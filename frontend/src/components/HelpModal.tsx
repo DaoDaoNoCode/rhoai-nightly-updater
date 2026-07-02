@@ -47,7 +47,7 @@ export const HelpButton: React.FC = () => {
           </Content>
           <Content component="p">
             The nightly FBC image reference is posted daily in the{" "}
-            <strong>#rhoai-build-notifications</strong> Slack channel. Copy the
+            <a href="https://redhat.enterprise.slack.com/archives/C07ANR2U56C" target="_blank" rel="noopener noreferrer"><strong>#rhoai-build-notifications</strong></a> Slack channel. Copy the
             full image URI including the <code>@sha256:...</code> digest and
             paste it into the &quot;FBC Image&quot; field.
           </Content>

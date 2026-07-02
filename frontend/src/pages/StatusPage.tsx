@@ -20,8 +20,10 @@ import {
   Grid,
   GridItem,
   Label,
+  Icon,
   PageSection,
   Card,
+  CardHeader,
   CardTitle,
   CardBody,
   Stack,
@@ -30,6 +32,9 @@ import {
   Tooltip,
 } from "@patternfly/react-core";
 import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
+import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
+import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
+import CloneIcon from "@patternfly/react-icons/dist/esm/icons/clone-icon";
 import type { NightlyTag, OperationResponse, StatusResponse, UpdateStep } from "../types";
 import { fetchNightlyTags, streamRefresh, trackFeature } from "../services/api";
 import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
@@ -282,15 +287,21 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                 />
                 <GridItem lg={6} md={6} sm={12}>
                   <Card isFullHeight isCompact>
-                    <CardTitle>
-                      <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                        <FlexItem>Step 2: Image Mirror (IDMS)</FlexItem>
-                        <FlexItem>{status.imageMirror.exists
-                          ? <Label color="green" isCompact>Ready</Label>
-                          : <Label color="red" isCompact>Missing</Label>}
-                        </FlexItem>
-                      </Flex>
-                    </CardTitle>
+                    <CardHeader>
+                      <CardTitle>
+                        <Flex alignItems={{ default: "alignItemsCenter" }} justifyContent={{ default: "justifyContentSpaceBetween" }} flexWrap={{ default: "nowrap" }}>
+                          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+                            <FlexItem><Icon><CloneIcon /></Icon></FlexItem>
+                            <FlexItem>Image Mirror (IDMS)</FlexItem>
+                          </Flex>
+                          <FlexItem>
+                            {status.imageMirror.exists
+                              ? <Label color="green" variant="outline" isCompact>Ready</Label>
+                              : <Label status="danger" variant="outline" isCompact>Missing</Label>}
+                          </FlexItem>
+                        </Flex>
+                      </CardTitle>
+                    </CardHeader>
                     <CardBody>
                       <Stack hasGutter>
                         <StackItem>

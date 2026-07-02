@@ -492,7 +492,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
             <FormHelperText>
               <HelperText>
                 <HelperTextItem>
-                  Paste the image from #rhoai-build-notifications or click
+                  Paste the image from <a href="https://redhat.enterprise.slack.com/archives/C07ANR2U56C" target="_blank" rel="noopener noreferrer">#rhoai-build-notifications</a> or click
                   "Fetch latest"
                   {image.trim() && (
                     <>

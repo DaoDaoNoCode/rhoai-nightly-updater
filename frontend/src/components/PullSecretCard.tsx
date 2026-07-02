@@ -126,33 +126,27 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
           <CardTitle>
             <Flex
               alignItems={{ default: "alignItemsCenter" }}
-              gap={{ default: "gapSm" }}
+              justifyContent={{ default: "justifyContentSpaceBetween" }}
               flexWrap={{ default: "nowrap" }}
             >
+              <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+                <FlexItem>
+                  <Icon>
+                    <KeyIcon />
+                  </Icon>
+                </FlexItem>
+                <FlexItem>Pull Secret</FlexItem>
+              </Flex>
               <FlexItem>
-                <Icon>
-                  <KeyIcon />
-                </Icon>
-              </FlexItem>
-              <FlexItem>Step 1: Pull Secret</FlexItem>
-              <FlexItem>
-                {cardStatusIcon(pullSecret.exists)}
+                {pullSecret.exists
+                  ? <Label color="green" variant="outline" isCompact>Ready</Label>
+                  : <Label status="danger" variant="outline" isCompact>Missing</Label>}
               </FlexItem>
             </Flex>
           </CardTitle>
         </CardHeader>
         <CardBody>
           <Stack hasGutter>
-            <StackItem>
-              <Flex
-                gap={{ default: "gapSm" }}
-                alignItems={{ default: "alignItemsCenter" }}
-              >
-                <FlexItem>
-                  {existsLabel(pullSecret.exists)}
-                </FlexItem>
-              </Flex>
-            </StackItem>
             <StackItem>
               <Content component="small">
                 Pull credentials for quay.io/rhoai nightly images
@@ -200,8 +194,8 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                     <Stack hasGutter>
                       <StackItem>
                         <Content component="small">
-                          Get credentials from Bitwarden (Openshift AI
-                          devel collection).
+                          Get credentials from <a href="https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1" target="_blank" rel="noopener noreferrer">Bitwarden</a> (Openshift AI
+                          devel collection). No access? Request in <a href="https://redhat.enterprise.slack.com/archives/C07TF3MBMMW" target="_blank" rel="noopener noreferrer">#rhoai-devtestops-requests</a>.
                         </Content>
                       </StackItem>
                       <StackItem>
@@ -248,8 +242,8 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                 <Stack hasGutter>
                   <StackItem>
                     <Content component="small">
-                      Get credentials from Bitwarden (Openshift AI devel
-                      collection).
+                      Get credentials from <a href="https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1" target="_blank" rel="noopener noreferrer">Bitwarden</a> (Openshift AI devel
+                      collection). No access? Request in <a href="https://redhat.enterprise.slack.com/archives/C07TF3MBMMW" target="_blank" rel="noopener noreferrer">#rhoai-devtestops-requests</a>.
                     </Content>
                   </StackItem>
                   <StackItem>

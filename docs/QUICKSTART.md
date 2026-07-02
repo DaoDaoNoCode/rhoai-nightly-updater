@@ -54,7 +54,9 @@ In the app UI:
 3. Paste your `quay.io/rhoai` base64 auth token into the input field
 4. Click **Create Secret**
 
-The app creates the `additional-pull-secret` in `kube-system` for you. Get the token from Bitwarden (Openshift AI devel collection).
+The app creates the `additional-pull-secret` in `kube-system` for you.
+
+**Where to get the token:** [Bitwarden — Openshift AI devel collection](https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1). If you don't have access, request it in [#rhoai-devtestops-requests](https://redhat.enterprise.slack.com/archives/C07TF3MBMMW).
 
 ## Step 5: Create the Image Digest Mirror Set (IDMS)
 
@@ -90,7 +92,7 @@ EOF
 
 1. Go to the **Status** page
 2. The **Update to Nightly** card should now show a green "Ready" state
-3. Click **Fetch latest** to auto-fill the latest nightly image
+3. Click **Fetch latest** to auto-fill the latest nightly image, or paste an image from [#rhoai-build-notifications](https://redhat.enterprise.slack.com/archives/C07ANR2U56C)
 4. (Optional) Click **Dry Run** to see what would change without modifying anything
 5. Click **Update** to apply the nightly build
 6. Watch the live pipeline progress — each step streams in real time
