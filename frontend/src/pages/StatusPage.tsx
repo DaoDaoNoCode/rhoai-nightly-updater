@@ -444,11 +444,11 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         </PageSection>
       )}
 
-      {/* --- Action Card 1: Upgrade to Nightly Build --- */}
+      {/* --- Action Card 1: Install / Upgrade to Nightly Build --- */}
       <PageSection>
         <Card isLarge>
           <CardTitle>
-            <Title headingLevel="h3">Upgrade to Nightly Build</Title>
+            <Title headingLevel="h3">{operatorInstalled(status) ? "Upgrade to Nightly Build" : "Install Nightly Build"}</Title>
           </CardTitle>
           <CardBody>
             <UpdatePanel
@@ -527,7 +527,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         </Card>
       </PageSection>
 
-      {/* --- Action Card 2: Reinstall Operator --- */}
+      {/* --- Action Card 2: Reinstall Operator (hidden when no operator installed) --- */}
+      {operatorInstalled(status) && (
       <PageSection>
         <Card isLarge>
           <CardTitle>
@@ -548,6 +549,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
           </CardBody>
         </Card>
       </PageSection>
+      )}
 
       {/* --- Setup modal (opened from banner or help) --- */}
       {status && (
