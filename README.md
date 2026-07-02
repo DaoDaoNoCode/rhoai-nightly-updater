@@ -9,7 +9,7 @@ A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clu
 - SSE streaming for real-time update/reinstall/refresh progress (8-13 step pipeline with per-step events)
 - Operator refresh for same-version image updates (forces CSV+Subscription recreate)
 - Version-aware tag sorting (handles EA vs GA versions correctly)
-- Safe 7-step reinstall flow with webhook and CRD conversion cleanup
+- Safe 13-step reinstall flow with webhook and CRD conversion cleanup
 - Preflight checks before update (pull secret, IDMS, operator health, registry access)
 - Server-side downgrade prevention (blocks update when selected version < current CSV version)
 - Assist Rollout for stuck deployments (patches maxUnavailable to unblock deadlocked rollouts on constrained clusters)
@@ -20,7 +20,7 @@ A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clu
 - Component health view with DSC v2 API (v1 fallback) and deployment details
 - Git commit tracking from OCI image labels (vcs-ref, git.url) via Quay registry
 - Pod inspector for debugging across operator/application namespaces
-- Live diagnostics engine with auto-detection of 6 problem categories and one-click fixes
+- Live diagnostics engine with auto-detection of 9 health checks (catalog, operator pods, subscription, CSV, install plan, pull secret, image mirror, stale webhooks, node capacity) and one-click fixes
 - Pull secret management (create, test, update) directly in the UI
 - Image registry whitelist (only quay.io/rhoai and registry.redhat.io/rhoai allowed)
 - Node readiness verification before updates
@@ -106,6 +106,7 @@ Open the URL in your browser — you'll be prompted to log in via OpenShift SSO.
 - `Deployment` with oauth-proxy sidecar (2 containers)
 - `Service`, `Route` (TLS reencrypt), `NetworkPolicy`
 - `ServiceMonitor` for Prometheus metrics
+- `PrometheusRule` with alerting rules
 - `ConsoleLink` in the OpenShift app launcher
 
 ### Uninstall
@@ -142,10 +143,13 @@ Run `make help` to see all available targets.
 
 | Variable | Default | Description |
 |---|---|---|
+| `APP_NAME` | `rhoai-nightly-updater` | Application name used for deployment resources |
 | `IMAGE` | `quay.io/juntao_wang/rhoai-nightly-updater` | Container image repository |
 | `TAG` | `latest` | Image tag |
 | `GIT_SHA` | auto-detected | Short git commit SHA (also used as secondary tag) |
 | `NAMESPACE` | `rhoai-nightly-updater` | OpenShift project for deployment |
+| `RUNTIME` | auto-detected (`podman` or `docker`) | Container runtime for building images |
+| `PLATFORM` | `linux/amd64` | Target platform for container builds |
 
 ### Build & Deploy (from source)
 
@@ -281,6 +285,8 @@ Before installing nightly builds, the cluster needs:
 
 ```
 ├── main.go                     # HTTP server, routing, graceful shutdown
+├── RUNBOOK.md                  # Operational runbook for troubleshooting
+├── SECURITY.md                 # Security model documentation
 ├── pkg/
 │   ├── api/
 │   │   ├── handlers.go         # REST handlers with auth middleware
@@ -303,26 +309,41 @@ Before installing nightly builds, the cluster needs:
 │   │   ├── pipeline_server.go  # Pipeline server (DSPA) lifecycle per project
 │   │   ├── s3.go               # S3 bucket operations (create bucket via MinIO API)
 │   │   ├── authz.go            # oauth-proxy SAR gate permission checks
-│   │   ├── diagnostics.go      # Live diagnostics engine (6 checks, auto-fix actions)
+│   │   ├── diagnostics.go      # Live diagnostics engine (9 checks, auto-fix actions)
 │   │   ├── rollout.go          # Assist Rollout: detect and unblock stuck deployments
 │   │   ├── snapshot.go         # Deployment snapshot for change detection
 │   │   ├── activity.go         # ConfigMap-backed activity log
 │   │   ├── diagnostics_test.go # Tests for diagnostics engine and auto-fix
+│   │   ├── activity_test.go    # Tests for activity log
+│   │   ├── fbc_test.go         # Tests for FBC catalog parsing
+│   │   ├── minio_test.go       # Tests for MinIO lifecycle
+│   │   ├── status_test.go      # Tests for cluster status queries
+│   │   ├── testmain_test.go    # Test suite setup
 │   │   ├── dashboard_test.go   # Tests for dashboard PR deploy/revert
 │   │   ├── image_labels_test.go # Tests for OCI image label extraction
 │   │   ├── operations_test.go  # Tests for update/reinstall operations
 │   │   └── s3_test.go          # Tests for S3 bucket operations
-│   ├── middleware/security.go  # Security headers
+│   ├── middleware/
+│   │   ├── security.go         # Security headers
+│   │   └── security_test.go    # Tests for security headers
 │   └── types/types.go          # Shared request/response types
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx             # Layout, routing, side nav
+│   │   ├── index.tsx           # React entry point
+│   │   ├── types.ts            # TypeScript type definitions
+│   │   ├── constants.ts        # Shared constants
+│   │   ├── utils.ts            # Shared utilities
 │   │   ├── pages/              # Dashboard, Components, Build Explorer, Dashboard Dev, Troubleshooting
 │   │   ├── components/         # Reusable UI components
 │   │   ├── hooks/              # useAsyncData custom hook
-│   │   ├── services/api.ts     # API client functions
-│   │   └── utils.ts            # Shared utilities
+│   │   └── services/api.ts     # API client functions
+│   ├── tsconfig.json           # TypeScript configuration
 │   └── webpack.config.js
+├── docs/
+│   └── OPENSHIFT_INTEGRATION.md # OpenShift-specific behaviors and incident learnings
+├── scripts/
+│   └── smoke-test.sh           # Smoke test script
 ├── deploy/
 │   └── template.yaml           # OpenShift deployment template
 ├── Containerfile               # Multi-stage build (Node 22 + Go 1.24 + UBI9)

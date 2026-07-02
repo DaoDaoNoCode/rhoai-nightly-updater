@@ -32,9 +32,12 @@ The ServiceAccount has a custom ClusterRole with permissions limited to:
 | `packages.operators.coreos.com` | packagemanifests | get, list | Read available packages |
 | `""` (core) | secrets | get, list, create, update, patch, delete | Manage pull secret, MinIO credentials, DSPA secrets |
 | `""` (core) | pods | get, list | Read pods for debug/components |
+| `""` (core) | nodes | get, list | Read node status for capacity checks |
 | `""` (core) | namespaces | get, list, create, delete | Read namespaces; create/delete for MinIO and DS projects |
 | `""` (core) | services, persistentvolumeclaims | get, list, create, update, patch, delete | Quick Resource Creator (MinIO service, PVCs) |
 | `apps` | deployments | get, list, create, update, patch, delete | Component status; MinIO deployment; Dashboard Dev PR deploy/revert |
+| `apps` | replicasets | get, list, create, update, patch, delete | Rollout management for stuck deployments |
+| `operators.coreos.com` | operatorgroups | get, list, create, update, patch, delete | Operator lifecycle management |
 | `route.openshift.io` | routes | get, list, create, update, patch, delete | MinIO routes; read dashboard/MLflow routes |
 | `""` (core) | configmaps | get, create, update, patch | Activity log ConfigMap |
 | `admissionregistration.k8s.io` | validatingwebhookconfigurations, mutatingwebhookconfigurations | get, list, delete | Clean up webhooks during rollback |
@@ -42,16 +45,18 @@ The ServiceAccount has a custom ClusterRole with permissions limited to:
 | `datasciencecluster.opendatahub.io` | datascienceclusters | get, list | Read DSC status |
 | `datasciencepipelinesapplications.opendatahub.io` | datasciencepipelinesapplications | get, list, create, update, patch, delete | Pipeline server (DSPA) lifecycle |
 | `mlflow.opendatahub.io` | mlflows | get, list, create, update, patch, delete | MLflow CR lifecycle and PR deploy |
+| `components.platform.opendatahub.io` | * | get, list, patch | Component CR lifecycle (stuck finalizer cleanup) |
+| `gateway.networking.k8s.io` | gateways | get, patch | Gateway management |
 | `user.openshift.io` | users | get | Read user identity |
 
-All mutation operations -- including Dashboard Dev PR image deployment, MinIO setup, pipeline server creation, and MLflow management -- use the **ServiceAccount token**. The user's OAuth token (from oauth-proxy) is used only for identity: `X-Forwarded-User` is recorded in the activity log for audit, and `X-Forwarded-Access-Token` gates authentication. Per-operation SubjectAccessReview checks ensure the user has appropriate cluster permissions before the SA token executes the mutation.
+All mutation operations -- including Dashboard Dev PR image deployment, MinIO setup, pipeline server creation, and MLflow management -- use the **ServiceAccount token**. The user's OAuth token (from oauth-proxy) is used only for identity: `X-Forwarded-User` is recorded in the activity log for audit, and `X-Forwarded-Access-Token` gates authentication. Authorization is handled by the oauth-proxy SAR gate only (`pods:list` in `redhat-ods-operator`); there are no per-endpoint SubjectAccessReview checks.
 
 This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources, namespaces, or perform destructive operations outside the scope listed above.
 
 ## Network Isolation
 
 - The backend listens on port 8080 inside the pod
-- A **NetworkPolicy** restricts ingress to port 8443 only (the oauth-proxy HTTPS port) -- port 8080 is blocked from external access
+- A **NetworkPolicy** restricts ingress to port 8443 only (the oauth-proxy HTTPS port) -- port 8080 is accessible only from `openshift-monitoring` and `openshift-user-workload-monitoring` namespaces for Prometheus scraping
 - The **Service** only exposes port 8443
 - The **Route** uses TLS `reencrypt` termination, meaning traffic is encrypted both from the client to the router and from the router to oauth-proxy
 - oauth-proxy forwards authenticated requests to the backend over `localhost:8080` within the same pod
@@ -78,7 +83,7 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 
 ## Dashboard Dev Endpoints
 
-- `POST /api/dashboard/deploy-pr` and `POST /api/dashboard/revert` are protected by `withMutationAuth` (rate limit + SSAR permission check). Only users who pass the SubjectAccessReview are allowed to deploy PR images or revert the dashboard. The SA token performs all mutation operations (deployment patches, annotation updates). The user's OAuth token (forwarded by oauth-proxy) is never used for Kubernetes API calls -- it only carries `user:check-access` and `user:info` scopes, which are sufficient for identity verification but not for cluster mutations. The oauth-proxy SAR check (`pods:list` in `redhat-ods-operator`) is the authorization gate that controls who can reach the app at all; the per-endpoint SSAR check is a second layer that controls who can perform mutations vs. read-only access.
+- `POST /api/dashboard/deploy-pr` and `POST /api/dashboard/revert` are protected by `withMutationAuth` (rate limit + authentication check). The SA token performs all mutation operations (deployment patches, annotation updates). The user's OAuth token (forwarded by oauth-proxy) is never used for Kubernetes API calls -- it only carries `user:check-access` and `user:info` scopes, which are sufficient for identity verification but not for cluster mutations. The oauth-proxy SAR check (`pods:list` in `redhat-ods-operator`) is the authorization gate that controls who can reach the app at all.
 
 ## MLflow Endpoints
 
@@ -86,8 +91,7 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 
 ## Known Limitations
 
-- **Two-layer authorization**: The oauth-proxy SAR gate (`pods:list` in `redhat-ods-operator`) controls access to the app. The backend additionally performs per-operation SubjectAccessReview checks for mutation endpoints — users who cannot `update subscriptions` in `redhat-ods-operator` see a read-only view with disabled buttons. This is enforced on both frontend (disabled buttons with tooltips) and backend (returns 403 on mutation attempts).
-- **Fail-open on SAR errors**: If the SubjectAccessReview API is temporarily unavailable, mutations are allowed (fail-open). This prevents the app from becoming unusable during transient API issues, while the backend mutation endpoints still enforce authentication.
+- **Single-layer authorization**: The oauth-proxy SAR gate (`pods:list` in `redhat-ods-operator`) is the sole authorization control. Users who pass the SAR check can access all app functionality. A `CheckUserPermissionWithToken()` function exists in the codebase but is not called by any endpoint.
 - **Usage analytics are privacy-safe**: The app tracks aggregate page view and feature usage counters via Prometheus metrics (`/metrics` endpoint). No user identity, IP addresses, or session data is stored — only counters like `page_views_total{page="dashboard"} 42`. The `POST /api/pageview` endpoint requires authentication and validates label names against a strict regex with a 100-label cap to prevent cardinality attacks.
 - **Dev mode bypass**: When `DEV_MODE=true` and no ServiceAccount token is available, authentication is bypassed using `DEV_TOKEN`. This path is never active in-cluster because the SA token file is always mounted.
 - **TLS enforcement**: In-cluster, the backend requires the ServiceAccount CA certificate for TLS verification. `InsecureSkipVerify` is only allowed when `DEV_MODE=true` (local development). In production without the CA cert, the server exits with a fatal error.

@@ -817,6 +817,8 @@ If the Deployment spec shows the new PR image but the running pod still uses the
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
 | `/api/health` | GET | No | Liveness probe |
+| `/api/health/ready` | GET | No | Readiness probe (checks Kubernetes API connectivity) |
+| `/api/user/permissions` | GET | Yes | Check if logged-in user can perform mutations |
 | `/api/status` | GET | Yes | Cluster + operator status |
 | `/api/update` | POST | Yes | Apply nightly CatalogSource |
 | `/api/rollback` | POST | Yes | Reinstall (stable or nightly) |
@@ -827,9 +829,9 @@ If the Deployment spec shows the new PR image but the running pod still uses the
 | `/api/components` | GET | Yes | DSC components + deployments |
 | `/api/build-explorer/tags` | GET | Yes | All FBC tags (Build Explorer) |
 | `/api/build-explorer/content` | GET | Yes | FBC relatedImages for a tag |
-| `/api/test-pull-secret` | POST | Yes | Validate pull secret |
+| `/api/test-pull-secret` | GET | Yes | Validate pull secret |
 | `/api/setup/pull-secret` | POST | Yes | Create/update pull secret |
-| `/api/verify-nodes` | POST | Yes | Verify pull secret + IDMS + registry access |
+| `/api/verify-nodes` | GET | Yes | Verify pull secret + IDMS + registry access |
 | `/api/debug` | GET | Yes | Debug pod info |
 | `/api/dashboard/state` | GET | Yes | Dashboard deployment state (default vs PR) |
 | `/api/dashboard/deploy-pr` | POST | Yes | Deploy a PR image to the dashboard |
@@ -847,5 +849,8 @@ If the Deployment spec shows the new PR image but the running pod still uses the
 | `/api/update/stream` | GET | Yes | SSE stream of update pipeline progress |
 | `/api/rollback/stream` | GET | Yes | SSE stream of rollback pipeline progress |
 | `/api/refresh/stream` | GET | Yes | SSE stream of refresh pipeline progress |
+| `/api/diagnostics` | GET | Yes | Run live cluster health checks and problem detection |
+| `/api/diagnostics/fix` | POST | Yes | Apply an auto-fix for a detected problem |
 | `/api/assist-rollout` | POST | Yes | Detect and unblock stuck deployment rollouts |
+| `/api/pageview` | POST | Yes | Record page view / feature usage (privacy-safe, aggregate only) |
 | `/metrics` | GET | No | Prometheus metrics (scraped on port 8080) |

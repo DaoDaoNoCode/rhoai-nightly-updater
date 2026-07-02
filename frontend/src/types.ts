@@ -169,6 +169,7 @@ export interface PodInfo {
   schedulingMessage?: string;
   gitCommit?: string;
   gitURL?: string;
+  commitDate?: string;
   buildDate?: string;
   version?: string;
 }
@@ -249,7 +250,7 @@ export interface DiagnosticResult {
 
 export interface Problem {
   id: string;
-  severity: "critical" | "high" | "warning" | "medium" | "info";
+  severity: "critical" | "warning" | "info";
   title: string;
   description: string;
   evidence?: string[];
