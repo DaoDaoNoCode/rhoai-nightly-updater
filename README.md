@@ -80,7 +80,7 @@ No build required — deploy the pre-built image in one command:
 ```bash
 oc new-project rhoai-nightly-updater
 
-oc process -f https://raw.githubusercontent.com/bobbravo2/razzmatazz-serving-demo-rosa/main/nightly-updater/deploy/template.yaml \
+oc process -f deploy/template.yaml \
   -p IMAGE=quay.io/juntao_wang/rhoai-nightly-updater:latest \
   -p NAMESPACE=rhoai-nightly-updater | oc apply -f -
 
