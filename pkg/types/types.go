@@ -1,0 +1,292 @@
+package types
+
+// ActivityEntry represents a single recorded user action.
+type ActivityEntry struct {
+	Timestamp string `json:"timestamp"`
+	User      string `json:"user"`
+	Action    string `json:"action"`  // "update", "rollback", "create-pull-secret"
+	Detail    string `json:"detail"`  // e.g., the FBC image for updates
+	Success   bool   `json:"success"`
+}
+
+// StatusResponse is the aggregated cluster and operator status returned by /api/status.
+type StatusResponse struct {
+	Cluster       ClusterInfo       `json:"cluster"`
+	Subscription  SubscriptionInfo  `json:"subscription"`
+	CSV           CSVInfo           `json:"csv"`
+	CatalogSource CatalogSourceInfo `json:"catalogSource"`
+	PullSecret    PullSecretInfo    `json:"pullSecret"`
+	ImageMirror   ImageMirrorInfo   `json:"imageMirror"`
+	InstallPlan   *InstallPlanInfo  `json:"installPlan,omitempty"`
+	CatalogPod    *CatalogPodInfo   `json:"catalogPod,omitempty"`
+	StableSource  string            `json:"stableSource"`
+	ConsoleURL    string            `json:"consoleURL,omitempty"`
+	StableChannel string            `json:"stableChannel"`
+	Activity      []ActivityEntry   `json:"activity,omitempty"`
+	Errors        []string          `json:"errors,omitempty"`
+}
+
+// ClusterInfo holds the OpenShift cluster server URL, version, and current user.
+type ClusterInfo struct {
+	Server  string `json:"server"`
+	Version string `json:"version"`
+	User    string `json:"user"`
+}
+
+// SubscriptionInfo describes the OLM Subscription resource for the RHOAI operator.
+type SubscriptionInfo struct {
+	Name    string `json:"name"`
+	Source  string `json:"source"`
+	Channel string `json:"channel"`
+	State   string `json:"state"`
+}
+
+// CSVInfo describes the ClusterServiceVersion for the installed RHOAI operator.
+type CSVInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Phase   string `json:"phase"`
+}
+
+// CatalogSourceInfo describes the nightly CatalogSource resource.
+type CatalogSourceInfo struct {
+	Exists bool   `json:"exists"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	State  string `json:"state"`
+}
+
+// PullSecretInfo reports whether the additional-pull-secret exists and is valid.
+type PullSecretInfo struct {
+	Exists bool   `json:"exists"`
+	Valid  bool   `json:"valid"`              // has correct format with quay.io/rhoai entry
+	Detail string `json:"detail,omitempty"`   // human-readable detail if invalid
+}
+
+// ImageMirrorInfo reports whether an ImageDigestMirrorSet exists for RHOAI images.
+type ImageMirrorInfo struct {
+	Exists bool   `json:"exists"`
+	Name   string `json:"name"`
+	Source string `json:"source"`
+}
+
+// InstallPlanInfo describes the latest OLM InstallPlan for the rhods-operator.
+type InstallPlanInfo struct {
+	Name     string `json:"name"`
+	Phase    string `json:"phase"`    // Planning, Installing, Complete, Failed
+	Approved bool   `json:"approved"`
+}
+
+// CatalogPodInfo describes the catalog source pod that serves the FBC index.
+type CatalogPodInfo struct {
+	Name         string `json:"name"`
+	Phase        string `json:"phase"`    // Pending, Running
+	Ready        bool   `json:"ready"`
+	RestartCount int    `json:"restartCount"`
+}
+
+// UpdateRequest is the JSON body for the POST /api/update endpoint.
+type UpdateRequest struct {
+	Image  string `json:"image"`
+	DryRun bool   `json:"dryRun"`
+}
+
+// ReinstallRequest is the JSON body for the POST /api/rollback endpoint.
+// If TargetType is empty or "stable", the operator is reinstalled from the stable catalog.
+// If TargetType is "nightly", the operator is reinstalled with the specified FBC Image.
+type ReinstallRequest struct {
+	TargetType string `json:"targetType"`         // "stable" or "nightly"
+	Image      string `json:"image,omitempty"`
+	Channel    string `json:"channel,omitempty"`   // optional channel override (e.g., "stable-3.5", "beta")
+}
+
+// CreatePullSecretRequest is the JSON body for the POST /api/setup/pull-secret endpoint.
+type CreatePullSecretRequest struct {
+	Auth string `json:"auth"` // base64-encoded quay.io/rhoai credentials
+}
+
+// OperationResponse is the standard response for mutating API operations.
+type OperationResponse struct {
+	Success   bool     `json:"success"`
+	Message   string   `json:"message"`
+	Logs      []string `json:"logs"`
+	ErrorCode string   `json:"errorCode,omitempty"` // "unauthorized", "forbidden", "prerequisites", "network", "validation"
+}
+
+// LatestNightlyResponse contains the latest nightly tag and full image reference.
+type LatestNightlyResponse struct {
+	Tag   string `json:"tag"`
+	Image string `json:"image"`
+	Error string `json:"error,omitempty"`
+}
+
+// NightlyTag pairs a version tag with its full image reference.
+type NightlyTag struct {
+	Tag       string `json:"tag"`
+	Image     string `json:"image"`     // full image with digest
+	BuildDate string `json:"buildDate,omitempty"` // when the image was built
+}
+
+// NightlyTagsResponse wraps a list of recent nightly tags.
+type NightlyTagsResponse struct {
+	Tags []NightlyTag `json:"tags"`
+}
+
+// ComponentInfo describes one DSC component's management state and health.
+type ComponentInfo struct {
+	Name            string `json:"name"`
+	ManagementState string `json:"managementState"` // "Managed", "Removed", "Unmanaged"
+	Status          string `json:"status"`           // "Available", "Degraded", "Progressing", "Unknown", "Deleting"
+	Message         string `json:"message,omitempty"`
+	FixAction       string `json:"fixAction,omitempty"`       // fix action ID for ApplyFix
+	FixTitle        string `json:"fixTitle,omitempty"`         // button text (plain English)
+	FixDescription  string `json:"fixDescription,omitempty"`   // one-line explanation
+	FixConfirm      string `json:"fixConfirm,omitempty"`       // confirmation modal body
+}
+
+// DeploymentInfo holds readiness and image metadata for a Kubernetes Deployment.
+type DeploymentInfo struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Ready     int    `json:"ready"`
+	Desired   int    `json:"desired"`
+	Available int    `json:"available"`
+	Image               string    `json:"image"` // first container image
+	UnavailableReplicas int       `json:"unavailableReplicas"`
+	UpdatedReplicas     int       `json:"updatedReplicas"`
+	RolloutStuck        bool      `json:"rolloutStuck"`
+	RolloutMessage      string    `json:"rolloutMessage,omitempty"`
+	ChangeStatus        string            `json:"changeStatus,omitempty"` // "updated", "new", or "" (unchanged)
+	MatchLabels         map[string]string `json:"-"`                      // for pod matching, not serialized
+	Pods                []PodInfo         `json:"pods,omitempty"`
+	GitCommit  string `json:"gitCommit,omitempty"`
+	GitURL     string `json:"gitURL,omitempty"`
+	CommitDate string `json:"commitDate,omitempty"` // when the commit was merged
+	BuildDate  string `json:"buildDate,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
+// ComponentsResponse groups DSC component statuses with deployment details.
+type ComponentsResponse struct {
+	Components   []ComponentInfo  `json:"components"`
+	Deployments  []DeploymentInfo `json:"deployments"`
+	DSCName      string           `json:"dscName"`
+	DSCPhase     string           `json:"dscPhase"`
+	DSCReason    string           `json:"dscReason,omitempty"`
+	SnapshotTime string           `json:"snapshotTime,omitempty"`
+	ChangedCount int              `json:"changedCount"`
+	ConsoleURL   string           `json:"consoleURL,omitempty"`
+}
+
+// ContainerInfo holds per-container status within a pod.
+type ContainerInfo struct {
+	Name     string `json:"name"`
+	Ready    bool   `json:"ready"`
+	Restarts int    `json:"restarts"`
+	State    string `json:"state"` // "running", "waiting", "terminated"
+	Reason   string `json:"reason,omitempty"` // e.g. "CrashLoopBackOff"
+}
+
+// PodInfo holds status details for a single pod used in debug output.
+type PodInfo struct {
+	Name              string          `json:"name"`
+	Namespace         string          `json:"namespace"`
+	Phase             string          `json:"phase"`
+	Node              string          `json:"node"`
+	Ready             bool            `json:"ready"`
+	Restarts          int             `json:"restarts"`
+	Image             string          `json:"image"`
+	ImageID           string          `json:"imageID"`
+	Age               string          `json:"age"`
+	Containers        []ContainerInfo `json:"containers,omitempty"`
+	Labels            map[string]string `json:"-"` // for matching, not serialized
+	OwnerKind         string          `json:"-"` // for matching, not serialized
+	PodTemplateHash   string          `json:"podTemplateHash,omitempty"`
+	SchedulingReason  string          `json:"schedulingReason,omitempty"`
+	SchedulingMessage string          `json:"schedulingMessage,omitempty"`
+	GitCommit         string          `json:"gitCommit,omitempty"`
+	GitURL            string          `json:"gitURL,omitempty"`
+	BuildDate         string          `json:"buildDate,omitempty"`
+	Version           string          `json:"version,omitempty"`
+}
+
+// RelatedImage represents a component image found inside an FBC catalog bundle.
+type RelatedImage struct {
+	Name       string `json:"name"`
+	Image      string `json:"image"`
+	Category   string `json:"category,omitempty"` // "core", "workbench", "pipeline", "training", "infra", "other"
+	GitCommit  string `json:"gitCommit,omitempty"`
+	GitURL     string `json:"gitURL,omitempty"`
+	CommitDate string `json:"commitDate,omitempty"`
+	BuildDate  string `json:"buildDate,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
+// FBCContentResponse contains the extracted component images from an FBC catalog.
+type FBCContentResponse struct {
+	Tag           string                    `json:"tag"`
+	Image         string                    `json:"image"`
+	BundleName    string                    `json:"bundleName,omitempty"`
+	RelatedImages []RelatedImage            `json:"relatedImages"`
+	Categories    map[string]int            `json:"categories,omitempty"`
+	Error         string                    `json:"error,omitempty"`
+}
+
+// DebugResponse groups pod information across RHOAI operator namespaces.
+type DebugResponse struct {
+	OperatorPods    []PodInfo `json:"operatorPods"`
+	ApplicationPods []PodInfo `json:"applicationPods"`
+	MarketplacePods []PodInfo `json:"marketplacePods"`
+	Warnings        []string  `json:"warnings,omitempty"`
+}
+
+// DashboardState describes the current state of the rhods-dashboard deployment.
+type DashboardState struct {
+	CurrentImage            string    `json:"currentImage"`
+	IsCustomPR              bool      `json:"isCustomPR"`
+	PRNumber                int       `json:"prNumber,omitempty"`
+	PRContainers            []string  `json:"prContainers,omitempty"`
+	Managed                 bool      `json:"managed"`
+	PodStatus               string    `json:"podStatus"`
+	PodReady                bool      `json:"podReady"`
+	ContainersReady         int       `json:"containersReady"`
+	ContainersTotal         int       `json:"containersTotal"`
+	Pods                    []PodInfo `json:"pods,omitempty"`
+	RolloutPending          bool      `json:"rolloutPending"`
+	SchedulingFailureReason string    `json:"schedulingFailureReason,omitempty"`
+	CanAssistRollout        bool      `json:"canAssistRollout"`
+	DashboardURL            string    `json:"dashboardURL,omitempty"`
+}
+
+// DeployPRRequest is the JSON body for the POST /api/dashboard/deploy-pr endpoint.
+type DeployPRRequest struct {
+	PR int `json:"pr"`
+}
+
+// ResourcesStatus reports the state of test infrastructure.
+type ResourcesStatus struct {
+	MinIO           ResourceState   `json:"minio"`
+	MLflow          ResourceState   `json:"mlflow"`
+	PipelineServers []ResourceState `json:"pipelineServers"`
+}
+
+// ResourceState describes the deployment state of a single resource group.
+type ResourceState struct {
+	Deployed     bool   `json:"deployed"`
+	Ready        bool   `json:"ready"`
+	Message      string `json:"message,omitempty"`
+	Namespace    string `json:"namespace,omitempty"`
+	APIRoute     string `json:"apiRoute,omitempty"`
+	UIRoute      string `json:"uiRoute,omitempty"`
+	CurrentImage string `json:"currentImage,omitempty"`
+}
+
+// PipelineServerRequest is the JSON body for pipeline server setup/teardown.
+type PipelineServerRequest struct {
+	Project string `json:"project"`
+}
+
+// DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.
+type DiagnosticsFixRequest struct {
+	ProblemID string `json:"problemId"`
+}

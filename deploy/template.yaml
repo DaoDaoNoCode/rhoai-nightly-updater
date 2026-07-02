@@ -1,0 +1,407 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: rhoai-nightly-updater
+parameters:
+  - name: IMAGE
+    required: true
+  - name: NAMESPACE
+    value: rhoai-nightly-updater
+  - name: APP_NAME
+    value: rhoai-nightly-updater
+  - name: COOKIE_SECRET
+    generate: expression
+    from: '[a-zA-Z0-9]{32}'
+  - name: OAUTH_PROXY_IMAGE
+    value: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.17
+objects:
+
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+      annotations:
+        serviceaccounts.openshift.io/oauth-redirectreference.primary: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"${APP_NAME}"}}'
+
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: ${APP_NAME}
+    rules:
+      # Read cluster info
+      - apiGroups: ["config.openshift.io"]
+        resources: ["clusterversions", "consoles", "imagedigestmirrorsets"]
+        verbs: ["get", "list"]
+      # Read node status for capacity diagnostics
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list"]
+      # Manage RHOAI operator (subscriptions, CSVs, catalogsources)
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions", "clusterserviceversions", "catalogsources", "installplans", "operatorgroups"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # Read package manifests
+      - apiGroups: ["packages.operators.coreos.com"]
+        resources: ["packagemanifests"]
+        verbs: ["get", "list"]
+      # Manage secrets — needed across multiple namespaces:
+      #   kube-system (pull secret), minio (credentials), user DS projects (DSPA secrets)
+      # Cannot be namespace-scoped because pipeline projects are dynamic.
+      # Server-side validation restricts actual access to known namespaces.
+      - apiGroups: [""]
+        resources: ["secrets"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # Pods, namespaces, services, PVCs for Quick Resource Creator
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["get", "list", "delete"]
+      # Namespaces: get/list is broad (needed for DS project listing),
+      # create/delete restricted to known prefixes by server-side validation.
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["get", "list", "create", "delete"]
+      - apiGroups: [""]
+        resources: ["services", "persistentvolumeclaims"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # User permission checks
+      - apiGroups: ["authorization.k8s.io"]
+        resources: ["selfsubjectaccessreviews"]
+        verbs: ["create"]
+      - apiGroups: ["route.openshift.io"]
+        resources: ["routes"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # Activity log ConfigMap
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["get", "create", "update", "patch"]
+      # Manage webhooks during rollback
+      - apiGroups: ["admissionregistration.k8s.io"]
+        resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+        verbs: ["get", "list", "delete"]
+      # Patch CRDs during rollback
+      - apiGroups: ["apiextensions.k8s.io"]
+        resources: ["customresourcedefinitions"]
+        verbs: ["get", "patch"]
+      # Read DSC
+      - apiGroups: ["datasciencecluster.opendatahub.io"]
+        resources: ["datascienceclusters"]
+        verbs: ["get", "list", "patch"]
+      # Component CRs: stale condition cross-check and finalizer cleanup during reinstall
+      - apiGroups: ["components.platform.opendatahub.io"]
+        resources: ["*"]
+        verbs: ["get", "list", "patch"]
+      # Patch MaaS gateway for annotation fixes
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        verbs: ["get", "patch"]
+      # Manage DSPAs (pipeline server)
+      - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
+        resources: ["datasciencepipelinesapplications"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # MLflow CR management
+      - apiGroups: ["mlflow.opendatahub.io"]
+        resources: ["mlflows"]
+        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # Read user identity
+      - apiGroups: ["user.openshift.io"]
+        resources: ["users"]
+        verbs: ["get"]
+
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: ${APP_NAME}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: ${APP_NAME}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: ${APP_NAME}
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: ${APP_NAME}
+    spec:
+      replicas: 2
+      revisionHistoryLimit: 3
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 0
+          maxSurge: 1
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+            app.kubernetes.io/name: ${APP_NAME}
+        spec:
+          serviceAccountName: ${APP_NAME}
+          automountServiceAccountToken: true
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app: ${APP_NAME}
+                    topologyKey: kubernetes.io/hostname
+          containers:
+            - name: app
+              image: ${IMAGE}
+              ports:
+                - containerPort: 8080
+                  name: http
+              startupProbe:
+                httpGet:
+                  path: /api/health
+                  port: 8080
+                failureThreshold: 10
+                periodSeconds: 3
+              readinessProbe:
+                httpGet:
+                  path: /api/health/ready
+                  port: 8080
+                initialDelaySeconds: 2
+                periodSeconds: 10
+                timeoutSeconds: 5
+              livenessProbe:
+                httpGet:
+                  path: /api/health
+                  port: 8080
+                initialDelaySeconds: 5
+                periodSeconds: 30
+                timeoutSeconds: 3
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+
+            - name: oauth-proxy
+              image: ${OAUTH_PROXY_IMAGE}
+              env:
+                - name: COOKIE_SECRET
+                  value: ${COOKIE_SECRET}
+              args:
+                - --https-address=:8443
+                - --provider=openshift
+                - --openshift-service-account=${APP_NAME}
+                - --upstream=http://localhost:8080
+                - --upstream-timeout=180s
+                - --upstream-flush=200ms
+                - --tls-cert=/etc/tls/private/tls.crt
+                - --tls-key=/etc/tls/private/tls.key
+                - --cookie-secret=$(COOKIE_SECRET)
+                - --cookie-samesite=strict
+                - --pass-access-token=true
+                - --pass-user-headers=true
+                - --openshift-sar={"resource":"pods","verb":"list","namespace":"redhat-ods-operator"}
+              ports:
+                - containerPort: 8443
+                  name: https
+              readinessProbe:
+                tcpSocket:
+                  port: 8443
+                initialDelaySeconds: 3
+                periodSeconds: 10
+                timeoutSeconds: 3
+              livenessProbe:
+                tcpSocket:
+                  port: 8443
+                initialDelaySeconds: 10
+                periodSeconds: 30
+                timeoutSeconds: 3
+              volumeMounts:
+                - name: tls
+                  mountPath: /etc/tls/private
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+
+          volumes:
+            - name: tls
+              secret:
+                secretName: ${APP_NAME}-tls
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+      annotations:
+        service.beta.openshift.io/serving-cert-secret-name: ${APP_NAME}-tls
+      labels:
+        app.kubernetes.io/name: ${APP_NAME}
+    spec:
+      selector:
+        app: ${APP_NAME}
+      ports:
+        - name: https
+          port: 8443
+          targetPort: 8443
+        - name: metrics
+          port: 8080
+          targetPort: 8080
+          protocol: TCP
+
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+    spec:
+      podSelector:
+        matchLabels:
+          app: ${APP_NAME}
+      policyTypes:
+        - Ingress
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  network.openshift.io/policy-group: ingress
+          ports:
+            - port: 8443
+              protocol: TCP
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: openshift-monitoring
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: openshift-user-workload-monitoring
+          ports:
+            - port: 8080
+              protocol: TCP
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+      annotations:
+        haproxy.router.openshift.io/timeout: 180s
+    spec:
+      to:
+        kind: Service
+        name: ${APP_NAME}
+      port:
+        targetPort: https
+      tls:
+        termination: reencrypt
+
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: ${APP_NAME}
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: ${APP_NAME}
+      endpoints:
+        - port: metrics
+          path: /metrics
+          interval: 60s
+
+  - apiVersion: console.openshift.io/v1
+    kind: ConsoleLink
+    metadata:
+      name: ${APP_NAME}
+    spec:
+      applicationMenu:
+        section: Red Hat Applications
+        imageURL: data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==
+      href: https://placeholder.apps.example.com
+      location: ApplicationMenu
+      text: RHOAI Nightly Updater
+
+  - apiVersion: monitoring.coreos.com/v1
+    kind: PrometheusRule
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: ${APP_NAME}
+    spec:
+      groups:
+        - name: ${APP_NAME}.rules
+          rules:
+            - alert: NightlyUpdaterDown
+              expr: up{job="${APP_NAME}"} == 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: RHOAI Nightly Updater is down
+                description: "The ${APP_NAME} target has been unreachable for 5 minutes."
+
+            - alert: NightlyUpdateFailed
+              expr: increase(rhoai_nightly_updater_updates_failed_total[1h]) > 0
+              labels:
+                severity: warning
+              annotations:
+                summary: A nightly update has failed
+                description: "At least one nightly update has failed in the last hour."
+
+            - alert: NightlyUpdaterHighErrorRate
+              expr: >-
+                (
+                  increase(rhoai_nightly_updater_updates_failed_total[10m])
+                  /
+                  clamp_min(increase(rhoai_nightly_updater_updates_total[10m]), 1)
+                ) > 0.5
+              for: 10m
+              labels:
+                severity: critical
+              annotations:
+                summary: RHOAI Nightly Updater has a high error rate
+                description: "More than 50% of updates have failed over the last 10 minutes."
+
+            - alert: NightlyUpdaterPodRestarting
+              expr: increase(kube_pod_container_status_restarts_total{namespace="${NAMESPACE}", container="app"}[1h]) > 3
+              labels:
+                severity: warning
+              annotations:
+                summary: RHOAI Nightly Updater pod is restarting frequently
+                description: "The nightly updater container has restarted more than 3 times in the last hour."
