@@ -13,6 +13,8 @@ parameters:
     generate: expression
     from: '[a-zA-Z0-9]{32}'
   - name: OAUTH_PROXY_IMAGE
+    # Match the tag to your cluster's OCP minor version (e.g., v4.17 for OCP 4.17.x).
+    # Find available tags: oc image info registry.redhat.io/openshift4/ose-oauth-proxy-rhel9 --filter-by-os=linux/amd64
     value: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.17
 objects:
 
@@ -134,7 +136,7 @@ objects:
         app.kubernetes.io/component: web
         app.kubernetes.io/part-of: ${APP_NAME}
     spec:
-      replicas: 2
+      replicas: 1
       revisionHistoryLimit: 3
       strategy:
         type: RollingUpdate

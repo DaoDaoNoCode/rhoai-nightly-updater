@@ -59,6 +59,9 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 	fbcContentCacheMu.RUnlock()
 
 	basicAuth := getQuayAuth(c)
+	if basicAuth == "" {
+		slog.Debug("fbc: proceeding without quay auth (pull secret may be missing or invalid)")
+	}
 	bearerToken, err := getQuayBearerToken(ctx, quayHTTPClient, basicAuth)
 	if err != nil {
 		return nil, fmt.Errorf("quay auth: %w", err)

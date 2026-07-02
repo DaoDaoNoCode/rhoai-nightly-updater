@@ -202,22 +202,33 @@ func getCSV(c *Client) (types.CSVInfo, error) {
 		return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
 	}
 	items, _ := result["items"].([]interface{})
+
+	// Primary: match by displayName (most specific)
+	// Fallback: match by name prefix "rhods-operator." (resilient to branding changes)
+	var fallback *types.CSVInfo
 	for _, item := range items {
 		obj, _ := item.(map[string]interface{})
+		meta, _ := obj["metadata"].(map[string]interface{})
+		name, _ := meta["name"].(string)
 		spec, _ := obj["spec"].(map[string]interface{})
+		version, _ := spec["version"].(string)
+		phase := "Unknown"
+		if status, ok := obj["status"].(map[string]interface{}); ok {
+			if p, ok := status["phase"].(string); ok {
+				phase = p
+			}
+		}
+
 		displayName, _ := spec["displayName"].(string)
 		if displayName == "Red Hat OpenShift AI" {
-			meta, _ := obj["metadata"].(map[string]interface{})
-			name, _ := meta["name"].(string)
-			version, _ := spec["version"].(string)
-			phase := "Unknown"
-			if status, ok := obj["status"].(map[string]interface{}); ok {
-				if p, ok := status["phase"].(string); ok {
-					phase = p
-				}
-			}
 			return types.CSVInfo{Name: name, Version: version, Phase: phase}, nil
 		}
+		if fallback == nil && strings.HasPrefix(name, "rhods-operator.") {
+			fallback = &types.CSVInfo{Name: name, Version: version, Phase: phase}
+		}
+	}
+	if fallback != nil {
+		return *fallback, nil
 	}
 	return types.CSVInfo{Phase: "Not Found"}, nil
 }

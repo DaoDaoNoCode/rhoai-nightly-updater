@@ -27,6 +27,17 @@ import KeyIcon from "@patternfly/react-icons/dist/esm/icons/key-icon";
 import type { OperationResponse, PullSecretInfo } from "../types";
 import { createPullSecret, testPullSecret } from "../services/api";
 
+const isValidBase64Auth = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  try {
+    const decoded = atob(trimmed);
+    return decoded.includes(":");
+  } catch {
+    return false;
+  }
+};
+
 interface PullSecretCardProps {
   pullSecret: PullSecretInfo;
   onStatusRefresh?: () => void;
@@ -223,7 +234,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                           size="sm"
                           onClick={handleCreatePullSecret}
                           isLoading={authLoading}
-                          isDisabled={authLoading || !authValue.trim() || !canMutate}
+                          isDisabled={authLoading || !isValidBase64Auth(authValue) || !canMutate}
                         >
                           Update Secret
                         </Button>
@@ -271,7 +282,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                       size="sm"
                       onClick={handleCreatePullSecret}
                       isLoading={authLoading}
-                      isDisabled={authLoading || !authValue.trim() || !canMutate}
+                      isDisabled={authLoading || !isValidBase64Auth(authValue) || !canMutate}
                     >
                       Create Secret
                     </Button>

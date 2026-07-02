@@ -85,9 +85,12 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
     };
   }, []);
 
+  const channelValid = !channelOverride.trim() || /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(channelOverride.trim());
   const canConfirm =
-    targetType === "stable" ||
-    (targetType === "nightly" && !!selectedImage.trim() && prerequisitesMet);
+    channelValid && (
+      targetType === "stable" ||
+      (targetType === "nightly" && !!selectedImage.trim() && prerequisitesMet)
+    );
 
   const handleReinstall = () => {
     trackFeature(targetType === "stable" ? "reinstall_stable" : "reinstall_nightly");
@@ -300,6 +303,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                     onChange={(_e, val) => setChannelOverride(val)}
                     placeholder="e.g., stable-3.5, beta (leave empty to auto-detect)"
                     isDisabled={loading}
+                    validated={channelValid ? "default" : "error"}
                   />
                   <HelperText>
                     <HelperTextItem>

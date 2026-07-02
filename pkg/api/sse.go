@@ -93,3 +93,11 @@ func (s *SSEWriter) EmitStepWithDetail(step, status, message, detail string) err
 		ElapsedMs: time.Since(s.start).Milliseconds(),
 	})
 }
+
+// SendHeartbeat writes an SSE comment (": heartbeat\n\n") to keep the
+// connection alive through proxies with idle timeouts. Per the SSE spec,
+// lines starting with ":" are comments and are ignored by EventSource clients.
+func (s *SSEWriter) SendHeartbeat() {
+	_, _ = fmt.Fprint(s.w, ": heartbeat\n\n")
+	_ = s.rc.Flush()
+}

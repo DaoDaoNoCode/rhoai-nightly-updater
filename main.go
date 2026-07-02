@@ -103,7 +103,7 @@ func main() {
 		fs.ServeHTTP(w, r)
 	})
 
-	handler := middleware.SecurityHeaders(mux)
+	handler := middleware.RequestID(middleware.SecurityHeaders(mux))
 
 	srv := &http.Server{
 		Addr:         ":" + port,

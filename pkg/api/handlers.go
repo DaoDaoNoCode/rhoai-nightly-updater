@@ -46,6 +46,21 @@ func releaseClusterMutationLock() {
 	clusterMutationInProgress.Store(false)
 }
 
+// sseHeartbeat sends periodic SSE comments to keep the connection alive
+// through proxies with idle timeouts. Stops when done is closed.
+func sseHeartbeat(w *SSEWriter, done <-chan struct{}) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			w.SendHeartbeat()
+		}
+	}
+}
+
 // isAllowedImage checks whether the image reference starts with an allowed registry prefix.
 func isAllowedImage(image string) bool {
 	lower := strings.ToLower(image)
@@ -467,6 +482,11 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		return
 	}
 	defer releaseClusterMutationLock()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in update-stream handler", "error", rec)
+		}
+	}()
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
@@ -493,6 +513,10 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		writeError(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
 
 	slog.Info("mutation", "op", "update-stream", "image", req.Image)
 
@@ -767,6 +791,11 @@ var HandleRefreshOperator = withMutationAuth(func(c *cluster.Client, w http.Resp
 		return
 	}
 	defer releaseClusterMutationLock()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in refresh handler", "error", rec)
+		}
+	}()
 
 	slog.Info("mutation", "op", "refresh")
 
@@ -849,6 +878,11 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		return
 	}
 	defer releaseClusterMutationLock()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in reinstall-stream handler", "error", rec)
+		}
+	}()
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
@@ -890,6 +924,10 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		return
 	}
 
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
 	slog.Info("mutation", "op", "reinstall-stream", "targetType", req.TargetType, "image", req.Image)
 
 	result, reinstallErr := cluster.ReinstallStream(c, req.TargetType, req.Image, req.Channel, func(event cluster.UpdateStepEvent) {
@@ -904,6 +942,10 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	})
 
 	if reinstallErr != nil {
+		if r.Context().Err() != nil {
+			slog.Warn("reinstall-stream: client disconnected (SSE dropped), but operations may have completed")
+			return
+		}
 		slog.Error("reinstall-stream failed", "error", reinstallErr)
 		return
 	}
@@ -924,12 +966,21 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 	defer releaseClusterMutationLock()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in refresh-stream handler", "error", rec)
+		}
+	}()
 
 	sseWriter, err := NewSSEWriter(w)
 	if err != nil {
 		writeError(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
 
 	slog.Info("mutation", "op", "refresh-stream")
 
@@ -945,6 +996,10 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	})
 
 	if refreshErr != nil {
+		if r.Context().Err() != nil {
+			slog.Warn("refresh-stream: client disconnected (SSE dropped), but operations may have completed")
+			return
+		}
 		slog.Error("refresh-stream failed", "error", refreshErr)
 		return
 	}

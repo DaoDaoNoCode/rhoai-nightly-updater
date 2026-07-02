@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
@@ -100,27 +101,32 @@ func getQuayAuth(c *Client) string {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
 	body, _, err := c.get(path)
 	if err != nil {
+		slog.Warn("quay auth: failed to read pull secret", "error", err)
 		return ""
 	}
 
 	var secret map[string]interface{}
 	if err := json.Unmarshal(body, &secret); err != nil {
+		slog.Warn("quay auth: failed to parse pull secret JSON", "error", err)
 		return ""
 	}
 
 	data, _ := secret["data"].(map[string]interface{})
 	dockerCfgB64, _ := data[".dockerconfigjson"].(string)
 	if dockerCfgB64 == "" {
+		slog.Warn("quay auth: pull secret has no .dockerconfigjson data")
 		return ""
 	}
 
 	decodedBytes, err := base64.StdEncoding.DecodeString(dockerCfgB64)
 	if err != nil {
+		slog.Warn("quay auth: failed to decode .dockerconfigjson base64", "error", err)
 		return ""
 	}
 
 	var dockerCfg map[string]interface{}
 	if err := json.Unmarshal(decodedBytes, &dockerCfg); err != nil {
+		slog.Warn("quay auth: failed to parse docker config JSON", "error", err)
 		return ""
 	}
 
@@ -134,6 +140,7 @@ func getQuayAuth(c *Client) string {
 			}
 		}
 	}
+	slog.Warn("quay auth: no quay.io/rhoai or quay.io entry found in pull secret auths")
 	return ""
 }
 

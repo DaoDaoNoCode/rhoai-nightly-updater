@@ -3,10 +3,11 @@ package cluster
 import (
 	"context"
 	"encoding/json"
-	"sync"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"sync"
 	"strings"
 	"time"
 )
@@ -104,6 +105,9 @@ func GetImageLabels(ctx context.Context, c *Client, imageID string) (*ImageLabel
 
 	// Get quay auth from the cluster pull secret
 	quayAuth := getQuayAuth(c)
+	if quayAuth == "" {
+		slog.Debug("image labels: proceeding without quay auth (pull secret may be missing or invalid)")
+	}
 
 	// Get bearer token scoped to this repo
 	authURL := fmt.Sprintf("https://quay.io/v2/auth?service=quay.io&scope=repository:%s:pull", repo)
@@ -149,7 +153,7 @@ func GetImageLabels(ctx context.Context, c *Client, imageID string) (*ImageLabel
 	// Cache the result with timestamp for TTL-based eviction
 	labelCacheMu.Lock()
 	if len(labelCache) >= cacheMaxEntries {
-		labelCache = make(map[string]labelCacheEntry)
+		evictStaleEntries(labelCache)
 	}
 	labelCache[imageID] = labelCacheEntry{labels: labels, at: time.Now()}
 	labelCacheMu.Unlock()
@@ -371,17 +375,20 @@ func fetchCommitDate(ctx context.Context, gitURL, sha string) string {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/commits/%s", owner, repo, sha)
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
+		slog.Debug("fetchCommitDate: failed to create request", "url", apiURL, "error", err)
 		return ""
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	resp, err := quayHTTPClient.Do(req)
 	if err != nil {
+		slog.Debug("fetchCommitDate: request failed", "url", apiURL, "error", err)
 		return ""
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		slog.Debug("fetchCommitDate: non-200 response", "status", resp.StatusCode, "repo", owner+"/"+repo)
 		return ""
 	}
 
@@ -393,16 +400,18 @@ func fetchCommitDate(ctx context.Context, gitURL, sha string) string {
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // 64KB limit
 	if err != nil {
+		slog.Debug("fetchCommitDate: failed to read response body", "error", err)
 		return ""
 	}
 	if err := json.Unmarshal(body, &commitData); err != nil {
+		slog.Debug("fetchCommitDate: failed to parse response JSON", "error", err)
 		return ""
 	}
 	date := commitData.Committer.Date
 	if date != "" {
 		commitDateCacheMu.Lock()
 		if len(commitDateCache) >= cacheMaxEntries {
-			commitDateCache = make(map[string]commitDateCacheEntry)
+			evictStaleCommitEntries(commitDateCache)
 		}
 		commitDateCache[cacheKey] = commitDateCacheEntry{date: date, at: time.Now()}
 		commitDateCacheMu.Unlock()
@@ -416,4 +425,26 @@ func truncateForLog(s string) string {
 		return s[:77] + "..."
 	}
 	return s
+}
+
+// evictStaleEntries removes entries older than cacheTTL from the label cache.
+// Must be called with labelCacheMu held.
+func evictStaleEntries(cache map[string]labelCacheEntry) {
+	now := time.Now()
+	for k, v := range cache {
+		if now.Sub(v.at) > cacheTTL {
+			delete(cache, k)
+		}
+	}
+}
+
+// evictStaleCommitEntries removes entries older than cacheTTL from the commit date cache.
+// Must be called with commitDateCacheMu held.
+func evictStaleCommitEntries(cache map[string]commitDateCacheEntry) {
+	now := time.Now()
+	for k, v := range cache {
+		if now.Sub(v.at) > cacheTTL {
+			delete(cache, k)
+		}
+	}
 }

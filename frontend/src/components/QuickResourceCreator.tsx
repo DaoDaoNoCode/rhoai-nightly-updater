@@ -292,7 +292,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                               </FlexItem>
                               <FlexItem>
                                 <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                  <Button variant="primary" size="sm" onClick={() => setSetupConfirm("deploy-mlflow-pr")} isDisabled={!canMutate || !mlflowPR || parseInt(mlflowPR, 10) <= 0 || !!resAction} isLoading={resAction === "deploy-mlflow-pr"}>Deploy PR</Button>
+                                  <Button variant="primary" size="sm" onClick={() => setSetupConfirm("deploy-mlflow-pr")} isDisabled={!canMutate || !mlflowPR || !Number.isInteger(Number(mlflowPR)) || Number(mlflowPR) <= 0 || !!resAction} isLoading={resAction === "deploy-mlflow-pr"}>Deploy PR</Button>
                                 </Tooltip>
                               </FlexItem>
                               {resStatus.mlflow.currentImage?.includes("odh-pr-") && (
