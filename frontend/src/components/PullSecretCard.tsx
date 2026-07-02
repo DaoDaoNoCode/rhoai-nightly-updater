@@ -138,9 +138,11 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                 <FlexItem>Pull Secret</FlexItem>
               </Flex>
               <FlexItem>
-                {pullSecret.exists
+                {pullSecret.exists && pullSecret.valid
                   ? <Label color="green" variant="outline" isCompact>Ready</Label>
-                  : <Label status="danger" variant="outline" isCompact>Missing</Label>}
+                  : pullSecret.exists
+                    ? <Label status="warning" variant="outline" isCompact>Invalid</Label>
+                    : <Label status="danger" variant="outline" isCompact>Missing</Label>}
               </FlexItem>
             </Flex>
           </CardTitle>

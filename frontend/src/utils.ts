@@ -1,7 +1,7 @@
 import type { StatusResponse } from "./types";
 
 export function prerequisitesMet(status: StatusResponse | null): boolean {
-  return !!(status?.pullSecret.exists && status?.imageMirror.exists);
+  return !!(status?.pullSecret.exists && status?.pullSecret.valid && status?.imageMirror.exists);
 }
 
 export function operatorInstalled(status: StatusResponse | null): boolean {

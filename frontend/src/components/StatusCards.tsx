@@ -207,7 +207,7 @@ export const StatusCards: React.FC<StatusCardsProps> = ({
                         RHOAI Operator
                       </Link>
                     </FlexItem>
-                    {status.csv.phase !== "Not Found" && (
+                    {status.csv.phase !== "Not Found" && status.csv.phase !== "Installing" && status.csv.phase !== "Replacing" && (
                       <FlexItem>{cardStatusIcon(csvOk)}</FlexItem>
                     )}
                   </Flex>

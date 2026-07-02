@@ -134,7 +134,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
     }
   });
 
-  const isOnNightly = status?.subscription.source !== status?.stableSource;
+  const isOnNightly = !!(status?.subscription.source && status.subscription.source !== status.stableSource);
   const prerequisitesMet = checkPrereqs(status);
 
   // Shared nightly tags — fetched once, used by both UpdatePanel and ReinstallPanel
@@ -448,7 +448,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
       <PageSection>
         <Card isLarge>
           <CardTitle>
-            <Title headingLevel="h3">{operatorInstalled(status) ? "Upgrade to Nightly Build" : "Install Nightly Build"}</Title>
+            <Title headingLevel="h3">{status?.csv.phase && status.csv.phase !== "Not Found" ? "Upgrade to Nightly Build" : "Install Nightly Build"}</Title>
           </CardTitle>
           <CardBody>
             <UpdatePanel
@@ -527,8 +527,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         </Card>
       </PageSection>
 
-      {/* --- Action Card 2: Reinstall Operator (hidden when no operator installed) --- */}
-      {operatorInstalled(status) && (
+      {/* --- Action Card 2: Reinstall Operator (hidden until operator has a CSV) --- */}
+      {status?.csv.phase && status.csv.phase !== "Not Found" && (
       <PageSection>
         <Card isLarge>
           <CardTitle>
