@@ -4,33 +4,32 @@ A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clu
 
 ## Features
 
-- Dashboard with live operator status, reconciliation progress tracker, and activity log
-- One-click upgrade to nightly builds with auto-fetch from Quay registry
-- SSE streaming for real-time update/reinstall/refresh progress (8-13 step pipeline with per-step events)
-- Operator refresh for same-version image updates (forces CSV+Subscription recreate)
-- Version-aware tag sorting (handles EA vs GA versions correctly)
-- Safe 13-step reinstall flow with webhook and CRD conversion cleanup
-- Preflight checks before update (pull secret, IDMS, operator health, registry access)
-- Server-side downgrade prevention (blocks update when selected version < current CSV version)
-- Assist Rollout for stuck deployments (patches maxUnavailable to unblock deadlocked rollouts on constrained clusters)
-- Channel override in Reinstall for when auto-detection picks wrong channel
-- Scheduling failure detection with actionable guidance (Pending pod analysis)
-- Build Explorer: browse all FBC nightly tags, filter by version/type (EA/GA), expand to see categorized component images (core, runtimes, workbenches, pipelines, training, infra) with git commit provenance
-- Sortable component status table (problems first)
-- Component health view with DSC v2 API (v1 fallback) and deployment details
-- Git commit tracking from OCI image labels (vcs-ref, git.url) via Quay registry
-- Pod inspector for debugging across operator/application namespaces
-- Live diagnostics engine with auto-detection of 9 health checks (catalog, operator pods, subscription, CSV, install plan, pull secret, image mirror, stale webhooks, node capacity) and one-click fixes
-- Pull secret management (create, test, update) directly in the UI
-- Image registry whitelist (only quay.io/rhoai and registry.redhat.io/rhoai allowed)
-- Node readiness verification before updates
-- Confirmation modals for all cluster-modifying actions
-- Activity audit log stored in ConfigMap
-- Dashboard Dev: deploy PR builds for live testing (multi-container: scans all 8 dashboard container repos on Quay for matching PR images), one-click revert with operator management toggle, image mismatch rollout detection, quick resource creator (MinIO, per-project pipeline servers, MLflow CR lifecycle with PR deploy/revert)
-- Dark mode with localStorage persistence
-- Per-user authorization via oauth-proxy SAR gate (read-only mode for non-admin users)
-- Structured JSON logging (slog) for log aggregation
-- 2 replicas with pod anti-affinity for high availability
+### Nightly Build Management
+- **One-click update** with auto-fetch from Quay registry and FBC content preview
+- **SSE streaming progress** — real-time step-by-step pipeline (8–13 steps depending on operation)
+- **Reinstall** with full cleanup (webhooks, CRDs, stale component CRs) and channel override
+- **Operator refresh** for same-version image updates without version change
+- **Preflight checks** — pull secret, IDMS, operator health, registry access, node readiness
+- **Downgrade prevention** — blocks update when selected version is older than current
+
+### Cluster Visibility
+- **DSC component status** — expandable breakdown (Ready / Needs Attention / Removed) with one-click fixes
+- **Deployment table** — sortable, with pod-level ready count, rollout stuck detection, scheduling failure alerts
+- **Git provenance** — commit SHA, diff link, and build date extracted from OCI image labels
+- **Live diagnostics** — 9 automated health checks with doc-backed fix actions
+- **Build Explorer** — browse all nightly tags, filter by version/type, preview FBC catalog contents inline
+
+### Dashboard Dev (PR Testing)
+- **Multi-container PR deploy** — scans 8 dashboard repos on Quay for matching PR images
+- **One-click revert** to operator-managed images
+- **Quick resource creator** — MinIO, per-project pipeline servers, MLflow CR lifecycle
+
+### Platform
+- **SSO authentication** via oauth-proxy with SAR gate (read-only mode for non-admins)
+- **Confirmation modals** for all cluster-modifying actions
+- **Activity audit log** stored in ConfigMap with user attribution
+- **Dark mode**, structured JSON logging, Prometheus metrics + alerting rules
+- **HA deployment** — 2 replicas with pod anti-affinity
 
 ## Architecture
 
