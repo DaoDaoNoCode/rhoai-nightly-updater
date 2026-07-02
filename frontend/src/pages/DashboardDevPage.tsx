@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Alert,
   Button,
@@ -220,7 +221,18 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
         onRefresh={handleManualRefresh}
       />
 
-      {error && <ErrorAlert error={error} genericTitle="Failed to load" />}
+      {error && !error.includes("failed to get dashboard state") && <ErrorAlert error={error} genericTitle="Failed to load" />}
+
+      {error && error.includes("failed to get dashboard state") && (
+        <PageSection>
+          <Alert variant="info" title="RHOAI Dashboard is not deployed yet" isInline>
+            <p>The Dashboard Dev page lets you deploy PR builds of the RHOAI Dashboard for testing.</p>
+            <p style={{ marginTop: "0.5rem" }}>
+              First install RHOAI from the <Link to="/">Dashboard</Link>, then come back here to deploy PR builds.
+            </p>
+          </Alert>
+        </PageSection>
+      )}
 
       {!canMutate && (
         <PageSection>

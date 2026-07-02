@@ -15,6 +15,11 @@ import {
   ModalHeader,
   ModalBody,
   ModalFooter,
+  Flex,
+  FlexItem,
+  Grid,
+  GridItem,
+  Label,
   PageSection,
   Card,
   CardTitle,
@@ -27,14 +32,13 @@ import {
 import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
 import type { NightlyTag, OperationResponse, StatusResponse, UpdateStep } from "../types";
 import { fetchNightlyTags, streamRefresh, trackFeature } from "../services/api";
+import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
 import { StatusCards } from "../components/StatusCards";
+import { PullSecretCard } from "../components/PullSecretCard";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { type OperationType as PipelineOperationType } from "../components/UpdatePipeline";
 import { ReinstallPanel } from "../components/ReinstallPanel";
-import {
-  PrerequisitesBanner,
-  SetupModal,
-} from "../components/PrerequisitesPanel";
+import { SetupModal } from "../components/PrerequisitesPanel";
 import { ActivityLog } from "../components/ActivityLog";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
@@ -125,11 +129,15 @@ export const StatusPage: React.FC<StatusPageProps> = ({
     }
   });
 
+  const isOnNightly = status?.subscription.source !== status?.stableSource;
+  const prerequisitesMet = checkPrereqs(status);
+
   // Shared nightly tags — fetched once, used by both UpdatePanel and ReinstallPanel
   const [nightlyTags, setNightlyTags] = useState<NightlyTag[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
 
   const loadTags = useCallback(async () => {
+    if (!prerequisitesMet) return;
     setTagsLoading(true);
     try {
       const res = await fetchNightlyTags();
@@ -139,7 +147,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
     } finally {
       setTagsLoading(false);
     }
-  }, []);
+  }, [prerequisitesMet]);
 
   useEffect(() => {
     loadTags();
@@ -160,9 +168,6 @@ export const StatusPage: React.FC<StatusPageProps> = ({
   const [refreshLoading, setRefreshLoading] = useState(false);
   const [refreshResult, setRefreshResult] = useState<OperationResponse | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-
-  const isOnNightly = status?.subscription.source !== status?.stableSource;
-  const prerequisitesMet = !!(status?.pullSecret.exists && status?.imageMirror.exists);
 
   // Abort controller for streaming operations
   const abortRef = useRef<AbortController | null>(null);
@@ -260,39 +265,57 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         </PageSection>
       )}
 
-      {/* --- First-time onboarding banner --- */}
-      {showOnboarding && (
+      {/* --- One-time cluster setup (combined onboarding + prerequisites) --- */}
+      {status && !prerequisitesMet && (
         <PageSection>
-          <Alert
-            variant="info"
-            title="Getting Started"
-            isInline
-            actionClose={
-              <AlertActionCloseButton onClose={handleDismissOnboarding} />
-            }
-          >
-            <p style={{ marginBottom: "0.5rem" }}>
-              Welcome to RHOAI Nightly Updater! This tool helps you install and
-              manage RHOAI nightly builds on this cluster.
-            </p>
-            <p style={{ marginBottom: "0.5rem" }}>
-              Before you can start, complete the one-time cluster setup:
-            </p>
-            <List component="ol">
-              <ListItem>
-                Configure the pull secret (use the Pull Secret card below)
-              </ListItem>
-              <ListItem>
-                Set up the image mirror (click &quot;View setup
-                instructions&quot; in the prerequisites banner below)
-              </ListItem>
-            </List>
-          </Alert>
+          <Stack hasGutter>
+            <StackItem>
+              <Title headingLevel="h3">One-Time Cluster Setup</Title>
+              <Content component="small">Complete these two steps before installing nightly builds.</Content>
+            </StackItem>
+            <StackItem>
+              <Grid hasGutter>
+                <PullSecretCard
+                  pullSecret={status.pullSecret}
+                  canMutate={canMutate}
+                  onStatusRefresh={refresh}
+                />
+                <GridItem lg={6} md={6} sm={12}>
+                  <Card isFullHeight isCompact>
+                    <CardTitle>
+                      <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
+                        <FlexItem>Step 2: Image Mirror (IDMS)</FlexItem>
+                        <FlexItem>{status.imageMirror.exists
+                          ? <Label color="green" isCompact>Ready</Label>
+                          : <Label color="red" isCompact>Missing</Label>}
+                        </FlexItem>
+                      </Flex>
+                    </CardTitle>
+                    <CardBody>
+                      <Stack hasGutter>
+                        <StackItem>
+                          <Content component="small">
+                            Redirects registry.redhat.io/rhoai image pulls to quay.io/rhoai where nightly images are hosted.
+                          </Content>
+                        </StackItem>
+                        <StackItem>
+                          <Button variant="link" isInline onClick={() => setSetupOpen(true)}>
+                            View setup instructions
+                          </Button>
+                        </StackItem>
+                      </Stack>
+                    </CardBody>
+                  </Card>
+                </GridItem>
+              </Grid>
+            </StackItem>
+          </Stack>
         </PageSection>
       )}
 
-      {/* --- Status cards (dashboard) --- */}
+      {/* --- Status cards (operator + catalog) --- */}
       <PageSection>
+        <Title headingLevel="h3" style={{ marginBottom: "0.75rem" }}>Operator Status</Title>
         <StatusCards
           status={status}
           loading={loading}
@@ -335,16 +358,6 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         </PageSection>
       )}
 
-      {/* --- Prerequisites banner (only when not met) --- */}
-      {status && (
-        <PageSection>
-          <PrerequisitesBanner
-            status={status}
-            onOpenSetup={() => setSetupOpen(true)}
-          />
-        </PageSection>
-      )}
-
       {/* --- Action Card 1: Upgrade to Nightly Build --- */}
       <PageSection>
         <Card isLarge>
@@ -381,7 +394,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                         icon={<SyncAltIcon />}
                         onClick={() => setRefreshConfirmOpen(true)}
                         isLoading={refreshLoading}
-                        isDisabled={refreshLoading || !canMutate}
+                        isDisabled={refreshLoading || !canMutate || !prerequisitesMet || !operatorInstalled(status)}
                         size="sm"
                       >
                         Refresh operator

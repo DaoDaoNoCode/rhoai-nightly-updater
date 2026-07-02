@@ -64,7 +64,7 @@ const IDMSInstructions: React.FC = () => (
             <strong>5.</strong> Create the image mirror:
           </Content>
           <ClipboardCopy isBlock isReadOnly>
-{`rosa create image-mirror --cluster=razzmatazz-serving-demo \\
+{`rosa create image-mirror --cluster=<your-cluster-name> \\
   --source=registry.redhat.io/rhoai --mirrors=quay.io/rhoai`}
           </ClipboardCopy>
         </ListItem>

@@ -106,7 +106,7 @@ func checkCatalogHealth(c *Client) checkOutput {
 
 	if !cs.Exists {
 		return checkOutput{
-			check: CheckResult{Name: "Catalog health", Status: "warn", Detail: "CatalogSource not found"},
+			check: CheckResult{Name: "Catalog health", Status: "pass", Detail: "No nightly catalog yet (normal for fresh clusters)"},
 			problems: []Problem{{
 				ID:          "catalog-missing",
 				Severity:    "info",
@@ -163,7 +163,16 @@ func checkOperatorPods(c *Client) checkOutput {
 
 	pods, err := getPodsInNamespace(c, SubNS)
 	if err != nil {
+		if IsK8sError(err, 404) {
+			out.check = CheckResult{Name: "Operator pods", Status: "pass", Detail: "No operator namespace (operator not installed yet)"}
+			return out
+		}
 		out.check = CheckResult{Name: "Operator pods", Status: "warn", Detail: "Could not list operator pods"}
+		return out
+	}
+
+	if len(pods) == 0 {
+		out.check = CheckResult{Name: "Operator pods", Status: "pass", Detail: "No operator pods (operator not installed yet)"}
 		return out
 	}
 
@@ -247,6 +256,15 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 	}
 
 	switch sub.State {
+	case "Not Installed":
+		out.check = CheckResult{Name: "Subscription health", Status: "pass", Detail: "No subscription (operator not installed yet)"}
+		out.problems = append(out.problems, Problem{
+			ID:          "subscription-missing",
+			Severity:    "info",
+			Title:       "No operator Subscription found",
+			Description: "The rhods-operator Subscription does not exist. This is normal on a fresh cluster before the first nightly install.",
+			Fix:         "Use the Update panel on the Dashboard to install a nightly build. This will create the Subscription automatically.",
+		})
 	case "AtLatestKnown":
 		out.check.Detail = fmt.Sprintf("Subscription active (channel: %s, source: %s)", sub.Channel, sub.Source)
 	case "UpgradePending":
@@ -308,9 +326,14 @@ func checkCSVHealth(c *Client) checkOutput {
 	}
 
 	if csv.Phase == "Not Found" || csv.Name == "" {
-		out.check = CheckResult{Name: "Operator installed", Status: "fail", Detail: "No CSV found — operator not installed"}
 		sub, subErr := getSubscription(c)
-		if subErr == nil && sub.Name != "" {
+		hasSubscription := subErr == nil && sub.Name != "" && sub.State != "Not Installed"
+		if !hasSubscription {
+			out.check = CheckResult{Name: "Operator installed", Status: "pass", Detail: "No operator installed yet (normal for fresh clusters)"}
+			return out
+		}
+		out.check = CheckResult{Name: "Operator installed", Status: "fail", Detail: "No CSV found — operator not installed"}
+		if hasSubscription {
 			out.problems = append(out.problems, Problem{
 				ID:          "csv-not-found",
 				Severity:    "critical",
@@ -420,28 +443,28 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 	}
 
 	if len(result.Items) == 0 {
-		_, subErr := getSubscription(c)
-		if subErr == nil {
+		sub, subErr := getSubscription(c)
+		if subErr != nil {
 			return checkOutput{
-				check: CheckResult{Name: "Install plan", Status: "warn", Detail: "No install plans found but subscription exists"},
-				problems: []Problem{{
-					ID:           "installplan-missing",
-					Severity:     "warning",
-					Title:        "OLM hasn't created an install plan yet",
-					Description:  "A subscription exists but no install plan has been created. OLM may be processing the subscription or the catalog may not be ready.",
-					Evidence:     []string{fmt.Sprintf("No install plans found in namespace '%s'", SubNS)},
-					Fix:          "Wait a few minutes. If no install plan appears, check the catalog health and use the Reinstall panel.",
-					TechnicalCmd: fmt.Sprintf("oc get installplans -n %s", SubNS),
-				}},
+				check: CheckResult{Name: "Install plan", Status: "warn", Detail: "Could not verify subscription status"},
 			}
 		}
-		if IsK8sError(subErr, 404) {
+		if sub.State == "Not Installed" || sub.Name == "" {
 			return checkOutput{
 				check: CheckResult{Name: "Install plan", Status: "pass", Detail: "No install plans (no subscription active)"},
 			}
 		}
 		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "warn", Detail: "Could not verify subscription status"},
+			check: CheckResult{Name: "Install plan", Status: "warn", Detail: "No install plans found but subscription exists"},
+			problems: []Problem{{
+				ID:           "installplan-missing",
+				Severity:     "warning",
+				Title:        "OLM hasn't created an install plan yet",
+				Description:  "A subscription exists but no install plan has been created. OLM may be processing the subscription or the catalog may not be ready.",
+				Evidence:     []string{fmt.Sprintf("No install plans found in namespace '%s'", SubNS)},
+				Fix:          "Wait a few minutes. If no install plan appears, check the catalog health and use the Reinstall panel.",
+				TechnicalCmd: fmt.Sprintf("oc get installplans -n %s", SubNS),
+			}},
 		}
 	}
 

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Alert,
   Bullseye,
@@ -12,6 +12,7 @@ import {
   DescriptionListGroup,
   DescriptionListTerm,
   DescriptionListDescription,
+  ExpandableSection,
   Flex,
   FlexItem,
   Grid,
@@ -32,11 +33,11 @@ import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclam
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
 import CatalogIcon from "@patternfly/react-icons/dist/esm/icons/catalog-icon";
-import MirrorIcon from "@patternfly/react-icons/dist/esm/icons/clone-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import { Link } from "react-router-dom";
 import { truncateImage } from "../utils";
 import type { StatusResponse } from "../types";
+import { prerequisitesMet as checkPrereqs } from "../utils";
 import { PullSecretCard } from "./PullSecretCard";
 
 interface StatusCardsProps {
@@ -57,10 +58,15 @@ function phaseLabel(phase: string) {
         </Label>
       );
     case "Failed":
-    case "Not Found":
       return (
         <Label color="red" icon={<ExclamationCircleIcon />}>
           {phase}
+        </Label>
+      );
+    case "Not Found":
+      return (
+        <Label color="grey">
+          Not Installed
         </Label>
       );
     case "Installing":
@@ -102,8 +108,7 @@ function cardStatusIcon(ok: boolean) {
   );
 }
 
-export const StatusCards: React.FC<StatusCardsProps> = React.memo(
-  ({
+export const StatusCards: React.FC<StatusCardsProps> = ({
     status,
     loading,
     error,
@@ -111,6 +116,8 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
     onStatusRefresh,
     canMutate = true,
   }) => {
+    const [setupExpanded, setSetupExpanded] = useState(false);
+
     if (loading && !status) {
       return (
         <Bullseye role="status">
@@ -147,6 +154,7 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
       status.catalogSource.exists &&
       status.catalogSource.state === "TRANSIENT_FAILURE";
     const catalogOk = status.catalogSource.exists && !catalogTransient;
+    const setupDone = checkPrereqs(status);
 
     return (
       <Stack hasGutter>
@@ -180,7 +188,7 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
         <StackItem>
           <Grid hasGutter>
             {/* --- Operator Card --- */}
-            <GridItem lg={3} md={6} sm={12}>
+            <GridItem lg={6} md={6} sm={12}>
               <Card isFullHeight isCompact>
                 <CardHeader>
                   <CardTitle>
@@ -202,7 +210,9 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
                           RHOAI Operator
                         </Link>
                       </FlexItem>
-                      <FlexItem>{cardStatusIcon(csvOk)}</FlexItem>
+                      {status.csv.phase !== "Not Found" && (
+                        <FlexItem>{cardStatusIcon(csvOk)}</FlexItem>
+                      )}
                     </Flex>
                   </CardTitle>
                 </CardHeader>
@@ -280,7 +290,7 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
             </GridItem>
 
             {/* --- Catalog Source Card --- */}
-            <GridItem lg={3} md={6} sm={12}>
+            <GridItem lg={6} md={6} sm={12}>
               <Card isFullHeight isCompact>
                 <CardHeader>
                   <CardTitle>
@@ -318,13 +328,13 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
                     <DescriptionListGroup>
                       <DescriptionListTerm>Source</DescriptionListTerm>
                       <DescriptionListDescription>
-                        {status.subscription.source}
+                        {status.subscription.source || <Content component="small" style={{ color: "var(--pf-t--global--color--nonstatus--gray--default)" }}>Not configured</Content>}
                       </DescriptionListDescription>
                     </DescriptionListGroup>
                     <DescriptionListGroup>
                       <DescriptionListTerm>Channel</DescriptionListTerm>
                       <DescriptionListDescription>
-                        {status.subscription.channel}
+                        {status.subscription.channel || <Content component="small" style={{ color: "var(--pf-t--global--color--nonstatus--gray--default)" }}>Not configured</Content>}
                       </DescriptionListDescription>
                     </DescriptionListGroup>
                     {catalogTransient && (
@@ -374,70 +384,51 @@ export const StatusCards: React.FC<StatusCardsProps> = React.memo(
               </Card>
             </GridItem>
 
-            {/* --- Pull Secret Card --- */}
-            <PullSecretCard
-              pullSecret={status.pullSecret}
-              canMutate={canMutate}
-              onStatusRefresh={onStatusRefresh}
-            />
-
-            {/* --- Image Mirror Card --- */}
-            <GridItem lg={3} md={6} sm={12}>
-              <Card isFullHeight isCompact>
-                <CardHeader>
-                  <CardTitle>
-                    <Stack hasGutter>
-                      <StackItem>
-                        <Flex
-                          alignItems={{ default: "alignItemsCenter" }}
-                          gap={{ default: "gapSm" }}
-                          flexWrap={{ default: "nowrap" }}
-                        >
-                          <FlexItem>
-                            <Icon>
-                              <MirrorIcon />
-                            </Icon>
-                          </FlexItem>
-                          <FlexItem>Image Mirror</FlexItem>
-                          <FlexItem>
-                            {cardStatusIcon(status.imageMirror.exists)}
-                          </FlexItem>
-                        </Flex>
-                      </StackItem>
-                      <StackItem>
-                        <Content component="small">
-                          Redirects registry.redhat.io/rhoai image pulls to
-                          quay.io/rhoai where nightly images are hosted
-                        </Content>
-                      </StackItem>
-                    </Stack>
-                  </CardTitle>
-                </CardHeader>
-                <CardBody>
-                  <DescriptionList isCompact>
-                    <DescriptionListGroup>
-                      <DescriptionListTerm>
-                        registry.redhat.io/rhoai
-                      </DescriptionListTerm>
-                      <DescriptionListDescription>
-                        {existsLabel(status.imageMirror.exists)}
-                      </DescriptionListDescription>
-                    </DescriptionListGroup>
-                    {status.imageMirror.exists && (
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>Name</DescriptionListTerm>
-                        <DescriptionListDescription>
-                          {status.imageMirror.name}
-                        </DescriptionListDescription>
-                      </DescriptionListGroup>
-                    )}
-                  </DescriptionList>
-                </CardBody>
-              </Card>
-            </GridItem>
           </Grid>
         </StackItem>
+        {setupDone && (
+          <StackItem>
+            <ExpandableSection
+              toggleText={setupExpanded ? "Hide cluster setup" : "Cluster setup"}
+              onToggle={(_e, expanded) => setSetupExpanded(expanded)}
+              isExpanded={setupExpanded}
+            >
+              <Grid hasGutter>
+                <PullSecretCard
+                  pullSecret={status.pullSecret}
+                  canMutate={canMutate}
+                  onStatusRefresh={onStatusRefresh}
+                />
+                <GridItem lg={6} md={6} sm={12}>
+                  <Card isFullHeight isCompact>
+                    <CardHeader>
+                      <CardTitle>
+                        <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
+                          <FlexItem>Image Mirror</FlexItem>
+                          <FlexItem><Label color="green" isCompact>Ready</Label></FlexItem>
+                        </Flex>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardBody>
+                      <DescriptionList isCompact>
+                        <DescriptionListGroup>
+                          <DescriptionListTerm>Source</DescriptionListTerm>
+                          <DescriptionListDescription>registry.redhat.io/rhoai</DescriptionListDescription>
+                        </DescriptionListGroup>
+                        {status.imageMirror.name && (
+                          <DescriptionListGroup>
+                            <DescriptionListTerm>Name</DescriptionListTerm>
+                            <DescriptionListDescription>{status.imageMirror.name}</DescriptionListDescription>
+                          </DescriptionListGroup>
+                        )}
+                      </DescriptionList>
+                    </CardBody>
+                  </Card>
+                </GridItem>
+              </Grid>
+            </ExpandableSection>
+          </StackItem>
+        )}
       </Stack>
     );
-  },
-);
+  };

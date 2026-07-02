@@ -31,6 +31,7 @@ import {
 } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td, ExpandableRowContent } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
+import { Link } from "react-router-dom";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
@@ -233,11 +234,22 @@ export const ComponentsPage: React.FC = () => {
         onRefresh={handleRefresh}
       />
 
-      {error && (
+      {error && !(error.includes("failed to get components") && !data) && (
         <ErrorAlert error={error} genericTitle="Failed to load components" />
       )}
 
-      {loading && !data && (
+      {error && error.includes("failed to get components") && !data && (
+        <PageSection>
+          <Alert variant="info" title="RHOAI operator is not installed yet" isInline>
+            <p>Components will appear here once the RHOAI operator is installed on this cluster.</p>
+            <p style={{ marginTop: "0.5rem" }}>
+              Go to the <Link to="/">Dashboard</Link> to install RHOAI using the <strong>Upgrade to Nightly Build</strong> panel.
+            </p>
+          </Alert>
+        </PageSection>
+      )}
+
+      {loading && !data && !error && (
         <PageSection>
           <Bullseye>
             <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>

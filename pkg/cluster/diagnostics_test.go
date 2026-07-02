@@ -117,6 +117,23 @@ func buildEmptyList() string {
 	return string(b)
 }
 
+func buildHealthyPodList() string {
+	list := map[string]interface{}{"items": []interface{}{
+		map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "rhods-operator-abc123", "namespace": SubNS, "creationTimestamp": "2026-07-01T00:00:00Z"},
+			"status": map[string]interface{}{
+				"phase": "Running",
+				"containerStatuses": []interface{}{
+					map[string]interface{}{"name": "manager", "ready": true, "restartCount": 0, "state": map[string]interface{}{"running": map[string]interface{}{}}},
+				},
+			},
+			"spec": map[string]interface{}{"nodeName": "node-1"},
+		},
+	}}
+	b, _ := json.Marshal(list)
+	return string(b)
+}
+
 func buildNodeList(count int) string {
 	items := make([]interface{}, count)
 	for i := 0; i < count; i++ {
@@ -171,7 +188,7 @@ func buildAllHealthyResponses() map[string]mockResponse {
 		paths["mwh"]:           {body: buildEmptyWebhookList()},
 		paths["installPlans"]:  {body: buildInstallPlanList()},
 		paths["nodes"]:         {body: buildNodeList(3)},
-		paths["opPods"]:        {body: buildEmptyList()},
+		paths["opPods"]:        {body: buildHealthyPodList()},
 		paths["appPods"]:       {body: buildEmptyList()},
 	}
 }

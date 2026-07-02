@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Badge,
@@ -281,7 +281,18 @@ export const BuildExplorerPage: React.FC = () => {
         onRefresh={fetchTags}
       />
 
-      {error && <ErrorAlert error={error} genericTitle="Failed to load tags" />}
+      {error && !error.includes("failed to fetch nightly tags") && <ErrorAlert error={error} genericTitle="Failed to load tags" />}
+
+      {error && error.includes("failed to fetch nightly tags") && (
+        <PageSection>
+          <Alert variant="info" title="Pull secret not configured" isInline>
+            <p>The build explorer needs a pull secret to access nightly builds on Quay.io.</p>
+            <p style={{ marginTop: "0.5rem" }}>
+              Go to the <Link to="/">Dashboard</Link> and configure the <strong>Pull Secret</strong> first.
+            </p>
+          </Alert>
+        </PageSection>
+      )}
 
       {/* Search any FBC image by tag@sha256 */}
       <PageSection>

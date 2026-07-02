@@ -166,6 +166,9 @@ func getSubscription(c *Client) (types.SubscriptionInfo, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 	body, _, err := c.get(path)
 	if err != nil {
+		if IsK8sError(err, 404) {
+			return types.SubscriptionInfo{State: "Not Installed"}, nil
+		}
 		return types.SubscriptionInfo{}, fmt.Errorf("request failed: %w", err)
 	}
 	var result map[string]interface{}
@@ -336,6 +339,9 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
 	body, _, err := c.get(path)
 	if err != nil {
+		if IsK8sError(err, 404) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	var result map[string]interface{}

@@ -325,7 +325,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
           <Button
             variant="danger"
             onClick={() => setConfirmOpen(true)}
-            isDisabled={!canConfirm || loading || !canMutate}
+            isDisabled={!canConfirm || loading || !canMutate || !prerequisitesMet}
             isLoading={loading}
           >
             Reinstall Operator

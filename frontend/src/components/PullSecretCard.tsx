@@ -120,7 +120,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
   };
 
   return (
-    <GridItem lg={3} md={6} sm={12}>
+    <GridItem lg={6} md={6} sm={12}>
       <Card isFullHeight isCompact>
         <CardHeader>
           <CardTitle>
@@ -134,7 +134,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                   <KeyIcon />
                 </Icon>
               </FlexItem>
-              <FlexItem>Pull Secret</FlexItem>
+              <FlexItem>Step 1: Pull Secret</FlexItem>
               <FlexItem>
                 {cardStatusIcon(pullSecret.exists)}
               </FlexItem>

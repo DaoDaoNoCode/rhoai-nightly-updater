@@ -1,3 +1,13 @@
+import type { StatusResponse } from "./types";
+
+export function prerequisitesMet(status: StatusResponse | null): boolean {
+  return !!(status?.pullSecret.exists && status?.imageMirror.exists);
+}
+
+export function operatorInstalled(status: StatusResponse | null): boolean {
+  return !!(status?.subscription.source || (status?.csv.phase && status.csv.phase !== "Not Found"));
+}
+
 export function truncateImage(image: string, maxLen = 60): string {
   if (image.length <= maxLen) return image;
   const keep = Math.floor((maxLen - 3) / 2);

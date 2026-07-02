@@ -41,6 +41,7 @@ import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
 import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import { Link } from "react-router-dom";
 import { FBCContentModal } from "./FBCContentModal";
+import { prerequisitesMet as prerequisitesReady } from "../utils";
 import type { OperationResponse, StatusResponse, UpdateStep } from "../types";
 import {
   updateOperator,
@@ -116,9 +117,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
   const [previewOpen, setPreviewOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  const prerequisitesMet = !!(
-    status?.pullSecret.exists && status?.imageMirror.exists
-  );
+  const prerequisitesMet = prerequisitesReady(status);
 
   // --- Preflight checks ---
   const preflightChecks = useMemo(() => {
@@ -464,7 +463,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
                     icon={<SyncAltIcon />}
                     onClick={handleFetchLatest}
                     isLoading={fetchingLatest}
-                    isDisabled={fetchingLatest}
+                    isDisabled={fetchingLatest || !prerequisitesMet}
                   >
                     Fetch latest
                   </Button>
@@ -507,7 +506,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
                 </HelperTextItem>
               </HelperText>
             </FormHelperText>
-            {fetchLatestError && (
+            {fetchLatestError && prerequisitesMet && (
               <Alert
                 variant="danger"
                 title="Failed to fetch latest nightly"
