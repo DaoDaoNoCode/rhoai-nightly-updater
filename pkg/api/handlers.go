@@ -1209,3 +1209,16 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 		slog.Error("response encode error", "label", "diagnostics-fix", "error", encErr)
 	}
 })
+
+// HandleCreateDSC creates a default DataScienceCluster if one doesn't exist.
+var HandleCreateDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	slog.Info("mutation", "op", "create-dsc")
+
+	result, err := cluster.CreateDefaultDSC(c)
+	if err != nil {
+		slog.Error("create-dsc failed", "error", err)
+		writeError(w, "failed to create DataScienceCluster", http.StatusInternalServerError)
+		return
+	}
+	writeOperationResult(w, result, "create-dsc")
+})

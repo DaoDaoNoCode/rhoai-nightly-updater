@@ -366,3 +366,7 @@ export function fixProblem(problemId: string): Promise<OperationResponse> {
     acceptStatuses: [422],
   });
 }
+
+export async function createDSC(): Promise<OperationResponse> {
+  return request<OperationResponse>('/api/setup/dsc', { method: 'POST' });
+}

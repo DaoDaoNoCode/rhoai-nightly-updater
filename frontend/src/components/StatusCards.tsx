@@ -34,6 +34,7 @@ import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/excl
 import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
 import CatalogIcon from "@patternfly/react-icons/dist/esm/icons/catalog-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
+import CloneIcon from "@patternfly/react-icons/dist/esm/icons/clone-icon";
 import { Link } from "react-router-dom";
 import { truncateImage } from "../utils";
 import type { StatusResponse } from "../types";
@@ -401,15 +402,13 @@ export const StatusCards: React.FC<StatusCardsProps> = ({
                 <Card isFullHeight isCompact>
                   <CardHeader>
                     <CardTitle>
-                      <Flex
-                        alignItems={{ default: "alignItemsCenter" }}
-                        gap={{ default: "gapSm" }}
-                      >
-                        <FlexItem>Image Mirror</FlexItem>
+                      <Flex alignItems={{ default: "alignItemsCenter" }} justifyContent={{ default: "justifyContentSpaceBetween" }} flexWrap={{ default: "nowrap" }}>
+                        <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+                          <FlexItem><Icon><CloneIcon /></Icon></FlexItem>
+                          <FlexItem>Image Mirror</FlexItem>
+                        </Flex>
                         <FlexItem>
-                          <Label color="green" isCompact>
-                            Ready
-                          </Label>
+                          <Label color="green" variant="outline" isCompact>Ready</Label>
                         </FlexItem>
                       </Flex>
                     </CardTitle>

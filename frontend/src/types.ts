@@ -20,6 +20,7 @@ export interface StatusResponse {
   catalogPod?: CatalogPodInfo;
   activity?: ActivityEntry[];
   errors?: string[];
+  dscExists: boolean;
 }
 
 export interface ClusterInfo {

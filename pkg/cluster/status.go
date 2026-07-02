@@ -104,6 +104,14 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	status.StableSource = getStableSource()
 	status.StableChannel = getStableChannel()
 
+	// Check if DSC exists (v2 first, fall back to v1)
+	dscExists, err := checkDSCExists(c)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("dsc check: %v", err))
+	} else {
+		status.DSCExists = dscExists
+	}
+
 	activity, err := GetActivity(c)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("activity: %v", err))
@@ -467,4 +475,31 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 		}
 	}
 	return types.ImageMirrorInfo{Exists: false}, nil
+}
+
+// checkDSCExists returns true if at least one DataScienceCluster exists.
+// Tries v2 API first, falls back to v1 for older RHOAI versions.
+// 404 errors (CRD not installed) are not treated as errors — they return false.
+func checkDSCExists(c *Client) (bool, error) {
+	// Try v2 first
+	dscBody, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")
+	if err != nil {
+		// Fall back to v1
+		dscBody, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters")
+		if err != nil {
+			// 404 means the CRD is not installed — this is not an error, just means no DSC
+			if IsK8sError(err, 404) {
+				return false, nil
+			}
+			return false, fmt.Errorf("request failed: %w", err)
+		}
+	}
+
+	var dscList map[string]interface{}
+	if err := json.Unmarshal(dscBody, &dscList); err != nil {
+		return false, fmt.Errorf("unmarshal: %w", err)
+	}
+
+	items, _ := dscList["items"].([]interface{})
+	return len(items) > 0, nil
 }

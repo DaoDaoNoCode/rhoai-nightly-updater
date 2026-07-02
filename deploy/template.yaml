@@ -88,10 +88,10 @@ objects:
       - apiGroups: ["apiextensions.k8s.io"]
         resources: ["customresourcedefinitions"]
         verbs: ["get", "patch"]
-      # Read DSC
+      # Manage DSC (read + create for fresh installs)
       - apiGroups: ["datasciencecluster.opendatahub.io"]
         resources: ["datascienceclusters"]
-        verbs: ["get", "list", "patch"]
+        verbs: ["get", "list", "create", "update", "patch"]
       # Component CRs: stale condition cross-check and finalizer cleanup during reinstall
       - apiGroups: ["components.platform.opendatahub.io"]
         resources: ["*"]

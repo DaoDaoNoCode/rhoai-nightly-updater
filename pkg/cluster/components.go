@@ -341,6 +341,159 @@ type conditionInfo struct {
 	message string
 }
 
+// CreateDefaultDSC creates a DataScienceCluster with default component configuration.
+// If a DSC already exists, it returns success without modification.
+func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
+	logs := []string{}
+
+	// Step 1: Check if a DSC already exists
+	logs = append(logs, "Checking for existing DataScienceCluster...")
+	dscBody, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")
+	if err != nil {
+		// Fall back to v1
+		dscBody, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters")
+		if err != nil {
+			// 404 means the CRD is not installed
+			if IsK8sError(err, 404) {
+				return &types.OperationResponse{
+					Success:   false,
+					Message:   "DataScienceCluster CRD not found. Install the RHOAI operator first.",
+					Logs:      logs,
+					ErrorCode: "prerequisites",
+				}, nil
+			}
+			return &types.OperationResponse{
+				Success:   false,
+				Message:   fmt.Sprintf("Failed to check for existing DSC: %v", err),
+				Logs:      logs,
+				ErrorCode: errorCodeFromK8sErr(err),
+			}, nil
+		}
+	}
+
+	var dscList map[string]interface{}
+	if err := json.Unmarshal(dscBody, &dscList); err != nil {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Failed to parse DSC list: %v", err),
+			Logs:      logs,
+			ErrorCode: "internal",
+		}, nil
+	}
+
+	items, _ := dscList["items"].([]interface{})
+	if len(items) > 0 {
+		logs = append(logs, "DataScienceCluster already exists")
+		return &types.OperationResponse{
+			Success: true,
+			Message: "DataScienceCluster already exists",
+			Logs:    logs,
+		}, nil
+	}
+
+	// Step 2: Create the default DSC
+	logs = append(logs, "Creating default DataScienceCluster...")
+	dscSpec := map[string]interface{}{
+		"apiVersion": "datasciencecluster.opendatahub.io/v2",
+		"kind":       "DataScienceCluster",
+		"metadata": map[string]interface{}{
+			"name": "default-dsc",
+			"labels": map[string]interface{}{
+				"app.kubernetes.io/name": "datasciencecluster",
+			},
+		},
+		"spec": map[string]interface{}{
+			"components": map[string]interface{}{
+				"dashboard": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"aipipelines": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"kserve": map[string]interface{}{
+					"managementState": "Managed",
+					"nim": map[string]interface{}{
+						"managementState": "Managed",
+					},
+					"modelsAsService": map[string]interface{}{
+						"managementState": "Removed",
+					},
+					"wva": map[string]interface{}{
+						"managementState": "Removed",
+					},
+				},
+				"kueue": map[string]interface{}{
+					"managementState": "Removed",
+				},
+				"trainingoperator": map[string]interface{}{
+					"managementState": "Removed",
+				},
+				"trainer": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"ray": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"workbenches": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"trustyai": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"modelregistry": map[string]interface{}{
+					"managementState":     "Managed",
+					"registriesNamespace": "rhoai-model-registries",
+				},
+				"feastoperator": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"llamastackoperator": map[string]interface{}{
+					"managementState": "Removed",
+				},
+				"ogx": map[string]interface{}{
+					"managementState": "Removed",
+				},
+				"mlflowoperator": map[string]interface{}{
+					"managementState": "Managed",
+				},
+				"sparkoperator": map[string]interface{}{
+					"managementState": "Removed",
+				},
+			},
+		},
+	}
+
+	path := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
+	_, _, applyErr := c.apply(path, dscSpec)
+	if applyErr != nil {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Failed to create DataScienceCluster: %v", applyErr),
+			Logs:      logs,
+			ErrorCode: errorCodeFromK8sErr(applyErr),
+		}, nil
+	}
+
+	logs = append(logs, "OK: DataScienceCluster created")
+
+	// Step 3: Record activity
+	RecordActivity(c, types.ActivityEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		User:      getUser(c),
+		Action:    "create-dsc",
+		Detail:    "default-dsc with default components",
+		Success:   true,
+	})
+
+	slog.Info("dsc created", "user", getUser(c))
+
+	return &types.OperationResponse{
+		Success: true,
+		Message: "DataScienceCluster created with default components",
+		Logs:    logs,
+	}, nil
+}
+
 func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error) {
 	path := namespacedPath("apps/v1", "deployments", namespace, "")
 	body, _, err := c.get(path)

@@ -64,11 +64,24 @@ This is needed so the cluster can pull nightly images from `quay.io/rhoai` when 
 
 **For ROSA HCP clusters:**
 
+You need to be on the **Red Hat VPN** and have ROSA CLI access (separate from `oc`). If you're not already logged in:
+
+```bash
+kinit <your-username>@IPA.REDHAT.COM
+rh-aws-saml-login                # select iaps-rhods-odh-dev
+rosa login --use-auth-code
+rosa whoami                       # verify access
+```
+
+Then create the image mirror:
+
 ```bash
 rosa create image-mirror --cluster=<your-cluster-name> \
   --source=registry.redhat.io/rhoai \
   --mirror=quay.io/rhoai
 ```
+
+> If you get a 403, you need OCM write access. Find the cluster owner and ask them to assign you access in OCM.
 
 **For self-managed OpenShift:**
 

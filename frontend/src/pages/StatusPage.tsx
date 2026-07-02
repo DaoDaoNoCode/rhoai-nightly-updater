@@ -36,7 +36,7 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import CloneIcon from "@patternfly/react-icons/dist/esm/icons/clone-icon";
 import type { NightlyTag, OperationResponse, StatusResponse, UpdateStep } from "../types";
-import { fetchNightlyTags, streamRefresh, trackFeature } from "../services/api";
+import { fetchNightlyTags, streamRefresh, trackFeature, createDSC } from "../services/api";
 import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
 import { StatusCards } from "../components/StatusCards";
 import { PullSecretCard } from "../components/PullSecretCard";
@@ -196,6 +196,10 @@ export const StatusPage: React.FC<StatusPageProps> = ({
     prevReconcilingRef.current = reconciling;
   }, [reconciling]);
 
+  // DSC creation state
+  const [dscLoading, setDscLoading] = useState(false);
+  const [dscResult, setDscResult] = useState<OperationResponse | null>(null);
+
   const handleRefreshOperator = () => {
     trackFeature("refresh_operator");
     setRefreshError(null);
@@ -233,6 +237,30 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         handleMutationComplete();
       },
     );
+  };
+
+  const handleCreateDSC = async () => {
+    trackFeature("create_dsc");
+    setDscLoading(true);
+    setDscResult(null);
+    try {
+      const res = await createDSC();
+      setDscResult(res);
+      if (res.success) {
+        // Refresh status to update dscExists flag
+        setTimeout(() => {
+          refresh();
+        }, 2000);
+      }
+    } catch (e) {
+      setDscResult({
+        success: false,
+        message: e instanceof Error ? e.message : "Failed to create DSC",
+        logs: [],
+      });
+    } finally {
+      setDscLoading(false);
+    }
   };
 
   const bothMissing =
@@ -342,6 +370,53 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         <PageSection>
           <Title headingLevel="h3" style={{ marginBottom: "0.5rem" }}>Recent Activity</Title>
           <ActivityLog activity={status.activity} />
+        </PageSection>
+      )}
+
+      {/* --- DSC Prompt Card (only show when operator is healthy but DSC doesn't exist) --- */}
+      {status && status.csv.phase === "Succeeded" && status.dscExists === false && (
+        <PageSection>
+          <Card isLarge>
+            <CardTitle>
+              <Title headingLevel="h3">DataScienceCluster Required</Title>
+            </CardTitle>
+            <CardBody>
+              <Stack hasGutter>
+                <StackItem>
+                  <Content component="p">
+                    The RHOAI operator is installed, but no DataScienceCluster has been created.
+                    The DSC tells the operator which components to deploy (dashboard, pipelines,
+                    model serving, etc.)
+                  </Content>
+                </StackItem>
+                <StackItem>
+                  <Tooltip
+                    content="You don't have permission to create a DSC. Contact a cluster admin."
+                    trigger={canMutate ? "manual" : "mouseenter focus"}
+                  >
+                    <Button
+                      variant="primary"
+                      onClick={handleCreateDSC}
+                      isLoading={dscLoading}
+                      isDisabled={dscLoading || !canMutate}
+                    >
+                      Create DataScienceCluster
+                    </Button>
+                  </Tooltip>
+                </StackItem>
+                {dscResult && (
+                  <StackItem>
+                    <Alert
+                      variant={dscResult.success ? "success" : "danger"}
+                      title={dscResult.message}
+                      isInline
+                      actionClose={dscResult.success ? <AlertActionCloseButton onClose={() => setDscResult(null)} /> : undefined}
+                    />
+                  </StackItem>
+                )}
+              </Stack>
+            </CardBody>
+          </Card>
         </PageSection>
       )}
 

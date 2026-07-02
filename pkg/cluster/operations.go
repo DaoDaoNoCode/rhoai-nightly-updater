@@ -489,33 +489,67 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 
-	// Check OperatorGroup exists in redhat-ods-operator namespace
+	// Ensure operator namespace and OperatorGroup exist (creates them for fresh clusters)
+	nsPath := namespacedPath("v1", "namespaces", "", SubNS)
+	_, _, nsErr := c.get(nsPath)
+	if nsErr != nil && IsK8sError(nsErr, 404) {
+		slog.Info("creating operator namespace", "namespace", SubNS)
+		nsResource := map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata":   map[string]interface{}{"name": SubNS},
+		}
+		_, _, nsCreateErr := c.apply(nsPath, nsResource)
+		if nsCreateErr != nil {
+			msg := fmt.Sprintf("Failed to create namespace %s: %v", SubNS, nsCreateErr)
+			logs = append(logs, msg)
+			emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(nsCreateErr)})
+			recordUpdateActivity(c, image, false)
+			return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(nsCreateErr)}, nil
+		}
+		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", SubNS))
+	} else if nsErr != nil {
+		msg := fmt.Sprintf("Failed to check namespace %s: %v", SubNS, nsErr)
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(nsErr)})
+		recordUpdateActivity(c, image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(nsErr)}, nil
+	}
+
 	ogPath := namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "")
 	ogBody, _, ogErr := c.get(ogPath)
-	if ogErr != nil {
-		msg := fmt.Sprintf("Failed to check OperatorGroup: %v", ogErr)
-		logs = append(logs, msg)
-		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(ogErr)})
-		recordUpdateActivity(c, image, false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(ogErr)}, nil
+	ogExists := false
+	if ogErr == nil {
+		var ogResult map[string]interface{}
+		if json.Unmarshal(ogBody, &ogResult) == nil {
+			ogItems, _ := ogResult["items"].([]interface{})
+			ogExists = len(ogItems) > 0
+		}
 	}
-	var ogResult map[string]interface{}
-	if jsonErr := json.Unmarshal(ogBody, &ogResult); jsonErr != nil {
-		msg := fmt.Sprintf("Failed to parse OperatorGroup response: %v", jsonErr)
-		logs = append(logs, msg)
-		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: "validation"})
-		recordUpdateActivity(c, image, false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
+	if !ogExists {
+		slog.Info("creating OperatorGroup", "namespace", SubNS)
+		ogResource := map[string]interface{}{
+			"apiVersion": "operators.coreos.com/v1",
+			"kind":       "OperatorGroup",
+			"metadata": map[string]interface{}{
+				"name":      "rhods-operator",
+				"namespace": SubNS,
+			},
+			"spec": map[string]interface{}{},
+		}
+		ogApplyPath := namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator")
+		_, _, ogCreateErr := c.apply(ogApplyPath, ogResource)
+		if ogCreateErr != nil {
+			msg := fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, ogCreateErr)
+			logs = append(logs, msg)
+			emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(ogCreateErr)})
+			recordUpdateActivity(c, image, false)
+			return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(ogCreateErr)}, nil
+		}
+		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", SubNS))
+	} else {
+		logs = append(logs, fmt.Sprintf("OK: OperatorGroup exists in %s", SubNS))
 	}
-	ogItems, _ := ogResult["items"].([]interface{})
-	if len(ogItems) == 0 {
-		msg := fmt.Sprintf("No OperatorGroup found in namespace %s. OLM cannot install the operator without one.", SubNS)
-		logs = append(logs, msg)
-		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: "prerequisites"})
-		recordUpdateActivity(c, image, false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "prerequisites"}, nil
-	}
-	logs = append(logs, fmt.Sprintf("OK: OperatorGroup exists in %s", SubNS))
 
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "success", Message: "Prerequisites validated"})
 

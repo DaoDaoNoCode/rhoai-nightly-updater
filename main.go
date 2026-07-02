@@ -72,6 +72,7 @@ func main() {
 	mux.HandleFunc("POST /api/resources/mlflow/revert", api.HandleMLflowRevert)
 	mux.HandleFunc("GET /api/diagnostics", api.HandleDiagnostics)
 	mux.HandleFunc("POST /api/diagnostics/fix", api.HandleDiagnosticsFix)
+	mux.HandleFunc("POST /api/setup/dsc", api.HandleCreateDSC)
 	mux.HandleFunc("GET /metrics", api.HandleMetrics)
 	mux.HandleFunc("POST /api/pageview", api.HandlePageView)
 

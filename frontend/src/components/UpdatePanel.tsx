@@ -122,6 +122,10 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
   // --- Preflight checks ---
   const preflightChecks = useMemo(() => {
     if (!status || !image.trim()) return null;
+    const operatorHealthy = status.csv.phase === "Succeeded" || status.csv.phase === "Not Found";
+    const operatorHealthyLabel = operatorHealthy && status.csv.phase === "Succeeded" && status.dscExists === false
+      ? "Operator healthy (no DSC yet)"
+      : "Operator healthy";
     return [
       {
         label: "Pull secret configured and valid",
@@ -132,8 +136,8 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
         passed: !!status.imageMirror.exists,
       },
       {
-        label: "Operator healthy",
-        passed: status.csv.phase === "Succeeded",
+        label: operatorHealthyLabel,
+        passed: operatorHealthy,
       },
       {
         label: "No concurrent operation",

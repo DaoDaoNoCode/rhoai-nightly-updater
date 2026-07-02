@@ -22,6 +22,7 @@ type StatusResponse struct {
 	StableSource  string            `json:"stableSource"`
 	ConsoleURL    string            `json:"consoleURL,omitempty"`
 	StableChannel string            `json:"stableChannel"`
+	DSCExists     bool              `json:"dscExists"`
 	Activity      []ActivityEntry   `json:"activity,omitempty"`
 	Errors        []string          `json:"errors,omitempty"`
 }
