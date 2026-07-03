@@ -268,9 +268,10 @@ export const ComponentsPage: React.FC = () => {
               <CardBody>
                 {(() => {
                   const components = data.components || [];
-                  const ready = components.filter(c => c.status === "Available");
-                  const notReady = components.filter(c => c.status !== "Available" && c.status !== "Removed");
-                  const removed = components.filter(c => c.status === "Removed");
+                  const sortByName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+                  const ready = components.filter(c => c.status === "Available").sort(sortByName);
+                  const notReady = components.filter(c => c.status !== "Available" && c.status !== "Removed").sort(sortByName);
+                  const removed = components.filter(c => c.status === "Removed").sort(sortByName);
 
                   return (
                     <Stack hasGutter>
