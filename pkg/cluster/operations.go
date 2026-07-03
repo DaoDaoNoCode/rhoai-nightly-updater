@@ -510,7 +510,7 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 
 	// Ensure operator namespace and OperatorGroup exist (creates them for fresh clusters)
-	nsPath := namespacedPath("v1", "namespaces", "", SubNS)
+	nsPath := "/api/v1/namespaces/" + SubNS
 	_, _, nsErr := c.get(nsPath)
 	if nsErr != nil && IsK8sError(nsErr, 404) {
 		slog.Info("creating operator namespace", "namespace", SubNS)
@@ -1040,8 +1040,8 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	}
 
 	// Check if namespace and OperatorGroup need to be created (fresh cluster)
-	nsPath := namespacedPath("v1", "namespaces", "", SubNS)
-	_, _, nsCheckErr := c.get(nsPath)
+	dryNsPath := "/api/v1/namespaces/" + SubNS
+	_, _, nsCheckErr := c.get(dryNsPath)
 	if nsCheckErr != nil && IsK8sError(nsCheckErr, 404) {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", SubNS))
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", SubNS))
