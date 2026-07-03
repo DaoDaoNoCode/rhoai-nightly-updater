@@ -227,19 +227,29 @@ func FetchNightlyTags(ctx context.Context, c *Client, limit int) (*types.Nightly
 		topTags = parsed[start:]
 	}
 
-	// Build response in descending order (newest first)
-	tags := make([]types.NightlyTag, 0, len(topTags))
-	for i := len(topTags) - 1; i >= 0; i-- {
-		tag := topTags[i].raw
-		digest, err := getTagDigest(ctx, quayHTTPClient, bearerToken, tag)
-		var image string
-		if err != nil {
-			image = fmt.Sprintf("%s:%s", quayImage, tag)
-		} else {
-			image = fmt.Sprintf("%s:%s@%s", quayImage, tag, digest)
-		}
-		tags = append(tags, types.NightlyTag{Tag: tag, Image: image})
+	// Build response in descending order (newest first), resolve digests in parallel
+	tags := make([]types.NightlyTag, len(topTags))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+	for idx := 0; idx < len(topTags); idx++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			t := topTags[len(topTags)-1-i]
+			digest, err := getTagDigest(ctx, quayHTTPClient, bearerToken, t.raw)
+			var image string
+			if err != nil {
+				image = fmt.Sprintf("%s:%s", quayImage, t.raw)
+			} else {
+				image = fmt.Sprintf("%s:%s@%s", quayImage, t.raw, digest)
+			}
+			tags[i] = types.NightlyTag{Tag: t.raw, Image: image}
+		}(idx)
 	}
+	wg.Wait()
 
 	return &types.NightlyTagsResponse{Tags: tags}, nil
 }

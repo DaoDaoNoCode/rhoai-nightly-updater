@@ -146,6 +146,9 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 		if bn != "" {
 			bundleName = bn
 		}
+		if bundleName != "" && len(allRelatedImages) > 0 {
+			break
+		}
 	}
 
 	// Deduplicate by image reference and categorize
@@ -239,7 +242,7 @@ func ResolveRelatedImageLabels(ctx context.Context, c *Client, images []types.Re
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			imageCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			imageCtx, cancel := context.WithTimeout(SkipCommitDate(ctx), 8*time.Second)
 			defer cancel()
 
 			labels, err := GetImageLabels(imageCtx, c, ref)

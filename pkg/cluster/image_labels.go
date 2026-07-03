@@ -42,6 +42,14 @@ var (
 	commitDateCacheMu sync.RWMutex
 )
 
+type skipCommitDateKey struct{}
+
+// SkipCommitDate returns a context that signals GetImageLabels to skip the
+// GitHub API call for commit dates (saves rate limit and latency).
+func SkipCommitDate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipCommitDateKey{}, true)
+}
+
 // isRHOAIImage checks whether an image reference is an RHOAI component image.
 func isRHOAIImage(imageRef string) bool {
 	return strings.Contains(imageRef, "rhoai/")
@@ -344,7 +352,8 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 
 	// Fetch commit date from GitHub API if we have both gitURL and gitCommit
-	if result.GitURL != "" && result.GitCommit != "" {
+	// Skip when caller sets skipCommitDate in context (e.g., FBC label resolution)
+	if result.GitURL != "" && result.GitCommit != "" && ctx.Value(skipCommitDateKey{}) == nil {
 		result.CommitDate = fetchCommitDate(ctx, result.GitURL, result.GitCommit)
 	}
 

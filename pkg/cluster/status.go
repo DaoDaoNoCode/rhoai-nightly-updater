@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -34,8 +35,10 @@ func getStableChannel() string {
 }
 
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
+// All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
 	status := &types.StatusResponse{}
+	var mu sync.Mutex
 	var errs []string
 
 	user, server, err := getClusterInfo(c)
@@ -44,80 +47,132 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	}
 	status.Cluster = types.ClusterInfo{Server: server, User: user}
 
-	version, err := getClusterVersion(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("cluster version: %v", err))
-	} else {
-		status.Cluster.Version = version
-	}
-
-	sub, err := getSubscription(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("subscription: %v", err))
-	} else {
-		status.Subscription = sub
-	}
-
-	csv, err := getCSV(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("csv: %v", err))
-	} else {
-		status.CSV = csv
-	}
-
-	cs, err := getCatalogSource(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("catalogsource: %v", err))
-	} else {
-		status.CatalogSource = cs
-	}
-
-	ps, err := getPullSecret(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("pull secret: %v", err))
-	} else {
-		status.PullSecret = ps
-	}
-
-	idms, err := getIDMS(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("image mirror: %v", err))
-	} else {
-		status.ImageMirror = idms
-	}
-
-	ip, err := getInstallPlan(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("installplan: %v", err))
-	} else {
-		status.InstallPlan = ip
-	}
-
-	cp, err := getCatalogPod(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("catalog pod: %v", err))
-	} else {
-		status.CatalogPod = cp
-	}
-
-	status.ConsoleURL = getConsoleURL(c)
 	status.StableSource = getStableSource()
 	status.StableChannel = getStableChannel()
 
-	// Check if DSC exists (v2 first, fall back to v1)
-	dscExists, err := checkDSCExists(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("dsc check: %v", err))
-	} else {
-		status.DSCExists = dscExists
+	var wg sync.WaitGroup
+
+	addErr := func(msg string) {
+		mu.Lock()
+		errs = append(errs, msg)
+		mu.Unlock()
 	}
 
-	activity, err := GetActivity(c)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("activity: %v", err))
-	} else {
-		status.Activity = activity
-	}
+	wg.Add(10)
+
+	go func() {
+		defer wg.Done()
+		if v, err := getClusterVersion(c); err != nil {
+			addErr(fmt.Sprintf("cluster version: %v", err))
+		} else {
+			mu.Lock()
+			status.Cluster.Version = v
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if sub, err := getSubscription(c); err != nil {
+			addErr(fmt.Sprintf("subscription: %v", err))
+		} else {
+			mu.Lock()
+			status.Subscription = sub
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if csv, err := getCSV(c); err != nil {
+			addErr(fmt.Sprintf("csv: %v", err))
+		} else {
+			mu.Lock()
+			status.CSV = csv
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if cs, err := getCatalogSource(c); err != nil {
+			addErr(fmt.Sprintf("catalogsource: %v", err))
+		} else {
+			mu.Lock()
+			status.CatalogSource = cs
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if ps, err := getPullSecret(c); err != nil {
+			addErr(fmt.Sprintf("pull secret: %v", err))
+		} else {
+			mu.Lock()
+			status.PullSecret = ps
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if idms, err := getIDMS(c); err != nil {
+			addErr(fmt.Sprintf("image mirror: %v", err))
+		} else {
+			mu.Lock()
+			status.ImageMirror = idms
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if ip, err := getInstallPlan(c); err != nil {
+			addErr(fmt.Sprintf("installplan: %v", err))
+		} else {
+			mu.Lock()
+			status.InstallPlan = ip
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if cp, err := getCatalogPod(c); err != nil {
+			addErr(fmt.Sprintf("catalog pod: %v", err))
+		} else {
+			mu.Lock()
+			status.CatalogPod = cp
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if exists, err := checkDSCExists(c); err != nil {
+			addErr(fmt.Sprintf("dsc check: %v", err))
+		} else {
+			mu.Lock()
+			status.DSCExists = exists
+			mu.Unlock()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if activity, err := GetActivity(c); err != nil {
+			addErr(fmt.Sprintf("activity: %v", err))
+		} else {
+			mu.Lock()
+			status.Activity = activity
+			mu.Unlock()
+		}
+	}()
+
+	wg.Wait()
+
+	status.ConsoleURL = getConsoleURL(c)
 
 	if len(errs) > 0 {
 		status.Errors = errs
