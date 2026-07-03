@@ -132,6 +132,25 @@ Your cluster is now ready.
 
 ---
 
+## Existing Cluster (RHOAI Already Installed)
+
+If your cluster already has RHOAI installed (stable or nightly) and you want to use the Nightly Updater to manage updates:
+
+1. **Deploy the app** — follow Steps 1–3 above (same for all clusters)
+2. **Check prerequisites** — open the app and look at the status cards:
+   - **Pull Secret**: If you already have credentials for `quay.io/rhoai`, it should show "Ready". If not, configure it (Step 4).
+   - **Image Mirror (IDMS)**: If you already have an IDMS for `registry.redhat.io/rhoai`, it should show "Ready". If not, create it (Step 5).
+3. **Start using it** — the app detects your existing operator:
+   - The card says **"Upgrade to Nightly Build"** (not "Install")
+   - Your current operator version, source, and channel are displayed
+   - The **Reinstall Operator** card is available for switching between stable and nightly
+   - The **Refresh operator** button re-pulls images from the current catalog
+4. **Skip DSC creation** — your existing DataScienceCluster is preserved. The DSC prompt only appears if no DSC exists.
+
+The app never modifies your existing DSC or DSCI. It only manages the operator lifecycle (CatalogSource, Subscription, CSV).
+
+---
+
 ## Day-to-Day Usage
 
 Once RHOAI is installed, the Status page changes to show the operator status and daily workflows. The one-time setup section is replaced by a collapsible "Cluster setup" link for checking/updating prerequisites.
