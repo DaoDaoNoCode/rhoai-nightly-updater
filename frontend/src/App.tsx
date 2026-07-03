@@ -224,17 +224,6 @@ const AppLayout: React.FC = () => {
         lastPollTimestampRef.current = now;
 
         if (phase === "Succeeded" || phase === "Failed") {
-          // Fire browser notification when reconciliation finishes
-          if (Notification.permission === "granted") {
-            new Notification("RHOAI Nightly Updater", {
-              body:
-                phase === "Succeeded"
-                  ? "Operator update completed successfully"
-                  : "Operator update failed",
-            });
-          } else if (Notification.permission !== "denied") {
-            Notification.requestPermission();
-          }
           reconcilingRef.current = false;
           setReconciling(false);
           persistReconcileState(false, 0);
