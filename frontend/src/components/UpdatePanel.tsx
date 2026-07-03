@@ -62,15 +62,22 @@ interface UpdatePanelProps {
 
 const NO_PERMISSION_MSG = "You don't have permission to modify the operator. Contact a cluster admin.";
 
-const EXECUTION_PLAN: string[] = [
+const INSTALL_PLAN: string[] = [
+  "Validate FBC image reference",
+  "Create namespace and OperatorGroup",
+  "Create CatalogSource with nightly image",
+  "Create Subscription with auto-detected channel",
+  "Wait for InstallPlan",
+  "Wait for CSV to reach Succeeded phase",
+];
+
+const UPGRADE_PLAN: string[] = [
   "Validate FBC image reference",
   "Create / update CatalogSource with nightly image",
   "Patch Subscription source and channel",
   "Delete current CSV to trigger OLM resolution",
   "Wait for new InstallPlan",
-  "Approve InstallPlan",
   "Wait for new CSV to reach Succeeded phase",
-  "Verify operator pod is running",
 ];
 
 export const UpdatePanel: React.FC<UpdatePanelProps> = ({
@@ -118,6 +125,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
   const abortRef = useRef<AbortController | null>(null);
 
   const prerequisitesMet = prerequisitesReady(status);
+  const isFirstInstall = !status?.csv.phase || status.csv.phase === "Not Found";
 
   // --- Preflight checks ---
   const preflightChecks = useMemo(() => {
@@ -585,7 +593,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
               <Tooltip
                 content={
                   !allPreflightsPassed && canMutate
-                    ? "All preflight checks must pass before updating"
+                    ? `All preflight checks must pass before ${isFirstInstall ? "installing" : "updating"}`
                     : NO_PERMISSION_MSG
                 }
                 trigger={canMutate && allPreflightsPassed ? "manual" : "mouseenter focus"}
@@ -595,7 +603,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
                   onClick={() => setConfirmOpen(true)}
                   isDisabled={!canOperate || !canMutate || !allPreflightsPassed}
                 >
-                  Update
+                  {isFirstInstall ? "Install" : "Update"}
                 </Button>
               </Tooltip>
             </FlexItem>
@@ -642,7 +650,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
         </Form>
       </StackItem>
 
-      {/* --- Confirm Update Modal --- */}
+      {/* --- Confirm Install/Update Modal --- */}
       <Modal
         aria-labelledby="confirm-update-title"
         variant={ModalVariant.medium}
@@ -650,37 +658,42 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
         onClose={() => { if (!loading && !pipelineActive) setConfirmOpen(false); }}
         onEscapePress={(event) => { if (loading || pipelineActive) event.preventDefault(); }}
       >
-        <ModalHeader title="Confirm Update" labelId="confirm-update-title" />
+        <ModalHeader title={isFirstInstall ? "Confirm Install" : "Confirm Update"} labelId="confirm-update-title" />
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
               <Content component="p">
-                This will update the RHOAI operator on the shared cluster. Review
-                the changes below and confirm to proceed.
+                {isFirstInstall
+                  ? "This will install the RHOAI operator on this cluster. Review the details below and confirm to proceed."
+                  : "This will update the RHOAI operator on the shared cluster. Review the changes below and confirm to proceed."}
               </Content>
             </StackItem>
 
             {/* Current -> Target comparison */}
             <StackItem>
               <DescriptionList isHorizontal isCompact>
+                {!isFirstInstall && (
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>Current source</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      {status?.subscription.source || "unknown"} / {status?.subscription.channel || "unknown"}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                )}
                 <DescriptionListGroup>
-                  <DescriptionListTerm>Current source</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    {status?.subscription.source || "unknown"} / {status?.subscription.channel || "unknown"}
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                  <DescriptionListTerm>Target source</DescriptionListTerm>
+                  <DescriptionListTerm>{isFirstInstall ? "Catalog source" : "Target source"}</DescriptionListTerm>
                   <DescriptionListDescription>
                     rhoai-catalog-dev / auto-detected
                   </DescriptionListDescription>
                 </DescriptionListGroup>
-                <DescriptionListGroup>
-                  <DescriptionListTerm>Current version</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    {status?.csv.version || "unknown"}
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
+                {!isFirstInstall && (
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>Current version</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      {status?.csv.version || "unknown"}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                )}
                 <DescriptionListGroup>
                   <DescriptionListTerm>Image</DescriptionListTerm>
                   <DescriptionListDescription>
@@ -696,7 +709,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
             <StackItem>
               <Content component="p"><strong>Execution plan</strong></Content>
               <List isPlain>
-                {EXECUTION_PLAN.map((step, i) => (
+                {(isFirstInstall ? INSTALL_PLAN : UPGRADE_PLAN).map((step, i) => (
                   <ListItem key={i}>
                     <Content component="small">{i + 1}. {step}</Content>
                   </ListItem>
@@ -742,7 +755,9 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
             <StackItem>
               <Alert
                 variant="warning"
-                title="The operator will be briefly unavailable (1-3 minutes) while OLM installs the new version. Existing workloads continue running."
+                title={isFirstInstall
+                  ? "The installation typically takes 2-5 minutes. The operator will deploy into the redhat-ods-operator namespace."
+                  : "The operator will be briefly unavailable (1-3 minutes) while OLM installs the new version. Existing workloads continue running."}
                 isInline
               />
             </StackItem>
@@ -754,7 +769,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
             onClick={handleConfirmUpdate}
             isDisabled={loading || pipelineActive}
           >
-            Confirm Update
+            {isFirstInstall ? "Confirm Install" : "Confirm Update"}
           </Button>
           <Button
             variant="link"
