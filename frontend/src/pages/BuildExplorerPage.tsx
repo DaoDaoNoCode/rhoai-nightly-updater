@@ -687,7 +687,7 @@ export const BuildExplorerPage: React.FC = () => {
                         <Tr isExpanded={isExpanded}>
                           <Td colSpan={5}>
                             <ExpandableRowContent>
-                              {isLoadingContent && (
+                              {isLoadingContent && !content && (
                                 <Bullseye>
                                   <Flex
                                     alignItems={{
@@ -813,18 +813,14 @@ export const BuildExplorerPage: React.FC = () => {
                                               </FlexItem>
                                             );
                                           })}
-                                        {isLoadingLabels && (
-                                          <FlexItem>
-                                            <Spinner
-                                              size="sm"
-                                              aria-label="Loading labels"
-                                            />{" "}
-                                            <Content component="small">
-                                              Resolving git info...
-                                            </Content>
-                                          </FlexItem>
-                                        )}
                                       </Flex>
+
+                                      {isLoadingLabels && (
+                                        <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} style={{ marginTop: "0.5rem" }}>
+                                          <FlexItem><Spinner size="sm" aria-label="Loading labels" /></FlexItem>
+                                          <FlexItem><Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>Resolving git commit info...</Content></FlexItem>
+                                        </Flex>
+                                      )}
 
                                       {displayImages.length > 0 && (
                                         <Table
@@ -835,9 +831,9 @@ export const BuildExplorerPage: React.FC = () => {
                                           <Thead>
                                             <Tr>
                                               <Th>Component</Th>
-                                              <Th>Commit</Th>
-                                              <Th>Built</Th>
-                                              <Th>Version</Th>
+                                              {!isLoadingLabels && <Th>Commit</Th>}
+                                              {!isLoadingLabels && <Th>Built</Th>}
+                                              {!isLoadingLabels && <Th>Version</Th>}
                                             </Tr>
                                           </Thead>
                                           <Tbody>
@@ -866,14 +862,9 @@ export const BuildExplorerPage: React.FC = () => {
                                                       </span>
                                                     </Tooltip>
                                                   </Td>
+                                                  {!isLoadingLabels && (
                                                   <Td dataLabel="Commit">
-                                                    {isLoadingLabels &&
-                                                    !shortSha ? (
-                                                      <Spinner
-                                                        size="sm"
-                                                        aria-label="Loading"
-                                                      />
-                                                    ) : shortSha ? (
+                                                    {shortSha ? (
                                                       <Flex
                                                         spaceItems={{
                                                           default:
@@ -934,14 +925,10 @@ export const BuildExplorerPage: React.FC = () => {
                                                       "-"
                                                     )}
                                                   </Td>
+                                                  )}
+                                                  {!isLoadingLabels && (
                                                   <Td dataLabel="Built">
-                                                    {isLoadingLabels &&
-                                                    !ri.buildDate ? (
-                                                      <Spinner
-                                                        size="sm"
-                                                        aria-label="Loading"
-                                                      />
-                                                    ) : ri.buildDate ? (
+                                                    {ri.buildDate ? (
                                                       <Tooltip
                                                         content={new Date(
                                                           ri.buildDate,
@@ -957,9 +944,12 @@ export const BuildExplorerPage: React.FC = () => {
                                                       "-"
                                                     )}
                                                   </Td>
+                                                  )}
+                                                  {!isLoadingLabels && (
                                                   <Td dataLabel="Version">
                                                     {ri.version || "-"}
                                                   </Td>
+                                                  )}
                                                 </Tr>
                                               );
                                             })}
