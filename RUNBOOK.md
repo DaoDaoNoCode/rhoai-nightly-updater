@@ -846,9 +846,11 @@ If the Deployment spec shows the new PR image but the running pod still uses the
 | `/api/resources/mlflow/teardown` | POST | Yes | Delete MLflow CR |
 | `/api/resources/mlflow/deploy-pr` | POST | Yes | Patch MLflow CR with PR image |
 | `/api/resources/mlflow/revert` | POST | Yes | Revert MLflow CR to default image |
-| `/api/update/stream` | GET | Yes | SSE stream of update pipeline progress |
-| `/api/rollback/stream` | GET | Yes | SSE stream of rollback pipeline progress |
-| `/api/refresh/stream` | GET | Yes | SSE stream of refresh pipeline progress |
+| `/api/setup/dsc/preview` | GET | Yes | Preview default DSC YAML |
+| `/api/setup/dsc` | POST | Yes | Create default DataScienceCluster |
+| `/api/update/stream` | POST | Yes | SSE stream of update pipeline progress |
+| `/api/rollback/stream` | POST | Yes | SSE stream of rollback pipeline progress |
+| `/api/refresh/stream` | POST | Yes | SSE stream of refresh pipeline progress |
 | `/api/diagnostics` | GET | Yes | Run live cluster health checks and problem detection |
 | `/api/diagnostics/fix` | POST | Yes | Apply an auto-fix for a detected problem |
 | `/api/assist-rollout` | POST | Yes | Detect and unblock stuck deployment rollouts |

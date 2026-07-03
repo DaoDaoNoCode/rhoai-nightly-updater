@@ -166,7 +166,8 @@ These headers are set by the SSEWriter before the first event is flushed. The re
 | `PropagationWait` | 10s | Pause after deleting resources before recreating (Reinstall Step 8) |
 | `ChannelRetryDelay` | 8s | Backoff between retries when detecting the nightly channel |
 | `SubRetryBackoffs` | [2s, 4s] | Backoff durations for Subscription creation retries |
-| `RefreshCleanupDelay` | 5s | Pause after deleting Subscription before recreating (RefreshOperator) |
+| `RefreshCleanupWait` | 5s | Pause after deleting Subscription before recreating (RefreshOperator) |
+| `PackageManifestPropagationWait` | 30s | Pause after CatalogSource READY before querying packagemanifest for channel detection |
 
 **Test overrides:** Tests set these to minimal values (e.g., `CatalogPollInterval = 100ms`, `CatalogReadyTimeout = 2s`) to avoid slow test suites. The pattern is:
 

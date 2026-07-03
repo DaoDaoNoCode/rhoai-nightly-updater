@@ -42,7 +42,7 @@ The ServiceAccount has a custom ClusterRole with permissions limited to:
 | `""` (core) | configmaps | get, create, update, patch | Activity log ConfigMap |
 | `admissionregistration.k8s.io` | validatingwebhookconfigurations, mutatingwebhookconfigurations | get, list, delete | Clean up webhooks during rollback |
 | `apiextensions.k8s.io` | customresourcedefinitions | get, patch | Patch CRDs during rollback |
-| `datasciencecluster.opendatahub.io` | datascienceclusters | get, list | Read DSC status |
+| `datasciencecluster.opendatahub.io` | datascienceclusters | get, list, create, update, patch | Read DSC status |
 | `datasciencepipelinesapplications.opendatahub.io` | datasciencepipelinesapplications | get, list, create, update, patch, delete | Pipeline server (DSPA) lifecycle |
 | `mlflow.opendatahub.io` | mlflows | get, list, create, update, patch, delete | MLflow CR lifecycle and PR deploy |
 | `components.platform.opendatahub.io` | * | get, list, patch | Component CR lifecycle (stuck finalizer cleanup) |
@@ -83,7 +83,7 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 
 ## Dashboard Dev Endpoints
 
-- `POST /api/dashboard/deploy-pr` and `POST /api/dashboard/revert` are protected by `withMutationAuth` (rate limit + authentication check). The SA token performs all mutation operations (deployment patches, annotation updates). The user's OAuth token (forwarded by oauth-proxy) is never used for Kubernetes API calls -- it only carries `user:check-access` and `user:info` scopes, which are sufficient for identity verification but not for cluster mutations. The oauth-proxy SAR check (`pods:list` in `redhat-ods-operator`) is the authorization gate that controls who can reach the app at all.
+- `POST /api/dashboard/deploy-pr` and `POST /api/dashboard/revert` are protected by `withMutationAuth` (rate limit + authentication check). Rate limiting is per-user AND per-endpoint — the rate limit key is `username:path` with a 30-second window. Each endpoint has its own rate limit window per user. The SA token performs all mutation operations (deployment patches, annotation updates). The user's OAuth token (forwarded by oauth-proxy) is never used for Kubernetes API calls -- it only carries `user:check-access` and `user:info` scopes, which are sufficient for identity verification but not for cluster mutations. The oauth-proxy SAR check (`pods:list` in `redhat-ods-operator`) is the authorization gate that controls who can reach the app at all.
 
 ## MLflow Endpoints
 

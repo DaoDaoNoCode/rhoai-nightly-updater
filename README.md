@@ -11,6 +11,8 @@ A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clu
 - **Operator refresh** for same-version image updates without version change
 - **Preflight checks** — pull secret, IDMS, operator health, registry access, node readiness
 - **Downgrade prevention** — blocks update when selected version is older than current
+- **Fresh cluster install** — automated setup from empty cluster to running operator
+- **DSC creation** — one-click DataScienceCluster creation with default settings
 
 ### Cluster Visibility
 - **DSC component status** — expandable breakdown (Ready / Needs Attention / Removed) with one-click fixes
@@ -29,7 +31,7 @@ A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clu
 - **Confirmation modals** for all cluster-modifying actions
 - **Activity audit log** stored in ConfigMap with user attribution
 - **Dark mode**, structured JSON logging, Prometheus metrics + alerting rules
-- **HA deployment** — 2 replicas with pod anti-affinity
+- **Production-ready** — pod anti-affinity, health probes, graceful shutdown
 
 ## Architecture
 
@@ -40,7 +42,7 @@ Browser --> oauth-proxy (OpenShift SSO) --> Go backend --> Kubernetes API
 ```
 
 - **Frontend**: React 18, PatternFly 6, TypeScript, webpack
-- **Backend**: Go (net/http), ServiceAccount token for k8s API calls
+- **Backend**: Go (net/http), raw HTTP K8s client (no client-go), ServiceAccount token for k8s API calls
 - **Auth**: oauth-proxy sidecar handles SSO, passes user identity via X-Forwarded-User
 - **RBAC**: Scoped ClusterRole (not cluster-admin) limited to RHOAI resources
 - **Security**: NetworkPolicy blocks direct access to backend port; only oauth-proxy port exposed
@@ -78,10 +80,14 @@ Operator mutations use a two-phase progress model:
 No build required — deploy the pre-built image in one command:
 
 ```bash
+OCP_VERSION=$(oc version -o json | sed -n 's/.*"openshiftVersion": "\([0-9]*\.[0-9]*\).*/\1/p')
+echo "Detected OCP version: $OCP_VERSION"
+
 oc new-project rhoai-nightly-updater
 
 oc process -f deploy/template.yaml \
   -p IMAGE=quay.io/juntao_wang/rhoai-nightly-updater:latest \
+  -p OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v${OCP_VERSION} \
   -p NAMESPACE=rhoai-nightly-updater | oc apply -f -
 
 oc rollout status deployment/rhoai-nightly-updater -n rhoai-nightly-updater --timeout=120s
@@ -277,6 +283,8 @@ Before installing nightly builds, the cluster needs:
 | POST | `/api/resources/mlflow/teardown` | Delete MLflow CR |
 | POST | `/api/resources/mlflow/deploy-pr` | Patch MLflow CR with a PR image |
 | POST | `/api/resources/mlflow/revert` | Revert MLflow CR image to default |
+| GET | `/api/setup/dsc/preview` | Preview default DSC YAML |
+| POST | `/api/setup/dsc` | Create default DataScienceCluster |
 | POST | `/api/pageview` | Record page view / feature usage (privacy-safe, aggregate only) |
 | GET | `/metrics` | Prometheus metrics (uptime, requests, page views, feature usage) |
 
