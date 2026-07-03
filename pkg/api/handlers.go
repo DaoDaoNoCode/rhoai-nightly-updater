@@ -1210,6 +1210,12 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 	}
 })
 
+// HandleDSCPreview returns the default DSC YAML for preview (fetched from upstream, cached).
+var HandleDSCPreview = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	yamlContent := cluster.GetDefaultDSCYAML()
+	writeJSON(w, map[string]string{"yaml": yamlContent}, "dsc-preview")
+})
+
 // HandleCreateDSC creates a default DataScienceCluster if one doesn't exist.
 var HandleCreateDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	slog.Info("mutation", "op", "create-dsc")

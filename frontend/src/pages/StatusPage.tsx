@@ -36,7 +36,7 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import CloneIcon from "@patternfly/react-icons/dist/esm/icons/clone-icon";
 import type { NightlyTag, OperationResponse, StatusResponse, UpdateStep } from "../types";
-import { fetchNightlyTags, streamRefresh, trackFeature, createDSC } from "../services/api";
+import { fetchNightlyTags, streamRefresh, trackFeature, createDSC, getDSCPreview } from "../services/api";
 import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
 import { StatusCards } from "../components/StatusCards";
 import { PullSecretCard } from "../components/PullSecretCard";
@@ -200,6 +200,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
   const [dscLoading, setDscLoading] = useState(false);
   const [dscResult, setDscResult] = useState<OperationResponse | null>(null);
   const [dscModalOpen, setDscModalOpen] = useState(false);
+  const [dscPreviewYAML, setDscPreviewYAML] = useState<string>("");
+  const [dscPreviewLoading, setDscPreviewLoading] = useState(false);
 
   const handleRefreshOperator = () => {
     trackFeature("refresh_operator");
@@ -397,7 +399,18 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                   >
                     <Button
                       variant="primary"
-                      onClick={() => setDscModalOpen(true)}
+                      onClick={async () => {
+                        setDscModalOpen(true);
+                        setDscPreviewLoading(true);
+                        try {
+                          const res = await getDSCPreview();
+                          setDscPreviewYAML(res.yaml);
+                        } catch {
+                          setDscPreviewYAML("(Failed to load preview from upstream — will use built-in defaults)");
+                        } finally {
+                          setDscPreviewLoading(false);
+                        }
+                      }}
                       isLoading={dscLoading}
                       isDisabled={dscLoading || !canMutate}
                     >
@@ -436,29 +449,13 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                   </Content>
                 </StackItem>
                 <StackItem>
-                  <CodeBlock>
-                    <CodeBlockCode>{`apiVersion: datasciencecluster.opendatahub.io/v2
-kind: DataScienceCluster
-metadata:
-  name: default-dsc
-spec:
-  components:
-    dashboard:          Managed
-    aipipelines:        Managed
-    kserve:             Managed
-    workbenches:        Managed
-    modelregistry:      Managed
-    ray:                Managed
-    trainer:            Managed
-    trustyai:           Managed
-    feastoperator:      Managed
-    mlflowoperator:     Managed
-    kueue:              Removed
-    trainingoperator:   Removed
-    llamastackoperator: Removed
-    sparkoperator:      Removed
-    ogx:                Removed`}</CodeBlockCode>
-                  </CodeBlock>
+                  {dscPreviewLoading ? (
+                    <Content component="p">Loading preview from upstream...</Content>
+                  ) : (
+                    <CodeBlock>
+                      <CodeBlockCode>{dscPreviewYAML}</CodeBlockCode>
+                    </CodeBlock>
+                  )}
                 </StackItem>
               </Stack>
             </ModalBody>

@@ -367,6 +367,10 @@ export function fixProblem(problemId: string): Promise<OperationResponse> {
   });
 }
 
+export async function getDSCPreview(): Promise<{ yaml: string }> {
+  return request<{ yaml: string }>('/api/setup/dsc/preview');
+}
+
 export async function createDSC(): Promise<OperationResponse> {
   return request<OperationResponse>('/api/setup/dsc', { method: 'POST' });
 }
