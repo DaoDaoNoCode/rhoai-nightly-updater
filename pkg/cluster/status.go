@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -150,13 +151,17 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 
 	go func() {
 		defer wg.Done()
-		if exists, err := checkDSCExists(c); err != nil {
-			addErr(fmt.Sprintf("dsc check: %v", err))
+		exists, err := checkDSCExists(c)
+		mu.Lock()
+		if err != nil {
+			// Transient API errors (429, 503) happen during operator reinstall.
+			// Default to true to avoid falsely showing the "Create DSC" prompt.
+			slog.Debug("dsc check failed, assuming exists", "error", err)
+			status.DSCExists = true
 		} else {
-			mu.Lock()
 			status.DSCExists = exists
-			mu.Unlock()
 		}
+		mu.Unlock()
 	}()
 
 	go func() {
