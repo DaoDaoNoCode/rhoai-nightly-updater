@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -290,6 +291,44 @@ var (
 	PackageManifestPropagationWait = 30 * time.Second
 )
 
+// validateTagDigestMatch checks if the image reference contains both a tag and
+// a digest, and verifies they match. This prevents accidentally installing the
+// wrong version (e.g., tag says ea.2 but digest points to GA).
+// Returns nil if: tag-only, digest-only, or tag+digest match.
+// Returns error if: tag+digest mismatch.
+func validateTagDigestMatch(ctx context.Context, c *Client, imageRef string) error {
+	// Only validate when both tag and digest are present
+	atIdx := strings.Index(imageRef, "@sha256:")
+	if atIdx < 0 {
+		return nil
+	}
+	providedDigest := imageRef[atIdx+1:]
+
+	tag := extractTagFromRef(imageRef)
+	if tag == "" || strings.HasPrefix(tag, "sha256:") {
+		return nil
+	}
+
+	quayAuth := getQuayAuth(c)
+	bearerToken, err := getQuayBearerToken(ctx, quayHTTPClient, quayAuth)
+	if err != nil {
+		slog.Warn("tag-digest validation: could not authenticate with Quay, skipping", "error", err)
+		return nil
+	}
+
+	resolvedDigest, err := getTagDigest(ctx, quayHTTPClient, bearerToken, tag)
+	if err != nil {
+		slog.Warn("tag-digest validation: could not resolve tag digest, skipping", "tag", tag, "error", err)
+		return nil
+	}
+
+	if resolvedDigest != providedDigest {
+		return fmt.Errorf("tag-digest mismatch: tag %q resolves to %s but the provided digest is %s — this would install the wrong version", tag, resolvedDigest[:20]+"...", providedDigest[:20]+"...")
+	}
+
+	return nil
+}
+
 func buildCatalogSourceSpec(image string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1",
@@ -508,6 +547,15 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
+
+	// Validate tag-digest consistency (prevents installing wrong version)
+	if mismatchErr := validateTagDigestMatch(c.ctx, c, image); mismatchErr != nil {
+		msg := mismatchErr.Error()
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: "validation"})
+		recordUpdateActivity(c, image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
+	}
 
 	// Ensure operator namespace and OperatorGroup exist (creates them for fresh clusters)
 	nsPath := "/api/v1/namespaces/" + SubNS
@@ -1313,6 +1361,14 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 // reinstallNightlySteps handles the nightly-specific portion of ReinstallStream:
 // create CatalogSource, wait for READY, detect channel, create Subscription, verify InstallPlan.
 func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.SubscriptionInfo, logs []string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
+	// Validate tag-digest consistency before proceeding
+	if mismatchErr := validateTagDigestMatch(c.ctx, c, image); mismatchErr != nil {
+		msg := mismatchErr.Error()
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "create_catalog_source", Status: "failed", Message: msg, ErrorCode: "validation"})
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
+	}
+
 	// --- Step 9: create_catalog_source ---
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
 	catalogSource := buildCatalogSourceSpec(image)
