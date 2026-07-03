@@ -1,6 +1,22 @@
-# RHOAI Nightly Updater
+<p align="center">
+  <img src="docs/images/logo.svg" alt="RHOAI Nightly Updater" width="80" />
+</p>
 
-A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clusters.
+<h1 align="center">RHOAI Nightly Updater</h1>
+
+<p align="center">
+  A web dashboard for managing Red Hat OpenShift AI nightly builds on ROSA HCP clusters.<br/>
+  Install, upgrade, reinstall, and monitor RHOAI operators — no <code>oc</code> commands needed.
+</p>
+
+<p align="center">
+  <img src="docs/images/status-page-1.png" alt="Status Page — Operator Status" width="800" />
+</p>
+<p align="center">
+  <img src="docs/images/status-page-2.png" alt="Status Page — Update Panel" width="800" />
+</p>
+
+---
 
 ## Features
 
@@ -67,13 +83,32 @@ Operator mutations use a two-phase progress model:
 
 ## Pages
 
+### Components — Deployment Monitoring
+
+Track every RHOAI deployment with per-container pod view, git commit provenance, and diff links.
+
+<p align="center">
+  <img src="docs/images/components-page.png" alt="Components Page" width="800" />
+</p>
+
+### Build Explorer — Nightly Build Browser
+
+Browse all nightly tags, filter by version/type, and inspect FBC catalog contents with categorized component images.
+
+<p align="center">
+  <img src="docs/images/build-explorer-page-1.png" alt="Build Explorer — Tag Browser" width="800" />
+</p>
+<p align="center">
+  <img src="docs/images/build-explorer-page-2.png" alt="Build Explorer — FBC Content" width="800" />
+</p>
+
 | Page | Description |
 |---|---|
-| Dashboard | Operator status, prerequisites, upgrade/reinstall with pre-flight checks, reconciliation progress, activity log |
-| Components | DSC v2 components, expandable deployments with per-container pod view, direct links to pod logs in OpenShift console, deployment snapshot change detection |
-| Build Explorer | Browse all FBC nightly tags, filter by version/type, search any image by digest, expand to see categorized component images with git provenance |
-| Dashboard Dev | PR Deploy tab: multi-container PR deploy (scans 8 repos), one-click revert. Resources tab: MinIO setup, per-project pipeline servers, MLflow CR lifecycle with PR deploy/revert |
-| Diagnostics | Live cluster health checks, auto-detected problems with severity labels, one-click fixes, contextual Learn More guidance, copyable diagnostic report |
+| **Dashboard** | Operator status, prerequisites, upgrade/reinstall with pre-flight checks, reconciliation progress, activity log |
+| **Components** | DSC v2 components, expandable deployments with per-container pod view, direct links to pod logs in OpenShift console |
+| **Build Explorer** | Browse all FBC nightly tags, filter by version/type, search any image by digest, inspect categorized component images with git provenance |
+| **Dashboard Dev** | Multi-container PR deploy (scans 8 repos), one-click revert, MinIO/pipeline/MLflow lifecycle |
+| **Diagnostics** | 9 automated health checks, auto-detected problems with severity labels, one-click fixes |
 
 ## Quick Start (Deploy to Your Cluster)
 
