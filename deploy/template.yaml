@@ -62,7 +62,7 @@ objects:
       # create/delete restricted to known prefixes by server-side validation.
       - apiGroups: [""]
         resources: ["namespaces"]
-        verbs: ["get", "list", "create", "delete"]
+        verbs: ["get", "list", "create", "patch", "delete"]
       - apiGroups: [""]
         resources: ["services", "persistentvolumeclaims"]
         verbs: ["get", "list", "create", "update", "patch", "delete"]
