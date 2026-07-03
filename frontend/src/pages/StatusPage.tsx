@@ -285,7 +285,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
       <PageHeader
         title="Cluster Status"
         lastRefreshed={lastRefreshed}
-        loading={loading}
+        loading={loading || pipelineActive}
         onRefresh={refresh}
       />
 
