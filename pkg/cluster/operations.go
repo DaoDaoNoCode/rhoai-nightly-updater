@@ -290,6 +290,26 @@ var (
 	PackageManifestPropagationWait = 30 * time.Second
 )
 
+func buildCatalogSourceSpec(image string) map[string]interface{} {
+	return map[string]interface{}{
+		"apiVersion": "operators.coreos.com/v1alpha1",
+		"kind":       "CatalogSource",
+		"metadata": map[string]interface{}{
+			"name":      CatalogName,
+			"namespace": CatalogNS,
+		},
+		"spec": map[string]interface{}{
+			"sourceType":  "grpc",
+			"image":       image,
+			"displayName": "RHOAI Development Catalog",
+			"publisher":   "RHOAI DevOps",
+			"grpcPodConfig": map[string]interface{}{
+				"securityContextConfig": "restricted",
+			},
+		},
+	}
+}
+
 // UpdateStepEvent represents a single step in the update pipeline.
 // Defined here so operations.go doesn't depend on the api package.
 type UpdateStepEvent struct {
@@ -589,23 +609,7 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	// --- Step 3: apply_catalog_source ---
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
 	logs = append(logs, fmt.Sprintf("Applying CatalogSource %s...", CatalogName))
-	catalogSource := map[string]interface{}{
-		"apiVersion": "operators.coreos.com/v1alpha1",
-		"kind":       "CatalogSource",
-		"metadata": map[string]interface{}{
-			"name":      CatalogName,
-			"namespace": CatalogNS,
-		},
-		"spec": map[string]interface{}{
-			"sourceType":  "grpc",
-			"image":       image,
-			"displayName": "RHOAI Development Catalog",
-			"publisher":   "RHOAI DevOps",
-			"grpcPodConfig": map[string]interface{}{
-				"securityContextConfig": "restricted",
-			},
-		},
-	}
+	catalogSource := buildCatalogSourceSpec(image)
 
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	_, _, err = c.apply(csPath, catalogSource)
@@ -1065,25 +1069,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		}, nil
 	}
 	// Server-side dry run: attempt CatalogSource apply with ?dryRun=All
-	catalogSpec := map[string]interface{}{
-		"apiVersion": "operators.coreos.com/v1alpha1",
-		"kind":       "CatalogSource",
-		"metadata": map[string]interface{}{
-			"name":      CatalogName,
-			"namespace": CatalogNS,
-		},
-		"spec": map[string]interface{}{
-			"sourceType":  "grpc",
-			"image":       image,
-			"displayName": "RHOAI Development Catalog",
-			"publisher":   "rhoai-nightly-updater",
-			"updateStrategy": map[string]interface{}{
-				"registryPoll": map[string]interface{}{
-					"interval": "15m",
-				},
-			},
-		},
-	}
+	catalogSpec := buildCatalogSourceSpec(image)
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	_, _, csDryErr := c.dryRunApply(csPath, catalogSpec)
 	if csDryErr != nil {
@@ -1329,23 +1315,7 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.SubscriptionInfo, logs []string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	// --- Step 9: create_catalog_source ---
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
-	catalogSource := map[string]interface{}{
-		"apiVersion": "operators.coreos.com/v1alpha1",
-		"kind":       "CatalogSource",
-		"metadata": map[string]interface{}{
-			"name":      CatalogName,
-			"namespace": CatalogNS,
-		},
-		"spec": map[string]interface{}{
-			"sourceType":  "grpc",
-			"image":       image,
-			"displayName": "RHOAI Development Catalog",
-			"publisher":   "RHOAI DevOps",
-			"grpcPodConfig": map[string]interface{}{
-				"securityContextConfig": "restricted",
-			},
-		},
-	}
+	catalogSource := buildCatalogSourceSpec(image)
 	csApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	_, _, err := c.apply(csApplyPath, catalogSource)
 	if err != nil {
