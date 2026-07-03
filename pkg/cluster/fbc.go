@@ -132,14 +132,15 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 	// Extract tag from image reference for bundle matching
 	tag := extractTagFromRef(imageRef)
 
-	// Download and parse each layer looking for FBC catalog content
+	// Download and parse layers in reverse order (catalog content is typically
+	// in the last layer, added on top of a base image during build)
 	var allRelatedImages []fbcRelatedImage
 	var bundleName string
 
-	for _, layerDigest := range layerDigests {
-		images, bn, err := downloadAndParseLayer(ctx, quayHTTPClient, bearerToken, layerDigest, tag)
+	for i := len(layerDigests) - 1; i >= 0; i-- {
+		images, bn, err := downloadAndParseLayer(ctx, quayHTTPClient, bearerToken, layerDigests[i], tag)
 		if err != nil {
-			slog.Warn("failed to parse FBC layer", "digest", layerDigest[:20], "error", err)
+			slog.Warn("failed to parse FBC layer", "digest", layerDigests[i][:20], "error", err)
 			continue
 		}
 		allRelatedImages = append(allRelatedImages, images...)
