@@ -210,6 +210,41 @@ func (c *Client) apply(path string, resource interface{}) ([]byte, int, error) {
 	return body, resp.StatusCode, nil
 }
 
+func (c *Client) dryRunApply(path string, resource interface{}) ([]byte, int, error) {
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	req, err := http.NewRequestWithContext(c.ctx, "PATCH", c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/apply-patch+yaml")
+	req.Header.Set("Accept", "application/json")
+	q := req.URL.Query()
+	q.Set("fieldManager", "rhoai-nightly-updater")
+	q.Set("force", "true")
+	q.Set("dryRun", "All")
+	req.URL.RawQuery = q.Encode()
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, wrapNetworkError(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	if resp.StatusCode >= 400 {
+		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
+	}
+	return body, resp.StatusCode, nil
+}
+
 func (c *Client) put(path string, data []byte) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(c.ctx, "PUT", c.baseURL+path, bytes.NewReader(data))
 	if err != nil {

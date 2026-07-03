@@ -1013,6 +1013,36 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 
+	// Validate pull secret has quay.io/rhoai auth
+	if !ps.Valid {
+		logs = append(logs, "[DRY-RUN] WARNING: Pull secret exists but is invalid (missing quay.io/rhoai credentials)")
+	} else {
+		logs = append(logs, "OK: Pull secret is valid")
+	}
+
+	// Validate image exists on Quay
+	quayAuth := getQuayAuth(c)
+	bearerToken, tokenErr := getQuayBearerToken(c.ctx, quayHTTPClient, quayAuth)
+	if tokenErr != nil {
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Could not authenticate with Quay: %v", tokenErr))
+	} else {
+		tag := extractTagFromRef(image)
+		_, digestErr := getTagDigest(c.ctx, quayHTTPClient, bearerToken, tag)
+		if digestErr != nil {
+			logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Image tag %q not found on Quay — the image may not exist", tag))
+		} else {
+			logs = append(logs, fmt.Sprintf("OK: Image tag %q exists on Quay", tag))
+		}
+	}
+
+	// Check if namespace and OperatorGroup need to be created (fresh cluster)
+	nsPath := namespacedPath("v1", "namespaces", "", SubNS)
+	_, _, nsCheckErr := c.get(nsPath)
+	if nsCheckErr != nil && IsK8sError(nsCheckErr, 404) {
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", SubNS))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", SubNS))
+	}
+
 	// Downgrade check (dry-run): compare the target image version against the
 	// currently installed CSV version.
 	dryRunTag := extractTagFromRef(image)
@@ -1034,13 +1064,43 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
+	// Server-side dry run: attempt CatalogSource apply with ?dryRun=All
+	catalogSpec := map[string]interface{}{
+		"apiVersion": "operators.coreos.com/v1alpha1",
+		"kind":       "CatalogSource",
+		"metadata": map[string]interface{}{
+			"name":      CatalogName,
+			"namespace": CatalogNS,
+		},
+		"spec": map[string]interface{}{
+			"sourceType":  "grpc",
+			"image":       image,
+			"displayName": "RHOAI Development Catalog",
+			"publisher":   "rhoai-nightly-updater",
+			"updateStrategy": map[string]interface{}{
+				"registryPoll": map[string]interface{}{
+					"interval": "15m",
+				},
+			},
+		},
+	}
+	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	_, _, csDryErr := c.dryRunApply(csPath, catalogSpec)
+	if csDryErr != nil {
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] FAILED: CatalogSource apply rejected by API server: %v", csDryErr))
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Dry run failed: CatalogSource would be rejected: %v", csDryErr),
+			Logs:      logs,
+			ErrorCode: errorCodeFromK8sErr(csDryErr),
+		}, nil
+	}
 	if cs.Exists && cs.Image == image {
-		logs = append(logs, "[DRY-RUN] CatalogSource already points to this image — no change needed")
+		logs = append(logs, "OK: CatalogSource already points to this image — no change needed (validated)")
 	} else if cs.Exists {
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would update CatalogSource image from: %s", cs.Image))
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would update CatalogSource image to:   %s", image))
+		logs = append(logs, fmt.Sprintf("OK: CatalogSource apply validated (would update image)"))
 	} else {
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create CatalogSource %s with image: %s", CatalogName, image))
+		logs = append(logs, fmt.Sprintf("OK: CatalogSource apply validated (would create %s)", CatalogName))
 	}
 
 	sub, err := getSubscription(c)
@@ -1052,7 +1112,9 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
-	if sub.Source == CatalogName {
+	if sub.State == "Not Installed" || sub.Source == "" {
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create Subscription pointing to %s", CatalogName))
+	} else if sub.Source == CatalogName {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Subscription already points to %s", CatalogName))
 	} else {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would patch Subscription source: %s -> %s", sub.Source, CatalogName))
