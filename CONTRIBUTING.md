@@ -6,9 +6,9 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 ### Required Versions
 
-- **Go**: 1.24.4 (from `go.mod`)
-- **Node.js**: 22.x (from `Containerfile` frontend build stage using `node:22-alpine`)
-- **TypeScript**: 5.6.x (from `frontend/package.json`)
+- **Go**: See `go.mod` for the required version
+- **Node.js**: 22.x
+- **TypeScript**: 5.x
 
 ### Required Tools
 
@@ -91,7 +91,7 @@ devServer: {
 ```
 /Users/juntaowang/Desktop/ODH/rhoai-nightly-updater/
 ├── main.go                  # HTTP server entry point
-├── go.mod                   # Go module definition (Go 1.24.4)
+├── go.mod                   # Go module definition
 ├── Makefile                 # Build/test/deploy automation
 ├── Containerfile            # Multi-stage Docker build
 ├── dev.sh                   # Local development launcher
@@ -102,21 +102,19 @@ devServer: {
 │   ├── middleware/          # HTTP middleware (security, request ID)
 │   └── types/               # Shared type definitions
 ├── frontend/                # React/TypeScript frontend
-│   ├── src/                 # Source files (.tsx, .ts)
+│   ├── src/                 # Source files
 │   │   ├── index.tsx        # React app entry point
 │   │   ├── App.tsx          # Root component with routing
-│   │   ├── types.ts         # TypeScript types
-│   │   ├── utils.ts         # Utility functions
-│   │   ├── constants.ts     # App constants
-│   │   └── components/      # React components (16 files)
-│   ├── public/              # Static assets (index.html template)
+│   │   ├── pages/           # Page components
+│   │   ├── components/      # Reusable UI components
+│   │   └── services/        # API client
+│   ├── public/              # Static assets
 │   ├── dist/                # Production build output (generated)
 │   ├── package.json         # Node dependencies and scripts
 │   ├── tsconfig.json        # TypeScript compiler config
 │   └── webpack.config.js    # Webpack bundler config
-├── deploy/                  # Kubernetes manifests (template.yaml)
+├── deploy/                  # Kubernetes manifests
 ├── scripts/                 # Automation scripts
-│   └── smoke-test.sh        # Post-deploy verification
 └── docs/                    # Documentation
 ```
 
@@ -134,19 +132,10 @@ make test              # Run both Go and frontend tests
 make test-go           # Runs: go test ./... -v -count=1
 ```
 
-**Test count**: 16 test files across `pkg/`
+**Test patterns:**
 
-**Test patterns** (from `pkg/cluster/testmain_test.go`):
-
-- Tests use **fast timing constants** (10-100ms) instead of production timeouts (5-120s)
-- `TestMain` overrides package-level timing constants:
-  ```go
-  CatalogReadyTimeout = 100 * time.Millisecond
-  CatalogPollInterval = 10 * time.Millisecond
-  InstallPlanPollTimeout = 100 * time.Millisecond
-  // ... etc
-  ```
-- This allows tests to run quickly without changing production behavior.
+- Tests use fast timing constants instead of production timeouts
+- `TestMain` overrides package-level timing constants to run quickly without changing production behavior
 
 ### Frontend Tests
 
@@ -309,20 +298,7 @@ path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "
 
 #### 3. Test Patterns
 
-Tests use **mock clients** by overriding timing constants in `TestMain`:
-
-```go
-// From pkg/cluster/testmain_test.go
-func TestMain(m *testing.M) {
-    // Override production timeouts (5-120s) with fast test values (10-100ms)
-    CatalogReadyTimeout = 100 * time.Millisecond
-    CatalogPollInterval = 10 * time.Millisecond
-    // ...
-    os.Exit(m.Run())
-}
-```
-
-This allows tests to verify polling/retry logic without waiting for production timeouts.
+Tests use mock clients by overriding timing constants in `TestMain`. This allows tests to verify polling/retry logic without waiting for production timeouts.
 
 ### Frontend Patterns
 

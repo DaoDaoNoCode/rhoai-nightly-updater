@@ -814,45 +814,4 @@ If the Deployment spec shows the new PR image but the running pod still uses the
 
 ## Quick Reference: App Endpoints
 
-| Endpoint | Method | Auth | Purpose |
-|----------|--------|------|---------|
-| `/api/health` | GET | No | Liveness probe |
-| `/api/health/ready` | GET | No | Readiness probe (checks Kubernetes API connectivity) |
-| `/api/user/permissions` | GET | Yes | Check if logged-in user can perform mutations |
-| `/api/status` | GET | Yes | Cluster + operator status |
-| `/api/update` | POST | Yes | Apply nightly CatalogSource |
-| `/api/rollback` | POST | Yes | Reinstall (stable or nightly) |
-| `/api/refresh` | POST | Yes | Force operator refresh (delete CSV + recreate Subscription) |
-| `/api/activity` | GET | Yes | Activity log from ConfigMap |
-| `/api/latest-nightly` | GET | Yes | Latest FBC tag from Quay |
-| `/api/nightly-tags` | GET | Yes | Top 5 FBC tags from Quay |
-| `/api/components` | GET | Yes | DSC components + deployments |
-| `/api/build-explorer/tags` | GET | Yes | All FBC tags (Build Explorer) |
-| `/api/build-explorer/content` | GET | Yes | FBC relatedImages for a tag |
-| `/api/test-pull-secret` | GET | Yes | Validate pull secret |
-| `/api/setup/pull-secret` | POST | Yes | Create/update pull secret |
-| `/api/verify-nodes` | GET | Yes | Verify pull secret + IDMS + registry access |
-| `/api/debug` | GET | Yes | Debug pod info |
-| `/api/dashboard/state` | GET | Yes | Dashboard deployment state (default vs PR) |
-| `/api/dashboard/deploy-pr` | POST | Yes | Deploy a PR image to the dashboard |
-| `/api/dashboard/revert` | POST | Yes | Revert dashboard to operator-managed image |
-| `/api/resources/status` | GET | Yes | Status of test infrastructure (MinIO, pipeline servers, MLflow) |
-| `/api/resources/projects` | GET | Yes | List Data Science projects |
-| `/api/resources/minio/setup` | POST | Yes | Deploy MinIO with S3 bucket |
-| `/api/resources/minio/teardown` | POST | Yes | Delete MinIO namespace |
-| `/api/resources/pipeline-server/setup` | POST | Yes | Create pipeline server (DSPA) in a project |
-| `/api/resources/pipeline-server/teardown` | POST | Yes | Remove pipeline server from a project |
-| `/api/resources/mlflow/setup` | POST | Yes | Create MLflow CR |
-| `/api/resources/mlflow/teardown` | POST | Yes | Delete MLflow CR |
-| `/api/resources/mlflow/deploy-pr` | POST | Yes | Patch MLflow CR with PR image |
-| `/api/resources/mlflow/revert` | POST | Yes | Revert MLflow CR to default image |
-| `/api/setup/dsc/preview` | GET | Yes | Preview default DSC YAML |
-| `/api/setup/dsc` | POST | Yes | Create default DataScienceCluster |
-| `/api/update/stream` | POST | Yes | SSE stream of update pipeline progress |
-| `/api/rollback/stream` | POST | Yes | SSE stream of rollback pipeline progress |
-| `/api/refresh/stream` | POST | Yes | SSE stream of refresh pipeline progress |
-| `/api/diagnostics` | GET | Yes | Run live cluster health checks and problem detection |
-| `/api/diagnostics/fix` | POST | Yes | Apply an auto-fix for a detected problem |
-| `/api/assist-rollout` | POST | Yes | Detect and unblock stuck deployment rollouts |
-| `/api/pageview` | POST | Yes | Record page view / feature usage (privacy-safe, aggregate only) |
-| `/metrics` | GET | No | Prometheus metrics (scraped on port 8080) |
+For the full list of API endpoints, see the API Endpoints section in README.md.

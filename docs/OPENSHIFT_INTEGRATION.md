@@ -34,7 +34,9 @@ All cluster operations MUST use the ServiceAccount token.
 
 **Architecture:** oauth-proxy's `--openshift-sar` check is the authorization gate. The SAR check uses the user's token (which has `user:check-access` scope — sufficient for SAR). If a user passes it, the SA does all operations.
 
-**Cookie behavior:** Default cookie expiry is 168h (7 days). The underlying OAuth token expires in 24h (OpenShift default). `--cookie-refresh` re-validates the token but does NOT obtain a new one — OpenShift OAuth tokens are non-refreshable.
+**Cookie behavior:** Cookie expiry defaults to 168h. The underlying OAuth token expires in 24h (OpenShift default). Cookie refresh re-validates the token but does not obtain a new one — OpenShift OAuth tokens are non-refreshable.
+
+**Note:** Check oauth-proxy configuration for current timeout values.
 
 **Source:** https://github.com/openshift/oauth-proxy/blob/master/providers/openshift/provider.go (LoadDefaults function)
 
@@ -56,17 +58,15 @@ All cluster operations MUST use the ServiceAccount token.
 
 **How SSE changes the budget:** Unlike the old request/response model (where the entire operation had to complete within WriteTimeout), SSE streams partial progress as it goes. Each SSE event resets the effective "time since last write," but Go's `WriteTimeout` is measured from the start of the response, not the last write. Therefore WriteTimeout must still cover the total wall-clock time of the longest operation.
 
-**Current budget:**
-| Layer | Timeout | Purpose |
-|---|---|---|
-| Frontend EventSource | 180s | Browser gives up on SSE stream |
-| Route HAProxy | 180s | Reverse proxy gives up |
-| Go WriteTimeout | 180s | Server kills response write |
-| SSE pipeline (Update) | 30s-120s typical | CatalogSource apply + wait ready + CSV refresh |
-| SSE pipeline (Reinstall) | 60s-180s typical | 7-step cleanup + wait + recreate |
-| SSE pipeline (worst case) | ~180s max | Slow image pulls, catalog indexing delays |
+**Timeout hierarchy:**
+- Frontend EventSource timeout
+- Route HAProxy timeout (configured via Route annotation)
+- Go WriteTimeout (configured in server)
+- SSE pipeline duration (varies by operation: Update, Reinstall, Refresh)
 
-**Rule:** Each layer must be >= the one below it. The Route timeout must be >= the Go WriteTimeout (180s) which must be >= the worst-case SSE stream duration.
+**Rule:** Each layer must be >= the one below it. The Route timeout must be >= the Go WriteTimeout which must be >= the worst-case SSE stream duration.
+
+**Note:** Check the source code and Route annotations for current timeout values.
 
 ## 5. ServiceAccount Token
 
@@ -84,15 +84,13 @@ All cluster operations MUST use the ServiceAccount token.
 3. Start the gRPC pod
 4. Index the package content
 
-This takes 10-30 seconds depending on image size and pull speed.
+This typically takes 10-30 seconds depending on image size and pull speed.
 
 **Impact:** If we mutate the Subscription before the CatalogSource is READY, OLM resolves against stale content or fails.
 
-**Fix:** CatalogSource readiness is now a proper step in the SSE pipeline (`wait_catalog_ready`). The pipeline polls `getCatalogSource(c).State == "READY"` every `CatalogPollInterval` (5s default, configurable) and times out after `CatalogReadyTimeout` (120s default, configurable). Each poll tick emits an SSE event so the frontend shows live progress.
+**Fix:** CatalogSource readiness is a step in the SSE pipeline. The pipeline polls the CatalogSource state and emits SSE events to show live progress.
 
-**Configurable values:**
-- `CatalogReadyTimeout` (default 120s): Maximum time to wait for the CatalogSource to reach READY state. Production clusters with slow image pulls may need the full 120s.
-- `CatalogPollInterval` (default 5s): How often to check CatalogSource status. Tests override this to 100ms for speed.
+**Note:** Check the source code for current poll interval and timeout values. Tests override these to minimal values for speed.
 
 ## 7. OLM Version Pinning
 
@@ -155,34 +153,15 @@ These headers are set by the SSEWriter before the first event is flushed. The re
 
 ## 13. Configurable Timing Constants
 
-**What:** Operation timing is controlled by package-level variables in `pkg/cluster/operations.go`. These are `var` (not `const`) so tests can override them for speed.
+**What:** Operation timing is controlled by package-level variables. These are `var` (not `const`) so tests can override them for speed.
 
-**Production values:**
+**Examples of timing constants:**
+- CatalogSource readiness timeouts and poll intervals
+- Resource propagation wait periods
+- Retry backoff durations
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `CatalogReadyTimeout` | 120s | Max wait for CatalogSource to reach READY after apply |
-| `CatalogPollInterval` | 5s | How often to poll CatalogSource state during wait |
-| `PropagationWait` | 10s | Pause after deleting resources before recreating (Reinstall Step 8) |
-| `ChannelRetryDelay` | 8s | Backoff between retries when detecting the nightly channel |
-| `SubRetryBackoffs` | [2s, 4s] | Backoff durations for Subscription creation retries |
-| `RefreshCleanupWait` | 5s | Pause after deleting Subscription before recreating (RefreshOperator) |
-| `PackageManifestPropagationWait` | 30s | Pause after CatalogSource READY before querying packagemanifest for channel detection |
-
-**Test overrides:** Tests set these to minimal values (e.g., `CatalogPollInterval = 100ms`, `CatalogReadyTimeout = 2s`) to avoid slow test suites. The pattern is:
-
-```go
-func TestSomething(t *testing.T) {
-    origTimeout := CatalogReadyTimeout
-    origInterval := CatalogPollInterval
-    CatalogReadyTimeout = 2 * time.Second
-    CatalogPollInterval = 100 * time.Millisecond
-    defer func() {
-        CatalogReadyTimeout = origTimeout
-        CatalogPollInterval = origInterval
-    }()
-    // ... test code ...
-}
-```
+**Test overrides:** Tests set these to minimal values to avoid slow test suites.
 
 **Why `var` not `const`:** Go `const` only supports primitive types and cannot hold `time.Duration` values that need to be overridden. Using package-level `var` is the standard Go pattern for testable timing constants.
+
+**Note:** Check the source code for current timeout values. Production values are designed for real cluster latencies; test values are designed for speed.
