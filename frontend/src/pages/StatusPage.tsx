@@ -199,6 +199,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
   // DSC creation state
   const [dscLoading, setDscLoading] = useState(false);
   const [dscResult, setDscResult] = useState<OperationResponse | null>(null);
+  const [dscModalOpen, setDscModalOpen] = useState(false);
 
   const handleRefreshOperator = () => {
     trackFeature("refresh_operator");
@@ -396,7 +397,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                   >
                     <Button
                       variant="primary"
-                      onClick={handleCreateDSC}
+                      onClick={() => setDscModalOpen(true)}
                       isLoading={dscLoading}
                       isDisabled={dscLoading || !canMutate}
                     >
@@ -417,6 +418,64 @@ export const StatusPage: React.FC<StatusPageProps> = ({
               </Stack>
             </CardBody>
           </Card>
+
+          {/* DSC Preview Modal */}
+          <Modal
+            aria-labelledby="dsc-preview-title"
+            variant={ModalVariant.large}
+            isOpen={dscModalOpen}
+            onClose={() => setDscModalOpen(false)}
+          >
+            <ModalHeader title="Create DataScienceCluster" labelId="dsc-preview-title" />
+            <ModalBody>
+              <Stack hasGutter>
+                <StackItem>
+                  <Content component="p">
+                    This will create a <code>default-dsc</code> DataScienceCluster with the following configuration.
+                    You can change component states later from the Components page.
+                  </Content>
+                </StackItem>
+                <StackItem>
+                  <CodeBlock>
+                    <CodeBlockCode>{`apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    dashboard:          Managed
+    aipipelines:        Managed
+    kserve:             Managed
+    workbenches:        Managed
+    modelregistry:      Managed
+    ray:                Managed
+    trainer:            Managed
+    trustyai:           Managed
+    feastoperator:      Managed
+    mlflowoperator:     Managed
+    kueue:              Removed
+    trainingoperator:   Removed
+    llamastackoperator: Removed
+    sparkoperator:      Removed
+    ogx:                Removed`}</CodeBlockCode>
+                  </CodeBlock>
+                </StackItem>
+              </Stack>
+            </ModalBody>
+            <ModalFooter>
+              <Button
+                variant="primary"
+                onClick={() => { setDscModalOpen(false); handleCreateDSC(); }}
+                isDisabled={dscLoading}
+                isLoading={dscLoading}
+              >
+                Confirm &amp; Create
+              </Button>
+              <Button variant="link" onClick={() => setDscModalOpen(false)}>
+                Cancel
+              </Button>
+            </ModalFooter>
+          </Modal>
         </PageSection>
       )}
 
