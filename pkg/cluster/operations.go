@@ -2552,12 +2552,12 @@ func TestPullSecret(c *Client) (*types.OperationResponse, error) {
 		}, nil
 	}
 
-	logs = append(logs, "OK: secret contains quay.io/rhoai credentials")
+	logs = append(logs, "OK: credentials accepted by quay.io/rhoai")
 	logs = append(logs, "Pull secret is correctly configured.")
 
 	return &types.OperationResponse{
 		Success: true,
-		Message: "Pull secret is valid and contains quay.io/rhoai credentials.",
+		Message: "Pull secret is valid — credentials verified against Quay.",
 		Logs:    logs,
 	}, nil
 }

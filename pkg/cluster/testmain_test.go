@@ -19,5 +19,9 @@ func TestMain(m *testing.M) {
 	ChannelRetryDelay = 10 * time.Millisecond
 	PackageManifestPropagationWait = 10 * time.Millisecond
 
+	// Skip real Quay credential verification in tests.
+	// Individual tests override this to test rejection behavior.
+	verifyQuayCredentials = func(string) error { return nil }
+
 	os.Exit(m.Run())
 }

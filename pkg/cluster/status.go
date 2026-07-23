@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -338,6 +340,15 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 	}, nil
 }
 
+// verifyQuayCredentials calls the Quay token endpoint to confirm the credentials
+// are accepted. Tests override this to skip the real network call.
+var verifyQuayCredentials = func(basicAuth string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := getQuayBearerToken(ctx, quayHTTPClient, basicAuth)
+	return err
+}
+
 func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
 	body, _, err := c.get(path)
@@ -378,13 +389,23 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 		return types.PullSecretInfo{Exists: true, Detail: "Missing 'auths' key in docker config"}, nil
 	}
 
-	for key := range auths {
+	var basicAuth string
+	for key, val := range auths {
 		if strings.Contains(key, "quay.io/rhoai") {
-			return types.PullSecretInfo{Exists: true, Valid: true}, nil
+			entry, _ := val.(map[string]interface{})
+			basicAuth, _ = entry["auth"].(string)
+			break
 		}
 	}
+	if basicAuth == "" {
+		return types.PullSecretInfo{Exists: true, Detail: "No quay.io/rhoai entry found in auths"}, nil
+	}
 
-	return types.PullSecretInfo{Exists: true, Detail: "No quay.io/rhoai entry found in auths"}, nil
+	if err := verifyQuayCredentials(basicAuth); err != nil {
+		return types.PullSecretInfo{Exists: true, Detail: fmt.Sprintf("Credentials rejected by Quay: %v", err)}, nil
+	}
+
+	return types.PullSecretInfo{Exists: true, Valid: true}, nil
 }
 
 func getConsoleURL(c *Client) string {

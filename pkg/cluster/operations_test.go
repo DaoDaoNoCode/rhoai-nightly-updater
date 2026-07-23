@@ -89,6 +89,47 @@ func TestTestPullSecret_Valid(t *testing.T) {
 	}
 }
 
+func TestTestPullSecret_RejectedByQuay(t *testing.T) {
+	orig := verifyQuayCredentials
+	verifyQuayCredentials = func(string) error { return fmt.Errorf("quay auth returned 401: unauthorized") }
+	defer func() { verifyQuayCredentials = orig }()
+
+	dockerConfig := map[string]interface{}{
+		"auths": map[string]interface{}{
+			"quay.io/rhoai": map[string]interface{}{
+				"auth": "dGVzdDp0ZXN0",
+			},
+		},
+	}
+	dockerConfigJSON, _ := json.Marshal(dockerConfig)
+	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigJSON)
+
+	secretData := map[string]interface{}{
+		"apiVersion": "v1", "kind": "Secret",
+		"data": map[string]interface{}{".dockerconfigjson": dockerConfigB64},
+	}
+	secretJSON, _ := json.Marshal(secretData)
+
+	client, cleanup := newMockClient(map[string]mockResponse{
+		"/api/v1/namespaces/kube-system/secrets/additional-pull-secret": {
+			body:       string(secretJSON),
+			statusCode: 200,
+		},
+	})
+	defer cleanup()
+
+	result, err := TestPullSecret(client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Error("expected failure when Quay rejects credentials")
+	}
+	if !strings.Contains(result.Message, "Credentials rejected") {
+		t.Errorf("expected 'Credentials rejected' in message, got: %s", result.Message)
+	}
+}
+
 func TestUpdate_PrerequisitesNotMet(t *testing.T) {
 	// Mock: pull secret does not exist (404)
 	client, cleanup := newMockClient(map[string]mockResponse{

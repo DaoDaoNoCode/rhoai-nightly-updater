@@ -602,7 +602,7 @@ var HandleLatestNightly = withAuth(func(c *cluster.Client, w http.ResponseWriter
 	result, err := cluster.FetchLatestNightly(r.Context(), c)
 	if err != nil {
 		slog.Error("latest-nightly failed", "error", err)
-		writeError(w, "failed to fetch latest nightly", http.StatusInternalServerError)
+		writeError(w, fmt.Sprintf("failed to fetch latest nightly: %v", err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, result, "latest-nightly")
