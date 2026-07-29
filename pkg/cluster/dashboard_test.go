@@ -226,6 +226,8 @@ func TestPRContainerRepos_Entries(t *testing.T) {
 		"eval-hub-ui",
 		"automl-ui",
 		"autorag-ui",
+		"agent-ops-ui",
+		"core-bff",
 	}
 	for _, name := range expectedContainers {
 		if _, ok := prContainerRepos[name]; !ok {

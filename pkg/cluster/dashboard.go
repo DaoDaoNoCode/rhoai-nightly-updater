@@ -33,6 +33,8 @@ var prContainerRepos = map[string]string{
 	"eval-hub-ui":       "opendatahub/odh-mod-arch-eval-hub",
 	"automl-ui":         "opendatahub/odh-mod-arch-automl",
 	"autorag-ui":        "opendatahub/odh-mod-arch-autorag",
+	"agent-ops-ui":      "opendatahub/odh-mod-arch-agent-ops",
+	"core-bff":          "opendatahub/odh-core-bff",
 }
 
 // containerEnvVarMap maps container names to their RELATED_IMAGE env var
@@ -46,6 +48,8 @@ var containerEnvVarMap = map[string]string{
 	"eval-hub-ui":       "RELATED_IMAGE_ODH_MOD_ARCH_EVAL_HUB_IMAGE",
 	"automl-ui":         "RELATED_IMAGE_ODH_MOD_ARCH_AUTOML_IMAGE",
 	"autorag-ui":        "RELATED_IMAGE_ODH_MOD_ARCH_AUTORAG_IMAGE",
+	"agent-ops-ui":      "RELATED_IMAGE_ODH_MOD_ARCH_AGENT_OPS_IMAGE",
+	"core-bff":          "RELATED_IMAGE_ODH_CORE_BFF_IMAGE",
 }
 
 // GetDashboardState returns the current state of the rhods-dashboard deployment.
