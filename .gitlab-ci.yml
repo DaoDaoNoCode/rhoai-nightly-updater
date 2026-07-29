@@ -11,7 +11,7 @@ variables:
     entrypoint: [""]
   before_script:
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"quay.io\":{\"auth\":\"$(echo -n ${QUAY_USER}:${QUAY_TOKEN} | base64)\"}}}" > /kaniko/.docker/config.json
+    - echo "{\"auths\":{\"quay.io\":{\"auth\":\"$(printf '%s:%s' "${QUAY_USER}" "${QUAY_TOKEN}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
 
 # Auto-build on push to main → :latest + :sha
 build-main:
