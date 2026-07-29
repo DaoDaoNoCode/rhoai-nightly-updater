@@ -1,0 +1,42 @@
+stages:
+  - build
+
+variables:
+  IMAGE: quay.io/juntao_wang/rhoai-nightly-updater
+
+.kaniko-build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  before_script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"quay.io\":{\"auth\":\"$(echo -n ${QUAY_USER}:${QUAY_TOKEN} | base64)\"}}}" > /kaniko/.docker/config.json
+
+# Auto-build on push to main → :latest + :sha
+build-main:
+  extends: .kaniko-build
+  script:
+    - >-
+      /kaniko/executor
+      --context=$CI_PROJECT_DIR
+      --dockerfile=Containerfile
+      --destination=$IMAGE:latest
+      --destination=$IMAGE:$CI_COMMIT_SHORT_SHA
+      --cache=true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Manual trigger for any other branch → :<branch-slug>
+build-branch:
+  extends: .kaniko-build
+  script:
+    - >-
+      /kaniko/executor
+      --context=$CI_PROJECT_DIR
+      --dockerfile=Containerfile
+      --destination=$IMAGE:$CI_COMMIT_REF_SLUG
+      --cache=true
+  rules:
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "main"
+      when: manual
