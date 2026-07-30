@@ -279,11 +279,22 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                     <Stack hasGutter>
                       {dashState && (
                         <StackItem>
-                          <Content component="small">
-                            <Tooltip content={dashState.currentImage}>
-                              <code>{truncateImage(dashState.currentImage)}</code>
-                            </Tooltip>
-                          </Content>
+                          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
+                            <FlexItem>
+                              <Content component="small">
+                                <Tooltip content={dashState.currentImage}>
+                                  <code>{truncateImage(dashState.currentImage)}</code>
+                                </Tooltip>
+                              </Content>
+                            </FlexItem>
+                            {dashState.deploymentMode && (
+                              <FlexItem>
+                                <Label isCompact color={dashState.deploymentMode === "Standalone" ? "blue" : "grey"}>
+                                  {dashState.deploymentMode}
+                                </Label>
+                              </FlexItem>
+                            )}
+                          </Flex>
                         </StackItem>
                       )}
 

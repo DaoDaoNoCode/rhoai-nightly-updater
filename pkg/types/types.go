@@ -244,6 +244,7 @@ type DebugResponse struct {
 // DashboardState describes the current state of the rhods-dashboard deployment.
 type DashboardState struct {
 	CurrentImage            string    `json:"currentImage"`
+	DeploymentMode          string    `json:"deploymentMode"`
 	IsCustomPR              bool      `json:"isCustomPR"`
 	PRNumber                int       `json:"prNumber,omitempty"`
 	PRContainers            []string  `json:"prContainers,omitempty"`

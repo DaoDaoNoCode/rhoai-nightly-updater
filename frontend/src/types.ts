@@ -189,6 +189,7 @@ export interface UserPermissions {
 
 export interface DashboardState {
   currentImage: string;
+  deploymentMode?: string;
   isCustomPR: boolean;
   prNumber?: number;
   prContainers?: string[];

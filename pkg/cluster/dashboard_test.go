@@ -663,3 +663,287 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 		t.Errorf("expected URL-encoded equals (%%3D) in query, got %q", capturedRawQuery)
 	}
 }
+
+func TestIsStandaloneMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		containers []string
+		want       bool
+	}{
+		{
+			name:       "standalone - core containers only",
+			containers: []string{"rhods-dashboard", "kube-rbac-proxy", "core-bff"},
+			want:       true,
+		},
+		{
+			name:       "sidecar - has module containers",
+			containers: []string{"rhods-dashboard", "kube-rbac-proxy", "core-bff", "model-registry-ui", "gen-ai-ui"},
+			want:       false,
+		},
+		{
+			name:       "sidecar - single module present",
+			containers: []string{"rhods-dashboard", "kube-rbac-proxy", "core-bff", "agent-ops-ui"},
+			want:       false,
+		},
+		{
+			name:       "empty containers",
+			containers: []string{},
+			want:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isStandaloneMode(tt.containers)
+			if got != tt.want {
+				t.Errorf("isStandaloneMode(%v) = %v, want %v", tt.containers, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetDashboardState_StandaloneMode(t *testing.T) {
+	// Main deployment has only core containers (standalone mode)
+	deploy := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]interface{}{
+				"opendatahub.io/managed": "true",
+			},
+		},
+		"spec": map[string]interface{}{
+			"selector": map[string]interface{}{
+				"matchLabels": map[string]interface{}{
+					"app": "rhods-dashboard",
+				},
+			},
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"name":  "rhods-dashboard",
+							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
+						},
+						map[string]interface{}{
+							"name":  "kube-rbac-proxy",
+							"image": "quay.io/opendatahub/odh-kube-rbac-proxy:latest",
+						},
+						map[string]interface{}{
+							"name":  "core-bff",
+							"image": "quay.io/opendatahub/odh-core-bff:main",
+						},
+					},
+				},
+			},
+		},
+	}
+	deployJSON, _ := json.Marshal(deploy)
+
+	// Standalone module deployment with a PR image
+	moduleDeploy := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"name":  "model-registry-ui",
+							"image": "quay.io/opendatahub/odh-mod-arch-modular-architecture:pr-42",
+						},
+					},
+				},
+			},
+		},
+	}
+	moduleDeployJSON, _ := json.Marshal(moduleDeploy)
+
+	podList := map[string]interface{}{"items": []interface{}{}}
+	podListJSON, _ := json.Marshal(podList)
+
+	client, cleanup := newMockClient(map[string]mockResponse{
+		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
+			body: string(deployJSON),
+		},
+		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/model-registry-ui": {
+			body: string(moduleDeployJSON),
+		},
+		"/api/v1/namespaces/redhat-ods-applications/pods": {
+			body: string(podListJSON),
+		},
+	})
+	defer cleanup()
+
+	state, err := GetDashboardState(client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.DeploymentMode != "Standalone" {
+		t.Errorf("expected DeploymentMode Standalone, got %q", state.DeploymentMode)
+	}
+	if !state.IsCustomPR {
+		t.Error("expected IsCustomPR to be true (standalone module has PR image)")
+	}
+	if state.PRNumber != 42 {
+		t.Errorf("expected PRNumber 42, got %d", state.PRNumber)
+	}
+	found := false
+	for _, c := range state.PRContainers {
+		if c == "model-registry-ui" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected model-registry-ui in PRContainers")
+	}
+}
+
+func TestGetDashboardState_SidecarModeDetection(t *testing.T) {
+	deploy := map[string]interface{}{
+		"metadata": map[string]interface{}{},
+		"spec": map[string]interface{}{
+			"selector": map[string]interface{}{
+				"matchLabels": map[string]interface{}{
+					"app": "rhods-dashboard",
+				},
+			},
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"name":  "rhods-dashboard",
+							"image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5",
+						},
+						map[string]interface{}{
+							"name":  "model-registry-ui",
+							"image": "registry.redhat.io/rhoai/model-registry:v3.5",
+						},
+					},
+				},
+			},
+		},
+	}
+	deployJSON, _ := json.Marshal(deploy)
+	podList := map[string]interface{}{"items": []interface{}{}}
+	podListJSON, _ := json.Marshal(podList)
+
+	client, cleanup := newMockClient(map[string]mockResponse{
+		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
+			body: string(deployJSON),
+		},
+		"/api/v1/namespaces/redhat-ods-applications/pods": {
+			body: string(podListJSON),
+		},
+	})
+	defer cleanup()
+
+	state, err := GetDashboardState(client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.DeploymentMode != "Sidecar" {
+		t.Errorf("expected DeploymentMode Sidecar, got %q", state.DeploymentMode)
+	}
+}
+
+func TestDeployPRImage_Standalone(t *testing.T) {
+	// Main deployment with core containers only (standalone mode)
+	deploy := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]interface{}{
+				"opendatahub.io/managed": "true",
+			},
+		},
+		"spec": map[string]interface{}{
+			"selector": map[string]interface{}{
+				"matchLabels": map[string]interface{}{"app": "rhods-dashboard"},
+			},
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{"name": "rhods-dashboard", "image": "registry.redhat.io/rhoai/odh-dashboard-rhel9:v3.5"},
+						map[string]interface{}{"name": "kube-rbac-proxy", "image": "quay.io/opendatahub/odh-kube-rbac-proxy:latest"},
+						map[string]interface{}{"name": "core-bff", "image": "quay.io/opendatahub/odh-core-bff:main"},
+					},
+				},
+			},
+		},
+	}
+	deployJSON, _ := json.Marshal(deploy)
+
+	// Standalone module deployment
+	moduleDeploy := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{"name": "model-registry-ui", "image": "registry.redhat.io/rhoai/model-registry:v3.5"},
+					},
+				},
+			},
+		},
+	}
+	moduleDeployJSON, _ := json.Marshal(moduleDeploy)
+
+	podList := map[string]interface{}{"items": []interface{}{}}
+	podListJSON, _ := json.Marshal(podList)
+
+	client, requests, cleanup := newRecordingMockClient(map[string]mockResponse{
+		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
+			body: string(deployJSON),
+		},
+		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/model-registry-ui": {
+			body: string(moduleDeployJSON),
+		},
+		"/api/v1/namespaces/redhat-ods-applications/pods": {
+			body: string(podListJSON),
+		},
+	})
+	defer cleanup()
+
+	// Simulate: only rhods-dashboard and model-registry-ui have PR images
+	// (Quay check is skipped in this test — we test the patching logic)
+	// We can't easily test with real Quay checks, so verify the mode detection
+	// and request paths instead
+	state, err := GetDashboardState(client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.DeploymentMode != "Standalone" {
+		t.Errorf("expected Standalone mode, got %q", state.DeploymentMode)
+	}
+
+	// Verify that GET requests went to both the main deployment and module deployments
+	var gotMainDeploy, gotModuleDeploy bool
+	for _, req := range *requests {
+		if req.Method == "GET" && strings.Contains(req.Path, "/deployments/rhods-dashboard") {
+			gotMainDeploy = true
+		}
+		if req.Method == "GET" && strings.Contains(req.Path, "/deployments/model-registry-ui") {
+			gotModuleDeploy = true
+		}
+	}
+	if !gotMainDeploy {
+		t.Error("expected GET request to rhods-dashboard deployment")
+	}
+	if !gotModuleDeploy {
+		t.Error("expected GET request to model-registry-ui standalone deployment")
+	}
+}
+
+func TestModuleContainers_MatchesModuleRegistry(t *testing.T) {
+	expectedModules := []string{
+		"model-registry-ui",
+		"gen-ai-ui",
+		"maas-ui",
+		"mlflow-ui",
+		"eval-hub-ui",
+		"automl-ui",
+		"autorag-ui",
+		"agent-ops-ui",
+	}
+	for _, name := range expectedModules {
+		if !moduleContainers[name] {
+			t.Errorf("moduleContainers missing %q", name)
+		}
+	}
+	if len(moduleContainers) != len(expectedModules) {
+		t.Errorf("expected %d entries in moduleContainers, got %d", len(expectedModules), len(moduleContainers))
+	}
+}

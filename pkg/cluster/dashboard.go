@@ -37,6 +37,20 @@ var prContainerRepos = map[string]string{
 	"core-bff":          "opendatahub/odh-core-bff",
 }
 
+// moduleContainers identifies containers that run as standalone Deployments
+// in standalone mode (rather than as sidecars in the main dashboard pod).
+// In standalone mode each module has its own Deployment named after the container.
+var moduleContainers = map[string]bool{
+	"model-registry-ui": true,
+	"gen-ai-ui":         true,
+	"maas-ui":           true,
+	"mlflow-ui":         true,
+	"eval-hub-ui":       true,
+	"automl-ui":         true,
+	"autorag-ui":        true,
+	"agent-ops-ui":      true,
+}
+
 // containerEnvVarMap maps container names to their RELATED_IMAGE env var
 // names in the operator deployment (for reverting).
 var containerEnvVarMap = map[string]string{
@@ -85,17 +99,27 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 
 	state := &types.DashboardState{}
 
-	// Check ALL containers for PR images
+	// Detect deployment mode from container list
+	var containerNames []string
+	for _, ct := range deploy.Spec.Template.Spec.Containers {
+		containerNames = append(containerNames, ct.Name)
+	}
+	standalone := isStandaloneMode(containerNames)
+	if standalone {
+		state.DeploymentMode = "Standalone"
+	} else {
+		state.DeploymentMode = "Sidecar"
+	}
+
+	// Check containers in the main deployment for PR images
 	for _, container := range deploy.Spec.Template.Spec.Containers {
 		if container.Name == dashboardContainerName {
 			state.CurrentImage = container.Image
 		}
-		// Check if this container is running a PR image
 		if repo, ok := prContainerRepos[container.Name]; ok {
 			prPrefix := fmt.Sprintf("quay.io/%s:pr-", repo)
 			if strings.HasPrefix(container.Image, prPrefix) {
 				state.PRContainers = append(state.PRContainers, container.Name)
-				// Extract PR number from any PR container
 				tagPart := container.Image[strings.LastIndex(container.Image, ":")+1:]
 				prStr := strings.TrimPrefix(tagPart, "pr-")
 				if n, err := strconv.Atoi(prStr); err == nil && state.PRNumber == 0 {
@@ -104,6 +128,30 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			}
 		}
 	}
+
+	// In standalone mode, also check each standalone module deployment
+	if standalone {
+		for containerName := range moduleContainers {
+			repo, ok := prContainerRepos[containerName]
+			if !ok {
+				continue
+			}
+			image := getStandaloneModuleImage(c, containerName)
+			if image == "" {
+				continue
+			}
+			prPrefix := fmt.Sprintf("quay.io/%s:pr-", repo)
+			if strings.HasPrefix(image, prPrefix) {
+				state.PRContainers = append(state.PRContainers, containerName)
+				tagPart := image[strings.LastIndex(image, ":")+1:]
+				prStr := strings.TrimPrefix(tagPart, "pr-")
+				if n, err := strconv.Atoi(prStr); err == nil && state.PRNumber == 0 {
+					state.PRNumber = n
+				}
+			}
+		}
+	}
+
 	state.IsCustomPR = len(state.PRContainers) > 0
 
 	// Check managed annotation (nil-safe)
@@ -311,48 +359,80 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 
 	logs = append(logs, fmt.Sprintf("Found %d/%d images", len(found), len(prContainerRepos)))
 
-	// Build strategic merge patch with all found containers
-	var containerPatches []map[string]interface{}
-	for name, image := range found {
-		containerPatches = append(containerPatches, map[string]interface{}{
-			"name":  name,
-			"image": image,
-		})
+	// Detect deployment mode
+	mainContainers, err := getDeploymentContainerNames(c, dashboardNamespace, dashboardDeploymentName)
+	if err != nil {
+		return nil, fmt.Errorf("detect deployment mode: %w", err)
+	}
+	standalone := isStandaloneMode(mainContainers)
+	if standalone {
+		logs = append(logs, "Deployment mode: Standalone")
+	} else {
+		logs = append(logs, "Deployment mode: Sidecar")
 	}
 
-	patchData, err := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
-				"opendatahub.io/managed": "false",
-			},
-		},
-		"spec": map[string]interface{}{
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": containerPatches,
+	// Split found images into core (for main deployment) and module (for standalone deployments)
+	coreImages := map[string]string{}
+	moduleImages := map[string]string{}
+	for name, image := range found {
+		if standalone && moduleContainers[name] {
+			moduleImages[name] = image
+		} else {
+			coreImages[name] = image
+		}
+	}
+
+	// Patch the main dashboard deployment with core images
+	if len(coreImages) > 0 {
+		var containerPatches []map[string]interface{}
+		for name, image := range coreImages {
+			containerPatches = append(containerPatches, map[string]interface{}{
+				"name":  name,
+				"image": image,
+			})
+		}
+		patchData, err := json.Marshal(map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"annotations": map[string]interface{}{
+					"opendatahub.io/managed": "false",
 				},
 			},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal patch: %w", err)
+			"spec": map[string]interface{}{
+				"template": map[string]interface{}{
+					"spec": map[string]interface{}{
+						"containers": containerPatches,
+					},
+				},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal patch: %w", err)
+		}
+		deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
+		_, _, err = c.strategicPatch(deployPath, patchData)
+		if err != nil {
+			RecordActivity(c, types.ActivityEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				User:      getUser(c),
+				Action:    "deploy-pr",
+				Detail:    fmt.Sprintf("PR #%d (patch failed: %v)", prNumber, err),
+				Success:   false,
+			})
+			return &types.OperationResponse{
+				Success: false, Message: fmt.Sprintf("Failed to patch dashboard deployment: %v", err),
+				Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+			}, nil
+		}
 	}
 
-	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
-
-	_, _, err = c.strategicPatch(deployPath, patchData)
-	if err != nil {
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			User:      getUser(c),
-			Action:    "deploy-pr",
-			Detail:    fmt.Sprintf("PR #%d (patch failed: %v)", prNumber, err),
-			Success:   false,
-		})
-		return &types.OperationResponse{
-			Success: false, Message: fmt.Sprintf("Failed to patch dashboard deployment: %v", err),
-			Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
-		}, nil
+	// Patch standalone module deployments
+	for name, image := range moduleImages {
+		if err := patchStandaloneModule(c, name, image); err != nil {
+			slog.Warn("failed to patch standalone module", "module", name, "error", err)
+			logs = append(logs, fmt.Sprintf("  %s: patch failed (%v)", name, err))
+		} else {
+			logs = append(logs, fmt.Sprintf("  %s: standalone deployment patched", name))
+		}
 	}
 
 	containerNames := make([]string, 0, len(found))
@@ -393,22 +473,41 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, fmt.Sprintf("Found %d original images", len(originalImages)))
 
-	// Build patch with all original container images
-	var containerPatches []map[string]interface{}
+	// Detect deployment mode
+	mainContainers, modeErr := getDeploymentContainerNames(c, dashboardNamespace, dashboardDeploymentName)
+	if modeErr != nil {
+		return &types.OperationResponse{
+			Success: false, Message: fmt.Sprintf("Failed to detect deployment mode: %v", modeErr),
+			Logs: logs, ErrorCode: "prerequisites",
+		}, nil
+	}
+	standalone := isStandaloneMode(mainContainers)
+
+	// Split original images into core (main deployment) and module (standalone)
+	coreImages := map[string]string{}
+	moduleImages := map[string]string{}
 	for name, image := range originalImages {
+		if standalone && moduleContainers[name] {
+			moduleImages[name] = image
+		} else {
+			coreImages[name] = image
+		}
+	}
+
+	for name, image := range coreImages {
+		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(image)))
+	}
+
+	// Revert the main dashboard deployment
+	var containerPatches []map[string]interface{}
+	for name, image := range coreImages {
 		containerPatches = append(containerPatches, map[string]interface{}{
 			"name":  name,
 			"image": image,
 		})
-		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(image)))
 	}
 
 	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
-
-	// Single atomic patch: restore all container images AND re-enable operator management.
-	// Combining both in one strategic merge patch eliminates the race window where the
-	// operator could detect the annotation change and start its own reconciliation
-	// before the images are updated.
 	patchData, err := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"annotations": map[string]interface{}{
@@ -436,19 +535,30 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: %d container images restored", len(containerPatches)))
 	logs = append(logs, "OK: Operator management re-enabled")
 
-	slog.Info("dashboard reverted", "containers", len(containerPatches), "user", getUser(c))
+	// Revert standalone module deployments
+	for name, image := range moduleImages {
+		if err := patchStandaloneModule(c, name, image); err != nil {
+			slog.Warn("failed to revert standalone module", "module", name, "error", err)
+			logs = append(logs, fmt.Sprintf("  %s: revert failed (%v)", name, err))
+		} else {
+			logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(image)))
+		}
+	}
+
+	totalReverted := len(containerPatches) + len(moduleImages)
+	slog.Info("dashboard reverted", "containers", totalReverted, "user", getUser(c))
 
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "revert-dashboard",
-		Detail:    fmt.Sprintf("%d containers restored", len(containerPatches)),
+		Detail:    fmt.Sprintf("%d containers restored", totalReverted),
 		Success:   true,
 	})
 
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("All %d containers restored to operator-managed images.", len(containerPatches)),
+		Message: fmt.Sprintf("All %d containers restored to operator-managed images.", totalReverted),
 		Logs:    logs,
 	}, nil
 }
@@ -642,4 +752,96 @@ func getDashboardPods(c *Client, matchLabels map[string]string) []types.PodInfo 
 	}
 
 	return pods
+}
+
+// isStandaloneMode checks whether the dashboard is running in standalone mode
+// by looking at the container list from the main deployment. If no module
+// container is present, the cluster is running standalone.
+func isStandaloneMode(containers []string) bool {
+	for _, name := range containers {
+		if moduleContainers[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// getDeploymentContainerNames returns the list of container names in a deployment.
+func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]string, error) {
+	path := namespacedPath("apps/v1", "deployments", namespace, deployName)
+	body, _, err := c.get(path)
+	if err != nil {
+		return nil, err
+	}
+	var deploy struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name string `json:"name"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &deploy); err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, c := range deploy.Spec.Template.Spec.Containers {
+		names = append(names, c.Name)
+	}
+	return names, nil
+}
+
+// getStandaloneModuleImage reads a standalone module deployment and returns
+// its container image. Returns empty string if the deployment doesn't exist.
+func getStandaloneModuleImage(c *Client, containerName string) string {
+	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, containerName)
+	body, statusCode, err := c.get(path)
+	if err != nil || statusCode == 404 {
+		return ""
+	}
+	var deploy struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name  string `json:"name"`
+						Image string `json:"image"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if json.Unmarshal(body, &deploy) != nil {
+		return ""
+	}
+	for _, ct := range deploy.Spec.Template.Spec.Containers {
+		if ct.Name == containerName {
+			return ct.Image
+		}
+	}
+	return ""
+}
+
+// patchStandaloneModule patches a standalone module deployment's container image.
+func patchStandaloneModule(c *Client, containerName, image string) error {
+	patchData, err := json.Marshal(map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []map[string]interface{}{
+						{"name": containerName, "image": image},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal module patch: %w", err)
+	}
+	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, containerName)
+	_, _, err = c.strategicPatch(path, patchData)
+	return err
 }
