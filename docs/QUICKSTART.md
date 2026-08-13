@@ -78,7 +78,7 @@ Then create the image mirror:
 ```bash
 rosa create image-mirror --cluster=<your-cluster-name> \
   --source=registry.redhat.io/rhoai \
-  --mirror=quay.io/rhoai
+  --mirrors=quay.io/rhoai
 ```
 
 > If you get a 403, you need OCM write access. Find the cluster owner and ask them to assign you access in OCM.
