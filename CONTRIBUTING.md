@@ -224,6 +224,21 @@ make push              # Push IMAGE:TAG and IMAGE:GIT_SHA to registry
 
 Requires prior `docker login` or `podman login` to the registry.
 
+To build and publish to the default Quay repository, with Podman running:
+
+```bash
+podman login quay.io
+make build push RUNTIME=podman IMAGE=quay.io/juntao_wang/rhoai-nightly-updater TAG=latest
+```
+
+This builds for `linux/amd64` and publishes both `latest` and the current short Git commit tag. For Docker, use `docker login quay.io` and set `RUNTIME=docker` in the same command. Building and publishing do not deploy the app; `make all` also deploys to OpenShift.
+
+### Automatic Image Publishing
+
+The repository's `.gitlab-ci.yml` builds and publishes to `quay.io/juntao_wang/rhoai-nightly-updater` when GitLab receives a push to `main`. It publishes `latest` and `CI_COMMIT_SHORT_SHA` tags and requires GitLab CI variables `QUAY_USER` and `QUAY_TOKEN` with write access to that Quay repository. Other branches have a manual build job.
+
+Pushing to GitHub does not execute `.gitlab-ci.yml`. There is currently no GitHub Actions publishing workflow in this repository. Automatic publishing from GitHub requires a GitHub Actions workflow with Quay credentials or a Quay build trigger connected to the GitHub repository. Quay-side triggers are configured separately under the repository's Builds tab and cannot be inferred from these source files.
+
 ## Code Patterns
 
 ### Backend Patterns

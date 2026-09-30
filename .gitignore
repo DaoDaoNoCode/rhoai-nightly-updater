@@ -8,3 +8,4 @@ server
 .env.*
 !.env.example
 nightly-updater/
+.DS_Store

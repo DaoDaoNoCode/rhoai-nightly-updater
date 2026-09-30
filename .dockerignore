@@ -6,3 +6,5 @@ deploy/
 .env
 .env.*
 nightly-updater/
+.DS_Store
+**/.DS_Store
