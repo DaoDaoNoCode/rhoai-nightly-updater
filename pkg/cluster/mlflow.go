@@ -237,6 +237,12 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 			Logs: logs, ErrorCode: "validation",
 		}, nil
 	}
+	if resp.StatusCode != http.StatusOK {
+		return &types.OperationResponse{
+			Success: false, Message: fmt.Sprintf("Cannot verify PR image: Quay returned HTTP %d. No changes were made.", resp.StatusCode),
+			Logs: logs, ErrorCode: "network",
+		}, nil
+	}
 	logs = append(logs, "OK: Image exists on Quay")
 
 	// Patch the MLflow CR

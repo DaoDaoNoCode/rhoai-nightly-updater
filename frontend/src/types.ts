@@ -16,6 +16,9 @@ export interface StatusResponse {
   consoleURL?: string;
   stableSource: string;
   stableChannel: string;
+  stableVersion?: string;
+  stableChannelPinned?: boolean;
+  stableDiscoveryError?: string;
   installPlan?: InstallPlanInfo;
   catalogPod?: CatalogPodInfo;
   activity?: ActivityEntry[];
@@ -115,7 +118,18 @@ export interface DeploymentInfo {
   version?: string;
 }
 
+export interface DSCCompatibility {
+  operatorVersion?: string;
+  branch?: string;
+  sourceURL?: string;
+  invalidFields: string[];
+  missingComponents: string[];
+  validationError?: string;
+  defaultsError?: string;
+}
+
 export interface ComponentsResponse {
+  dscCompatibility?: DSCCompatibility;
   components: ComponentInfo[];
   deployments: DeploymentInfo[];
   dscName: string;

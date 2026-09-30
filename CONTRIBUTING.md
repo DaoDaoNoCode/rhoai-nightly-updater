@@ -257,7 +257,7 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 2. Extract cluster token from service account or `DEV_TOKEN` env var
 3. Create a `cluster.Client` with the user's token
 4. Call the handler function with the authenticated client
-5. (`withMutationAuth` only) Apply rate limiting and cluster mutation lock
+5. (`withMutationAuth` only) Check full user RBAC (`subscriptions:update` in `redhat-ods-operator`) and apply rate limiting. Operator lifecycle handlers also hold the cluster mutation lock. Accepted mutations use a browser-independent context with a 15-minute deadline.
 
 #### 2. Kubernetes API Client
 
@@ -402,7 +402,7 @@ make deploy            # Requires 'oc login' first
 **What the smoke test checks**:
 
 1. **Pod Status**: Pods are running and ready with correct image
-2. **Route Configuration**: Route has 180s timeout annotation and valid URL
+2. **Route Configuration**: Route has 960s timeout annotation and valid URL
 3. **ClusterRole Permissions**: Required permissions exist (deployments:patch, namespaces:create, secrets:get, mlflows:create, datasciencepipelinesapplications:create)
 4. **Health Probes**: Startup, liveness, and readiness probes are configured correctly (`/api/health`, `/api/health/ready`)
 5. **Observability**: ServiceMonitor and PrometheusRule exist
@@ -456,7 +456,10 @@ See `.env.example` for all available environment variables:
 ### Operator Defaults
 
 - `STABLE_SOURCE` — Catalog source name (default: `redhat-operators`)
-- `STABLE_CHANNEL` — Operator channel (default: `stable-3.4`)
+- `STABLE_CHANNEL` — Optional GA channel pin; by default discover the highest GA version available in the configured catalog's `stable`, `fast`, and `eus` channels. The pin must exist and have a GA head. No fixed version fallback is used.
+- `DSC_SAMPLE_REF` — Optional Git branch/tag for DSC samples; otherwise derived from the installed operator version, supporting numbered and unnumbered prereleases
+
+Set these variables in the backend process environment. For a deployed app, use `oc set env deployment/rhoai-nightly-updater -n rhoai-nightly-updater DSC_SAMPLE_REF=<branch-or-tag>` (adjust the deployment and namespace if customized). Remove the override with `DSC_SAMPLE_REF-` to return to automatic version matching.
 
 ### Server
 

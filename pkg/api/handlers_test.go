@@ -4,11 +4,47 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
+
+func TestValidateReinstallRequestCustomBuilds(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, image := range []string{
+		"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + digest,
+		"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.3@sha256:" + digest,
+		"quay.io/rhoai/rhoai-fbc-fragment@sha256:" + digest,
+		"quay.io/another-team/custom-fbc:build-42",
+	} {
+		req := types.ReinstallRequest{TargetType: "custom", Image: " " + image + " ", Channel: " stable-3.3 "}
+		if err := validateReinstallRequest(&req); err != nil {
+			t.Errorf("rejected %s: %v", image, err)
+		}
+		if req.Image != image || req.Channel != "stable-3.3" {
+			t.Fatal("request not normalized")
+		}
+	}
+	for _, req := range []types.ReinstallRequest{
+		{TargetType: "custom"},
+		{TargetType: "custom", Image: "quay.io/rhoai/fbc"},
+		{TargetType: "custom", Image: "quay.io/rhoai/fbc@sha256:abc"},
+		{TargetType: "custom", Image: "quay.io.evil.test/rhoai/fbc:build"},
+		{TargetType: "custom", Image: "docker.io/rhoai/fbc:build"},
+		{TargetType: "custom", Image: "quay.io/rhoai/fbc:build", Channel: "bad channel"},
+		{TargetType: "unknown"},
+	} {
+		if err := validateReinstallRequest(&req); err == nil {
+			t.Errorf("accepted invalid request: %+v", req)
+		}
+	}
+	legacy := types.ReinstallRequest{}
+	if err := validateReinstallRequest(&legacy); err != nil || legacy.TargetType != "stable" {
+		t.Fatal("legacy stable request rejected")
+	}
+}
 
 func TestRateLimiter_FirstCallNotLimited(t *testing.T) {
 	rl := &rateLimiter{window: 30 * time.Second}

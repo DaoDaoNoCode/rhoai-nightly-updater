@@ -11,20 +11,23 @@ type ActivityEntry struct {
 
 // StatusResponse is the aggregated cluster and operator status returned by /api/status.
 type StatusResponse struct {
-	Cluster       ClusterInfo       `json:"cluster"`
-	Subscription  SubscriptionInfo  `json:"subscription"`
-	CSV           CSVInfo           `json:"csv"`
-	CatalogSource CatalogSourceInfo `json:"catalogSource"`
-	PullSecret    PullSecretInfo    `json:"pullSecret"`
-	ImageMirror   ImageMirrorInfo   `json:"imageMirror"`
-	InstallPlan   *InstallPlanInfo  `json:"installPlan,omitempty"`
-	CatalogPod    *CatalogPodInfo   `json:"catalogPod,omitempty"`
-	StableSource  string            `json:"stableSource"`
-	ConsoleURL    string            `json:"consoleURL,omitempty"`
-	StableChannel string            `json:"stableChannel"`
-	DSCExists     bool              `json:"dscExists"`
-	Activity      []ActivityEntry   `json:"activity,omitempty"`
-	Errors        []string          `json:"errors,omitempty"`
+	Cluster              ClusterInfo       `json:"cluster"`
+	Subscription         SubscriptionInfo  `json:"subscription"`
+	CSV                  CSVInfo           `json:"csv"`
+	CatalogSource        CatalogSourceInfo `json:"catalogSource"`
+	PullSecret           PullSecretInfo    `json:"pullSecret"`
+	ImageMirror          ImageMirrorInfo   `json:"imageMirror"`
+	InstallPlan          *InstallPlanInfo  `json:"installPlan,omitempty"`
+	CatalogPod           *CatalogPodInfo   `json:"catalogPod,omitempty"`
+	StableSource         string            `json:"stableSource"`
+	ConsoleURL           string            `json:"consoleURL,omitempty"`
+	StableChannel        string            `json:"stableChannel"`
+	StableVersion        string            `json:"stableVersion,omitempty"`
+	StableChannelPinned  bool              `json:"stableChannelPinned,omitempty"`
+	StableDiscoveryError string            `json:"stableDiscoveryError,omitempty"`
+	DSCExists            bool              `json:"dscExists"`
+	Activity             []ActivityEntry   `json:"activity,omitempty"`
+	Errors               []string          `json:"errors,omitempty"`
 }
 
 // ClusterInfo holds the OpenShift cluster server URL, version, and current user.
@@ -96,7 +99,7 @@ type UpdateRequest struct {
 // If TargetType is empty or "stable", the operator is reinstalled from the stable catalog.
 // If TargetType is "nightly", the operator is reinstalled with the specified FBC Image.
 type ReinstallRequest struct {
-	TargetType string `json:"targetType"`         // "stable" or "nightly"
+	TargetType string `json:"targetType"` // "stable", "nightly", or "custom"
 	Image      string `json:"image,omitempty"`
 	Channel    string `json:"channel,omitempty"`   // optional channel override (e.g., "stable-3.5", "beta")
 }
@@ -160,23 +163,35 @@ type DeploymentInfo struct {
 	ChangeStatus        string            `json:"changeStatus,omitempty"` // "updated", "new", or "" (unchanged)
 	MatchLabels         map[string]string `json:"-"`                      // for pod matching, not serialized
 	Pods                []PodInfo         `json:"pods,omitempty"`
-	GitCommit  string `json:"gitCommit,omitempty"`
-	GitURL     string `json:"gitURL,omitempty"`
-	CommitDate string `json:"commitDate,omitempty"` // when the commit was merged
-	BuildDate  string `json:"buildDate,omitempty"`
-	Version    string `json:"version,omitempty"`
+	GitCommit           string            `json:"gitCommit,omitempty"`
+	GitURL              string            `json:"gitURL,omitempty"`
+	CommitDate          string            `json:"commitDate,omitempty"` // when the commit was merged
+	BuildDate           string            `json:"buildDate,omitempty"`
+	Version             string            `json:"version,omitempty"`
+}
+
+// DSCCompatibility reports field names unsupported by the installed DSC schema.
+type DSCCompatibility struct {
+	OperatorVersion   string   `json:"operatorVersion,omitempty"`
+	Branch            string   `json:"branch,omitempty"`
+	SourceURL         string   `json:"sourceURL,omitempty"`
+	InvalidFields     []string `json:"invalidFields"`
+	MissingComponents []string `json:"missingComponents"`
+	ValidationError   string   `json:"validationError,omitempty"`
+	DefaultsError     string   `json:"defaultsError,omitempty"`
 }
 
 // ComponentsResponse groups DSC component statuses with deployment details.
 type ComponentsResponse struct {
-	Components   []ComponentInfo  `json:"components"`
-	Deployments  []DeploymentInfo `json:"deployments"`
-	DSCName      string           `json:"dscName"`
-	DSCPhase     string           `json:"dscPhase"`
-	DSCReason    string           `json:"dscReason,omitempty"`
-	SnapshotTime string           `json:"snapshotTime,omitempty"`
-	ChangedCount int              `json:"changedCount"`
-	ConsoleURL   string           `json:"consoleURL,omitempty"`
+	DSCCompatibility *DSCCompatibility `json:"dscCompatibility,omitempty"`
+	Components       []ComponentInfo   `json:"components"`
+	Deployments      []DeploymentInfo  `json:"deployments"`
+	DSCName          string            `json:"dscName"`
+	DSCPhase         string            `json:"dscPhase"`
+	DSCReason        string            `json:"dscReason,omitempty"`
+	SnapshotTime     string            `json:"snapshotTime,omitempty"`
+	ChangedCount     int               `json:"changedCount"`
+	ConsoleURL       string            `json:"consoleURL,omitempty"`
 }
 
 // ContainerInfo holds per-container status within a pod.

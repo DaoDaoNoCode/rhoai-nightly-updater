@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -499,49 +498,20 @@ func parseYAMLFBC(content []byte, targetTag string, allImages *[]fbcRelatedImage
 }
 
 func findMatchingBundle(bundles []fbcBundleInfo, tag string) *fbcBundleInfo {
-	// Extract major.minor and optional EA from tag
-	// "rhoai-3.5-ea.2" → major=3, minor=5, ea=2
-	// "rhoai-3.4" → major=3, minor=4, ea=-1
-	m := regexp.MustCompile(`^rhoai-(\d+)\.(\d+)(?:\.\d+)?(?:-ea\.(\d+))?$`).FindStringSubmatch(tag)
-	if m == nil {
+	target, ok := parseTag(tag)
+	if !ok {
 		return nil
 	}
-	major, minor := m[1], m[2]
-	eaSuffix := ""
-	if m[3] != "" {
-		eaSuffix = "-ea." + m[3]
-	}
-
-	// Find all bundles matching this major.minor
-	prefix := fmt.Sprintf("rhods-operator.%s.%s", major, minor)
-	var candidates []*fbcBundleInfo
+	var best *fbcBundleInfo
+	var bestVersion parsedTag
 	for i := range bundles {
-		name := bundles[i].name
-		if !strings.HasPrefix(name, prefix) {
+		version, ok := parseCSVVersion(bundles[i].name)
+		if !ok || version.major != target.major || version.minor != target.minor || version.ea != target.ea {
 			continue
 		}
-		// Check EA match: if tag is EA, bundle must have same EA suffix
-		// If tag is GA, bundle must NOT have -ea.
-		if eaSuffix != "" {
-			if strings.Contains(name, eaSuffix) {
-				candidates = append(candidates, &bundles[i])
-			}
-		} else {
-			if !strings.Contains(name, "-ea.") {
-				candidates = append(candidates, &bundles[i])
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		return nil
-	}
-
-	// Pick the highest version among candidates
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.name > best.name {
-			best = c
+		if best == nil || compareTags(version, bestVersion) > 0 {
+			best = &bundles[i]
+			bestVersion = version
 		}
 	}
 	return best

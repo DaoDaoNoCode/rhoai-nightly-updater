@@ -280,17 +280,6 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 		}, nil
 	}
 
-	// Check if this PR is already deployed and running
-	state, stateErr := GetDashboardState(c)
-	if stateErr == nil && state.PRNumber == prNumber && state.PodReady && !state.RolloutPending {
-		logs = append(logs, fmt.Sprintf("PR #%d is already deployed and running.", prNumber))
-		return &types.OperationResponse{
-			Success: true,
-			Message: fmt.Sprintf("PR #%d is already deployed and running.", prNumber),
-			Logs:    logs,
-		}, nil
-	}
-
 	tag := fmt.Sprintf("pr-%d", prNumber)
 	logs = append(logs, fmt.Sprintf("Checking Quay for PR #%d images...", prNumber))
 
@@ -321,8 +310,10 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				resultCh <- checkResult{name, image, "found"}
-			} else {
+			} else if resp.StatusCode == http.StatusNotFound {
 				resultCh <- checkResult{name, "", "not built"}
+			} else {
+				resultCh <- checkResult{name, "", "error"}
 			}
 		}(containerName, repo)
 	}
@@ -343,6 +334,9 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 		}
 	}
 
+	if checkErrors > 0 {
+		return &types.OperationResponse{Success: false, Message: "Could not verify all PR images on Quay. Retry after the registry issue is resolved; no images were patched.", Logs: logs, ErrorCode: "network"}, nil
+	}
 	if len(found) == 0 {
 		RecordActivity(c, types.ActivityEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -426,17 +420,24 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}
 
 	// Patch standalone module deployments
+	patched := make(map[string]string, len(found))
+	for name, image := range coreImages {
+		patched[name] = image
+	}
+	var failedModules []string
 	for name, image := range moduleImages {
 		if err := patchStandaloneModule(c, name, image); err != nil {
 			slog.Warn("failed to patch standalone module", "module", name, "error", err)
 			logs = append(logs, fmt.Sprintf("  %s: patch failed (%v)", name, err))
+			failedModules = append(failedModules, name)
 		} else {
+			patched[name] = image
 			logs = append(logs, fmt.Sprintf("  %s: standalone deployment patched", name))
 		}
 	}
 
 	containerNames := make([]string, 0, len(found))
-	for name := range found {
+	for name := range patched {
 		containerNames = append(containerNames, name)
 	}
 	sort.Strings(containerNames)
@@ -448,9 +449,13 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "deploy-pr",
-		Detail:    fmt.Sprintf("PR #%d (%d containers)", prNumber, len(found)),
-		Success:   true,
+		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), len(found), strings.Join(failedModules, ", ")),
+		Success:   len(failedModules) == 0,
 	})
+	if len(failedModules) > 0 {
+		sort.Strings(failedModules)
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("PR #%d partially deployed: %d/%d containers patched. Failed modules: %s. Retry to finish deployment.", prNumber, len(patched), len(found), strings.Join(failedModules, ", ")), Logs: logs, ErrorCode: "partial_failure"}, nil
+	}
 
 	return &types.OperationResponse{
 		Success: true,
@@ -536,25 +541,32 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: Operator management re-enabled")
 
 	// Revert standalone module deployments
+	var failedModules []string
+	totalReverted := len(containerPatches)
 	for name, image := range moduleImages {
 		if err := patchStandaloneModule(c, name, image); err != nil {
 			slog.Warn("failed to revert standalone module", "module", name, "error", err)
 			logs = append(logs, fmt.Sprintf("  %s: revert failed (%v)", name, err))
+			failedModules = append(failedModules, name)
 		} else {
+			totalReverted++
 			logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(image)))
 		}
 	}
 
-	totalReverted := len(containerPatches) + len(moduleImages)
 	slog.Info("dashboard reverted", "containers", totalReverted, "user", getUser(c))
 
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "revert-dashboard",
-		Detail:    fmt.Sprintf("%d containers restored", totalReverted),
-		Success:   true,
+		Detail:    fmt.Sprintf("%d containers restored; failed modules: %s", totalReverted, strings.Join(failedModules, ", ")),
+		Success:   len(failedModules) == 0,
 	})
+	if len(failedModules) > 0 {
+		sort.Strings(failedModules)
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Dashboard partially restored: %d containers restored. Failed modules: %s. Retry to finish restoring.", totalReverted, strings.Join(failedModules, ", ")), Logs: logs, ErrorCode: "partial_failure"}, nil
+	}
 
 	return &types.OperationResponse{
 		Success: true,

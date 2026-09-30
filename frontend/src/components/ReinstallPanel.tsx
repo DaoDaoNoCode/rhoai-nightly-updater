@@ -56,11 +56,12 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   prerequisitesMet,
 }) => {
   // Target mode
-  const [targetType, setTargetType] = useState<"stable" | "nightly">("stable");
+  const [targetType, setTargetType] = useState<"stable" | "nightly" | "custom">("stable");
 
   // Nightly version selection
   const [tagSelectOpen, setTagSelectOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState("");
+  const [customImage, setCustomImage] = useState("");
   const [channelOverride, setChannelOverride] = useState("");
 
   // Confirmation modal state
@@ -86,14 +87,17 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   }, []);
 
   const channelValid = !channelOverride.trim() || /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(channelOverride.trim());
+  const targetImage = targetType === "custom" ? customImage.trim() : selectedImage.trim();
+  const customImageValid = /^quay\.io\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+(?::[a-zA-Z0-9._-]+)?(?:@sha256:[a-f0-9]{64})?$/.test(customImage.trim()) && /(?::[^/]+|@sha256:[a-f0-9]{64})$/.test(customImage.trim());
   const canConfirm =
     channelValid && (
-      targetType === "stable" ||
-      (targetType === "nightly" && !!selectedImage.trim() && prerequisitesMet)
+      (targetType === "stable" && !!status?.stableChannel && !status?.stableDiscoveryError) ||
+      (!!targetImage && (targetType !== "custom" || customImageValid) && prerequisitesMet)
     );
 
   const handleReinstall = () => {
-    trackFeature(targetType === "stable" ? "reinstall_stable" : "reinstall_nightly");
+    let completion: UpdateStep | undefined;
+    trackFeature(targetType === "stable" ? "reinstall_stable" : targetType === "custom" ? "reinstall_custom" : "reinstall_nightly");
     setError(null);
     setResult(null);
 
@@ -103,14 +107,15 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
 
     // Start streaming
     setLoading(true);
-    onStreamStart(targetType === "nightly" ? "reinstall_nightly" : "reinstall_stable");
+    onStreamStart(targetType !== "stable" ? "reinstall_nightly" : "reinstall_stable");
 
     abortRef.current?.abort();
     abortRef.current = streamReinstall(
       targetType,
-      targetType === "nightly" ? selectedImage.trim() : undefined,
-      targetType === "nightly" && channelOverride.trim() ? channelOverride.trim() : undefined,
+      targetType !== "stable" ? targetImage : undefined,
+      targetType !== "stable" && channelOverride.trim() ? channelOverride.trim() : undefined,
       (step) => {
+        if (step.step === "operation_complete") completion = step;
         onStreamStep(step);
       },
       (success, errorMsg) => {
@@ -119,7 +124,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
         if (success) {
           setResult({
             success: true,
-            message: `Reinstall to ${targetType} initiated successfully`,
+            message: completion?.message || `Reinstall to ${targetType} initiated successfully`,
             logs: [],
           });
           onComplete();
@@ -171,11 +176,11 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
 
   const targetDescription =
     targetType === "stable"
-      ? `${status?.stableSource} / ${status?.stableChannel}`
-      : selectedImage
-        ? (selectedImage.length > 80 ? selectedImage.slice(0, 80) + "..." : selectedImage) +
+      ? `${status?.stableSource} / ${status?.stableChannel}${status?.stableVersion ? ` (GA ${status.stableVersion})` : ""}`
+      : targetImage
+        ? targetImage +
           (channelOverride.trim() ? ` (channel: ${channelOverride.trim()})` : " (channel: auto-detect)")
-        : "No nightly version selected";
+        : "No FBC image selected";
 
   return (
     <Stack hasGutter>
@@ -195,12 +200,22 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             <Radio
               id="reinstall-stable"
               name="reinstall-target"
-              label="Latest stable"
+              label={status?.stableChannelPinned ? "Configured GA channel" : "Latest stable"}
               description={
                 <HelperText>
                   <HelperTextItem>
-                    Reinstall from <strong>{status?.stableSource}</strong> /{" "}
-                    <strong>{status?.stableChannel}</strong>
+                    {status?.stableChannel ? (
+                      <>
+                        Reinstall from <strong>{status.stableSource}</strong> /{" "}
+                        <strong>{status.stableChannel}</strong>
+                        {status.stableVersion && <> — GA {status.stableVersion}</>}
+                        {!status.stableChannelPinned && <>. Latest GA available in this cluster's catalog.</>}
+                      </>
+                    ) : status?.stableDiscoveryError ? (
+                      "Stable release unavailable"
+                    ) : (
+                      "Discovering stable releases from the cluster catalog..."
+                    )}
                   </HelperTextItem>
                 </HelperText>
               }
@@ -212,6 +227,11 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
               }}
               isDisabled={loading}
             />
+            {targetType === "stable" && status?.stableDiscoveryError && (
+              <Alert variant="warning" title="Could not discover the latest stable release" isInline style={{ marginTop: "0.5rem" }}>
+                <Content component="small">{status.stableDiscoveryError}. Refresh cluster status after resolving the catalog issue.</Content>
+              </Alert>
+            )}
           </StackItem>
           <StackItem>
             <Radio
@@ -231,7 +251,19 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             />
           </StackItem>
 
-          {targetType === "nightly" && (
+          <StackItem>
+            <Radio
+              id="reinstall-custom"
+              name="reinstall-target"
+              label="Custom version"
+              description="Reinstall any version or build using a Quay FBC image. Include a SHA256 digest to pin an exact build."
+              isChecked={targetType === "custom"}
+              onChange={() => setTargetType("custom")}
+              isDisabled={loading}
+            />
+          </StackItem>
+
+          {targetType !== "stable" && (
             <StackItem>
               {!prerequisitesMet && (
                 <Alert
@@ -248,6 +280,26 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                 </Alert>
               )}
               <Form>
+                {targetType === "custom" ? (
+                  <FormGroup label="Custom FBC image" fieldId="reinstall-custom-image" isRequired>
+                    <TextInput
+                      id="reinstall-custom-image"
+                      value={customImage}
+                      onChange={(_e, value) => setCustomImage(value)}
+                      placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
+                      isDisabled={loading}
+                      validated={customImage.trim() && !customImageValid ? "error" : "default"}
+                      aria-describedby="reinstall-custom-image-help"
+                    />
+                    <HelperText id="reinstall-custom-image-help">
+                      <HelperTextItem variant={customImage.trim() && !customImageValid ? "error" : "default"}>
+                        {customImage.trim() && !customImageValid
+                          ? "Enter a Quay image reference with a tag or a full 64-character SHA256 digest."
+                          : "The supplied digest is used exactly, even when its tag now points to a newer build. Any version or build can be selected."}
+                      </HelperTextItem>
+                    </HelperText>
+                  </FormGroup>
+                ) : (
                 <FormGroup
                   label="Nightly version"
                   fieldId="reinstall-nightly-image"
@@ -293,6 +345,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                     </FlexItem>
                   </Flex>
                 </FormGroup>
+                )}
                 <FormGroup
                   label="Channel override"
                   fieldId="reinstall-channel-override"
@@ -301,7 +354,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                     id="reinstall-channel-override"
                     value={channelOverride}
                     onChange={(_e, val) => setChannelOverride(val)}
-                    placeholder="e.g., stable-3.5, beta (leave empty to auto-detect)"
+                    placeholder="Leave empty to detect a channel from the selected catalog"
                     isDisabled={loading}
                     validated={channelValid ? "default" : "error"}
                   />
@@ -325,7 +378,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
           <Button
             variant="danger"
             onClick={() => setConfirmOpen(true)}
-            isDisabled={!canConfirm || loading || !canMutate || !prerequisitesMet}
+            isDisabled={!canConfirm || loading || !canMutate}
             isLoading={loading}
           >
             Reinstall Operator
@@ -410,7 +463,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                 {status?.subscription.channel}
               </Content>
               <Content component="p">
-                <strong>Target:</strong> {targetDescription}
+                <strong>Target:</strong> <span style={{ overflowWrap: "anywhere" }}>{targetDescription}</span>
               </Content>
             </StackItem>
             <StackItem>
@@ -418,6 +471,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                 The following steps will be performed:
               </Content>
               <List isPlain={false} component="ol">
+                {targetType !== "stable" && <ListItem>Validate the selected image and channel in a fresh temporary catalog</ListItem>}
                 <ListItem>Remove the nightly CatalogSource</ListItem>
                 <ListItem>Delete the current operator Subscription</ListItem>
                 <ListItem>
@@ -434,7 +488,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                 <ListItem>
                   {targetType === "stable"
                     ? "Create a fresh Subscription to the stable catalog"
-                    : "Create CatalogSource with nightly image and fresh Subscription"}
+                    : "Create CatalogSource with the selected FBC image and fresh Subscription"}
                 </ListItem>
               </List>
             </StackItem>
@@ -468,7 +522,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             variant="danger"
             onClick={handleReinstall}
             isLoading={loading}
-            isDisabled={confirmText !== "reinstall" || loading}
+            isDisabled={confirmText !== "reinstall" || loading || !canConfirm || !canMutate}
           >
             {loading ? "Reinstalling..." : "Confirm Reinstall"}
           </Button>

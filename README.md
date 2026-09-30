@@ -23,12 +23,14 @@
 ### Nightly Build Management
 - **One-click update** with auto-fetch from Quay registry and FBC content preview
 - **SSE streaming progress** — real-time step-by-step pipeline (8–13 steps depending on operation)
-- **Reinstall** with full cleanup (webhooks, CRDs, stale component CRs) and channel override
+- **Reinstall** with full cleanup, channel override, and a custom Quay FBC image for any version or digest-pinned build
+- **Latest stable discovery** from the cluster's Red Hat catalog, showing the highest available GA version and ignoring nightly catalogs
 - **Operator refresh** for same-version image updates without version change
 - **Preflight checks** — pull secret, IDMS, operator health, registry access, node readiness
 - **Downgrade prevention** — blocks update when selected version is older than current
 - **Fresh cluster install** — automated setup from empty cluster to running operator
-- **DSC creation** — one-click DataScienceCluster creation with default settings
+- **DSC creation** — defaults fetched from the rhods-operator branch matching the installed version, including EA releases
+- **DSC field compatibility** — identify unsupported component and nested field names; remove invalid keys or preview and reset to version defaults
 
 ### Cluster Visibility
 - **DSC component status** — expandable breakdown (Ready / Needs Attention / Removed) with one-click fixes
@@ -43,7 +45,7 @@
 - **Quick resource creator** — MinIO, per-project pipeline servers, MLflow CR lifecycle
 
 ### Platform
-- **SSO authentication** via oauth-proxy with SAR gate (read-only mode for non-admins)
+- **SSO authentication** via oauth-proxy with a SAR gate; viewers have read-only access, operator editors can mutate
 - **Confirmation modals** for all cluster-modifying actions
 - **Activity audit log** stored in ConfigMap with user attribution
 - **Dark mode**, structured JSON logging, Prometheus metrics + alerting rules

@@ -557,6 +557,8 @@ func TestGetCatalogPod_PodNotReady(t *testing.T) {
 // --- GetStatus tests with installPlan and catalogPod ---
 
 func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
 	// Build all required mock responses for GetStatus
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
@@ -643,6 +645,7 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	activityPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/rhoai-updater-activity", SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock("redhat-operators", "stable-3.5", "3.5.0"),
 		subPath:         {body: string(subJSON)},
 		csvListPath:     {body: string(csvJSON)},
 		csPath:          {body: string(csJSON)},
@@ -657,6 +660,9 @@ func TestGetStatus_IncludesInstallPlanAndCatalogPod(t *testing.T) {
 	status, err := GetStatus(client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.StableChannel != "stable-3.5" || status.StableVersion != "3.5.0" || status.StableDiscoveryError != "" {
+		t.Fatalf("stable channel=%q version=%q error=%q", status.StableChannel, status.StableVersion, status.StableDiscoveryError)
 	}
 
 	// Verify installPlan is present

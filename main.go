@@ -43,6 +43,7 @@ func main() {
 	mux.HandleFunc("POST /api/update/stream", api.HandleUpdateStream)
 	mux.HandleFunc("POST /api/rollback", api.HandleRollback)
 	mux.HandleFunc("POST /api/rollback/stream", api.HandleReinstallStream)
+	mux.HandleFunc("POST /api/components/dsc/repair", api.HandleRepairDSC)
 	mux.HandleFunc("POST /api/refresh", api.HandleRefreshOperator)
 	mux.HandleFunc("POST /api/refresh/stream", api.HandleRefreshStream)
 	mux.HandleFunc("POST /api/assist-rollout", api.HandleAssistRollout)

@@ -4,145 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
-	"gopkg.in/yaml.v3"
 )
-
-const dscSampleURL = "https://raw.githubusercontent.com/opendatahub-io/opendatahub-operator/main/config/rhoai/samples/datasciencecluster_v2_datasciencecluster.yaml"
-
-var (
-	dscSpecCache   map[string]interface{}
-	dscSpecCacheMu sync.RWMutex
-	dscSpecCacheAt time.Time
-	dscYAMLCache   string
-)
-
-const dscCacheTTL = 1 * time.Hour
-
-// fetchDefaultDSCSpec fetches the default DSC spec from the upstream GitHub repo.
-// Falls back to a built-in default if GitHub is unreachable.
-func fetchDefaultDSCSpec() (map[string]interface{}, string) {
-	dscSpecCacheMu.RLock()
-	if dscSpecCache != nil && time.Since(dscSpecCacheAt) < dscCacheTTL {
-		cached := dscSpecCache
-		dscSpecCacheMu.RUnlock()
-		return cached, "upstream (cached)"
-	}
-	dscSpecCacheMu.RUnlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", dscSampleURL, nil)
-	if err != nil {
-		slog.Warn("dsc: failed to create GitHub request", "error", err)
-		return builtinDSCSpec(), "built-in (request error)"
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		slog.Warn("dsc: GitHub fetch failed", "error", err)
-		return builtinDSCSpec(), "built-in (fetch error)"
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		slog.Warn("dsc: GitHub returned non-200", "status", resp.StatusCode)
-		return builtinDSCSpec(), fmt.Sprintf("built-in (GitHub %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-	if err != nil {
-		slog.Warn("dsc: failed to read GitHub response", "error", err)
-		return builtinDSCSpec(), "built-in (read error)"
-	}
-
-	var spec map[string]interface{}
-	if err := yaml.Unmarshal(body, &spec); err != nil {
-		slog.Warn("dsc: failed to parse upstream YAML", "error", err)
-		return builtinDSCSpec(), "built-in (parse error)"
-	}
-
-	dscSpecCacheMu.Lock()
-	dscSpecCache = spec
-	dscYAMLCache = string(body)
-	dscSpecCacheAt = time.Now()
-	dscSpecCacheMu.Unlock()
-
-	return spec, "upstream (GitHub)"
-}
-
-// GetDefaultDSCYAML returns the default DSC YAML for preview.
-func GetDefaultDSCYAML() string {
-	dscSpecCacheMu.RLock()
-	if dscYAMLCache != "" && time.Since(dscSpecCacheAt) < dscCacheTTL {
-		cached := dscYAMLCache
-		dscSpecCacheMu.RUnlock()
-		return cached
-	}
-	dscSpecCacheMu.RUnlock()
-
-	// Trigger a fetch to populate cache
-	fetchDefaultDSCSpec()
-
-	dscSpecCacheMu.RLock()
-	defer dscSpecCacheMu.RUnlock()
-	if dscYAMLCache != "" {
-		return dscYAMLCache
-	}
-	return builtinDSCYAML
-}
-
-const builtinDSCYAML = `apiVersion: datasciencecluster.opendatahub.io/v2
-kind: DataScienceCluster
-metadata:
-  name: default-dsc
-spec:
-  components:
-    dashboard:
-      managementState: Managed
-    aipipelines:
-      managementState: Managed
-    kserve:
-      managementState: Managed
-    workbenches:
-      managementState: Managed
-    modelregistry:
-      managementState: Managed
-    ray:
-      managementState: Managed
-    trainer:
-      managementState: Managed
-    trustyai:
-      managementState: Managed
-    feastoperator:
-      managementState: Managed
-    mlflowoperator:
-      managementState: Managed
-    kueue:
-      managementState: Removed
-    trainingoperator:
-      managementState: Removed
-    llamastackoperator:
-      managementState: Removed
-    sparkoperator:
-      managementState: Removed
-    ogx:
-      managementState: Removed
-`
-
-func builtinDSCSpec() map[string]interface{} {
-	var spec map[string]interface{}
-	yaml.Unmarshal([]byte(builtinDSCYAML), &spec)
-	return spec
-}
 
 // GetComponents fetches DSC component statuses and deployment information.
 // GetComponents returns DSC components and deployment info.
@@ -172,6 +39,7 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 	dsc, _ := items[0].(map[string]interface{})
 	meta, _ := dsc["metadata"].(map[string]interface{})
 	resp.DSCName, _ = meta["name"].(string)
+	resp.DSCCompatibility = checkDSCCompatibility(c, dsc)
 
 	// Extract DSC phase from status
 	dscStatus, _ := dsc["status"].(map[string]interface{})
@@ -524,13 +392,16 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 		}, nil
 	}
 
-	// Step 2: Fetch default DSC spec from upstream, fall back to built-in default
+	// Step 2: Fetch the sample matching the installed operator version.
 	logs = append(logs, "Creating default DataScienceCluster...")
-	dscSpec, source := fetchDefaultDSCSpec()
-	logs = append(logs, fmt.Sprintf("DSC spec source: %s", source))
+	defaults, fetchErr := fetchDefaultDSCSpec(c)
+	if fetchErr != nil {
+		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
+	}
+	logs = append(logs, fmt.Sprintf("DSC spec source: %s (%s)", defaults.SourceURL, defaults.Version))
 
-	path := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
-	_, _, applyErr := c.apply(path, dscSpec)
+	path := "/apis/" + defaults.Spec["apiVersion"].(string) + "/datascienceclusters/default-dsc"
+	_, _, applyErr := c.apply(path, defaults.Spec)
 	if applyErr != nil {
 		return &types.OperationResponse{
 			Success:   false,

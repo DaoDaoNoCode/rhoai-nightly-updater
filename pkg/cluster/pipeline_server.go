@@ -16,19 +16,21 @@ const (
 	dspaAPIGroup           = "datasciencepipelinesapplications.opendatahub.io/v1"
 )
 
-func findDSPAProjects(c *Client) []string {
+func findDSPAProjects(c *Client) ([]string, error) {
 	projects, err := GetDSProjects(c)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list projects for pipeline dependency check: %w", err)
 	}
 	var withDSPA []string
 	for _, p := range projects {
 		dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", p, dspaName)
 		if _, _, err := c.get(dspaPath); err == nil {
 			withDSPA = append(withDSPA, p)
+		} else if !IsK8sError(err, 404) {
+			return nil, fmt.Errorf("check pipeline server in %s: %w", p, err)
 		}
 	}
-	return withDSPA
+	return withDSPA, nil
 }
 
 func getPipelineServerStatus(c *Client, project string) types.ResourceState {

@@ -58,13 +58,13 @@ function categoryOrder(cat: string): number {
 function parseTagVersion(
   tag: string,
 ): { series: string; major: number; minor: number; ea: number } | null {
-  const m = tag.match(/^rhoai-(\d+)\.(\d+)(?:\.\d+)?(?:-ea\.(\d+))?$/);
+  const m = tag.match(/^rhoai-(\d+)\.(\d+)(?:\.\d+)?(-ea(?:\.(\d+))?)?$/);
   if (!m) return null;
   return {
     series: `${m[1]}.${m[2]}`,
     major: parseInt(m[1], 10),
     minor: parseInt(m[2], 10),
-    ea: m[3] ? parseInt(m[3], 10) : -1,
+    ea: m[3] ? (m[4] ? parseInt(m[4], 10) : 0) : -1,
   };
 }
 
@@ -307,7 +307,7 @@ export const BuildExplorerPage: React.FC = () => {
                   Look up a specific build by image reference
                 </Content>
                 <SearchInput
-                  placeholder="quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5-ea.2@sha256:..."
+                  placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
                   value={searchImage}
                   onChange={(_e, val) => setSearchImage(val)}
                   onSearch={handleSearchSubmit}
@@ -658,7 +658,7 @@ export const BuildExplorerPage: React.FC = () => {
                           </Td>
                           <Td dataLabel="Type">
                             <Label isCompact color={isEA ? "orange" : "green"}>
-                              {isEA ? `EA ${parsed?.ea}` : "GA"}
+                              {isEA ? (tag.tag.endsWith("-ea") ? "EA" : `EA ${parsed?.ea}`) : "GA"}
                             </Label>
                           </Td>
                           <Td dataLabel="Last Built">

@@ -49,7 +49,7 @@ export function refreshOperator(): Promise<OperationResponse> {
   return request('/api/refresh', { method: 'POST', acceptStatuses: [422] });
 }
 
-export function reinstallOperator(targetType: 'stable' | 'nightly', image?: string, channel?: string): Promise<OperationResponse> {
+export function reinstallOperator(targetType: 'stable' | 'nightly' | 'custom', image?: string, channel?: string): Promise<OperationResponse> {
   return request('/api/rollback', {
     method: 'POST',
     body: JSON.stringify({ targetType, image, channel: channel || undefined }),
@@ -190,12 +190,11 @@ export function teardownPipelineServer(project: string): Promise<OperationRespon
  * events, and invokes the provided callbacks. Returns an AbortController
  * so the caller can cancel.
  *
- * Tracks whether any step reported a failure so that success=!hadFailure
- * on stream completion. If the connection drops mid-stream, invokes
+ * Requires an explicit operation_complete result before reporting success. If the connection drops mid-stream, invokes
  * onConnectionDrop (if provided) so the caller can fall back to polling
  * instead of treating it as a hard failure.
  */
-function streamSSE(
+export function streamSSE(
   url: string,
   body: unknown | null,
   onStep: (step: UpdateStep) => void,
@@ -230,8 +229,7 @@ function streamSSE(
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let hadFailure = false;
-      let receivedAnyData = false;
+      let terminal: UpdateStep | undefined;
 
       try {
         // eslint-disable-next-line no-constant-condition
@@ -249,8 +247,7 @@ function streamSSE(
             if (trimmed.startsWith('data: ')) {
               try {
                 const step: UpdateStep = JSON.parse(trimmed.slice(6));
-                if (step.status === 'failed') hadFailure = true;
-                receivedAnyData = true;
+                if (step.step === 'operation_complete') terminal = step;
                 onStep(step);
               } catch {
                 // skip malformed lines
@@ -263,18 +260,24 @@ function streamSSE(
         if (buffer.trim().startsWith('data: ')) {
           try {
             const step: UpdateStep = JSON.parse(buffer.trim().slice(6));
-            if (step.status === 'failed') hadFailure = true;
-            receivedAnyData = true;
+            if (step.step === 'operation_complete') terminal = step;
             onStep(step);
           } catch {
             // skip
           }
         }
 
-        onDone(!hadFailure);
+        if (terminal) {
+          onDone(terminal.status === 'success', terminal.status === 'failed' ? terminal.message : undefined);
+        } else if (onConnectionDrop) {
+          onConnectionDrop();
+        } else {
+          onDone(false, 'Connection ended before the operation result. Refresh status to check progress.');
+        }
       } catch {
         // reader.read() rejected - connection dropped mid-stream
-        if (receivedAnyData && onConnectionDrop) {
+        if (controller.signal.aborted) return;
+        if (onConnectionDrop) {
           onConnectionDrop();
         } else {
           onDone(false, 'Connection lost during operation.');
@@ -283,11 +286,9 @@ function streamSSE(
     })
     .catch((err) => {
       if (controller.signal.aborted) return;
-      if (onConnectionDrop) {
-        onConnectionDrop();
-      } else {
-        onDone(false, err instanceof Error ? err.message : String(err));
-      }
+      // HTTP validation, authorization and lock errors are real failures, not
+      // evidence that an operation was accepted and continues in the backend.
+      onDone(false, err instanceof Error ? err.message : String(err));
     });
 
   return controller;
@@ -317,7 +318,7 @@ export function streamUpdate(
  * Returns an AbortController so the caller can cancel.
  */
 export function streamReinstall(
-  targetType: 'stable' | 'nightly',
+  targetType: 'stable' | 'nightly' | 'custom',
   image: string | undefined,
   channel: string | undefined,
   onStep: (step: UpdateStep) => void,
@@ -367,10 +368,18 @@ export function fixProblem(problemId: string): Promise<OperationResponse> {
   });
 }
 
-export async function getDSCPreview(): Promise<{ yaml: string }> {
-  return request<{ yaml: string }>('/api/setup/dsc/preview');
+export async function getDSCPreview(): Promise<{ yaml: string; operatorVersion: string; branch: string; sourceURL: string }> {
+  return request<{ yaml: string; operatorVersion: string; branch: string; sourceURL: string }>('/api/setup/dsc/preview');
 }
 
 export async function createDSC(): Promise<OperationResponse> {
   return request<OperationResponse>('/api/setup/dsc', { method: 'POST' });
+}
+
+export function repairDSC(name: string, mode: 'remove-invalid' | 'reset-defaults', expectedOperatorVersion?: string): Promise<OperationResponse> {
+  return request('/api/components/dsc/repair', {
+    method: 'POST',
+    body: JSON.stringify({ name, mode, expectedOperatorVersion }),
+    acceptStatuses: [422],
+  });
 }

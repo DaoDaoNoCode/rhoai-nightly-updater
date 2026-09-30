@@ -398,7 +398,10 @@ func TeardownMinIO(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
 	// Check if any pipeline servers depend on MinIO
-	dspaProjects := findDSPAProjects(c)
+	dspaProjects, err := findDSPAProjects(c)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot verify pipeline dependencies; MinIO was not deleted: %v", err), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
 	if len(dspaProjects) > 0 {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Cannot tear down MinIO while %d pipeline server(s) are still running. Tear them down first.", len(dspaProjects)),

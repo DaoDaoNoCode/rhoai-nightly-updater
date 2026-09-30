@@ -4,6 +4,8 @@ import {
   Card,
   CardBody,
   CardTitle,
+  CodeBlock,
+  CodeBlockCode,
   Content,
   Dropdown,
   DropdownItem,
@@ -37,7 +39,7 @@ import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclam
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import MinusCircleIcon from "@patternfly/react-icons/dist/esm/icons/minus-circle-icon";
 import type { ComponentsResponse, DeploymentInfo } from "../types";
-import { getComponents, getComponentsWithLabels, assistRollout, fixProblem } from "../services/api";
+import { getComponents, getComponentsWithLabels, assistRollout, fixProblem, repairDSC, getDSCPreview } from "../services/api";
 import { formatRelativeTime } from "../utils";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
@@ -184,6 +186,40 @@ export const ComponentsPage: React.FC = () => {
   const [fixConfirm, setFixConfirm] = useState<{ action: string; title: string; message: string } | null>(null);
   const [fixLoading, setFixLoading] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<Record<string, { success: boolean; message: string }>>({});
+  const [repairMode, setRepairMode] = useState<"remove-invalid" | "reset-defaults" | null>(null);
+  const [repairLoading, setRepairLoading] = useState(false);
+  const [repairResult, setRepairResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [defaultsPreview, setDefaultsPreview] = useState("");
+  const [previewVersion, setPreviewVersion] = useState("");
+  const [previewError, setPreviewError] = useState("");
+
+  useEffect(() => {
+    if (repairMode !== "reset-defaults") return;
+    let active = true;
+    setDefaultsPreview("");
+    setPreviewVersion("");
+    setPreviewError("");
+    getDSCPreview().then(res => { if (active) { setDefaultsPreview(res.yaml); setPreviewVersion(res.operatorVersion); } })
+      .catch(err => { if (active) setPreviewError(String(err)); });
+    return () => { active = false; };
+  }, [repairMode]);
+
+  const handleRepairDSC = async () => {
+    if (!repairMode || !data) return;
+    setRepairLoading(true);
+    setRepairResult(null);
+    try {
+      const result = await repairDSC(data.dscName, repairMode, repairMode === "reset-defaults" ? previewVersion : undefined);
+      setRepairResult(result);
+      setRepairMode(null);
+      if (result.success) handleRefresh();
+    } catch (err) {
+      setRepairResult({ success: false, message: String(err) });
+      setRepairMode(null);
+    } finally {
+      setRepairLoading(false);
+    }
+  };
 
   const handleComponentFix = useCallback(async (action: string) => {
     setFixConfirm(null);
@@ -262,6 +298,44 @@ export const ComponentsPage: React.FC = () => {
 
       {data && (
         <>
+          {data.dscCompatibility && (
+            <PageSection>
+              <Stack hasGutter>
+                {data.dscCompatibility.validationError && (
+                  <StackItem><Alert variant="warning" title="DSC field validation unavailable" isInline>{data.dscCompatibility.validationError}</Alert></StackItem>
+                )}
+                {data.dscCompatibility.defaultsError && (
+                  <StackItem><Alert variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
+                )}
+                {(data.dscCompatibility.invalidFields.length > 0 || data.dscCompatibility.missingComponents.length > 0) && (
+                  <StackItem>
+                    <Alert variant="warning" title="DSC field names differ from the installed operator" isInline>
+                      <Stack hasGutter>
+                        {data.dscCompatibility.invalidFields.length > 0 && <StackItem>
+                          <Content component="p">Invalid or deprecated fields in the installed CRD:</Content>
+                          <List>{data.dscCompatibility.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List>
+                        </StackItem>}
+                        {data.dscCompatibility.missingComponents.length > 0 && <StackItem>
+                          <Content component="p">Components present in the version defaults but missing from this DSC: {data.dscCompatibility.missingComponents.join(", ")}. Missing components may be intentional.</Content>
+                        </StackItem>}
+                        <StackItem><Content component="p">Management state choices are preserved when removing invalid fields. Resetting replaces the entire DSC spec, including management states and custom settings.</Content></StackItem>
+                        {data.dscCompatibility.sourceURL && <StackItem>
+                          <Button variant="link" isInline component="a" href={data.dscCompatibility.sourceURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+                            Defaults for {data.dscCompatibility.operatorVersion} ({data.dscCompatibility.branch})
+                          </Button>
+                        </StackItem>}
+                        <StackItem><Flex gap={{ default: "gapSm" }}>
+                          {data.dscCompatibility.invalidFields.length > 0 && <FlexItem><Button variant="secondary" onClick={() => setRepairMode("remove-invalid")} isDisabled={repairLoading || !!data.dscCompatibility.validationError}>Remove invalid fields</Button></FlexItem>}
+                          <FlexItem><Button variant="secondary" onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError}>Reset to version defaults</Button></FlexItem>
+                        </Flex></StackItem>
+                      </Stack>
+                    </Alert>
+                  </StackItem>
+                )}
+                {repairResult && <StackItem><Alert variant={repairResult.success ? "success" : "danger"} title={repairResult.message} isInline /></StackItem>}
+              </Stack>
+            </PageSection>
+          )}
           {/* DSC Status Card — shows exactly what the operator reports */}
           <PageSection>
             <Card isCompact>
@@ -703,6 +777,24 @@ export const ComponentsPage: React.FC = () => {
           </PageSection>
         </>
       )}
+
+      <Modal variant={ModalVariant.medium} isOpen={repairMode !== null} onClose={() => !repairLoading && setRepairMode(null)} aria-labelledby="dsc-repair-title">
+        <ModalHeader title={repairMode === "reset-defaults" ? "Reset DSC to version defaults" : "Remove invalid DSC fields"} labelId="dsc-repair-title" />
+        <ModalBody>
+          <Stack hasGutter>
+            <StackItem><Content component="p">{repairMode === "reset-defaults"
+              ? `Replace the spec of ${data?.dscName} with the defaults for the currently installed operator. This resets management states and custom settings and may enable or disable components.`
+              : `Remove only invalid keys from ${data?.dscName}. Valid settings and management states will be preserved.`}</Content></StackItem>
+            {repairMode === "remove-invalid" && <StackItem><List>{data?.dscCompatibility?.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List></StackItem>}
+            {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
+              : defaultsPreview ? <CodeBlock><CodeBlockCode>{defaultsPreview}</CodeBlockCode></CodeBlock> : <Spinner aria-label="Loading DSC defaults" />}</StackItem>}
+          </Stack>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={handleRepairDSC} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && !defaultsPreview)}>Confirm</Button>
+          <Button variant="link" onClick={() => setRepairMode(null)} isDisabled={repairLoading}>Cancel</Button>
+        </ModalFooter>
+      </Modal>
 
       {/* Unblock Rollout Confirmation Modal */}
       <Modal

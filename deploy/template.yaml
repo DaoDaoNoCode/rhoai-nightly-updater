@@ -215,7 +215,7 @@ objects:
                 - --provider=openshift
                 - --openshift-service-account=${APP_NAME}
                 - --upstream=http://localhost:8080
-                - --upstream-timeout=180s
+                - --upstream-timeout=960s
                 - --upstream-flush=200ms
                 - --tls-cert=/etc/tls/private/tls.crt
                 - --tls-key=/etc/tls/private/tls.key
@@ -320,7 +320,7 @@ objects:
       name: ${APP_NAME}
       namespace: ${NAMESPACE}
       annotations:
-        haproxy.router.openshift.io/timeout: 180s
+        haproxy.router.openshift.io/timeout: 960s
     spec:
       to:
         kind: Service

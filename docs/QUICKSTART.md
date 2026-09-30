@@ -144,10 +144,11 @@ If your cluster already has RHOAI installed (stable or nightly) and you want to 
    - The card says **"Upgrade to Nightly Build"** (not "Install")
    - Your current operator version, source, and channel are displayed
    - The **Reinstall Operator** card is available for switching between stable and nightly
+   - **Latest stable** discovers the newest GA version available in your cluster's Red Hat catalog and shows the selected channel and version
    - The **Refresh operator** button re-pulls images from the current catalog
 4. **Skip DSC creation** — your existing DataScienceCluster is preserved. The DSC prompt only appears if no DSC exists.
 
-The app never modifies your existing DSC or DSCI. It only manages the operator lifecycle (CatalogSource, Subscription, CSV).
+Operator lifecycle actions preserve your existing DSC and DSCI. To fix DSC fields after changing operator versions, use the Components page: **Remove invalid fields** preserves valid settings, while **Reset to version defaults** previews and replaces the DSC spec after confirmation.
 
 ---
 
@@ -161,6 +162,7 @@ Once RHOAI is installed, the Status page changes to show the operator status and
 | **Refresh current nightly** | Status page → "Refresh operator" (re-pulls same version with latest images) |
 | **Rollback to stable** | Status page → Reinstall → select "Stable" → Reinstall Operator |
 | **Switch to a different nightly** | Status page → Reinstall → select "Nightly" → pick version → Reinstall |
+| **Reinstall an exact older build** | Status page → Reinstall → select "Custom version" → paste a Quay FBC image with `@sha256:` digest → optionally set a channel → Reinstall |
 | **Deploy a Dashboard PR** | Dashboard Dev page → enter PR number → Deploy |
 | **Deploy an MLflow PR** | Dashboard Dev page → Resources tab → enter PR number → Deploy |
 | **Set up MinIO + Pipelines** | Dashboard Dev page → Resources tab → Set up MinIO → Add Pipeline Server |

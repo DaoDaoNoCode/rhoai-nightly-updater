@@ -203,20 +203,20 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
   const isDowngrade = useMemo(() => {
     if (!status?.csv.version || !image.trim()) return false;
     // Extract tag from image (e.g., "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5-ea.1@sha256:..." -> "rhoai-3.5-ea.1")
-    const tagMatch = image.match(/:rhoai-(\d+\.\d+(?:\.\d+)?(?:-ea\.\d+)?)/);
+    const tagMatch = image.trim().match(/:rhoai-(\d+\.\d+(?:\.\d+)?(?:-ea(?:\.\d+)?)?)(?=@|$)/);
     if (!tagMatch) return false;
     const selectedVersion = tagMatch[1]; // e.g., "3.5-ea.1"
-    const currentVersion = status.csv.version.replace(/^v?/, ""); // e.g., "3.5.0-ea.2"
+    const currentVersion = status.csv.version.replace(/^v?/, "").split("+")[0]; // ignore build metadata
 
     // Parse both versions for comparison
     const parse = (v: string) => {
-      const m = v.match(/^(\d+)\.(\d+)(?:\.(\d+))?(?:-ea\.(\d+))?$/);
+      const m = v.match(/^(\d+)\.(\d+)(?:\.(\d+))?(-ea(?:\.(\d+))?)?$/);
       if (!m) return null;
       return {
         major: +m[1],
         minor: +m[2],
         patch: +(m[3] || 0),
-        ea: m[4] ? +m[4] : -1,
+        ea: m[4] ? (m[5] ? +m[5] : 0) : -1,
       };
     };
     const selected = parse(selectedVersion);
@@ -498,7 +498,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({
                 setImage(val);
                 setAutoFilled(false);
               }}
-              placeholder="quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@sha256:..."
+              placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
               isDisabled={loading || pipelineActive}
             />
             <FormHelperText>

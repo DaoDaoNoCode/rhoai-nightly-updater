@@ -4,64 +4,35 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 )
 
-// SelfSubjectAccessReview types for the authorization.k8s.io/v1 API.
-type selfSubjectAccessReview struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Spec       struct {
-		ResourceAttributes *resourceAttributes `json:"resourceAttributes"`
-	} `json:"spec"`
-}
-
-type resourceAttributes struct {
-	Verb      string `json:"verb"`
-	Resource  string `json:"resource"`
-	Group     string `json:"group"`
-	Namespace string `json:"namespace"`
-}
-
-type ssarResponse struct {
-	Status struct {
-		Allowed bool   `json:"allowed"`
-		Reason  string `json:"reason,omitempty"`
-	} `json:"status"`
-}
-
-// CheckUserPermissionWithToken performs a SelfSubjectAccessReview using the
-// user's own OAuth token. This correctly resolves ALL permissions including
-// group-based RBAC, IDP-granted roles, and implicit cluster-admin grants.
+// CheckUserPermissionWithToken checks the token owner's full RBAC permissions.
+// OpenShift's user:check-access OAuth scope permits a self SAR. An explicitly
+// empty scopes array asks about full RBAC, rather than the OAuth token's limited
+// scopes, as oauth-proxy does. Identity and groups come from the token itself.
 func CheckUserPermissionWithToken(ctx context.Context, userToken, verb, resource, apiGroup, namespace string) (bool, error) {
 	userClient := NewClientWithContext(ctx, userToken)
-
-	ssar := selfSubjectAccessReview{
-		APIVersion: "authorization.k8s.io/v1",
-		Kind:       "SelfSubjectAccessReview",
-	}
-	ssar.Spec.ResourceAttributes = &resourceAttributes{
-		Verb:      verb,
-		Resource:  resource,
-		Group:     apiGroup,
-		Namespace: namespace,
-	}
-
-	data, err := json.Marshal(ssar)
+	data, err := json.Marshal(map[string]interface{}{
+		"apiVersion": "authorization.openshift.io/v1", "kind": "SubjectAccessReview",
+		"verb": verb, "resource": resource, "resourceAPIGroup": apiGroup,
+		"namespace": namespace, "scopes": []string{},
+	})
 	if err != nil {
-		return false, fmt.Errorf("marshal SSAR: %w", err)
+		return false, fmt.Errorf("marshal permission review: %w", err)
 	}
-
-	body, statusCode, err := userClient.post("/apis/authorization.k8s.io/v1/selfsubjectaccessreviews", data)
+	body, _, err := userClient.post("/apis/authorization.openshift.io/v1/subjectaccessreviews", data)
 	if err != nil {
-		return false, fmt.Errorf("SSAR request failed (status %d): %w", statusCode, err)
+		return false, fmt.Errorf("permission review failed: %w", err)
 	}
-
-	var resp ssarResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return false, fmt.Errorf("parse SSAR response: %w", err)
+	var response struct {
+		Allowed         *bool  `json:"allowed"`
+		EvaluationError string `json:"evaluationError"`
 	}
-
-	slog.Info("permission check", "verb", verb, "resource", resource, "namespace", namespace, "allowed", resp.Status.Allowed)
-	return resp.Status.Allowed, nil
+	if err := json.Unmarshal(body, &response); err != nil {
+		return false, fmt.Errorf("parse permission review: %w", err)
+	}
+	if response.Allowed == nil || response.EvaluationError != "" {
+		return false, fmt.Errorf("permission review incomplete: %s", response.EvaluationError)
+	}
+	return *response.Allowed, nil
 }

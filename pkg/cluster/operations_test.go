@@ -154,7 +154,7 @@ func TestUpdate_PrerequisitesNotMet(t *testing.T) {
 
 func TestRollback_AlreadyOnStable(t *testing.T) {
 	stableSource := "redhat-operators"
-	stableChannel := "stable-3.4"
+	stableChannel := "stable-3.5"
 	if v := os.Getenv("STABLE_SOURCE"); v != "" {
 		stableSource = v
 	}
@@ -178,6 +178,7 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
 	client, cleanup := newMockClient(map[string]mockResponse{
+		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
 		subPath: {
 			body:       string(subJSON),
 			statusCode: 200,
@@ -216,6 +217,14 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 		records = append(records, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
 
+		if strings.Contains(r.URL.Path, "/catalogsources/"+CatalogName+"-verify-") {
+			if r.Method == "GET" {
+				fmt.Fprint(w, `{"status":{"connectionState":{"lastObservedState":"READY"}}}`)
+			} else {
+				fmt.Fprint(w, `{}`)
+			}
+			return
+		}
 		key := r.Method + " " + r.URL.Path
 		resp, ok := responses[key]
 		if !ok {
@@ -234,6 +243,9 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.statusCode)
+		if strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), "-verify-") {
+			resp.body = strings.ReplaceAll(resp.body, `"catalogSource":"`+CatalogName+`"`, `"catalogSource":"`+strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")+`"`)
+		}
 		w.Write([]byte(resp.body))
 	}))
 
@@ -428,6 +440,14 @@ func wrapPkgManifestList(singleBody string) string {
 		return `{"items":[]}`
 	}
 	obj["metadata"] = map[string]interface{}{"name": "rhods-operator"}
+	status, _ := obj["status"].(map[string]interface{})
+	if status == nil {
+		status = map[string]interface{}{}
+		obj["status"] = status
+	}
+	status["packageName"] = SubName
+	status["catalogSource"] = CatalogName
+	status["catalogSourceNamespace"] = CatalogNS
 	wrapped := map[string]interface{}{"items": []interface{}{obj}}
 	b, _ := json.Marshal(wrapped)
 	return string(b)
@@ -766,15 +786,16 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", SubNS)
 
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		pullSecretPath:    {body: string(secretJSON)},
-		idmsPath:          {body: string(idmsJSON)},
-		csPath:            {body: string(csJSON)},
-		subPath:           {body: string(subJSON)},
-		csvListPath:       {body: string(csvJSON)},
-		csvDeletePath:     {body: `{"kind":"Status","status":"Success"}`},
-		dashDeployPath:    {body: string(dashDeployJSON)},
-		dashPodsPath:      {body: string(emptyPodList)},
-		pkgManifestPath:   {body: string(pkgManifestJSON)},
+		pullSecretPath:  {body: string(secretJSON)},
+		idmsPath:        {body: string(idmsJSON)},
+		csPath:          {body: string(csJSON)},
+		subPath:         {body: string(subJSON)},
+		csvListPath:     {body: string(csvJSON)},
+		csvDeletePath:   {body: `{"kind":"Status","status":"Success"}`},
+		dashDeployPath:  {body: string(dashDeployJSON)},
+		dashPodsPath:    {body: string(emptyPodList)},
+		pkgManifestPath: {body: string(pkgManifestJSON)},
+		strings.TrimSuffix(pkgManifestPath, "/"+SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
 		appDeployListPath: {body: string(emptyDeployList)},
 		opDeployListPath:  {body: string(emptyDeployList)},
 		ogPath:            {body: string(ogJSON)},
@@ -878,7 +899,7 @@ func TestReinstall_Subscription404(t *testing.T) {
 // RefreshOperator instead.
 func TestReinstall_StableCSVFailed(t *testing.T) {
 	stableSource := "redhat-operators"
-	stableChannel := "stable-3.4"
+	stableChannel := "stable-3.5"
 	if v := os.Getenv("STABLE_SOURCE"); v != "" {
 		stableSource = v
 	}
@@ -902,6 +923,7 @@ func TestReinstall_StableCSVFailed(t *testing.T) {
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
 		subPath: {body: string(subJSON)},
 	})
 	defer cleanup()
@@ -920,7 +942,7 @@ func TestReinstall_StableCSVFailed(t *testing.T) {
 
 func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	stableSource := "redhat-operators"
-	stableChannel := "stable-3.4"
+	stableChannel := "stable-3.5"
 	if v := os.Getenv("STABLE_SOURCE"); v != "" {
 		stableSource = v
 	}
@@ -957,6 +979,7 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	csvListPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/clusterserviceversions", SubNS)
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
 		subPath:     {body: string(subJSON)},
 		csvListPath: {body: string(csvJSON)},
 	})
@@ -1091,7 +1114,7 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 
 	// Verify logs mention the detected nightly channel
 	logText := strings.Join(result.Logs, "\n")
-	if !strings.Contains(logText, "Detected nightly channel: stable-3.5") {
+	if !strings.Contains(logText, "Verified replacement channel: stable-3.5") {
 		t.Errorf("logs should contain detected nightly channel 'stable-3.5', got:\n%s", logText)
 	}
 
@@ -1602,15 +1625,16 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	}
 
 	responses := map[string]mockResponse{
-		pullSecretPath:    {body: string(secretJSON)},
-		idmsPath:          {body: string(idmsJSON)},
-		csPath:            {body: string(csJSON)},
-		subPath:           {body: string(subJSON)},
-		csvListPath:       {body: string(csvJSON)},
-		csvDeletePath:     {body: `{"kind":"Status","status":"Success"}`},
-		dashDeployPath:    {body: string(dashDeployJSON)},
-		dashPodsPath:      {body: string(emptyPodList)},
-		pkgManifestPath:   {body: string(pkgManifestJSON)},
+		pullSecretPath:  {body: string(secretJSON)},
+		idmsPath:        {body: string(idmsJSON)},
+		csPath:          {body: string(csJSON)},
+		subPath:         {body: string(subJSON)},
+		csvListPath:     {body: string(csvJSON)},
+		csvDeletePath:   {body: `{"kind":"Status","status":"Success"}`},
+		dashDeployPath:  {body: string(dashDeployJSON)},
+		dashPodsPath:    {body: string(emptyPodList)},
+		pkgManifestPath: {body: string(pkgManifestJSON)},
+		strings.TrimSuffix(pkgManifestPath, "/"+SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
 		appDeployListPath: {body: string(emptyDeployList)},
 		opDeployListPath:  {body: string(emptyDeployList)},
 		ogPath:            {body: string(ogJSON)},
@@ -1809,6 +1833,15 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 		recs = append(recs, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
 
+		if strings.Contains(r.URL.Path, "/catalogsources/"+CatalogName+"-verify-") {
+			fmt.Fprint(w, `{"status":{"connectionState":{"lastObservedState":"READY"}}}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/packagemanifests") {
+			source := strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")
+			fmt.Fprint(w, strings.ReplaceAll(wrapPkgManifestList(`{"status":{"channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}`), `"catalogSource":"`+CatalogName+`"`, `"catalogSource":"`+source+`"`))
+			return
+		}
 		key := r.Method + " " + r.URL.Path
 		resp, ok := responses[key]
 		if !ok {
@@ -1932,4 +1965,3 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 		}
 	}
 }
-

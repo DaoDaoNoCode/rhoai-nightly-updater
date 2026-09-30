@@ -1,13 +1,11 @@
 package cluster
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -39,6 +37,14 @@ func parseCSVVersion(csv string) (parsedTag, bool) {
 	n, _ := fmt.Sscanf(normalized, "rhods-operator.%d.%d.%d-ea.%d", &major, &minor, &patch, &eaNum)
 	if n == 4 {
 		return parsedTag{raw: csv, major: major, minor: minor, patch: patch, ea: eaNum}, true
+	}
+	// Recognize unnumbered EA and build metadata using the same parser as release tags.
+	version := strings.TrimPrefix(normalized, "rhods-operator.")
+	if strings.HasPrefix(normalized, "rhods-operator.") {
+		if parsed, ok := parseTag("rhoai-" + strings.SplitN(version, "+", 2)[0]); ok {
+			parsed.raw = csv
+			return parsed, true
+		}
 	}
 
 	// Try GA parse (no suffix): "rhods-operator.M.m.p"
@@ -91,49 +97,11 @@ func extractTargetVersion(imageRef string) (int, int, bool) {
 // (eus-*, support-required-upgrade-*), and picks the highest version with a
 // deterministic tiebreaker: stable-M.x > stable-M.N > beta > fast > other.
 func detectNightlyChannel(c *Client, imageRef string) (string, error) {
-	// Query the packagemanifest from our nightly catalog specifically (not the
-	// default redhat-operators catalog) by using a label selector.
-	listPath := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
-		"?labelSelector=" + url.QueryEscape("catalog="+CatalogName)
-	body, _, err := c.get(listPath)
+	channels, err := catalogChannels(c, CatalogName)
 	if err != nil {
-		slog.Warn("detectNightlyChannel: API request failed, falling back to default", "error", err)
-		// Fallback: query by name (may hit the wrong catalog)
-		fallbackPath := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "rhods-operator")
-		body, _, err = c.get(fallbackPath)
-		if err != nil {
-			return "", fmt.Errorf("packagemanifest API request failed: %w", err)
-		}
-		var result map[string]interface{}
-		if err := json.Unmarshal(body, &result); err != nil {
-			return "", fmt.Errorf("unmarshal packagemanifest: %w", err)
-		}
-		status, _ := result["status"].(map[string]interface{})
-		channels, _ := status["channels"].([]interface{})
-		return detectBestChannel(channels, imageRef)
+		return "", err
 	}
-
-	// Parse the list response and find the rhods-operator entry
-	var list struct {
-		Items []struct {
-			Metadata struct{ Name string `json:"name"` } `json:"metadata"`
-			Status   struct {
-				Channels []interface{} `json:"channels"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return "", fmt.Errorf("unmarshal packagemanifest list: %w", err)
-	}
-
-	for _, item := range list.Items {
-		if item.Metadata.Name == "rhods-operator" {
-			return detectBestChannel(item.Status.Channels, imageRef)
-		}
-	}
-
-	slog.Warn("detectNightlyChannel: rhods-operator not found in nightly catalog")
-	return "", nil
+	return detectBestChannel(channels, imageRef)
 }
 
 func detectBestChannel(channels []interface{}, imageRef string) (string, error) {
@@ -143,6 +111,7 @@ func detectBestChannel(channels []interface{}, imageRef string) (string, error) 
 	}
 
 	targetMajor, targetMinor, hasTarget := extractTargetVersion(imageRef)
+	targetRelease, hasRelease := parseTag(extractTagFromRef(imageRef))
 	if hasTarget {
 		slog.Info("detectNightlyChannel: filtering to target version", "major", targetMajor, "minor", targetMinor, "image", imageRef)
 	}
@@ -167,6 +136,10 @@ func detectBestChannel(channels []interface{}, imageRef string) (string, error) 
 
 		// If we know the target version, only consider channels with matching major.minor
 		if hasTarget && (parsed.major != targetMajor || parsed.minor != targetMinor) {
+			continue
+		}
+
+		if hasRelease && parsed.ea != targetRelease.ea {
 			continue
 		}
 
@@ -225,53 +198,14 @@ func channelPriority(name string, ea int) int {
 // found, (false, nil) if the catalog has no such channel, and (false, err) on
 // transient API / parse failures.
 func channelExistsInCatalog(c *Client, channel string) (bool, error) {
-	listPath := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "") +
-		"?labelSelector=" + url.QueryEscape("catalog="+CatalogName)
-	body, _, err := c.get(listPath)
+	channels, err := catalogChannels(c, CatalogName)
 	if err != nil {
-		// Fallback to direct query
-		fallbackPath := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "rhods-operator")
-		body, _, err = c.get(fallbackPath)
-		if err != nil {
-			return false, fmt.Errorf("packagemanifest API request failed: %w", err)
-		}
-		var result map[string]interface{}
-		if err := json.Unmarshal(body, &result); err != nil {
-			return false, fmt.Errorf("unmarshal packagemanifest: %w", err)
-		}
-		status, _ := result["status"].(map[string]interface{})
-		channels, _ := status["channels"].([]interface{})
-		for _, ch := range channels {
-			chMap, _ := ch.(map[string]interface{})
-			name, _ := chMap["name"].(string)
-			if name == channel {
-				return true, nil
-			}
-		}
-		return false, nil
+		return false, err
 	}
-
-	var list struct {
-		Items []struct {
-			Metadata struct{ Name string `json:"name"` } `json:"metadata"`
-			Status   struct {
-				Channels []struct {
-					Name string `json:"name"`
-				} `json:"channels"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, fmt.Errorf("unmarshal packagemanifest list: %w", err)
-	}
-
-	for _, item := range list.Items {
-		if item.Metadata.Name == "rhods-operator" {
-			for _, ch := range item.Status.Channels {
-				if ch.Name == channel {
-					return true, nil
-				}
-			}
+	for _, entry := range channels {
+		ch, _ := entry.(map[string]interface{})
+		if ch["name"] == channel {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -296,38 +230,6 @@ var (
 // wrong version (e.g., tag says ea.2 but digest points to GA).
 // Returns nil if: tag-only, digest-only, or tag+digest match.
 // Returns error if: tag+digest mismatch.
-func validateTagDigestMatch(ctx context.Context, c *Client, imageRef string) error {
-	// Only validate when both tag and digest are present
-	atIdx := strings.Index(imageRef, "@sha256:")
-	if atIdx < 0 {
-		return nil
-	}
-	providedDigest := imageRef[atIdx+1:]
-
-	tag := extractTagFromRef(imageRef)
-	if tag == "" || strings.HasPrefix(tag, "sha256:") {
-		return nil
-	}
-
-	quayAuth := getQuayAuth(c)
-	bearerToken, err := getQuayBearerToken(ctx, quayHTTPClient, quayAuth)
-	if err != nil {
-		slog.Warn("tag-digest validation: could not authenticate with Quay, skipping", "error", err)
-		return nil
-	}
-
-	resolvedDigest, err := getTagDigest(ctx, quayHTTPClient, bearerToken, tag)
-	if err != nil {
-		slog.Warn("tag-digest validation: could not resolve tag digest, skipping", "tag", tag, "error", err)
-		return nil
-	}
-
-	if resolvedDigest != providedDigest {
-		return fmt.Errorf("tag-digest mismatch: tag %q resolves to %s but the provided digest is %s — this would install the wrong version", tag, resolvedDigest[:20]+"...", providedDigest[:20]+"...")
-	}
-
-	return nil
-}
 
 func buildCatalogSourceSpec(image string) map[string]interface{} {
 	return map[string]interface{}{
@@ -499,7 +401,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 // UpdateStream executes the 8-step update pipeline, emitting progress events
 // via the emit callback so callers can stream status to SSE clients.
 // It returns the final OperationResponse with all collected logs.
-func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (result *types.OperationResponse, opErr error) {
 	logs := []string{}
 
 	// Warn if a dashboard PR image is currently deployed — the operator update will overwrite it
@@ -547,15 +449,6 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
-
-	// Validate tag-digest consistency (prevents installing wrong version)
-	if mismatchErr := validateTagDigestMatch(c.ctx, c, image); mismatchErr != nil {
-		msg := mismatchErr.Error()
-		logs = append(logs, msg)
-		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: "validation"})
-		recordUpdateActivity(c, image, false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
-	}
 
 	// Ensure operator namespace and OperatorGroup exist (creates them for fresh clusters)
 	nsPath := "/api/v1/namespaces/" + SubNS
@@ -627,6 +520,9 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	targetTag := extractTagFromRef(image)
 	targetParsed, targetOK := parseTag(targetTag)
 	currentCSV, csvCheckErr := getCSV(c)
+	if csvCheckErr != nil {
+		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + csvCheckErr.Error(), Logs: logs}, nil
+	}
 	if csvCheckErr == nil && currentCSV.Name != "" && targetOK {
 		currentParsed, currentOK := parseCSVVersion(currentCSV.Name)
 		if currentOK && compareTags(targetParsed, currentParsed) < 0 {
@@ -644,6 +540,13 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	}
 
 	// --- Step 2: save_snapshot ---
+	// Verify the exact image in a fresh catalog before switching the active
+	// catalog or removing any installed resources.
+	if _, preflightErr := preflightReinstallCatalog(c, image, ""); preflightErr != nil {
+		msg := "Replacement catalog validation failed: " + preflightErr.Error()
+		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "failed", Message: msg, ErrorCode: "validation"})
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
+	}
 	emit(UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
 	if snapErr := SaveDeploymentSnapshot(c); snapErr != nil {
 		slog.Warn("failed to save deployment snapshot", "error", snapErr)
@@ -654,12 +557,24 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 		emit(UpdateStepEvent{Step: "save_snapshot", Status: "success", Message: "Snapshot saved"})
 	}
 
+	recovery, recoveryErr := captureOperatorRecovery(c)
+	if recoveryErr != nil {
+		return &types.OperationResponse{Success: false, Message: recoveryErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
+	}
+	defer func() { recovery.restore(c, result, opErr, emit) }()
+
 	// --- Step 3: apply_catalog_source ---
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
 	logs = append(logs, fmt.Sprintf("Applying CatalogSource %s...", CatalogName))
 	catalogSource := buildCatalogSourceSpec(image)
 
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	recovery.started = true
+	// Recreate this source so READY and PackageManifest cannot describe its
+	// previous image. The verified temporary catalog remains separate.
+	if _, deleteErr := c.delete(csPath); deleteErr != nil && !IsK8sError(deleteErr, 404) {
+		return &types.OperationResponse{Success: false, Message: "Cannot replace nightly catalog: " + deleteErr.Error(), Logs: logs}, nil
+	}
 	_, _, err = c.apply(csPath, catalogSource)
 	if err != nil {
 		msg := fmt.Sprintf("Failed to apply CatalogSource: %v", err)
@@ -789,16 +704,10 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 		}, nil
 	}
 	if nightlyChannel == "" {
-		// Falling back to the channel from the current Subscription — validate it exists
-		logs = append(logs, fmt.Sprintf("Warning: no channels found in catalog, using current: %s", targetChannel))
-		exists, valErr := channelExistsInCatalog(c, targetChannel)
-		if valErr != nil {
-			slog.Warn("failed to validate fallback channel in catalog", "channel", targetChannel, "error", valErr)
-		} else if !exists {
-			slog.Error("fallback channel does not exist in catalog", "channel", targetChannel)
-			logs = append(logs, fmt.Sprintf("Warning: fallback channel %q not found in catalog — subscription may fail", targetChannel))
-		}
-		emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("No channels in catalog, using fallback: %s", targetChannel), Detail: targetChannel})
+		msg := "No matching channel found in the selected nightly catalog. Subscription and CSV were not changed."
+		emit(UpdateStepEvent{Step: "detect_channel", Status: "failed", Message: msg, ErrorCode: "channel_detection"})
+		recordUpdateActivity(c, image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "channel_detection"}, nil
 	} else {
 		targetChannel = nightlyChannel
 		logs = append(logs, fmt.Sprintf("Detected nightly channel: %s", nightlyChannel))
@@ -855,6 +764,8 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	logs = append(logs, fmt.Sprintf("OK: Subscription applied (channel=%s)", targetChannel))
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "success", Message: "Subscription applied", Detail: targetChannel})
 
+	recovery.started = true
+
 	// --- Step 7: delete_csv ---
 	// Delete the CSV AND the old InstallPlan, then recreate the Subscription.
 	// Just deleting the CSV is not enough for same-version refreshes — OLM sees
@@ -865,24 +776,21 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	logs = append(logs, "Deleting old CSV and InstallPlan...")
 
-	csv, csvErr := getCSV(c)
-	if csvErr != nil {
-		slog.Warn("failed to look up CSV", "error", csvErr)
-		logs = append(logs, fmt.Sprintf("Warning: could not look up CSV: %v", csvErr))
-	} else if csv.Name != "" {
+	csv := currentCSV
+	if csv.Name != "" {
 		csvPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name)
-		_, csvDelErr := c.delete(csvPath)
-		if csvDelErr != nil && !IsK8sError(csvDelErr, 404) {
-			slog.Warn("failed to delete CSV", "name", csv.Name, "error", csvDelErr)
-			logs = append(logs, fmt.Sprintf("Warning: CSV delete failed: %v", csvDelErr))
-		} else {
-			logs = append(logs, fmt.Sprintf("OK: CSV %s deleted", csv.Name))
+		if _, err := c.delete(csvPath); err != nil && !IsK8sError(err, 404) {
+			return &types.OperationResponse{Success: false, Message: "Cannot delete current CSV: " + err.Error(), Logs: logs}, nil
 		}
+		logs = append(logs, "OK: CSV "+csv.Name+" deleted")
 	}
 
 	// Delete old InstallPlans
 	ipListPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
 	ipListBody, _, ipListErr := c.get(ipListPath)
+	if ipListErr != nil && !IsK8sError(ipListErr, 404) {
+		return &types.OperationResponse{Success: false, Message: "Cannot list InstallPlans: " + ipListErr.Error(), Logs: logs}, nil
+	}
 	if ipListErr == nil {
 		var ipList struct {
 			Items []struct {
@@ -891,10 +799,17 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 				} `json:"metadata"`
 			} `json:"items"`
 		}
-		if json.Unmarshal(ipListBody, &ipList) == nil {
+		if err := json.Unmarshal(ipListBody, &ipList); err != nil {
+			return &types.OperationResponse{Success: false, Message: "Cannot parse InstallPlans: " + err.Error(), Logs: logs}, nil
+		} else {
 			for _, ip := range ipList.Items {
+				if ip.Metadata.Name != recovery.installPlanName() {
+					continue
+				}
 				ipDelPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ip.Metadata.Name)
-				c.delete(ipDelPath)
+				if _, err := c.delete(ipDelPath); err != nil && !IsK8sError(err, 404) {
+					return &types.OperationResponse{Success: false, Message: "Cannot delete old InstallPlan: " + err.Error(), Logs: logs}, nil
+				}
 				logs = append(logs, fmt.Sprintf("OK: InstallPlan %s deleted", ip.Metadata.Name))
 			}
 		}
@@ -902,7 +817,9 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 
 	// Delete and recreate Subscription to clear installedCSV status
 	subDelPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	c.delete(subDelPath)
+	if _, err := c.delete(subDelPath); err != nil && !IsK8sError(err, 404) {
+		return &types.OperationResponse{Success: false, Message: "Cannot delete Subscription: " + err.Error(), Logs: logs}, nil
+	}
 	logs = append(logs, "OK: Subscription deleted (clearing installedCSV)")
 
 	select {
@@ -978,7 +895,7 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (*types.O
 	if !ipFound {
 		msg := "No InstallPlan created within 60s — OLM may be stuck"
 		logs = append(logs, msg)
-		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
+		emit(UpdateStepEvent{Step: "verify_installplan", Status: "skipped", Message: msg})
 		// Non-fatal: the update was applied, OLM may still reconcile
 		logs = append(logs, "Update applied but InstallPlan verification timed out. OLM may still be processing.")
 		logs = append(logs, "Refresh the status to monitor progress.")
@@ -1194,12 +1111,13 @@ func Reinstall(c *Client, targetType, image, channelOverride string) (*types.Ope
 // reinstalls with the specified FBC image.
 // channelOverride: if non-empty, forces the Subscription channel instead
 // of auto-detecting from the catalog.
-func ReinstallStream(c *Client, targetType, image, channelOverride string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func ReinstallStream(c *Client, targetType, image, channelOverride string, emit func(UpdateStepEvent)) (result *types.OperationResponse, opErr error) {
 	logs := []string{}
 
 	stableSource := getStableSource()
-	stableChannel := getStableChannel()
-	isNightly := targetType == "nightly"
+	stableChannel := ""
+	activityTarget := image
+	isNightly := targetType == "nightly" || targetType == "custom"
 
 	// Warn if a dashboard PR image is currently deployed
 	if dashState, dashErr := GetDashboardState(c); dashErr == nil && dashState.IsCustomPR {
@@ -1210,18 +1128,57 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 
 	// --- Step 1: validate_target ---
 	emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Validating reinstall target..."})
+	if targetType != "stable" && targetType != "nightly" && targetType != "custom" {
+		return &types.OperationResponse{Success: false, Message: "Invalid reinstall target", ErrorCode: "validation"}, nil
+	}
+	if isNightly && image == "" {
+		return &types.OperationResponse{Success: false, Message: "An FBC image is required", ErrorCode: "validation"}, nil
+	}
+
+	if targetType == "custom" {
+		logs = append(logs, "Using the supplied FBC image exactly; a digest pins the selected build even if its tag has moved")
+	}
+	if isNightly {
+		channel, err := preflightReinstallCatalog(c, image, channelOverride)
+		if err != nil {
+			msg := "Replacement catalog validation failed; current operator was not removed: " + err.Error()
+			emit(UpdateStepEvent{Step: "validate_target", Status: "failed", Message: msg, ErrorCode: "validation"})
+			return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "validation"}, nil
+		}
+		channelOverride = channel
+		logs = append(logs, "Replacement catalog verified before cleanup (channel: "+channel+")")
+	}
 
 	sub, err := getSubscription(c)
 	if err != nil {
 		msg := fmt.Sprintf("Failed to get subscription: %v", err)
 		logs = append(logs, msg)
 		emit(UpdateStepEvent{Step: "validate_target", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(err)})
-		recordReinstallActivity(c, targetType, image, false)
+		recordReinstallActivity(c, targetType, activityTarget, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
 
+	if !isNightly {
+		if sub.State == "Not Installed" {
+			msg := "No operator Subscription found. Install the operator before using reinstall."
+			emit(UpdateStepEvent{Step: "validate_target", Status: "failed", Message: msg, ErrorCode: "validation"})
+			return &types.OperationResponse{Success: false, Message: msg, Logs: append(logs, msg), ErrorCode: "validation"}, nil
+		}
+		target, discoveryErr := resolveStableTarget(c)
+		if discoveryErr != nil {
+			msg := fmt.Sprintf("Cannot determine the stable reinstall target: %v", discoveryErr)
+			logs = append(logs, msg)
+			emit(UpdateStepEvent{Step: "validate_target", Status: "failed", Message: msg, ErrorCode: "validation"})
+			recordReinstallActivity(c, targetType, activityTarget, false)
+			return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
+		}
+		stableSource, stableChannel = target.Source, target.Channel
+		activityTarget = stableSource + "/" + stableChannel
+		logs = append(logs, fmt.Sprintf("Catalog target: %s / %s (GA %s)", stableSource, stableChannel, target.Version))
+	}
+
 	// For stable target: check if already on stable
-	if !isNightly && sub.Source == stableSource {
+	if !isNightly && sub.Source == stableSource && sub.Channel == stableChannel {
 		msg := "Already on stable. Nothing to reinstall."
 		logs = append(logs, fmt.Sprintf("Subscription source is already %s / %s", stableSource, stableChannel))
 		emit(UpdateStepEvent{Step: "validate_target", Status: "skipped", Message: msg})
@@ -1230,6 +1187,11 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 			Message: msg,
 			Logs:    logs,
 		}, nil
+	}
+
+	csv, csvErr := getCSV(c)
+	if csvErr != nil {
+		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + csvErr.Error(), Logs: logs}, nil
 	}
 
 	if isNightly {
@@ -1250,15 +1212,21 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 		emit(UpdateStepEvent{Step: "save_snapshot", Status: "success", Message: "Snapshot saved"})
 	}
 
+	recovery, recoveryErr := captureOperatorRecovery(c)
+	if recoveryErr != nil {
+		return &types.OperationResponse{Success: false, Message: recoveryErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
+	}
+	defer func() { recovery.restore(c, result, opErr, emit) }()
+
+	recovery.started = true
+
 	// --- Step 3: delete_catalog_source ---
 	emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	_, delErr := c.delete(csPath)
 	if delErr != nil {
 		if !IsK8sError(delErr, 404) {
-			slog.Warn("failed to delete nightly CatalogSource", "name", CatalogName, "error", delErr)
-			logs = append(logs, fmt.Sprintf("Warning: failed to delete nightly CatalogSource: %v", delErr))
-			emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "success", Message: "CatalogSource delete had warnings", Detail: delErr.Error()})
+			return &types.OperationResponse{Success: false, Message: "Cannot remove nightly CatalogSource: " + delErr.Error(), Logs: logs}, nil
 		} else {
 			logs = append(logs, "OK: nightly CatalogSource already absent")
 			emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "skipped", Message: "Nightly CatalogSource already absent"})
@@ -1277,7 +1245,7 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 			msg := fmt.Sprintf("Failed to delete Subscription: %v", delErr)
 			logs = append(logs, msg)
 			emit(UpdateStepEvent{Step: "delete_subscription", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(delErr)})
-			recordReinstallActivity(c, targetType, image, false)
+			recordReinstallActivity(c, targetType, activityTarget, false)
 			return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(delErr)}, nil
 		}
 		logs = append(logs, "OK: Subscription already absent")
@@ -1289,28 +1257,14 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 
 	// --- Step 5: delete_csv ---
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV..."})
-	csv, csvErr := getCSV(c)
-	if csvErr != nil {
-		logs = append(logs, fmt.Sprintf("Warning: could not look up CSV: %v", csvErr))
-		emit(UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: "Could not look up CSV", Detail: csvErr.Error()})
-	} else if csv.Name != "" {
+	if csv.Name != "" {
 		csvPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name)
-		_, delErr = c.delete(csvPath)
-		if delErr != nil {
-			if !IsK8sError(delErr, 404) {
-				logs = append(logs, fmt.Sprintf("Warning: failed to delete CSV %s: %v", csv.Name, delErr))
-				emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: fmt.Sprintf("CSV delete had warnings: %v", delErr)})
-			} else {
-				logs = append(logs, fmt.Sprintf("OK: CSV %s already absent", csv.Name))
-				emit(UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: fmt.Sprintf("CSV %s already absent", csv.Name)})
-			}
-		} else {
-			logs = append(logs, fmt.Sprintf("OK: CSV %s deleted", csv.Name))
-			emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: fmt.Sprintf("CSV %s deleted", csv.Name)})
+		if _, err := c.delete(csvPath); err != nil && !IsK8sError(err, 404) {
+			return &types.OperationResponse{Success: false, Message: "Cannot delete current CSV: " + err.Error(), Logs: logs}, nil
 		}
+		emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "CSV removed: " + csv.Name})
 	} else {
-		logs = append(logs, "No RHOAI CSV found (already removed)")
-		emit(UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: "No RHOAI CSV found"})
+		emit(UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: "No current CSV"})
 	}
 
 	// --- Step 6: cleanup_webhooks ---
@@ -1344,7 +1298,7 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 		msg := "Operation cancelled during cleanup wait."
 		logs = append(logs, msg)
 		emit(UpdateStepEvent{Step: "wait_propagation", Status: "failed", Message: msg})
-		recordReinstallActivity(c, targetType, image, false)
+		recordReinstallActivity(c, targetType, activityTarget, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
 	case <-time.After(PropagationWait):
 	}
@@ -1361,14 +1315,6 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 // reinstallNightlySteps handles the nightly-specific portion of ReinstallStream:
 // create CatalogSource, wait for READY, detect channel, create Subscription, verify InstallPlan.
 func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.SubscriptionInfo, logs []string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
-	// Validate tag-digest consistency before proceeding
-	if mismatchErr := validateTagDigestMatch(c.ctx, c, image); mismatchErr != nil {
-		msg := mismatchErr.Error()
-		logs = append(logs, msg)
-		emit(UpdateStepEvent{Step: "create_catalog_source", Status: "failed", Message: msg, ErrorCode: "validation"})
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "validation"}, nil
-	}
-
 	// --- Step 9: create_catalog_source ---
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
 	catalogSource := buildCatalogSourceSpec(image)
@@ -1456,55 +1402,16 @@ func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.S
 	// --- Step 11: detect_channel ---
 	emit(UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Detecting target channel..."})
 
-	var targetChannel string
-	if channelOverride != "" {
-		targetChannel = channelOverride
-		logs = append(logs, fmt.Sprintf("Using channel override: %s", channelOverride))
-		emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Using override channel: %s", channelOverride), Detail: channelOverride})
-	} else {
-		for attempt := 1; attempt <= 3; attempt++ {
-			ch, chErr := detectNightlyChannel(c, image)
-			if chErr != nil {
-				slog.Warn("detectNightlyChannel failed in ReinstallStream, retrying", "attempt", attempt, "error", chErr)
-				if attempt < 3 {
-					select {
-					case <-c.ctx.Done():
-						msg := "Operation cancelled during channel detection."
-						emit(UpdateStepEvent{Step: "detect_channel", Status: "failed", Message: msg})
-						recordReinstallActivity(c, "nightly", image, false)
-						return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-					case <-time.After(ChannelRetryDelay):
-					}
-					continue
-				}
-				// All retries exhausted
-				targetChannel = sub.Channel
-				slog.Warn("detectNightlyChannel failed after retries, falling back",
-					"fallbackChannel", targetChannel)
-				logs = append(logs, fmt.Sprintf("WARNING: Could not detect nightly channel after %d attempts, falling back to '%s'", attempt, targetChannel))
-				logs = append(logs, "This channel may be stale -- verify the catalog contains this channel if the install fails")
-				emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Channel detection failed, using fallback: %s", targetChannel), Detail: targetChannel})
-				break
-			}
-			if ch == "" {
-				targetChannel = sub.Channel
-				logs = append(logs, fmt.Sprintf("No channels found in catalog, using current: %s", targetChannel))
-				// Validate fallback channel exists in the catalog before creating Subscription
-				if exists, valErr := channelExistsInCatalog(c, targetChannel); valErr != nil {
-					slog.Warn("failed to validate fallback channel in catalog during reinstall", "channel", targetChannel, "error", valErr)
-				} else if !exists {
-					slog.Error("fallback channel does not exist in catalog during reinstall", "channel", targetChannel)
-					logs = append(logs, fmt.Sprintf("Warning: fallback channel %q not found in catalog — subscription may fail", targetChannel))
-				}
-				emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("No channels in catalog, using fallback: %s", targetChannel), Detail: targetChannel})
-			} else {
-				targetChannel = ch
-				logs = append(logs, fmt.Sprintf("Detected nightly channel: %s", targetChannel))
-				emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Detected channel: %s", targetChannel), Detail: targetChannel})
-			}
-			break
-		}
+	targetChannel := channelOverride
+	exists, channelErr := channelExistsInCatalog(c, targetChannel)
+	if channelErr != nil || !exists || targetChannel == "" {
+		msg := fmt.Sprintf("Selected channel %q is unavailable in the replacement catalog: %v", targetChannel, channelErr)
+		emit(UpdateStepEvent{Step: "detect_channel", Status: "failed", Message: msg, ErrorCode: "channel_detection"})
+		recordReinstallActivity(c, "nightly", image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "channel_detection"}, nil
 	}
+	logs = append(logs, "Verified replacement channel: "+targetChannel)
+	emit(UpdateStepEvent{Step: "detect_channel", Status: "success", Message: "Verified replacement channel: " + targetChannel, Detail: targetChannel})
 
 	// --- Step 12: create_subscription ---
 	emit(UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating Subscription to nightly catalog..."})
@@ -1681,7 +1588,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 			case <-c.ctx.Done():
 				msg := "Operation cancelled during Subscription creation retry."
 				emit(UpdateStepEvent{Step: "create_subscription", Status: "failed", Message: msg})
-				recordReinstallActivity(c, "stable", "", false)
+				recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
 				return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
 			case <-time.After(stableRetryBackoffs[attempt-1]):
 			}
@@ -1693,7 +1600,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 		logs = append(logs, fmt.Sprintf("CRITICAL: All 3 attempts to create Subscription failed: %v", stableApplyErr))
 		logs = append(logs, "Manual intervention required: the cluster has no operator Subscription.")
 		emit(UpdateStepEvent{Step: "create_subscription", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(stableApplyErr)})
-		recordReinstallActivity(c, "stable", "", false)
+		recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(stableApplyErr)}, nil
 	}
 	logs = append(logs, "OK: Subscription created pointing to stable catalog")
@@ -1715,7 +1622,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 			msg := "Operation cancelled while waiting for InstallPlan"
 			logs = append(logs, msg)
 			emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
-			recordReinstallActivity(c, "stable", "", false)
+			recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
 			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
 		case <-time.After(ipPollInterval):
 		}
@@ -1756,7 +1663,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
 		logs = append(logs, "Reinstall applied but InstallPlan verification timed out. OLM may still be processing.")
 		logs = append(logs, "Refresh the status to monitor progress.")
-		recordReinstallActivity(c, "stable", "", true)
+		recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, true)
 		return &types.OperationResponse{
 			Success: true,
 			Message: "Reinstall to stable initiated (InstallPlan pending -- OLM may still be processing).",
@@ -1770,7 +1677,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 	logs = append(logs, "Reinstall complete. OLM is installing the stable operator. This may take several minutes.")
 	logs = append(logs, "Refresh the status to monitor progress.")
 
-	recordReinstallActivity(c, "stable", "", true)
+	recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, true)
 
 	return &types.OperationResponse{
 		Success: true,
@@ -2045,15 +1952,17 @@ func recordRollbackActivity(c *Client, success bool) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "rollback",
-		Detail:    fmt.Sprintf("to %s/%s", getStableSource(), getStableChannel()),
+		Detail:    fmt.Sprintf("to latest GA from %s", getStableSource()),
 		Success:   success,
 	})
 }
 
 func recordReinstallActivity(c *Client, targetType, image string, success bool) {
-	detail := fmt.Sprintf("to %s/%s", getStableSource(), getStableChannel())
-	if targetType == "nightly" {
-		detail = fmt.Sprintf("to nightly %s", image)
+	detail := fmt.Sprintf("to latest GA from %s", getStableSource())
+	if targetType == "stable" && image != "" {
+		detail = "to " + image
+	} else if targetType == "nightly" || targetType == "custom" {
+		detail = fmt.Sprintf("to %s %s", targetType, image)
 	}
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),

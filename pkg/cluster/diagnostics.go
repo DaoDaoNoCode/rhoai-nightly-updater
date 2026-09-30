@@ -880,10 +880,28 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 func applyFixRecreateSubscription(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
-	origSource := getStableSource()
-	origChannel := getStableChannel()
 	origSub, origSubErr := getSubscription(c)
-	if origSubErr == nil {
+	source, channel := "", ""
+	cs, csErr := getCatalogSource(c)
+	if csErr != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the catalog source: %v", csErr)}, nil
+	}
+	if cs.Exists {
+		source = CatalogName
+		var chErr error
+		channel, chErr = detectNightlyChannel(c, cs.Image)
+		if chErr != nil || channel == "" {
+			return &types.OperationResponse{Success: false, Message: "Cannot determine the catalog channel; existing Subscription was retained."}, nil
+		}
+	} else {
+		target, discoveryErr := resolveStableTarget(c)
+		if discoveryErr != nil {
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the stable channel: %v", discoveryErr)}, nil
+		}
+		source, channel = target.Source, target.Channel
+	}
+	origSource, origChannel := source, channel
+	if origSubErr == nil && origSub.Source != "" && origSub.Channel != "" {
 		origSource = origSub.Source
 		origChannel = origSub.Channel
 	}
@@ -900,18 +918,6 @@ func applyFixRecreateSubscription(c *Client) (*types.OperationResponse, error) {
 	case <-c.ctx.Done():
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled.", Logs: logs}, c.ctx.Err()
 	case <-time.After(3 * time.Second):
-	}
-
-	source := getStableSource()
-	channel := getStableChannel()
-
-	cs, csErr := getCatalogSource(c)
-	if csErr == nil && cs.Exists {
-		source = CatalogName
-		nightlyChannel, chErr := detectNightlyChannel(c, cs.Image)
-		if chErr == nil && nightlyChannel != "" {
-			channel = nightlyChannel
-		}
 	}
 
 	logs = append(logs, fmt.Sprintf("Recreating subscription (source: %s, channel: %s)...", source, channel))

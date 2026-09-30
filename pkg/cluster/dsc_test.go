@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -60,6 +61,7 @@ func TestCreateDefaultDSC_AlreadyExists(t *testing.T) {
 // TestCreateDefaultDSC_CreatesSuccessfully verifies that CreateDefaultDSC creates
 // a new DSC when none exists.
 func TestCreateDefaultDSC_CreatesSuccessfully(t *testing.T) {
+	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 	// Mock empty DSC list (no existing DSC)
 	emptyList := map[string]interface{}{
 		"items": []interface{}{},
@@ -82,6 +84,7 @@ func TestCreateDefaultDSC_CreatesSuccessfully(t *testing.T) {
 
 	// The actual implementation uses c.apply() which internally uses PATCH with SSA params
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
+		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
 		dscListPathV2: {body: string(emptyListJSON)},
 		dscListPathV1: {body: string(emptyListJSON)},
 		dscApplyPath:  {body: string(applyResponseJSON)},
@@ -146,6 +149,7 @@ func TestCreateDefaultDSC_CRDNotInstalled(t *testing.T) {
 // TestCreateDefaultDSC_ApplyFailure verifies that CreateDefaultDSC handles
 // API errors during the apply operation gracefully.
 func TestCreateDefaultDSC_ApplyFailure(t *testing.T) {
+	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 	// Mock empty DSC list (no existing DSC)
 	emptyList := map[string]interface{}{
 		"items": []interface{}{},
@@ -160,6 +164,7 @@ func TestCreateDefaultDSC_ApplyFailure(t *testing.T) {
 	dscApplyPath := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
 
 	client, cleanup := newMockClient(map[string]mockResponse{
+		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
 		dscListPathV2: {body: string(emptyListJSON)},
 		dscListPathV1: {body: string(emptyListJSON)},
 		dscApplyPath:  {body: errorResponse, statusCode: 500},

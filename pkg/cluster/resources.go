@@ -15,7 +15,10 @@ func GetResourcesStatus(c *Client, userVisibleProjects []string) (*types.Resourc
 	status.MLflow = getMLflowStatus(c)
 
 	// Get status for DSPA projects that the user can see
-	dspaProjects := findDSPAProjects(c)
+	dspaProjects, err := findDSPAProjects(c)
+	if err != nil {
+		return nil, err
+	}
 	visible := map[string]bool{}
 	for _, p := range userVisibleProjects {
 		visible[p] = true

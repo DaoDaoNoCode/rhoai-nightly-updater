@@ -30,13 +30,6 @@ func getStableSource() string {
 	return "redhat-operators"
 }
 
-func getStableChannel() string {
-	if v := os.Getenv("STABLE_CHANNEL"); v != "" {
-		return v
-	}
-	return "stable-3.4"
-}
-
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
 // All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
@@ -51,7 +44,6 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	status.Cluster = types.ClusterInfo{Server: server, User: user}
 
 	status.StableSource = getStableSource()
-	status.StableChannel = getStableChannel()
 
 	var wg sync.WaitGroup
 
@@ -61,7 +53,20 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 		mu.Unlock()
 	}
 
-	wg.Add(10)
+	wg.Add(11)
+
+	go func() {
+		defer wg.Done()
+		target, err := resolveStableTarget(c)
+		mu.Lock()
+		status.StableChannel = target.Channel
+		status.StableVersion = target.Version
+		status.StableChannelPinned = target.Pinned
+		if err != nil {
+			status.StableDiscoveryError = err.Error()
+		}
+		mu.Unlock()
+	}()
 
 	go func() {
 		defer wg.Done()
@@ -265,6 +270,24 @@ func getSubscription(c *Client) (types.SubscriptionInfo, error) {
 }
 
 func getCSV(c *Client) (types.CSVInfo, error) {
+	// Prefer the Subscription's installed CSV when multiple versions coexist
+	// during OLM reconciliation. List order is not installation identity.
+	installedName := ""
+	subBody, _, subErr := c.get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
+	if subErr != nil && !IsK8sError(subErr, 404) {
+		return types.CSVInfo{}, subErr
+	}
+	if subErr == nil {
+		var sub struct {
+			Status struct {
+				InstalledCSV string `json:"installedCSV"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(subBody, &sub); err != nil {
+			return types.CSVInfo{}, err
+		}
+		installedName = sub.Status.InstalledCSV
+	}
 	path := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
 	body, _, err := c.get(path)
 	if err != nil {
@@ -293,6 +316,12 @@ func getCSV(c *Client) (types.CSVInfo, error) {
 		}
 
 		displayName, _ := spec["displayName"].(string)
+		if installedName != "" {
+			if name == installedName {
+				return types.CSVInfo{Name: name, Version: version, Phase: phase}, nil
+			}
+			continue
+		}
 		if displayName == "Red Hat OpenShift AI" {
 			return types.CSVInfo{Name: name, Version: version, Phase: phase}, nil
 		}

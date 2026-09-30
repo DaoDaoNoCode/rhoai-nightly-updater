@@ -202,6 +202,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
   const [dscModalOpen, setDscModalOpen] = useState(false);
   const [dscPreviewYAML, setDscPreviewYAML] = useState<string>("");
   const [dscPreviewLoading, setDscPreviewLoading] = useState(false);
+  const [dscPreviewError, setDscPreviewError] = useState("");
 
   const handleRefreshOperator = () => {
     trackFeature("refresh_operator");
@@ -402,11 +403,13 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                       onClick={async () => {
                         setDscModalOpen(true);
                         setDscPreviewLoading(true);
+                        setDscPreviewYAML("");
+                        setDscPreviewError("");
                         try {
                           const res = await getDSCPreview();
                           setDscPreviewYAML(res.yaml);
-                        } catch {
-                          setDscPreviewYAML("(Failed to load preview from upstream — will use built-in defaults)");
+                        } catch (err) {
+                          setDscPreviewError(String(err));
                         } finally {
                           setDscPreviewLoading(false);
                         }
@@ -451,6 +454,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                 <StackItem>
                   {dscPreviewLoading ? (
                     <Content component="p">Loading preview from upstream...</Content>
+                  ) : dscPreviewError ? (
+                    <Alert variant="danger" title="Could not fetch version-matched DSC defaults" isInline>{dscPreviewError}</Alert>
                   ) : (
                     <CodeBlock>
                       <CodeBlockCode>{dscPreviewYAML}</CodeBlockCode>
@@ -463,7 +468,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
               <Button
                 variant="primary"
                 onClick={() => { setDscModalOpen(false); handleCreateDSC(); }}
-                isDisabled={dscLoading}
+                isDisabled={dscLoading || dscPreviewLoading || !dscPreviewYAML || !!dscPreviewError || !canMutate}
                 isLoading={dscLoading}
               >
                 Confirm &amp; Create

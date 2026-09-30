@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,36 @@ import (
 var imageRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]+(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$`)
 var namespaceRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var channelRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+var customFBCImageRegex = regexp.MustCompile(`^quay\.io/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)+(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$`)
+var dscNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
+
+func validateReinstallRequest(req *types.ReinstallRequest) error {
+	if req.TargetType == "" {
+		req.TargetType = "stable"
+	}
+	req.Image = strings.TrimSpace(req.Image)
+	req.Channel = strings.TrimSpace(req.Channel)
+	if req.TargetType != "stable" && req.TargetType != "nightly" && req.TargetType != "custom" {
+		return fmt.Errorf("invalid targetType: %s (must be stable, nightly, or custom)", req.TargetType)
+	}
+	if req.TargetType != "stable" {
+		if req.Image == "" {
+			return fmt.Errorf("image is required for nightly or custom reinstall")
+		}
+		if req.TargetType == "custom" {
+			match := customFBCImageRegex.FindStringSubmatch(req.Image)
+			if match == nil || (match[1] == "" && match[2] == "") {
+				return fmt.Errorf("provide a quay.io FBC image with a tag or a full SHA256 digest")
+			}
+		} else if !imageRegex.MatchString(req.Image) || !isAllowedImage(req.Image) {
+			return fmt.Errorf("provide a valid FBC image from quay.io/rhoai/ or registry.redhat.io/rhoai/")
+		}
+	}
+	if req.Channel != "" && !channelRegex.MatchString(req.Channel) {
+		return fmt.Errorf("invalid channel name: %s", req.Channel)
+	}
+	return nil
+}
 
 // allowedImagePrefixes is the whitelist of registries from which images may be pulled.
 var allowedImagePrefixes = []string{
@@ -127,9 +158,8 @@ func (rl *rateLimiter) startCleanup() {
 }
 
 // withMutationAuth wraps a handler that performs a cluster mutation.
-// It applies the same auth checks as withAuth, plus a per-user rate limit.
-// Authorization is handled upstream by oauth-proxy (verifies the user can
-// list pods in redhat-ods-operator before any request reaches the backend).
+// It checks user RBAC before using the SA token, applies a per-user rate limit,
+// and gives accepted work a bounded lifetime independent of the browser.
 func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		RecordRequest()
@@ -144,6 +174,15 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 			return
 		}
 		username := resolveUsername(r)
+		allowed, permissionErr := mutationPermission(r.Context(), userToken)
+		if permissionErr != nil {
+			writeError(w, "Cannot verify mutation permissions. No changes were made.", http.StatusServiceUnavailable, "authorization_unavailable")
+			return
+		}
+		if !allowed {
+			writeError(w, "Read-only access: updating operator Subscriptions in redhat-ods-operator is required.", http.StatusForbidden, "forbidden")
+			return
+		}
 
 		rateLimitKey := username + ":" + r.URL.Path
 		if mutationLimiter.isRateLimited(rateLimitKey) {
@@ -153,7 +192,9 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 			return
 		}
 
-		client := cluster.NewClientWithContext(r.Context(), clusterToken)
+		opContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
+		defer cancel()
+		client := cluster.NewClientWithContext(opContext, clusterToken)
 		client.SetUsername(username)
 
 		sw := &statusWriter{ResponseWriter: w}
@@ -337,8 +378,13 @@ func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)
 // upstream by oauth-proxy before requests reach this backend.
 var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	username := resolveUsername(r)
+	allowed, err := mutationPermission(r.Context(), extractUserToken(r))
+	if err != nil {
+		writeError(w, "Cannot verify mutation permissions", http.StatusServiceUnavailable, "authorization_unavailable")
+		return
+	}
 	writeJSON(w, map[string]interface{}{
-		"canMutate": true,
+		"canMutate": allowed,
 		"user":      username,
 	}, "user-permissions")
 })
@@ -514,6 +560,8 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		return
 	}
 
+	defer sseWriter.Close()
+
 	done := make(chan struct{})
 	defer close(done)
 	go sseHeartbeat(sseWriter, done)
@@ -531,11 +579,9 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		})
 	})
 
+	sendOperationResult(sseWriter, result, updateErr)
+
 	if updateErr != nil {
-		if r.Context().Err() != nil {
-			slog.Warn("update-stream: client disconnected (SSE dropped), but operations may have completed")
-			return
-		}
 		slog.Error("update-stream failed", "error", updateErr)
 		RecordUpdate(false)
 		return
@@ -704,6 +750,30 @@ var HandleComponents = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 	writeJSON(w, components, "components")
 })
 
+var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !acquireClusterMutationLock() {
+		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req struct {
+		Name                    string `json:"name"`
+		Mode                    string `json:"mode"`
+		ExpectedOperatorVersion string `json:"expectedOperatorVersion"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || (req.Mode != "remove-invalid" && req.Mode != "reset-defaults") {
+		writeError(w, "Provide a DSC name and mode: remove-invalid or reset-defaults", http.StatusBadRequest, "validation")
+		return
+	}
+	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusUnprocessableEntity, "validation")
+		return
+	}
+	writeOperationResult(w, result, "repair-dsc")
+})
+
 // HandleAssistRollout detects and unblocks stuck deployment rollouts.
 var HandleAssistRollout = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !acquireClusterMutationLock() {
@@ -822,35 +892,13 @@ var HandleRollback = withMutationAuth(func(c *cluster.Client, w http.ResponseWri
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	var req types.ReinstallRequest
-	// Attempt to decode; empty body is fine (defaults to stable)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// If the body is empty or not JSON, default to stable
-		req = types.ReinstallRequest{TargetType: "stable"}
-	}
-	if req.TargetType == "" {
-		req.TargetType = "stable"
-	}
-
-	if req.TargetType != "stable" && req.TargetType != "nightly" {
-		writeError(w, fmt.Sprintf("invalid targetType: %s (must be \"stable\" or \"nightly\")", req.TargetType), http.StatusBadRequest, "validation")
+	// Preserve the legacy empty-body stable rollback, but reject malformed JSON.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
 		return
 	}
-	if req.TargetType == "nightly" {
-		if req.Image == "" {
-			writeError(w, "image is required when targetType is \"nightly\"", http.StatusBadRequest, "validation")
-			return
-		}
-		if !imageRegex.MatchString(req.Image) {
-			writeError(w, fmt.Sprintf("invalid image format: %s", req.Image), http.StatusBadRequest, "validation")
-			return
-		}
-		if !isAllowedImage(req.Image) {
-			writeError(w, fmt.Sprintf("image registry not allowed: %s (must be quay.io/rhoai/ or registry.redhat.io/rhoai/)", req.Image), http.StatusBadRequest, "validation")
-			return
-		}
-	}
-	if req.Channel != "" && !channelRegex.MatchString(req.Channel) {
-		writeError(w, fmt.Sprintf("invalid channel name: %s (must match K8s naming pattern)", req.Channel), http.StatusBadRequest, "validation")
+	if err := validateReinstallRequest(&req); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest, "validation")
 		return
 	}
 
@@ -887,34 +935,13 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	var req types.ReinstallRequest
-	// Attempt to decode; empty body is fine (defaults to stable)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		req = types.ReinstallRequest{TargetType: "stable"}
-	}
-	if req.TargetType == "" {
-		req.TargetType = "stable"
-	}
-
-	if req.TargetType != "stable" && req.TargetType != "nightly" {
-		writeError(w, fmt.Sprintf("invalid targetType: %s (must be \"stable\" or \"nightly\")", req.TargetType), http.StatusBadRequest, "validation")
+	// Preserve the legacy empty-body stable rollback, but reject malformed JSON.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
 		return
 	}
-	if req.TargetType == "nightly" {
-		if req.Image == "" {
-			writeError(w, "image is required when targetType is \"nightly\"", http.StatusBadRequest, "validation")
-			return
-		}
-		if !imageRegex.MatchString(req.Image) {
-			writeError(w, fmt.Sprintf("invalid image format: %s", req.Image), http.StatusBadRequest, "validation")
-			return
-		}
-		if !isAllowedImage(req.Image) {
-			writeError(w, fmt.Sprintf("image registry not allowed: %s (must be quay.io/rhoai/ or registry.redhat.io/rhoai/)", req.Image), http.StatusBadRequest, "validation")
-			return
-		}
-	}
-	if req.Channel != "" && !channelRegex.MatchString(req.Channel) {
-		writeError(w, fmt.Sprintf("invalid channel name: %s (must match K8s naming pattern)", req.Channel), http.StatusBadRequest, "validation")
+	if err := validateReinstallRequest(&req); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest, "validation")
 		return
 	}
 
@@ -923,6 +950,8 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		writeError(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+
+	defer sseWriter.Close()
 
 	done := make(chan struct{})
 	defer close(done)
@@ -941,11 +970,9 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		})
 	})
 
+	sendOperationResult(sseWriter, result, reinstallErr)
+
 	if reinstallErr != nil {
-		if r.Context().Err() != nil {
-			slog.Warn("reinstall-stream: client disconnected (SSE dropped), but operations may have completed")
-			return
-		}
 		slog.Error("reinstall-stream failed", "error", reinstallErr)
 		return
 	}
@@ -978,6 +1005,8 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 
+	defer sseWriter.Close()
+
 	done := make(chan struct{})
 	defer close(done)
 	go sseHeartbeat(sseWriter, done)
@@ -995,11 +1024,9 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		})
 	})
 
+	sendOperationResult(sseWriter, result, refreshErr)
+
 	if refreshErr != nil {
-		if r.Context().Err() != nil {
-			slog.Warn("refresh-stream: client disconnected (SSE dropped), but operations may have completed")
-			return
-		}
 		slog.Error("refresh-stream failed", "error", refreshErr)
 		return
 	}
@@ -1212,12 +1239,22 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 
 // HandleDSCPreview returns the default DSC YAML for preview (fetched from upstream, cached).
 var HandleDSCPreview = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	yamlContent := cluster.GetDefaultDSCYAML()
-	writeJSON(w, map[string]string{"yaml": yamlContent}, "dsc-preview")
+	defaults, err := cluster.GetDefaultDSCYAML(c)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadGateway, "prerequisites")
+		return
+	}
+	yamlContent := defaults.YAML
+	writeJSON(w, map[string]string{"yaml": yamlContent, "operatorVersion": defaults.Version, "branch": defaults.Branch, "sourceURL": defaults.SourceURL}, "dsc-preview")
 })
 
 // HandleCreateDSC creates a default DataScienceCluster if one doesn't exist.
 var HandleCreateDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !acquireClusterMutationLock() {
+		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "create-dsc")
 
 	result, err := cluster.CreateDefaultDSC(c)

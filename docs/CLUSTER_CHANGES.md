@@ -53,6 +53,12 @@ Triggered by the "Update to Nightly" action.
 
 Triggered by the "Reinstall" action.
 
+**Stable target discovery:**
+- Reads `rhods-operator` PackageManifest entries from the configured `STABLE_SOURCE` (default: `redhat-operators`) in `openshift-marketplace`, using a catalog label selector and verifying the returned catalog name and namespace. The nightly CatalogSource does not influence this result.
+- Chooses the highest GA channel head among production `stable`, `fast`, and `eus` channels. EA and other prereleases are excluded. Equal versions prefer the catalog's default channel, then a stable channel.
+- The UI shows the selected channel and GA version. `STABLE_CHANNEL` optionally pins a validated GA channel and is labeled as configured rather than latest.
+- Rechecks catalog availability before cleanup; discovery failure stops reinstall without removing the operator. An older channel on the same Red Hat catalog can be reinstalled to the latest channel.
+
 **Deletion phase:**
 
 | Kind | Name | Namespace | Operation |
@@ -67,12 +73,13 @@ Triggered by the "Reinstall" action.
 
 | Kind | Name | Namespace | Operation |
 |------|------|-----------|-----------|
-| CatalogSource | `rhoai-catalog-dev` | `openshift-marketplace` | create (nightly only) |
+| CatalogSource | `rhoai-catalog-dev` | `openshift-marketplace` | create (nightly or custom image) |
 | Subscription | `rhods-operator` | `redhat-ods-operator` | create |
 
 **What happens:**
 - All stale RHOAI webhooks are deleted to prevent blocking API calls
-- For nightly reinstalls, creates fresh CatalogSource + Subscription
+- For nightly or custom reinstalls, creates fresh CatalogSource + Subscription
+- Custom version accepts a Quay FBC image, including older versions and builds pinned by SHA256 digest. The digest is used exactly, even if the tag now points to a different build. The channel is detected from the selected catalog or supplied as an override.
 - For stable reinstalls, creates Subscription pointing to `redhat-operators` catalog
 
 ---
@@ -103,7 +110,19 @@ Triggered by the "Create DSC" action.
 
 **What happens:**
 - Only created if no DSC exists
-- Default component configuration fetched from upstream or uses built-in spec
+- Default configuration is fetched from `red-hat-data-services/rhods-operator` using the installed CSV version: `3.6.0` maps to `rhoai-3.6`, and `3.6.0-ea.2` maps to `rhoai-3.6-ea.2`.
+- Unnumbered EA releases work the same way: `3.7.0-ea` maps to `rhoai-3.7-ea`; GA maps to `rhoai-3.7`. Version numbers and prerelease names are derived, with no supported-version list. `DSC_SAMPLE_REF` can override the Git branch/tag if upstream naming changes.
+- Fetches the v2 sample, with v1 fallback only when the v2 sample is absent in that same branch. Samples are cached by branch and API version for one hour.
+- If the corresponding sample cannot be fetched, creation fails with an actionable error. An unrelated built-in spec is never substituted.
+
+### DSC Field Repair
+
+Triggered by **Remove invalid fields** or **Reset to version defaults** on the Components page, after confirmation.
+
+- Checks field names against the installed DSC CRD schema, including nested keys. Management state differences are not compatibility errors. Valid optional settings and free-form configuration are retained.
+- **Remove invalid fields** patches the named DataScienceCluster, deleting unsupported keys while preserving valid values.
+- **Reset to version defaults** previews the matching upstream sample, then replaces the DSC spec, including management states and custom settings. Removed keys are explicitly deleted; DSC metadata is retained.
+- Repairs use a resource-version precondition to detect concurrent edits, share the cluster mutation lock, and are recorded in the activity log. Reset also checks that the installed operator version still matches the preview.
 
 ---
 
@@ -437,4 +456,4 @@ Before each nightly update or reinstall, the tool captures current deployment im
 
 The ServiceAccount has broad RBAC permissions because pipeline project namespaces are user-specified at runtime. Operations include server-side validation that restricts actual access to known safe namespaces (`minio`, Data Science projects with `opendatahub.io/dashboard` label).
 
-The tool performs self-access reviews for sensitive operations (namespace create/delete, secret management, DSPA/MLflow lifecycle).
+The tool checks the token owner's full RBAC before every mutation: `update` on `subscriptions.operators.coreos.com` in `redhat-ods-operator` grants access to app mutations. Users who can enter the app but lack that permission are read-only. Reviews use the user OAuth token and OpenShift self SAR with an explicitly empty scopes array; cluster mutations use the ServiceAccount token. Permission lookup errors block mutations.

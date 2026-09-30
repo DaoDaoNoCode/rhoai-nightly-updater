@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,16 +35,17 @@ var quayHTTPClient = &http.Client{
 }
 
 // Matches clean version tags:
-//   rhoai-3.4, rhoai-3.5.0, rhoai-3.5.0-ea.1, rhoai-3.5-ea.2
-var cleanTagRegex = regexp.MustCompile(`^rhoai-\d+\.\d+(\.\d+)?(-ea\.\d+)?$`)
-var tagParseRegex = regexp.MustCompile(`^rhoai-(\d+)\.(\d+)(?:\.(\d+))?(?:-ea\.(\d+))?$`)
+//
+//	rhoai-3.4, rhoai-3.5.0, rhoai-3.5.0-ea.1, rhoai-3.5-ea.2
+var cleanTagRegex = regexp.MustCompile(`^rhoai-\d+\.\d+(\.\d+)?(-ea(\.\d+)?)?$`)
+var tagParseRegex = regexp.MustCompile(`^rhoai-(\d+)\.(\d+)(?:\.(\d+))?(-ea(?:\.(\d+))?)?$`)
 
 type parsedTag struct {
 	raw   string
 	major int
 	minor int
 	patch int
-	ea    int // -1 = GA (no suffix), 0+ = EA number
+	ea    int // -1 = GA, 0 = unnumbered EA, positive values = numbered EA
 }
 
 func parseTag(tag string) (parsedTag, bool) {
@@ -59,7 +61,10 @@ func parseTag(tag string) (parsedTag, bool) {
 		fmt.Sscanf(m[3], "%d", &patch)
 	}
 	if m[4] != "" {
-		fmt.Sscanf(m[4], "%d", &ea)
+		ea = 0
+		if m[5] != "" {
+			fmt.Sscanf(m[5], "%d", &ea)
+		}
 	}
 	return parsedTag{raw: tag, major: major, minor: minor, patch: patch, ea: ea}, true
 }
@@ -327,79 +332,60 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 	tagScanCacheMu.RUnlock()
 
-	// Start concurrent paginations from evenly-spaced points across the
-	// rhoai- lexicographic range. Each goroutine scans up to 30 pages (3000 tags).
-	// This covers ~20k+ tags in parallel instead of sequentially.
-	startPoints := []string{
-		"rhoai-",     // catches everything from the start
-		"rhoai-2.2",  // jumps past early 2.x noise
-		"rhoai-2.9",  // jumps to the 2.9/3.0 boundary
-		"rhoai-3.2",  // 3.2+ range
-		"rhoai-3.4",  // 3.4+ range
-		"rhoai-3.5",  // 3.5+ range (catches EA tags)
-		"rhoai-3.9",  // future versions
-	}
-
-	type scanResult struct {
-		tags []string
-		err  error
-	}
-	results := make(chan scanResult, len(startPoints))
-
-	for _, start := range startPoints {
-		go func(startTag string) {
-			var found []string
-			lastTag := startTag
-			for page := 0; page < 30; page++ {
-				url := fmt.Sprintf("%s?n=100&last=%s", quayTagsURL, lastTag)
-				req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-				if err != nil {
-					break
-				}
-				req.Header.Set("Authorization", "Bearer "+bearerToken)
-				req.Header.Set("Accept", "application/json")
-				resp, err := httpClient.Do(req)
-				if err != nil {
-					break
-				}
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-				resp.Body.Close()
-				if resp.StatusCode != 200 {
-					break
-				}
-				var data quayTagsResponse
-				if json.Unmarshal(body, &data) != nil || len(data.Tags) == 0 {
-					break
-				}
-				pastRange := false
-				for _, tag := range data.Tags {
-					if cleanTagRegex.MatchString(tag) {
-						found = append(found, tag)
-					}
-					if tag > "rhoai." {
-						pastRange = true
-						break
-					}
-				}
-				if pastRange {
-					break
-				}
-				lastTag = data.Tags[len(data.Tags)-1]
-			}
-			results <- scanResult{tags: found}
-		}(start)
-	}
-
-	seen := make(map[string]bool)
+	// Walk the registry's release-tag range to exhaustion. There are no fixed
+	// version checkpoints or page limits that can hide future releases.
 	var allCleanTags []string
-	for range startPoints {
-		r := <-results
-		for _, t := range r.tags {
-			if !seen[t] {
-				seen[t] = true
-				allCleanTags = append(allCleanTags, t)
+	seen := make(map[string]bool)
+	lastTag := "rhoai-"
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		requestURL := fmt.Sprintf("%s?n=1000&last=%s", quayTagsURL, lastTag)
+		req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+		req.Header.Set("Accept", "application/json")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fetching Quay tags: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("Quay tag listing returned HTTP %d", resp.StatusCode)
+		}
+		var data quayTagsResponse
+		if err := json.Unmarshal(body, &data); err != nil {
+			return nil, fmt.Errorf("parsing Quay tags: %w", err)
+		}
+		if len(data.Tags) == 0 {
+			break
+		}
+		pastRange := false
+		for _, tag := range data.Tags {
+			if !strings.HasPrefix(tag, "rhoai-") {
+				pastRange = true
+				break
+			}
+			if cleanTagRegex.MatchString(tag) && !seen[tag] {
+				seen[tag] = true
+				allCleanTags = append(allCleanTags, tag)
 			}
 		}
+		if pastRange {
+			break
+		}
+		nextTag := data.Tags[len(data.Tags)-1]
+		if nextTag <= lastTag {
+			return nil, fmt.Errorf("Quay tag pagination did not advance past %q", lastTag)
+		}
+		lastTag = nextTag
 	}
 
 	if len(allCleanTags) == 0 {

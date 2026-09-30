@@ -6,13 +6,13 @@ This document captures every OpenShift-specific behavior that affects the RHOAI 
 
 **What:** OpenShift Routes have a default HAProxy timeout of 30 seconds. Any HTTP response that takes longer is terminated with a 504.
 
-**Impact:** SSE streams from mutation endpoints (Update, Reinstall, Refresh) can run up to 3 minutes (WriteTimeout set to 180s). The default 30s Route timeout would kill the SSE connection mid-stream. The Route must support long-lived connections for SSE.
+**Impact:** SSE streams from mutation endpoints (Update, Reinstall, Refresh) can run for up to 15 minutes. SSE handlers replace the ordinary 180s response deadline with a short per-write deadline; accepted operations have an independent 15-minute lifetime. The default 30s Route timeout would kill the SSE connection mid-stream. The Route must support long-lived connections for SSE.
 
-**Fix:** `haproxy.router.openshift.io/timeout: 180s` annotation on the Route. This must be >= the Go server's WriteTimeout (180s) to prevent HAProxy from terminating SSE streams before the server does.
+**Fix:** `haproxy.router.openshift.io/timeout: 960s` annotation on the Route. The oauth-proxy upstream timeout is also 960s, exceeding the operation deadline.
 
 **Note:** The `haproxy.router.openshift.io/timeout` annotation may need to be explicitly set for SSE to work reliably. Without it, HAProxy uses the global default (30s), which is far too short for streaming operations.
 
-**Test:** After deploy, verify: `oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='{.metadata.annotations.haproxy\.router\.openshift\.io/timeout}'` returns `180s`.
+**Test:** After deploy, verify: `oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='{.metadata.annotations.haproxy\.router\.openshift\.io/timeout}'` returns `960s`.
 
 ## 2. OAuth Proxy Token Scopes
 

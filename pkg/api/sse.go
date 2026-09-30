@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -23,9 +24,11 @@ type UpdateStep struct {
 // It uses http.ResponseController (Go 1.20+) for flushing, which
 // correctly handles wrapped ResponseWriters.
 type SSEWriter struct {
-	w    http.ResponseWriter
-	rc   *http.ResponseController
-	start time.Time
+	mu     sync.Mutex
+	closed bool
+	w      http.ResponseWriter
+	rc     *http.ResponseController
+	start  time.Time
 }
 
 // NewSSEWriter configures the ResponseWriter for SSE streaming.
@@ -34,6 +37,9 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Cluster operations have their own bounded deadline and can outlast the
+	// server's ordinary response timeout.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	return &SSEWriter{
 		w:    w,
@@ -51,6 +57,12 @@ func (s *SSEWriter) StartTime() time.Time {
 // SendStep marshals an UpdateStep to JSON and writes it as an SSE data frame.
 // The format is "data: {json}\n\n" per the SSE specification.
 func (s *SSEWriter) SendStep(step UpdateStep) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	_ = s.rc.SetWriteDeadline(time.Now().Add(15 * time.Second))
 	data, err := json.Marshal(step)
 	if err != nil {
 		slog.Error("sse: failed to marshal step", "step", step.Step, "error", err)
@@ -59,12 +71,14 @@ func (s *SSEWriter) SendStep(step UpdateStep) error {
 
 	_, err = fmt.Fprintf(s.w, "data: %s\n\n", data)
 	if err != nil {
+		s.closed = true
 		slog.Error("sse: failed to write step", "step", step.Step, "error", err)
 		return fmt.Errorf("write step %q: %w", step.Step, err)
 	}
 
 	if flushErr := s.rc.Flush(); flushErr != nil {
-		slog.Warn("sse: flush failed (client may see delayed events)", "error", flushErr)
+		s.closed = true
+		return flushErr
 	}
 
 	slog.Debug("sse: sent step", "step", step.Step, "status", step.Status, "elapsedMs", step.ElapsedMs)
@@ -98,6 +112,24 @@ func (s *SSEWriter) EmitStepWithDetail(step, status, message, detail string) err
 // connection alive through proxies with idle timeouts. Per the SSE spec,
 // lines starting with ":" are comments and are ignored by EventSource clients.
 func (s *SSEWriter) SendHeartbeat() {
-	_, _ = fmt.Fprint(s.w, ": heartbeat\n\n")
-	_ = s.rc.Flush()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	_ = s.rc.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	if _, err := fmt.Fprint(s.w, ": heartbeat\n\n"); err != nil {
+		s.closed = true
+		return
+	}
+	if err := s.rc.Flush(); err != nil {
+		s.closed = true
+	}
+}
+
+// Close prevents heartbeat or progress writes after the handler returns.
+func (s *SSEWriter) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
 }
