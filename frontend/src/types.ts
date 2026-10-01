@@ -203,6 +203,14 @@ export interface UserPermissions {
 }
 
 export interface DashboardState {
+  operatorAvailable?: boolean;
+  operatorPaused?: boolean;
+  operatorError?: string;
+  isDevMode?: boolean;
+  devMode?: 'main' | 'pr';
+  devImages?: { deployment: string; container: string; envVar: string; repository: string; currentImage: string; defaultImage: string; ready: boolean }[];
+  allDevImagesReady?: boolean;
+  defaultImagesRestored?: boolean;
   currentImage: string;
   deploymentMode?: string;
   isCustomPR: boolean;

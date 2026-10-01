@@ -862,6 +862,16 @@ var HandleDashboardRevert = withMutationAuth(func(c *cluster.Client, w http.Resp
 	writeOperationResult(w, result, "revert-dashboard")
 })
 
+var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	result, err := cluster.DeployDashboardMain(c)
+	if err != nil {
+		slog.Error("deploy dashboard main failed", "error", err)
+		writeError(w, "deploy dashboard main failed", http.StatusInternalServerError)
+		return
+	}
+	writeOperationResult(w, result, "deploy-dashboard-main")
+})
+
 // HandleRefreshOperator deletes the current CSV to trigger OLM to reinstall
 // with updated images from the current catalog.
 var HandleRefreshOperator = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {

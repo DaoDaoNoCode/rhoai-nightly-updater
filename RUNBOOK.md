@@ -524,6 +524,15 @@ echo
 
 ## 11. Dashboard Stuck on PR Image
 
+On installations with `dashboard-operator`, use **Dashboard Dev → Revert to default**. This resumes the saved operator replica count and waits for all dashboard modules to return to their release images. A failed or interrupted deploy retains the recovery annotation on `dashboard-operator`, so the same action works after an updater restart. To inspect the recovery state:
+
+```bash
+oc get deployment dashboard-operator -n redhat-ods-applications -o json \
+  | jq '{replicas:.spec.replicas,session:.metadata.annotations["rhoai-nightly-updater.opendatahub.io/dashboard-dev"]}'
+```
+
+The manual image restoration instructions below apply to older installations without dashboard-operator.
+
 ### Symptoms
 - Dashboard shows an old or broken PR build instead of the operator-managed image.
 - The Dashboard Dev page in the app shows "PR deployed" state but the revert button does not work or was never clicked.

@@ -259,21 +259,41 @@ type DebugResponse struct {
 
 // DashboardState describes the current state of the rhods-dashboard deployment.
 type DashboardState struct {
-	CurrentImage            string    `json:"currentImage"`
-	DeploymentMode          string    `json:"deploymentMode"`
-	IsCustomPR              bool      `json:"isCustomPR"`
-	PRNumber                int       `json:"prNumber,omitempty"`
-	PRContainers            []string  `json:"prContainers,omitempty"`
-	Managed                 bool      `json:"managed"`
-	PodStatus               string    `json:"podStatus"`
-	PodReady                bool      `json:"podReady"`
-	ContainersReady         int       `json:"containersReady"`
-	ContainersTotal         int       `json:"containersTotal"`
-	Pods                    []PodInfo `json:"pods,omitempty"`
-	RolloutPending          bool      `json:"rolloutPending"`
-	SchedulingFailureReason string    `json:"schedulingFailureReason,omitempty"`
-	CanAssistRollout        bool      `json:"canAssistRollout"`
-	DashboardURL            string    `json:"dashboardURL,omitempty"`
+	OperatorAvailable       bool                `json:"operatorAvailable"`
+	OperatorPaused          bool                `json:"operatorPaused"`
+	OperatorError           string              `json:"operatorError,omitempty"`
+	IsDevMode               bool                `json:"isDevMode"`
+	DevMode                 string              `json:"devMode,omitempty"`
+	DevImages               []DashboardDevImage `json:"devImages,omitempty"`
+	AllDevImagesReady       bool                `json:"allDevImagesReady"`
+	DefaultImagesRestored   bool                `json:"defaultImagesRestored"`
+	CurrentImage            string              `json:"currentImage"`
+	DeploymentMode          string              `json:"deploymentMode"`
+	IsCustomPR              bool                `json:"isCustomPR"`
+	PRNumber                int                 `json:"prNumber,omitempty"`
+	PRContainers            []string            `json:"prContainers,omitempty"`
+	Managed                 bool                `json:"managed"`
+	PodStatus               string              `json:"podStatus"`
+	PodReady                bool                `json:"podReady"`
+	ContainersReady         int                 `json:"containersReady"`
+	ContainersTotal         int                 `json:"containersTotal"`
+	Pods                    []PodInfo           `json:"pods,omitempty"`
+	RolloutPending          bool                `json:"rolloutPending"`
+	SchedulingFailureReason string              `json:"schedulingFailureReason,omitempty"`
+	CanAssistRollout        bool                `json:"canAssistRollout"`
+	DashboardURL            string              `json:"dashboardURL,omitempty"`
+}
+
+type DashboardDevImage struct {
+	Deployment   string `json:"deployment"`
+	Container    string `json:"container"`
+	EnvVar       string `json:"envVar"`
+	Repository   string `json:"repository"`
+	CurrentImage string `json:"currentImage"`
+	DefaultImage string `json:"defaultImage"`
+	Ready        bool   `json:"ready"`
+	WorkloadUID  string `json:"-"`
+	OwnerUID     string `json:"-"`
 }
 
 // DeployPRRequest is the JSON body for the POST /api/dashboard/deploy-pr endpoint.

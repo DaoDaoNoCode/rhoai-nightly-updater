@@ -83,6 +83,8 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 
 ## Dashboard Dev Endpoints
 
+`POST /api/dashboard/deploy-main` uses the same mutation authentication and rate limiting as PR deploy/revert. On installations with dashboard-operator, only deployments sharing the host's Dashboard controller owner UID are image targets, and each build component must match an operator image environment variable. The operator's own image and infrastructure dependency images are excluded. Operator replica count and image-binding recovery data are stored in its deployment annotation before pausing it.
+
 - `POST /api/dashboard/deploy-pr` and `POST /api/dashboard/revert` are protected by `withMutationAuth` (authentication, full user RBAC permission review, and rate limit). Rate limiting is per-user AND per-endpoint — the rate limit key is `username:path` with a 30-second window. Each endpoint has its own rate limit window per user. The SA token performs all mutation operations (deployment patches, annotation updates). The user's OAuth token carries `user:check-access` and `user:info` scopes: it checks full RBAC via OpenShift self SAR but cannot perform cluster mutations. The oauth-proxy SAR check (`pods:list` in `redhat-ods-operator`) is the authorization gate that controls who can reach the app at all.
 
 ## MLflow Endpoints

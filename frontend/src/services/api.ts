@@ -130,6 +130,10 @@ export function deployPR(pr: number): Promise<OperationResponse> {
   });
 }
 
+export function deployDashboardMain(): Promise<OperationResponse> {
+  return request('/api/dashboard/deploy-main', { method: 'POST', acceptStatuses: [422] });
+}
+
 export function revertDashboard(): Promise<OperationResponse> {
   return request('/api/dashboard/revert', {
     method: 'POST',

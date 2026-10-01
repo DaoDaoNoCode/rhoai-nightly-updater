@@ -98,6 +98,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 
 	state := &types.DashboardState{}
+	operator, operatorErr := readDashboardOperator(c)
 
 	// Detect deployment mode from container list
 	var containerNames []string
@@ -130,7 +131,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 
 	// In standalone mode, also check each standalone module deployment
-	if standalone {
+	if standalone && operator == nil {
 		for containerName := range moduleContainers {
 			repo, ok := prContainerRepos[containerName]
 			if !ok {
@@ -264,6 +265,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 		}
 	}
 
+	populateDashboardDevStateWithOperator(c, state, operator, operatorErr)
 	return state, nil
 }
 
@@ -271,6 +273,15 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 // It checks all 8 dashboard container repos on Quay for pr-N tags and
 // patches every container that has a published image.
 func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
+	if prNumber > 0 {
+		operator, err := readDashboardOperator(c)
+		if err != nil {
+			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
+		}
+		if operator != nil {
+			return deployDashboardBuild(c, "pr", prNumber)
+		}
+	}
 	logs := []string{}
 
 	if prNumber <= 0 {
@@ -466,6 +477,13 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 
 // RevertDashboardImage reverts ALL dashboard containers to their operator-managed images.
 func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
+	operator, err := readDashboardOperator(c)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
+	}
+	if operator != nil {
+		return revertDashboardOperator(c, operator)
+	}
 	logs := []string{}
 
 	logs = append(logs, "Looking up original images from operator env vars...")

@@ -218,32 +218,39 @@ Triggered by the Quick Resource Creator MLflow teardown action.
 
 ---
 
-### Dashboard PR Deploy
+### Dashboard Main / PR Deploy
 
-Triggered by the Dashboard Dev PR deploy action.
+Triggered by Dashboard Dev's Deploy latest main or Deploy PR action.
 
 | Kind | Name | Namespace | Operation |
 |------|------|-----------|-----------|
-| Deployment | `rhods-dashboard` | `redhat-ods-applications` | patch |
+| Deployment | `dashboard-operator` | `redhat-ods-applications` | patch annotation and replicas |
+| Deployment | Dashboard-owned host and installed federated modules | `redhat-ods-applications` | patch selected container images |
 
 **What happens:**
-- Disables operator reconciliation via annotation
-- Patches container images for all containers with published PR images
-- Verifies images exist on Quay before patching
+- Discovers installed dashboard build containers from dashboard-operator image environment variables and the host deployment's Dashboard controller owner UID
+- Verifies Quay images and pins each selected tag to its digest before any mutation. Main requires every installed build image; PR skips confirmed missing builds
+- Saves the operator UID, original replica count, test mode and discovered image bindings in `rhoai-nightly-updater.opendatahub.io/dashboard-dev` on `dashboard-operator`
+- Scales `dashboard-operator` to zero and waits for its pods to terminate before patching Dashboard-owned deployments in `redhat-ods-applications`
+- Checks workload UID, controller owner and resource version before image patches. Unrelated deployments and infrastructure dependencies are excluded
+- A partial failure retains the recovery annotation and exposes Revert to default. Legacy installations without dashboard-operator use the previous unmanaged-annotation PR flow
 
 ---
 
-### Dashboard PR Revert
+### Dashboard Main / PR Revert
 
 Triggered by the Dashboard Dev revert action.
 
 | Kind | Name | Namespace | Operation |
 |------|------|-----------|-----------|
-| Deployment | `rhods-dashboard` | `redhat-ods-applications` | patch |
+| Deployment | `dashboard-operator` | `redhat-ods-applications` | restore replicas and clear recovery annotation |
+| Deployment | Dashboard-owned host and installed federated modules | `redhat-ods-applications` | remove legacy unmanaged annotations |
 
 **What happens:**
-- Restores all container images to operator-managed defaults
-- Re-enables operator management via annotation
+- Removes legacy unmanaged annotations from verified Dashboard-owned workloads
+- Restores the saved `dashboard-operator` replica count, even if a workload cleanup fails
+- Lets dashboard-operator reconcile all images to the installed release; readiness waits for all discovered deployments and default image references
+- Retains recovery information if cleanup or operator resume fails, allowing a retry. Older installations without dashboard-operator use the previous direct image restoration flow
 
 ---
 

@@ -34,6 +34,7 @@ import type { DashboardState, OperationResponse } from "../types";
 import {
   getDashboardState,
   deployPR,
+  deployDashboardMain,
   revertDashboard,
   assistRollout,
   trackFeature,
@@ -58,35 +59,41 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
   const [prNumber, setPrNumber] = useState("");
   const [deploying, setDeploying] = useState(false);
+  const [deployMode, setDeployMode] = useState<"main" | "pr">("pr");
   const [reverting, setReverting] = useState(false);
-  const [waitingFor, setWaitingFor] = useState<"deploy" | "revert" | null>(null);
+  const [waitingFor, setWaitingFor] = useState<"main" | "pr" | "revert" | null>(null);
   const [waitStartTime, setWaitStartTime] = useState(0);
   const [result, setResult] = useState<OperationResponse | null>(null);
   const [assisting, setAssisting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const stateRequestRef = useRef(0);
 
   // Abort in-flight requests on unmount
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      stateRequestRef.current++;
     };
   }, []);
 
-  const parsedPR = parseInt(prNumber, 10);
-  const validPR = !isNaN(parsedPR) && parsedPR > 0;
+  const parsedPR = Number(prNumber);
+  const validPR = /^\d+$/.test(prNumber) && Number.isSafeInteger(parsedPR) && parsedPR > 0;
 
   const fetchState = useCallback(async () => {
+    const requestId = ++stateRequestRef.current;
     setLoading(true);
     setError(null);
     try {
       const s = await getDashboardState();
+      if (requestId !== stateRequestRef.current) return;
       setDashState(s);
       setLastRefreshed(new Date());
     } catch (e) {
+      if (requestId !== stateRequestRef.current) return;
       setError(e instanceof Error ? e.message : "Failed to load state");
     } finally {
-      setLoading(false);
+      if (requestId === stateRequestRef.current) setLoading(false);
     }
   }, []);
 
@@ -104,19 +111,19 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   }, [deploying, reverting, waitingFor, fetchState]);
 
   useEffect(() => {
-    if (!waitingFor || !dashState) return;
-    const ready = dashState.podReady && !dashState.rolloutPending;
+    if (!waitingFor || !dashState || deploying || reverting) return;
+    const ready = dashState.operatorAvailable ? dashState.allDevImagesReady : dashState.podReady && !dashState.rolloutPending;
     if (ready) {
-      if (waitingFor === "deploy" && dashState.isCustomPR) {
+      if ((waitingFor === "pr" && dashState.isCustomPR && dashState.prNumber === parsedPR) || (waitingFor === "main" && dashState.devMode === "main" && dashState.operatorPaused)) {
         setWaitingFor(null);
         setWaitStartTime(0);
-        setResult({ success: true, message: `PR #${dashState.prNumber} is running. All containers ready.`, logs: [] });
+        setResult((prev) => ({ success: true, message: `${waitingFor === "main" ? "Latest main" : `PR #${dashState.prNumber}`} is running. All dashboard components are ready. Revert after testing.`, logs: prev?.logs ?? [] }));
         return;
-      } else if (waitingFor === "revert" && !dashState.isCustomPR) {
+      } else if (waitingFor === "revert" && (dashState.operatorAvailable ? !dashState.operatorPaused && dashState.defaultImagesRestored : !dashState.isCustomPR)) {
         setWaitingFor(null);
         setWaitStartTime(0);
         setPrNumber("");
-        setResult({ success: true, message: "Dashboard restored to default. Operator is managing the deployment again. The operator will now reconcile the dashboard deployment. This typically takes 2-5 minutes. Refresh the page to check progress.", logs: [] });
+        setResult((prev) => ({ success: true, message: "Dashboard components restored to the installed release. Operator reconciliation is active.", logs: prev?.logs ?? [] }));
         return;
       }
     }
@@ -128,7 +135,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
         : "Rollout is taking too long. Check cluster resources or pod status in the OpenShift Console.";
       setResult({ success: false, message: timeoutMessage, logs: [] });
     }
-  }, [waitingFor, dashState, waitStartTime]);
+  }, [waitingFor, dashState, waitStartTime, deploying, reverting, parsedPR]);
 
   useEffect(() => {
     document.title = "Dashboard Dev — RHOAI Nightly Updater";
@@ -140,6 +147,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
     const ac = new AbortController();
     abortRef.current = ac;
     setDeploying(true);
+    setDeployMode("pr");
     setResult(null);
     setWaitingFor(null);
     setConfirmOpen(false);
@@ -147,11 +155,13 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       const res = await deployPR(parsedPR);
       if (ac.signal.aborted) return;
       if (res.success) {
-        setWaitingFor("deploy");
+        setResult(res);
+        setWaitingFor("pr");
         setWaitStartTime(Date.now());
         fetchState();
       } else {
         setResult(res);
+        fetchState();
       }
     } catch (e) {
       if (ac.signal.aborted) return;
@@ -163,6 +173,23 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
     }
   };
 
+  const handleDeployMain = async () => {
+    trackFeature("deploy_dashboard_main");
+    setDeploying(true);
+    setDeployMode("main");
+    setResult(null);
+    setWaitingFor(null);
+    try {
+      const res = await deployDashboardMain();
+      setResult(res);
+      if (res.success) { setWaitingFor("main"); setWaitStartTime(Date.now()); }
+      fetchState();
+    } catch (e) {
+      setResult({ success: false, message: e instanceof Error ? e.message : "Deploy failed", logs: [] });
+      fetchState();
+    } finally { setDeploying(false); }
+  };
+
   const handleRevert = async () => {
     trackFeature("revert_dashboard");
     abortRef.current?.abort();
@@ -170,15 +197,18 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
     abortRef.current = ac;
     setReverting(true);
     setResult(null);
+    setWaitingFor(null);
     try {
       const res = await revertDashboard();
       if (ac.signal.aborted) return;
       if (res.success) {
+        setResult(res);
         setWaitingFor("revert");
         setWaitStartTime(Date.now());
         fetchState();
       } else {
         setResult(res);
+        fetchState();
       }
     } catch (e) {
       if (ac.signal.aborted) return;
@@ -207,7 +237,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
     }
   };
 
-  const isCustom = dashState?.isCustomPR ?? false;
+  const isCustom = !!dashState && (dashState.isDevMode || dashState.isCustomPR || dashState.operatorPaused || !dashState.managed);
   const readyCount = dashState?.containersReady ?? 0;
   const totalCount = dashState?.containersTotal ?? 0;
   const allReady = dashState?.podReady ?? false;
@@ -244,7 +274,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
       <PageSection>
         <Tabs activeKey={activeTab} onSelect={(_e, key) => setActiveTab(key as number)}>
-          <Tab eventKey={0} title={<TabTitleText>PR Deploy</TabTitleText>}>
+          <Tab eventKey={0} title={<TabTitleText>Image Deploy</TabTitleText>}>
             <TabContent id="tab-pr-deploy">
               <TabContentBody hasPadding>
                 <Card>
@@ -261,7 +291,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                             </Label>
                           ) : isCustom ? (
                             <Label color="blue" icon={<CheckCircleIcon />}>
-                              PR #{dashState.prNumber}{dashState.prContainers && dashState.prContainers.length > 1 ? ` (${dashState.prContainers.length} containers)` : ""}
+                              {dashState.operatorPaused && dashState.defaultImagesRestored ? "Operator paused" : dashState.devMode === "main" ? "Latest main" : dashState.prNumber ? `PR #${dashState.prNumber}` : "Custom images"}
                             </Label>
                           ) : (
                             <Label color="green" icon={<CheckCircleIcon />}>Default</Label>
@@ -277,6 +307,16 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                       </Flex>
                     )}
                     <Stack hasGutter>
+                      {dashState?.operatorError && <StackItem><Alert variant="warning" title="Cannot verify dashboard-operator" isInline>{dashState.operatorError}</Alert></StackItem>}
+                      <StackItem>
+                        <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
+                          <FlexItem><Button variant="primary" onClick={handleDeployMain} isDisabled={!canMutate || !dashState?.operatorAvailable || !!dashState?.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "main"}>Deploy latest main</Button></FlexItem>
+                          <FlexItem><Button variant="secondary" onClick={handleRevert} isDisabled={!canMutate || !isCustom || deploying || reverting} isLoading={reverting}>Revert to default</Button></FlexItem>
+                        </Flex>
+                        <Content component="small" className="pf-v6-u-mt-sm">Deploy main to all installed dashboard components and federated modules. PR deploy updates only components with a published PR image. Revert resumes the operator and restores the installed release.</Content>
+                      </StackItem>
+                      {dashState?.operatorAvailable && <StackItem><Label color={dashState.operatorPaused ? "orange" : "green"}>Dashboard-operator {dashState.operatorPaused ? "paused" : "running"}</Label></StackItem>}
+                      {dashState?.devImages && <StackItem><details><summary>{dashState.devImages.length} controlled dashboard images</summary><Stack hasGutter className="pf-v6-u-mt-md">{dashState.devImages.map(image => <StackItem key={`${image.deployment}/${image.container}`}><Content component="small"><strong>{image.deployment} / {image.container}</strong>{" "}<Label isCompact color={image.ready ? "green" : "orange"}>{image.ready ? "Ready" : "Rolling out"}</Label><br /><Tooltip content={image.currentImage}><code>{truncateImage(image.currentImage, 90)}</code></Tooltip></Content></StackItem>)}</Stack></details></StackItem>}
                       {dashState && (
                         <StackItem>
                           <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
@@ -373,7 +413,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
                       {isCustom && allReady && !waitingFor && (
                         <StackItem>
-                          <Alert variant="warning" title={`PR #${dashState?.prNumber} is deployed on this shared cluster`} isInline isPlain>
+                          <Alert variant="warning" title={`${dashState?.devMode === "main" ? "Latest main" : dashState?.prNumber ? `PR #${dashState.prNumber}` : "Custom dashboard images"} deployed on this shared cluster`} isInline isPlain>
                             Remember to revert after testing.
                             {dashState?.dashboardURL && (
                               <>{" "}<Button variant="link" isInline component="a" href={dashState.dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Open dashboard</Button></>
@@ -392,7 +432,6 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                               <Button variant="link" isInline component="a" href={`https://quay.io/repository/opendatahub/odh-dashboard?tab=tags&tag=pr-${dashState.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Quay</Button>
                             </FlexItem>
                             <FlexItem>
-                              <Button variant="danger" size="sm" onClick={handleRevert} isDisabled={!canMutate || reverting || !!waitingFor} isLoading={reverting}>Revert to default</Button>
                             </FlexItem>
                           </Flex>
                         </StackItem>
@@ -402,10 +441,10 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                         <Flex alignItems={{ default: "alignItemsFlexEnd" }} gap={{ default: "gapSm" }}>
                           <FlexItem>
                             <Content component="small" className="pf-v6-u-mb-xs">PR number</Content>
-                            <TextInput type="number" value={prNumber} onChange={(_e, val) => setPrNumber(val)} placeholder="e.g. 7892" aria-label="PR number" className="pf-v6-u-w-initial" />
+                            <TextInput type="number" value={prNumber} onChange={(_e, val) => setPrNumber(val)} placeholder="e.g. 7892" aria-label="PR number" className="pf-v6-u-w-initial" isDisabled={deploying || reverting || !!waitingFor} />
                           </FlexItem>
                           <FlexItem>
-                            <Button variant="primary" onClick={() => setConfirmOpen(true)} isDisabled={!canMutate || !validPR || deploying || !!waitingFor} isLoading={deploying}>Deploy PR</Button>
+                            <Button variant="primary" onClick={() => setConfirmOpen(true)} isDisabled={!canMutate || !validPR || !dashState || !!dashState.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "pr"}>Deploy PR</Button>
                           </FlexItem>
                         </Flex>
                       </StackItem>
@@ -414,7 +453,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                           <Content component="small">
                             <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${parsedPR}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">PR #{parsedPR}</Button>
                             {" · "}
-                            <code>quay.io/opendatahub/odh-dashboard:pr-{parsedPR}</code>
+                            <code>pr-{parsedPR}</code> images for installed dashboard components
                           </Content>
                         </StackItem>
                       )}
@@ -424,6 +463,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                           <Alert variant={result.success ? "success" : "danger"} title={result.message} isInline />
                         </StackItem>
                       )}
+                      {result?.logs?.length ? <StackItem><details><summary>Deployment details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.logs.join("\n")}</pre></details></StackItem> : null}
                     </Stack>
                   </CardBody>
                 </Card>
@@ -446,7 +486,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
         <ModalHeader title={`Deploy PR #${parsedPR}`} labelId="confirm-deploy-title" />
         <ModalBody>
           <Stack hasGutter>
-            <StackItem><Content component="small"><code>quay.io/opendatahub/odh-dashboard:pr-{parsedPR}</code></Content></StackItem>
+            <StackItem><Content component="small">Deploy published <code>pr-{parsedPR}</code> images for installed dashboard components. Components without a PR build keep their current images.</Content></StackItem>
             <StackItem>
               <Alert variant="warning" title="Shared cluster impact" isInline>
                 This replaces the dashboard for ALL users on this cluster. The operator will stop managing the deployment until you revert. Please revert after testing.

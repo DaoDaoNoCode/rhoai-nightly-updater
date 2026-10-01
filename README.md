@@ -39,9 +39,13 @@
 - **Live diagnostics** — 9 automated health checks with doc-backed fix actions
 - **Build Explorer** — browse all nightly tags, filter by version/type, preview FBC catalog contents inline
 
-### Dashboard Dev (PR Testing)
-- **Multi-container PR deploy** — scans 8 dashboard repos on Quay for matching PR images
-- **One-click revert** to operator-managed images
+### Dashboard Dev (Main and PR Testing)
+- **Deploy latest main** — resolves the latest Quay build for each installed dashboard component, including federated modules
+- **Selective PR deploy** — updates only installed components with a published `pr-N` image; confirmed missing builds remain unchanged
+- **Operator-aware discovery** — matches Dashboard-owned workloads to dashboard-operator's `RELATED_IMAGE_*` environment variables. New `ODH_MOD_ARCH_*` modules are discovered automatically; MaaS and model registry use upstream repository naming exceptions in `dashboardBuildRepo`
+- **One-click revert** — restores dashboard-operator's saved replica count and lets it reconcile all related images to the installed release. Recovery information survives an updater restart
+- Image verification completes before dashboard-operator is paused, and image patches wait for its pods to terminate. Infrastructure dependencies such as kube-rbac-proxy retain their release images
+- Older installations without dashboard-operator retain the existing PR deploy/revert flow; latest-main deployment requires dashboard-operator
 - **Quick resource creator** — MinIO, per-project pipeline servers, MLflow CR lifecycle
 
 ### Platform

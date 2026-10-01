@@ -60,6 +60,7 @@ func main() {
 	mux.HandleFunc("GET /api/build-explorer/content", api.HandleBuildExplorerContent)
 	mux.HandleFunc("GET /api/dashboard/state", api.HandleDashboardState)
 	mux.HandleFunc("POST /api/dashboard/deploy-pr", api.HandleDashboardDeployPR)
+	mux.HandleFunc("POST /api/dashboard/deploy-main", api.HandleDashboardDeployMain)
 	mux.HandleFunc("POST /api/dashboard/revert", api.HandleDashboardRevert)
 	mux.HandleFunc("GET /api/resources/status", api.HandleResourcesStatus)
 	mux.HandleFunc("GET /api/resources/projects", api.HandleDSProjects)
