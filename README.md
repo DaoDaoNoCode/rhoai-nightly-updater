@@ -46,6 +46,7 @@
 - **One-click revert** — restores dashboard-operator's saved replica count and lets it reconcile all related images to the installed release. Recovery information survives an updater restart
 - **Conflict recovery** — updates selected containers together in each deployment and retries resource-version conflicts after rechecking ownership and current images. Partial deployments remain visible and can be retried or reverted
 - Each deployment resolves the current Quay tag to its manifest digest, so clicking deploy again picks up a new build and triggers a rollout
+- Dashboard Dev refreshes every 30 seconds while idle and every 5 seconds during deploy/revert operations, pauses background polling in hidden tabs, and refreshes when the tab becomes visible
 - Image verification completes before dashboard-operator is paused, and image patches wait for its pods to terminate. Infrastructure dependencies such as kube-rbac-proxy retain their release images
 - Older installations without dashboard-operator retain the existing PR deploy/revert flow; latest-main deployment requires dashboard-operator
 - **Quick resource creator** — MinIO, per-project pipeline servers, MLflow CR lifecycle

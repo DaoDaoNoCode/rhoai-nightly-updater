@@ -46,6 +46,7 @@ import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { DashboardImages } from "../components/DashboardImages";
+import { COMPONENTS_POLL_MS } from "../constants";
 
 interface DashboardDevPageProps {
   canMutate: boolean;
@@ -70,6 +71,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   const [assisting, setAssisting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const stateRequestRef = useRef(0);
+  const stateFetchInFlightRef = useRef(0);
 
   // Abort in-flight requests on unmount
   const abortRef = useRef<AbortController | null>(null);
@@ -83,9 +85,10 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   const parsedPR = Number(prNumber);
   const validPR = /^\d+$/.test(prNumber) && Number.isSafeInteger(parsedPR) && parsedPR > 0;
 
-  const fetchState = useCallback(async () => {
+  const fetchState = useCallback(async (background = false) => {
     const requestId = ++stateRequestRef.current;
-    setLoading(true);
+    stateFetchInFlightRef.current++;
+    if (!background) setLoading(true);
     setError(null);
     try {
       const s = await getDashboardState();
@@ -96,6 +99,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       if (requestId !== stateRequestRef.current) return;
       setError(e instanceof Error ? e.message : "Failed to load state");
     } finally {
+      stateFetchInFlightRef.current--;
       if (requestId === stateRequestRef.current) setLoading(false);
     }
   }, []);
@@ -108,9 +112,16 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   }, [fetchState]);
 
   useEffect(() => {
-    if (!deploying && !reverting && !waitingFor) return;
-    const id = setInterval(fetchState, 5000);
-    return () => clearInterval(id);
+    const poll = () => {
+      if (document.hidden || stateFetchInFlightRef.current > 0) return;
+      void fetchState(true);
+    };
+    const id = setInterval(poll, deploying || reverting || waitingFor ? 5000 : COMPONENTS_POLL_MS);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", poll);
+    };
   }, [deploying, reverting, waitingFor, fetchState]);
 
   useEffect(() => {

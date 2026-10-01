@@ -33,6 +33,8 @@ function actionLabel(action: string): string {
     case "rollback":
     case "reinstall": return "Operator reinstalled";
     case "deploy-pr": return "Dashboard PR deployed";
+    case "deploy-dashboard-pr": return "Dashboard PR deployed";
+    case "deploy-dashboard-main": return "Dashboard main deployed";
     case "revert-dashboard": return "Dashboard reverted";
     case "create-pull-secret": return "Pull secret configured";
     case "setup-minio": return "MinIO set up";
@@ -55,6 +57,8 @@ function actionColor(action: string): "blue" | "orange" | "teal" | "purple" | "g
     case "rollback":
     case "reinstall": return "orange";
     case "deploy-pr": return "teal";
+    case "deploy-dashboard-pr":
+    case "deploy-dashboard-main": return "teal";
     case "revert-dashboard": return "orange";
     case "create-pull-secret": return "purple";
     case "setup-minio": return "green";
@@ -97,12 +101,12 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity })
   const entries = [...activity].reverse().slice(0, maxDisplay);
 
   return (
-    <Stack hasGutter>
+    <Stack hasGutter style={{ minWidth: 0, maxWidth: "100%" }}>
       {entries.map((entry, i) => {
         const detail = formatDetail(entry.action, entry.detail);
         return (
           <StackItem key={i}>
-            <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+            <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
               <FlexItem>
                 <Icon isInline status={entry.success ? "success" : "danger"} size="sm">
                   {entry.success ? <CheckCircleIcon /> : <TimesCircleIcon />}
@@ -119,14 +123,12 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity })
                   <Content component="small">{relativeTime(entry.timestamp)}</Content>
                 </Tooltip>
               </FlexItem>
-              {detail && (
-                <FlexItem>
-                  <Tooltip content={entry.detail}>
-                    <Label isCompact variant="outline" color="grey">{detail}</Label>
-                  </Tooltip>
-                </FlexItem>
-              )}
             </Flex>
+            {detail && (
+              <Content component="small" style={{ overflowWrap: "anywhere" }} className="pf-v6-u-mt-xs">
+                <Tooltip content={entry.detail}><span>{detail}</span></Tooltip>
+              </Content>
+            )}
           </StackItem>
         );
       })}
