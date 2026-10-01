@@ -170,13 +170,14 @@ type DeploymentInfo struct {
 	Version             string            `json:"version,omitempty"`
 }
 
-// DSCCompatibility reports field names unsupported by the installed DSC schema.
+// DSCCompatibility reports invalid field names and differences from version-matched component defaults.
 type DSCCompatibility struct {
 	OperatorVersion   string   `json:"operatorVersion,omitempty"`
 	Branch            string   `json:"branch,omitempty"`
 	SourceURL         string   `json:"sourceURL,omitempty"`
 	InvalidFields     []string `json:"invalidFields"`
 	MissingComponents []string `json:"missingComponents"`
+	ExtraComponents   []string `json:"extraComponents"`
 	ValidationError   string   `json:"validationError,omitempty"`
 	DefaultsError     string   `json:"defaultsError,omitempty"`
 }

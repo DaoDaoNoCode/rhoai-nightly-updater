@@ -83,7 +83,7 @@ func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, pat
 }
 
 func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCCompatibility {
-	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}}
+	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}, ExtraComponents: []string{}}
 	apiVersion, _ := dsc["apiVersion"].(string)
 	schema, err := dscSpecSchema(c, apiVersion)
 	if err != nil {
@@ -109,7 +109,13 @@ func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCComp
 			result.MissingComponents = append(result.MissingComponents, key)
 		}
 	}
+	for key := range currentComponents {
+		if _, exists := defaultComponents[key]; !exists {
+			result.ExtraComponents = append(result.ExtraComponents, key)
+		}
+	}
 	sort.Strings(result.MissingComponents)
+	sort.Strings(result.ExtraComponents)
 	return result
 }
 
@@ -133,8 +139,8 @@ func replacementMergePatch(old, next map[string]interface{}) map[string]interfac
 	return patch
 }
 
-func RepairDSC(c *Client, name, mode, expectedOperatorVersion string) (*types.OperationResponse, error) {
-	if mode != "remove-invalid" && mode != "reset-defaults" {
+func RepairDSC(c *Client, name, mode, expectedOperatorVersion string, expectedExtraComponents []string) (*types.OperationResponse, error) {
+	if mode != "remove-invalid" && mode != "remove-extra-components" && mode != "reset-defaults" {
 		return nil, fmt.Errorf("invalid DSC repair mode")
 	}
 	// Read the named resource again so the repair is computed from fresh values and schema.
@@ -160,7 +166,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string) (*types.Op
 	invalid := []string{}
 	nextSpec, _ := pruneUnknownDSCFields(oldSpec, schema, "spec", &invalid).(map[string]interface{})
 	detail := "Removed invalid DSC fields: " + strings.Join(invalid, ", ")
-	if mode == "reset-defaults" {
+	if mode == "reset-defaults" || mode == "remove-extra-components" {
 		defaults, err := fetchDefaultDSCSpec(c)
 		if err != nil {
 			return nil, err
@@ -171,14 +177,51 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string) (*types.Op
 		if defaults.Spec["apiVersion"] != apiVersion {
 			return nil, fmt.Errorf("sample API version does not match the existing DSC; wait for operator migration to complete")
 		}
-		nextSpec, _ = defaults.Spec["spec"].(map[string]interface{})
-		// A matching branch may be ahead of the installed build. Never apply unknown sample keys.
-		unknownDefaults := []string{}
-		pruneUnknownDSCFields(nextSpec, schema, "spec", &unknownDefaults)
-		if len(unknownDefaults) != 0 {
-			return nil, fmt.Errorf("version defaults contain fields unsupported by the installed CRD: %s", strings.Join(unknownDefaults, ", "))
+		defaultSpec, _ := defaults.Spec["spec"].(map[string]interface{})
+		if mode == "remove-extra-components" {
+			defaultComponents, _ := defaultSpec["components"].(map[string]interface{})
+			currentComponents, _ := oldSpec["components"].(map[string]interface{})
+			nextComponents := make(map[string]interface{}, len(currentComponents))
+			removed := []string{}
+			for key, value := range currentComponents {
+				if _, exists := defaultComponents[key]; exists {
+					nextComponents[key] = value
+				} else {
+					removed = append(removed, key)
+				}
+			}
+			if len(removed) == 0 {
+				return &types.OperationResponse{Success: true, Message: "No extra DSC components to remove", Logs: []string{}}, nil
+			}
+			expected := make(map[string]bool, len(expectedExtraComponents))
+			for _, name := range expectedExtraComponents {
+				expected[name] = true
+			}
+			if len(removed) != len(expected) {
+				return nil, fmt.Errorf("DSC components or version defaults changed since confirmation; refresh and review the extra components again")
+			}
+			for _, name := range removed {
+				if !expected[name] {
+					return nil, fmt.Errorf("DSC components or version defaults changed since confirmation; refresh and review the extra components again")
+				}
+			}
+			sort.Strings(removed)
+			nextSpec = make(map[string]interface{}, len(oldSpec))
+			for key, value := range oldSpec {
+				nextSpec[key] = value
+			}
+			nextSpec["components"] = nextComponents
+			detail = "Removed DSC components absent from " + defaults.Branch + " defaults: " + strings.Join(removed, ", ")
+		} else {
+			nextSpec = defaultSpec
+			// A matching branch may be ahead of the installed build. Never apply unknown sample keys.
+			unknownDefaults := []string{}
+			pruneUnknownDSCFields(nextSpec, schema, "spec", &unknownDefaults)
+			if len(unknownDefaults) != 0 {
+				return nil, fmt.Errorf("version defaults contain fields unsupported by the installed CRD: %s", strings.Join(unknownDefaults, ", "))
+			}
+			detail = "Reset DSC spec to defaults from " + defaults.SourceURL
 		}
-		detail = "Reset DSC spec to defaults from " + defaults.SourceURL
 	} else if len(invalid) == 0 {
 		return &types.OperationResponse{Success: true, Message: "No invalid DSC fields to remove", Logs: []string{}}, nil
 	}

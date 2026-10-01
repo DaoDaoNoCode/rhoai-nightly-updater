@@ -124,6 +124,7 @@ export interface DSCCompatibility {
   sourceURL?: string;
   invalidFields: string[];
   missingComponents: string[];
+  extraComponents?: string[];
   validationError?: string;
   defaultsError?: string;
 }

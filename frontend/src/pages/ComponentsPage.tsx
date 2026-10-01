@@ -186,7 +186,7 @@ export const ComponentsPage: React.FC = () => {
   const [fixConfirm, setFixConfirm] = useState<{ action: string; title: string; message: string } | null>(null);
   const [fixLoading, setFixLoading] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<Record<string, { success: boolean; message: string }>>({});
-  const [repairMode, setRepairMode] = useState<"remove-invalid" | "reset-defaults" | null>(null);
+  const [repairMode, setRepairMode] = useState<"remove-invalid" | "remove-extra-components" | "reset-defaults" | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
   const [repairResult, setRepairResult] = useState<{ success: boolean; message: string } | null>(null);
   const [defaultsPreview, setDefaultsPreview] = useState("");
@@ -209,7 +209,9 @@ export const ComponentsPage: React.FC = () => {
     setRepairLoading(true);
     setRepairResult(null);
     try {
-      const result = await repairDSC(data.dscName, repairMode, repairMode === "reset-defaults" ? previewVersion : undefined);
+      const result = await repairDSC(data.dscName, repairMode, repairMode === "reset-defaults" ? previewVersion
+        : repairMode === "remove-extra-components" ? data.dscCompatibility?.operatorVersion : undefined,
+        repairMode === "remove-extra-components" ? data.dscCompatibility?.extraComponents : undefined);
       setRepairResult(result);
       setRepairMode(null);
       if (result.success) handleRefresh();
@@ -303,6 +305,7 @@ export const ComponentsPage: React.FC = () => {
             data.dscCompatibility.defaultsError ||
             data.dscCompatibility.invalidFields.length > 0 ||
             data.dscCompatibility.missingComponents.length > 0 ||
+            (data.dscCompatibility.extraComponents?.length ?? 0) > 0 ||
             repairResult
           ) && (
             <PageSection>
@@ -313,7 +316,7 @@ export const ComponentsPage: React.FC = () => {
                 {data.dscCompatibility.defaultsError && (
                   <StackItem><Alert variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
                 )}
-                {(data.dscCompatibility.invalidFields.length > 0 || data.dscCompatibility.missingComponents.length > 0) && (
+                {(data.dscCompatibility.invalidFields.length > 0 || data.dscCompatibility.missingComponents.length > 0 || (data.dscCompatibility.extraComponents?.length ?? 0) > 0) && (
                   <StackItem>
                     <Alert variant="warning" title="DSC field names differ from the installed operator" isInline>
                       <Stack hasGutter>
@@ -324,7 +327,12 @@ export const ComponentsPage: React.FC = () => {
                         {data.dscCompatibility.missingComponents.length > 0 && <StackItem>
                           <Content component="p">Components present in the version defaults but missing from this DSC: {data.dscCompatibility.missingComponents.join(", ")}. Missing components may be intentional.</Content>
                         </StackItem>}
-                        <StackItem><Content component="p">Management state choices are preserved when removing invalid fields. Resetting replaces the entire DSC spec, including management states and custom settings.</Content></StackItem>
+                        {(data.dscCompatibility.extraComponents?.length ?? 0) > 0 && <StackItem>
+                          <Content component="p">Components present in this DSC but absent from the {data.dscCompatibility.branch} version defaults:</Content>
+                          <List>{data.dscCompatibility.extraComponents?.map(name => <ListItem key={name}><code>{name}</code></ListItem>)}</List>
+                          <Content component="p">The installed CRD may still accept these names. Review them before removing their configuration.</Content>
+                        </StackItem>}
+                        <StackItem><Content component="p">Removing extra components preserves the remaining component settings and management states. Removing invalid fields preserves valid settings. Resetting replaces the entire DSC spec, including management states and custom settings.</Content></StackItem>
                         {data.dscCompatibility.sourceURL && <StackItem>
                           <Button variant="link" isInline component="a" href={data.dscCompatibility.sourceURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
                             Defaults for {data.dscCompatibility.operatorVersion} ({data.dscCompatibility.branch})
@@ -332,6 +340,7 @@ export const ComponentsPage: React.FC = () => {
                         </StackItem>}
                         <StackItem><Flex gap={{ default: "gapSm" }}>
                           {data.dscCompatibility.invalidFields.length > 0 && <FlexItem><Button variant="secondary" onClick={() => setRepairMode("remove-invalid")} isDisabled={repairLoading || !!data.dscCompatibility.validationError}>Remove invalid fields</Button></FlexItem>}
+                          {(data.dscCompatibility.extraComponents?.length ?? 0) > 0 && <FlexItem><Button variant="secondary" onClick={() => setRepairMode("remove-extra-components")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError}>Remove extra components</Button></FlexItem>}
                           <FlexItem><Button variant="secondary" onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError}>Reset to version defaults</Button></FlexItem>
                         </Flex></StackItem>
                       </Stack>
@@ -785,13 +794,16 @@ export const ComponentsPage: React.FC = () => {
       )}
 
       <Modal variant={ModalVariant.medium} isOpen={repairMode !== null} onClose={() => !repairLoading && setRepairMode(null)} aria-labelledby="dsc-repair-title">
-        <ModalHeader title={repairMode === "reset-defaults" ? "Reset DSC to version defaults" : "Remove invalid DSC fields"} labelId="dsc-repair-title" />
+        <ModalHeader title={repairMode === "reset-defaults" ? "Reset DSC to version defaults" : repairMode === "remove-extra-components" ? "Remove extra DSC components" : "Remove invalid DSC fields"} labelId="dsc-repair-title" />
         <ModalBody>
           <Stack hasGutter>
             <StackItem><Content component="p">{repairMode === "reset-defaults"
               ? `Replace the spec of ${data?.dscName} with the defaults for the currently installed operator. This resets management states and custom settings and may enable or disable components.`
+              : repairMode === "remove-extra-components"
+              ? `Remove the component entries below from ${data?.dscName} because they are absent from the ${data?.dscCompatibility?.branch} defaults. The remaining component settings and management states will be preserved. Removing component configuration may affect running workloads.`
               : `Remove only invalid keys from ${data?.dscName}. Valid settings and management states will be preserved.`}</Content></StackItem>
             {repairMode === "remove-invalid" && <StackItem><List>{data?.dscCompatibility?.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List></StackItem>}
+            {repairMode === "remove-extra-components" && <StackItem><List>{data?.dscCompatibility?.extraComponents?.map(name => <ListItem key={name}><code>{name}</code></ListItem>)}</List></StackItem>}
             {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
               : defaultsPreview ? <CodeBlock><CodeBlockCode>{defaultsPreview}</CodeBlockCode></CodeBlock> : <Spinner aria-label="Loading DSC defaults" />}</StackItem>}
           </Stack>

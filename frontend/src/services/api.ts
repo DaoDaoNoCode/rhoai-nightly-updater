@@ -376,10 +376,10 @@ export async function createDSC(): Promise<OperationResponse> {
   return request<OperationResponse>('/api/setup/dsc', { method: 'POST' });
 }
 
-export function repairDSC(name: string, mode: 'remove-invalid' | 'reset-defaults', expectedOperatorVersion?: string): Promise<OperationResponse> {
+export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-components' | 'reset-defaults', expectedOperatorVersion?: string, expectedExtraComponents?: string[]): Promise<OperationResponse> {
   return request('/api/components/dsc/repair', {
     method: 'POST',
-    body: JSON.stringify({ name, mode, expectedOperatorVersion }),
+    body: JSON.stringify({ name, mode, expectedOperatorVersion, expectedExtraComponents }),
     acceptStatuses: [422],
   });
 }

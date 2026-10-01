@@ -30,7 +30,7 @@
 - **Downgrade prevention** — blocks update when selected version is older than current
 - **Fresh cluster install** — automated setup from empty cluster to running operator
 - **DSC creation** — defaults fetched from the rhods-operator branch matching the installed version, including EA releases
-- **DSC field compatibility** — identify unsupported component and nested field names; remove invalid keys or preview and reset to version defaults
+- **DSC field compatibility** — identify unsupported field names and missing or extra components against version defaults; remove invalid keys, remove reviewed extra components while preserving remaining settings, or preview and reset to version defaults
 
 ### Cluster Visibility
 - **DSC component status** — expandable breakdown (Ready / Needs Attention / Removed) with one-click fixes

@@ -117,10 +117,12 @@ Triggered by the "Create DSC" action.
 
 ### DSC Field Repair
 
-Triggered by **Remove invalid fields** or **Reset to version defaults** on the Components page, after confirmation.
+Triggered by **Remove invalid fields**, **Remove extra components**, or **Reset to version defaults** on the Components page, after confirmation.
 
 - Checks field names against the installed DSC CRD schema, including nested keys. Management state differences are not compatibility errors. Valid optional settings and free-form configuration are retained.
+- Compares component names in both directions against the version-matched upstream sample. Components absent from that sample are reported even if the installed CRD still accepts them for backward compatibility.
 - **Remove invalid fields** patches the named DataScienceCluster, deleting unsupported keys while preserving valid values.
+- **Remove extra components** deletes only the reviewed component entries absent from the version defaults. Remaining settings and management states are retained; missing components are not added. The operation refuses to proceed if the operator version or extra-component list changes after confirmation.
 - **Reset to version defaults** previews the matching upstream sample, then replaces the DSC spec, including management states and custom settings. Removed keys are explicitly deleted; DSC metadata is retained.
 - Repairs use a resource-version precondition to detect concurrent edits, share the cluster mutation lock, and are recorded in the activity log. Reset also checks that the installed operator version still matches the preview.
 
