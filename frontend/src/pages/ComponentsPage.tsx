@@ -299,6 +299,12 @@ export const ComponentsPage: React.FC = () => {
       {data && (
         <>
           {data.dscCompatibility && (
+            data.dscCompatibility.validationError ||
+            data.dscCompatibility.defaultsError ||
+            data.dscCompatibility.invalidFields.length > 0 ||
+            data.dscCompatibility.missingComponents.length > 0 ||
+            repairResult
+          ) && (
             <PageSection>
               <Stack hasGutter>
                 {data.dscCompatibility.validationError && (
