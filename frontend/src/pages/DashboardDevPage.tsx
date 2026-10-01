@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
   Content,
   Flex,
@@ -29,6 +30,7 @@ import {
   Tooltip,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
+import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import type { DashboardState, OperationResponse } from "../types";
 import {
@@ -43,6 +45,7 @@ import { truncateImage } from "../utils";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
+import { DashboardImages } from "../components/DashboardImages";
 
 interface DashboardDevPageProps {
   canMutate: boolean;
@@ -114,7 +117,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
     if (!waitingFor || !dashState || deploying || reverting) return;
     const ready = dashState.operatorAvailable ? dashState.allDevImagesReady : dashState.podReady && !dashState.rolloutPending;
     if (ready) {
-      if ((waitingFor === "pr" && dashState.isCustomPR && dashState.prNumber === parsedPR) || (waitingFor === "main" && dashState.devMode === "main" && dashState.operatorPaused)) {
+      if (!dashState.operatorError && (!dashState.operatorAvailable || dashState.devImagesMatchTarget !== false) && ((waitingFor === "pr" && dashState.isCustomPR && dashState.prNumber === parsedPR) || (waitingFor === "main" && dashState.devMode === "main" && dashState.operatorPaused))) {
         setWaitingFor(null);
         setWaitStartTime(0);
         setResult((prev) => ({ success: true, message: `${waitingFor === "main" ? "Latest main" : `PR #${dashState.prNumber}`} is running. All dashboard components are ready. Revert after testing.`, logs: prev?.logs ?? [] }));
@@ -240,7 +243,8 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   const isCustom = !!dashState && (dashState.isDevMode || dashState.isCustomPR || dashState.operatorPaused || !dashState.managed);
   const readyCount = dashState?.containersReady ?? 0;
   const totalCount = dashState?.containersTotal ?? 0;
-  const allReady = dashState?.podReady ?? false;
+  const allReady = dashState?.operatorAvailable ? !!dashState.allDevImagesReady : !!dashState?.podReady;
+  const partial = isCustom && dashState?.operatorAvailable && !dashState.operatorError && dashState.devImagesMatchTarget === false;
 
   return (
     <>
@@ -278,12 +282,19 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
             <TabContent id="tab-pr-deploy">
               <TabContentBody hasPadding>
                 <Card>
+                  <CardHeader>
                   <CardTitle>
                     <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
-                      <FlexItem><Title headingLevel="h3">Dashboard Image</Title></FlexItem>
+                      <FlexItem><Title headingLevel="h3">Dashboard builds</Title></FlexItem>
                       <FlexItem>
                         {dashState && (
-                          dashState.rolloutPending ? (
+                          deploying || reverting ? (
+                            <Label color="orange" icon={<Spinner size="sm" aria-label="Applying images" />}>Applying</Label>
+                          ) : dashState.operatorError ? (
+                            <Label color="orange" icon={<ExclamationTriangleIcon />}>Status unavailable</Label>
+                          ) : partial ? (
+                            <Label color="orange" icon={<ExclamationTriangleIcon />}>Partial deployment</Label>
+                          ) : dashState.rolloutPending || dashState.operatorAvailable && !allReady ? (
                             <Label color="orange" icon={<Spinner size="sm" aria-label="Rolling out" />}>Rolling out</Label>
                           ) : waitingFor ? (
                             <Label color="orange" icon={<Spinner size="sm" aria-label="Applying" />}>
@@ -300,6 +311,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                       </FlexItem>
                     </Flex>
                   </CardTitle>
+                  </CardHeader>
                   <CardBody>
                     {!dashState && loading && (
                       <Flex justifyContent={{ default: "justifyContentCenter" }} className="pf-v6-u-py-lg">
@@ -308,16 +320,17 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                     )}
                     <Stack hasGutter>
                       {dashState?.operatorError && <StackItem><Alert variant="warning" title="Cannot verify dashboard-operator" isInline>{dashState.operatorError}</Alert></StackItem>}
+                      {result && <StackItem><Alert variant={result.success ? "success" : "danger"} title={result.message} isInline /></StackItem>}
+                      {partial && !result && <StackItem><Alert variant="warning" title="Selected build is not fully applied" isInline>Retry the deployment to finish updating the dashboard, or revert to restore the installed release.</Alert></StackItem>}
                       <StackItem>
                         <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
                           <FlexItem><Button variant="primary" onClick={handleDeployMain} isDisabled={!canMutate || !dashState?.operatorAvailable || !!dashState?.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "main"}>Deploy latest main</Button></FlexItem>
                           <FlexItem><Button variant="secondary" onClick={handleRevert} isDisabled={!canMutate || !isCustom || deploying || reverting} isLoading={reverting}>Revert to default</Button></FlexItem>
                         </Flex>
-                        <Content component="small" className="pf-v6-u-mt-sm">Deploy main to all installed dashboard components and federated modules. PR deploy updates only components with a published PR image. Revert resumes the operator and restores the installed release.</Content>
+                        <Content component="p" className="pf-v6-u-mt-md">Test the latest main builds across dashboard components, or deploy only the images published for a PR.</Content>
                       </StackItem>
-                      {dashState?.operatorAvailable && <StackItem><Label color={dashState.operatorPaused ? "orange" : "green"}>Dashboard-operator {dashState.operatorPaused ? "paused" : "running"}</Label></StackItem>}
-                      {dashState?.devImages && <StackItem><details><summary>{dashState.devImages.length} controlled dashboard images</summary><Stack hasGutter className="pf-v6-u-mt-md">{dashState.devImages.map(image => <StackItem key={`${image.deployment}/${image.container}`}><Content component="small"><strong>{image.deployment} / {image.container}</strong>{" "}<Label isCompact color={image.ready ? "green" : "orange"}>{image.ready ? "Ready" : "Rolling out"}</Label><br /><Tooltip content={image.currentImage}><code>{truncateImage(image.currentImage, 90)}</code></Tooltip></Content></StackItem>)}</Stack></details></StackItem>}
-                      {dashState && (
+                      {dashState?.operatorAvailable && <StackItem><Flex gap={{ default: "gapSm" }}><FlexItem><Label isCompact color={dashState.operatorPaused ? "orange" : "green"}>Operator {dashState.operatorPaused ? "paused" : "running"}</Label></FlexItem>{dashState.deploymentMode && <FlexItem><Label isCompact>{dashState.deploymentMode}</Label></FlexItem>}</Flex></StackItem>}
+                      {dashState && !dashState.operatorAvailable && (
                         <StackItem>
                           <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
                             <FlexItem>
@@ -411,7 +424,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                         </StackItem>
                       )}
 
-                      {isCustom && allReady && !waitingFor && (
+                      {isCustom && allReady && !waitingFor && !partial && !deploying && !reverting && (
                         <StackItem>
                           <Alert variant="warning" title={`${dashState?.devMode === "main" ? "Latest main" : dashState?.prNumber ? `PR #${dashState.prNumber}` : "Custom dashboard images"} deployed on this shared cluster`} isInline isPlain>
                             Remember to revert after testing.
@@ -431,8 +444,6 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                             <FlexItem>
                               <Button variant="link" isInline component="a" href={`https://quay.io/repository/opendatahub/odh-dashboard?tab=tags&tag=pr-${dashState.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Quay</Button>
                             </FlexItem>
-                            <FlexItem>
-                            </FlexItem>
                           </Flex>
                         </StackItem>
                       )}
@@ -444,7 +455,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                             <TextInput type="number" value={prNumber} onChange={(_e, val) => setPrNumber(val)} placeholder="e.g. 7892" aria-label="PR number" className="pf-v6-u-w-initial" isDisabled={deploying || reverting || !!waitingFor} />
                           </FlexItem>
                           <FlexItem>
-                            <Button variant="primary" onClick={() => setConfirmOpen(true)} isDisabled={!canMutate || !validPR || !dashState || !!dashState.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "pr"}>Deploy PR</Button>
+                            <Button variant="secondary" onClick={() => setConfirmOpen(true)} isDisabled={!canMutate || !validPR || !dashState || !!dashState.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "pr"}>Deploy PR</Button>
                           </FlexItem>
                         </Flex>
                       </StackItem>
@@ -458,11 +469,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                         </StackItem>
                       )}
 
-                      {result && (
-                        <StackItem>
-                          <Alert variant={result.success ? "success" : "danger"} title={result.message} isInline />
-                        </StackItem>
-                      )}
+                      {dashState?.devImages && <StackItem><DashboardImages images={dashState.devImages} /></StackItem>}
                       {result?.logs?.length ? <StackItem><details><summary>Deployment details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.logs.join("\n")}</pre></details></StackItem> : null}
                     </Stack>
                   </CardBody>

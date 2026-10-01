@@ -44,6 +44,8 @@
 - **Selective PR deploy** — updates only installed components with a published `pr-N` image; confirmed missing builds remain unchanged
 - **Operator-aware discovery** — matches Dashboard-owned workloads to dashboard-operator's `RELATED_IMAGE_*` environment variables. New `ODH_MOD_ARCH_*` modules are discovered automatically; MaaS and model registry use upstream repository naming exceptions in `dashboardBuildRepo`
 - **One-click revert** — restores dashboard-operator's saved replica count and lets it reconcile all related images to the installed release. Recovery information survives an updater restart
+- **Conflict recovery** — updates selected containers together in each deployment and retries resource-version conflicts after rechecking ownership and current images. Partial deployments remain visible and can be retried or reverted
+- Each deployment resolves the current Quay tag to its manifest digest, so clicking deploy again picks up a new build and triggers a rollout
 - Image verification completes before dashboard-operator is paused, and image patches wait for its pods to terminate. Infrastructure dependencies such as kube-rbac-proxy retain their release images
 - Older installations without dashboard-operator retain the existing PR deploy/revert flow; latest-main deployment requires dashboard-operator
 - **Quick resource creator** — MinIO, per-project pipeline servers, MLflow CR lifecycle
@@ -113,7 +115,7 @@ Browse all nightly tags, filter by version/type, and inspect FBC catalog content
 | **Dashboard** | Operator status, prerequisites, upgrade/reinstall with pre-flight checks, reconciliation progress, activity log |
 | **Components** | DSC v2 components, expandable deployments with per-container pod view, direct links to pod logs in OpenShift console |
 | **Build Explorer** | Browse all FBC nightly tags, filter by version/type, search any image by digest, inspect categorized component images with git provenance |
-| **Dashboard Dev** | Multi-container PR deploy (scans 8 repos), one-click revert, MinIO/pipeline/MLflow lifecycle |
+| **Dashboard Dev** | Deploy latest main or published PR images to operator-controlled dashboard components, one-click revert, MinIO/pipeline/MLflow lifecycle |
 | **Diagnostics** | 9 automated health checks, auto-detected problems with severity labels, one-click fixes |
 
 ## Quick Start

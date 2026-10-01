@@ -18,13 +18,16 @@ import (
 // exercises the production functions, including restart recovery, without
 // changing an actual cluster.
 type dashboardDevFixture struct {
-	mu           sync.Mutex
-	operator     dashboardDeployment
-	workloads    map[string]dashboardDeployment
-	writes       []string
-	operatorPods bool
-	failWorkload string
-	failResume   bool
+	mu               sync.Mutex
+	operator         dashboardDeployment
+	workloads        map[string]dashboardDeployment
+	writes           []string
+	operatorPods     bool
+	failWorkload     string
+	failResume       bool
+	conflicts        map[string]int
+	onConflict       func(*dashboardDeployment)
+	containerPatches map[string][][]string
 }
 
 func dashboardFixtureDeployment(name, container, image, owner string) dashboardDeployment {
@@ -115,22 +118,169 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 		return
 	}
+	if remaining := f.conflicts[name]; remaining > 0 {
+		f.conflicts[name] = remaining - 1
+		d.Metadata.ResourceVersion += "-next"
+		if f.onConflict != nil {
+			f.onConflict(&d)
+		}
+		f.workloads[name] = d
+		w.WriteHeader(http.StatusConflict)
+		io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"object has been modified"}`)
+		return
+	}
+	if metadata, ok := patch["metadata"].(map[string]interface{}); ok {
+		if version, ok := metadata["resourceVersion"].(string); ok && version != d.Metadata.ResourceVersion {
+			w.WriteHeader(http.StatusConflict)
+			io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"stale resourceVersion"}`)
+			return
+		}
+	}
 	if spec, ok := patch["spec"].(map[string]interface{}); ok {
 		if *f.operator.Spec.Replicas != 0 {
 			panic("image patch while operator running")
 		}
 		containers := spec["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})
+		if f.containerPatches == nil {
+			f.containerPatches = map[string][][]string{}
+		}
+		var names []string
 		for _, raw := range containers {
 			ct := raw.(map[string]interface{})
+			names = append(names, ct["name"].(string))
 			for i := range d.Spec.Template.Spec.Containers {
 				if d.Spec.Template.Spec.Containers[i].Name == ct["name"] {
 					d.Spec.Template.Spec.Containers[i].Image = ct["image"].(string)
 				}
 			}
 		}
+		f.containerPatches[name] = append(f.containerPatches[name], names)
 	}
 	f.workloads[name] = d
 	json.NewEncoder(w).Encode(d)
+}
+
+func TestDashboardAtomicHostPatchRetriesStatusConflicts(t *testing.T) {
+	mockDashboardRegistry(t, nil)
+	f, c := newDashboardDevFixture(t)
+	d := f.workloads[dashboardDeploymentName]
+	core := d.Spec.Template.Spec.Containers[0]
+	core.Name = "core-bff"
+	core.Image = "release-core"
+	d.Spec.Template.Spec.Containers = append(d.Spec.Template.Spec.Containers, core)
+	f.workloads[dashboardDeploymentName] = d
+	env := f.operator.Spec.Template.Spec.Containers[0].Env[0]
+	env.Name = "RELATED_IMAGE_ODH_CORE_BFF_IMAGE"
+	env.Value = "release-core"
+	f.operator.Spec.Template.Spec.Containers[0].Env = append(f.operator.Spec.Template.Spec.Containers[0].Env, env)
+	f.conflicts = map[string]int{dashboardDeploymentName: 2}
+	result, err := DeployDashboardMain(c)
+	if err != nil || !result.Success {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	patches := f.containerPatches[dashboardDeploymentName]
+	if len(patches) != 1 || len(patches[0]) != 2 {
+		t.Fatalf("expected one atomic host/core patch after retries, got %v", patches)
+	}
+	var state types.DashboardState
+	populateDashboardDevState(c, &state)
+	if !state.DevImagesMatchTarget {
+		t.Fatalf("target images did not apply: %+v", state.DevImages)
+	}
+}
+
+func TestDashboardConflictRetriesRejectConcurrentChanges(t *testing.T) {
+	for _, change := range []string{"owner", "uid", "image", "container", "operator-resumed"} {
+		t.Run(change, func(t *testing.T) {
+			f, c := newDashboardDevFixture(t)
+			images, err := discoverDashboardImages(c, &f.operator)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var image types.DashboardDevImage
+			for _, candidate := range images {
+				if candidate.Deployment == dashboardDeploymentName {
+					image = candidate
+				}
+			}
+			zero := 0
+			f.operator.Spec.Replicas = &zero
+			f.conflicts = map[string]int{dashboardDeploymentName: 1}
+			f.onConflict = func(d *dashboardDeployment) {
+				switch change {
+				case "owner":
+					d.Metadata.OwnerReferences[0].UID = "another-dashboard"
+				case "uid":
+					d.Metadata.UID = "replacement"
+				case "image":
+					d.Spec.Template.Spec.Containers[0].Image = "someone-elses-build"
+				case "container":
+					d.Spec.Template.Spec.Containers = nil
+				case "operator-resumed":
+					one := 1
+					f.operator.Spec.Replicas = &one
+				}
+			}
+			if err := patchControlledDashboardImage(c, &f.operator, image, "selected-build"); err == nil {
+				t.Fatal("overwrote a concurrent change")
+			}
+			if len(f.containerPatches[dashboardDeploymentName]) != 0 {
+				t.Fatal("unsafe retry patched a changed workload")
+			}
+		})
+	}
+}
+
+func TestDashboardConflictRetriesAreBounded(t *testing.T) {
+	f, c := newDashboardDevFixture(t)
+	images, err := discoverDashboardImages(c, &f.operator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var image types.DashboardDevImage
+	for _, candidate := range images {
+		if candidate.Deployment == dashboardDeploymentName {
+			image = candidate
+		}
+	}
+	zero := 0
+	f.operator.Spec.Replicas = &zero
+	f.conflicts = map[string]int{dashboardDeploymentName: 10}
+	err = patchControlledDashboardImage(c, &f.operator, image, "selected-build")
+	if !IsK8sError(err, http.StatusConflict) || len(f.writes) != 5 {
+		t.Fatalf("err=%v attempts=%v", err, f.writes)
+	}
+}
+
+func TestDashboardPartialStateDoesNotClaimMainIsApplied(t *testing.T) {
+	mockDashboardRegistry(t, nil)
+	f, c := newDashboardDevFixture(t)
+	f.failWorkload = dashboardDeploymentName
+	result, err := DeployDashboardMain(c)
+	if err != nil || result.Success {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for _, oldSession := range []bool{false, true} {
+		if oldSession {
+			session, _ := dashboardSession(&f.operator)
+			session.TargetsRecorded = false
+			for i := range session.Bindings {
+				session.Bindings[i].TargetImage = ""
+			}
+			raw, _ := json.Marshal(session)
+			f.operator.Metadata.Annotations[dashboardDevAnnotation] = string(raw)
+		}
+		var state types.DashboardState
+		populateDashboardDevState(c, &state)
+		if !state.AllDevImagesReady || state.DevImagesMatchTarget {
+			t.Fatalf("oldSession=%v state=%+v", oldSession, state)
+		}
+		for _, image := range state.DevImages {
+			if image.Deployment == dashboardDeploymentName && (image.MatchesTarget || image.TargetImage == "") {
+				t.Fatalf("failed host incorrectly marked applied: %+v", image)
+			}
+		}
+	}
 }
 
 func mockDashboardRegistry(t *testing.T, statuses map[string]int) {
@@ -196,6 +346,44 @@ func TestDashboardPRSkipsUnbuiltComponents(t *testing.T) {
 	}
 	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":pr-123@") {
 		t.Fatal("host PR not patched")
+	}
+	var state types.DashboardState
+	populateDashboardDevState(c, &state)
+	if !state.DevImagesMatchTarget {
+		t.Fatalf("unbuilt PR components incorrectly marked incomplete: %+v", state)
+	}
+}
+
+func TestDashboardTargetStatusDetectsMissingOrReplacedWorkloads(t *testing.T) {
+	for _, removed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("removed=%v", removed), func(t *testing.T) {
+			mockDashboardRegistry(t, nil)
+			f, c := newDashboardDevFixture(t)
+			result, err := DeployDashboardMain(c)
+			if err != nil || !result.Success {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if removed {
+				delete(f.workloads, "notebooks-ui")
+			} else {
+				d := f.workloads["notebooks-ui"]
+				d.Metadata.UID = "replacement-uid"
+				f.workloads["notebooks-ui"] = d
+			}
+			var state types.DashboardState
+			populateDashboardDevState(c, &state)
+			if state.DevImagesMatchTarget {
+				t.Fatalf("missing or replaced target incorrectly marked applied: %+v", state)
+			}
+		})
+	}
+}
+
+func TestDashboardLegacyTargetStatusPreservesPRReadiness(t *testing.T) {
+	state := types.DashboardState{IsCustomPR: true, PodReady: true}
+	populateDashboardDevStateWithOperator(nil, &state, nil, nil)
+	if !state.AllDevImagesReady || !state.DevImagesMatchTarget || !state.IsDevMode {
+		t.Fatalf("legacy PR readiness lost: %+v", state)
 	}
 }
 

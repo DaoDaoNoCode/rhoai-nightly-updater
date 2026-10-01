@@ -266,6 +266,7 @@ type DashboardState struct {
 	DevMode                 string              `json:"devMode,omitempty"`
 	DevImages               []DashboardDevImage `json:"devImages,omitempty"`
 	AllDevImagesReady       bool                `json:"allDevImagesReady"`
+	DevImagesMatchTarget    bool                `json:"devImagesMatchTarget"`
 	DefaultImagesRestored   bool                `json:"defaultImagesRestored"`
 	CurrentImage            string              `json:"currentImage"`
 	DeploymentMode          string              `json:"deploymentMode"`
@@ -285,15 +286,17 @@ type DashboardState struct {
 }
 
 type DashboardDevImage struct {
-	Deployment   string `json:"deployment"`
-	Container    string `json:"container"`
-	EnvVar       string `json:"envVar"`
-	Repository   string `json:"repository"`
-	CurrentImage string `json:"currentImage"`
-	DefaultImage string `json:"defaultImage"`
-	Ready        bool   `json:"ready"`
-	WorkloadUID  string `json:"-"`
-	OwnerUID     string `json:"-"`
+	Deployment    string `json:"deployment"`
+	Container     string `json:"container"`
+	EnvVar        string `json:"envVar"`
+	Repository    string `json:"repository"`
+	CurrentImage  string `json:"currentImage"`
+	DefaultImage  string `json:"defaultImage"`
+	Ready         bool   `json:"ready"`
+	TargetImage   string `json:"targetImage,omitempty"`
+	MatchesTarget bool   `json:"matchesTarget"`
+	WorkloadUID   string `json:"-"`
+	OwnerUID      string `json:"-"`
 }
 
 // DeployPRRequest is the JSON body for the POST /api/dashboard/deploy-pr endpoint.

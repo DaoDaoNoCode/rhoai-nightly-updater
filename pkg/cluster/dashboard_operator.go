@@ -63,18 +63,20 @@ type dashboardDeployment struct {
 }
 
 type dashboardDevSession struct {
-	OperatorUID string                `json:"operatorUID"`
-	Replicas    int                   `json:"replicas"`
-	Mode        string                `json:"mode"`
-	PR          int                   `json:"pr,omitempty"`
-	Bindings    []dashboardDevBinding `json:"bindings,omitempty"`
+	OperatorUID     string                `json:"operatorUID"`
+	Replicas        int                   `json:"replicas"`
+	Mode            string                `json:"mode"`
+	PR              int                   `json:"pr,omitempty"`
+	Bindings        []dashboardDevBinding `json:"bindings,omitempty"`
+	TargetsRecorded bool                  `json:"targetsRecorded,omitempty"`
 }
 
 type dashboardDevBinding struct {
-	Deployment string `json:"deployment"`
-	UID        string `json:"uid"`
-	Container  string `json:"container"`
-	EnvVar     string `json:"envVar"`
+	Deployment  string `json:"deployment"`
+	UID         string `json:"uid"`
+	Container   string `json:"container"`
+	EnvVar      string `json:"envVar"`
+	TargetImage string `json:"targetImage,omitempty"`
 }
 
 func readDashboardOperator(c *Client) (*dashboardDeployment, error) {
@@ -230,6 +232,7 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 	if operator == nil {
 		state.IsDevMode = state.IsCustomPR
 		state.AllDevImagesReady = state.PodReady && !state.RolloutPending
+		state.DevImagesMatchTarget = true
 		return
 	}
 	state.OperatorAvailable = true
@@ -252,10 +255,37 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 	}
 	state.DevImages = images
 	state.AllDevImagesReady = true
+	state.DevImagesMatchTarget = true
 	state.DefaultImagesRestored = true
 	state.PRContainers = nil
 	state.DeploymentMode = "Standalone"
-	for _, image := range images {
+	matchedBindings := map[string]bool{}
+	for i := range images {
+		image := &images[i]
+		image.MatchesTarget = true
+		if session != nil {
+			for _, binding := range session.Bindings {
+				if binding.Deployment == image.Deployment && binding.Container == image.Container {
+					image.TargetImage = binding.TargetImage
+					if binding.TargetImage != "" {
+						image.MatchesTarget = binding.UID == image.WorkloadUID && image.CurrentImage == binding.TargetImage
+						matchedBindings[binding.Deployment+"/"+binding.Container] = true
+					}
+				}
+			}
+			// Sessions created before target digests were saved still need to
+			// distinguish a release host from successfully patched main modules.
+			if !session.TargetsRecorded && session.Mode == "main" {
+				image.TargetImage = "quay.io/" + image.Repository + ":main"
+				image.MatchesTarget = image.CurrentImage == image.TargetImage || strings.HasPrefix(image.CurrentImage, image.TargetImage+"@")
+			}
+			if session.TargetsRecorded && session.Mode == "main" && image.TargetImage == "" {
+				image.MatchesTarget = false
+			}
+		}
+		if !image.MatchesTarget {
+			state.DevImagesMatchTarget = false
+		}
 		if image.Deployment == dashboardDeploymentName && strings.HasPrefix(image.EnvVar, "RELATED_IMAGE_ODH_MOD_ARCH_") {
 			state.DeploymentMode = "Sidecar"
 		}
@@ -290,6 +320,13 @@ func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardStat
 		}
 	}
 	state.IsCustomPR = len(state.PRContainers) > 0
+	if session != nil && session.TargetsRecorded {
+		for _, binding := range session.Bindings {
+			if binding.TargetImage != "" && !matchedBindings[binding.Deployment+"/"+binding.Container] {
+				state.DevImagesMatchTarget = false
+			}
+		}
+	}
 	if state.DefaultImagesRestored && session == nil {
 		state.IsDevMode = false
 		state.DevMode = ""
@@ -467,8 +504,9 @@ func deployDashboardBuild(c *Client, mode string, pr int) (*types.OperationRespo
 	session.Mode = mode
 	session.PR = pr
 	session.Bindings = nil
-	for _, image := range images {
-		session.Bindings = append(session.Bindings, dashboardDevBinding{Deployment: image.Deployment, UID: image.WorkloadUID, Container: image.Container, EnvVar: image.EnvVar})
+	session.TargetsRecorded = true
+	for i, image := range images {
+		session.Bindings = append(session.Bindings, dashboardDevBinding{Deployment: image.Deployment, UID: image.WorkloadUID, Container: image.Container, EnvVar: image.EnvVar, TargetImage: resolved[i].image})
 	}
 	if err := patchDashboardOperator(c, operator, 0, session); err != nil {
 		return fail("Could not pause dashboard-operator: "+err.Error(), errorCodeFromK8sErr(err))
@@ -478,18 +516,37 @@ func deployDashboardBuild(c *Client, mode string, pr int) (*types.OperationRespo
 		return fail(err.Error()+". No dashboard images were patched. Click Revert to default to resume the operator.", "prerequisites")
 	}
 	var failures []string
+	groups := map[string][]dashboardImagePatch{}
+	var deployments []string
 	for _, r := range targets {
 		image := images[r.i]
-		if err := patchControlledDashboardImage(c, operator, image, r.image); err != nil {
-			failures = append(failures, image.Deployment+"/"+image.Container+": "+err.Error())
+		if _, ok := groups[image.Deployment]; !ok {
+			deployments = append(deployments, image.Deployment)
+		}
+		groups[image.Deployment] = append(groups[image.Deployment], dashboardImagePatch{Image: image, Target: r.image})
+	}
+	patched := 0
+	for _, deployment := range deployments {
+		group := groups[deployment]
+		if err := patchControlledDashboardImages(c, operator, group); err != nil {
+			failure := deployment + ": " + err.Error()
+			failures = append(failures, failure)
+			logs = append(logs, "Failed: "+failure)
 			continue
 		}
-		logs = append(logs, image.Deployment+"/"+image.Container+": "+r.image)
+		patched += len(group)
+		for _, patch := range group {
+			logs = append(logs, patch.Image.Deployment+"/"+patch.Image.Container+": "+patch.Target)
+		}
 	}
 	success := len(failures) == 0
 	message := fmt.Sprintf("Deployed %s to %d dashboard containers. Dashboard-operator is paused; revert after testing.", tag, len(targets))
 	if !success {
-		message = "Partial deployment: " + strings.Join(failures, "; ") + ". Click Revert to default to resume reconciliation."
+		retry := "Deploy latest main"
+		if mode == "pr" {
+			retry = fmt.Sprintf("Deploy PR #%d", pr)
+		}
+		message = fmt.Sprintf("Partial deployment: %d/%d containers updated. Retry %s to finish, or Revert to default to resume operator reconciliation.", patched, len(targets), retry)
 	}
 	RecordActivity(c, types.ActivityEntry{Timestamp: time.Now().UTC().Format(time.RFC3339), User: getUser(c), Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
 	code := ""
@@ -500,40 +557,79 @@ func deployDashboardBuild(c *Client, mode string, pr int) (*types.OperationRespo
 }
 
 func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, image types.DashboardDevImage, target string) error {
-	current, err := readDashboardOperator(c)
-	if err != nil {
-		return err
+	return patchControlledDashboardImages(c, operator, []dashboardImagePatch{{Image: image, Target: target}})
+}
+
+type dashboardImagePatch struct {
+	Image  types.DashboardDevImage
+	Target string
+}
+
+// Patch all selected containers in a deployment atomically. Status changes can
+// advance resourceVersion during rollout; retry only conflicts and repeat all
+// ownership/image checks on each fresh read.
+func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, patches []dashboardImagePatch) error {
+	if len(patches) == 0 {
+		return nil
 	}
-	if current == nil || current.Metadata.UID != operator.Metadata.UID || current.Spec.Replicas == nil || *current.Spec.Replicas != 0 {
-		return fmt.Errorf("dashboard-operator is no longer paused")
-	}
+	image := patches[0].Image
 	path := namespacedPath("apps/v1", "deployments", dashboardNamespace, image.Deployment)
-	body, _, err := c.get(path)
-	if err != nil {
-		return err
-	}
-	var d dashboardDeployment
-	if err := json.Unmarshal(body, &d); err != nil {
-		return err
-	}
-	if d.Metadata.UID != image.WorkloadUID || dashboardOwner(d) != image.OwnerUID {
-		return fmt.Errorf("workload was replaced or is no longer owned by the same Dashboard")
-	}
-	matched := false
-	for _, ct := range d.Spec.Template.Spec.Containers {
-		if ct.Name == image.Container {
-			matched = true
-			if ct.Image != image.CurrentImage {
-				return fmt.Errorf("container image changed during deployment; retry")
+	for attempt := 0; attempt < 5; attempt++ {
+		current, err := readDashboardOperator(c)
+		if err != nil {
+			return err
+		}
+		if current == nil || current.Metadata.UID != operator.Metadata.UID || current.Spec.Replicas == nil || *current.Spec.Replicas != 0 {
+			return fmt.Errorf("dashboard-operator is no longer paused")
+		}
+		body, _, err := c.get(path)
+		if err != nil {
+			return err
+		}
+		var d dashboardDeployment
+		if err := json.Unmarshal(body, &d); err != nil {
+			return err
+		}
+		var containers []map[string]string
+		for _, patch := range patches {
+			if patch.Image.Deployment != image.Deployment || d.Metadata.UID != patch.Image.WorkloadUID || dashboardOwner(d) != patch.Image.OwnerUID {
+				return fmt.Errorf("workload was replaced or is no longer owned by the same Dashboard")
+			}
+			matched := false
+			for _, ct := range d.Spec.Template.Spec.Containers {
+				if ct.Name != patch.Image.Container {
+					continue
+				}
+				matched = true
+				if ct.Image != patch.Image.CurrentImage && ct.Image != patch.Target {
+					return fmt.Errorf("%s image changed during deployment; refusing to overwrite it", ct.Name)
+				}
+				if ct.Image != patch.Target {
+					containers = append(containers, map[string]string{"name": ct.Name, "image": patch.Target})
+				}
+			}
+			if !matched {
+				return fmt.Errorf("container %s no longer exists", patch.Image.Container)
 			}
 		}
+		if len(containers) == 0 {
+			return nil
+		}
+		data, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": d.Metadata.UID, "resourceVersion": d.Metadata.ResourceVersion}, "spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": containers}}}})
+		_, _, err = c.strategicPatch(path, data)
+		if err == nil {
+			return nil
+		}
+		if !IsK8sError(err, http.StatusConflict) || attempt == 4 {
+			return err
+		}
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
+		}
 	}
-	if !matched {
-		return fmt.Errorf("container no longer exists")
-	}
-	data, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"uid": d.Metadata.UID, "resourceVersion": d.Metadata.ResourceVersion}, "spec": map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{"containers": []map[string]string{{"name": image.Container, "image": target}}}}}})
-	_, _, err = c.strategicPatch(path, data)
-	return err
+	return fmt.Errorf("dashboard image patch exhausted conflict retries")
 }
 
 func revertDashboardOperator(c *Client, operator *dashboardDeployment) (*types.OperationResponse, error) {

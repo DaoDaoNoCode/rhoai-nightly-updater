@@ -208,7 +208,8 @@ export interface DashboardState {
   operatorError?: string;
   isDevMode?: boolean;
   devMode?: 'main' | 'pr';
-  devImages?: { deployment: string; container: string; envVar: string; repository: string; currentImage: string; defaultImage: string; ready: boolean }[];
+  devImages?: DashboardDevImage[];
+  devImagesMatchTarget?: boolean;
   allDevImagesReady?: boolean;
   defaultImagesRestored?: boolean;
   currentImage: string;
@@ -226,6 +227,18 @@ export interface DashboardState {
   schedulingFailureReason?: string;
   canAssistRollout: boolean;
   dashboardURL?: string;
+}
+
+export interface DashboardDevImage {
+  deployment: string;
+  container: string;
+  envVar: string;
+  repository: string;
+  currentImage: string;
+  defaultImage: string;
+  ready: boolean;
+  targetImage?: string;
+  matchesTarget?: boolean;
 }
 
 export interface ResourcesStatus {
