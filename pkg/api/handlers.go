@@ -217,6 +217,12 @@ func (sw *statusWriter) WriteHeader(code int) {
 	sw.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets ResponseController reach streaming and deadline support on the
+// underlying writer while the wrapper continues to track response status.
+func (sw *statusWriter) Unwrap() http.ResponseWriter {
+	return sw.ResponseWriter
+}
+
 // writeError writes a JSON error response with an optional error code.
 // The response always includes both "error" and "errorCode" fields for a
 // consistent client-facing shape. When no explicit errorCode is provided,

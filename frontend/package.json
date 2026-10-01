@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "test": "node --test tests/*.test.cjs",
     "test:streams": "node --test tests/stream-reader.test.cjs",
     "build": "webpack --mode production",
     "dev": "webpack serve --mode development --port 9000"

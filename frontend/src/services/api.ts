@@ -380,6 +380,5 @@ export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-c
   return request('/api/components/dsc/repair', {
     method: 'POST',
     body: JSON.stringify({ name, mode, expectedOperatorVersion, expectedExtraComponents }),
-    acceptStatuses: [422],
   });
 }

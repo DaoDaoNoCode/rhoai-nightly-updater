@@ -132,3 +132,68 @@ func TestCSVUsesInstalledSubscriptionIdentity(t *testing.T) {
 		t.Fatalf("CSV=%+v err=%v", csv, err)
 	}
 }
+
+func TestCSVStaleSubscriptionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		items   string
+		wantErr bool
+	}{
+		{"surviving RHOAI CSV", `[{"metadata":{"name":"rhods-operator.v3.6.0"},"spec":{"displayName":"Red Hat OpenShift AI","version":"3.6.0"}}]`, true},
+		{"renamed display name", `[{"metadata":{"name":"rhods-operator.v3.6.0"},"spec":{"displayName":"New branding","version":"3.6.0"}}]`, true},
+		{"no CSVs", `[]`, false},
+		{"unrelated operator", `[{"metadata":{"name":"other-operator.v1.0.0"},"spec":{"displayName":"Other Operator"}}]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
+			listPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
+			c, cleanup := newMockClient(map[string]mockResponse{
+				subPath:  {body: `{"status":{"installedCSV":"rhods-operator.v3.5.0"}}`},
+				listPath: {body: `{"items":` + tc.items + `}`},
+			})
+			defer cleanup()
+			csv, err := getCSV(c)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "rhods-operator.v3.5.0") || !strings.Contains(err.Error(), "rhods-operator.v3.6.0") {
+					t.Fatalf("expected stale identity error naming both CSVs; CSV=%+v err=%v", csv, err)
+				}
+			} else if err != nil || csv.Name != "" || csv.Phase != "Not Found" {
+				t.Fatalf("expected no installed RHOAI CSV; CSV=%+v err=%v", csv, err)
+			}
+		})
+	}
+}
+
+func TestInstallStaleCSVIdentityDoesNotRemoveOperator(t *testing.T) {
+	for _, action := range []string{"update", "reinstall"} {
+		t.Run(action, func(t *testing.T) {
+			image := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5"
+			responses, paths := buildUpdateStreamMocks(image)
+			responses[paths["sub"]] = mockResponse{body: `{"spec":{"source":"rhoai-catalog-dev","channel":"fast"},"status":{"installedCSV":"rhods-operator.v3.4.0"}}`}
+			c, requests, cleanup := newRecordingMockClient(responses)
+			defer cleanup()
+			var message string
+			if action == "update" {
+				result, err := UpdateStream(c, image, func(UpdateStepEvent) {})
+				if err != nil || result == nil || result.Success {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+				message = result.Message
+			} else {
+				result, err := ReinstallStream(c, "nightly", image, "", func(UpdateStepEvent) {})
+				if err != nil || result == nil || result.Success {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+				message = result.Message
+			}
+			if !strings.Contains(message, "Cannot identify installed CSV") {
+				t.Fatalf("unexpected failure: %s", message)
+			}
+			for _, req := range *requests {
+				if req.Method == "DELETE" && (req.Path == paths["sub"] || req.Path == paths["cs"] || strings.Contains(req.Path, "/clusterserviceversions/")) {
+					t.Fatalf("operator removed with stale identity: %+v", req)
+				}
+			}
+		})
+	}
+}

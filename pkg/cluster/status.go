@@ -320,6 +320,9 @@ func getCSV(c *Client) (types.CSVInfo, error) {
 			if name == installedName {
 				return types.CSVInfo{Name: name, Version: version, Phase: phase}, nil
 			}
+			if fallback == nil && (displayName == "Red Hat OpenShift AI" || strings.HasPrefix(name, "rhods-operator.")) {
+				fallback = &types.CSVInfo{Name: name, Version: version, Phase: phase}
+			}
 			continue
 		}
 		if displayName == "Red Hat OpenShift AI" {
@@ -330,6 +333,11 @@ func getCSV(c *Client) (types.CSVInfo, error) {
 		}
 	}
 	if fallback != nil {
+		if installedName != "" {
+			// A stale Subscription reference is not proof that the operator is
+			// absent. Stop lifecycle cleanup rather than guessing which CSV to delete.
+			return types.CSVInfo{}, fmt.Errorf("subscription references missing CSV %q, but RHOAI CSV %q still exists; wait for OLM reconciliation or resolve the stale Subscription reference before retrying", installedName, fallback.Name)
+		}
 		return *fallback, nil
 	}
 	return types.CSVInfo{Phase: "Not Found"}, nil

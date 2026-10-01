@@ -1,11 +1,49 @@
 package api
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
+
+func TestMutationAuthStreamsProgressAndCompletion(t *testing.T) {
+	setupDevMode(t)
+	rec := httptest.NewRecorder()
+	called := false
+	handler := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) {
+		called = true
+		sw, err := NewSSEWriter(w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sw.Close()
+		if err := sw.EmitStep("validate_target", "running", "Validating"); err != nil {
+			t.Fatal(err)
+		}
+		if !rec.Flushed {
+			t.Fatal("progress was not flushed before the handler completed")
+		}
+		sw.SendHeartbeat()
+		if err := sw.EmitStep("operation_complete", "success", "Installed"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	req := httptest.NewRequest("POST", "/api/test-mutation-stream", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	handler.ServeHTTP(rec, req)
+	if !called {
+		t.Fatalf("handler not called: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{`"step":"validate_target"`, ": heartbeat\n\n", `"step":"operation_complete"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("stream missing %q: %s", want, rec.Body.String())
+		}
+	}
+}
 
 func TestNewSSEWriter_SetsHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
