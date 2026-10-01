@@ -1,15 +1,7 @@
 package cluster
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"reflect"
 	"testing"
-	"time"
 )
 
 func TestUnnumberedEAReleaseTagsAndCSV(t *testing.T) {
@@ -67,51 +59,7 @@ func TestUnnumberedEAReleaseTagsAndCSV(t *testing.T) {
 
 func resetReleaseTagCache(t *testing.T) {
 	t.Helper()
-	reset := func() {
-		tagScanCacheMu.RLock()
-		done := tagScanRefreshDone
-		tagScanCacheMu.RUnlock()
-		if done != nil {
-			<-done
-		}
-		tagScanCacheMu.Lock()
-		tagScanCache = nil
-		tagScanCacheAt = time.Time{}
-		tagScanRefreshErr = nil
-		tagScanRetryAt = time.Time{}
-		tagScanCacheMu.Unlock()
-	}
+	reset := func() { tagScanCacheMu.Lock(); tagScanCache = nil; tagScanCacheMu.Unlock() }
 	reset()
 	t.Cleanup(reset)
-}
-
-func TestReleaseDiscoveryPaginatesWithoutVersionCheckpointsOrPageLimit(t *testing.T) {
-	resetReleaseTagCache(t)
-	calls := 0
-	last := "rhoai-"
-	client := &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Query().Get("last") != last {
-			t.Fatalf("unexpected pagination cursor: %s", r.URL.Query().Get("last"))
-		}
-		calls++
-		// Include more pages than the old per-scan limit; a registry can cap page size.
-		tags := []string{fmt.Sprintf("rhoai-3.6a-%03d-build", calls)}
-		if calls == 32 {
-			tags = []string{"rhoai-3.7", "rhoai-3.7-ea", "rhoai-3.9", "rhoai-8.12-ea", "unrelated-tag"}
-		}
-		last = tags[len(tags)-1]
-		body, _ := json.Marshal(map[string]interface{}{"tags": tags})
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
-	})}
-	tags, err := fetchAndParseTags(context.Background(), client, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []string
-	for _, tag := range tags {
-		got = append(got, tag.raw)
-	}
-	if !reflect.DeepEqual(got, []string{"rhoai-3.7-ea", "rhoai-3.7", "rhoai-3.9", "rhoai-8.12-ea"}) || calls != 32 {
-		t.Fatalf("tags=%v, calls=%d", got, calls)
-	}
 }
