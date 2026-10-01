@@ -86,6 +86,8 @@ export const BuildExplorerPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [tags, setTags] = useState<NightlyTag[]>([]);
   const [loading, setLoading] = useState(true);
+  const [datesLoading, setDatesLoading] = useState(false);
+  const tagsRequestId = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
@@ -147,21 +149,43 @@ export const BuildExplorerPage: React.FC = () => {
   };
 
   const fetchTags = useCallback(async () => {
+    const requestId = ++tagsRequestId.current;
     setLoading(true);
+    setDatesLoading(false);
     setError(null);
     try {
       const res = await getBuildExplorerTags();
+      if (requestId !== tagsRequestId.current) return;
       setTags(res.tags || []);
       setLastRefreshed(new Date());
+      setDatesLoading(true);
+      // Show versions immediately; image config timestamps are optional and
+      // can arrive later. Only merge dates for the exact image already shown.
+      void getBuildExplorerTags(true)
+        .then((enriched) => {
+          if (requestId !== tagsRequestId.current) return;
+          const dates = new Map(enriched.tags.map((tag) => [tag.image, tag.buildDate]));
+          setTags((current) => current.map((tag) => ({
+            ...tag,
+            buildDate: dates.get(tag.image) || tag.buildDate,
+          })));
+        })
+        .catch(() => { /* Build dates are optional; keep the version list usable. */ })
+        .finally(() => {
+          if (requestId === tagsRequestId.current) setDatesLoading(false);
+        });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fetch tags");
+      if (requestId === tagsRequestId.current) {
+        setError(e instanceof Error ? e.message : "Failed to fetch tags");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === tagsRequestId.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchTags();
+    return () => { tagsRequestId.current++; };
   }, [fetchTags]);
 
   useEffect(() => {
@@ -662,7 +686,9 @@ export const BuildExplorerPage: React.FC = () => {
                             </Label>
                           </Td>
                           <Td dataLabel="Last Built">
-                            {tag.buildDate ? (
+                            {datesLoading && !tag.buildDate ? (
+                              <Spinner size="sm" aria-label="Loading build date" />
+                            ) : tag.buildDate ? (
                               <Tooltip
                                 content={new Date(
                                   tag.buildDate,

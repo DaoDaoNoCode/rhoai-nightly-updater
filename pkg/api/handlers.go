@@ -684,7 +684,9 @@ var HandleBuildExplorerTags = withAuth(func(c *cluster.Client, w http.ResponseWr
 		return
 	}
 
-	cluster.EnrichTagsWithBuildDates(r.Context(), c, result.Tags)
+	if r.URL.Query().Get("includeDates") != "false" {
+		cluster.EnrichTagsWithBuildDates(r.Context(), c, result.Tags)
+	}
 
 	writeJSON(w, result, "build-explorer-tags")
 })

@@ -88,8 +88,8 @@ export function getComponentsWithLabels(): Promise<ComponentsResponse> {
   return request('/api/components?labels=true');
 }
 
-export function getBuildExplorerTags(): Promise<NightlyTagsResponse> {
-  return request('/api/build-explorer/tags');
+export function getBuildExplorerTags(includeDates = false): Promise<NightlyTagsResponse> {
+  return request('/api/build-explorer/tags?includeDates=' + includeDates);
 }
 
 export function trackPageView(page: string): void {

@@ -39,6 +39,7 @@ var quayHTTPClient = &http.Client{
 //	rhoai-3.4, rhoai-3.5.0, rhoai-3.5.0-ea.1, rhoai-3.5-ea.2
 var cleanTagRegex = regexp.MustCompile(`^rhoai-\d+\.\d+(\.\d+)?(-ea(\.\d+)?)?$`)
 var tagParseRegex = regexp.MustCompile(`^rhoai-(\d+)\.(\d+)(?:\.(\d+))?(-ea(?:\.(\d+))?)?$`)
+var releaseBuildPrefixRegex = regexp.MustCompile(`^(rhoai-\d+\.\d+(?:\.\d+)?(?:-ea(?:\.\d+)?)?)-`)
 
 type parsedTag struct {
 	raw   string
@@ -293,126 +294,207 @@ func EnrichTagsWithBuildDates(ctx context.Context, c *Client, tags []types.Night
 	}
 }
 
-// tagScanCache caches the full tag scan result (tags change at most once/day).
+// Cache release names, not digests: moving nightly tags still resolve to the
+// current manifest on every request.
 var (
-	tagScanCache     []parsedTag
-	tagScanCacheMu   sync.RWMutex
-	tagScanCacheAt   time.Time
-	tagScanRefreshMu sync.Mutex // serializes cache refresh to prevent stampede
+	tagScanCache       []parsedTag
+	tagScanCacheMu     sync.RWMutex
+	tagScanCacheAt     time.Time
+	tagScanRefreshDone chan struct{}
+	tagScanRefreshErr  error
+	tagScanRetryAt     time.Time
 )
 
-const tagScanCacheTTL = 5 * time.Minute
+const (
+	tagScanCacheTTL      = 5 * time.Minute
+	tagScanCacheMaxStale = 30 * time.Minute
+	tagScanTimeout       = 90 * time.Second
+	tagScanConcurrency   = 8
+)
 
-// fetchAndParseTags scans the Quay v2 tags/list API to find all clean version tags.
-// It runs concurrent paginations from multiple lexicographic start points to cover
-// the full range without scanning every page sequentially. Results are cached for 5m.
-// A refresh mutex prevents multiple goroutines from performing the expensive scan
-// simultaneously (cache stampede).
+// Refresh an expired release list in the background while callers use the last
+// complete list. Cold callers share one refresh and can cancel their own wait.
 func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken string) ([]parsedTag, error) {
-	tagScanCacheMu.RLock()
-	if len(tagScanCache) > 0 && time.Since(tagScanCacheAt) < tagScanCacheTTL {
-		result := make([]parsedTag, len(tagScanCache))
-		copy(result, tagScanCache)
-		tagScanCacheMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tagScanCacheMu.Lock()
+	age := time.Since(tagScanCacheAt)
+	if len(tagScanCache) > 0 && age < tagScanCacheTTL {
+		result := append([]parsedTag(nil), tagScanCache...)
+		tagScanCacheMu.Unlock()
 		return result, nil
 	}
-	tagScanCacheMu.RUnlock()
-
-	// Serialize refreshes: only one goroutine does the actual fetch while others wait.
-	tagScanRefreshMu.Lock()
-	defer tagScanRefreshMu.Unlock()
-
-	// Double-check: another goroutine may have refreshed while we waited for the lock.
-	tagScanCacheMu.RLock()
-	if len(tagScanCache) > 0 && time.Since(tagScanCacheAt) < tagScanCacheTTL {
-		result := make([]parsedTag, len(tagScanCache))
-		copy(result, tagScanCache)
-		tagScanCacheMu.RUnlock()
+	if tagScanRefreshDone == nil && !time.Now().Before(tagScanRetryAt) {
+		done := make(chan struct{})
+		tagScanRefreshDone = done
+		go func() {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), tagScanTimeout)
+			defer cancel()
+			tags, err := scanReleaseTags(refreshCtx, httpClient, bearerToken)
+			tagScanCacheMu.Lock()
+			if err == nil {
+				tagScanCache = tags
+				tagScanCacheAt = time.Now()
+				tagScanRetryAt = time.Time{}
+			} else {
+				tagScanRetryAt = time.Now().Add(15 * time.Second)
+				slog.Warn("release tag refresh failed", "error", err)
+			}
+			tagScanRefreshErr = err
+			tagScanRefreshDone = nil
+			close(done)
+			tagScanCacheMu.Unlock()
+		}()
+	}
+	if len(tagScanCache) > 0 && age < tagScanCacheMaxStale {
+		result := append([]parsedTag(nil), tagScanCache...)
+		tagScanCacheMu.Unlock()
 		return result, nil
 	}
-	tagScanCacheMu.RUnlock()
-
-	// Walk the registry's release-tag range to exhaustion. There are no fixed
-	// version checkpoints or page limits that can hide future releases.
-	var allCleanTags []string
-	seen := make(map[string]bool)
-	lastTag := "rhoai-"
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		requestURL := fmt.Sprintf("%s?n=1000&last=%s", quayTagsURL, lastTag)
-		req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
-		req.Header.Set("Accept", "application/json")
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("fetching Quay tags: %w", err)
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Quay tag listing returned HTTP %d", resp.StatusCode)
-		}
-		var data quayTagsResponse
-		if err := json.Unmarshal(body, &data); err != nil {
-			return nil, fmt.Errorf("parsing Quay tags: %w", err)
-		}
-		if len(data.Tags) == 0 {
-			break
-		}
-		pastRange := false
-		for _, tag := range data.Tags {
-			if !strings.HasPrefix(tag, "rhoai-") {
-				pastRange = true
-				break
-			}
-			if cleanTagRegex.MatchString(tag) && !seen[tag] {
-				seen[tag] = true
-				allCleanTags = append(allCleanTags, tag)
-			}
-		}
-		if pastRange {
-			break
-		}
-		nextTag := data.Tags[len(data.Tags)-1]
-		if nextTag <= lastTag {
-			return nil, fmt.Errorf("Quay tag pagination did not advance past %q", lastTag)
-		}
-		lastTag = nextTag
+	done, refreshErr := tagScanRefreshDone, tagScanRefreshErr
+	tagScanCacheMu.Unlock()
+	if done == nil {
+		return nil, refreshErr
 	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-done:
+	}
+	tagScanCacheMu.RLock()
+	defer tagScanCacheMu.RUnlock()
+	if tagScanRefreshErr != nil {
+		return nil, tagScanRefreshErr
+	}
+	return append([]parsedTag(nil), tagScanCache...), nil
+}
 
-	if len(allCleanTags) == 0 {
+type releaseTagRange struct {
+	prefix string
+	last   string
+}
+
+type releaseTagPage struct {
+	tags []parsedTag
+	next *releaseTagRange
+	ea   *releaseTagRange
+	err  error
+}
+
+// Registry pagination is lexical. A release's dated/hash build tags lie in
+// "<release>-...". Jump past that block to "<release>.", preserving numeric
+// patch tags, and scan "<release>-ea..." separately so no EA aliases are lost.
+// All ranges come from observed tags, not a fixed list of versions or pages.
+func scanReleaseTagPage(ctx context.Context, httpClient *http.Client, bearerToken string, scan releaseTagRange) releaseTagPage {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s?n=1000&last=%s", quayTagsURL, scan.last), nil)
+	if err != nil {
+		return releaseTagPage{err: err}
+	}
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return releaseTagPage{err: fmt.Errorf("fetching Quay tags: %w", err)}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return releaseTagPage{err: fmt.Errorf("Quay tag listing returned HTTP %d", resp.StatusCode)}
+	}
+	var data quayTagsResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data); err != nil {
+		return releaseTagPage{err: fmt.Errorf("parsing Quay tags: %w", err)}
+	}
+	page := releaseTagPage{}
+	if len(data.Tags) == 0 {
+		return page
+	}
+	for _, tag := range data.Tags {
+		if !strings.HasPrefix(tag, scan.prefix) {
+			return page
+		}
+		if parsed, ok := parseTag(tag); ok {
+			page.tags = append(page.tags, parsed)
+		}
+	}
+	last := data.Tags[len(data.Tags)-1]
+	if last <= scan.last {
+		page.err = fmt.Errorf("Quay tag pagination did not advance past %q", scan.last)
+		return page
+	}
+	if !cleanTagRegex.MatchString(last) {
+		if match := releaseBuildPrefixRegex.FindStringSubmatch(last); match != nil {
+			prefix := match[1]
+			jump := prefix + "."
+			if jump > last && strings.HasPrefix(jump, scan.prefix) {
+				if release, ok := parseTag(prefix); ok && release.ea == -1 {
+					page.ea = &releaseTagRange{prefix: prefix + "-ea", last: prefix + "-e"}
+				}
+				last = jump
+			}
+		}
+	}
+	page.next = &releaseTagRange{prefix: scan.prefix, last: last}
+	return page
+}
+
+func scanReleaseTags(ctx context.Context, httpClient *http.Client, bearerToken string) ([]parsedTag, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer func() { cancel(); wg.Wait() }()
+	pending := []releaseTagRange{{prefix: "rhoai-", last: "rhoai-"}}
+	ranges := map[string]bool{"rhoai-": true}
+	seen := make(map[string]parsedTag)
+	results := make(chan releaseTagPage, tagScanConcurrency)
+	active := 0
+	for len(pending) > 0 || active > 0 {
+		for len(pending) > 0 && active < tagScanConcurrency {
+			scan := pending[0]
+			pending = pending[1:]
+			active++
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				page := scanReleaseTagPage(ctx, httpClient, bearerToken, scan)
+				select {
+				case results <- page:
+				case <-ctx.Done():
+				}
+			}()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case page := <-results:
+			active--
+			if page.err != nil {
+				return nil, page.err
+			}
+			for _, tag := range page.tags {
+				seen[tag.raw] = tag
+			}
+			if page.next != nil {
+				pending = append(pending, *page.next)
+			}
+			if page.ea != nil && !ranges[page.ea.prefix] {
+				ranges[page.ea.prefix] = true
+				pending = append(pending, *page.ea)
+			}
+		}
+	}
+	if len(seen) == 0 {
 		return nil, fmt.Errorf("no rhoai release tags found")
 	}
-
-	var parsed []parsedTag
-	for _, tag := range allCleanTags {
-		if p, ok := parseTag(tag); ok {
-			parsed = append(parsed, p)
-		}
+	parsed := make([]parsedTag, 0, len(seen))
+	for _, tag := range seen {
+		parsed = append(parsed, tag)
 	}
-	if len(parsed) == 0 {
-		return nil, fmt.Errorf("no parseable rhoai tags found")
-	}
-
 	sort.Slice(parsed, func(i, j int) bool {
-		return compareTags(parsed[i], parsed[j]) < 0
+		if order := compareTags(parsed[i], parsed[j]); order != 0 {
+			return order < 0
+		}
+		return parsed[i].raw < parsed[j].raw
 	})
-
-	// Update the cache so subsequent callers get the cached result.
-	tagScanCacheMu.Lock()
-	tagScanCache = make([]parsedTag, len(parsed))
-	copy(tagScanCache, parsed)
-	tagScanCacheAt = time.Now()
-	tagScanCacheMu.Unlock()
-
 	return parsed, nil
 }
 
