@@ -77,6 +77,16 @@ func releaseClusterMutationLock() {
 	clusterMutationInProgress.Store(false)
 }
 
+// lockCluster acquires the cluster mutation lock or answers 409 Conflict.
+// When it returns true the caller must defer releaseClusterMutationLock.
+func lockCluster(w http.ResponseWriter) bool {
+	if acquireClusterMutationLock() {
+		return true
+	}
+	writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	return false
+}
+
 // sseHeartbeat sends periodic SSE comments to keep the connection alive
 // through proxies with idle timeouts. Stops when done is closed.
 func sseHeartbeat(w *SSEWriter, done <-chan struct{}) {
@@ -496,8 +506,7 @@ var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *ht
 
 // HandleUpdate applies a nightly catalog update to the cluster.
 var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -550,8 +559,7 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 
 // HandleUpdateStream applies a nightly catalog update and streams progress via SSE.
 var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -780,8 +788,7 @@ var HandleComponents = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 })
 
 var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -806,8 +813,7 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 
 // HandleAssistRollout detects and unblocks stuck deployment rollouts.
 var HandleAssistRollout = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -847,6 +853,10 @@ var HandleDashboardState = withAuth(func(c *cluster.Client, w http.ResponseWrite
 
 // HandleDashboardDeployPR deploys a PR image to the rhods-dashboard deployment.
 var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	var req types.DeployPRRequest
@@ -872,6 +882,10 @@ var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.Re
 
 // HandleDashboardRevert reverts the dashboard to the original operator image.
 var HandleDashboardRevert = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "revert-dashboard")
 
 	result, err := cluster.RevertDashboardImage(c)
@@ -884,6 +898,10 @@ var HandleDashboardRevert = withMutationAuth(func(c *cluster.Client, w http.Resp
 })
 
 var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	result, err := cluster.DeployDashboardMain(c)
 	if err != nil {
 		slog.Error("deploy dashboard main failed", "error", err)
@@ -896,8 +914,7 @@ var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.
 // HandleRefreshOperator deletes the current CSV to trigger OLM to reinstall
 // with updated images from the current catalog.
 var HandleRefreshOperator = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -923,8 +940,7 @@ var HandleRefreshOperator = withMutationAuth(func(c *cluster.Client, w http.Resp
 // it performs the original rollback-to-stable flow. If targetType is "nightly" and an image is
 // provided, it reinstalls using the specified nightly FBC image.
 var HandleRollback = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -961,8 +977,7 @@ var HandleRollback = withMutationAuth(func(c *cluster.Client, w http.ResponseWri
 // HandleReinstallStream performs the full uninstall/cleanup/reinstall flow
 // and streams progress via SSE.
 var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -1028,8 +1043,7 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 // HandleRefreshStream deletes the current CSV and Subscription to trigger OLM
 // to reinstall with updated images, streaming progress via SSE.
 var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -1175,6 +1189,10 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 
 // HandleMLflowSetup creates the MLflow CR.
 var HandleMLflowSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "setup-mlflow")
 	result, err := cluster.SetupMLflow(c)
 	if err != nil {
@@ -1187,6 +1205,10 @@ var HandleMLflowSetup = withMutationAuth(func(c *cluster.Client, w http.Response
 
 // HandleMLflowTeardown deletes the MLflow CR.
 var HandleMLflowTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "teardown-mlflow")
 	result, err := cluster.TeardownMLflow(c)
 	if err != nil {
@@ -1199,6 +1221,10 @@ var HandleMLflowTeardown = withMutationAuth(func(c *cluster.Client, w http.Respo
 
 // HandleMLflowDeployPR patches the MLflow CR with a PR image.
 var HandleMLflowDeployPR = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.DeployPRRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1221,6 +1247,10 @@ var HandleMLflowDeployPR = withMutationAuth(func(c *cluster.Client, w http.Respo
 
 // HandleMLflowRevert reverts the MLflow CR image to default.
 var HandleMLflowRevert = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "revert-mlflow")
 	result, err := cluster.RevertMLflowImage(c)
 	if err != nil {
@@ -1246,8 +1276,7 @@ var HandleDiagnostics = withAuth(func(c *cluster.Client, w http.ResponseWriter, 
 
 // HandleDiagnosticsFix attempts to auto-fix a specific problem identified by diagnostics.
 var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
@@ -1290,8 +1319,7 @@ var HandleDSCPreview = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 
 // HandleCreateDSC creates a default DataScienceCluster if one doesn't exist.
 var HandleCreateDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !acquireClusterMutationLock() {
-		writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
+	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
