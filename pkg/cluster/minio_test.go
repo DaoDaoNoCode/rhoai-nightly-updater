@@ -102,14 +102,31 @@ func TestGetMinIOStatus_DeploymentReady(t *testing.T) {
 // minioCredentials tests
 // ---------------------------------------------------------------------------
 
-func TestMinioCredentials_DifferentOnEachCall(t *testing.T) {
-	// Generate several passwords and confirm they are not all the same.
-	// With 24 chars drawn from a 62-char alphabet the probability of a
-	// collision in 10 samples is astronomically low.
+// freshMinioClient serves no minio-secret, as on a first-time setup.
+func freshMinioClient(t *testing.T) *Client {
+	t.Helper()
+	t.Setenv("MINIO_ROOT_USER", "")
+	t.Setenv("MINIO_ROOT_PASSWORD", "")
+	client, cleanup := newMockClient(map[string]mockResponse{})
+	t.Cleanup(cleanup)
+	return client
+}
+
+func mustMinioCredentials(t *testing.T, c *Client) (string, string) {
+	t.Helper()
+	user, pw, err := minioCredentials(c)
+	if err != nil {
+		t.Fatalf("minioCredentials: %v", err)
+	}
+	return user, pw
+}
+
+func TestMinioCredentials_DifferentOnEachFirstSetup(t *testing.T) {
+	client := freshMinioClient(t)
 	seen := make(map[string]bool)
 	const iterations = 10
 	for i := 0; i < iterations; i++ {
-		_, pw := minioCredentials()
+		_, pw := mustMinioCredentials(t, client)
 		seen[pw] = true
 	}
 	if len(seen) < 2 {
@@ -117,22 +134,12 @@ func TestMinioCredentials_DifferentOnEachCall(t *testing.T) {
 	}
 }
 
-func TestMinioCredentials_SufficientLength(t *testing.T) {
-	_, pw := minioCredentials()
-	if len(pw) < 16 {
-		t.Errorf("password length %d is less than the minimum 16 characters", len(pw))
-	}
-}
-
 func TestMinioCredentials_HexCharacters(t *testing.T) {
 	// The generated password is a hex-encoded random byte slice (0-9, a-f).
-	// Verify it only contains valid hex characters and has the expected length.
-	_, pw := minioCredentials()
-
+	_, pw := mustMinioCredentials(t, freshMinioClient(t))
 	if len(pw) != 32 { // 16 bytes -> 32 hex chars
 		t.Errorf("expected password length 32, got %d", len(pw))
 	}
-
 	for _, ch := range pw {
 		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
 			t.Errorf("password contains unexpected character %q", ch)
@@ -140,10 +147,47 @@ func TestMinioCredentials_HexCharacters(t *testing.T) {
 	}
 }
 
-func TestMinioCredentials_UserIsConstant(t *testing.T) {
-	user, _ := minioCredentials()
-	if user != "minio" {
+func TestMinioCredentials_DefaultUser(t *testing.T) {
+	if user, _ := mustMinioCredentials(t, freshMinioClient(t)); user != "minio" {
 		t.Errorf("expected user %q, got %q", "minio", user)
+	}
+}
+
+func TestMinioCredentials_ReusesExistingSecret(t *testing.T) {
+	t.Setenv("MINIO_ROOT_USER", "")
+	t.Setenv("MINIO_ROOT_PASSWORD", "")
+	client, cleanup := newMockClient(map[string]mockResponse{
+		"/api/v1/namespaces/minio/secrets/minio-secret": {body: `{"data":{"minio_root_user":"YWRtaW4=","minio_root_password":"a2VlcG1l"}}`},
+	})
+	defer cleanup()
+	for i := 0; i < 3; i++ {
+		if user, pw := mustMinioCredentials(t, client); user != "admin" || pw != "keepme" {
+			t.Fatalf("re-running setup must keep existing credentials, got %q/%q", user, pw)
+		}
+	}
+}
+
+func TestMinioCredentials_EnvOverridesSecret(t *testing.T) {
+	t.Setenv("MINIO_ROOT_USER", "")
+	t.Setenv("MINIO_ROOT_PASSWORD", "fromenv")
+	client, cleanup := newMockClient(map[string]mockResponse{
+		"/api/v1/namespaces/minio/secrets/minio-secret": {body: `{"data":{"minio_root_user":"YWRtaW4=","minio_root_password":"a2VlcG1l"}}`},
+	})
+	defer cleanup()
+	if user, pw := mustMinioCredentials(t, client); user != "admin" || pw != "fromenv" {
+		t.Fatalf("got %q/%q", user, pw)
+	}
+}
+
+func TestMinioCredentials_ReadErrorDoesNotRotate(t *testing.T) {
+	t.Setenv("MINIO_ROOT_USER", "")
+	t.Setenv("MINIO_ROOT_PASSWORD", "")
+	client, cleanup := newMockClient(map[string]mockResponse{
+		"/api/v1/namespaces/minio/secrets/minio-secret": {statusCode: 500, body: `{"kind":"Status","status":"Failure","message":"boom"}`},
+	})
+	defer cleanup()
+	if _, _, err := minioCredentials(client); err == nil {
+		t.Fatal("an unreadable secret must stop setup instead of generating new credentials")
 	}
 }
 
@@ -156,8 +200,7 @@ func TestSetupMinIO_ResponseDoesNotLeakPassword(t *testing.T) {
 	// S3 bucket creation always fails (no real MinIO), so we exercise the
 	// deployment path and verify that every response message is credential-free.
 	//
-	// We also call minioCredentials() before and after to capture the generated
-	// password and confirm it never appears in any log line or message.
+	// The response must not reveal the stored password.
 
 	nsJSON, _ := json.Marshal(map[string]interface{}{
 		"apiVersion": "v1", "kind": "Namespace",
@@ -205,7 +248,10 @@ func TestSetupMinIO_ResponseDoesNotLeakPassword(t *testing.T) {
 		allText += "\n" + l
 	}
 
-	// The old hardcoded password must not appear anywhere.
+	// Neither the stored password nor the old hardcoded one may appear.
+	if strings.Contains(allText, "testpass") {
+		t.Errorf("response contains the stored password: %s", allText)
+	}
 	if strings.Contains(allText, "minio123") {
 		t.Errorf("response contains hardcoded password 'minio123': %s", allText)
 	}

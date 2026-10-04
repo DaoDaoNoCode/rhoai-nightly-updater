@@ -19,26 +19,46 @@ const (
 	minioServiceName = "minio-service"
 )
 
-// minioCredentials returns the MinIO root user and password.
-// Values are read from MINIO_ROOT_USER / MINIO_ROOT_PASSWORD env vars.
-// When the env vars are unset, cryptographically random credentials are
-// generated so that no secret is baked into the binary.
-func minioCredentials() (user, password string) {
+// minioCredentials returns the MinIO root user and password. Explicit
+// MINIO_ROOT_USER / MINIO_ROOT_PASSWORD env vars win. Otherwise credentials
+// already stored in minio-secret are reused, because pipeline servers copy
+// them into their own secrets and MinIO picks up a changed secret on restart.
+// Only a first-time setup generates a random password, so no secret is baked
+// into the binary.
+func minioCredentials(c *Client) (user, password string, err error) {
 	user = os.Getenv("MINIO_ROOT_USER")
 	password = os.Getenv("MINIO_ROOT_PASSWORD")
+	if user == "" || password == "" {
+		body, _, getErr := c.get(namespacedPath("v1", "secrets", minioNamespace, "minio-secret"))
+		switch {
+		case getErr == nil:
+			var secret struct {
+				Data map[string]string `json:"data"`
+			}
+			if jsonErr := json.Unmarshal(body, &secret); jsonErr != nil {
+				return "", "", fmt.Errorf("parse existing minio-secret: %w", jsonErr)
+			}
+			if user == "" {
+				user = decodeBase64Field(secret.Data["minio_root_user"])
+			}
+			if password == "" {
+				password = decodeBase64Field(secret.Data["minio_root_password"])
+			}
+		case !IsK8sError(getErr, 404):
+			return "", "", fmt.Errorf("read existing minio-secret: %w", getErr)
+		}
+	}
 	if user == "" {
 		user = "minio"
 	}
 	if password == "" {
 		b := make([]byte, 16)
-		if _, err := rand.Read(b); err != nil {
-			// Extremely unlikely; fall back to a fixed value only as last resort.
-			password = "minio-generated-fallback"
-		} else {
-			password = hex.EncodeToString(b)
+		if _, randErr := rand.Read(b); randErr != nil {
+			return "", "", fmt.Errorf("generate MinIO password: %w", randErr)
 		}
+		password = hex.EncodeToString(b)
 	}
-	return user, password
+	return user, password, nil
 }
 
 func getMinIOStatus(c *Client) types.ResourceState {
@@ -149,7 +169,13 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	}
 
 	// Step 2: Apply resources
-	minioUser, minioPass := minioCredentials()
+	minioUser, minioPass, credErr := minioCredentials(c)
+	if credErr != nil {
+		return &types.OperationResponse{
+			Success: false, Message: fmt.Sprintf("Cannot determine MinIO credentials: %v", credErr),
+			Logs: logs, ErrorCode: errorCodeFromK8sErr(credErr),
+		}, nil
+	}
 	resources := []struct {
 		name string
 		obj  map[string]interface{}
