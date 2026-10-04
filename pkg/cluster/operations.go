@@ -261,34 +261,117 @@ type UpdateStepEvent struct {
 	ErrorCode string `json:"errorCode,omitempty"`
 }
 
-// waitForCatalogSourceReady polls the CatalogSource until its connectionState
-// reports "READY" or the timeout expires. The packagemanifest will not reflect
-// new catalog content until the CatalogSource grpc pod is running and OLM has
-// connected to it, so callers should wait for READY before detecting channels.
-func waitForCatalogSourceReady(c *Client, timeout time.Duration) error {
-	deadline := time.After(timeout)
-	ticker := time.NewTicker(CatalogPollInterval)
-	defer ticker.Stop()
-
-	for {
-		cs, err := getCatalogSource(c)
-		if err == nil && cs.Exists && cs.State == "READY" {
-			return nil
+// waitForNightlyCatalogReady polls the nightly CatalogSource until it reports
+// READY, logging and emitting each observed state. The PackageManifest will not
+// reflect new catalog content until the catalog pod serves it, so callers wait
+// for READY before detecting channels. It returns false on timeout and the
+// context error if the operation is canceled.
+func waitForNightlyCatalogReady(c *Client, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
+	deadline := time.Now().Add(CatalogReadyTimeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-c.ctx.Done():
+			return false, c.ctx.Err()
+		case <-time.After(CatalogPollInterval):
 		}
 
+		cs, err := getCatalogSource(c)
+		if err != nil {
+			slog.Warn("error polling CatalogSource state", "error", err)
+			continue
+		}
+		*logs = append(*logs, fmt.Sprintf("  CatalogSource state: %s", cs.State))
+		emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: fmt.Sprintf("CatalogSource: %s", cs.State), Detail: cs.State})
+		if cs.State == "READY" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// waitForNightlyPackageManifest waits until the nightly catalog's
+// PackageManifest lists a channel for image, because a CatalogSource reports
+// READY before OLM refreshes its PackageManifest. A timeout is logged and the
+// caller proceeds; the context error is returned if the operation is canceled.
+func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) error {
+	start := time.Now()
+	for time.Since(start) < PackageManifestPropagationWait {
+		if err := c.ctx.Err(); err != nil {
+			return err
+		}
+		if ch, _ := detectNightlyChannel(c, image); ch != "" {
+			*logs = append(*logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", time.Since(start).Round(time.Second), ch))
+			return nil
+		}
 		select {
 		case <-c.ctx.Done():
 			return c.ctx.Err()
-		case <-deadline:
-			state := "unknown"
-			if cs.Exists {
-				state = cs.State
-			}
-			return fmt.Errorf("CatalogSource %s not READY after %s (current state: %s)", CatalogName, timeout, state)
-		case <-ticker.C:
-			// poll again
+		case <-time.After(3 * time.Second):
 		}
 	}
+	*logs = append(*logs, fmt.Sprintf("Warning: PackageManifest not ready after %s, proceeding with detection", PackageManifestPropagationWait))
+	return nil
+}
+
+// waitForInstallPlan polls the Subscription at subPath until OLM records the
+// InstallPlan it created. It returns "" if none appears within
+// InstallPlanPollTimeout and the context error if the operation is canceled.
+func waitForInstallPlan(c *Client, subPath string) (string, error) {
+	deadline := time.Now().Add(InstallPlanPollTimeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-c.ctx.Done():
+			return "", c.ctx.Err()
+		case <-time.After(InstallPlanPollInterval):
+		}
+
+		body, _, err := c.get(subPath)
+		if err != nil {
+			slog.Debug("error polling Subscription for installPlanRef", "error", err)
+			continue
+		}
+		var sub map[string]interface{}
+		if json.Unmarshal(body, &sub) != nil {
+			continue
+		}
+		status, _ := sub["status"].(map[string]interface{})
+		for _, field := range []string{"installPlanRef", "installplan"} {
+			ref, _ := status[field].(map[string]interface{})
+			if name, _ := ref["name"].(string); name != "" {
+				return name, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// applySubscriptionWithRetry server-side applies sub up to three times,
+// waiting SubRetryBackoffs between attempts. onFailure is called after every
+// failed attempt, with willRetry false for the last one. It returns the last
+// apply error, or the context error if canceled while waiting to retry.
+func applySubscriptionWithRetry(c *Client, path string, sub map[string]interface{}, onFailure func(attempt int, err error, willRetry bool, backoff time.Duration)) (applyErr, cancelErr error) {
+	const attempts = 3
+	for attempt := 1; attempt <= attempts; attempt++ {
+		_, _, applyErr = c.apply(path, sub)
+		if applyErr == nil {
+			return nil, nil
+		}
+		willRetry := attempt < attempts
+		var backoff time.Duration
+		if willRetry {
+			backoff = SubRetryBackoffs[attempt-1]
+		}
+		onFailure(attempt, applyErr, willRetry, backoff)
+		if !willRetry {
+			break
+		}
+		select {
+		case <-c.ctx.Done():
+			return applyErr, c.ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+	return applyErr, nil
 }
 
 // errorCodeFromK8sErr maps a K8s API error to a user-facing error code string.
@@ -590,35 +673,13 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (result *
 	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY..."})
 	logs = append(logs, "Waiting for CatalogSource to become READY...")
 
-	catalogReady := false
-	catalogTimeout := CatalogReadyTimeout
-	catalogPollInterval := CatalogPollInterval
-	catalogDeadline := time.Now().Add(catalogTimeout)
-
-	for time.Now().Before(catalogDeadline) {
-		select {
-		case <-c.ctx.Done():
-			msg := "Operation cancelled while waiting for CatalogSource"
-			logs = append(logs, msg)
-			emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "failed", Message: msg})
-			recordUpdateActivity(c, image, false)
-			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-		case <-time.After(catalogPollInterval):
-		}
-
-		cs, csErr := getCatalogSource(c)
-		if csErr != nil {
-			slog.Warn("error polling CatalogSource state", "error", csErr)
-			continue
-		}
-		state := cs.State
-		logs = append(logs, fmt.Sprintf("  CatalogSource state: %s", state))
-		emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: fmt.Sprintf("CatalogSource: %s", state), Detail: state})
-
-		if state == "READY" {
-			catalogReady = true
-			break
-		}
+	catalogReady, catalogErr := waitForNightlyCatalogReady(c, emit, &logs)
+	if catalogErr != nil {
+		msg := "Operation cancelled while waiting for CatalogSource"
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "failed", Message: msg})
+		recordUpdateActivity(c, image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, catalogErr
 	}
 
 	if !catalogReady {
@@ -636,23 +697,8 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (result *
 	// Instead of a fixed wait, poll every 3s until we detect channels for our
 	// target version, with a timeout.
 	emit(UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh..."})
-	pmReady := false
-	pmStart := time.Now()
-	for time.Since(pmStart) < PackageManifestPropagationWait {
-		ch, _ := detectNightlyChannel(c, image)
-		if ch != "" {
-			pmReady = true
-			logs = append(logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", time.Since(pmStart).Round(time.Second), ch))
-			break
-		}
-		select {
-		case <-c.ctx.Done():
-			return nil, c.ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-	}
-	if !pmReady {
-		logs = append(logs, fmt.Sprintf("Warning: PackageManifest not ready after %s, proceeding with detection", PackageManifestPropagationWait))
+	if err := waitForNightlyPackageManifest(c, image, &logs); err != nil {
+		return nil, err
 	}
 
 	// --- Step 5: detect_channel ---
@@ -734,25 +780,17 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (result *
 		},
 	}
 	subApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	subRetryBackoffs := SubRetryBackoffs
-	var subApplyErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		_, _, subApplyErr = c.apply(subApplyPath, newSub)
-		if subApplyErr == nil {
-			break
+	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subApplyPath, newSub, func(attempt int, err error, willRetry bool, _ time.Duration) {
+		if willRetry {
+			slog.Warn("failed to apply Subscription, retrying", "attempt", attempt, "error", err)
+			logs = append(logs, fmt.Sprintf("  Warning: Subscription apply attempt %d failed: %v — retrying", attempt, err))
 		}
-		if attempt < 3 {
-			slog.Warn("failed to apply Subscription, retrying", "attempt", attempt, "error", subApplyErr)
-			logs = append(logs, fmt.Sprintf("  Warning: Subscription apply attempt %d failed: %v — retrying", attempt, subApplyErr))
-			select {
-			case <-c.ctx.Done():
-				msg := "Operation cancelled during Subscription apply retry"
-				emit(UpdateStepEvent{Step: "apply_subscription", Status: "failed", Message: msg})
-				recordUpdateActivity(c, image, false)
-				return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-			case <-time.After(subRetryBackoffs[attempt-1]):
-			}
-		}
+	})
+	if cancelErr != nil {
+		msg := "Operation cancelled during Subscription apply retry"
+		emit(UpdateStepEvent{Step: "apply_subscription", Status: "failed", Message: msg})
+		recordUpdateActivity(c, image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, cancelErr
 	}
 	if subApplyErr != nil {
 		msg := fmt.Sprintf("Failed to apply Subscription after 3 attempts: %v", subApplyErr)
@@ -843,54 +881,15 @@ func UpdateStream(c *Client, image string, emit func(UpdateStepEvent)) (result *
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for InstallPlan creation..."})
 	logs = append(logs, "Waiting for InstallPlan creation...")
 
-	ipFound := false
-	ipName := ""
-	ipTimeout := InstallPlanPollTimeout
-	ipPollInterval := InstallPlanPollInterval
-	ipDeadline := time.Now().Add(ipTimeout)
-
-	for time.Now().Before(ipDeadline) {
-		select {
-		case <-c.ctx.Done():
-			msg := "Operation cancelled while waiting for InstallPlan"
-			logs = append(logs, msg)
-			emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
-			recordUpdateActivity(c, image, false)
-			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-		case <-time.After(ipPollInterval):
-		}
-
-		// Check Subscription status.installPlanRef for the InstallPlan name
-		subBody, _, subGetErr := c.get(subApplyPath)
-		if subGetErr != nil {
-			slog.Debug("error polling Subscription for installPlanRef", "error", subGetErr)
-			continue
-		}
-		var subResult map[string]interface{}
-		if jsonErr := json.Unmarshal(subBody, &subResult); jsonErr != nil {
-			continue
-		}
-		subStatus, _ := subResult["status"].(map[string]interface{})
-		if subStatus == nil {
-			continue
-		}
-		ipRef, _ := subStatus["installPlanRef"].(map[string]interface{})
-		if ipRef != nil {
-			if name, ok := ipRef["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
-		// Also check installplan field
-		if ipField, ok := subStatus["installplan"].(map[string]interface{}); ok {
-			if name, ok := ipField["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
+	ipName, ipErr := waitForInstallPlan(c, subApplyPath)
+	if ipErr != nil {
+		msg := "Operation cancelled while waiting for InstallPlan"
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
+		recordUpdateActivity(c, image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, ipErr
 	}
+	ipFound := ipName != ""
 
 	if !ipFound {
 		msg := "No InstallPlan created within 60s — OLM may be stuck"
@@ -1334,35 +1333,13 @@ func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.S
 	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY..."})
 	logs = append(logs, "Waiting for CatalogSource to become READY...")
 
-	catalogReady := false
-	catalogTimeout := CatalogReadyTimeout
-	catalogPollInterval := CatalogPollInterval
-	catalogDeadline := time.Now().Add(catalogTimeout)
-
-	for time.Now().Before(catalogDeadline) {
-		select {
-		case <-c.ctx.Done():
-			msg := "Operation cancelled while waiting for CatalogSource"
-			logs = append(logs, msg)
-			emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "failed", Message: msg})
-			recordReinstallActivity(c, "nightly", image, false)
-			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-		case <-time.After(catalogPollInterval):
-		}
-
-		cs, csErr := getCatalogSource(c)
-		if csErr != nil {
-			slog.Warn("error polling CatalogSource state", "error", csErr)
-			continue
-		}
-		state := cs.State
-		logs = append(logs, fmt.Sprintf("  CatalogSource state: %s", state))
-		emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: fmt.Sprintf("CatalogSource: %s", state), Detail: state})
-
-		if state == "READY" {
-			catalogReady = true
-			break
-		}
+	catalogReady, catalogErr := waitForNightlyCatalogReady(c, emit, &logs)
+	if catalogErr != nil {
+		msg := "Operation cancelled while waiting for CatalogSource"
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "failed", Message: msg})
+		recordReinstallActivity(c, "nightly", image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, catalogErr
 	}
 
 	if !catalogReady {
@@ -1377,26 +1354,8 @@ func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.S
 
 	// Poll PackageManifest until the nightly catalog's channels appear (same as UpdateStream)
 	emit(UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh..."})
-	pmReady := false
-	pmStart := time.Now()
-	for time.Since(pmStart) < PackageManifestPropagationWait {
-		if c.ctx.Err() != nil {
-			return nil, c.ctx.Err()
-		}
-		ch, _ := detectNightlyChannel(c, image)
-		if ch != "" {
-			pmReady = true
-			logs = append(logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", time.Since(pmStart).Round(time.Second), ch))
-			break
-		}
-		select {
-		case <-c.ctx.Done():
-			return nil, c.ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-	}
-	if !pmReady {
-		logs = append(logs, fmt.Sprintf("Warning: PackageManifest not ready after %s, proceeding with detection", PackageManifestPropagationWait))
+	if err := waitForNightlyPackageManifest(c, image, &logs); err != nil {
+		return nil, err
 	}
 
 	// --- Step 11: detect_channel ---
@@ -1434,30 +1393,18 @@ func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.S
 		},
 	}
 	subApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	subRetryBackoffs := SubRetryBackoffs
-	var subApplyErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		_, _, subApplyErr = c.apply(subApplyPath, newSub)
-		if subApplyErr == nil {
-			break
+	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subApplyPath, newSub, func(attempt int, err error, willRetry bool, backoff time.Duration) {
+		if willRetry {
+			slog.Warn("failed to create nightly Subscription, retrying", "attempt", attempt, "error", err, "backoff", backoff)
+			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s", attempt, err, backoff))
+			emit(UpdateStepEvent{Step: "create_subscription", Status: "running", Message: fmt.Sprintf("Attempt %d failed, retrying...", attempt)})
 		}
-		if attempt < 3 {
-			slog.Warn("failed to create nightly Subscription, retrying",
-				"attempt", attempt, "error", subApplyErr,
-				"backoff", subRetryBackoffs[attempt-1])
-			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s",
-				attempt, subApplyErr, subRetryBackoffs[attempt-1]))
-			emit(UpdateStepEvent{Step: "create_subscription", Status: "running",
-				Message: fmt.Sprintf("Attempt %d failed, retrying...", attempt)})
-			select {
-			case <-c.ctx.Done():
-				msg := "Operation cancelled during Subscription creation retry."
-				emit(UpdateStepEvent{Step: "create_subscription", Status: "failed", Message: msg})
-				recordReinstallActivity(c, "nightly", image, false)
-				return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-			case <-time.After(subRetryBackoffs[attempt-1]):
-			}
-		}
+	})
+	if cancelErr != nil {
+		msg := "Operation cancelled during Subscription creation retry."
+		emit(UpdateStepEvent{Step: "create_subscription", Status: "failed", Message: msg})
+		recordReinstallActivity(c, "nightly", image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, cancelErr
 	}
 	if subApplyErr != nil {
 		msg := fmt.Sprintf("Failed to create nightly Subscription after 3 attempts: %v. Manual intervention required.", subApplyErr)
@@ -1475,52 +1422,15 @@ func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.S
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Verifying InstallPlan creation..."})
 	logs = append(logs, "Verifying InstallPlan creation...")
 
-	ipFound := false
-	ipName := ""
-	ipTimeout := InstallPlanPollTimeout
-	ipPollInterval := InstallPlanPollInterval
-	ipDeadline := time.Now().Add(ipTimeout)
-
-	for time.Now().Before(ipDeadline) {
-		select {
-		case <-c.ctx.Done():
-			msg := "Operation cancelled while waiting for InstallPlan"
-			logs = append(logs, msg)
-			emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
-			recordReinstallActivity(c, "nightly", image, false)
-			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-		case <-time.After(ipPollInterval):
-		}
-
-		subBody, _, subGetErr := c.get(subApplyPath)
-		if subGetErr != nil {
-			slog.Debug("error polling Subscription for installPlanRef", "error", subGetErr)
-			continue
-		}
-		var subResult map[string]interface{}
-		if jsonErr := json.Unmarshal(subBody, &subResult); jsonErr != nil {
-			continue
-		}
-		subStatus, _ := subResult["status"].(map[string]interface{})
-		if subStatus == nil {
-			continue
-		}
-		ipRef, _ := subStatus["installPlanRef"].(map[string]interface{})
-		if ipRef != nil {
-			if name, ok := ipRef["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
-		if ipField, ok := subStatus["installplan"].(map[string]interface{}); ok {
-			if name, ok := ipField["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
+	ipName, ipErr := waitForInstallPlan(c, subApplyPath)
+	if ipErr != nil {
+		msg := "Operation cancelled while waiting for InstallPlan"
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
+		recordReinstallActivity(c, "nightly", image, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, ipErr
 	}
+	ipFound := ipName != ""
 
 	if !ipFound {
 		msg := "No InstallPlan created within 60s -- OLM may still be processing"
@@ -1572,30 +1482,18 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 		},
 	}
 	subApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	stableRetryBackoffs := SubRetryBackoffs
-	var stableApplyErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		_, _, stableApplyErr = c.apply(subApplyPath, newSub)
-		if stableApplyErr == nil {
-			break
+	stableApplyErr, cancelErr := applySubscriptionWithRetry(c, subApplyPath, newSub, func(attempt int, err error, willRetry bool, backoff time.Duration) {
+		if willRetry {
+			slog.Warn("failed to create stable Subscription, retrying", "attempt", attempt, "error", err, "backoff", backoff)
+			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s", attempt, err, backoff))
+			emit(UpdateStepEvent{Step: "create_subscription", Status: "running", Message: fmt.Sprintf("Attempt %d failed, retrying...", attempt)})
 		}
-		if attempt < 3 {
-			slog.Warn("failed to create stable Subscription, retrying",
-				"attempt", attempt, "error", stableApplyErr,
-				"backoff", stableRetryBackoffs[attempt-1])
-			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s",
-				attempt, stableApplyErr, stableRetryBackoffs[attempt-1]))
-			emit(UpdateStepEvent{Step: "create_subscription", Status: "running",
-				Message: fmt.Sprintf("Attempt %d failed, retrying...", attempt)})
-			select {
-			case <-c.ctx.Done():
-				msg := "Operation cancelled during Subscription creation retry."
-				emit(UpdateStepEvent{Step: "create_subscription", Status: "failed", Message: msg})
-				recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
-				return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-			case <-time.After(stableRetryBackoffs[attempt-1]):
-			}
-		}
+	})
+	if cancelErr != nil {
+		msg := "Operation cancelled during Subscription creation retry."
+		emit(UpdateStepEvent{Step: "create_subscription", Status: "failed", Message: msg})
+		recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, cancelErr
 	}
 	if stableApplyErr != nil {
 		msg := fmt.Sprintf("Failed to create stable Subscription after 3 attempts: %v. Manual intervention required.", stableApplyErr)
@@ -1613,52 +1511,15 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Verifying InstallPlan creation..."})
 	logs = append(logs, "Verifying InstallPlan creation...")
 
-	ipFound := false
-	ipName := ""
-	ipTimeout := InstallPlanPollTimeout
-	ipPollInterval := InstallPlanPollInterval
-	ipDeadline := time.Now().Add(ipTimeout)
-
-	for time.Now().Before(ipDeadline) {
-		select {
-		case <-c.ctx.Done():
-			msg := "Operation cancelled while waiting for InstallPlan"
-			logs = append(logs, msg)
-			emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
-			recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
-			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-		case <-time.After(ipPollInterval):
-		}
-
-		subBody, _, subGetErr := c.get(subApplyPath)
-		if subGetErr != nil {
-			slog.Debug("error polling Subscription for installPlanRef", "error", subGetErr)
-			continue
-		}
-		var subResult map[string]interface{}
-		if jsonErr := json.Unmarshal(subBody, &subResult); jsonErr != nil {
-			continue
-		}
-		subStatus, _ := subResult["status"].(map[string]interface{})
-		if subStatus == nil {
-			continue
-		}
-		ipRef, _ := subStatus["installPlanRef"].(map[string]interface{})
-		if ipRef != nil {
-			if name, ok := ipRef["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
-		if ipField, ok := subStatus["installplan"].(map[string]interface{}); ok {
-			if name, ok := ipField["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
+	ipName, ipErr := waitForInstallPlan(c, subApplyPath)
+	if ipErr != nil {
+		msg := "Operation cancelled while waiting for InstallPlan"
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
+		recordReinstallActivity(c, "stable", stableSource+"/"+stableChannel, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, ipErr
 	}
+	ipFound := ipName != ""
 
 	if !ipFound {
 		msg := "No InstallPlan created within 60s -- OLM may still be processing"
@@ -1960,6 +1821,16 @@ func recordRollbackActivity(c *Client, success bool) {
 	})
 }
 
+func recordRefreshActivity(c *Client, csvName string, success bool) {
+	RecordActivity(c, types.ActivityEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		User:      getUser(c),
+		Action:    "refresh",
+		Detail:    csvName,
+		Success:   success,
+	})
+}
+
 func recordReinstallActivity(c *Client, targetType, image string, success bool) {
 	detail := fmt.Sprintf("to latest GA from %s", getStableSource())
 	if targetType == "stable" && image != "" {
@@ -2096,13 +1967,7 @@ func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (result *types
 		msg := "Operation cancelled during cleanup wait."
 		logs = append(logs, msg)
 		emit(UpdateStepEvent{Step: "wait_cleanup", Status: "failed", Message: msg})
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			User:      getUser(c),
-			Action:    "refresh",
-			Detail:    csv.Name,
-			Success:   false,
-		})
+		recordRefreshActivity(c, csv.Name, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
 	case <-time.After(RefreshCleanupWait):
 	}
@@ -2130,43 +1995,21 @@ func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (result *types
 	}
 	subApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 
-	retryBackoffs := SubRetryBackoffs
-	var applyErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		_, _, applyErr = c.apply(subApplyPath, newSub)
-		if applyErr == nil {
-			break
-		}
-		slog.Warn("Subscription recreation failed, retrying", "attempt", attempt, "error", applyErr)
-		logs = append(logs, fmt.Sprintf("  Attempt %d/3 failed: %v", attempt, applyErr))
-		if attempt < 3 {
-			select {
-			case <-c.ctx.Done():
-				msg := "Operation cancelled during Subscription recreation retry."
-				emit(UpdateStepEvent{Step: "recreate_subscription", Status: "failed", Message: msg})
-				RecordActivity(c, types.ActivityEntry{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					User:      getUser(c),
-					Action:    "refresh",
-					Detail:    csv.Name,
-					Success:   false,
-				})
-				return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-			case <-time.After(retryBackoffs[attempt-1]):
-			}
-		}
+	applyErr, cancelErr := applySubscriptionWithRetry(c, subApplyPath, newSub, func(attempt int, err error, _ bool, _ time.Duration) {
+		slog.Warn("Subscription recreation failed", "attempt", attempt, "error", err)
+		logs = append(logs, fmt.Sprintf("  Attempt %d/3 failed: %v", attempt, err))
+	})
+	if cancelErr != nil {
+		msg := "Operation cancelled during Subscription recreation retry."
+		emit(UpdateStepEvent{Step: "recreate_subscription", Status: "failed", Message: msg})
+		recordRefreshActivity(c, csv.Name, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, cancelErr
 	}
 	if applyErr != nil {
 		msg := fmt.Sprintf("Failed to recreate Subscription after 3 attempts: %v", applyErr)
 		logs = append(logs, msg)
 		emit(UpdateStepEvent{Step: "recreate_subscription", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(applyErr)})
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			User:      getUser(c),
-			Action:    "refresh",
-			Detail:    csv.Name,
-			Success:   false,
-		})
+		recordRefreshActivity(c, csv.Name, false)
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   msg,
@@ -2181,58 +2024,15 @@ func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (result *types
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Verifying InstallPlan creation..."})
 	logs = append(logs, "Waiting for InstallPlan creation...")
 
-	ipFound := false
-	ipName := ""
-	ipTimeout := InstallPlanPollTimeout
-	ipPollInterval := InstallPlanPollInterval
-	ipDeadline := time.Now().Add(ipTimeout)
-
-	for time.Now().Before(ipDeadline) {
-		select {
-		case <-c.ctx.Done():
-			msg := "Operation cancelled while waiting for InstallPlan"
-			logs = append(logs, msg)
-			emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
-			RecordActivity(c, types.ActivityEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				User:      getUser(c),
-				Action:    "refresh",
-				Detail:    csv.Name,
-				Success:   false,
-			})
-			return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, c.ctx.Err()
-		case <-time.After(ipPollInterval):
-		}
-
-		subBody, _, subGetErr := c.get(subApplyPath)
-		if subGetErr != nil {
-			slog.Debug("error polling Subscription for installPlanRef", "error", subGetErr)
-			continue
-		}
-		var subResult map[string]interface{}
-		if jsonErr := json.Unmarshal(subBody, &subResult); jsonErr != nil {
-			continue
-		}
-		subStatus, _ := subResult["status"].(map[string]interface{})
-		if subStatus == nil {
-			continue
-		}
-		ipRef, _ := subStatus["installPlanRef"].(map[string]interface{})
-		if ipRef != nil {
-			if name, ok := ipRef["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
-		if ipField, ok := subStatus["installplan"].(map[string]interface{}); ok {
-			if name, ok := ipField["name"].(string); ok && name != "" {
-				ipName = name
-				ipFound = true
-				break
-			}
-		}
+	ipName, ipErr := waitForInstallPlan(c, subApplyPath)
+	if ipErr != nil {
+		msg := "Operation cancelled while waiting for InstallPlan"
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
+		recordRefreshActivity(c, csv.Name, false)
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs}, ipErr
 	}
+	ipFound := ipName != ""
 
 	if !ipFound {
 		msg := "No InstallPlan created within 60s -- OLM may still be processing"
@@ -2240,13 +2040,7 @@ func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (result *types
 		emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: msg})
 		logs = append(logs, "Refresh initiated but InstallPlan verification timed out. OLM may still be processing.")
 		logs = append(logs, "This typically takes 1-3 minutes.")
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			User:      getUser(c),
-			Action:    "refresh",
-			Detail:    csv.Name,
-			Success:   true,
-		})
+		recordRefreshActivity(c, csv.Name, true)
 		return &types.OperationResponse{
 			Success: true,
 			Message: "Operator refresh initiated (InstallPlan pending -- OLM may still be processing).",
@@ -2260,13 +2054,7 @@ func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (result *types
 	logs = append(logs, "OLM will create a new InstallPlan and reinstall with updated images.")
 	logs = append(logs, "This typically takes 1-3 minutes.")
 
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "refresh",
-		Detail:    csv.Name,
-		Success:   true,
-	})
+	recordRefreshActivity(c, csv.Name, true)
 
 	return &types.OperationResponse{
 		Success: true,
