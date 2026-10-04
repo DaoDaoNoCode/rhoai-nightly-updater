@@ -429,8 +429,8 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 
 	type scanResult struct {
-		tags []string
-		err  error
+		tags       []string
+		incomplete bool // a page could not be read even after a retry
 	}
 	results := make(chan scanResult, len(startPoints))
 
@@ -439,24 +439,15 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 			var found []string
 			lastTag := startTag
 			for page := 0; page < 30; page++ {
-				url := fmt.Sprintf("%s?n=100&last=%s", quayTagsURL, lastTag)
-				req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+				data, status, err := fetchTagPage(ctx, httpClient, bearerToken, lastTag)
 				if err != nil {
-					break
+					slog.Warn("quay tag scan: page failed", "start", startTag, "last", lastTag, "error", err)
+					results <- scanResult{tags: found, incomplete: true}
+					return
 				}
-				req.Header.Set("Authorization", "Bearer "+bearerToken)
-				req.Header.Set("Accept", "application/json")
-				resp, err := httpClient.Do(req)
-				if err != nil {
-					break
-				}
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-				resp.Body.Close()
-				if resp.StatusCode != 200 {
-					break
-				}
-				var data quayTagsResponse
-				if json.Unmarshal(body, &data) != nil || len(data.Tags) == 0 {
+				// Other client errors end this start point, as before; the
+				// remaining start points cover the rest of the range.
+				if status != http.StatusOK || len(data.Tags) == 0 {
 					break
 				}
 				pastRange := false
@@ -480,8 +471,10 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 
 	seen := make(map[string]bool)
 	var allCleanTags []string
+	incomplete := false
 	for range startPoints {
 		r := <-results
+		incomplete = incomplete || r.incomplete
 		for _, t := range r.tags {
 			if !seen[t] {
 				seen[t] = true
@@ -491,6 +484,9 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 
 	if len(allCleanTags) == 0 {
+		if incomplete {
+			return nil, fmt.Errorf("could not list rhoai release tags from Quay; retry shortly")
+		}
 		return nil, fmt.Errorf("no rhoai release tags found")
 	}
 
@@ -508,6 +504,13 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 		return compareTags(parsed[i], parsed[j]) < 0
 	})
 
+	// A partial scan can miss the newest releases, so it is returned for this
+	// request but not cached; the next request scans again.
+	if incomplete {
+		slog.Warn("quay tag scan incomplete; result not cached", "tags", len(parsed))
+		return parsed, nil
+	}
+
 	// Update the cache so subsequent callers get the cached result.
 	tagScanCacheMu.Lock()
 	tagScanCache = make([]parsedTag, len(parsed))
@@ -516,6 +519,53 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	tagScanCacheMu.Unlock()
 
 	return parsed, nil
+}
+
+// fetchTagPage reads one page of the Quay tag list. Network failures,
+// throttling and server errors are retried once and then returned as errors;
+// other responses are returned with their status for the caller to interpret.
+func fetchTagPage(ctx context.Context, httpClient *http.Client, bearerToken, last string) (quayTagsResponse, int, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return quayTagsResponse{}, 0, ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		url := fmt.Sprintf("%s?n=100&last=%s", quayTagsURL, last)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return quayTagsResponse{}, 0, err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+		req.Header.Set("Accept", "application/json")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("quay tags list returned HTTP %d", resp.StatusCode)
+			continue
+		}
+		var data quayTagsResponse
+		if resp.StatusCode == http.StatusOK {
+			if err := json.Unmarshal(body, &data); err != nil {
+				lastErr = fmt.Errorf("parse quay tags list: %w", err)
+				continue
+			}
+		}
+		return data, resp.StatusCode, nil
+	}
+	return quayTagsResponse{}, 0, lastErr
 }
 
 // FetchLatestNightly returns the highest-versioned nightly tag and its image reference.
