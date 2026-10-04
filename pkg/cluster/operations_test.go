@@ -1384,98 +1384,79 @@ func TestRefreshOperator_NoCSV(t *testing.T) {
 }
 
 func TestRefreshOperator_ContextCancellation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow test in short mode")
-	}
+	responses, paths := buildRefreshMocks()
 
-	responses, _ := buildRefreshMocks()
-
-	// Use a recording mock so we can inspect requests
-	_, records, cleanup := newRecordingMockClient(responses)
-
-	// Build a client with a context we can cancel. We need the same server URL
-	// and httpClient, so grab them from the server the mock created.
-	// Re-create the mock with a cancellable context.
-	cleanup() // close the first server
-
-	// Create a fresh server with the same responses
+	// Cancel the operation as soon as the CSV is being deleted, i.e. after the
+	// operator has started to be removed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var mu sync.Mutex
 	var recs []requestRecord
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		recs = append(recs, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
-
+		if r.Method == "DELETE" && r.URL.Path == paths["csvDelete"] {
+			cancel()
+		}
 		key := r.Method + " " + r.URL.Path
 		resp, ok := responses[key]
 		if !ok {
 			resp, ok = responses[r.URL.Path]
 		}
+		w.Header().Set("Content-Type", "application/json")
 		if !ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"apiVersion":"v1","kind":"ConfigMap","data":{}}`))
 			return
 		}
 		if resp.statusCode == 0 {
 			resp.statusCode = 200
 		}
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.statusCode)
 		w.Write([]byte(resp.body))
 	}))
 	defer server.Close()
 
-	// Cancel context almost immediately so the 5-second wait is interrupted
-	ctx, cancel := context.WithCancel(context.Background())
-
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: server.Client(),
-		ctx:        ctx,
+	client := &Client{baseURL: server.URL, token: "test-token", httpClient: server.Client(), ctx: ctx}
+	result, _ := RefreshOperator(client)
+	if result == nil || result.Success {
+		t.Fatalf("expected failure on context cancellation, got %+v", result)
+	}
+	if !strings.Contains(result.Message, "restored") {
+		t.Errorf("expected the previous Subscription to be restored, got: %s", result.Message)
 	}
 
-	// Cancel context after a brief moment to allow the CSV/Sub deletes to succeed
-	// but interrupt the 5-second wait.
-	go func() {
-		// Wait until the DELETE requests have been issued, then cancel
-		for {
-			mu.Lock()
-			count := len(recs)
-			mu.Unlock()
-			if count >= 4 { // GET csv list + GET sub + DELETE csv + DELETE sub (at minimum)
-				break
-			}
-		}
-		cancel()
-	}()
-
-	result, err := RefreshOperator(client)
-	// The function should return ctx.Err() and a failure response
-	if err == nil {
-		// If err is nil, the context was not caught during the wait window.
-		// This can happen if the cancel races with time.After.
-		// Check that at least the result indicates cancellation.
-		if result.Success {
-			t.Error("expected failure on context cancellation")
-		}
-	} else if err != context.Canceled {
-		t.Errorf("expected context.Canceled error, got: %v", err)
-	}
-
-	if result != nil && result.Success {
-		t.Error("expected failure result on context cancellation")
-	}
-
-	// Verify no Subscription PATCH was issued (cancelled before recreation)
-	_ = records // suppress unused warning from the first mock
+	// The saved Subscription must be re-applied after the CSV deletion began.
 	mu.Lock()
 	defer mu.Unlock()
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
+	csvDeleted, restored := false, false
 	for _, rec := range recs {
-		if rec.Method == "PATCH" && rec.Path == subPath {
-			t.Error("Subscription should NOT have been recreated after context cancellation")
+		if rec.Method == "DELETE" && rec.Path == paths["csvDelete"] {
+			csvDeleted = true
+		}
+		if csvDeleted && rec.Method == "PATCH" && rec.Path == paths["sub"] {
+			restored = true
+		}
+	}
+	if !csvDeleted || !restored {
+		t.Errorf("csvDeleted=%v restored=%v; requests: %v", csvDeleted, restored, recs)
+	}
+}
+
+func TestRefreshOperator_MissingSubscriptionChangesNothing(t *testing.T) {
+	responses, paths := buildRefreshMocks()
+	delete(responses, paths["sub"])
+	responses["GET "+paths["sub"]] = mockResponse{statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`}
+	client, records, cleanup := newRecordingMockClient(responses)
+	defer cleanup()
+
+	result, err := RefreshOperator(client)
+	if err != nil || result.Success || result.ErrorCode != "prerequisites" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for _, rec := range *records {
+		if rec.Method == "DELETE" || rec.Method == "PATCH" && strings.Contains(rec.Path, "/operators.coreos.com/") {
+			t.Fatalf("nothing may be changed without a usable Subscription, got %s %s", rec.Method, rec.Path)
 		}
 	}
 }

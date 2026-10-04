@@ -1988,7 +1988,7 @@ func RefreshOperator(c *Client) (*types.OperationResponse, error) {
 // via the emit callback so callers can stream status to SSE clients.
 // It deletes the current CSV and Subscription, waits for cleanup, recreates
 // the Subscription to trigger a fresh InstallPlan, and verifies the InstallPlan.
-func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (result *types.OperationResponse, opErr error) {
 	logs := []string{}
 
 	// --- Step 1: verify_csv ---
@@ -2035,8 +2035,27 @@ func RefreshOperatorStream(c *Client, emit func(UpdateStepEvent)) (*types.Operat
 		emit(UpdateStepEvent{Step: "get_subscription", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(err)})
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
+	if sub.State == "Not Installed" || sub.Source == "" || sub.Channel == "" {
+		// Refresh recreates the Subscription from its own source and channel;
+		// without them it would leave the operator uninstalled.
+		msg := "The operator Subscription is missing or has no source/channel, so it cannot be recreated. Nothing was changed; use Reinstall instead."
+		logs = append(logs, msg)
+		emit(UpdateStepEvent{Step: "get_subscription", Status: "failed", Message: msg, ErrorCode: "prerequisites"})
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "prerequisites"}, nil
+	}
 	logs = append(logs, fmt.Sprintf("Subscription: source=%s, channel=%s", sub.Source, sub.Channel))
 	emit(UpdateStepEvent{Step: "get_subscription", Status: "success", Message: fmt.Sprintf("Subscription: %s/%s", sub.Source, sub.Channel), Detail: sub.Channel})
+
+	// If anything below fails, restore the previous Subscription so OLM
+	// reinstalls the operator, as Update and Reinstall do.
+	recovery, recoveryErr := captureOperatorRecovery(c)
+	if recoveryErr != nil {
+		msg := recoveryErr.Error() + ". Nothing was changed."
+		emit(UpdateStepEvent{Step: "get_subscription", Status: "failed", Message: msg, ErrorCode: errorCodeFromK8sErr(recoveryErr)})
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "prerequisites"}, nil
+	}
+	defer func() { recovery.restore(c, result, opErr, emit) }()
+	recovery.started = true
 
 	// --- Step 4: delete_csv ---
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger fresh install..."})
