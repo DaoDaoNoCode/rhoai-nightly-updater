@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -25,8 +26,9 @@ var (
 )
 
 const (
-	maxLayerSize          = 50 * 1024 * 1024 // 50MB
-	fbcCacheMaxEntries    = 100
+	maxLayerSize       = 50 * 1024 * 1024 // compressed layer bytes
+	maxCatalogFileSize = 10 * 1024 * 1024 // per catalog file
+	fbcCacheMaxEntries = 100
 )
 
 type fbcEntry struct {
@@ -44,18 +46,19 @@ type fbcRelatedImage struct {
 // ExtractFBCContent downloads an FBC catalog image from Quay, parses its
 // layers to find olm.bundle entries, and returns the relatedImages list.
 func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.FBCContentResponse, error) {
-	_, digest, ok := extractRepoAndDigest(imageRef)
-	if !ok {
-		// Try parsing as tag-only reference (quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5-ea.2)
-		digest = imageRef
-	}
+	// Only digest-pinned references are cached: a tag can move to a new build.
+	// The tag is part of the key because it selects the bundle to show.
+	_, digest, cacheable := extractRepoAndDigest(imageRef)
+	cacheKey := digest + "|" + extractTagFromRef(imageRef)
 
-	fbcContentCacheMu.RLock()
-	if cached, ok := fbcContentCache[digest]; ok {
+	if cacheable {
+		fbcContentCacheMu.RLock()
+		if cached, ok := fbcContentCache[cacheKey]; ok {
+			fbcContentCacheMu.RUnlock()
+			return cached, nil
+		}
 		fbcContentCacheMu.RUnlock()
-		return cached, nil
 	}
-	fbcContentCacheMu.RUnlock()
 
 	basicAuth := getQuayAuth(c)
 	if basicAuth == "" {
@@ -135,11 +138,13 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 	// in the last layer, added on top of a base image during build)
 	var allRelatedImages []fbcRelatedImage
 	var bundleName string
+	var layerErr error
 
 	for i := len(layerDigests) - 1; i >= 0; i-- {
 		images, bn, err := downloadAndParseLayer(ctx, quayHTTPClient, bearerToken, layerDigests[i], tag)
 		if err != nil {
-			slog.Warn("failed to parse FBC layer", "digest", layerDigests[i][:20], "error", err)
+			slog.Warn("failed to parse FBC layer", "digest", layerDigests[i], "error", err)
+			layerErr = err
 			continue
 		}
 		allRelatedImages = append(allRelatedImages, images...)
@@ -149,6 +154,11 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 		if bundleName != "" && len(allRelatedImages) > 0 {
 			break
 		}
+	}
+
+	if bundleName == "" && len(allRelatedImages) == 0 && layerErr != nil {
+		// Report the failure instead of an apparently empty catalog.
+		return nil, fmt.Errorf("reading FBC layers: %w", layerErr)
 	}
 
 	// Deduplicate by image reference and categorize
@@ -189,12 +199,14 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 		Categories:    categories,
 	}
 
-	fbcContentCacheMu.Lock()
-	if len(fbcContentCache) >= fbcCacheMaxEntries {
-		evictFBCCache()
+	if cacheable {
+		fbcContentCacheMu.Lock()
+		if len(fbcContentCache) >= fbcCacheMaxEntries {
+			evictFBCCache()
+		}
+		fbcContentCache[cacheKey] = result
+		fbcContentCacheMu.Unlock()
 	}
-	fbcContentCache[digest] = result
-	fbcContentCacheMu.Unlock()
 
 	return result, nil
 }
@@ -369,10 +381,8 @@ func downloadAndParseLayer(ctx context.Context, client *http.Client, token, laye
 		return nil, "", fmt.Errorf("layer download returned HTTP %d", resp.StatusCode)
 	}
 
-	limitedReader := io.LimitReader(resp.Body, maxLayerSize)
-
-	// Try gzip first, fall back to raw tar
-	gzReader, err := gzip.NewReader(limitedReader)
+	// Fail rather than parse a silently truncated layer or catalog file.
+	gzReader, err := gzip.NewReader(&sizeLimitedReader{r: resp.Body, remaining: maxLayerSize, what: "layer"})
 	if err != nil {
 		return nil, "", fmt.Errorf("gzip decompress: %w", err)
 	}
@@ -389,7 +399,7 @@ func downloadAndParseLayer(ctx context.Context, client *http.Client, token, laye
 			break
 		}
 		if err != nil {
-			break
+			return nil, "", fmt.Errorf("read layer archive: %w", err)
 		}
 
 		if header.Typeflag != tar.TypeReg {
@@ -402,9 +412,9 @@ func downloadAndParseLayer(ctx context.Context, client *http.Client, token, laye
 			continue
 		}
 
-		content, err := io.ReadAll(io.LimitReader(tarReader, 10*1024*1024))
+		content, err := io.ReadAll(&sizeLimitedReader{r: tarReader, remaining: maxCatalogFileSize, what: "catalog file " + name})
 		if err != nil {
-			continue
+			return nil, "", err
 		}
 
 		images, bn := parseFBCContent(content, targetTag)
@@ -417,6 +427,31 @@ func downloadAndParseLayer(ctx context.Context, client *http.Client, token, laye
 	return allImages, bundleName, nil
 }
 
+// sizeLimitedReader reads at most remaining bytes and returns an error, rather
+// than a silent EOF, when the underlying stream is longer.
+type sizeLimitedReader struct {
+	r         io.Reader
+	remaining int64
+	what      string
+}
+
+func (l *sizeLimitedReader) Read(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		var probe [1]byte
+		n, err := l.r.Read(probe[:])
+		if n > 0 {
+			return 0, fmt.Errorf("%s exceeds the size limit", l.what)
+		}
+		return 0, err
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err := l.r.Read(p)
+	l.remaining -= int64(n)
+	return n, err
+}
+
 func isCatalogFile(path string) bool {
 	if strings.HasPrefix(path, "configs/") || strings.HasPrefix(path, "catalog/") {
 		return strings.HasSuffix(path, ".json") || strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
@@ -424,77 +459,120 @@ func isCatalogFile(path string) bool {
 	return false
 }
 
+// parseFBCContent returns the relatedImages of the bundle that matches
+// targetTag in one catalog file. File-based catalogs are a stream of objects
+// written as YAML documents or as JSON (one per line or pretty-printed and
+// concatenated, the default output of opm render).
 func parseFBCContent(content []byte, targetTag string) ([]fbcRelatedImage, string) {
-	var allImages []fbcRelatedImage
-	var bundleName string
-
-	// Try YAML multi-document first (split on "---")
-	if parseYAMLFBC(content, targetTag, &allImages, &bundleName) {
-		return allImages, bundleName
-	}
-
-	// Fallback: try newline-delimited JSON
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var entry fbcEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-		if entry.Schema == "olm.bundle" && len(entry.RelatedImages) > 0 {
-			allImages = append(allImages, entry.RelatedImages...)
-			if entry.Name != "" {
-				bundleName = entry.Name
-			}
-		}
-	}
-
-	return allImages, bundleName
-}
-
-func parseYAMLFBC(content []byte, targetTag string, allImages *[]fbcRelatedImage, bundleName *string) bool {
-	var bundles []fbcBundleInfo
-
-	decoder := yaml.NewDecoder(strings.NewReader(string(content)))
-	for {
-		var entry fbcEntry
-		err := decoder.Decode(&entry)
-		if err != nil {
-			break
-		}
-		if entry.Schema == "olm.bundle" && len(entry.RelatedImages) > 0 {
-			bundles = append(bundles, fbcBundleInfo{name: entry.Name, images: entry.RelatedImages})
-		}
-	}
-
+	bundles := decodeFBCBundles(content)
 	if len(bundles) == 0 {
-		return false
+		return nil, ""
 	}
 
 	// Match bundle to the tag version. Tag "rhoai-3.5-ea.2" → match "rhods-operator.3.5*-ea.2"
 	// Tag "rhoai-3.4" → match "rhods-operator.3.4.*" (highest patch)
 	best := findMatchingBundle(bundles, targetTag)
 	if best == nil {
-		// Fallback: use the bundle with the highest version
-		best = &bundles[0]
-		for i := range bundles {
-			if bundles[i].name > best.name {
-				best = &bundles[i]
-			}
-		}
+		best = highestBundle(bundles)
 	}
 
-	*bundleName = best.name
+	var images []fbcRelatedImage
 	for _, img := range best.images {
 		if strings.HasSuffix(img.Name, "-annotation") {
 			continue
 		}
-		*allImages = append(*allImages, img)
+		images = append(images, img)
 	}
-	return true
+	return images, best.name
+}
+
+// decodeFBCBundles extracts olm.bundle entries that list relatedImages.
+func decodeFBCBundles(content []byte) []fbcBundleInfo {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	decoders := []func([]byte) []fbcEntry{decodeYAMLEntries, decodeJSONEntries}
+	if trimmed[0] == '{' {
+		decoders = []func([]byte) []fbcEntry{decodeJSONEntries, decodeYAMLEntries}
+	}
+	for _, decode := range decoders {
+		var bundles []fbcBundleInfo
+		for _, entry := range decode(trimmed) {
+			if entry.Schema == "olm.bundle" && len(entry.RelatedImages) > 0 {
+				bundles = append(bundles, fbcBundleInfo{name: entry.Name, images: entry.RelatedImages})
+			}
+		}
+		if len(bundles) > 0 {
+			return bundles
+		}
+	}
+	return nil
+}
+
+func decodeYAMLEntries(content []byte) []fbcEntry {
+	var entries []fbcEntry
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	for {
+		var entry fbcEntry
+		if err := decoder.Decode(&entry); err != nil {
+			break
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// decodeJSONEntries reads a stream of JSON objects. If the stream is malformed
+// it falls back to decoding each line separately, skipping bad lines.
+func decodeJSONEntries(content []byte) []fbcEntry {
+	var entries []fbcEntry
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	for {
+		var entry fbcEntry
+		err := decoder.Decode(&entry)
+		if err == io.EOF {
+			return entries
+		}
+		if err != nil {
+			break
+		}
+		entries = append(entries, entry)
+	}
+	var lineEntries []fbcEntry
+	for _, line := range strings.Split(string(content), "\n") {
+		var entry fbcEntry
+		if json.Unmarshal([]byte(strings.TrimSpace(line)), &entry) == nil {
+			lineEntries = append(lineEntries, entry)
+		}
+	}
+	if len(lineEntries) > len(entries) {
+		return lineEntries
+	}
+	return entries
+}
+
+// highestBundle returns the bundle with the highest operator version, using
+// the name as a tiebreaker and for names that do not parse as versions.
+func highestBundle(bundles []fbcBundleInfo) *fbcBundleInfo {
+	best := &bundles[0]
+	bestVersion, bestOK := parseCSVVersion(best.name)
+	for i := 1; i < len(bundles); i++ {
+		version, ok := parseCSVVersion(bundles[i].name)
+		better := false
+		switch {
+		case ok != bestOK:
+			better = ok // a parseable version beats an unparseable name
+		case ok && compareTags(version, bestVersion) != 0:
+			better = compareTags(version, bestVersion) > 0
+		default:
+			better = bundles[i].name > best.name
+		}
+		if better {
+			best, bestVersion, bestOK = &bundles[i], version, ok
+		}
+	}
+	return best
 }
 
 func findMatchingBundle(bundles []fbcBundleInfo, tag string) *fbcBundleInfo {
