@@ -144,6 +144,7 @@ Triggered by the Quick Resource Creator MinIO action.
 
 **What happens:**
 - Creates a complete MinIO deployment in the `minio` namespace
+- Credentials already stored in `minio-secret` are reused when setup runs again, so existing pipeline servers keep working
 - S3 bucket `pipelines` is created via MinIO S3 API after deployment is ready
 
 ---
@@ -363,7 +364,7 @@ Triggered by diagnostics auto-fix for failing components.
 
 | Kind | Name | Namespace | Operation |
 |------|------|-----------|-----------|
-| DataScienceCluster | `default-dsc` | cluster-scoped | patch |
+| DataScienceCluster | the cluster's DSC (as shown on the Components page) | cluster-scoped | patch |
 
 **What happens:**
 - Sets component managementState to "Removed"

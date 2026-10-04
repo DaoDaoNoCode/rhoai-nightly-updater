@@ -11,11 +11,11 @@ NC='\033[0m' # No Color
 # Local development mode:
 # - Go backend on :8080, connects to your current oc cluster
 # - Webpack dev server on :9000, proxies /api to :8080
-# - Open http://localhost:9000 in your browser
+# - Open http://127.0.0.1:9000 in your browser
 #
-# Since there's no oauth-proxy locally, the frontend sends requests
-# directly to the Go backend with the Authorization header set to
-# your current oc token.
+# Since there's no oauth-proxy locally, the Go backend runs with
+# DEV_MODE=true and uses your current oc token (DEV_TOKEN) for every
+# request. Both servers therefore listen on 127.0.0.1 only.
 
 echo -e "${CYAN}=== RHOAI Nightly Updater — Dev Mode ===${NC}"
 echo ""
@@ -70,7 +70,7 @@ sleep 1
 # Start webpack dev server
 echo -e "${CYAN}Starting frontend dev server on :9000...${NC}"
 echo ""
-echo -e "${GREEN}Open ${YELLOW}http://localhost:9000${GREEN} in your browser${NC}"
+echo -e "${GREEN}Open ${YELLOW}http://127.0.0.1:9000${GREEN} in your browser${NC}"
 echo -e "(requests are proxied to the Go backend on :8080)"
 echo ""
 (cd frontend && npm run dev) &

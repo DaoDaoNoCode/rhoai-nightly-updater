@@ -147,7 +147,7 @@ curl -s -u "$(echo $QUAY_AUTH | base64 -d)" "https://quay.io/v2/auth?service=qua
 **Pull secret expired or missing**
 - The `additional-pull-secret` in `kube-system` contains the Quay robot account credentials. If the robot account token was rotated in Quay, update it:
   1. Get the new credentials from Bitwarden Enterprise ("Openshift AI devel" collection).
-  2. Use the app's Setup page to update the pull secret, or manually:
+  2. Use the app's Setup page to update the pull secret (it replaces only the `quay.io/rhoai` entry and keeps other registry credentials), or manually. The manual command below replaces every entry in the secret:
      ```bash
      oc patch secret additional-pull-secret -n kube-system --type merge \
        -p '{"data":{".dockerconfigjson":"'$(echo -n '{"auths":{"quay.io/rhoai":{"auth":"<base64-user:pass>"}}}' | base64)'"}}'

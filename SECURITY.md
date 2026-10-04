@@ -31,9 +31,9 @@ The ServiceAccount has a custom ClusterRole with permissions limited to:
 | `operators.coreos.com` | subscriptions, clusterserviceversions, catalogsources, installplans | get, list, create, update, patch, delete | Manage RHOAI operator |
 | `packages.operators.coreos.com` | packagemanifests | get, list | Read available packages |
 | `""` (core) | secrets | get, list, create, update, patch, delete | Manage pull secret, MinIO credentials, DSPA secrets |
-| `""` (core) | pods | get, list | Read pods for debug/components |
+| `""` (core) | pods | get, list, delete | Read pods for debug/components; delete a Pending pod to unblock a stuck rollout |
 | `""` (core) | nodes | get, list | Read node status for capacity checks |
-| `""` (core) | namespaces | get, list, create, delete | Read namespaces; create/delete for MinIO and DS projects |
+| `""` (core) | namespaces | get, list, create, patch, delete | Read namespaces; create the operator namespace; create/delete for MinIO and DS projects |
 | `""` (core) | services, persistentvolumeclaims | get, list, create, update, patch, delete | Quick Resource Creator (MinIO service, PVCs) |
 | `apps` | deployments | get, list, create, update, patch, delete | Component status; MinIO deployment; Dashboard Dev PR deploy/revert |
 | `apps` | replicasets | get, list, create, update, patch, delete | Rollout management for stuck deployments |
@@ -48,10 +48,11 @@ The ServiceAccount has a custom ClusterRole with permissions limited to:
 | `components.platform.opendatahub.io` | * | get, list, patch | Component CR lifecycle (stuck finalizer cleanup) |
 | `gateway.networking.k8s.io` | gateways | get, patch | Gateway management |
 | `user.openshift.io` | users | get | Read user identity |
+| `authorization.k8s.io` | selfsubjectaccessreviews | create | Permission self-checks |
 
 All mutation operations -- including Dashboard Dev PR image deployment, MinIO setup, pipeline server creation, and MLflow management -- use the **ServiceAccount token**. The user's OAuth token is used for the permission check shared by mutation endpoints and `/api/user/permissions`. The app grants its mutation capabilities to operator editors; it does not independently delegate each operation's underlying Kubernetes permissions. Viewers who pass the login gate have read-only access.
 
-This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources, namespaces, or perform destructive operations outside the scope listed above.
+This is not cluster-admin: the ServiceAccount can only use the resources and verbs listed above. Several of them are cluster-wide, though. Secrets, Deployments, Pods and namespaces can be read or changed in any namespace (pipeline projects are created dynamically), so the ServiceAccount token must be protected like an administrator credential. Narrowing these rules to fixed namespaces would require moving them to namespaced Roles.
 
 ## Network Isolation
 
@@ -97,6 +98,6 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 - **Operation lifetime**: Accepted mutations continue if the browser disconnects, with a 15-minute deadline. Operator lifecycle operations keep the mutation lock until completion. Cleanup failures trigger a bounded attempt to restore the previous catalog and Subscription desired state. On SIGTERM the backend stops accepting mutations, reports not ready, and waits up to 16 minutes for running ones to finish (`SHUTDOWN_DRAIN_TIMEOUT`); the Deployment uses the `Recreate` strategy and a 1020-second termination grace period so only one pod runs operations. A crash or forced kill still interrupts in-process operations; there is no durable job queue.
 - **Usage analytics are privacy-safe**: The app tracks aggregate page view and feature usage counters via Prometheus metrics (`/metrics` endpoint). No user identity, IP addresses, or session data is stored — only counters like `page_views_total{page="dashboard"} 42`. The `POST /api/pageview` endpoint requires authentication and validates label names against a strict regex with a 100-label cap to prevent cardinality attacks.
 - **Dev mode bypass**: When `DEV_MODE=true` and no ServiceAccount token is available, authentication is bypassed using `DEV_TOKEN`. This path is never active in-cluster because the SA token file is always mounted. In dev mode the backend listens on `127.0.0.1` only (override with `BIND_ADDRESS`), and the webpack dev server also binds to `127.0.0.1`.
-- **TLS enforcement**: In-cluster, the backend requires the ServiceAccount CA certificate for TLS verification. `InsecureSkipVerify` is only allowed when `DEV_MODE=true` (local development). In production without the CA cert, the server exits with a fatal error.
-- **Shared HTTP client**: All Quay/GitHub API calls use a shared HTTP client with connection pooling to prevent file descriptor exhaustion under load.
+- **TLS enforcement**: In-cluster, the backend requires the ServiceAccount CA certificate for TLS verification. `InsecureSkipVerify` is only allowed when `DEV_MODE=true` (local development). Without the CA cert outside dev mode, verification stays strict against the system trust store, so API calls fail rather than fall back to insecure TLS.
+- **Shared HTTP clients**: Quay registry calls share one pooled HTTP client (which honors `HTTP(S)_PROXY`) to prevent file descriptor exhaustion under load; the DSC defaults download from GitHub uses Go's default client.
 - **Cache TTL**: Image label and commit date caches use a 1-hour TTL with lazy eviction to prevent unbounded memory growth. FBC content is cached by digest (immutable). Tag scan results are cached for 5 minutes.

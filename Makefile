@@ -55,8 +55,8 @@ lint-go:  ## Run Go linter (golangci-lint)
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; exit 1; }
 	golangci-lint run ./...
 
-lint-frontend:  ## Run frontend linter
-	cd frontend && npm run lint 2>/dev/null || echo "No lint script configured in frontend/package.json yet"
+lint-frontend:  ## Type-check the frontend
+	cd frontend && npm run typecheck
 
 test: test-go test-frontend  ## Run all tests
 
@@ -64,7 +64,7 @@ test-go:  ## Run Go tests
 	go test ./... -v -count=1
 
 test-frontend:  ## Run frontend tests
-	cd frontend && npm test 2>/dev/null || echo "No test script configured in frontend/package.json yet"
+	cd frontend && npm test
 
 clean:  ## Remove build artifacts
 	rm -f server

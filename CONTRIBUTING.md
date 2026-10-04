@@ -31,10 +31,10 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 This starts two servers:
 
-1. **Go backend** on `:8080` — connects to your current OpenShift cluster using your `oc` token
-2. **Webpack dev server** on `:9000` — proxies `/api` requests to the backend on `:8080`
+1. **Go backend** on `127.0.0.1:8080` — connects to your current OpenShift cluster using your `oc` token
+2. **Webpack dev server** on `127.0.0.1:9000` — proxies `/api` requests to the backend on `:8080`
 
-Open **http://localhost:9000** in your browser.
+Open **http://127.0.0.1:9000** in your browser.
 
 ### What `dev.sh` Does
 
@@ -46,10 +46,10 @@ Open **http://localhost:9000** in your browser.
    - `KUBERNETES_SERVICE_PORT` — cluster API port
    - `DEV_TOKEN` — your current `oc` token
    - `DEV_USER` — your OpenShift username
-   - `DEV_MODE=true` — enables dev mode (uses insecure TLS, skips OAuth proxy)
+   - `DEV_MODE=true` — enables dev mode (uses insecure TLS, skips OAuth proxy, listens on `127.0.0.1` only)
 5. Starts the frontend dev server (`npm run dev`) which runs webpack-dev-server with:
    - Hot reload enabled
-   - Proxy: `/api` → `http://localhost:8080`
+   - Proxy: `/api` → `http://127.0.0.1:8080`
 
 ### Frontend Development
 
@@ -82,7 +82,8 @@ The webpack dev server proxies `/api` requests to the Go backend:
 ```javascript
 // frontend/webpack.config.js
 devServer: {
-  proxy: [{ context: ['/api'], target: 'http://localhost:8080' }],
+  host: '127.0.0.1',
+  proxy: [{ context: ['/api'], target: 'http://127.0.0.1:8080' }],
 }
 ```
 
@@ -143,7 +144,7 @@ make test-go           # Runs: go test ./... -v -count=1
 make test-frontend     # Runs: cd frontend && npm test
 ```
 
-Note: Currently prints `"No test script configured in frontend/package.json yet"` — frontend tests are not yet implemented.
+Runs the Node test runner over `frontend/tests/*.test.cjs` (no browser needed). A failing test fails the target.
 
 ## Linting
 
@@ -167,10 +168,10 @@ go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 ### Frontend Linter
 
 ```bash
-make lint-frontend     # Runs: cd frontend && npm run lint
+make lint-frontend     # Runs: cd frontend && npm run typecheck (tsc --noEmit)
 ```
 
-Note: Currently prints `"No lint script configured in frontend/package.json yet"` — frontend linting is not yet configured.
+There is no ESLint configuration; the TypeScript compiler check is the frontend lint step.
 
 ## Building
 

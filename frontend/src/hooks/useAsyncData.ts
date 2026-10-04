@@ -18,6 +18,7 @@ interface AsyncDataResult<T> {
  *  - Immediate refresh when tab becomes visible again
  *  - Loading, error, and last-refreshed state
  *  - Preserves stale data on refresh failure (only shows loading spinner on initial fetch)
+ *  - Ignores responses that arrive after a newer request was started
  *
  * Note: `fetchFn` is stored in a ref, so callers do not need to memoize it.
  * Inline arrow functions are safe and will not cause infinite re-fetch loops.
@@ -36,22 +37,29 @@ export function useAsyncData<T>(
   const fetchRef = useRef(fetchFn);
   fetchRef.current = fetchFn;
 
+  // Tracks whether data has loaded, without reading state inside an updater.
+  const hasDataRef = useRef(false);
+  // Polls can overlap with slow requests; only the newest request may update
+  // state, so an older response never overwrites a newer one.
+  const latestRequestRef = useRef(0);
+
   const refresh = useCallback(async () => {
-    // Only show the loading spinner on the initial fetch (data === null).
+    const requestId = ++latestRequestRef.current;
+    // Only show the loading spinner on the initial fetch.
     // Subsequent refreshes keep stale data visible to avoid a flash of spinner.
-    setData((prev) => {
-      if (prev === null) setLoading(true);
-      return prev;
-    });
+    if (!hasDataRef.current) setLoading(true);
     setError(null);
     try {
       const result = await fetchRef.current();
+      if (requestId !== latestRequestRef.current) return;
+      hasDataRef.current = true;
       setData(result);
       setLastRefreshed(new Date());
     } catch (e) {
+      if (requestId !== latestRequestRef.current) return;
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {
-      setLoading(false);
+      if (requestId === latestRequestRef.current) setLoading(false);
     }
   }, []);
 
