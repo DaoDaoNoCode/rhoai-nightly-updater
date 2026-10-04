@@ -132,6 +132,23 @@ func main() {
 	<-ctx.Done()
 	slog.Info("shutting down server")
 
+	// Let accepted cluster mutations finish (they have a 15-minute deadline and
+	// a bounded recovery step) instead of cutting them off half-way. The pod's
+	// terminationGracePeriodSeconds must exceed this drain plus the shutdown.
+	drainTimeout := 16 * time.Minute
+	if v := os.Getenv("SHUTDOWN_DRAIN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			drainTimeout = d
+		} else {
+			slog.Warn("invalid SHUTDOWN_DRAIN_TIMEOUT, using default", "value", v, "default", drainTimeout)
+		}
+	}
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), drainTimeout)
+	if running := api.DrainMutations(drainCtx); running > 0 {
+		slog.Warn("shutting down with cluster operations still running", "count", running)
+	}
+	cancelDrain()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

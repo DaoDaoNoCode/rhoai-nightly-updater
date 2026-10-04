@@ -138,11 +138,10 @@ objects:
     spec:
       replicas: 1
       revisionHistoryLimit: 3
+      # Recreate keeps a single updater pod: operation locks are in-process,
+      # so an old and a new pod must never run cluster changes concurrently.
       strategy:
-        type: RollingUpdate
-        rollingUpdate:
-          maxUnavailable: 0
-          maxSurge: 1
+        type: Recreate
       selector:
         matchLabels:
           app: ${APP_NAME}
@@ -154,6 +153,10 @@ objects:
         spec:
           serviceAccountName: ${APP_NAME}
           automountServiceAccountToken: true
+          # On shutdown the server waits up to 16 minutes for running cluster
+          # operations (15-minute deadline plus recovery), then 30 seconds for
+          # connections. Keep this above that total so they are not killed.
+          terminationGracePeriodSeconds: 1020
           affinity:
             podAntiAffinity:
               preferredDuringSchedulingIgnoredDuringExecution:

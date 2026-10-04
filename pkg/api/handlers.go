@@ -192,6 +192,13 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 			return
 		}
 
+		if !mutations.begin() {
+			w.Header().Set("Retry-After", "30")
+			writeError(w, "The updater is restarting. No changes were made; retry once it is back.", http.StatusServiceUnavailable, "shutting_down")
+			return
+		}
+		defer mutations.end()
+
 		opContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 		defer cancel()
 		client := cluster.NewClientWithContext(opContext, clusterToken)
@@ -421,6 +428,20 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 
 	uptime := fmt.Sprintf("%.0fs", time.Since(startTime).Seconds())
 	checks["uptime"] = uptime
+
+	if mutations.isDraining() {
+		// Stop receiving new traffic while running operations finish.
+		checks["server"] = "shutting down"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "draining",
+			"checks": checks,
+		}); err != nil {
+			slog.Error("response encode error", "label", "ready", "error", err)
+		}
+		return
+	}
 
 	token := getClusterToken()
 	if token == "" {

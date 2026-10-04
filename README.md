@@ -56,7 +56,7 @@
 - **Confirmation modals** for all cluster-modifying actions
 - **Activity audit log** stored in ConfigMap with user attribution
 - **Dark mode**, structured JSON logging, Prometheus metrics + alerting rules
-- **Production-ready** — pod anti-affinity, health probes, graceful shutdown
+- **Production-ready** — health probes, and a graceful shutdown that lets running cluster operations finish
 
 ## Architecture
 
