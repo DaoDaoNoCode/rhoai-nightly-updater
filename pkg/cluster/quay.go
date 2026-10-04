@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +29,9 @@ const (
 var quayHTTPClient = &http.Client{
 	Timeout: 60 * time.Second,
 	Transport: &http.Transport{
+		// Honor HTTP(S)_PROXY/NO_PROXY like http.DefaultTransport does, so
+		// registry calls work on clusters that require an egress proxy.
+		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        20,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
@@ -100,6 +105,95 @@ type quayTagsResponse struct {
 	Tags []string `json:"tags"`
 }
 
+// quayRHOAIRegistry is the registry path whose credentials the updater needs.
+const quayRHOAIRegistry = "quay.io/rhoai"
+
+// decodeDockerConfigSecret extracts the docker config from a
+// kubernetes.io/dockerconfigjson Secret API response. On failure it returns a
+// user-facing reason instead of a config.
+func decodeDockerConfigSecret(body []byte) (map[string]interface{}, string) {
+	var secret struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &secret); err != nil {
+		return nil, "Failed to parse secret response"
+	}
+	if secret.Data == nil {
+		return nil, "Secret has no data"
+	}
+	dockerConfigB64 := secret.Data[".dockerconfigjson"]
+	if dockerConfigB64 == "" {
+		return nil, "Secret is missing .dockerconfigjson key"
+	}
+	dockerConfigBytes, err := base64.StdEncoding.DecodeString(dockerConfigB64)
+	if err != nil {
+		return nil, "Failed to decode .dockerconfigjson"
+	}
+	var dockerConfig map[string]interface{}
+	if err := json.Unmarshal(dockerConfigBytes, &dockerConfig); err != nil || dockerConfig == nil {
+		return nil, "Invalid JSON in .dockerconfigjson"
+	}
+	return dockerConfig, ""
+}
+
+// normalizeRegistryKey strips the optional scheme and trailing slash that
+// docker config auth keys may carry ("https://quay.io/" -> "quay.io").
+func normalizeRegistryKey(key string) string {
+	key = strings.TrimPrefix(strings.TrimPrefix(key, "https://"), "http://")
+	return strings.TrimSuffix(key, "/")
+}
+
+// authFromEntry returns the base64 "user:password" credential of a docker
+// config auth entry, accepting either the "auth" field or username/password.
+func authFromEntry(val interface{}) string {
+	entry, _ := val.(map[string]interface{})
+	if auth, _ := entry["auth"].(string); auth != "" {
+		return auth
+	}
+	user, _ := entry["username"].(string)
+	pass, _ := entry["password"].(string)
+	if user != "" && pass != "" {
+		return base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+	}
+	return ""
+}
+
+// selectQuayAuth picks the credential that container runtimes use for
+// quay.io/rhoai images: the most specific matching registry key wins, so an
+// exact quay.io/rhoai entry is preferred over repository-scoped entries, which
+// are preferred over a generic quay.io login. The choice is deterministic.
+// It returns the credential and the auths key it came from.
+func selectQuayAuth(auths map[string]interface{}) (string, string) {
+	keys := make([]string, 0, len(auths))
+	for key := range auths {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	rank := func(key string) int {
+		switch k := normalizeRegistryKey(key); {
+		case k == quayRHOAIRegistry:
+			return 0
+		case strings.HasPrefix(k, quayRHOAIRegistry+"/"):
+			return 1
+		case k == "quay.io":
+			return 2
+		default:
+			return -1
+		}
+	}
+	bestAuth, bestKey, bestRank := "", "", 3
+	for _, key := range keys {
+		r := rank(key)
+		if r < 0 || r >= bestRank {
+			continue
+		}
+		if auth := authFromEntry(auths[key]); auth != "" {
+			bestAuth, bestKey, bestRank = auth, key, r
+		}
+	}
+	return bestAuth, bestKey
+}
+
 // getQuayAuth extracts the quay.io/rhoai auth credential from the cluster pull secret.
 func getQuayAuth(c *Client) string {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
@@ -108,44 +202,34 @@ func getQuayAuth(c *Client) string {
 		slog.Warn("quay auth: failed to read pull secret", "error", err)
 		return ""
 	}
-
-	var secret map[string]interface{}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		slog.Warn("quay auth: failed to parse pull secret JSON", "error", err)
+	dockerCfg, problem := decodeDockerConfigSecret(body)
+	if problem != "" {
+		slog.Warn("quay auth: unusable pull secret", "reason", problem)
 		return ""
 	}
-
-	data, _ := secret["data"].(map[string]interface{})
-	dockerCfgB64, _ := data[".dockerconfigjson"].(string)
-	if dockerCfgB64 == "" {
-		slog.Warn("quay auth: pull secret has no .dockerconfigjson data")
-		return ""
-	}
-
-	decodedBytes, err := base64.StdEncoding.DecodeString(dockerCfgB64)
-	if err != nil {
-		slog.Warn("quay auth: failed to decode .dockerconfigjson base64", "error", err)
-		return ""
-	}
-
-	var dockerCfg map[string]interface{}
-	if err := json.Unmarshal(decodedBytes, &dockerCfg); err != nil {
-		slog.Warn("quay auth: failed to parse docker config JSON", "error", err)
-		return ""
-	}
-
 	auths, _ := dockerCfg["auths"].(map[string]interface{})
-	for key, val := range auths {
-		if key == "quay.io/rhoai" || key == "quay.io" {
-			entry, _ := val.(map[string]interface{})
-			auth, _ := entry["auth"].(string)
-			if auth != "" {
-				return auth
-			}
-		}
+	auth, _ := selectQuayAuth(auths)
+	if auth == "" {
+		slog.Warn("quay auth: no quay.io/rhoai or quay.io entry found in pull secret auths")
 	}
-	slog.Warn("quay auth: no quay.io/rhoai or quay.io entry found in pull secret auths")
-	return ""
+	return auth
+}
+
+// quayAuthError is returned when the Quay token endpoint answers with a
+// non-200 status, letting callers tell rejected credentials from outages.
+type quayAuthError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *quayAuthError) Error() string {
+	return fmt.Sprintf("quay auth returned %d: %s", e.StatusCode, e.Body)
+}
+
+// isQuayCredentialRejection reports whether err means Quay refused the credentials.
+func isQuayCredentialRejection(err error) bool {
+	var authErr *quayAuthError
+	return errors.As(err, &authErr) && (authErr.StatusCode == http.StatusUnauthorized || authErr.StatusCode == http.StatusForbidden)
 }
 
 func getQuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth string) (string, error) {
@@ -165,7 +249,7 @@ func getQuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return "", fmt.Errorf("quay auth returned %d: %s", resp.StatusCode, string(body))
+		return "", &quayAuthError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var tokenData quayTokenResponse

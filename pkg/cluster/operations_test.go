@@ -91,7 +91,7 @@ func TestTestPullSecret_Valid(t *testing.T) {
 
 func TestTestPullSecret_RejectedByQuay(t *testing.T) {
 	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(string) error { return fmt.Errorf("quay auth returned 401: unauthorized") }
+	verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 401, Body: "unauthorized"} }
 	defer func() { verifyQuayCredentials = orig }()
 
 	dockerConfig := map[string]interface{}{
@@ -592,9 +592,6 @@ func TestCreatePullSecret_RejectsEmptyUsernameAndPassword(t *testing.T) {
 	defer cleanup()
 
 	// "Og==" is base64 of ":" (empty username and empty password)
-	// The current validation only checks that a colon is present, so this
-	// passes validation but fails during the actual K8s API call because
-	// the mock doesn't serve the secret create/update path.
 	result, err := CreatePullSecret(client, "Og==")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -609,7 +606,6 @@ func TestCreatePullSecret_RejectsEmptyPassword(t *testing.T) {
 	defer cleanup()
 
 	// "dXNlcjo=" is base64 of "user:" (empty password)
-	// Same as above: passes validation (contains ":") but fails at the API level.
 	result, err := CreatePullSecret(client, "dXNlcjo=")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

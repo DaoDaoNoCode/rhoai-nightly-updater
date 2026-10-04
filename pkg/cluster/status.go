@@ -2,7 +2,7 @@ package cluster
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -377,12 +377,50 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 	}, nil
 }
 
-// verifyQuayCredentials calls the Quay token endpoint to confirm the credentials
-// are accepted. Tests override this to skip the real network call.
-var verifyQuayCredentials = func(basicAuth string) error {
+// quayCredentialCacheTTL bounds how long a Quay verdict on a credential is
+// reused. Status is polled every few seconds; without a cache every poll calls
+// Quay's token endpoint.
+const quayCredentialCacheTTL = 5 * time.Minute
+
+type quayCredentialVerdict struct {
+	err error // nil when accepted; a rejection error otherwise
+	at  time.Time
+}
+
+var (
+	quayCredentialCacheMu sync.Mutex
+	quayCredentialCache   = map[[sha256.Size]byte]quayCredentialVerdict{}
+)
+
+// verifyQuayCredentials confirms Quay accepts the credentials. Tests override
+// it to skip the real network call.
+var verifyQuayCredentials = verifyQuayCredentialsCached
+
+// verifyQuayCredentialsCached calls the Quay token endpoint to confirm the
+// credentials are accepted. Definitive answers (accepted or rejected) are cached
+// per credential; transient failures are not.
+func verifyQuayCredentialsCached(basicAuth string) error {
+	key := sha256.Sum256([]byte(basicAuth))
+	quayCredentialCacheMu.Lock()
+	cached, ok := quayCredentialCache[key]
+	quayCredentialCacheMu.Unlock()
+	if ok && time.Since(cached.at) < quayCredentialCacheTTL {
+		return cached.err
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, err := getQuayBearerToken(ctx, quayHTTPClient, basicAuth)
+	if err == nil || isQuayCredentialRejection(err) {
+		quayCredentialCacheMu.Lock()
+		for k, v := range quayCredentialCache {
+			if time.Since(v.at) >= quayCredentialCacheTTL {
+				delete(quayCredentialCache, k)
+			}
+		}
+		quayCredentialCache[key] = quayCredentialVerdict{err: err, at: time.Now()}
+		quayCredentialCacheMu.Unlock()
+	}
 	return err
 }
 
@@ -396,29 +434,9 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 		return types.PullSecretInfo{Exists: false}, err
 	}
 
-	var secret map[string]interface{}
-	if err := json.Unmarshal(body, &secret); err != nil {
-		return types.PullSecretInfo{Exists: true, Detail: "Failed to parse secret response"}, nil
-	}
-
-	data, _ := secret["data"].(map[string]interface{})
-	if data == nil {
-		return types.PullSecretInfo{Exists: true, Detail: "Secret has no data"}, nil
-	}
-
-	dockerConfigB64, ok := data[".dockerconfigjson"].(string)
-	if !ok || dockerConfigB64 == "" {
-		return types.PullSecretInfo{Exists: true, Detail: "Secret is missing .dockerconfigjson key"}, nil
-	}
-
-	dockerConfigBytes, err := base64.StdEncoding.DecodeString(dockerConfigB64)
-	if err != nil {
-		return types.PullSecretInfo{Exists: true, Detail: "Failed to decode .dockerconfigjson"}, nil
-	}
-
-	var dockerConfig map[string]interface{}
-	if err := json.Unmarshal(dockerConfigBytes, &dockerConfig); err != nil {
-		return types.PullSecretInfo{Exists: true, Detail: "Invalid JSON in .dockerconfigjson"}, nil
+	dockerConfig, problem := decodeDockerConfigSecret(body)
+	if problem != "" {
+		return types.PullSecretInfo{Exists: true, Detail: problem}, nil
 	}
 
 	auths, ok := dockerConfig["auths"].(map[string]interface{})
@@ -426,20 +444,17 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 		return types.PullSecretInfo{Exists: true, Detail: "Missing 'auths' key in docker config"}, nil
 	}
 
-	var basicAuth string
-	for key, val := range auths {
-		if strings.Contains(key, "quay.io/rhoai") {
-			entry, _ := val.(map[string]interface{})
-			basicAuth, _ = entry["auth"].(string)
-			break
-		}
-	}
+	// Validate the same credential that registry calls use.
+	basicAuth, _ := selectQuayAuth(auths)
 	if basicAuth == "" {
 		return types.PullSecretInfo{Exists: true, Detail: "No quay.io/rhoai entry found in auths"}, nil
 	}
 
 	if err := verifyQuayCredentials(basicAuth); err != nil {
-		return types.PullSecretInfo{Exists: true, Detail: fmt.Sprintf("Credentials rejected by Quay: %v", err)}, nil
+		if isQuayCredentialRejection(err) {
+			return types.PullSecretInfo{Exists: true, Detail: fmt.Sprintf("Credentials rejected by Quay: %v", err)}, nil
+		}
+		return types.PullSecretInfo{Exists: true, Detail: fmt.Sprintf("Could not verify credentials with Quay: %v", err)}, nil
 	}
 
 	return types.PullSecretInfo{Exists: true, Valid: true}, nil

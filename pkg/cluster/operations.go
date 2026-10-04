@@ -2294,8 +2294,8 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}
 	}
 
-	// Validate it looks like username:password
-	if !strings.Contains(string(decoded), ":") {
+	// Validate it looks like username:password with both parts present
+	if user, pass, ok := strings.Cut(string(decoded), ":"); !ok || user == "" || pass == "" {
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   "Auth value must decode to username:password format",
@@ -2306,9 +2306,10 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 
 	logs = append(logs, "Auth value validated")
 
-	// Check if secret already exists
+	// Check if secret already exists. Its other registry credentials must be
+	// preserved: only the quay.io/rhoai entry is replaced.
 	secretPath := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	_, _, getErr := c.get(secretPath)
+	existingBody, _, getErr := c.get(secretPath)
 	secretExists := true
 	if getErr != nil {
 		if IsK8sError(getErr, 404) {
@@ -2323,14 +2324,39 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}
 	}
 
-	// Construct the docker config using json.Marshal for safety (no string interpolation)
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{
-				"auth": auth,
-			},
-		},
+	dockerConfig := map[string]interface{}{}
+	if secretExists {
+		existing, problem := decodeDockerConfigSecret(existingBody)
+		switch {
+		case problem == "":
+			dockerConfig = existing
+		case problem == "Secret has no data" || problem == "Secret is missing .dockerconfigjson key":
+			// Nothing to preserve.
+		default:
+			// The kubelet cannot use an unreadable config either, so nothing
+			// usable is lost by replacing it.
+			logs = append(logs, fmt.Sprintf("Warning: existing .dockerconfigjson was unreadable (%s) and will be replaced", problem))
+		}
 	}
+	auths, ok := dockerConfig["auths"].(map[string]interface{})
+	if !ok {
+		auths = map[string]interface{}{}
+	}
+	preserved := 0
+	for key := range auths {
+		if normalizeRegistryKey(key) == quayRHOAIRegistry {
+			// Remove equivalent spellings so the new credential is the one used.
+			delete(auths, key)
+			continue
+		}
+		preserved++
+	}
+	auths[quayRHOAIRegistry] = map[string]interface{}{"auth": auth}
+	dockerConfig["auths"] = auths
+	if preserved > 0 {
+		logs = append(logs, fmt.Sprintf("Preserving %d other registry credential(s) in the pull secret", preserved))
+	}
+
 	dockerConfigBytes, err := json.Marshal(dockerConfig)
 	if err != nil {
 		return &types.OperationResponse{
