@@ -1,0 +1,81 @@
+package cluster
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
+	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
+		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
+			body: `{"items":[{"metadata":{"name":"my-dsc"}}]}`,
+		},
+		"PATCH /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {body: `{}`},
+	})
+	defer cleanup()
+	result, err := ApplyFix(client, "disable-component:llamastackoperator")
+	if err != nil || !result.Success {
+		t.Fatalf("ApplyFix = %+v, %v", result, err)
+	}
+	patched := false
+	for _, r := range *records {
+		if r.Method == "PATCH" {
+			if r.Path != "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc" {
+				t.Fatalf("patched %s", r.Path)
+			}
+			patched = true
+		}
+	}
+	if !patched {
+		t.Fatal("DSC was not patched")
+	}
+}
+
+func TestDisableComponent_FallsBackToV1API(t *testing.T) {
+	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
+		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
+			statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`,
+		},
+		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters": {
+			body: `{"items":[{"metadata":{"name":"rhods"}}]}`,
+		},
+	})
+	defer cleanup()
+	result, err := ApplyFix(client, "disable-component:ray")
+	if err != nil || !result.Success {
+		t.Fatalf("ApplyFix = %+v, %v", result, err)
+	}
+	for _, r := range *records {
+		if r.Method == "PATCH" && r.Path != "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods" {
+			t.Fatalf("patched %s", r.Path)
+		}
+	}
+}
+
+func TestDisableComponent_NoDSC(t *testing.T) {
+	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
+		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {body: `{"items":[]}`},
+	})
+	defer cleanup()
+	result, err := ApplyFix(client, "disable-component:ray")
+	if err != nil || result.Success || !strings.Contains(result.Message, "no DataScienceCluster") {
+		t.Fatalf("ApplyFix = %+v, %v", result, err)
+	}
+	for _, r := range *records {
+		if r.Method == "PATCH" {
+			t.Fatalf("unexpected patch %s", r.Path)
+		}
+	}
+}
+
+func TestForceDeleteComponentIsNotAFixAction(t *testing.T) {
+	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{})
+	defer cleanup()
+	result, err := ApplyFix(client, "force-delete-component:modelsasservice")
+	if err != nil || result.Success || result.ErrorCode != "validation" {
+		t.Fatalf("ApplyFix = %+v, %v", result, err)
+	}
+	if len(*records) != 0 {
+		t.Fatalf("unknown fix made requests: %v", *records)
+	}
+}

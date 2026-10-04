@@ -839,10 +839,6 @@ func ApplyFix(c *Client, problemID string) (*types.OperationResponse, error) {
 	case "restart-operator":
 		return applyFixRestartOperator(c)
 	default:
-		if strings.HasPrefix(problemID, "force-delete-component:") {
-			compName := strings.TrimPrefix(problemID, "force-delete-component:")
-			return applyFixForceDeleteComponent(c, compName)
-		}
 		if strings.HasPrefix(problemID, "disable-component:") {
 			compName := strings.TrimPrefix(problemID, "disable-component:")
 			return applyFixDisableComponent(c, compName)
@@ -1097,13 +1093,15 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	}
 
 	patch := fmt.Sprintf(`{"spec":{"components":{%q:{"managementState":"Removed"}}}}`, compName)
-	// Try v2 first (RHOAI 3.5+), fall back to v1
-	dscPath := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
-	_, _, err := c.patch(dscPath, []byte(patch))
-	if err != nil && IsK8sError(err, 404) {
-		dscPath = "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/default-dsc"
-		_, _, err = c.patch(dscPath, []byte(patch))
+	dscPath, err := dataScienceClusterPath(c)
+	if err != nil {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Cannot find the DataScienceCluster: %v", err),
+			ErrorCode: errorCodeFromK8sErr(err),
+		}, nil
 	}
+	_, _, err = c.patch(dscPath, []byte(patch))
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -1152,83 +1150,6 @@ func applyFixMaaSGatewayAnnotation(c *Client) (*types.OperationResponse, error) 
 	}, nil
 }
 
-func applyFixForceDeleteComponent(c *Client, compName string) (*types.OperationResponse, error) {
-	if compName == "" {
-		return &types.OperationResponse{Success: false, Message: "Component name is required", ErrorCode: "validation"}, nil
-	}
-
-	// Map component names to their CRD resource names and CR instance names
-	crMap := map[string]struct{ resource, instance string }{
-		"modelsasservice": {"modelsasservices", "default-modelsasservice"},
-	}
-
-	cr, ok := crMap[compName]
-	if !ok {
-		return &types.OperationResponse{
-			Success: false,
-			Message: fmt.Sprintf("Force-delete is not supported for component %q. Use the OpenShift Console.", compName),
-		}, nil
-	}
-
-	crPath := fmt.Sprintf("/apis/components.platform.opendatahub.io/v1alpha1/%s/%s", cr.resource, cr.instance)
-
-	// First check if the CR has finalizers blocking deletion
-	body, _, err := c.get(crPath)
-	if err != nil {
-		if IsK8sError(err, 404) {
-			return &types.OperationResponse{
-				Success: true,
-				Message: fmt.Sprintf("Component %s CR already deleted.", compName),
-			}, nil
-		}
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Failed to check component CR: %v", err),
-			ErrorCode: errorCodeFromK8sErr(err),
-		}, nil
-	}
-
-	// Check for finalizers
-	var crObj struct {
-		Metadata struct {
-			Finalizers        []string `json:"finalizers"`
-			DeletionTimestamp *string  `json:"deletionTimestamp"`
-		} `json:"metadata"`
-	}
-	if err := json.Unmarshal(body, &crObj); err == nil && len(crObj.Metadata.Finalizers) > 0 && crObj.Metadata.DeletionTimestamp != nil {
-		// CR is stuck with finalizers during deletion — remove them
-		_, _, patchErr := c.patch(crPath, []byte(`{"metadata":{"finalizers":[]}}`))
-		if patchErr != nil {
-			return &types.OperationResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to remove finalizers: %v", patchErr),
-			}, nil
-		}
-	} else {
-		// CR exists but isn't being deleted — delete it
-		_, delErr := c.delete(crPath)
-		if delErr != nil && !IsK8sError(delErr, 404) {
-			return &types.OperationResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to delete component CR: %v", delErr),
-			}, nil
-		}
-	}
-
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "force-delete-component",
-		Detail:    compName,
-		Success:   true,
-	})
-
-	return &types.OperationResponse{
-		Success: true,
-		Message: fmt.Sprintf("Component %s CR removed. The DSC should update shortly.", compName),
-	}, nil
-}
-
 func applyFixRestartOperator(c *Client) (*types.OperationResponse, error) {
 	depPath := namespacedPath("apps/v1", "deployments", SubNS, "rhods-operator")
 	patchData, _ := json.Marshal(map[string]interface{}{
@@ -1264,4 +1185,35 @@ func applyFixRestartOperator(c *Client) (*types.OperationResponse, error) {
 		Success: true,
 		Message: "Operator restart triggered. The operator has multiple replicas so there will be no downtime. DSC conditions should refresh within 1-2 minutes.",
 	}, nil
+}
+
+// dataScienceClusterPath returns the API path of the cluster's
+// DataScienceCluster (the same one the Components page shows), using the v2
+// API when it is served and v1 otherwise.
+func dataScienceClusterPath(c *Client) (string, error) {
+	for _, version := range []string{"v2", "v1"} {
+		listPath := "/apis/datasciencecluster.opendatahub.io/" + version + "/datascienceclusters"
+		body, _, err := c.get(listPath)
+		if IsK8sError(err, 404) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		var list struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return "", fmt.Errorf("parse DataScienceCluster list: %w", err)
+		}
+		if len(list.Items) == 0 || list.Items[0].Metadata.Name == "" {
+			return "", fmt.Errorf("no DataScienceCluster exists")
+		}
+		return listPath + "/" + list.Items[0].Metadata.Name, nil
+	}
+	return "", fmt.Errorf("the DataScienceCluster API is not installed")
 }
