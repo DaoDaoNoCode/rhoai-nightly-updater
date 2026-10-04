@@ -85,7 +85,9 @@ func getPipelineServerStatus(c *Client, project string) types.ResourceState {
 		routePath := namespacedPath("route.openshift.io/v1", "routes", dashboardNamespace, "rhods-dashboard")
 		if routeBody, _, err := c.get(routePath); err == nil {
 			var route struct {
-				Spec struct{ Host string `json:"host"` } `json:"spec"`
+				Spec struct {
+					Host string `json:"host"`
+				} `json:"spec"`
 			}
 			if json.Unmarshal(routeBody, &route) == nil && route.Spec.Host != "" {
 				state.UIRoute = "https://" + route.Spec.Host + "/develop-train/pipelines/definitions/" + project
@@ -154,7 +156,9 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		nsBody, _, nsGetErr := c.get(nsGetPath)
 		if nsGetErr == nil {
 			var ns struct {
-				Status struct{ Phase string `json:"phase"` } `json:"status"`
+				Status struct {
+					Phase string `json:"phase"`
+				} `json:"status"`
 			}
 			if json.Unmarshal(nsBody, &ns) == nil && ns.Status.Phase == "Terminating" {
 				return &types.OperationResponse{

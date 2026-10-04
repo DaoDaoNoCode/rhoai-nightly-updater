@@ -742,8 +742,8 @@ func getDashboardPods(c *Client, matchLabels map[string]string) []types.PodInfo 
 					Ready        bool   `json:"ready"`
 					RestartCount int    `json:"restartCount"`
 					State        struct {
-						Running    *struct{} `json:"running"`
-						Waiting    *struct {
+						Running *struct{} `json:"running"`
+						Waiting *struct {
 							Reason string `json:"reason"`
 						} `json:"waiting"`
 						Terminated *struct {

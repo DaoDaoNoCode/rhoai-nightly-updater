@@ -45,7 +45,9 @@ func GetDSProjects(c *Client) ([]string, error) {
 			Metadata struct {
 				Name string `json:"name"`
 			} `json:"metadata"`
-			Status struct{ Phase string `json:"phase"` } `json:"status"`
+			Status struct {
+				Phase string `json:"phase"`
+			} `json:"status"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &nsList); err != nil {

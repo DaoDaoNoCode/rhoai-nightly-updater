@@ -15,7 +15,7 @@ type UpdateStep struct {
 	Step      string `json:"step"`                // e.g., "validate_prerequisites", "apply_catalog_source"
 	Status    string `json:"status"`              // "running", "success", "failed", "skipped"
 	Message   string `json:"message"`             // Human-readable description
-	Detail    string `json:"detail,omitempty"`     // Extra info (e.g., image URL, channel name)
+	Detail    string `json:"detail,omitempty"`    // Extra info (e.g., image URL, channel name)
 	ElapsedMs int64  `json:"elapsedMs"`           // Time since step started
 	ErrorCode string `json:"errorCode,omitempty"` // For error categorization
 }
@@ -42,8 +42,8 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	return &SSEWriter{
-		w:    w,
-		rc:   http.NewResponseController(w),
+		w:     w,
+		rc:    http.NewResponseController(w),
 		start: time.Now(),
 	}, nil
 }

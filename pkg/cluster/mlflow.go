@@ -71,7 +71,9 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	routePath := namespacedPath("route.openshift.io/v1", "routes", mlflowNamespace, "mlflow")
 	if routeBody, _, err := c.get(routePath); err == nil {
 		var route struct {
-			Spec struct{ Host string `json:"host"` } `json:"spec"`
+			Spec struct {
+				Host string `json:"host"`
+			} `json:"spec"`
 		}
 		if json.Unmarshal(routeBody, &route) == nil && route.Spec.Host != "" {
 			state.UIRoute = "https://" + route.Spec.Host

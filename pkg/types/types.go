@@ -4,8 +4,8 @@ package types
 type ActivityEntry struct {
 	Timestamp string `json:"timestamp"`
 	User      string `json:"user"`
-	Action    string `json:"action"`  // "update", "rollback", "create-pull-secret"
-	Detail    string `json:"detail"`  // e.g., the FBC image for updates
+	Action    string `json:"action"` // "update", "rollback", "create-pull-secret"
+	Detail    string `json:"detail"` // e.g., the FBC image for updates
 	Success   bool   `json:"success"`
 }
 
@@ -63,8 +63,8 @@ type CatalogSourceInfo struct {
 // PullSecretInfo reports whether the additional-pull-secret exists and is valid.
 type PullSecretInfo struct {
 	Exists bool   `json:"exists"`
-	Valid  bool   `json:"valid"`              // has correct format with quay.io/rhoai entry
-	Detail string `json:"detail,omitempty"`   // human-readable detail if invalid
+	Valid  bool   `json:"valid"`            // has correct format with quay.io/rhoai entry
+	Detail string `json:"detail,omitempty"` // human-readable detail if invalid
 }
 
 // ImageMirrorInfo reports whether an ImageDigestMirrorSet exists for RHOAI images.
@@ -77,14 +77,14 @@ type ImageMirrorInfo struct {
 // InstallPlanInfo describes the latest OLM InstallPlan for the rhods-operator.
 type InstallPlanInfo struct {
 	Name     string `json:"name"`
-	Phase    string `json:"phase"`    // Planning, Installing, Complete, Failed
+	Phase    string `json:"phase"` // Planning, Installing, Complete, Failed
 	Approved bool   `json:"approved"`
 }
 
 // CatalogPodInfo describes the catalog source pod that serves the FBC index.
 type CatalogPodInfo struct {
 	Name         string `json:"name"`
-	Phase        string `json:"phase"`    // Pending, Running
+	Phase        string `json:"phase"` // Pending, Running
 	Ready        bool   `json:"ready"`
 	RestartCount int    `json:"restartCount"`
 }
@@ -101,7 +101,7 @@ type UpdateRequest struct {
 type ReinstallRequest struct {
 	TargetType string `json:"targetType"` // "stable", "nightly", or "custom"
 	Image      string `json:"image,omitempty"`
-	Channel    string `json:"channel,omitempty"`   // optional channel override (e.g., "stable-3.5", "beta")
+	Channel    string `json:"channel,omitempty"` // optional channel override (e.g., "stable-3.5", "beta")
 }
 
 // CreatePullSecretRequest is the JSON body for the POST /api/setup/pull-secret endpoint.
@@ -127,7 +127,7 @@ type LatestNightlyResponse struct {
 // NightlyTag pairs a version tag with its full image reference.
 type NightlyTag struct {
 	Tag       string `json:"tag"`
-	Image     string `json:"image"`     // full image with digest
+	Image     string `json:"image"`               // full image with digest
 	BuildDate string `json:"buildDate,omitempty"` // when the image was built
 }
 
@@ -140,26 +140,26 @@ type NightlyTagsResponse struct {
 type ComponentInfo struct {
 	Name            string `json:"name"`
 	ManagementState string `json:"managementState"` // "Managed", "Removed", "Unmanaged"
-	Status          string `json:"status"`           // "Available", "Degraded", "Progressing", "Unknown", "Deleting"
+	Status          string `json:"status"`          // "Available", "Degraded", "Progressing", "Unknown", "Deleting"
 	Message         string `json:"message,omitempty"`
-	FixAction       string `json:"fixAction,omitempty"`       // fix action ID for ApplyFix
-	FixTitle        string `json:"fixTitle,omitempty"`         // button text (plain English)
-	FixDescription  string `json:"fixDescription,omitempty"`   // one-line explanation
-	FixConfirm      string `json:"fixConfirm,omitempty"`       // confirmation modal body
+	FixAction       string `json:"fixAction,omitempty"`      // fix action ID for ApplyFix
+	FixTitle        string `json:"fixTitle,omitempty"`       // button text (plain English)
+	FixDescription  string `json:"fixDescription,omitempty"` // one-line explanation
+	FixConfirm      string `json:"fixConfirm,omitempty"`     // confirmation modal body
 }
 
 // DeploymentInfo holds readiness and image metadata for a Kubernetes Deployment.
 type DeploymentInfo struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Ready     int    `json:"ready"`
-	Desired   int    `json:"desired"`
-	Available int    `json:"available"`
-	Image               string    `json:"image"` // first container image
-	UnavailableReplicas int       `json:"unavailableReplicas"`
-	UpdatedReplicas     int       `json:"updatedReplicas"`
-	RolloutStuck        bool      `json:"rolloutStuck"`
-	RolloutMessage      string    `json:"rolloutMessage,omitempty"`
+	Name                string            `json:"name"`
+	Namespace           string            `json:"namespace"`
+	Ready               int               `json:"ready"`
+	Desired             int               `json:"desired"`
+	Available           int               `json:"available"`
+	Image               string            `json:"image"` // first container image
+	UnavailableReplicas int               `json:"unavailableReplicas"`
+	UpdatedReplicas     int               `json:"updatedReplicas"`
+	RolloutStuck        bool              `json:"rolloutStuck"`
+	RolloutMessage      string            `json:"rolloutMessage,omitempty"`
 	ChangeStatus        string            `json:"changeStatus,omitempty"` // "updated", "new", or "" (unchanged)
 	MatchLabels         map[string]string `json:"-"`                      // for pod matching, not serialized
 	Pods                []PodInfo         `json:"pods,omitempty"`
@@ -200,31 +200,31 @@ type ContainerInfo struct {
 	Name     string `json:"name"`
 	Ready    bool   `json:"ready"`
 	Restarts int    `json:"restarts"`
-	State    string `json:"state"` // "running", "waiting", "terminated"
+	State    string `json:"state"`            // "running", "waiting", "terminated"
 	Reason   string `json:"reason,omitempty"` // e.g. "CrashLoopBackOff"
 }
 
 // PodInfo holds status details for a single pod used in debug output.
 type PodInfo struct {
-	Name              string          `json:"name"`
-	Namespace         string          `json:"namespace"`
-	Phase             string          `json:"phase"`
-	Node              string          `json:"node"`
-	Ready             bool            `json:"ready"`
-	Restarts          int             `json:"restarts"`
-	Image             string          `json:"image"`
-	ImageID           string          `json:"imageID"`
-	Age               string          `json:"age"`
-	Containers        []ContainerInfo `json:"containers,omitempty"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	Phase             string            `json:"phase"`
+	Node              string            `json:"node"`
+	Ready             bool              `json:"ready"`
+	Restarts          int               `json:"restarts"`
+	Image             string            `json:"image"`
+	ImageID           string            `json:"imageID"`
+	Age               string            `json:"age"`
+	Containers        []ContainerInfo   `json:"containers,omitempty"`
 	Labels            map[string]string `json:"-"` // for matching, not serialized
-	OwnerKind         string          `json:"-"` // for matching, not serialized
-	PodTemplateHash   string          `json:"podTemplateHash,omitempty"`
-	SchedulingReason  string          `json:"schedulingReason,omitempty"`
-	SchedulingMessage string          `json:"schedulingMessage,omitempty"`
-	GitCommit         string          `json:"gitCommit,omitempty"`
-	GitURL            string          `json:"gitURL,omitempty"`
-	BuildDate         string          `json:"buildDate,omitempty"`
-	Version           string          `json:"version,omitempty"`
+	OwnerKind         string            `json:"-"` // for matching, not serialized
+	PodTemplateHash   string            `json:"podTemplateHash,omitempty"`
+	SchedulingReason  string            `json:"schedulingReason,omitempty"`
+	SchedulingMessage string            `json:"schedulingMessage,omitempty"`
+	GitCommit         string            `json:"gitCommit,omitempty"`
+	GitURL            string            `json:"gitURL,omitempty"`
+	BuildDate         string            `json:"buildDate,omitempty"`
+	Version           string            `json:"version,omitempty"`
 }
 
 // RelatedImage represents a component image found inside an FBC catalog bundle.
@@ -241,12 +241,12 @@ type RelatedImage struct {
 
 // FBCContentResponse contains the extracted component images from an FBC catalog.
 type FBCContentResponse struct {
-	Tag           string                    `json:"tag"`
-	Image         string                    `json:"image"`
-	BundleName    string                    `json:"bundleName,omitempty"`
-	RelatedImages []RelatedImage            `json:"relatedImages"`
-	Categories    map[string]int            `json:"categories,omitempty"`
-	Error         string                    `json:"error,omitempty"`
+	Tag           string         `json:"tag"`
+	Image         string         `json:"image"`
+	BundleName    string         `json:"bundleName,omitempty"`
+	RelatedImages []RelatedImage `json:"relatedImages"`
+	Categories    map[string]int `json:"categories,omitempty"`
+	Error         string         `json:"error,omitempty"`
 }
 
 // DebugResponse groups pod information across RHOAI operator namespaces.

@@ -120,8 +120,8 @@ func isAllowedImage(image string) bool {
 // unbounded memory growth.
 type rateLimiter struct {
 	// users maps username (string) -> last mutation time (time.Time)
-	users   sync.Map
-	window  time.Duration
+	users  sync.Map
+	window time.Duration
 }
 
 // mutationLimiter is the package-level rate limiter for mutation endpoints.
@@ -400,9 +400,8 @@ func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// HandleUserPermissions returns the permissions for the logged-in user.
-// All authenticated users are allowed to mutate -- authorization is enforced
-// upstream by oauth-proxy before requests reach this backend.
+// HandleUserPermissions reports whether the logged-in user may mutate, using
+// the same permission review that guards every mutation endpoint.
 var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	username := resolveUsername(r)
 	allowed, err := mutationPermission(r.Context(), extractUserToken(r))

@@ -74,7 +74,9 @@ func getMinIOStatus(c *Client) types.ResourceState {
 
 	// Check if namespace is terminating
 	var ns struct {
-		Status struct{ Phase string `json:"phase"` } `json:"status"`
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
 	}
 	if json.Unmarshal(nsBody, &ns) == nil && ns.Status.Phase == "Terminating" {
 		state.Message = "Terminating"
@@ -109,7 +111,9 @@ func getMinIOStatus(c *Client) types.ResourceState {
 	apiRoutePath := namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-api")
 	if routeBody, _, err := c.get(apiRoutePath); err == nil {
 		var route struct {
-			Spec struct{ Host string `json:"host"` } `json:"spec"`
+			Spec struct {
+				Host string `json:"host"`
+			} `json:"spec"`
 		}
 		if json.Unmarshal(routeBody, &route) == nil && route.Spec.Host != "" {
 			state.APIRoute = "https://" + route.Spec.Host
@@ -119,7 +123,9 @@ func getMinIOStatus(c *Client) types.ResourceState {
 	uiRoutePath := namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui")
 	if routeBody, _, err := c.get(uiRoutePath); err == nil {
 		var route struct {
-			Spec struct{ Host string `json:"host"` } `json:"spec"`
+			Spec struct {
+				Host string `json:"host"`
+			} `json:"spec"`
 		}
 		if json.Unmarshal(routeBody, &route) == nil && route.Spec.Host != "" {
 			state.UIRoute = "https://" + route.Spec.Host
@@ -154,7 +160,9 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 		nsBody, _, nsGetErr := c.get(nsGetPath)
 		if nsGetErr == nil {
 			var ns struct {
-				Status struct{ Phase string `json:"phase"` } `json:"status"`
+				Status struct {
+					Phase string `json:"phase"`
+				} `json:"status"`
 			}
 			if json.Unmarshal(nsBody, &ns) == nil && ns.Status.Phase == "Terminating" {
 				return &types.OperationResponse{
@@ -318,7 +326,9 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 		body, _, err := c.get(deployPath)
 		if err == nil {
 			var deploy struct {
-				Status struct{ ReadyReplicas int `json:"readyReplicas"` } `json:"status"`
+				Status struct {
+					ReadyReplicas int `json:"readyReplicas"`
+				} `json:"status"`
 			}
 			if json.Unmarshal(body, &deploy) == nil && deploy.Status.ReadyReplicas >= 1 {
 				ready = true

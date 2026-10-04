@@ -7,8 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,8 +36,8 @@ type commitDateCacheEntry struct {
 
 // In-memory caches with TTL-based lazy eviction.
 var (
-	labelCache     = make(map[string]labelCacheEntry)
-	labelCacheMu   sync.RWMutex
+	labelCache        = make(map[string]labelCacheEntry)
+	labelCacheMu      sync.RWMutex
 	commitDateCache   = make(map[string]commitDateCacheEntry) // key: "owner/repo/sha" → date
 	commitDateCacheMu sync.RWMutex
 )

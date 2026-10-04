@@ -214,23 +214,18 @@ func channelExistsInCatalog(c *Client, channel string) (bool, error) {
 // Timing constants used by multi-step operations. Package-level vars so tests
 // can override them with shorter durations to avoid real-time waits.
 var (
-	CatalogReadyTimeout    = 120 * time.Second
-	CatalogPollInterval    = 5 * time.Second
-	InstallPlanPollTimeout = 60 * time.Second
-	InstallPlanPollInterval = 5 * time.Second
-	PropagationWait        = 10 * time.Second
-	RefreshCleanupWait     = 5 * time.Second
-	SubRetryBackoffs       = []time.Duration{2 * time.Second, 4 * time.Second}
+	CatalogReadyTimeout            = 120 * time.Second
+	CatalogPollInterval            = 5 * time.Second
+	InstallPlanPollTimeout         = 60 * time.Second
+	InstallPlanPollInterval        = 5 * time.Second
+	PropagationWait                = 10 * time.Second
+	RefreshCleanupWait             = 5 * time.Second
+	SubRetryBackoffs               = []time.Duration{2 * time.Second, 4 * time.Second}
 	ChannelRetryDelay              = 8 * time.Second
 	PackageManifestPropagationWait = 30 * time.Second
 )
 
-// validateTagDigestMatch checks if the image reference contains both a tag and
-// a digest, and verifies they match. This prevents accidentally installing the
-// wrong version (e.g., tag says ea.2 but digest points to GA).
-// Returns nil if: tag-only, digest-only, or tag+digest match.
-// Returns error if: tag+digest mismatch.
-
+// buildCatalogSourceSpec returns the nightly CatalogSource for an FBC image.
 func buildCatalogSourceSpec(image string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1",
@@ -1729,10 +1724,6 @@ func isWebhookStale(c *Client, webhookObj map[string]interface{}) bool {
 	return false
 }
 
-// patchCRDConversionWebhooks patches RHOAI CRDs to remove conversion webhook configs.
-// During the rollback window (operator down), CRD conversion webhooks would fail because
-// the webhook service is gone. Patching to strategy=None prevents API failures.
-// The new operator will re-add the conversion webhook when it starts.
 // cleanupStuckComponentCRs finds component CRs that have a deletionTimestamp
 // and finalizers (stuck deleting) and removes the finalizers to unblock deletion.
 // This is the documented K8s pattern for unblocking stuck deletions:
@@ -1786,6 +1777,10 @@ func cleanupStuckComponentCRs(c *Client) int {
 	return unstuck
 }
 
+// patchCRDConversionWebhooks patches RHOAI CRDs to remove conversion webhook configs.
+// During the rollback window (operator down), CRD conversion webhooks would fail because
+// the webhook service is gone. Patching to strategy=None prevents API failures.
+// The new operator will re-add the conversion webhook when it starts.
 func patchCRDConversionWebhooks(c *Client) int {
 	crds := []string{
 		"datascienceclusters.datasciencecluster.opendatahub.io",

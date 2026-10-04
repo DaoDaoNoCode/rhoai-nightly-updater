@@ -11,8 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// GetComponents fetches DSC component statuses and deployment information.
-// GetComponents returns DSC components and deployment info.
+// GetComponents returns DSC component statuses and deployment information.
 // If includeLabels is true, it also fetches git commit/build info from Quay (slower).
 func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, error) {
 	resp := &types.ComponentsResponse{}

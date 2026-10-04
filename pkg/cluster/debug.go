@@ -97,8 +97,8 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 					RestartCount int    `json:"restartCount"`
 					ImageID      string `json:"imageID"`
 					State        struct {
-						Running    *struct{} `json:"running"`
-						Waiting    *struct {
+						Running *struct{} `json:"running"`
+						Waiting *struct {
 							Reason string `json:"reason"`
 						} `json:"waiting"`
 						Terminated *struct {

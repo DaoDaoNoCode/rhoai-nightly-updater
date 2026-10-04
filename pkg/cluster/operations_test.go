@@ -261,13 +261,13 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 
 func TestParseCSVVersion(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantOK  bool
-		major   int
-		minor   int
-		patch   int
-		ea      int
+		name   string
+		input  string
+		wantOK bool
+		major  int
+		minor  int
+		patch  int
+		ea     int
 	}{
 		{
 			name:   "EA build",
@@ -706,8 +706,8 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	// Build Subscription response (points to nightly catalog, with installPlanRef for verify step)
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]interface{}{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state": "AtLatestKnown",
 			"installPlanRef": map[string]interface{}{
@@ -1061,18 +1061,18 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	})
 
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		subPath:           {body: string(subJSON)},
-		csvListPath:       {body: string(csvJSON)},
-		csvDeletePath:     {body: `{"kind":"Status","status":"Success"}`},
-		csPath:            {body: string(csReadyResponse)},
+		subPath:             {body: string(subJSON)},
+		csvListPath:         {body: string(csvJSON)},
+		csvDeletePath:       {body: `{"kind":"Status","status":"Success"}`},
+		csPath:              {body: string(csReadyResponse)},
 		pkgManifestListPath: {body: wrapPkgManifestList(string(pkgManifestJSON))},
-		pkgManifestPath:    {body: string(pkgManifestJSON)},
-		vwhPath:            {body: string(emptyList)},
-		mwhPath:           {body: string(emptyList)},
-		crd1Path:          {body: `{"kind":"CustomResourceDefinition"}`},
-		crd2Path:          {body: `{"kind":"CustomResourceDefinition"}`},
-		appDeployListPath: {body: string(emptyList)},
-		opDeployListPath:  {body: string(emptyList)},
+		pkgManifestPath:     {body: string(pkgManifestJSON)},
+		vwhPath:             {body: string(emptyList)},
+		mwhPath:             {body: string(emptyList)},
+		crd1Path:            {body: `{"kind":"CustomResourceDefinition"}`},
+		crd2Path:            {body: `{"kind":"CustomResourceDefinition"}`},
+		appDeployListPath:   {body: string(emptyList)},
+		opDeployListPath:    {body: string(emptyList)},
 	})
 	defer cleanup()
 
@@ -1143,9 +1143,9 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":     map[string]interface{}{"state": "AtLatestKnown"},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
+		"status":   map[string]interface{}{"state": "AtLatestKnown"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
@@ -1267,9 +1267,9 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":     map[string]interface{}{"state": "AtLatestKnown"},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
+		"status":   map[string]interface{}{"state": "AtLatestKnown"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
@@ -1306,12 +1306,12 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 		// Route other requests
 		key := r.Method + " " + r.URL.Path
 		responses := map[string]mockResponse{
-			"GET " + csvListPath:        {body: string(csvJSON)},
-			"GET " + subPath:            {body: string(subJSON)},
-			"DELETE " + csvDeletePath:    {body: `{"kind":"Status","status":"Success"}`},
-			"DELETE " + subPath:          {body: `{"kind":"Status","status":"Success"}`},
-			"GET " + appDeployListPath:   {body: string(emptyDeployList)},
-			"GET " + opDeployListPath:    {body: string(emptyDeployList)},
+			"GET " + csvListPath:       {body: string(csvJSON)},
+			"GET " + subPath:           {body: string(subJSON)},
+			"DELETE " + csvDeletePath:  {body: `{"kind":"Status","status":"Success"}`},
+			"DELETE " + subPath:        {body: `{"kind":"Status","status":"Success"}`},
+			"GET " + appDeployListPath: {body: string(emptyDeployList)},
+			"GET " + opDeployListPath:  {body: string(emptyDeployList)},
 		}
 		resp, ok := responses[key]
 		if !ok {
@@ -1510,8 +1510,8 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	// Subscription (with installPlanRef in status)
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]interface{}{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state": "AtLatestKnown",
 			"installPlanRef": map[string]interface{}{
@@ -1904,8 +1904,8 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 	// Keep installPlanRef so verify_installplan step completes quickly
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec":       map[string]interface{}{"source": CatalogName, "channel": "fast"},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state":          "AtLatestKnown",
 			"installPlanRef": map[string]interface{}{"name": "install-plan-compat"},

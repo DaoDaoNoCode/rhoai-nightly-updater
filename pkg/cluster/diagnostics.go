@@ -195,13 +195,13 @@ func checkOperatorPods(c *Client) checkOutput {
 			if container.Reason == "ImagePullBackOff" || container.Reason == "ErrImagePull" {
 				out.check = CheckResult{Name: "Operator pods", Status: "fail", Detail: fmt.Sprintf("Pod %s: %s", pod.Name, container.Reason)}
 				out.problems = append(out.problems, Problem{
-					ID:          fmt.Sprintf("operator-pod-%s", container.Reason),
-					Severity:    "critical",
-					Title:       fmt.Sprintf("Operator pod %s: %s", pod.Name, container.Reason),
-					Description: fmt.Sprintf("Container %s in pod %s is in %s state.", container.Name, pod.Name, container.Reason),
-					Evidence:    []string{fmt.Sprintf("Pod: %s", pod.Name), fmt.Sprintf("Container: %s", container.Name), fmt.Sprintf("State: %s", container.Reason)},
-					Fix:         "The pull secret may be expired or the IDMS hasn't propagated to all nodes yet (wait 2-3 minutes after setup).",
-					LearnMore:   "**ImagePullBackOff:** The pull secret may be expired or the IDMS hasn't propagated to all nodes yet (wait 2-3 minutes after setup).",
+					ID:             fmt.Sprintf("operator-pod-%s", container.Reason),
+					Severity:       "critical",
+					Title:          fmt.Sprintf("Operator pod %s: %s", pod.Name, container.Reason),
+					Description:    fmt.Sprintf("Container %s in pod %s is in %s state.", container.Name, pod.Name, container.Reason),
+					Evidence:       []string{fmt.Sprintf("Pod: %s", pod.Name), fmt.Sprintf("Container: %s", container.Name), fmt.Sprintf("State: %s", container.Reason)},
+					Fix:            "The pull secret may be expired or the IDMS hasn't propagated to all nodes yet (wait 2-3 minutes after setup).",
+					LearnMore:      "**ImagePullBackOff:** The pull secret may be expired or the IDMS hasn't propagated to all nodes yet (wait 2-3 minutes after setup).",
 					AutoFixable:    true,
 					AutoFixAction:  "recreate-subscription",
 					ConfirmMessage: "This will delete and recreate the operator Subscription, CSV, and clean up stale webhooks. The operator will be briefly unavailable.\n\nImportant: Do NOT manually delete DSCI or DSC resources while the operator is down.",
@@ -270,12 +270,12 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 	case "UpgradePending":
 		out.check = CheckResult{Name: "Subscription health", Status: "warn", Detail: "Subscription: UpgradePending"}
 		out.problems = append(out.problems, Problem{
-			ID:          "subscription-upgrade-pending",
-			Severity:    "warning",
-			Title:       "Subscription is waiting for an upgrade",
-			Description: fmt.Sprintf("The operator Subscription is in UpgradePending state (source: %s, channel: %s). OLM may be processing the InstallPlan.", sub.Source, sub.Channel),
-			Fix:         "Wait a few minutes for OLM to process the InstallPlan. If the state persists, reinstall.",
-			LearnMore:   "UpgradePending means OLM found a new version but hasn't completed the upgrade yet. Check that the InstallPlan was approved.",
+			ID:             "subscription-upgrade-pending",
+			Severity:       "warning",
+			Title:          "Subscription is waiting for an upgrade",
+			Description:    fmt.Sprintf("The operator Subscription is in UpgradePending state (source: %s, channel: %s). OLM may be processing the InstallPlan.", sub.Source, sub.Channel),
+			Fix:            "Wait a few minutes for OLM to process the InstallPlan. If the state persists, reinstall.",
+			LearnMore:      "UpgradePending means OLM found a new version but hasn't completed the upgrade yet. Check that the InstallPlan was approved.",
 			AutoFixable:    true,
 			AutoFixAction:  "recreate-subscription",
 			ConfirmMessage: "This will delete and recreate the operator Subscription. The operator will be briefly unavailable.",
@@ -694,12 +694,12 @@ func checkNodeCapacity(c *Client) checkOutput {
 	if len(notReadyNodes) > 0 {
 		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: fmt.Sprintf("%d of %d nodes are not ready", len(notReadyNodes), totalNodes)}
 		out.problems = append(out.problems, Problem{
-			ID:          "nodes-not-ready",
-			Severity:    "warning",
-			Title:       fmt.Sprintf("%d cluster node(s) are not ready", len(notReadyNodes)),
-			Description: "Some cluster nodes are not in a Ready state. This can prevent pods from being scheduled and cause deployments to get stuck.",
-			Evidence:    append([]string{fmt.Sprintf("Not-ready nodes: %s", strings.Join(notReadyNodes, ", "))}, fmt.Sprintf("Total nodes: %d", totalNodes)),
-			Fix:         "Check the cluster infrastructure. Node issues are typically caused by resource exhaustion, network problems, or infrastructure failures.",
+			ID:           "nodes-not-ready",
+			Severity:     "warning",
+			Title:        fmt.Sprintf("%d cluster node(s) are not ready", len(notReadyNodes)),
+			Description:  "Some cluster nodes are not in a Ready state. This can prevent pods from being scheduled and cause deployments to get stuck.",
+			Evidence:     append([]string{fmt.Sprintf("Not-ready nodes: %s", strings.Join(notReadyNodes, ", "))}, fmt.Sprintf("Total nodes: %d", totalNodes)),
+			Fix:          "Check the cluster infrastructure. Node issues are typically caused by resource exhaustion, network problems, or infrastructure failures.",
 			TechnicalCmd: "oc get nodes",
 		})
 		return out
