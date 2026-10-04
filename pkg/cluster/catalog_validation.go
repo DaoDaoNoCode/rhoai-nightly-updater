@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,10 +65,12 @@ func preflightReinstallCatalog(c *Client, image, override string) (string, error
 		return "", fmt.Errorf("create verification catalog: %w", err)
 	}
 	deadline := time.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
-	var lastErr error
+	lastProblem := "the catalog has not reported its state yet"
 	for time.Now().Before(deadline) {
 		body, _, err := c.get(path)
-		if err == nil {
+		if err != nil {
+			lastProblem = "read verification catalog: " + err.Error()
+		} else {
 			var cs struct {
 				Status struct {
 					Connection struct {
@@ -75,25 +78,32 @@ func preflightReinstallCatalog(c *Client, image, override string) (string, error
 					} `json:"connectionState"`
 				} `json:"status"`
 			}
-			err = json.Unmarshal(body, &cs)
-			if err == nil && cs.Status.Connection.State == "READY" {
-				channels, channelErr := catalogChannels(c, name)
-				if channelErr == nil {
-					if override != "" {
-						for _, entry := range channels {
-							ch, _ := entry.(map[string]interface{})
-							if ch["name"] == override {
-								return override, nil
-							}
-						}
-					} else if ch, err := detectBestChannel(channels, image); err == nil && ch != "" {
-						return ch, nil
+			if err := json.Unmarshal(body, &cs); err != nil {
+				lastProblem = "parse verification catalog: " + err.Error()
+			} else if state := cs.Status.Connection.State; state != "READY" {
+				if state == "" {
+					state = "unknown"
+				}
+				lastProblem = "catalog state is " + state
+			} else if channels, channelErr := catalogChannels(c, name); channelErr != nil {
+				lastProblem = channelErr.Error()
+			} else if len(channels) == 0 {
+				lastProblem = "the catalog does not list the " + SubName + " package yet"
+			} else if override != "" {
+				for _, entry := range channels {
+					ch, _ := entry.(map[string]interface{})
+					if ch["name"] == override {
+						return override, nil
 					}
 				}
-				lastErr = channelErr
+				lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(channelNames(channels), ", "))
+			} else if ch, err := detectBestChannel(channels, image); err != nil {
+				lastProblem = err.Error()
+			} else if ch != "" {
+				return ch, nil
+			} else {
+				lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 			}
-		} else {
-			lastErr = err
 		}
 		select {
 		case <-c.ctx.Done():
@@ -101,5 +111,18 @@ func preflightReinstallCatalog(c *Client, image, override string) (string, error
 		case <-time.After(CatalogPollInterval):
 		}
 	}
-	return "", fmt.Errorf("selected image did not publish a ready RHOAI catalog with a matching channel (override %q): %v", override, lastErr)
+	return "", fmt.Errorf("selected image did not publish a ready RHOAI catalog with a matching channel: %s", lastProblem)
+}
+
+// channelNames lists the channel names of a PackageManifest, sorted.
+func channelNames(channels []interface{}) []string {
+	var names []string
+	for _, entry := range channels {
+		ch, _ := entry.(map[string]interface{})
+		if name, _ := ch["name"].(string); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }

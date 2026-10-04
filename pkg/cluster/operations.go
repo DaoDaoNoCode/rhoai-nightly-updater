@@ -1405,7 +1405,10 @@ func reinstallNightlySteps(c *Client, image, channelOverride string, sub types.S
 	targetChannel := channelOverride
 	exists, channelErr := channelExistsInCatalog(c, targetChannel)
 	if channelErr != nil || !exists || targetChannel == "" {
-		msg := fmt.Sprintf("Selected channel %q is unavailable in the replacement catalog: %v", targetChannel, channelErr)
+		msg := fmt.Sprintf("Selected channel %q is unavailable in the replacement catalog", targetChannel)
+		if channelErr != nil {
+			msg = fmt.Sprintf("Cannot verify channel %q in the replacement catalog: %v", targetChannel, channelErr)
+		}
 		emit(UpdateStepEvent{Step: "detect_channel", Status: "failed", Message: msg, ErrorCode: "channel_detection"})
 		recordReinstallActivity(c, "nightly", image, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "channel_detection"}, nil
