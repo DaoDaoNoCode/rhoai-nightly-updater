@@ -209,6 +209,10 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 		}
 		defer mutations.end()
 
+		// Accepted operations can outlast the server's 180s write timeout,
+		// including the non-streaming endpoints; their own deadline applies.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 		opContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 		defer cancel()
 		client := cluster.NewClientWithContext(opContext, clusterToken)
