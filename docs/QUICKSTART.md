@@ -30,6 +30,8 @@ oc process -f deploy/template.yaml \
 oc rollout status deployment/rhoai-nightly-updater -n rhoai-nightly-updater --timeout=120s
 ```
 
+`:latest` follows the `main` branch: CI publishes it after the Go and frontend tests pass, and a pod using it pulls the newest image whenever it restarts. To stay on a fixed build, use the short commit tag that CI publishes alongside it (for example `:4503bb7`).
+
 ### Step 2: Get the App URL
 
 ```bash
