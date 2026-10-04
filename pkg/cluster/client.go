@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -127,13 +128,32 @@ func NewClientWithContext(ctx context.Context, token string) *Client {
 	}
 }
 
-func (c *Client) get(path string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(c.ctx, "GET", c.baseURL+path, nil)
+// do sends one authenticated request to the Kubernetes API. query values are
+// added to the path's own query. Error responses are returned as *K8sError
+// together with their body; transport failures as *NetworkError.
+func (c *Client) do(method, path, contentType string, body []byte, query url.Values) ([]byte, int, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(c.ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if len(query) > 0 {
+		q := req.URL.Query()
+		for key, values := range query {
+			for _, v := range values {
+				q.Set(key, v)
+			}
+		}
+		req.URL.RawQuery = q.Encode()
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -141,207 +161,62 @@ func (c *Client) get(path string) ([]byte, int, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
 	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
+		return respBody, resp.StatusCode, parseK8sError(respBody, resp.StatusCode)
 	}
-	return body, resp.StatusCode, nil
+	return respBody, resp.StatusCode, nil
+}
+
+func (c *Client) get(path string) ([]byte, int, error) {
+	return c.do(http.MethodGet, path, "", nil, nil)
 }
 
 func (c *Client) post(path string, data []byte) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(c.ctx, "POST", c.baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
-}
-
-func (c *Client) apply(path string, resource interface{}) ([]byte, int, error) {
-	data, err := json.Marshal(resource)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(c.ctx, "PATCH", c.baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/apply-patch+yaml")
-	req.Header.Set("Accept", "application/json")
-	q := req.URL.Query()
-	q.Set("fieldManager", "rhoai-nightly-updater")
-	q.Set("force", "true")
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
-}
-
-func (c *Client) dryRunApply(path string, resource interface{}) ([]byte, int, error) {
-	data, err := json.Marshal(resource)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(c.ctx, "PATCH", c.baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/apply-patch+yaml")
-	req.Header.Set("Accept", "application/json")
-	q := req.URL.Query()
-	q.Set("fieldManager", "rhoai-nightly-updater")
-	q.Set("force", "true")
-	q.Set("dryRun", "All")
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
+	return c.do(http.MethodPost, path, "application/json", data, nil)
 }
 
 func (c *Client) put(path string, data []byte) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(c.ctx, "PUT", c.baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
+	return c.do(http.MethodPut, path, "application/json", data, nil)
 }
 
+// patch sends a JSON merge patch.
 func (c *Client) patch(path string, patchData []byte) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(c.ctx, "PATCH", c.baseURL+path, bytes.NewReader(patchData))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/merge-patch+json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
+	return c.do(http.MethodPatch, path, "application/merge-patch+json", patchData, nil)
 }
 
 func (c *Client) strategicPatch(path string, patchData []byte) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(c.ctx, "PATCH", c.baseURL+path, bytes.NewReader(patchData))
+	return c.do(http.MethodPatch, path, "application/strategic-merge-patch+json", patchData, nil)
+}
+
+// apply server-side applies resource, taking ownership of its fields.
+func (c *Client) apply(path string, resource interface{}) ([]byte, int, error) {
+	return c.applyWithOptions(path, resource, false)
+}
+
+// dryRunApply validates a server-side apply without persisting it.
+func (c *Client) dryRunApply(path string, resource interface{}) ([]byte, int, error) {
+	return c.applyWithOptions(path, resource, true)
+}
+
+func (c *Client) applyWithOptions(path string, resource interface{}, dryRun bool) ([]byte, int, error) {
+	data, err := json.Marshal(resource)
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/strategic-merge-patch+json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, wrapNetworkError(err)
+	query := url.Values{"fieldManager": {"rhoai-nightly-updater"}, "force": {"true"}}
+	if dryRun {
+		query.Set("dryRun", "All")
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
+	return c.do(http.MethodPatch, path, "application/apply-patch+yaml", data, query)
 }
 
 func (c *Client) delete(path string) (int, error) {
-	req, err := http.NewRequestWithContext(c.ctx, "DELETE", c.baseURL+path, nil)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return 0, wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return resp.StatusCode, err
-	}
-	if resp.StatusCode >= 400 {
-		return resp.StatusCode, parseK8sError(body, resp.StatusCode)
-	}
-	return resp.StatusCode, nil
+	_, status, err := c.do(http.MethodDelete, path, "", nil, nil)
+	return status, err
 }
 
 // namespacedPath builds a K8s API path for a namespaced resource.
