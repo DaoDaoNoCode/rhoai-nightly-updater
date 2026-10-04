@@ -39,7 +39,9 @@ module.exports = (env, argv) => {
       hot: true,
       liveReload: true,
       historyApiFallback: true,
-      proxy: [{ context: ['/api'], target: 'http://localhost:8080' }],
+      // Only this machine may reach the dev server: its /api proxy uses your oc token.
+      host: '127.0.0.1',
+      proxy: [{ context: ['/api'], target: 'http://127.0.0.1:8080' }],
     },
     devtool: isProd ? false : 'eval-source-map',
   };

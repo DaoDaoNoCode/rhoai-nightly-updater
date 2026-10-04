@@ -107,10 +107,18 @@ func main() {
 		fs.ServeHTTP(w, r)
 	})
 
-	handler := middleware.RequestID(middleware.SecurityHeaders(mux))
+	handler := middleware.RequestID(middleware.SecurityHeaders(middleware.RequireJSONForMutations(mux)))
+
+	// DEV_MODE authenticates every request with the developer's own token, so
+	// it must only be reachable from this machine. In-cluster the backend
+	// listens on all interfaces for oauth-proxy and Prometheus.
+	bindAddress := os.Getenv("BIND_ADDRESS")
+	if bindAddress == "" && os.Getenv("DEV_MODE") == "true" {
+		bindAddress = "127.0.0.1"
+	}
 
 	srv := &http.Server{
-		Addr:         ":" + port,
+		Addr:         bindAddress + ":" + port,
 		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 180 * time.Second,
@@ -122,7 +130,7 @@ func main() {
 	defer stop()
 
 	go func() {
-		slog.Info("starting server", "port", port, "staticDir", absStaticDir)
+		slog.Info("starting server", "address", srv.Addr, "staticDir", absStaticDir)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)

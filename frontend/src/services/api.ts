@@ -7,9 +7,12 @@ interface RequestOptions extends RequestInit {
 
 async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   const { acceptStatuses, ...fetchOptions } = options || {};
-  const headers: HeadersInit = { ...fetchOptions?.headers };
-  if (fetchOptions?.body) {
-    (headers as Record<string, string>)['Content-Type'] = 'application/json';
+  const headers: Record<string, string> = { ...(fetchOptions?.headers as Record<string, string> | undefined) };
+  const method = (fetchOptions?.method || 'GET').toUpperCase();
+  // The backend requires JSON on every state-changing request (CSRF guard),
+  // including POSTs without a body.
+  if (fetchOptions?.body || (method !== 'GET' && method !== 'HEAD')) {
+    headers['Content-Type'] = 'application/json';
   }
   const resp = await fetch(path, {
     ...fetchOptions,
@@ -41,18 +44,6 @@ export function updateOperator(image: string, dryRun: boolean): Promise<Operatio
   return request('/api/update', {
     method: 'POST',
     body: JSON.stringify({ image, dryRun }),
-    acceptStatuses: [422],
-  });
-}
-
-export function refreshOperator(): Promise<OperationResponse> {
-  return request('/api/refresh', { method: 'POST', acceptStatuses: [422] });
-}
-
-export function reinstallOperator(targetType: 'stable' | 'nightly' | 'custom', image?: string, channel?: string): Promise<OperationResponse> {
-  return request('/api/rollback', {
-    method: 'POST',
-    body: JSON.stringify({ targetType, image, channel: channel || undefined }),
     acceptStatuses: [422],
   });
 }

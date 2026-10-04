@@ -15,7 +15,7 @@ test('Dashboard Dev sends main, PR and revert requests and retains partial-failu
   vm.runInNewContext(compiled, {
     exports, AbortSignal,
     fetch: async (url, options) => {
-      calls.push({ url, method: options.method, body: options.body });
+      calls.push({ url, method: options.method, body: options.body, contentType: options.headers && options.headers['Content-Type'] });
       return new Response(JSON.stringify(partial), { status: 422, headers: { 'Content-Type': 'application/json' } });
     },
   });
@@ -24,5 +24,7 @@ test('Dashboard Dev sends main, PR and revert requests and retains partial-failu
   }
   assert.deepEqual(calls.map(c => c.url), ['/api/dashboard/deploy-main', '/api/dashboard/deploy-pr', '/api/dashboard/revert']);
   assert.ok(calls.every(c => c.method === 'POST'));
+  // Body-less POSTs must still declare JSON: the backend rejects other types.
+  assert.ok(calls.every(c => c.contentType === 'application/json'), JSON.stringify(calls));
   assert.deepEqual(JSON.parse(calls[1].body), { pr: 123 });
 });

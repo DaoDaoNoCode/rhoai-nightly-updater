@@ -71,6 +71,7 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 ## Session Security
 
 - oauth-proxy session cookies use `SameSite=Strict` to prevent CSRF
+- State-changing `/api/` requests must use `Content-Type: application/json` (otherwise 415). Browsers cannot send that cross-site without a CORS preflight, which the backend does not grant
 - TLS is enforced end-to-end via the reencrypt Route
 - The backend applies security headers (via `middleware/security.go`) to all responses
 
@@ -95,7 +96,7 @@ This is NOT cluster-admin. The ServiceAccount cannot access arbitrary resources,
 
 - **Operation lifetime**: Accepted mutations continue if the browser disconnects, with a 15-minute deadline. Operator lifecycle operations keep the mutation lock until completion. Cleanup failures trigger a bounded attempt to restore the previous catalog and Subscription desired state. On SIGTERM the backend stops accepting mutations, reports not ready, and waits up to 16 minutes for running ones to finish (`SHUTDOWN_DRAIN_TIMEOUT`); the Deployment uses the `Recreate` strategy and a 1020-second termination grace period so only one pod runs operations. A crash or forced kill still interrupts in-process operations; there is no durable job queue.
 - **Usage analytics are privacy-safe**: The app tracks aggregate page view and feature usage counters via Prometheus metrics (`/metrics` endpoint). No user identity, IP addresses, or session data is stored — only counters like `page_views_total{page="dashboard"} 42`. The `POST /api/pageview` endpoint requires authentication and validates label names against a strict regex with a 100-label cap to prevent cardinality attacks.
-- **Dev mode bypass**: When `DEV_MODE=true` and no ServiceAccount token is available, authentication is bypassed using `DEV_TOKEN`. This path is never active in-cluster because the SA token file is always mounted.
+- **Dev mode bypass**: When `DEV_MODE=true` and no ServiceAccount token is available, authentication is bypassed using `DEV_TOKEN`. This path is never active in-cluster because the SA token file is always mounted. In dev mode the backend listens on `127.0.0.1` only (override with `BIND_ADDRESS`), and the webpack dev server also binds to `127.0.0.1`.
 - **TLS enforcement**: In-cluster, the backend requires the ServiceAccount CA certificate for TLS verification. `InsecureSkipVerify` is only allowed when `DEV_MODE=true` (local development). In production without the CA cert, the server exits with a fatal error.
 - **Shared HTTP client**: All Quay/GitHub API calls use a shared HTTP client with connection pooling to prevent file descriptor exhaustion under load.
 - **Cache TTL**: Image label and commit date caches use a 1-hour TTL with lazy eviction to prevent unbounded memory growth. FBC content is cached by digest (immutable). Tag scan results are cached for 5 minutes.

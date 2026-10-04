@@ -777,7 +777,7 @@ If the Deployment spec shows the new PR image but the running pod still uses the
 - **If stuck (rollout does not progress for >90 seconds),** use the "Assist Rollout" button on the Status page, or call the endpoint directly:
   ```bash
   # From your workstation (through the Route, requires auth cookie):
-  curl -X POST https://<route-host>/api/assist-rollout -H "Cookie: <auth-cookie>"
+  curl -X POST https://<route-host>/api/assist-rollout -H "Cookie: <auth-cookie>" -H "Content-Type: application/json"
 
   # From inside the cluster (bypasses oauth-proxy, port 8080):
   oc exec deploy/rhoai-nightly-updater -c app -n rhoai-nightly-updater -- \
