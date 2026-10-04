@@ -364,27 +364,18 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 
 	logs = append(logs, fmt.Sprintf("Found %d/%d images", len(found), len(prContainerRepos)))
 
-	// Detect deployment mode
-	mainContainers, err := getDeploymentContainerNames(c, dashboardNamespace, dashboardDeploymentName)
+	// Only containers that exist in this installation are patched; a strategic
+	// merge patch would otherwise add a bare container to the pod.
+	coreImages, moduleImages, failedModules, err := splitLegacyDashboardTargets(c, found, &logs)
 	if err != nil {
 		return nil, fmt.Errorf("detect deployment mode: %w", err)
 	}
-	standalone := isStandaloneMode(mainContainers)
-	if standalone {
-		logs = append(logs, "Deployment mode: Standalone")
-	} else {
-		logs = append(logs, "Deployment mode: Sidecar")
-	}
-
-	// Split found images into core (for main deployment) and module (for standalone deployments)
-	coreImages := map[string]string{}
-	moduleImages := map[string]string{}
-	for name, image := range found {
-		if standalone && moduleContainers[name] {
-			moduleImages[name] = image
-		} else {
-			coreImages[name] = image
-		}
+	targets := len(coreImages) + len(moduleImages) + len(failedModules)
+	if targets == 0 {
+		return &types.OperationResponse{
+			Success: false, Message: fmt.Sprintf("No installed dashboard components have an image for pr-%d. No changes were made.", prNumber),
+			Logs: logs, ErrorCode: "validation",
+		}, nil
 	}
 
 	// Patch the main dashboard deployment with core images
@@ -431,11 +422,10 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}
 
 	// Patch standalone module deployments
-	patched := make(map[string]string, len(found))
+	patched := make(map[string]string, targets)
 	for name, image := range coreImages {
 		patched[name] = image
 	}
-	var failedModules []string
 	for name, image := range moduleImages {
 		if err := patchStandaloneModule(c, name, image); err != nil {
 			slog.Warn("failed to patch standalone module", "module", name, "error", err)
@@ -447,32 +437,96 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 		}
 	}
 
-	containerNames := make([]string, 0, len(found))
+	containerNames := make([]string, 0, len(patched))
 	for name := range patched {
 		containerNames = append(containerNames, name)
 	}
 	sort.Strings(containerNames)
 	logs = append(logs, fmt.Sprintf("OK: Patched containers: %s", strings.Join(containerNames, ", ")))
 
-	slog.Info("dashboard PR deployed", "pr", prNumber, "containers", len(found), "user", getUser(c))
+	slog.Info("dashboard PR deployed", "pr", prNumber, "containers", len(patched), "user", getUser(c))
 
+	sort.Strings(failedModules)
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "deploy-pr",
-		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), len(found), strings.Join(failedModules, ", ")),
+		Detail:    fmt.Sprintf("PR #%d (%d/%d containers patched; failed modules: %s)", prNumber, len(patched), targets, strings.Join(failedModules, ", ")),
 		Success:   len(failedModules) == 0,
 	})
 	if len(failedModules) > 0 {
-		sort.Strings(failedModules)
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("PR #%d partially deployed: %d/%d containers patched. Failed modules: %s. Retry to finish deployment.", prNumber, len(patched), len(found), strings.Join(failedModules, ", ")), Logs: logs, ErrorCode: "partial_failure"}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("PR #%d partially deployed: %d/%d containers patched. Failed modules: %s. Retry to finish deployment.", prNumber, len(patched), targets, strings.Join(failedModules, ", ")), Logs: logs, ErrorCode: "partial_failure"}, nil
 	}
 
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("PR #%d deployed (%d containers patched).", prNumber, len(found)),
+		Message: fmt.Sprintf("PR #%d deployed (%d containers patched).", prNumber, len(patched)),
 		Logs:    logs,
 	}, nil
+}
+
+// splitLegacyDashboardTargets maps container images onto the workloads that
+// actually run those containers in this installation. In standalone mode a
+// module runs as its own Deployment; otherwise every container lives in the
+// main dashboard Deployment. Containers that are not installed are skipped so
+// strategic merge patches never add new containers. Modules whose Deployment
+// cannot be read are returned as failures.
+func splitLegacyDashboardTargets(c *Client, images map[string]string, logs *[]string) (core, modules map[string]string, failed []string, err error) {
+	mainContainers, err := getDeploymentContainerNames(c, dashboardNamespace, dashboardDeploymentName)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	standalone := isStandaloneMode(mainContainers)
+	if standalone {
+		*logs = append(*logs, "Deployment mode: Standalone")
+	} else {
+		*logs = append(*logs, "Deployment mode: Sidecar")
+	}
+	inMain := map[string]bool{}
+	for _, name := range mainContainers {
+		inMain[name] = true
+	}
+
+	names := make([]string, 0, len(images))
+	for name := range images {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	core = map[string]string{}
+	modules = map[string]string{}
+	for _, name := range names {
+		if standalone && moduleContainers[name] {
+			moduleNames, moduleErr := getDeploymentContainerNames(c, dashboardNamespace, name)
+			switch {
+			case IsK8sError(moduleErr, 404):
+				*logs = append(*logs, fmt.Sprintf("  %s: module not installed; unchanged", name))
+			case moduleErr != nil:
+				*logs = append(*logs, fmt.Sprintf("  %s: cannot read module deployment (%v)", name, moduleErr))
+				failed = append(failed, name)
+			case !containsString(moduleNames, name):
+				*logs = append(*logs, fmt.Sprintf("  %s: container not found in its deployment; unchanged", name))
+			default:
+				modules[name] = images[name]
+			}
+			continue
+		}
+		if !inMain[name] {
+			*logs = append(*logs, fmt.Sprintf("  %s: not part of %s; unchanged", name, dashboardDeploymentName))
+			continue
+		}
+		core[name] = images[name]
+	}
+	return core, modules, failed, nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 // RevertDashboardImage reverts ALL dashboard containers to their operator-managed images.
@@ -496,55 +550,49 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, fmt.Sprintf("Found %d original images", len(originalImages)))
 
-	// Detect deployment mode
-	mainContainers, modeErr := getDeploymentContainerNames(c, dashboardNamespace, dashboardDeploymentName)
+	// Only installed containers are reverted; see splitLegacyDashboardTargets.
+	coreImages, moduleImages, failedModules, modeErr := splitLegacyDashboardTargets(c, originalImages, &logs)
 	if modeErr != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Failed to detect deployment mode: %v", modeErr),
 			Logs: logs, ErrorCode: "prerequisites",
 		}, nil
 	}
-	standalone := isStandaloneMode(mainContainers)
 
-	// Split original images into core (main deployment) and module (standalone)
-	coreImages := map[string]string{}
-	moduleImages := map[string]string{}
-	for name, image := range originalImages {
-		if standalone && moduleContainers[name] {
-			moduleImages[name] = image
-		} else {
-			coreImages[name] = image
-		}
+	coreNames := make([]string, 0, len(coreImages))
+	for name := range coreImages {
+		coreNames = append(coreNames, name)
 	}
-
-	for name, image := range coreImages {
-		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(image)))
-	}
+	sort.Strings(coreNames)
 
 	// Revert the main dashboard deployment
 	var containerPatches []map[string]interface{}
-	for name, image := range coreImages {
+	for _, name := range coreNames {
+		logs = append(logs, fmt.Sprintf("  %s: %s", name, truncateForLog(coreImages[name])))
 		containerPatches = append(containerPatches, map[string]interface{}{
 			"name":  name,
-			"image": image,
+			"image": coreImages[name],
 		})
 	}
 
 	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
-	patchData, err := json.Marshal(map[string]interface{}{
+	revertPatch := map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"annotations": map[string]interface{}{
 				"opendatahub.io/managed": "true",
 			},
 		},
-		"spec": map[string]interface{}{
+	}
+	if len(containerPatches) > 0 {
+		revertPatch["spec"] = map[string]interface{}{
 			"template": map[string]interface{}{
 				"spec": map[string]interface{}{
 					"containers": containerPatches,
 				},
 			},
-		},
-	})
+		}
+	}
+	patchData, err := json.Marshal(revertPatch)
 	if err != nil {
 		return nil, fmt.Errorf("marshal revert patch: %w", err)
 	}
@@ -559,7 +607,6 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: Operator management re-enabled")
 
 	// Revert standalone module deployments
-	var failedModules []string
 	totalReverted := len(containerPatches)
 	for name, image := range moduleImages {
 		if err := patchStandaloneModule(c, name, image); err != nil {

@@ -41,6 +41,10 @@ func TestDashboardPartialDeployAndRevertReportActualFailures(t *testing.T) {
 					io.WriteString(w, `{"spec":{"template":{"spec":{"containers":[{"name":"rhods-dashboard","image":"old"}]}}}}`)
 					return
 				}
+				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/deployments/model-registry-ui") {
+					io.WriteString(w, `{"spec":{"template":{"spec":{"containers":[{"name":"model-registry-ui","image":"old-module"}]}}}}`)
+					return
+				}
 				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/deployments/rhods-operator") {
 					io.WriteString(w, `{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"original-dashboard"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_MODEL_REGISTRY_IMAGE","value":"original-module"}]}]}}}}`)
 					return
