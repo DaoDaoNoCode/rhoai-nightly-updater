@@ -1,0 +1,38 @@
+# golangci-lint v2 configuration (https://golangci-lint.run/docs/configuration/file/).
+# CI reports only issues introduced by the change under test
+# (--new-from-rev); `make lint-go` shows every issue.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - misspell
+  settings:
+    errcheck:
+      exclude-functions:
+        # Closing a response body or writing to a ResponseWriter/metrics
+        # stream has no useful error handling.
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (net/http.ResponseWriter).Write
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+    rules:
+      # Tests may ignore errors from helpers and fixtures.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
