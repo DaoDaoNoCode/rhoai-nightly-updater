@@ -9,6 +9,7 @@ import {
   ModalFooter,
   ModalHeader,
   ModalVariant,
+  Skeleton,
   Spinner,
   ToggleGroup,
   ToggleGroupItem,
@@ -19,6 +20,7 @@ import { Link } from "react-router-dom";
 import { formatRelativeTime } from "../utils";
 import { useFbcContent } from "../hooks/useFbcContent";
 import { CopyableText } from "./CopyableText";
+import { CATEGORY_LABELS } from "./BuildContents";
 
 interface FBCContentModalProps {
   image: string;
@@ -89,7 +91,7 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
                 {sortedCategories.map(cat => (
                   <ToggleGroupItem
                     key={cat}
-                    text={`${cat} (${categories[cat]})`}
+                    text={`${CATEGORY_LABELS[cat] || cat} (${categories[cat]})`}
                     isSelected={category === cat}
                     onChange={() => setActiveCategory(cat)}
                   />
@@ -124,17 +126,17 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
                               <Button variant="link" isInline component="a" href={commitURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">
                                 {shortSha}
                               </Button>
-                            ) : labelsDone ? "-" : <Spinner size="sm" aria-label={`Loading commit for ${img.name}`} />}
+                            ) : labelsDone ? "-" : <Skeleton width="4rem" screenreaderText={`Loading commit of ${img.name}`} />}
                           </Td>
                           <Td dataLabel="Built">
                             {img.buildDate ? (
                               <Content component="small">
                                 <time dateTime={img.buildDate} title={new Date(img.buildDate).toLocaleString()}>{formatRelativeTime(img.buildDate)}</time>
                               </Content>
-                            ) : labelsDone ? "-" : <Spinner size="sm" aria-label={`Loading build date for ${img.name}`} />}
+                            ) : labelsDone ? "-" : <Skeleton width="3rem" screenreaderText={`Loading build date of ${img.name}`} />}
                           </Td>
                           <Td dataLabel="Version">
-                            <Content component="small">{img.version || "-"}</Content>
+                            {img.version ? <Content component="small">{img.version}</Content> : labelsDone ? "-" : <Skeleton width="3rem" screenreaderText={`Loading version of ${img.name}`} />}
                           </Td>
                         </Tr>
                       );

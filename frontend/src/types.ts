@@ -291,3 +291,151 @@ export interface CheckResult {
   status: "pass" | "fail" | "warn" | "info";
   detail: string;
 }
+
+// ---------------------------------------------------------------------------
+// Secondary pages (Components, Build Explorer, Dashboard Dev, test resources,
+// Diagnostics): fields added by the backend fixes (B2-B5). Additive only:
+// these declarations merge with the interfaces above (TypeScript interface
+// merging), so the shared definitions stay untouched.
+// ---------------------------------------------------------------------------
+
+/** One FBC build as reported by `status.nightly` (pkg/types NightlyBuild). */
+export interface NightlyBuild {
+  image: string;
+  tag?: string;
+  digest?: string;
+  buildDate?: string;
+  dashboardCommit?: string;
+  dashboardGitURL?: string;
+}
+
+/** Installed vs latest nightly (pkg/types NightlyStatus). */
+export interface NightlyStatus {
+  installed?: NightlyBuild;
+  latest?: NightlyBuild;
+  /** Absent when either digest is unknown. */
+  updateAvailable?: boolean;
+  checkedAt?: string;
+  error?: string;
+}
+
+export interface StatusResponse {
+  /** Omitted unless the Subscription uses the nightly catalog. */
+  nightly?: NightlyStatus;
+}
+
+export interface DSCCompatibility {
+  defaultsSource?: string;
+}
+
+export interface ComponentsResponse {
+  dscExists?: boolean;
+  /** "present", "no-dsc" (CRD installed, no DSC) or "no-crd" (no DSC API). */
+  dscState?: string;
+  operatorVersion?: string;
+  operatorPhase?: string;
+}
+
+/** Who started a Dashboard Dev action and when (pkg/types DashboardDevAction). */
+export interface DashboardDevAction {
+  /** "deploy-pr", "deploy-main" or "revert". */
+  action: string;
+  by: string;
+  at: string;
+  detail?: string;
+}
+
+/** The image the tool set on one dashboard container (pkg/types DashboardOverrideComponent). */
+export interface DashboardOverrideComponent {
+  deployment: string;
+  container: string;
+  image?: string;
+  /** "pr", "main" or "baseline" (the release image). */
+  source?: string;
+  tag?: string;
+}
+
+/** The Dashboard Dev session recorded on dashboard-operator (pkg/types DashboardOverride). */
+export interface DashboardOverride {
+  active: boolean;
+  operatorPaused: boolean;
+  sessionRecorded: boolean;
+  sessionError?: string;
+  /** "pr" or "main". */
+  mode?: string;
+  prNumber?: number;
+  /** "rhoai" (Konflux, odh-pr-N) or "odh" (OpenShift CI, pr-N). */
+  flavor?: string;
+  startedAt?: string;
+  startedBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  releaseVersionAtStart?: string;
+  releaseVersion?: string;
+  /** RHOAI changed while the operator was paused. */
+  stale: boolean;
+  staleReasons?: string[] | null;
+  /** The Dashboard CR is being deleted and waits for the paused operator. */
+  dashboardDeleting: boolean;
+  warnings?: string[] | null;
+  components?: DashboardOverrideComponent[] | null;
+  lastAction?: DashboardDevAction;
+}
+
+export type DashboardFlavor = "rhoai" | "odh";
+
+export interface DashboardState {
+  override?: DashboardOverride;
+  flavor?: string;
+  defaultFlavor?: string;
+  availableFlavors?: string[] | null;
+  /** A workload hit ProgressDeadlineExceeded (server-side condition). */
+  rolloutStuck?: boolean;
+  stuckReason?: string;
+}
+
+export interface DashboardDevImage {
+  /** "pr", "main" or "baseline". */
+  targetSource?: string;
+  targetTag?: string;
+  /** "release", "pr", "main" or "other". */
+  running?: string;
+  runningPR?: number;
+  flavor?: string;
+  baselineImage?: string;
+  rolloutStuck?: boolean;
+  rolloutMessage?: string;
+  waitingReason?: string;
+  waitingMessage?: string;
+  restarts?: number;
+  podName?: string;
+}
+
+export interface ResourcesStatus {
+  /** Projects that already have a pipeline server the tool did not create. */
+  unmanagedPipelineProjects?: string[] | null;
+}
+
+export interface ResourceState {
+  /** DSPA name for pipeline servers ("nightly-dspa", or "dspa" for legacy ones). */
+  name?: string;
+  /** False: the tool did not create it and will not tear it down. */
+  managedByTool?: boolean;
+  terminating?: boolean;
+  setupBlockedReason?: string;
+  teardownBlockedReason?: string;
+  /** The resource can't become ready without a change (for example ImagePullBackOff). */
+  terminalError?: boolean;
+  /** PVCs deleted with the resource. */
+  dataPVCs?: string[] | null;
+  /** MLflow runs a PR image (independent of readiness). */
+  prOverride?: boolean;
+  prNumber?: number;
+  /** Image restored by Revert; "" means the operator default. */
+  revertImage?: string;
+}
+
+export interface Problem {
+  /** "<Kind> <ns>/<name>" or "<Kind> <name>"; for auto-fixes, exactly what the fix may change. */
+  affectedObjects?: string[] | null;
+}

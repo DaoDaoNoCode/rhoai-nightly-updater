@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  AlertActionCloseButton,
+  AlertActionLink,
   Button,
   Card,
   CardBody,
@@ -16,15 +18,9 @@ import {
   Label,
   MenuToggle,
   MenuToggleElement,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalVariant,
   Select,
   SelectList,
   SelectOption,
-  Spinner,
   Stack,
   StackItem,
   TextInput,
@@ -33,7 +29,7 @@ import {
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
-import TimesIcon from "@patternfly/react-icons/dist/esm/icons/times-icon";
+import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import type { OperationResponse, ResourceState, ResourcesStatus } from "../types";
 import {
   getResourcesStatus,
@@ -52,6 +48,8 @@ import {
 import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
 import { TooltipButton, NO_PERMISSION_REASON } from "./TooltipButton";
+import { ConfirmActionModal } from "./ConfirmActionModal";
+import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
 /**
  * Container waiting reasons that do not resolve on their own (Kubernetes
@@ -71,6 +69,7 @@ const TERMINAL_REASONS = [
 /** Why a deployed resource can't become ready without a change, or null. */
 export function terminalReason(state: ResourceState | undefined): string | null {
   if (!state || !state.deployed || state.ready) return null;
+  if (state.terminalError) return state.waitingReason || "Failed";
   const candidates = [state.waitingReason, state.message].filter((v): v is string => !!v);
   for (const text of candidates) {
     const reason = TERMINAL_REASONS.find((r) => text.includes(r));
@@ -80,30 +79,83 @@ export function terminalReason(state: ResourceState | undefined): string | null 
   return null;
 }
 
+function isTerminating(state: ResourceState | undefined): boolean {
+  return !!state && (!!state.terminating || state.message === "Terminating");
+}
+
+type ResourceKind = "minio" | "mlflow" | "pipeline";
+
+/** What to do about a resource that cannot start (A08-3, A06-5). */
+export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = true): string | null {
+  if (!terminalReason(state)) return null;
+  const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;
+  const managed = state.managedByTool !== false;
+  if (/ImagePullBackOff|ErrImagePull|InvalidImageName/.test(text)) {
+    if (kind === "minio" && managed) return "The image cannot be pulled. Repair applies the MinIO Deployment again with the image this updater is configured to use; the stored data is kept.";
+    if (kind === "mlflow" && state.prOverride) return "The PR image cannot be pulled. Revert to the image used before the PR, or deploy another PR.";
+    return "The image cannot be pulled. Check that the image exists and that the cluster pull secret can read it.";
+  }
+  if (/CrashLoopBackOff/.test(text)) {
+    if (kind === "mlflow" && state.prOverride) return "The PR build keeps crashing. Revert to the image used before the PR, or deploy another PR.";
+    return "The container keeps crashing. Read its logs in the OpenShift console.";
+  }
+  if (/CreateContainerConfigError|CreateContainerError/.test(text)) {
+    return "A Secret or ConfigMap the pod needs is missing or invalid. The message above names it.";
+  }
+  if (kind === "pipeline") {
+    return minioReady
+      ? "The pipeline server did not become ready within 5 minutes. Check its conditions in the project's Pipelines page."
+      : "The pipeline server cannot reach MinIO. Fix MinIO first; the pipeline server recovers once MinIO serves requests.";
+  }
+  return null;
+}
+
 const BUSY_REASON = "Another operation is in progress";
 
 interface QuickResourceCreatorProps {
   canMutate: boolean;
 }
 
-const ResourceStateLabel: React.FC<{ state: ResourceState }> = ({ state }) => {
+const StatusLabel: React.FC<{ state: ResourceState }> = ({ state }) => {
+  if (isTerminating(state)) return <Label isCompact color="orange" icon={<InProgressIcon />}>Terminating</Label>;
+  if (state.ready) return <Label isCompact color="green" icon={<CheckCircleIcon />}>Running</Label>;
+  if (!state.deployed) return <Label isCompact color="grey">Not set up</Label>;
   const reason = terminalReason(state);
   if (reason) {
-    return <Label isCompact color="red" icon={<ExclamationCircleIcon />}>Failed: {reason}</Label>;
+    const short = state.waitingReason || (reason !== "Failed" && reason.length <= 40 ? reason : "");
+    return <Label isCompact color="red" icon={<ExclamationCircleIcon />}>{short ? `Failed: ${short}` : "Failed"}</Label>;
   }
-  return <Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Starting" />}>{state.message || "Starting"}</Label>;
+  return <Label isCompact color="blue" icon={<InProgressIcon />}>Starting</Label>;
 };
+
+/** Status text plus the next step, under a resource's name. */
+const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean }> = ({ kind, state, minioReady }) => {
+  const step = nextStep(kind, state, minioReady);
+  const showMessage = state.deployed && !state.ready && !!state.message && state.message !== "Terminating";
+  return (
+    <>
+      {state.managedByTool === false && (
+        <Content component="small"><Label isCompact variant="outline">Not managed by this tool</Label> {state.teardownBlockedReason}</Content>
+      )}
+      {showMessage && <Content component="small" style={{ overflowWrap: "anywhere" }}>{state.message}</Content>}
+      {step && <Content component="small"><strong>Next step:</strong> {step}</Content>}
+    </>
+  );
+};
+
+type Pending =
+  | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
+  | { kind: "deploy-mlflow-pr"; pr: number }
+  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
 
 export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canMutate }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
   const [resAction, setResAction] = useState<string | null>(null);
   const [resResult, setResResult] = useState<OperationResponse | null>(null);
-  const [teardownConfirm, setTeardownConfirm] = useState<string | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
   const [projectList, setProjectList] = useState<string[]>([]);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [setupConfirmProject, setSetupConfirmProject] = useState<string | null>(null);
   const [mlflowPR, setMlflowPR] = useState("");
-  const [setupConfirm, setSetupConfirm] = useState<string | null>(null);
 
   const [resError, setResError] = useState<string | null>(null);
   const fetchResources = useCallback(async () => {
@@ -125,12 +177,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
 
   useEffect(() => { refreshProjects(); }, [refreshProjects]);
 
-  const allResources = resStatus ? [resStatus.minio, resStatus.mlflow, ...(resStatus.pipelineServers || [])] : [];
-  // Settling: something is starting or terminating and may still change on its own.
-  const resourcesSettling = resStatus != null && (
-    resStatus.minio.message === "Terminating" ||
-    allResources.some((r) => r.deployed && !r.ready && !terminalReason(r))
-  );
+  const minio = resStatus?.minio;
+  const mlflow = resStatus?.mlflow;
+  const pipelineServers = resStatus?.pipelineServers ?? [];
+  const allResources = resStatus ? [resStatus.minio, resStatus.mlflow, ...pipelineServers] : [];
+  // Settling: something is starting or terminating and may still change on its
+  // own. Terminal states are not settling: they need a change (A08-3).
+  const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
 
   // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
   // once nothing is settling; hidden tabs don't poll (A06-5).
@@ -155,178 +208,203 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
 
   const handleResourceAction = async (action: string, fn: () => Promise<OperationResponse>) => {
     trackFeature(action);
+    setPending(null);
     setResAction(action);
     setResResult(null);
     setPollGaveUp(false);
     setPollRound((n) => n + 1);
+    let res: OperationResponse;
     try {
-      const res = await fn();
-      setResResult(res);
-      setTeardownConfirm(null);
-      fetchResources();
-      refreshProjects();
+      res = await fn();
     } catch (e) {
-      setResResult({ success: false, message: toApiError(e, "Operation failed").message, logs: [] });
-      setTeardownConfirm(null);
-    } finally {
-      setResAction(null);
+      res = errorResult(e, "Operation failed");
+    }
+    setResResult(res);
+    setResAction(null);
+    void fetchResources();
+    refreshProjects();
+  };
+
+  const execute = (p: Pending) => {
+    switch (p.kind) {
+      case "setup-minio": return handleResourceAction("setup-minio", setupMinIO);
+      case "repair-minio": return handleResourceAction("setup-minio", setupMinIO);
+      case "teardown-minio": return handleResourceAction("teardown-minio", teardownMinIO);
+      case "setup-mlflow": return handleResourceAction("setup-mlflow", setupMLflow);
+      case "teardown-mlflow": return handleResourceAction("teardown-mlflow", teardownMLflow);
+      case "deploy-mlflow-pr": return handleResourceAction("deploy-mlflow-pr", () => deployMLflowPR(p.pr));
+      case "revert-mlflow": return handleResourceAction("revert-mlflow", revertMLflow);
+      case "setup-pipeline-server": return handleResourceAction("setup-pipeline-server", () => setupPipelineServer(p.project));
+      case "teardown-pipeline-server": return handleResourceAction("teardown-pipeline-server", () => teardownPipelineServer(p.project));
     }
   };
 
-  const availableProjects = projectList.filter(
-    (p) => !(resStatus?.pipelineServers || []).some((ps) => ps.namespace === p)
-  );
+  const baseReason = !canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null;
+  const unmanagedProjects = new Set(resStatus?.unmanagedPipelineProjects ?? []);
+  const availableProjects = projectList.filter((p) => !pipelineServers.some((ps) => ps.namespace === p) && !unmanagedProjects.has(p));
+  const mlflowPRValid = /^\d+$/.test(mlflowPR) && Number(mlflowPR) > 0;
+  const minioReady = !!minio?.ready;
+  const pvcList = (state: ResourceState | undefined) => (state?.dataPVCs ?? []);
 
-  const getTeardownLabel = (id: string | null): string => {
-    switch (id) {
-      case "minio": return "MinIO";
-      case "mlflow": return "MLflow";
-      default: return `Pipeline Server in ${id}`;
-    }
-  };
-
-  const getTeardownWarning = (id: string | null): string => {
-    switch (id) {
-      case "minio":
-        return "This deletes the entire 'minio' namespace including all stored data (pipeline artifacts, models, test files). This cannot be undone. Other projects using this MinIO as their S3 backend will lose access to their storage.";
-      case "mlflow":
-        return "This removes the MLflow CR and its storage (experiments, models, artifacts). The MLflow operator will clean up all resources.";
-      default:
-        return `This removes the pipeline server (DSPA), its database, and credentials from '${id}'. Existing pipeline runs will be lost. The namespace is preserved.`;
-    }
-  };
-
-  const executeTeardown = (id: string) => {
-    switch (id) {
-      case "minio":
-        handleResourceAction("teardown-minio", teardownMinIO);
-        break;
-      case "mlflow":
-        handleResourceAction("teardown-mlflow", teardownMLflow);
-        break;
-      default:
-        handleResourceAction("teardown-pipeline-server", () => teardownPipelineServer(id));
-    }
-  };
-
-  const getSetupLabel = (id: string | null): string => {
-    switch (id) {
-      case "setup-minio": return "Set up MinIO";
-      case "setup-mlflow": return "Set up MLflow";
-      case "deploy-mlflow-pr": return "Deploy MLflow PR";
-      case "revert-mlflow": return "Revert MLflow";
-      default: return "";
-    }
-  };
-
-  const getSetupWarning = (id: string | null): string => {
-    switch (id) {
+  const modal = (() => {
+    if (!pending) return null;
+    const pvcs = (s: ResourceState | undefined, what: string) => pvcList(s).length > 0
+      ? <>PersistentVolumeClaim{pvcList(s).length > 1 ? "s" : ""} {pvcList(s).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)}, with {what}.</>
+      : undefined;
+    switch (pending.kind) {
       case "setup-minio":
-        return "This will create a MinIO deployment in the minio namespace with a pipeline bucket.";
+      case "repair-minio":
+        return {
+          title: pending.kind === "repair-minio" ? "Repair MinIO?" : "Set up MinIO?",
+          confirm: pending.kind === "repair-minio" ? "Repair MinIO" : "Set up MinIO",
+          changes: [
+            <>Namespace <code>minio</code> {pending.kind === "repair-minio" ? "(kept)" : "is created"}, labelled as managed by this tool.</>,
+            <>Deployment, Service, PersistentVolumeClaim <code>minio-pvc</code>, Routes <code>minio-api</code> and <code>minio-ui</code>, and the bucket <code>pipelines</code> are applied with the image the server is configured to use.</>,
+          ],
+          extra: <Content component="p">The server waits up to 90 seconds for MinIO to become ready and reports the pod&apos;s reason if it cannot start.{pending.kind === "repair-minio" ? " Stored data is kept." : ""}</Content>,
+        };
+      case "teardown-minio":
+        return {
+          title: "Tear down MinIO?", confirm: "Tear down MinIO", danger: true,
+          changes: [<>Namespace <code>{minio?.namespace || "minio"}</code> is deleted with everything in it.</>],
+          dataLoss: pvcs(minio, "every object stored in MinIO (pipeline artifacts, uploaded files)") ?? <>Every object stored in MinIO (pipeline artifacts, uploaded files).</>,
+          extra: <Content component="p">The server refuses while a pipeline server still uses MinIO, or while a CRD conversion webhook is broken (the namespace deletion would hang); the message names the cause.</Content>,
+        };
       case "setup-mlflow":
-        return "This will create an MLflow server in redhat-ods-applications.";
+        return {
+          title: "Set up MLflow?", confirm: "Set up MLflow",
+          changes: [<>MLflow CR <code>mlflow</code> is created; the MLflow operator deploys the server in <code>redhat-ods-applications</code> with its default (RHOAI) image.</>],
+        };
+      case "teardown-mlflow":
+        return {
+          title: "Tear down MLflow?", confirm: "Tear down MLflow", danger: true,
+          changes: [<>MLflow CR <code>mlflow</code> is deleted; the operator removes the server.</>],
+          dataLoss: pvcs(mlflow, "every experiment, run and artifact stored in it") ?? <>Every experiment, run and artifact stored in MLflow.</>,
+        };
       case "deploy-mlflow-pr":
-        return "This will replace the running MLflow server with PR image. The server will restart.";
+        return {
+          title: `Deploy MLflow PR #${pending.pr}?`, confirm: `Deploy PR #${pending.pr}`,
+          changes: [
+            <>MLflow CR <code>mlflow</code>: <code>spec.image.image</code> is set to <code>quay.io/opendatahub/mlflow:odh-pr-{pending.pr}</code>, pinned to its current digest.</>,
+            ...(!mlflow?.prOverride ? [<>The image in use now is saved on the CR so Revert can restore it.</>] : []),
+          ],
+          extra: (
+            <Stack hasGutter>
+              <StackItem><Content component="p">The MLflow server restarts; it is unavailable until the new pod is ready.</Content></StackItem>
+              {mlflow?.managedByTool === false && (
+                <StackItem><Alert component="p" variant="warning" isInline title="This MLflow instance was not created by this tool">Someone else may rely on it. Revert restores its current image.</Alert></StackItem>
+              )}
+            </Stack>
+          ),
+        };
       case "revert-mlflow":
-        return "This will revert MLflow to the operator-managed image.";
-      default:
-        return "";
+        return {
+          title: "Revert MLflow?", confirm: "Revert MLflow",
+          changes: [mlflow?.revertImage
+            ? <>MLflow CR <code>mlflow</code>: <code>spec.image.image</code> goes back to <code>{mlflow.revertImage}</code>, the image used before the PR.</>
+            : <>MLflow CR <code>mlflow</code>: <code>spec.image.image</code> is removed, so the operator&apos;s default (RHOAI) image is used again.</>],
+          extra: <Content component="p">The MLflow server restarts.</Content>,
+        };
+      case "setup-pipeline-server":
+        return {
+          title: `Set up a pipeline server in ${pending.project}?`, confirm: "Set up",
+          changes: [
+            <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, using MinIO for storage.</>,
+          ],
+          extra: <Content component="p">The pipeline server takes 1 to 3 minutes to become ready.</Content>,
+        };
+      case "teardown-pipeline-server": {
+        const ps = pipelineServers.find((p) => p.namespace === pending.project);
+        return {
+          title: `Tear down the pipeline server in ${pending.project}?`, confirm: "Tear down", danger: true,
+          changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || "nightly-dspa"}</code> and its S3 credentials Secret are deleted. The project stays.</>],
+          dataLoss: pvcs(ps, "the pipeline database (runs, experiments and their history)") ?? <>The pipeline database (runs, experiments and their history).</>,
+        };
+      }
     }
-  };
-
-  const executeSetup = (id: string) => {
-    setSetupConfirm(null);
-    switch (id) {
-      case "setup-minio":
-        handleResourceAction("setup-minio", setupMinIO);
-        break;
-      case "setup-mlflow":
-        handleResourceAction("setup-mlflow", setupMLflow);
-        break;
-      case "deploy-mlflow-pr":
-        handleResourceAction("deploy-mlflow-pr", () => deployMLflowPR(parseInt(mlflowPR, 10)));
-        break;
-      case "revert-mlflow":
-        handleResourceAction("revert-mlflow", revertMLflow);
-        break;
-    }
-  };
+  })();
 
   return (
     <>
       <Card>
         <CardTitle>
-          <Title headingLevel="h3">Quick Resource Creator</Title>
+          <Title headingLevel="h2" size="lg">Test resources</Title>
+          <Content component="small">Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster.</Content>
         </CardTitle>
         <CardBody>
-          <Content component="small" className="pf-v6-u-mb-md">
-            Deploy test infrastructure with sensible defaults.
-          </Content>
-
-          {resError && (
-            <Alert variant="warning" title="Resource status may be out of date" isInline isPlain component="p" className="pf-v6-u-mb-md">
-              {resError}
-            </Alert>
-          )}
-          {pollGaveUp && resourcesSettling && (
-            <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline isPlain component="p" className="pf-v6-u-mb-md"
-              actionLinks={<Button variant="link" isInline onClick={checkAgain}>Check again</Button>}
-            />
-          )}
-          {resResult && (
-            <Alert
-              variant={resResult.success ? "success" : "danger"}
-              title={resResult.message}
-              isInline
-              isLiveRegion
-              component="p"
-              className="pf-v6-u-mb-md"
-              actionClose={<Button variant="plain" aria-label="Close" onClick={() => setResResult(null)}><TimesIcon /></Button>}
-            />
-          )}
-
           <Stack hasGutter>
-            {/* Storage & Data */}
+            {resError && (
+              <StackItem>
+                <Alert variant="warning" title="Resource status may be out of date" isInline isPlain component="p">{resError}</Alert>
+              </StackItem>
+            )}
+            {pollGaveUp && resourcesSettling && (
+              <StackItem>
+                <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline isPlain component="p"
+                  actionLinks={<AlertActionLink onClick={checkAgain}>Check again</AlertActionLink>} />
+              </StackItem>
+            )}
+            {resResult && (
+              <StackItem>
+                <Alert
+                  variant={outcomeVariant(resResult)}
+                  title={outcomeTitle(resResult, "The action failed")}
+                  isInline
+                  isLiveRegion
+                  component="p"
+                  actionClose={<AlertActionCloseButton onClose={() => setResResult(null)} />}
+                >
+                  {resResult.success ? undefined : resResult.message}
+                  {resResult.errorCode === "in_progress" ? " This page keeps checking." : ""}
+                </Alert>
+              </StackItem>
+            )}
+
+            {/* Storage */}
             <StackItem>
-              <Content component="h4">Storage & Data</Content>
-              <DataList isCompact aria-label="Storage resources">
+              <Title headingLevel="h3" size="md">Storage</Title>
+              <DataList isCompact aria-label="Storage">
                 <DataListItem aria-labelledby="minio-item">
                   <DataListItemRow>
                     <DataListItemCells
                       dataListCells={[
-                        <DataListCell key="name" width={2} id="minio-item">
-                          <strong>MinIO Object Storage</strong>
-                          <Content component="small">Namespace: minio — S3 storage for pipeline artifacts, model data, and test files.</Content>
+                        <DataListCell key="name" width={3}>
+                          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                            <FlexItem><strong id="minio-item">MinIO object storage</strong></FlexItem>
+                            {minio && <FlexItem><StatusLabel state={minio} /></FlexItem>}
+                          </Flex>
+                          <Content component="small">Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files.</Content>
+                          {minio && <StatusDetails kind="minio" state={minio} />}
                         </DataListCell>,
-                        <DataListCell key="status" width={1} alignRight>
-                          <Flex justifyContent={{ default: "justifyContentFlexEnd" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                            {resStatus?.minio.message === "Terminating" ? (
-                              <FlexItem><Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Terminating" />}>Terminating</Label></FlexItem>
-                            ) : resStatus?.minio.ready ? (
-                              <>
-                                <FlexItem><Label isCompact color="green" icon={<CheckCircleIcon />}>Running</Label></FlexItem>
-                                {resStatus.minio.uiRoute && (
-                                  <FlexItem>
-                                    <Button variant="link" isInline component="a" href={resStatus.minio.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Console</Button>
-                                  </FlexItem>
-                                )}
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("minio")} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
-                                </FlexItem>
-                              </>
-                            ) : resStatus?.minio.deployed ? (
-                              <>
-                                <FlexItem><ResourceStateLabel state={resStatus.minio} /></FlexItem>
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("minio")} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
-                                </FlexItem>
-                              </>
-                            ) : (
+                        <DataListCell key="actions" width={2} alignRight>
+                          <Flex justifyContent={{ default: "justifyContentFlexEnd" }} gap={{ default: "gapSm" }}>
+                            {minio?.ready && minio.uiRoute && (
                               <FlexItem>
-                                <TooltipButton variant="primary" size="sm" onClick={() => setSetupConfirm("setup-minio")} isLoading={resAction === "setup-minio"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : (resStatus?.minio.message === "Terminating") ? "MinIO is still being removed. Wait for it to finish." : null}>Set up</TooltipButton>
+                                <Button variant="link" isInline component="a" href={minio.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Console</Button>
+                              </FlexItem>
+                            )}
+                            {minio && !minio.deployed && !isTerminating(minio) && (
+                              <FlexItem>
+                                <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
+                                  disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
+                              </FlexItem>
+                            )}
+                            {minio?.deployed && minio.managedByTool !== false && !!terminalReason(minio) && !isTerminating(minio) && (
+                              <FlexItem>
+                                <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
+                                  disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
+                              </FlexItem>
+                            )}
+                            {minio?.deployed && minio.managedByTool !== false && !isTerminating(minio) && (
+                              <FlexItem>
+                                <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
+                                  disabledReason={baseReason ?? minio.teardownBlockedReason ?? null}>Tear down</TooltipButton>
                               </FlexItem>
                             )}
                           </Flex>
+                          {minio?.deployed && minio.managedByTool !== false && minio.teardownBlockedReason && (
+                            <Content component="small" style={{ textAlign: "end" }}>Tear down is blocked: {minio.teardownBlockedReason}</Content>
+                          )}
                         </DataListCell>,
                       ]}
                     />
@@ -337,56 +415,54 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
 
             {/* MLflow */}
             <StackItem>
-              <Content component="h4">MLflow</Content>
+              <Title headingLevel="h3" size="md">MLflow</Title>
               <DataList isCompact aria-label="MLflow">
                 <DataListItem aria-labelledby="mlflow-item">
                   <DataListItemRow>
                     <DataListItemCells
                       dataListCells={[
-                        <DataListCell key="name" width={2} id="mlflow-item">
-                          <strong>MLflow Server</strong>
-                          <Content component="small">Deploys MLflow in redhat-ods-applications.</Content>
-                          {resStatus?.mlflow.ready && resStatus.mlflow.currentImage?.includes("odh-pr-") && (
-                            <Label isCompact color="blue" className="pf-v6-u-mt-xs">
-                              PR #{resStatus.mlflow.currentImage.match(/odh-pr-(\d+)/)?.[1]}
-                            </Label>
-                          )}
-                          {resStatus?.mlflow.ready && (
-                            <Flex alignItems={{ default: "alignItemsFlexEnd" }} gap={{ default: "gapSm" }} className="pf-v6-u-mt-sm">
+                        <DataListCell key="name" width={3}>
+                          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                            <FlexItem><strong id="mlflow-item">MLflow server</strong></FlexItem>
+                            {mlflow && <FlexItem><StatusLabel state={mlflow} /></FlexItem>}
+                            {mlflow?.prOverride && <FlexItem><Label isCompact color="blue">PR #{mlflow.prNumber ?? "?"}</Label></FlexItem>}
+                          </Flex>
+                          <Content component="small">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.</Content>
+                          {mlflow && <StatusDetails kind="mlflow" state={mlflow} />}
+                          {mlflow?.deployed && (
+                            <Flex alignItems={{ default: "alignItemsFlexEnd" }} gap={{ default: "gapSm" }} style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
                               <FlexItem>
-                                <Content component="small" className="pf-v6-u-mb-xs">PR (opendatahub-io/mlflow)</Content>
-                                <TextInput type="number" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val)} placeholder="e.g. 42" aria-label="MLflow PR number" className="pf-v6-u-w-initial" />
+                                <TextInput type="text" inputMode="numeric" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val.trim())} placeholder="PR number" aria-label="opendatahub-io/mlflow PR number" style={{ maxWidth: "9rem" }} />
                               </FlexItem>
                               <FlexItem>
-                                <TooltipButton variant="primary" size="sm" onClick={() => setSetupConfirm("deploy-mlflow-pr")} isLoading={resAction === "deploy-mlflow-pr"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : (!mlflowPR || !Number.isInteger(Number(mlflowPR)) || Number(mlflowPR) <= 0) ? "Enter a PR number first." : null}>Deploy PR</TooltipButton>
+                                <TooltipButton variant="secondary" size="sm" onClick={() => setPending({ kind: "deploy-mlflow-pr", pr: Number(mlflowPR) })} isLoading={resAction === "deploy-mlflow-pr"}
+                                  disabledReason={baseReason ?? (!mlflowPRValid ? "Enter an opendatahub-io/mlflow PR number first." : null)}>Deploy PR</TooltipButton>
                               </FlexItem>
-                              {resStatus.mlflow.currentImage?.includes("odh-pr-") && (
+                              {mlflow.prOverride && (
                                 <FlexItem>
-                                  <TooltipButton variant="secondary" size="sm" onClick={() => setSetupConfirm("revert-mlflow")} isLoading={resAction === "revert-mlflow"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Revert</TooltipButton>
+                                  <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>Revert</TooltipButton>
                                 </FlexItem>
                               )}
                             </Flex>
                           )}
                         </DataListCell>,
-                        <DataListCell key="status" width={1} alignRight>
-                          <Flex justifyContent={{ default: "justifyContentFlexEnd" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                            {resStatus?.mlflow.ready ? (
-                              <>
-                                <FlexItem><Label isCompact color="green" icon={<CheckCircleIcon />}>Running</Label></FlexItem>
-                                {resStatus.mlflow.uiRoute && (
-                                  <FlexItem>
-                                    <Button variant="link" isInline component="a" href={resStatus.mlflow.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Open MLflow</Button>
-                                  </FlexItem>
-                                )}
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("mlflow")} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
-                                </FlexItem>
-                              </>
-                            ) : resStatus?.mlflow.deployed ? (
-                              <FlexItem><ResourceStateLabel state={resStatus.mlflow} /></FlexItem>
-                            ) : (
+                        <DataListCell key="actions" width={2} alignRight>
+                          <Flex justifyContent={{ default: "justifyContentFlexEnd" }} gap={{ default: "gapSm" }}>
+                            {mlflow?.ready && mlflow.uiRoute && (
                               <FlexItem>
-                                <TooltipButton variant="primary" size="sm" onClick={() => setSetupConfirm("setup-mlflow")} isLoading={resAction === "setup-mlflow"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Set up</TooltipButton>
+                                <Button variant="link" isInline component="a" href={mlflow.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Open MLflow</Button>
+                              </FlexItem>
+                            )}
+                            {mlflow && !mlflow.deployed && (
+                              <FlexItem>
+                                <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
+                                  disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
+                              </FlexItem>
+                            )}
+                            {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
+                              <FlexItem>
+                                <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
+                                  disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
                               </FlexItem>
                             )}
                           </Flex>
@@ -400,45 +476,42 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
 
             {/* Pipelines */}
             <StackItem>
-              <Content component="h4">Pipelines</Content>
-              {!resStatus?.minio.ready && (
+              <Title headingLevel="h3" size="md">Pipeline servers</Title>
+              {resStatus && !minioReady && (
                 <Alert
                   variant="warning"
-                  title={resStatus?.minio.deployed ? `Requires MinIO, which is not ready${terminalReason(resStatus.minio) ? ` (${terminalReason(resStatus.minio)})` : ""}` : "Requires MinIO — set up Storage first"}
+                  title={minio?.deployed ? `Pipeline servers need MinIO, which is not ready${minio.waitingReason ? ` (${minio.waitingReason})` : ""}` : "Pipeline servers need MinIO: set up storage first"}
                   isInline
                   isPlain
                   component="p"
-                  className="pf-v6-u-mb-sm"
                 />
               )}
-              {(resStatus?.pipelineServers || []).length === 0 && resStatus?.minio.ready && (
-                <Content component="small" className="pf-v6-u-mb-sm">No pipeline servers configured. Use the button below to add one to a project.</Content>
-              )}
               <DataList isCompact aria-label="Pipeline servers">
-                {(resStatus?.pipelineServers || []).map((ps) => (
+                {pipelineServers.map((ps) => (
                   <DataListItem key={ps.namespace} aria-labelledby={`ps-${ps.namespace}`}>
                     <DataListItemRow>
                       <DataListItemCells
                         dataListCells={[
-                          <DataListCell key="name" width={2} id={`ps-${ps.namespace}`}>
-                            <strong>{ps.namespace}</strong>
+                          <DataListCell key="name" width={3}>
+                            <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                              <FlexItem><strong id={`ps-${ps.namespace}`}>{ps.namespace}</strong></FlexItem>
+                              <FlexItem><StatusLabel state={ps} /></FlexItem>
+                            </Flex>
+                            {ps.name && <Content component="small">DataSciencePipelinesApplication <code>{ps.name}</code></Content>}
+                            <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
                           </DataListCell>,
-                          <DataListCell key="status" width={1} alignRight>
-                            <Flex justifyContent={{ default: "justifyContentFlexEnd" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                              {ps.ready ? (
-                                <>
-                                  <FlexItem><Label isCompact color="green" icon={<CheckCircleIcon />}>Running</Label></FlexItem>
-                                  {ps.uiRoute && (
-                                    <FlexItem>
-                                      <Button variant="link" isInline component="a" href={ps.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Pipelines</Button>
-                                    </FlexItem>
-                                  )}
-                                  <FlexItem>
-                                    <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm(ps.namespace!)} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
-                                  </FlexItem>
-                                </>
-                              ) : (
-                                <FlexItem><ResourceStateLabel state={ps} /></FlexItem>
+                          <DataListCell key="actions" width={2} alignRight>
+                            <Flex justifyContent={{ default: "justifyContentFlexEnd" }} gap={{ default: "gapSm" }}>
+                              {ps.ready && ps.uiRoute && (
+                                <FlexItem>
+                                  <Button variant="link" isInline component="a" href={ps.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Pipelines</Button>
+                                </FlexItem>
+                              )}
+                              {ps.managedByTool !== false && !isTerminating(ps) && (
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name })}
+                                    isLoading={resAction === "teardown-pipeline-server"} disabledReason={baseReason ?? ps.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+                                </FlexItem>
                               )}
                             </Flex>
                           </DataListCell>,
@@ -451,29 +524,33 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                   <DataListItemRow>
                     <DataListItemCells
                       dataListCells={[
-                        <DataListCell key="add" id="add-pipeline-item">
+                        <DataListCell key="add">
+                          <span id="add-pipeline-item" className="pf-v6-screen-reader">Add a pipeline server</span>
                           <Select
-                  isOpen={addProjectOpen}
-                  onOpenChange={setAddProjectOpen}
-                  onSelect={(_e, val) => {
-                    setAddProjectOpen(false);
-                    setSetupConfirmProject(val as string);
-                  }}
-                  toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
-                    <MenuToggle ref={toggleRef} onClick={() => setAddProjectOpen(!addProjectOpen)} isExpanded={addProjectOpen} isDisabled={!canMutate || !resStatus?.minio.ready || !!resAction} variant="primary">
-                      {resAction === "setup-pipeline-server" ? <><Spinner size="sm" aria-label="Setting up" /> Setting up...</> : "+ Add to project"}
-                    </MenuToggle>
-                  )}
-                >
-                  <SelectList aria-label="Data Science projects">
-                    {availableProjects.map((p) => (
-                      <SelectOption key={p} value={p}>{p}</SelectOption>
-                    ))}
-                    {availableProjects.length === 0 && (
-                      <SelectOption isDisabled value="">All projects already have pipeline servers</SelectOption>
-                    )}
-                  </SelectList>
+                            isOpen={addProjectOpen}
+                            onOpenChange={setAddProjectOpen}
+                            onSelect={(_e, val) => {
+                              setAddProjectOpen(false);
+                              if (val) setPending({ kind: "setup-pipeline-server", project: val as string });
+                            }}
+                            toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
+                              <MenuToggle ref={toggleRef} onClick={() => setAddProjectOpen(!addProjectOpen)} isExpanded={addProjectOpen}
+                                isDisabled={!canMutate || !minioReady || !!resAction} variant="secondary">
+                                {resAction === "setup-pipeline-server" ? "Setting up..." : "Add to a project"}
+                              </MenuToggle>
+                            )}
+                          >
+                            <SelectList aria-label="Data science projects">
+                              {availableProjects.map((p) => <SelectOption key={p} value={p}>{p}</SelectOption>)}
+                              {availableProjects.length === 0 && <SelectOption isDisabled value="">No project without a pipeline server</SelectOption>}
+                            </SelectList>
                           </Select>
+                          {!canMutate ? <Content component="small">{NO_PERMISSION_REASON}</Content> : !minioReady ? <Content component="small">Available once MinIO is running.</Content> : null}
+                          {unmanagedProjects.size > 0 && (
+                            <Content component="small">
+                              Not offered because they already have a pipeline server this tool did not create: {[...unmanagedProjects].join(", ")}.
+                            </Content>
+                          )}
                         </DataListCell>,
                       ]}
                     />
@@ -485,124 +562,21 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
         </CardBody>
       </Card>
 
-      {/* Teardown Confirmation Modal */}
-      <Modal
-        aria-labelledby="confirm-teardown-title"
-        variant={ModalVariant.small}
-        isOpen={!!teardownConfirm}
-        onClose={() => setTeardownConfirm(null)}
-      >
-        <ModalHeader
-          title={`Tear down ${getTeardownLabel(teardownConfirm)}?`}
-          labelId="confirm-teardown-title"
-        />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem>
-              <Alert component="p" variant="warning" title="Shared cluster impact" isInline>
-                {getTeardownWarning(teardownConfirm)}
-              </Alert>
-            </StackItem>
-            {teardownConfirm === "minio" && (resStatus?.pipelineServers?.length ?? 0) > 0 && (
-              <StackItem>
-                <Alert component="p" variant="danger" title="Pipeline servers depend on MinIO" isInline>
-                  Pipeline servers are running in: {(resStatus?.pipelineServers || []).map((ps) => ps.namespace).join(", ")}. Tear them down first, or the backend will block this operation.
-                </Alert>
-              </StackItem>
-            )}
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="danger"
-            onClick={() => {
-              executeTeardown(teardownConfirm!);
-            }}
-            isLoading={!!resAction}
-            isDisabled={!!resAction || (teardownConfirm === "minio" && (resStatus?.pipelineServers?.length ?? 0) > 0)}
-          >
-            Tear down
-          </Button>
-          <Button variant="link" onClick={() => setTeardownConfirm(null)} isDisabled={!!resAction}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
-
-      {/* Pipeline Server Setup Confirmation Modal */}
-      <Modal
-        aria-labelledby="confirm-setup-pipeline-title"
-        variant={ModalVariant.small}
-        isOpen={!!setupConfirmProject}
-        onClose={() => setSetupConfirmProject(null)}
-      >
-        <ModalHeader
-          title={`Set up Pipeline Server in ${setupConfirmProject}?`}
-          labelId="confirm-setup-pipeline-title"
-        />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="small">This will create a DSPA (DataSciencePipelinesApplication) and S3 credentials in project <strong>{setupConfirmProject}</strong>, backed by MinIO storage.</Content>
-            </StackItem>
-            <StackItem>
-              <Alert component="p" variant="info" title="The pipeline server will take 1-3 minutes to become ready." isInline isPlain />
-            </StackItem>
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="primary"
-            onClick={() => {
-              const project = setupConfirmProject!;
-              setSetupConfirmProject(null);
-              handleResourceAction("setup-pipeline-server", () => setupPipelineServer(project));
-            }}
-            isLoading={!!resAction}
-            isDisabled={!!resAction}
-          >
-            Set up
-          </Button>
-          <Button variant="link" onClick={() => setSetupConfirmProject(null)} isDisabled={!!resAction}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
-
-      {/* Setup / Action Confirmation Modal */}
-      <Modal
-        aria-labelledby="confirm-setup-title"
-        variant={ModalVariant.small}
-        isOpen={!!setupConfirm}
-        onClose={() => setSetupConfirm(null)}
-      >
-        <ModalHeader
-          title={`${getSetupLabel(setupConfirm)}?`}
-          labelId="confirm-setup-title"
-        />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem>
-              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster" isInline>
-                {getSetupWarning(setupConfirm)}
-              </Alert>
-            </StackItem>
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="primary"
-            onClick={() => executeSetup(setupConfirm!)}
-            isLoading={!!resAction}
-            isDisabled={!!resAction}
-          >
-            {getSetupLabel(setupConfirm)}
-          </Button>
-          <Button variant="link" onClick={() => setSetupConfirm(null)} isDisabled={!!resAction}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
+      {modal && (
+        <ConfirmActionModal
+          isOpen
+          title={modal.title}
+          changes={modal.changes}
+          dataLoss={"dataLoss" in modal ? modal.dataLoss : undefined}
+          confirmLabel={modal.confirm}
+          confirmVariant={"danger" in modal && modal.danger ? "danger" : "primary"}
+          isLoading={!!resAction}
+          onConfirm={() => pending && execute(pending)}
+          onCancel={() => setPending(null)}
+        >
+          {"extra" in modal ? modal.extra : undefined}
+        </ConfirmActionModal>
+      )}
     </>
   );
 };

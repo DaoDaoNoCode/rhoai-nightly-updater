@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  AlertActionCloseButton,
   Bullseye,
   Button,
   Card,
@@ -32,12 +33,12 @@ import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclam
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import InfoCircleIcon from "@patternfly/react-icons/dist/esm/icons/info-circle-icon";
 import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
-import type {
-  CheckResult,
-  Problem,
-  DiagnosticResult,
-} from "../types";
-import { getDiagnostics, fixProblem, toApiError } from "../services/api";
+import type { CheckResult, OperationResponse, Problem, DiagnosticResult } from "../types";
+import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
+import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { LoadErrorAlert } from "../components/LoadErrorAlert";
+import { TooltipButton, NO_PERMISSION_REASON } from "../components/TooltipButton";
+import { usePermissions, CHECKING_PERMISSIONS_REASON } from "../hooks/usePermissions";
 
 type ScanState = "idle" | "loading" | "done" | "error";
 
@@ -49,8 +50,15 @@ const statusIcon = (status: CheckResult["status"]) => {
       return <ExclamationCircleIcon color="var(--pf-t--global--color--status--danger--default)" />;
     case "warn":
       return <ExclamationTriangleIcon color="var(--pf-t--global--color--status--warning--default)" />;
+    default:
+      return <InfoCircleIcon color="var(--pf-t--global--color--status--info--default)" />;
   }
 };
+
+const statusText = (status: CheckResult["status"]) =>
+  status === "pass" ? "Passed" : status === "fail" ? "Failed" : status === "warn" ? "Warning" : "Info";
+const statusColor = (status: CheckResult["status"]): "green" | "red" | "yellow" | "blue" =>
+  status === "pass" ? "green" : status === "fail" ? "red" : status === "warn" ? "yellow" : "blue";
 
 const severityIcon = (severity: Problem["severity"]) => {
   switch (severity) {
@@ -58,7 +66,7 @@ const severityIcon = (severity: Problem["severity"]) => {
       return <ExclamationCircleIcon color="var(--pf-t--global--color--status--danger--default)" />;
     case "warning":
       return <ExclamationTriangleIcon color="var(--pf-t--global--color--status--warning--default)" />;
-    case "info":
+    default:
       return <InfoCircleIcon color="var(--pf-t--global--color--status--info--default)" />;
   }
 };
@@ -69,12 +77,17 @@ const severityLabel = (severity: Problem["severity"]) => {
       return <Label color="red" isCompact>Critical</Label>;
     case "warning":
       return <Label color="yellow" isCompact>Warning</Label>;
-    case "info":
+    default:
       return <Label color="blue" isCompact>Info</Label>;
   }
 };
 
-function buildDiagnosticReport(data: DiagnosticResult): string {
+/** Guidance-only problems carry no autoFixAction: they get instructions, never a Fix button. */
+export function hasAutoFix(problem: Problem): boolean {
+  return !!problem.autoFixable && !!problem.autoFixAction;
+}
+
+export function buildDiagnosticReport(data: DiagnosticResult): string {
   const lines: string[] = [];
   lines.push("=== Diagnostic Report ===");
   lines.push(`Generated: ${new Date().toISOString()}`);
@@ -82,7 +95,7 @@ function buildDiagnosticReport(data: DiagnosticResult): string {
 
   lines.push("--- Health Checks ---");
   for (const check of (data.checks ?? [])) {
-    const icon = check.status === "pass" ? "[OK]" : check.status === "fail" ? "[FAIL]" : "[WARN]";
+    const icon = check.status === "pass" ? "[OK]" : check.status === "fail" ? "[FAIL]" : check.status === "warn" ? "[WARN]" : "[INFO]";
     lines.push(`${icon} ${check.name}: ${check.detail}`);
   }
 
@@ -96,14 +109,13 @@ function buildDiagnosticReport(data: DiagnosticResult): string {
       lines.push(`  ${problem.description}`);
       if (problem.evidence && problem.evidence.length > 0) {
         lines.push("  Evidence:");
-        for (const e of problem.evidence) {
-          lines.push(`    - ${e}`);
-        }
+        for (const e of problem.evidence) lines.push(`    - ${e}`);
       }
-      lines.push(`  Fix: ${problem.fix}`);
-      if (problem.technicalCmd) {
-        lines.push(`  Command: $ ${problem.technicalCmd}`);
+      if (problem.affectedObjects && problem.affectedObjects.length > 0) {
+        lines.push(`  Objects: ${problem.affectedObjects.join(", ")}`);
       }
+      lines.push(`  Fix: ${problem.fix ?? ""}${hasAutoFix(problem) ? " (automatic fix available)" : " (manual)"}`);
+      if (problem.technicalCmd) lines.push(`  Command: $ ${problem.technicalCmd}`);
     }
   } else {
     lines.push("");
@@ -113,20 +125,26 @@ function buildDiagnosticReport(data: DiagnosticResult): string {
   return lines.join("\n");
 }
 
+const ObjectList: React.FC<{ objects: string[] }> = ({ objects }) => (
+  <List>
+    {objects.map((o) => <ListItem key={o}><code style={{ overflowWrap: "anywhere" }}>{o}</code></ListItem>)}
+  </List>
+);
+
 export const TroubleshootingPage: React.FC = () => {
   const [scanState, setScanState] = useState<ScanState>("idle");
   const [data, setData] = useState<DiagnosticResult | null>(null);
-  const [error, setError] = useState<string>("");
+  const [error, setError] = useState<ApiError | null>(null);
   const [fixingId, setFixingId] = useState<string | null>(null);
-  const [fixError, setFixError] = useState<string>("");
+  const [fixResult, setFixResult] = useState<OperationResponse | null>(null);
   const [copied, setCopied] = useState(false);
-  const [confirmFix, setConfirmFix] = useState<{ action: string; message: string } | null>(null);
+  const [confirmFix, setConfirmFix] = useState<Problem | null>(null);
+  const { canMutate, loaded: permissionsLoaded } = usePermissions();
   const mountedRef = useRef(true);
 
   const runScan = useCallback(async () => {
     setScanState("loading");
-    setError("");
-    setFixError("");
+    setError(null);
     try {
       const result = await getDiagnostics();
       if (!mountedRef.current) return;
@@ -134,7 +152,7 @@ export const TroubleshootingPage: React.FC = () => {
       setScanState("done");
     } catch (err) {
       if (!mountedRef.current) return;
-      setError(toApiError(err, "Diagnostics scan failed").message);
+      setError(toApiError(err, "Diagnostics scan failed"));
       setScanState("error");
     }
   }, []);
@@ -151,46 +169,38 @@ export const TroubleshootingPage: React.FC = () => {
 
   const handleFix = async (autoFixAction: string) => {
     setFixingId(autoFixAction);
-    setFixError("");
+    setFixResult(null);
+    let result: OperationResponse;
     try {
-      const result = await fixProblem(autoFixAction);
-      if (!mountedRef.current) return;
-      if (!result.success) {
-        setFixError(result.message);
-      }
-      // Re-scan to reflect the new state
-      await runScan();
+      result = await fixProblem(autoFixAction);
     } catch (err) {
-      if (!mountedRef.current) return;
-      setFixError(toApiError(err, "Fix failed").message);
-    } finally {
-      if (mountedRef.current) {
-        setFixingId(null);
-      }
+      result = errorResult(err, "Fix failed");
     }
+    if (!mountedRef.current) return;
+    setFixResult(result);
+    setFixingId(null);
+    // Re-scan to show the state after the fix (or after someone else's change).
+    await runScan();
   };
 
   const handleCopyReport = () => {
     if (!data) return;
-    const report = buildDiagnosticReport(data);
-    navigator.clipboard.writeText(report).then(() => {
+    navigator.clipboard.writeText(buildDiagnosticReport(data)).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => { /* clipboard may be blocked */ });
   };
 
-  // Compute summary counts (guard against null checks/problems from backend)
   const checks = data?.checks ?? [];
   const problems = data?.problems ?? [];
   const failCount = checks.filter((c) => c.status === "fail").length;
   const warnCount = checks.filter((c) => c.status === "warn").length;
   const passCount = checks.filter((c) => c.status === "pass").length;
   const totalChecks = checks.length;
-  const problemCount = problems.length;
+  const fixReason = !permissionsLoaded ? CHECKING_PERMISSIONS_REASON : !canMutate ? NO_PERMISSION_REASON : null;
 
   return (
     <>
-      {/* Title section */}
       <PageSection>
         <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
           <FlexItem>
@@ -198,28 +208,19 @@ export const TroubleshootingPage: React.FC = () => {
               Diagnostics
             </Title>
             <Content component="p">
-              Live health checks and problem detection for RHOAI nightly builds
+              Live health checks of the RHOAI install, with the cause of each problem and how to fix it
             </Content>
           </FlexItem>
           <FlexItem>
             <Flex>
               <FlexItem>
-                <Button
-                  variant="secondary"
-                  icon={<SyncAltIcon />}
-                  onClick={runScan}
-                  isDisabled={scanState === "loading"}
-                  isLoading={scanState === "loading"}
-                >
+                <Button variant="secondary" icon={<SyncAltIcon />} onClick={runScan} isDisabled={scanState === "loading"} isLoading={scanState === "loading"}>
                   Re-scan
                 </Button>
               </FlexItem>
               {data && (
                 <FlexItem>
-                  <Button
-                    variant="secondary"
-                    onClick={handleCopyReport}
-                  >
+                  <Button variant="secondary" onClick={handleCopyReport}>
                     {copied ? "Copied!" : "Copy diagnostic report"}
                   </Button>
                   <span className="pf-v6-screen-reader" role="status">{copied ? "Diagnostic report copied to the clipboard" : ""}</span>
@@ -230,58 +231,160 @@ export const TroubleshootingPage: React.FC = () => {
         </Flex>
       </PageSection>
 
-      {/* Loading state */}
       {scanState === "loading" && !data && (
         <PageSection>
           <Bullseye>
             <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-              <FlexItem>
-                <Spinner size="xl" aria-label="Scanning cluster health" />
-              </FlexItem>
-              <FlexItem>
-                <Content component="p">Scanning cluster health...</Content>
-              </FlexItem>
+              <FlexItem><Spinner size="xl" aria-label="Scanning cluster health" /></FlexItem>
+              <FlexItem><Content component="p">Scanning cluster health...</Content></FlexItem>
             </Flex>
           </Bullseye>
         </PageSection>
       )}
 
-      {/* Error state */}
-      {scanState === "error" && (
-        <PageSection>
-          <Alert variant="danger" title="Diagnostic scan failed" isInline isLiveRegion component="p">
-            {error}
-          </Alert>
-        </PageSection>
+      {scanState === "error" && error && (
+        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={runScan} stale={!!data} />
       )}
 
-      {/* Results */}
       {data && (
         <>
-          {/* Summary banner */}
           <PageSection aria-live="polite">
             {failCount === 0 && warnCount === 0 && (
-              <Alert component="p" variant="success" title={`All ${totalChecks} checks passed — no issues detected`} isInline />
+              <Alert component="p" variant="success" title={`All ${totalChecks} checks passed, no issues detected`} isInline />
             )}
             {failCount === 0 && warnCount > 0 && (
               <Alert component="p" variant="warning" title={`${warnCount} warning${warnCount !== 1 ? "s" : ""} found`} isInline />
             )}
             {failCount > 0 && (
-              <Alert component="p"
-                variant="danger"
-                title={`${failCount + warnCount} issue${failCount + warnCount !== 1 ? "s" : ""} found that need attention`}
-                isInline
-              >
+              <Alert component="p" variant="danger" title={`${failCount + warnCount} issue${failCount + warnCount !== 1 ? "s" : ""} found that need attention`} isInline>
                 {passCount > 0 && <Content component="p">{passCount} of {totalChecks} checks passed.</Content>}
-                {problemCount > 0 && <Content component="p">See the problems section below for details and fix instructions.</Content>}
+                {problems.length > 0 && <Content component="p">The problems below say what was observed and how to fix it.</Content>}
               </Alert>
             )}
           </PageSection>
 
-          {/* Health checks grid */}
+          {fixResult && (
+            <PageSection>
+              <Alert variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "Fix failed")} isInline isLiveRegion component="p"
+                actionClose={<AlertActionCloseButton onClose={() => setFixResult(null)} />}>
+                {fixResult.success ? undefined : fixResult.message}
+                {fixResult.errorCode === "conflict" ? " The scan was refreshed; check the problem again before retrying." : ""}
+                {(fixResult.logs?.length ?? 0) > 0 && (
+                  <List>{fixResult.logs!.map((l, i) => <ListItem key={i}>{l}</ListItem>)}</List>
+                )}
+              </Alert>
+            </PageSection>
+          )}
+
+          {problems.length > 0 && (
+            <PageSection>
+              <Title headingLevel="h2" size="lg" style={{ marginBottom: "1rem" }}>
+                Problems ({problems.length})
+              </Title>
+              <Stack hasGutter>
+                {problems.map((problem) => {
+                  const auto = hasAutoFix(problem);
+                  const objects = problem.affectedObjects ?? [];
+                  return (
+                    <StackItem key={problem.id}>
+                      <Card>
+                        <CardTitle>
+                          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+                            <FlexItem>{severityIcon(problem.severity)}</FlexItem>
+                            <FlexItem flex={{ default: "flex_1" }} style={{ minWidth: 0 }}>
+                              <Title headingLevel="h3" size="md" style={{ margin: 0, overflowWrap: "anywhere" }}>
+                                {problem.title}
+                              </Title>
+                            </FlexItem>
+                            <FlexItem>
+                              <Flex gap={{ default: "gapXs" }} flexWrap={{ default: "wrap" }} justifyContent={{ default: "justifyContentFlexEnd" }}>
+                                <FlexItem>{auto ? <Label isCompact color="blue">Automatic fix</Label> : <Label isCompact variant="outline">Manual fix</Label>}</FlexItem>
+                                <FlexItem>{severityLabel(problem.severity)}</FlexItem>
+                              </Flex>
+                            </FlexItem>
+                          </Flex>
+                        </CardTitle>
+                        <CardBody>
+                          <Stack hasGutter>
+                            <StackItem>
+                              <Content component="p">{problem.description}</Content>
+                            </StackItem>
+
+                            {problem.evidence && problem.evidence.length > 0 && (
+                              <StackItem>
+                                <Content component="p" style={{ fontWeight: 600 }}>What was observed:</Content>
+                                <List>
+                                  {problem.evidence.map((e, i) => (
+                                    <ListItem key={i}><span style={{ overflowWrap: "anywhere", whiteSpace: "pre-line" }}>{e}</span></ListItem>
+                                  ))}
+                                </List>
+                              </StackItem>
+                            )}
+
+                            {objects.length > 0 && (
+                              <StackItem>
+                                <Content component="p" style={{ fontWeight: 600 }}>Objects:</Content>
+                                <ObjectList objects={objects} />
+                              </StackItem>
+                            )}
+
+                            <StackItem>
+                              <Content component="p" style={{ fontWeight: 600 }}>How to fix:</Content>
+                              <Content component="p">{problem.fix}</Content>
+                            </StackItem>
+
+                            {!auto && problem.technicalCmd && (
+                              <StackItem>
+                                <Content component="p" style={{ fontWeight: 600 }}>Command:</Content>
+                                <ClipboardCopy isReadOnly isCode hoverTip="Copy command" clickTip="Copied" textAriaLabel={`Command for ${problem.title}`}>
+                                  {problem.technicalCmd}
+                                </ClipboardCopy>
+                                <Content component="small">This page changes nothing for this problem. Read the command before you run it with <code>oc</code>.</Content>
+                              </StackItem>
+                            )}
+
+                            {auto && (
+                              <StackItem>
+                                <TooltipButton
+                                  variant="primary"
+                                  onClick={() => setConfirmFix(problem)}
+                                  isDisabled={fixingId !== null}
+                                  isLoading={fixingId === problem.autoFixAction}
+                                  disabledReason={fixReason}
+                                >
+                                  {fixingId === problem.autoFixAction ? "Fixing..." : "Fix"}
+                                </TooltipButton>
+                              </StackItem>
+                            )}
+
+                            {problem.learnMore && (
+                              <StackItem>
+                                <ExpandableSection toggleText="Learn more">
+                                  <Content component="p" style={{ whiteSpace: "pre-line" }}>{problem.learnMore}</Content>
+                                </ExpandableSection>
+                              </StackItem>
+                            )}
+
+                            {auto && problem.technicalCmd && (
+                              <StackItem>
+                                <ExpandableSection toggleText="Technical details">
+                                  <ClipboardCopy isBlock isReadOnly isCode>{problem.technicalCmd}</ClipboardCopy>
+                                </ExpandableSection>
+                              </StackItem>
+                            )}
+                          </Stack>
+                        </CardBody>
+                      </Card>
+                    </StackItem>
+                  );
+                })}
+              </Stack>
+            </PageSection>
+          )}
+
           <PageSection>
-            <Title headingLevel="h3" style={{ marginBottom: "1rem" }}>
-              Health checks
+            <Title headingLevel="h2" size="lg" style={{ marginBottom: "1rem" }}>
+              Health checks ({totalChecks})
             </Title>
             <Grid hasGutter>
               {checks.map((check) => (
@@ -291,20 +394,13 @@ export const TroubleshootingPage: React.FC = () => {
                       <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
                         <div style={{ flexShrink: 0, paddingTop: "2px" }}>{statusIcon(check.status)}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <Content component="p" style={{ fontWeight: 600, margin: 0 }}>
-                            {check.name}
-                          </Content>
+                          <Content component="p" style={{ fontWeight: 600, margin: 0 }}>{check.name}</Content>
                           <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)", overflowWrap: "anywhere" }}>
                             {check.detail}
                           </Content>
                         </div>
                         <div style={{ flexShrink: 0 }}>
-                          <Label
-                            color={check.status === "pass" ? "green" : check.status === "fail" ? "red" : "yellow"}
-                            isCompact
-                          >
-                            {check.status === "pass" ? "Passed" : check.status === "fail" ? "Failed" : "Warning"}
-                          </Label>
+                          <Label color={statusColor(check.status)} isCompact>{statusText(check.status)}</Label>
                         </div>
                       </div>
                     </CardBody>
@@ -314,108 +410,7 @@ export const TroubleshootingPage: React.FC = () => {
             </Grid>
           </PageSection>
 
-          {/* Fix error */}
-          {fixError && (
-            <PageSection>
-              <Alert variant="danger" title="Fix failed" isInline isLiveRegion component="p">
-                {fixError}
-              </Alert>
-            </PageSection>
-          )}
-
-          {/* Problems section */}
-          {problems.length > 0 && (
-            <PageSection>
-              <Title headingLevel="h3" style={{ marginBottom: "1rem" }}>
-                Problems ({problems.length})
-              </Title>
-              <Stack hasGutter>
-                {problems.map((problem) => (
-                  <StackItem key={problem.id}>
-                    <Card>
-                      <CardTitle>
-                        <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                          <FlexItem>{severityIcon(problem.severity)}</FlexItem>
-                          <FlexItem flex={{ default: "flex_1" }}>
-                            <Title headingLevel="h4" style={{ margin: 0 }}>
-                              {problem.title}
-                            </Title>
-                          </FlexItem>
-                          <FlexItem>{severityLabel(problem.severity)}</FlexItem>
-                        </Flex>
-                      </CardTitle>
-                      <CardBody>
-                        <Stack hasGutter>
-                          <StackItem>
-                            <Content component="p">{problem.description}</Content>
-                          </StackItem>
-
-                          {problem.evidence && problem.evidence.length > 0 && (
-                            <StackItem>
-                              <Content component="p" style={{ fontWeight: 600 }}>What was observed:</Content>
-                              <List>
-                                {problem.evidence.map((e, i) => (
-                                  <ListItem key={i}>{e}</ListItem>
-                                ))}
-                              </List>
-                            </StackItem>
-                          )}
-
-                          <StackItem>
-                            <Content component="p" style={{ fontWeight: 600 }}>How to fix:</Content>
-                            <Content component="p">{problem.fix}</Content>
-                          </StackItem>
-
-                          {problem.autoFixable && problem.autoFixAction && (
-                            <StackItem>
-                              <Button
-                                variant="primary"
-                                onClick={() => setConfirmFix({
-                                  action: problem.autoFixAction!,
-                                  message: problem.confirmMessage || "This will modify resources on the shared cluster.",
-                                })}
-                                isDisabled={fixingId !== null}
-                                isLoading={fixingId === problem.autoFixAction}
-                              >
-                                {fixingId === problem.autoFixAction ? "Fixing..." : "Fix"}
-                              </Button>
-                            </StackItem>
-                          )}
-
-                          {problem.learnMore && (
-                            <StackItem>
-                              <ExpandableSection toggleText="Learn more">
-                                <Content component="p" style={{ whiteSpace: "pre-line" }}>
-                                  {problem.learnMore}
-                                </Content>
-                              </ExpandableSection>
-                            </StackItem>
-                          )}
-
-                          {problem.technicalCmd && (
-                            <StackItem>
-                              <ExpandableSection toggleText="Technical details">
-                                <Stack hasGutter>
-                                  <StackItem>
-                                    <ClipboardCopy isBlock isReadOnly>
-                                      {problem.technicalCmd}
-                                    </ClipboardCopy>
-                                  </StackItem>
-                                </Stack>
-                              </ExpandableSection>
-                            </StackItem>
-                          )}
-                        </Stack>
-                      </CardBody>
-                    </Card>
-                  </StackItem>
-                ))}
-              </Stack>
-            </PageSection>
-          )}
-
-          {/* Scanning overlay for re-scan */}
-          {scanState === "loading" && data && (
+          {scanState === "loading" && (
             <PageSection>
               <Bullseye>
                 <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
@@ -428,21 +423,24 @@ export const TroubleshootingPage: React.FC = () => {
         </>
       )}
 
-      {/* Confirmation modal for fix actions */}
-      <Modal
-        aria-labelledby="confirm-fix-title"
-        variant={ModalVariant.small}
-        isOpen={confirmFix !== null}
-        onClose={() => setConfirmFix(null)}
-      >
-        <ModalHeader title="Confirm action" labelId="confirm-fix-title" />
+      <Modal aria-labelledby="confirm-fix-title" variant={ModalVariant.medium} isOpen={confirmFix !== null} onClose={() => setConfirmFix(null)}>
+        <ModalHeader title={`Fix: ${confirmFix?.title ?? ""}`} labelId="confirm-fix-title" />
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
-              <Content component="p">{confirmFix?.message}</Content>
+              <Content component="p">{confirmFix?.confirmMessage || "This changes resources on the shared cluster."}</Content>
+            </StackItem>
+            {(confirmFix?.affectedObjects?.length ?? 0) > 0 && (
+              <StackItem>
+                <Content component="p">Objects this fix may change:</Content>
+                <ObjectList objects={confirmFix!.affectedObjects!} />
+              </StackItem>
+            )}
+            <StackItem>
+              <Content component="small">The server checks the problem again first and changes nothing if it is already gone.</Content>
             </StackItem>
             <StackItem>
-              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster." isInline isPlain />
+              <Alert component="p" variant="warning" title="This changes a shared cluster." isInline isPlain />
             </StackItem>
           </Stack>
         </ModalBody>
@@ -450,14 +448,14 @@ export const TroubleshootingPage: React.FC = () => {
           <Button
             variant="primary"
             onClick={() => {
-              if (confirmFix) {
-                handleFix(confirmFix.action);
+              if (confirmFix?.autoFixAction) {
+                void handleFix(confirmFix.autoFixAction);
                 setConfirmFix(null);
               }
             }}
             isLoading={fixingId !== null}
           >
-            Confirm
+            Fix
           </Button>
           <Button variant="link" onClick={() => setConfirmFix(null)}>Cancel</Button>
         </ModalFooter>
