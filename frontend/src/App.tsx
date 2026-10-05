@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useState } from "react";
 import {
   Alert,
   AlertActionCloseButton,
+  Bullseye,
   Button,
-  Content,
   EmptyState,
   EmptyStateActions,
   EmptyStateBody,
@@ -27,6 +27,7 @@ import {
   DropdownList,
   Label,
   MenuToggle,
+  SkipToContent,
   Spinner,
   Toolbar,
   ToolbarContent,
@@ -37,36 +38,32 @@ import ThIcon from "@patternfly/react-icons/dist/esm/icons/th-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import SunIcon from "@patternfly/react-icons/dist/esm/icons/sun-icon";
 import MoonIcon from "@patternfly/react-icons/dist/esm/icons/moon-icon";
+import BarsIcon from "@patternfly/react-icons/dist/esm/icons/bars-icon";
+import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import {
   BrowserRouter,
+  Link,
   Routes,
   Route,
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import type { StatusResponse } from "./types";
-import { getStatus, getUserPermissions, trackPageView } from "./services/api";
-import BarsIcon from "@patternfly/react-icons/dist/esm/icons/bars-icon";
+import { getUserPermissions, trackPageView } from "./services/api";
+import { isPermissionError } from "./errors";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
-import { StatusPage } from "./pages/StatusPage";
-import { ComponentsPage } from "./pages/ComponentsPage";
-import { TroubleshootingPage } from "./pages/TroubleshootingPage";
-import { BuildExplorerPage } from "./pages/BuildExplorerPage";
-import { DashboardDevPage } from "./pages/DashboardDevPage";
-import {
-  RECONCILE_POLL_MS,
-  RECONCILE_TIMEOUT_MS,
-  RECONCILE_POLL_FAST_MS,
-  RECONCILE_POLL_MEDIUM_MS,
-  RECONCILE_POLL_SLOW_MS,
-  RECONCILE_POLL_FAST_UNTIL_MS,
-  RECONCILE_POLL_MEDIUM_UNTIL_MS,
-  BACKGROUND_POLL_MS,
-  NAV_ITEMS,
-} from "./constants";
+import { NAV_ITEMS } from "./constants";
+import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
+import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 
-import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
+// Route-level code splitting: each page is its own chunk.
+const StatusPage = lazy(() => import("./pages/StatusPage").then((m) => ({ default: m.StatusPage })));
+const ComponentsPage = lazy(() => import("./pages/ComponentsPage").then((m) => ({ default: m.ComponentsPage })));
+const BuildExplorerPage = lazy(() => import("./pages/BuildExplorerPage").then((m) => ({ default: m.BuildExplorerPage })));
+const DashboardDevPage = lazy(() => import("./pages/DashboardDevPage").then((m) => ({ default: m.DashboardDevPage })));
+const TroubleshootingPage = lazy(() => import("./pages/TroubleshootingPage").then((m) => ({ default: m.TroubleshootingPage })));
+
+const MAIN_CONTENT_ID = "main-content";
 
 const NotFoundPage: React.FC = () => {
   const navigate = useNavigate();
@@ -74,7 +71,7 @@ const NotFoundPage: React.FC = () => {
     <PageSection isFilled>
       <EmptyState headingLevel="h1" icon={SearchIcon} titleText="404 — Page not found" variant="full">
         <EmptyStateBody>
-          The page you're looking for doesn't exist or has been moved.
+          The page you&apos;re looking for doesn&apos;t exist or has been moved.
         </EmptyStateBody>
         <EmptyStateFooter>
           <EmptyStateActions>
@@ -89,88 +86,58 @@ const NotFoundPage: React.FC = () => {
   );
 };
 
-export type OperationPhase = "idle" | "streaming" | "reconciling" | "complete";
+const PageLoading: React.FC = () => (
+  <PageSection isFilled>
+    <Bullseye>
+      <Spinner size="xl" aria-label="Loading page" />
+    </Bullseye>
+  </PageSection>
+);
 
-/** Compute the adaptive poll interval based on how long we've been actively polling. */
-function getAdaptivePollInterval(activeTimeMs: number): number {
-  if (activeTimeMs < RECONCILE_POLL_FAST_UNTIL_MS) return RECONCILE_POLL_FAST_MS;
-  if (activeTimeMs < RECONCILE_POLL_MEDIUM_UNTIL_MS) return RECONCILE_POLL_MEDIUM_MS;
-  return RECONCILE_POLL_SLOW_MS;
-}
+/**
+ * Adapts react-router's Link to NavItem's `component` prop: NavItem passes
+ * the `to` value as `href`, plus its class names, aria-current and click handler.
+ */
+const RouterNavLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttributes<HTMLAnchorElement>>(
+  ({ href, ...props }, ref) => <Link ref={ref} to={href ?? "/"} {...props} />,
+);
+RouterNavLink.displayName = "RouterNavLink";
 
-const SESSION_KEY_RECONCILING = "rhoai-reconciling";
-const SESSION_KEY_RECONCILE_START = "rhoai-reconcile-start";
+/** Page-view names for adoption metrics (aggregate only, no user identity). */
+const PAGE_VIEW_NAMES: Record<string, string> = {
+  "/": "dashboard",
+  "/components": "components",
+  "/builds": "build_explorer",
+  "/dashboard-dev": "dashboard_dev",
+  "/diagnostics": "diagnostics",
+};
 
-/** Restore reconciliation state from sessionStorage (survives page refresh). */
-function restoreReconcileState(): { reconciling: boolean; startTime: number } {
+function initialDarkMode(): boolean {
   try {
-    const isReconciling = sessionStorage.getItem(SESSION_KEY_RECONCILING) === "true";
-    const startTime = Number(sessionStorage.getItem(SESSION_KEY_RECONCILE_START) || "0");
-    if (isReconciling && startTime > 0) {
-      if (Date.now() - startTime < RECONCILE_TIMEOUT_MS) {
-        return { reconciling: true, startTime };
-      }
-      sessionStorage.removeItem(SESSION_KEY_RECONCILING);
-      sessionStorage.removeItem(SESSION_KEY_RECONCILE_START);
-    }
+    const stored = localStorage.getItem("pf-theme");
+    if (stored === "dark") return true;
+    if (stored === "light") return false;
   } catch {
-    // sessionStorage may be disabled
+    // localStorage may be disabled
   }
-  return { reconciling: false, startTime: 0 };
-}
-
-function persistReconcileState(isReconciling: boolean, startTime: number): void {
-  try {
-    if (isReconciling) {
-      sessionStorage.setItem(SESSION_KEY_RECONCILING, "true");
-      sessionStorage.setItem(SESSION_KEY_RECONCILE_START, String(startTime));
-    } else {
-      sessionStorage.removeItem(SESSION_KEY_RECONCILING);
-      sessionStorage.removeItem(SESSION_KEY_RECONCILE_START);
-    }
-  } catch {
-    // sessionStorage may be disabled
-  }
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
 const AppLayout: React.FC = () => {
-  const restoredState = restoreReconcileState();
-  const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [reconciling, setReconciling] = useState(restoredState.reconciling);
-  const [reconcileStartTime, setReconcileStartTime] = useState(restoredState.startTime);
+  const { status } = useClusterStatus();
+  const { state: operationState, dismissTimeout } = useOperation();
+  const reconciling = operationState.reconcile.active;
   const [setupOpen, setSetupOpen] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
   const [canMutate, setCanMutate] = useState(true); // default true until checked
-  const [isDark, setIsDark] = useState(() => {
-    try { return localStorage.getItem('pf-theme') === 'dark'; } catch { return false; }
-  });
-  const [reconcileTimedOut, setReconcileTimedOut] = useState(false);
-  const [operationPhase, setOperationPhase] = useState<OperationPhase>("idle");
-
-  const reconcilingRef = useRef(restoredState.reconciling);
-  const reconcileStartRef = useRef<number>(restoredState.startTime);
-  const activePollingTimeRef = useRef<number>(0);
-  const lastPollTimestampRef = useRef<number>(0);
-  const operationPhaseRef = useRef<OperationPhase>("idle");
-  const reconcilePhaseStartRef = useRef<number>(0);
+  const [isDark, setIsDark] = useState(initialDarkMode);
 
   const location = useLocation();
-  const navigate = useNavigate();
 
-  // Track page views (aggregate only, no user identity)
+  // Count each page view once, here only (pages don't track their own views).
   useEffect(() => {
-    const pageMap: Record<string, string> = {
-      "/": "dashboard",
-      "/components": "components",
-      "/builds": "build_explorer",
-      "/dashboard-dev": "dashboard_dev",
-      "/diagnostics": "diagnostics",
-    };
-    const page = pageMap[location.pathname];
+    const page = PAGE_VIEW_NAMES[location.pathname];
     if (page) trackPageView(page);
   }, [location.pathname]);
 
@@ -179,160 +146,18 @@ const AppLayout: React.FC = () => {
     getUserPermissions()
       .then((p) => setCanMutate(p.canMutate))
       .catch((err) => {
-        // For auth errors (401/403), fail closed — the user likely lacks permissions
-        const msg = err instanceof Error ? err.message.toLowerCase() : "";
-        if (msg.includes("401") || msg.includes("403") || msg.includes("unauthorized") || msg.includes("forbidden")) {
-          setCanMutate(false);
-        }
-        // For network/other errors, default to true (fail-open for UX;
-        // backend mutation endpoints still enforce auth)
+        // 401/403 fail closed: the user likely lacks permissions. Other
+        // errors fail open for UX; the backend still enforces every mutation.
+        if (isPermissionError(err)) setCanMutate(false);
       });
   }, []);
 
   // Dark mode: toggle CSS class on <html> and persist preference
   useEffect(() => {
     const htmlEl = document.documentElement;
-    if (isDark) {
-      htmlEl.classList.add('pf-v6-theme-dark');
-    } else {
-      htmlEl.classList.remove('pf-v6-theme-dark');
-    }
-    try { localStorage.setItem('pf-theme', isDark ? 'dark' : 'light'); } catch {}
+    htmlEl.classList.toggle("pf-v6-theme-dark", isDark);
+    try { localStorage.setItem("pf-theme", isDark ? "dark" : "light"); } catch { /* localStorage may be disabled */ }
   }, [isDark]);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const s = await getStatus();
-      setStatus(s);
-      setLastRefreshed(new Date());
-
-      if (reconcilingRef.current) {
-        const phase = s.csv.phase;
-
-        // Track active polling time (time spent while tab is visible)
-        const now = Date.now();
-        if (lastPollTimestampRef.current > 0) {
-          const delta = now - lastPollTimestampRef.current;
-          // Only count intervals that look like normal poll gaps (< 2x poll interval)
-          // to avoid counting time when the tab was hidden
-          if (delta < RECONCILE_POLL_MS * 2.5) {
-            activePollingTimeRef.current += delta;
-          }
-        }
-        lastPollTimestampRef.current = now;
-
-        if (phase === "Succeeded" || phase === "Failed") {
-          reconcilingRef.current = false;
-          setReconciling(false);
-          persistReconcileState(false, 0);
-          setOperationPhase("complete");
-          operationPhaseRef.current = "complete";
-        } else if (activePollingTimeRef.current >= RECONCILE_TIMEOUT_MS) {
-          // Timeout reached without success or failure — inform the user
-          reconcilingRef.current = false;
-          setReconciling(false);
-          persistReconcileState(false, 0);
-          setReconcileTimedOut(true);
-          setOperationPhase("idle");
-          operationPhaseRef.current = "idle";
-        }
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to fetch status";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const startReconciling = useCallback(() => {
-    const now = Date.now();
-    reconcilingRef.current = true;
-    reconcileStartRef.current = now;
-    activePollingTimeRef.current = 0;
-    lastPollTimestampRef.current = 0;
-    setReconcileStartTime(now);
-    setReconciling(true);
-    setReconcileTimedOut(false);
-    persistReconcileState(true, now);
-  }, []);
-
-  const handleMutationComplete = useCallback(() => {
-    startReconciling();
-    refresh();
-  }, [startReconciling, refresh]);
-
-  // Stream lifecycle handlers — used by UpdatePanel via StatusPage
-  const handleStreamStart = useCallback(() => {
-    setOperationPhase("streaming");
-    operationPhaseRef.current = "streaming";
-  }, []);
-
-  const handleStreamEnd = useCallback(
-    (success: boolean) => {
-      if (success) {
-        setOperationPhase("reconciling");
-        operationPhaseRef.current = "reconciling";
-        reconcilePhaseStartRef.current = Date.now();
-        startReconciling();
-        refresh();
-      } else {
-        setOperationPhase("idle");
-        operationPhaseRef.current = "idle";
-      }
-    },
-    [startReconciling, refresh],
-  );
-
-  const handleReconcileComplete = useCallback(() => {
-    setOperationPhase("complete");
-    operationPhaseRef.current = "complete";
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  // Reconcile polling with adaptive interval (fast -> medium -> slow based on active polling time)
-  // When streaming, SSE provides live data so we skip polling entirely.
-  useEffect(() => {
-    if (!reconciling) return;
-
-    let timerId: ReturnType<typeof setTimeout>;
-
-    const scheduleNext = () => {
-      const interval = getAdaptivePollInterval(activePollingTimeRef.current);
-      timerId = setTimeout(() => {
-        if (document.hidden) {
-          scheduleNext();
-          return;
-        }
-        refresh();
-        if (reconcilingRef.current) {
-          scheduleNext();
-        }
-      }, interval);
-    };
-
-    scheduleNext();
-
-    return () => clearTimeout(timerId);
-  }, [reconciling, refresh]);
-
-  // Background polling (every 60s for general freshness)
-  // Paused during streaming (SSE provides live data) and during reconcile (has its own poll)
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (document.hidden) return;
-      if (reconcilingRef.current) return;
-      if (operationPhaseRef.current === "streaming") return;
-      refresh();
-    }, BACKGROUND_POLL_MS);
-
-    return () => clearInterval(id);
-  }, [refresh]);
 
   const header = (
     <Masthead>
@@ -345,9 +170,9 @@ const AppLayout: React.FC = () => {
             <BarsIcon />
           </PageToggleButton>
         </MastheadToggle>
-        <MastheadBrand data-codemods>
-          <MastheadLogo>
-            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==" alt="RHOAI" height="38" />
+        <MastheadBrand>
+          <MastheadLogo component={(props: React.HTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" aria-label="RHOAI Nightly Updater home" style={{ color: "inherit", textDecoration: "none" }} />}>
+            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==" alt="" height="38" />
             <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.2, marginLeft: "8px" }}>
               <strong style={{ fontSize: "var(--pf-t--global--font--size--body--default)" }}>RHOAI</strong>
               <span style={{ fontSize: "var(--pf-t--global--font--size--body--default)", fontWeight: "var(--pf-t--global--font--weight--body--default)" }}>Nightly Updater</span>
@@ -358,22 +183,22 @@ const AppLayout: React.FC = () => {
       <MastheadContent>
         <Toolbar isStatic>
           <ToolbarContent>
-            <ToolbarGroup align={{ default: "alignEnd" }}>
+            <ToolbarGroup align={{ default: "alignEnd" }} gap={{ default: "gapNone", md: "gapMd" }}>
               <ToolbarItem>
                 <Button
                   variant="plain"
-                  aria-label="Toggle dark mode"
+                  aria-label="Dark mode"
+                  aria-pressed={isDark}
                   onClick={() => setIsDark((prev) => !prev)}
-                >
-                  {isDark ? <SunIcon /> : <MoonIcon />}
-                </Button>
+                  icon={isDark ? <SunIcon /> : <MoonIcon />}
+                />
               </ToolbarItem>
               <ToolbarItem>
                 <HelpButton />
               </ToolbarItem>
               {status ? (
                 <>
-                  <ToolbarItem>
+                  <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
                     <Dropdown
                       isOpen={appLauncherOpen}
                       onSelect={() => setAppLauncherOpen(false)}
@@ -386,9 +211,8 @@ const AppLayout: React.FC = () => {
                           isExpanded={appLauncherOpen}
                           variant="plain"
                           aria-label="Applications"
-                        >
-                          <ThIcon />
-                        </MenuToggle>
+                          icon={<ThIcon />}
+                        />
                       )}
                     >
                       <DropdownList>
@@ -417,13 +241,13 @@ const AppLayout: React.FC = () => {
                     </Dropdown>
                   </ToolbarItem>
                   {reconciling && (
-                    <ToolbarItem>
+                    <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
                       <Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Reconciling" />}>
                         Reconciling...
                       </Label>
                     </ToolbarItem>
                   )}
-                  <ToolbarItem>
+                  <ToolbarItem visibility={{ default: "hidden", lg: "visible" }}>
                     <Label isCompact color="blue">
                       OCP {status.cluster.version}
                     </Label>
@@ -433,18 +257,25 @@ const AppLayout: React.FC = () => {
                       isOpen={userMenuOpen}
                       onSelect={() => setUserMenuOpen(false)}
                       onOpenChange={setUserMenuOpen}
+                      popperProps={{ position: "right" }}
                       toggle={(toggleRef) => (
                         <MenuToggle
                           ref={toggleRef}
                           onClick={() => setUserMenuOpen(!userMenuOpen)}
                           isExpanded={userMenuOpen}
                           variant="plainText"
+                          aria-label={`User menu for ${status.cluster.user}`}
                         >
-                          {status.cluster.user}
+                          <span style={{ display: "inline-block", maxWidth: "8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
+                            {status.cluster.user}
+                          </span>
                         </MenuToggle>
                       )}
                     >
                       <DropdownList>
+                        <DropdownItem key="cluster" isDisabled description={`OCP ${status.cluster.version}`}>
+                          {status.cluster.user}
+                        </DropdownItem>
                         <DropdownItem
                           key="logout"
                           onClick={() => { window.location.href = "/oauth/sign_in"; }}
@@ -456,14 +287,9 @@ const AppLayout: React.FC = () => {
                   </ToolbarItem>
                 </>
               ) : (
-                <>
-                  <ToolbarItem>
-                    <Spinner size="sm" aria-label="Loading cluster info" />
-                  </ToolbarItem>
-                  <ToolbarItem>
-                    <Label isCompact color="blue">Loading...</Label>
-                  </ToolbarItem>
-                </>
+                <ToolbarItem>
+                  <Spinner size="sm" aria-label="Loading cluster info" />
+                </ToolbarItem>
               )}
             </ToolbarGroup>
           </ToolbarContent>
@@ -475,13 +301,15 @@ const AppLayout: React.FC = () => {
   const sidebar = (
     <PageSidebar>
       <PageSidebarBody>
-        <Nav>
+        <Nav aria-label="Global">
           <NavList>
             {NAV_ITEMS.map((item) => (
               <NavItem
                 key={item.path}
+                itemId={item.path}
+                to={item.path}
+                component={RouterNavLink}
                 isActive={location.pathname === item.path}
-                onClick={() => navigate(item.path)}
               >
                 {item.label}
               </NavItem>
@@ -493,49 +321,39 @@ const AppLayout: React.FC = () => {
   );
 
   return (
-    <Page masthead={header} sidebar={sidebar} isManagedSidebar>
-      {reconcileTimedOut && (
+    <Page
+      masthead={header}
+      sidebar={sidebar}
+      isManagedSidebar
+      skipToContent={<SkipToContent href={`#${MAIN_CONTENT_ID}`}>Skip to content</SkipToContent>}
+      mainContainerId={MAIN_CONTENT_ID}
+    >
+      {operationState.reconcile.timedOut && (
         <Alert
           variant="warning"
           title="Reconciliation monitoring timed out"
           isInline
-          actionClose={<AlertActionCloseButton onClose={() => setReconcileTimedOut(false)} />}
+          component="p"
+          actionClose={<AlertActionCloseButton onClose={dismissTimeout} />}
           style={{ margin: "var(--pf-t--global--spacer--md)" }}
         >
           Automatic status polling has stopped after 10 minutes of active monitoring. The operator may still be reconciling.
           Please check the cluster status manually or refresh the page.
         </Alert>
       )}
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <StatusPage
-              status={status}
-              loading={loading}
-              error={error}
-              reconciling={reconciling}
-              reconcileStartTime={reconcileStartTime}
-              reconcileTimedOut={reconcileTimedOut}
-              lastRefreshed={lastRefreshed}
-              setupOpen={setupOpen}
-              setSetupOpen={setSetupOpen}
-              refresh={refresh}
-              handleMutationComplete={handleMutationComplete}
-              canMutate={canMutate}
-              operationPhase={operationPhase}
-              onStreamStart={handleStreamStart}
-              onStreamEnd={handleStreamEnd}
-              onReconcileComplete={handleReconcileComplete}
-            />
-          }
-        />
-        <Route path="/components" element={<ComponentsPage />} />
-        <Route path="/builds" element={<BuildExplorerPage />} />
-        <Route path="/dashboard-dev" element={<DashboardDevPage canMutate={canMutate} />} />
-        <Route path="/diagnostics" element={<TroubleshootingPage />} />
-        <Route path="*" element={<NotFoundPage />} />
-      </Routes>
+      <Suspense fallback={<PageLoading />}>
+        <Routes>
+          <Route
+            path="/"
+            element={<StatusPage setupOpen={setupOpen} setSetupOpen={setSetupOpen} canMutate={canMutate} />}
+          />
+          <Route path="/components" element={<ComponentsPage />} />
+          <Route path="/builds" element={<BuildExplorerPage />} />
+          <Route path="/dashboard-dev" element={<DashboardDevPage canMutate={canMutate} />} />
+          <Route path="/diagnostics" element={<TroubleshootingPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </Suspense>
     </Page>
   );
 };
@@ -545,7 +363,11 @@ export const App: React.FC = () => {
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        <AppLayout />
+        <LiveAnnouncerProvider>
+          <AppStateProvider>
+            <AppLayout />
+          </AppStateProvider>
+        </LiveAnnouncerProvider>
       </ErrorBoundary>
     </BrowserRouter>
   );

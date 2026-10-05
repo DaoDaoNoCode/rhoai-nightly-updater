@@ -1,24 +1,24 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   Button,
   Content,
   Flex,
   FlexItem,
-  Label,
   Modal,
   ModalBody,
   ModalFooter,
   ModalHeader,
   ModalVariant,
   Spinner,
-  Tooltip,
+  ToggleGroup,
+  ToggleGroupItem,
 } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import { Link } from "react-router-dom";
-import type { FBCContentResponse, RelatedImage } from "../types";
-import { getBuildExplorerContent } from "../services/api";
 import { formatRelativeTime } from "../utils";
+import { useFbcContent } from "../hooks/useFbcContent";
+import { CopyableText } from "./CopyableText";
 
 interface FBCContentModalProps {
   image: string;
@@ -28,59 +28,17 @@ interface FBCContentModalProps {
 
 const CATEGORY_ORDER = ["core", "runtime", "workbench", "pipeline", "training", "infra", "other"];
 
-const CATEGORY_COLORS: Record<string, "blue" | "teal" | "purple" | "orange" | "grey"> = {
-  core: "blue",
-  runtime: "teal",
-  workbench: "purple",
-  pipeline: "orange",
-  training: "orange",
-  infra: "grey",
-  other: "grey",
-};
-
 export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen, onClose }) => {
-  const [data, setData] = useState<FBCContentResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [labelsData, setLabelsData] = useState<RelatedImage[] | null>(null);
+  // The hook cancels the requests for a previous image, so labels from one
+  // build are never shown for another.
+  const { data, loading, labelsDone, error } = useFbcContent(isOpen && image ? image : null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const prevImageRef = useRef("");
 
-  const fetchContent = useCallback(async (img: string) => {
-    setLoading(true);
-    setError("");
-    setData(null);
-    setLabelsData(null);
-    setActiveCategory(null);
-    try {
-      const result = await getBuildExplorerContent(img);
-      setData(result);
-      if (result.relatedImages?.length > 0) {
-        getBuildExplorerContent(img, true)
-          .then(enriched => setLabelsData(enriched.relatedImages))
-          .catch(() => {});
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load catalog content");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isOpen && image && image !== prevImageRef.current) {
-      prevImageRef.current = image;
-      fetchContent(image);
-    }
-    if (!isOpen) {
-      prevImageRef.current = "";
-    }
-  }, [isOpen, image, fetchContent]);
-
-  const images = labelsData || data?.relatedImages || [];
+  const images = data?.relatedImages ?? [];
   const categories = data?.categories || {};
   const sortedCategories = CATEGORY_ORDER.filter(c => (categories[c] ?? 0) > 0);
-  const filtered = activeCategory ? images.filter(i => i.category === activeCategory) : images;
+  const category = activeCategory && sortedCategories.includes(activeCategory) ? activeCategory : null;
+  const filtered = category ? images.filter(i => i.category === category) : images;
 
   return (
     <Modal
@@ -95,55 +53,48 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
         description={data?.tag ? `Tag: ${data.tag}` : undefined}
       />
       <ModalBody>
-        {loading && (
-          <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }} style={{ padding: "2rem" }}>
-            <FlexItem>
-              <Spinner size="lg" aria-label="Loading catalog content" />
-            </FlexItem>
-            <FlexItem>
-              <Content component="p">Downloading and parsing FBC catalog image...</Content>
-            </FlexItem>
-            <FlexItem>
-              <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
-                This may take a few seconds depending on image size
-              </Content>
-            </FlexItem>
-          </Flex>
-        )}
+        <div aria-live="polite">
+          {loading && (
+            <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }} style={{ padding: "2rem" }}>
+              <FlexItem>
+                <Spinner size="lg" aria-label="Loading catalog content" />
+              </FlexItem>
+              <FlexItem>
+                <Content component="p">Downloading and parsing FBC catalog image...</Content>
+              </FlexItem>
+              <FlexItem>
+                <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
+                  This may take a few seconds depending on image size
+                </Content>
+              </FlexItem>
+            </Flex>
+          )}
 
-        {error && (
-          <Content component="p" style={{ color: "var(--pf-t--global--color--status--danger--default)" }}>
-            {error}
-          </Content>
-        )}
+          {error && (
+            <Content component="p" role="alert" style={{ color: "var(--pf-t--global--color--status--danger--default)" }}>
+              {error.message}
+            </Content>
+          )}
+        </div>
 
         {data && !loading && (
           <>
             {sortedCategories.length > 0 && (
-              <Flex gap={{ default: "gapSm" }} style={{ marginBottom: "1rem" }} flexWrap={{ default: "wrap" }}>
-                <FlexItem>
-                  <Label
-                    isCompact
-                    color={activeCategory === null ? "blue" : "grey"}
-                    onClick={() => setActiveCategory(null)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    All ({images.length})
-                  </Label>
-                </FlexItem>
+              <ToggleGroup aria-label="Component category" isCompact style={{ marginBottom: "1rem", flexWrap: "wrap" }}>
+                <ToggleGroupItem
+                  text={`All (${images.length})`}
+                  isSelected={category === null}
+                  onChange={() => setActiveCategory(null)}
+                />
                 {sortedCategories.map(cat => (
-                  <FlexItem key={cat}>
-                    <Label
-                      isCompact
-                      color={activeCategory === cat ? CATEGORY_COLORS[cat] : "grey"}
-                      onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
-                      style={{ cursor: "pointer" }}
-                    >
-                      {cat} ({categories[cat]})
-                    </Label>
-                  </FlexItem>
+                  <ToggleGroupItem
+                    key={cat}
+                    text={`${cat} (${categories[cat]})`}
+                    isSelected={category === cat}
+                    onChange={() => setActiveCategory(cat)}
+                  />
                 ))}
-              </Flex>
+              </ToggleGroup>
             )}
 
             {filtered.length > 0 ? (
@@ -164,23 +115,23 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
                       return (
                         <Tr key={`${img.name}-${idx}`}>
                           <Td dataLabel="Component">
-                            <Tooltip content={img.image}>
-                              <Content component="small">{img.name}</Content>
-                            </Tooltip>
+                            <Content component="small">
+                              <CopyableText text={img.name} value={img.image} what="image reference" />
+                            </Content>
                           </Td>
                           <Td dataLabel="Commit">
                             {shortSha ? (
                               <Button variant="link" isInline component="a" href={commitURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">
                                 {shortSha}
                               </Button>
-                            ) : labelsData ? "-" : <Spinner size="sm" />}
+                            ) : labelsDone ? "-" : <Spinner size="sm" aria-label={`Loading commit for ${img.name}`} />}
                           </Td>
                           <Td dataLabel="Built">
                             {img.buildDate ? (
-                              <Tooltip content={new Date(img.buildDate).toLocaleString()}>
-                                <Content component="small">{formatRelativeTime(img.buildDate)}</Content>
-                              </Tooltip>
-                            ) : labelsData ? "-" : <Spinner size="sm" />}
+                              <Content component="small">
+                                <time dateTime={img.buildDate} title={new Date(img.buildDate).toLocaleString()}>{formatRelativeTime(img.buildDate)}</time>
+                              </Content>
+                            ) : labelsDone ? "-" : <Spinner size="sm" aria-label={`Loading build date for ${img.name}`} />}
                           </Td>
                           <Td dataLabel="Version">
                             <Content component="small">{img.version || "-"}</Content>

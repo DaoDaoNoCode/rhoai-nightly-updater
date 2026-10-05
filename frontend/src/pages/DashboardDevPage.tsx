@@ -21,13 +21,10 @@ import {
   Stack,
   StackItem,
   Tab,
-  TabContent,
-  TabContentBody,
   Tabs,
   TabTitleText,
   TextInput,
   Title,
-  Tooltip,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
@@ -40,7 +37,11 @@ import {
   revertDashboard,
   assistRollout,
   trackFeature,
+  toApiError,
+  type ApiError,
 } from "../services/api";
+import { usePolling } from "../hooks/usePolling";
+import { CopyableText } from "../components/CopyableText";
 import { truncateImage } from "../utils";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
@@ -58,7 +59,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   const [activeTab, setActiveTab] = useState(0);
   const [dashState, setDashState] = useState<DashboardState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const [prNumber, setPrNumber] = useState("");
@@ -76,9 +77,11 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   // Abort in-flight requests on unmount
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => {
+    const abort = abortRef;
+    const stateRequests = stateRequestRef;
     return () => {
-      abortRef.current?.abort();
-      stateRequestRef.current++;
+      abort.current?.abort();
+      stateRequests.current++;
     };
   }, []);
 
@@ -97,7 +100,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       setLastRefreshed(new Date());
     } catch (e) {
       if (requestId !== stateRequestRef.current) return;
-      setError(e instanceof Error ? e.message : "Failed to load state");
+      setError(toApiError(e, "Failed to load state"));
     } finally {
       stateFetchInFlightRef.current--;
       if (requestId === stateRequestRef.current) setLoading(false);
@@ -111,18 +114,12 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
     fetchState();
   }, [fetchState]);
 
-  useEffect(() => {
-    const poll = () => {
-      if (document.hidden || stateFetchInFlightRef.current > 0) return;
-      void fetchState(true);
-    };
-    const id = setInterval(poll, deploying || reverting || waitingFor ? 5000 : COMPONENTS_POLL_MS);
-    document.addEventListener("visibilitychange", poll);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", poll);
-    };
-  }, [deploying, reverting, waitingFor, fetchState]);
+  // Poll faster while a deploy or revert is rolling out; hidden tabs don't poll.
+  const busyPolling = deploying || reverting || !!waitingFor;
+  usePolling(() => (stateFetchInFlightRef.current > 0 ? undefined : fetchState(true)), {
+    delay: busyPolling ? 5000 : COMPONENTS_POLL_MS,
+    restartKey: busyPolling,
+  });
 
   useEffect(() => {
     if (!waitingFor || !dashState || deploying || reverting) return;
@@ -179,7 +176,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       }
     } catch (e) {
       if (ac.signal.aborted) return;
-      setResult({ success: false, message: e instanceof Error ? e.message : "Deploy failed", logs: [] });
+      setResult({ success: false, message: toApiError(e, "Deploy failed").message, logs: [] });
     } finally {
       if (!ac.signal.aborted) {
         setDeploying(false);
@@ -199,7 +196,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       if (res.success) { setWaitingFor("main"); setWaitStartTime(Date.now()); }
       fetchState();
     } catch (e) {
-      setResult({ success: false, message: e instanceof Error ? e.message : "Deploy failed", logs: [] });
+      setResult({ success: false, message: toApiError(e, "Deploy failed").message, logs: [] });
       fetchState();
     } finally { setDeploying(false); }
   };
@@ -226,7 +223,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       }
     } catch (e) {
       if (ac.signal.aborted) return;
-      setResult({ success: false, message: e instanceof Error ? e.message : "Revert failed", logs: [] });
+      setResult({ success: false, message: toApiError(e, "Revert failed").message, logs: [] });
     } finally {
       if (!ac.signal.aborted) {
         setReverting(false);
@@ -245,7 +242,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
         setWaitStartTime(Date.now());
       }
     } catch (e) {
-      setResult({ success: false, message: e instanceof Error ? e.message : "Assist rollout failed", logs: [] });
+      setResult({ success: false, message: toApiError(e, "Assist rollout failed").message, logs: [] });
     } finally {
       setAssisting(false);
     }
@@ -257,6 +254,10 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
   const allReady = dashState?.operatorAvailable ? !!dashState.allDevImagesReady : !!dashState?.podReady;
   const partial = isCustom && dashState?.operatorAvailable && !dashState.operatorError && dashState.devImagesMatchTarget === false;
 
+  // The backend answers 500 "failed to get dashboard state" without a
+  // specific errorCode yet; match that exact response, not a substring.
+  const dashboardUnavailable = !!error && error.status === 500 && error.message === "failed to get dashboard state";
+
   return (
     <>
       <PageHeader
@@ -266,11 +267,11 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
         onRefresh={handleManualRefresh}
       />
 
-      {error && !error.includes("failed to get dashboard state") && <ErrorAlert error={error} genericTitle="Failed to load" />}
+      {error && !dashboardUnavailable && <ErrorAlert error={error} genericTitle="Failed to load" />}
 
-      {error && error.includes("failed to get dashboard state") && (
+      {dashboardUnavailable && (
         <PageSection>
-          <Alert variant="info" title="RHOAI Dashboard is not deployed yet" isInline>
+          <Alert variant="info" title="RHOAI Dashboard is not deployed yet" isInline component="p">
             <p>The Dashboard Dev page lets you deploy PR builds of the RHOAI Dashboard for testing.</p>
             <p style={{ marginTop: "0.5rem" }}>
               First install RHOAI from the <Link to="/">Dashboard</Link>, then come back here to deploy PR builds.
@@ -281,7 +282,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
       {!canMutate && (
         <PageSection>
-          <Alert variant="info" title="Read-only access" isInline isPlain>
+          <Alert variant="info" title="Read-only access" isInline isPlain component="p">
             Deploy and revert operations are disabled. Contact a cluster admin for write access.
           </Alert>
         </PageSection>
@@ -290,8 +291,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       <PageSection>
         <Tabs activeKey={activeTab} onSelect={(_e, key) => setActiveTab(key as number)}>
           <Tab eventKey={0} title={<TabTitleText>Image Deploy</TabTitleText>}>
-            <TabContent id="tab-pr-deploy">
-              <TabContentBody hasPadding>
+              <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
                 <Card>
                   <CardHeader>
                   <CardTitle>
@@ -330,9 +330,9 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                       </Flex>
                     )}
                     <Stack hasGutter>
-                      {dashState?.operatorError && <StackItem><Alert variant="warning" title="Cannot verify dashboard-operator" isInline>{dashState.operatorError}</Alert></StackItem>}
-                      {result && <StackItem><Alert variant={result.success ? "success" : "danger"} title={result.message} isInline /></StackItem>}
-                      {partial && !result && <StackItem><Alert variant="warning" title="Selected build is not fully applied" isInline>Retry the deployment to finish updating the dashboard, or revert to restore the installed release.</Alert></StackItem>}
+                      {dashState?.operatorError && <StackItem><Alert variant="warning" title="Cannot verify dashboard-operator" isInline component="p">{dashState.operatorError}</Alert></StackItem>}
+                      {result && <StackItem><Alert variant={result.success ? "success" : "danger"} title={result.message} isInline isLiveRegion component="p" /></StackItem>}
+                      {partial && !result && <StackItem><Alert variant="warning" title="Selected build is not fully applied" isInline component="p">Retry the deployment to finish updating the dashboard, or revert to restore the installed release.</Alert></StackItem>}
                       <StackItem>
                         <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
                           <FlexItem><Button variant="primary" onClick={handleDeployMain} isDisabled={!canMutate || !dashState?.operatorAvailable || !!dashState?.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "main"}>Deploy latest main</Button></FlexItem>
@@ -346,9 +346,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                           <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
                             <FlexItem>
                               <Content component="small">
-                                <Tooltip content={dashState.currentImage}>
-                                  <code>{truncateImage(dashState.currentImage)}</code>
-                                </Tooltip>
+                                <CopyableText text={truncateImage(dashState.currentImage)} value={dashState.currentImage} what="image reference" code />
                               </Content>
                             </FlexItem>
                             {dashState.deploymentMode && (
@@ -364,7 +362,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
                       {dashState?.rolloutPending && (
                         <StackItem>
-                          <Alert variant="warning" title="Rollout in progress" isInline isPlain>
+                          <Alert variant="warning" title="Rollout in progress" isInline isPlain component="p">
                             Old pod is still serving while the new pod starts up.
                           </Alert>
                         </StackItem>
@@ -385,7 +383,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                                   {pod.image && (
                                     <FlexItem>
                                       <Content component="small">
-                                        <Tooltip content={pod.image}><code>{truncateImage(pod.image, 40)}</code></Tooltip>
+                                        <CopyableText text={truncateImage(pod.image, 40)} value={pod.image} what="image reference" code />
                                       </Content>
                                     </FlexItem>
                                   )}
@@ -398,7 +396,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
                       {dashState?.rolloutPending && dashState?.schedulingFailureReason && (
                         <StackItem>
-                          <Alert variant="warning" title="Pod cannot be scheduled" isInline>
+                          <Alert variant="warning" title="Pod cannot be scheduled" isInline component="p">
                             <Stack hasGutter>
                               <StackItem>{dashState.schedulingFailureReason}</StackItem>
                               {dashState.canAssistRollout && (
@@ -437,7 +435,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
                       {isCustom && allReady && !waitingFor && !partial && !deploying && !reverting && (
                         <StackItem>
-                          <Alert variant="warning" title={`${dashState?.devMode === "main" ? "Latest main" : dashState?.prNumber ? `PR #${dashState.prNumber}` : "Custom dashboard images"} deployed on this shared cluster`} isInline isPlain>
+                          <Alert variant="warning" title={`${dashState?.devMode === "main" ? "Latest main" : dashState?.prNumber ? `PR #${dashState.prNumber}` : "Custom dashboard images"} deployed on this shared cluster`} isInline isPlain component="p">
                             Remember to revert after testing.
                             {dashState?.dashboardURL && (
                               <>{" "}<Button variant="link" isInline component="a" href={dashState.dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Open dashboard</Button></>
@@ -485,16 +483,13 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
                     </Stack>
                   </CardBody>
                 </Card>
-              </TabContentBody>
-            </TabContent>
+              </div>
           </Tab>
 
           <Tab eventKey={1} title={<TabTitleText>Resources</TabTitleText>}>
-            <TabContent id="tab-resources">
-              <TabContentBody hasPadding>
+              <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
                 <QuickResourceCreator canMutate={canMutate} />
-              </TabContentBody>
-            </TabContent>
+              </div>
           </Tab>
         </Tabs>
       </PageSection>
@@ -506,11 +501,11 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
           <Stack hasGutter>
             <StackItem><Content component="small">Deploy published <code>pr-{parsedPR}</code> images for installed dashboard components. Components without a PR build keep their current images.</Content></StackItem>
             <StackItem>
-              <Alert variant="warning" title="Shared cluster impact" isInline>
+              <Alert component="p" variant="warning" title="Shared cluster impact" isInline>
                 This replaces the dashboard for ALL users on this cluster. The operator will stop managing the deployment until you revert. Please revert after testing.
               </Alert>
             </StackItem>
-            <StackItem><Alert variant="info" title="The dashboard may be briefly unavailable (1-2 min) during the rollout." isInline isPlain /></StackItem>
+            <StackItem><Alert component="p" variant="info" title="The dashboard may be briefly unavailable (1-2 min) during the rollout." isInline isPlain /></StackItem>
           </Stack>
         </ModalBody>
         <ModalFooter>

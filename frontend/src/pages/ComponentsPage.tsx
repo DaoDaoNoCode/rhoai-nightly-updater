@@ -11,7 +11,6 @@ import {
   DropdownItem,
   DropdownList,
   Label,
-  MenuToggle,
   Modal,
   ModalBody,
   ModalFooter,
@@ -38,26 +37,13 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import MinusCircleIcon from "@patternfly/react-icons/dist/esm/icons/minus-circle-icon";
-import type { ComponentsResponse, DeploymentInfo } from "../types";
-import { getComponents, getComponentsWithLabels, assistRollout, fixProblem, repairDSC, getDSCPreview } from "../services/api";
+import type { DeploymentInfo } from "../types";
+import { assistRollout, fixProblem, repairDSC, getDSCPreview, toApiError } from "../services/api";
 import { formatRelativeTime } from "../utils";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
-import { useAsyncData } from "../hooks/useAsyncData";
-import { COMPONENTS_POLL_MS } from "../constants";
-
-function mgmtStateColor(state: string): "green" | "grey" | "orange" | "blue" {
-  switch (state) {
-    case "Managed":
-      return "green";
-    case "Removed":
-      return "grey";
-    case "Unmanaged":
-      return "orange";
-    default:
-      return "blue";
-  }
-}
+import { CopyableText } from "../components/CopyableText";
+import { useComponentsData } from "../hooks/useComponentsData";
 
 function statusColor(
   status: string,
@@ -123,56 +109,9 @@ function rolloutStuckInfo(dep: DeploymentInfo): { stuck: boolean; reason?: strin
   return { stuck: true, reason };
 }
 
-type SortColumn = 'name' | 'managementState' | 'status';
-type SortDirection = 'asc' | 'desc';
-
-const STATUS_PRIORITY: Record<string, number> = {
-  Degraded: 0,
-  Deleting: 1,
-  Unknown: 2,
-  Progressing: 3,
-  Available: 4,
-  Removed: 5,
-};
-
-const MGMT_PRIORITY: Record<string, number> = {
-  Managed: 0,
-  Unmanaged: 1,
-  Unknown: 2,
-  Removed: 3,
-};
-
 export const ComponentsPage: React.FC = () => {
-  const fetchComponents = useCallback(() => getComponents(), []);
-  const { data, loading, error, lastRefreshed, refresh } =
-    useAsyncData<ComponentsResponse>(fetchComponents, COMPONENTS_POLL_MS);
-
-  // Sorting state — default: status problems first
-  const [sortColumn, setSortColumn] = useState<SortColumn>('status');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-
-  // Fetch labels (git commit info) in the background after initial load
-  const [labelsData, setLabelsData] = useState<ComponentsResponse | null>(null);
-  const [labelsLoading, setLabelsLoading] = useState(false);
-
-  useEffect(() => {
-    if (data && !labelsData && !labelsLoading) {
-      setLabelsLoading(true);
-      getComponentsWithLabels()
-        .then(setLabelsData)
-        .catch(() => {}) // silently fail — labels are optional
-        .finally(() => setLabelsLoading(false));
-    }
-  }, [data, labelsData, labelsLoading]);
-
-  // Merge: use labelsData for deployments if available, otherwise data
-  const displayData = labelsData || data;
-
-  // Manual refresh that also re-fetches labels
-  const handleRefresh = useCallback(() => {
-    setLabelsData(null); // clear labels so they re-fetch after data loads
-    refresh();
-  }, [refresh]);
+  // Polled data with git labels merged in by deployment and image.
+  const { data, loading, labelsLoading, error, lastRefreshed, refresh: handleRefresh } = useComponentsData();
 
   // Expandable rows state for deployments
   const [expandedDeps, setExpandedDeps] = useState<Record<string, boolean>>({});
@@ -200,7 +139,7 @@ export const ComponentsPage: React.FC = () => {
     setPreviewVersion("");
     setPreviewError("");
     getDSCPreview().then(res => { if (active) { setDefaultsPreview(res.yaml); setPreviewVersion(res.operatorVersion); } })
-      .catch(err => { if (active) setPreviewError(String(err)); });
+      .catch(err => { if (active) setPreviewError(toApiError(err).message); });
     return () => { active = false; };
   }, [repairMode]);
 
@@ -216,7 +155,7 @@ export const ComponentsPage: React.FC = () => {
       setRepairMode(null);
       if (result.success) handleRefresh();
     } catch (err) {
-      setRepairResult({ success: false, message: String(err) });
+      setRepairResult({ success: false, message: toApiError(err).message });
       setRepairMode(null);
     } finally {
       setRepairLoading(false);
@@ -231,7 +170,7 @@ export const ComponentsPage: React.FC = () => {
       setFixResult(prev => ({ ...prev, [action]: { success: res.success, message: res.message } }));
       if (res.success) handleRefresh();
     } catch (e) {
-      setFixResult(prev => ({ ...prev, [action]: { success: false, message: String(e) } }));
+      setFixResult(prev => ({ ...prev, [action]: { success: false, message: toApiError(e).message } }));
     } finally {
       setFixLoading(null);
     }
@@ -254,7 +193,7 @@ export const ComponentsPage: React.FC = () => {
         handleRefresh();
       })
       .catch(err => {
-        setRolloutResult(prev => ({ ...prev, [depKey]: { success: false, message: String(err) } }));
+        setRolloutResult(prev => ({ ...prev, [depKey]: { success: false, message: toApiError(err).message } }));
       })
       .finally(() => setRolloutLoading(null));
   }, [handleRefresh]);
@@ -262,6 +201,11 @@ export const ComponentsPage: React.FC = () => {
   useEffect(() => {
     document.title = "Components — RHOAI Nightly Updater";
   }, []);
+
+  // The backend answers 500 "failed to get components" when no DSC exists or
+  // the operator isn't installed (pkg/api HandleComponents). It has no
+  // specific errorCode yet, so match that exact response, not a substring.
+  const componentsUnavailable = !!error && error.status === 500 && error.message === "failed to get components";
 
   return (
     <>
@@ -272,13 +216,13 @@ export const ComponentsPage: React.FC = () => {
         onRefresh={handleRefresh}
       />
 
-      {error && !(error.includes("failed to get components") && !data) && (
+      {error && !(componentsUnavailable && !data) && (
         <ErrorAlert error={error} genericTitle="Failed to load components" />
       )}
 
-      {error && error.includes("failed to get components") && !data && (
+      {componentsUnavailable && !data && (
         <PageSection>
-          <Alert variant="info" title="RHOAI operator is not installed yet" isInline>
+          <Alert variant="info" title="RHOAI operator is not installed yet" isInline component="p">
             <p>Components will appear here once the RHOAI operator is installed on this cluster.</p>
             <p style={{ marginTop: "0.5rem" }}>
               Go to the <Link to="/">Dashboard</Link> to install RHOAI using the <strong>Upgrade to Nightly Build</strong> panel.
@@ -311,14 +255,14 @@ export const ComponentsPage: React.FC = () => {
             <PageSection>
               <Stack hasGutter>
                 {data.dscCompatibility.validationError && (
-                  <StackItem><Alert variant="warning" title="DSC field validation unavailable" isInline>{data.dscCompatibility.validationError}</Alert></StackItem>
+                  <StackItem><Alert component="p" variant="warning" title="DSC field validation unavailable" isInline>{data.dscCompatibility.validationError}</Alert></StackItem>
                 )}
                 {data.dscCompatibility.defaultsError && (
-                  <StackItem><Alert variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
+                  <StackItem><Alert component="p" variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
                 )}
                 {(data.dscCompatibility.invalidFields.length > 0 || data.dscCompatibility.missingComponents.length > 0 || (data.dscCompatibility.extraComponents?.length ?? 0) > 0) && (
                   <StackItem>
-                    <Alert variant="warning" title="DSC field names differ from the installed operator" isInline>
+                    <Alert component="p" variant="warning" title="DSC field names differ from the installed operator" isInline>
                       <Stack hasGutter>
                         {data.dscCompatibility.invalidFields.length > 0 && <StackItem>
                           <Content component="p">Invalid or deprecated fields in the installed CRD:</Content>
@@ -347,7 +291,7 @@ export const ComponentsPage: React.FC = () => {
                     </Alert>
                   </StackItem>
                 )}
-                {repairResult && <StackItem><Alert variant={repairResult.success ? "success" : "danger"} title={repairResult.message} isInline /></StackItem>}
+                {repairResult && <StackItem><Alert component="p" variant={repairResult.success ? "success" : "danger"} title={repairResult.message} isInline /></StackItem>}
               </Stack>
             </PageSection>
           )}
@@ -490,16 +434,16 @@ export const ComponentsPage: React.FC = () => {
                 <Title headingLevel="h3">Deployments</Title>
               </CardTitle>
               <CardBody>
-                {displayData && (displayData.changedCount ?? 0) > 0 && displayData.snapshotTime && (
+                {(data.changedCount ?? 0) > 0 && data.snapshotTime && (
                   <Content component="small" style={{ marginBottom: "0.5rem" }}>
-                    <Label isCompact color="blue">{displayData.changedCount} updated</Label>{' '}
-                    since last snapshot ({formatRelativeTime(displayData.snapshotTime)})
+                    <Label isCompact color="blue">{data.changedCount} updated</Label>{' '}
+                    since last snapshot ({formatRelativeTime(data.snapshotTime)})
                   </Content>
                 )}
                 <Table
                   aria-label="Deployments table"
                   variant="compact"
-                  gridBreakPoint="grid-lg"
+                  gridBreakPoint="grid-md"
                 >
                   <Thead>
                     <Tr>
@@ -521,30 +465,30 @@ export const ComponentsPage: React.FC = () => {
                       <Th>Version</Th>
                     </Tr>
                   </Thead>
-                  {displayData?.deployments && displayData.deployments.length > 0 ? (
-                    displayData.deployments.map((dep, rowIndex) => {
+                  {data.deployments && data.deployments.length > 0 ? (
+                    data.deployments.map((dep, rowIndex) => {
                       const depKey = `${dep.namespace}/${dep.name}`;
                       const isExpanded = !!expandedDeps[depKey];
                       const shortSha = dep.gitCommit ? dep.gitCommit.slice(0, 7) : "";
                       const commitURL = dep.gitCommit && dep.gitURL ? `${dep.gitURL}/commit/${dep.gitCommit}` : "";
                       const compareURL = dep.gitCommit && dep.gitURL ? `${dep.gitURL}/compare/${dep.gitCommit}...main` : "";
-                      const hasPods = dep.pods && dep.pods.length > 0;
-                      const consoleURL = displayData.consoleURL?.startsWith("https://") ? displayData.consoleURL : "";
+                      const hasPods = !!dep.pods && dep.pods.length > 0;
+                      const canExpand = hasPods || !!dep.image;
+                      const consoleURL = data.consoleURL?.startsWith("https://") ? data.consoleURL : "";
 
                       return (
                         <Tbody key={depKey} isExpanded={isExpanded}>
                           <Tr>
                             <Td
-                              expand={hasPods ? {
+                              expand={canExpand ? {
                                 rowIndex,
                                 isExpanded,
                                 onToggle: () => setExpandedDeps(prev => ({ ...prev, [depKey]: !prev[depKey] })),
                               } : undefined}
                             />
-                            <Td dataLabel="Name">
-                              <Tooltip content={dep.image || "No image"}>
-                                <span>{dep.name}</span>
-                              </Tooltip>
+                            <Td dataLabel="Name" id={`simple-node${rowIndex}`}>
+                              <div>
+                              {dep.image ? <CopyableText text={dep.name} value={dep.image} what="image reference" /> : dep.name}
                               {dep.changeStatus === "updated" && <>{' '}<Label isCompact color="green">Updated</Label></>}
                               {dep.changeStatus === "new" && <>{' '}<Label isCompact color="blue">New</Label></>}
                               {(() => {
@@ -556,7 +500,7 @@ export const ComponentsPage: React.FC = () => {
                                   return (
                                     <>
                                       {' '}
-                                      <Label isCompact color="blue" icon={<Spinner size="sm" />}>Rollout in progress</Label>
+                                      <Label isCompact color="blue" icon={<Spinner size="sm" aria-label="Rollout in progress" />}>Rollout in progress</Label>
                                       {' '}
                                       <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
                                         {result.message}
@@ -598,8 +542,10 @@ export const ComponentsPage: React.FC = () => {
                                   </>
                                 );
                               })()}
+                              </div>
                             </Td>
                             <Td dataLabel="Ready">
+                              <div>
                               {(() => {
                                 const rl = readyLabel(dep);
                                 return (
@@ -608,8 +554,10 @@ export const ComponentsPage: React.FC = () => {
                                   </Label>
                                 );
                               })()}
+                              </div>
                             </Td>
                             <Td dataLabel="Commit">
+                              <div>
                               {labelsLoading && !shortSha ? (
                                 <Spinner size="sm" aria-label="Loading commit info" />
                               ) : shortSha ? (
@@ -627,28 +575,35 @@ export const ComponentsPage: React.FC = () => {
                                     )}
                                   </Flex>
                                   {dep.commitDate && (
-                                    <Tooltip content={new Date(dep.commitDate).toLocaleString()}>
-                                      <Content component="small">merged {formatRelativeTime(dep.commitDate)}</Content>
-                                    </Tooltip>
+                                    <Content component="small">
+                                      merged <time dateTime={dep.commitDate} title={new Date(dep.commitDate).toLocaleString()}>{formatRelativeTime(dep.commitDate)}</time>
+                                    </Content>
                                   )}
                                 </>
                               ) : "-"}
+                              </div>
                             </Td>
                             <Td dataLabel="Built">
                               {labelsLoading && !dep.buildDate ? (
                                 <Spinner size="sm" aria-label="Loading build info" />
                               ) : dep.buildDate ? (
-                                <Tooltip content={new Date(dep.buildDate).toLocaleString()}>
-                                  <Content component="small">{formatRelativeTime(dep.buildDate)}</Content>
-                                </Tooltip>
+                                <Content component="small">
+                                  <time dateTime={dep.buildDate} title={new Date(dep.buildDate).toLocaleString()}>{formatRelativeTime(dep.buildDate)}</time>
+                                </Content>
                               ) : "-"}
                             </Td>
                             <Td dataLabel="Version">{dep.version || "-"}</Td>
                           </Tr>
-                          {hasPods && (
+                          {canExpand && (
                             <Tr isExpanded={isExpanded}>
                               <Td colSpan={6}>
                                 <ExpandableRowContent>
+                                  {dep.image && (
+                                    <Content component="small" style={{ overflowWrap: "anywhere" }}>
+                                      Image: <code>{dep.image}</code>
+                                    </Content>
+                                  )}
+                                  {hasPods && (
                                   <Table aria-label={`Pods for ${dep.name}`} variant="compact" borders={false}>
                                     <Thead>
                                       <Tr>
@@ -661,7 +616,7 @@ export const ComponentsPage: React.FC = () => {
                                       </Tr>
                                     </Thead>
                                     <Tbody>
-                                      {dep.pods!.map(pod => {
+                                      {(dep.pods ?? []).map(pod => {
                                         const containers = pod.containers || [];
                                         const podLogBase = `${consoleURL}/k8s/ns/${pod.namespace}/pods/${pod.name}/logs`;
                                         const dropdownKey = pod.name;
@@ -672,7 +627,7 @@ export const ComponentsPage: React.FC = () => {
                                           {pod.schedulingReason && (
                                             <Tr>
                                               <Td colSpan={6} style={{ padding: "0.25rem 0.5rem" }}>
-                                                <Alert
+                                                <Alert component="p"
                                                   variant="warning"
                                                   title={pod.schedulingReason}
                                                   isInline
@@ -770,6 +725,7 @@ export const ComponentsPage: React.FC = () => {
                                       })}
                                     </Tbody>
                                   </Table>
+                                  )}
                                 </ExpandableRowContent>
                               </Td>
                             </Tr>
@@ -804,7 +760,7 @@ export const ComponentsPage: React.FC = () => {
               : `Remove only invalid keys from ${data?.dscName}. Valid settings and management states will be preserved.`}</Content></StackItem>
             {repairMode === "remove-invalid" && <StackItem><List>{data?.dscCompatibility?.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List></StackItem>}
             {repairMode === "remove-extra-components" && <StackItem><List>{data?.dscCompatibility?.extraComponents?.map(name => <ListItem key={name}><code>{name}</code></ListItem>)}</List></StackItem>}
-            {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
+            {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert component="p" variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
               : defaultsPreview ? <CodeBlock><CodeBlockCode>{defaultsPreview}</CodeBlockCode></CodeBlock> : <Spinner aria-label="Loading DSC defaults" />}</StackItem>}
           </Stack>
         </ModalBody>
@@ -832,7 +788,7 @@ export const ComponentsPage: React.FC = () => {
               </Content>
             </StackItem>
             <StackItem>
-              <Alert variant="warning" title="This action will modify resources on the shared cluster." isInline />
+              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster." isInline />
             </StackItem>
           </Stack>
         </ModalBody>
@@ -863,7 +819,7 @@ export const ComponentsPage: React.FC = () => {
               <Content component="p">{fixConfirm?.message}</Content>
             </StackItem>
             <StackItem>
-              <Alert variant="warning" title="This action will modify resources on the shared cluster." isInline />
+              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster." isInline />
             </StackItem>
           </Stack>
         </ModalBody>

@@ -30,9 +30,10 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
     <Flex
       justifyContent={{ default: "justifyContentSpaceBetween" }}
       alignItems={{ default: "alignItemsCenter" }}
+      gap={{ default: "gapSm" }}
     >
       <FlexItem>
-        <Title headingLevel="h2">{title}</Title>
+        <Title headingLevel="h1" size="xl">{title}</Title>
       </FlexItem>
       <FlexItem>
         <Flex

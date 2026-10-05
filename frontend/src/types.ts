@@ -1,3 +1,7 @@
+// These types mirror the JSON of pkg/types/types.go (and pkg/cluster for
+// diagnostics). A Go slice field without omitempty encodes nil as null, so
+// such fields are typed `T[] | null` and read with `?? []`.
+
 export interface ActivityEntry {
   timestamp: string;
   user: string;
@@ -19,8 +23,6 @@ export interface StatusResponse {
   stableVersion?: string;
   stableChannelPinned?: boolean;
   stableDiscoveryError?: string;
-  installPlan?: InstallPlanInfo;
-  catalogPod?: CatalogPodInfo;
   activity?: ActivityEntry[];
   errors?: string[];
   dscExists: boolean;
@@ -67,7 +69,8 @@ export interface ImageMirrorInfo {
 export interface OperationResponse {
   success: boolean;
   message: string;
-  logs: string[];
+  /** null when the Go result left Logs unset. */
+  logs: string[] | null;
   errorCode?: string;
 }
 
@@ -84,7 +87,7 @@ export interface NightlyTag {
 }
 
 export interface NightlyTagsResponse {
-  tags: NightlyTag[];
+  tags: NightlyTag[] | null;
 }
 
 export interface ComponentInfo {
@@ -122,17 +125,17 @@ export interface DSCCompatibility {
   operatorVersion?: string;
   branch?: string;
   sourceURL?: string;
-  invalidFields: string[];
-  missingComponents: string[];
-  extraComponents?: string[];
+  invalidFields: string[] | null;
+  missingComponents: string[] | null;
+  extraComponents?: string[] | null;
   validationError?: string;
   defaultsError?: string;
 }
 
 export interface ComponentsResponse {
   dscCompatibility?: DSCCompatibility;
-  components: ComponentInfo[];
-  deployments: DeploymentInfo[];
+  components: ComponentInfo[] | null;
+  deployments: DeploymentInfo[] | null;
   dscName: string;
   dscPhase: string;
   dscReason?: string;
@@ -156,7 +159,7 @@ export interface FBCContentResponse {
   tag: string;
   image: string;
   bundleName?: string;
-  relatedImages: RelatedImage[];
+  relatedImages: RelatedImage[] | null;
   categories?: Record<string, number>;
   error?: string;
 }
@@ -185,16 +188,8 @@ export interface PodInfo {
   schedulingMessage?: string;
   gitCommit?: string;
   gitURL?: string;
-  commitDate?: string;
   buildDate?: string;
   version?: string;
-}
-
-export interface DebugResponse {
-  operatorPods: PodInfo[];
-  applicationPods: PodInfo[];
-  marketplacePods: PodInfo[];
-  warnings?: string[];
 }
 
 export interface UserPermissions {
@@ -244,7 +239,7 @@ export interface DashboardDevImage {
 export interface ResourcesStatus {
   minio: ResourceState;
   mlflow: ResourceState;
-  pipelineServers: ResourceState[];
+  pipelineServers: ResourceState[] | null;
 }
 
 export interface ResourceState {
@@ -255,6 +250,10 @@ export interface ResourceState {
   apiRoute?: string;
   uiRoute?: string;
   currentImage?: string;
+  /** Planned backend fields: the resource can't become ready without a change. */
+  terminal?: boolean;
+  /** Planned backend field: a container waiting reason such as ImagePullBackOff. */
+  waitingReason?: string;
 }
 
 export interface UpdateStep {
@@ -266,24 +265,11 @@ export interface UpdateStep {
   errorCode?: string;
 }
 
-export interface InstallPlanInfo {
-  name: string;
-  phase: string;
-  approved: boolean;
-}
-
-export interface CatalogPodInfo {
-  name: string;
-  phase: string;
-  ready: boolean;
-  restartCount: number;
-}
-
 // --- Diagnostics types (match backend cluster.DiagnosticResult JSON) ---
 
 export interface DiagnosticResult {
-  problems: Problem[];
-  checks: CheckResult[];
+  problems: Problem[] | null;
+  checks: CheckResult[] | null;
 }
 
 export interface Problem {

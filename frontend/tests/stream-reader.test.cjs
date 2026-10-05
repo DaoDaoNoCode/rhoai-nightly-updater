@@ -10,7 +10,7 @@ const ts = require('typescript');
 const source = fs.readFileSync(path.join(__dirname, '../src/services/api.ts'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 const exportsObject = {};
-const sandbox = { exports: exportsObject, AbortController, TextDecoder, fetch: (...args) => global.fetch(...args) };
+const sandbox = { exports: exportsObject, AbortController, TextDecoder, setTimeout, clearTimeout, fetch: (...args) => global.fetch(...args) };
 vm.runInNewContext(compiled, sandbox);
 const { streamSSE } = exportsObject;
 

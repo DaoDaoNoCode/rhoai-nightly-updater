@@ -31,7 +31,7 @@ export class ErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <PageSection>
-          <Alert
+          <Alert component="p"
             variant="danger"
             title="Something went wrong"
             isInline

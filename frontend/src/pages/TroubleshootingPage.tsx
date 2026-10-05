@@ -37,7 +37,7 @@ import type {
   Problem,
   DiagnosticResult,
 } from "../types";
-import { getDiagnostics, fixProblem, trackPageView } from "../services/api";
+import { getDiagnostics, fixProblem, toApiError } from "../services/api";
 
 type ScanState = "idle" | "loading" | "done" | "error";
 
@@ -134,14 +134,14 @@ export const TroubleshootingPage: React.FC = () => {
       setScanState("done");
     } catch (err) {
       if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : "Diagnostics scan failed");
+      setError(toApiError(err, "Diagnostics scan failed").message);
       setScanState("error");
     }
   }, []);
 
   useEffect(() => {
+    // The page view is counted once, by the router in App.
     document.title = "Diagnostics — RHOAI Nightly Updater";
-    trackPageView("diagnostics");
     mountedRef.current = true;
     runScan();
     return () => {
@@ -162,7 +162,7 @@ export const TroubleshootingPage: React.FC = () => {
       await runScan();
     } catch (err) {
       if (!mountedRef.current) return;
-      setFixError(err instanceof Error ? err.message : "Fix failed");
+      setFixError(toApiError(err, "Fix failed").message);
     } finally {
       if (mountedRef.current) {
         setFixingId(null);
@@ -192,9 +192,9 @@ export const TroubleshootingPage: React.FC = () => {
     <>
       {/* Title section */}
       <PageSection>
-        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
+        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
           <FlexItem>
-            <Title headingLevel="h2" style={{ marginBottom: "0.25rem" }}>
+            <Title headingLevel="h1" size="xl" style={{ marginBottom: "0.25rem" }}>
               Diagnostics
             </Title>
             <Content component="p">
@@ -222,6 +222,7 @@ export const TroubleshootingPage: React.FC = () => {
                   >
                     {copied ? "Copied!" : "Copy diagnostic report"}
                   </Button>
+                  <span className="pf-v6-screen-reader" role="status">{copied ? "Diagnostic report copied to the clipboard" : ""}</span>
                 </FlexItem>
               )}
             </Flex>
@@ -235,7 +236,7 @@ export const TroubleshootingPage: React.FC = () => {
           <Bullseye>
             <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
               <FlexItem>
-                <Spinner size="xl" />
+                <Spinner size="xl" aria-label="Scanning cluster health" />
               </FlexItem>
               <FlexItem>
                 <Content component="p">Scanning cluster health...</Content>
@@ -248,7 +249,7 @@ export const TroubleshootingPage: React.FC = () => {
       {/* Error state */}
       {scanState === "error" && (
         <PageSection>
-          <Alert variant="danger" title="Diagnostic scan failed" isInline>
+          <Alert variant="danger" title="Diagnostic scan failed" isInline isLiveRegion component="p">
             {error}
           </Alert>
         </PageSection>
@@ -258,15 +259,15 @@ export const TroubleshootingPage: React.FC = () => {
       {data && (
         <>
           {/* Summary banner */}
-          <PageSection>
+          <PageSection aria-live="polite">
             {failCount === 0 && warnCount === 0 && (
-              <Alert variant="success" title={`All ${totalChecks} checks passed — no issues detected`} isInline />
+              <Alert component="p" variant="success" title={`All ${totalChecks} checks passed — no issues detected`} isInline />
             )}
             {failCount === 0 && warnCount > 0 && (
-              <Alert variant="warning" title={`${warnCount} warning${warnCount !== 1 ? "s" : ""} found`} isInline />
+              <Alert component="p" variant="warning" title={`${warnCount} warning${warnCount !== 1 ? "s" : ""} found`} isInline />
             )}
             {failCount > 0 && (
-              <Alert
+              <Alert component="p"
                 variant="danger"
                 title={`${failCount + warnCount} issue${failCount + warnCount !== 1 ? "s" : ""} found that need attention`}
                 isInline
@@ -284,7 +285,7 @@ export const TroubleshootingPage: React.FC = () => {
             </Title>
             <Grid hasGutter>
               {checks.map((check) => (
-                <GridItem key={check.name} span={6}>
+                <GridItem key={check.name} span={12} md={6}>
                   <Card isCompact>
                     <CardBody>
                       <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
@@ -293,7 +294,7 @@ export const TroubleshootingPage: React.FC = () => {
                           <Content component="p" style={{ fontWeight: 600, margin: 0 }}>
                             {check.name}
                           </Content>
-                          <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
+                          <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)", overflowWrap: "anywhere" }}>
                             {check.detail}
                           </Content>
                         </div>
@@ -316,7 +317,7 @@ export const TroubleshootingPage: React.FC = () => {
           {/* Fix error */}
           {fixError && (
             <PageSection>
-              <Alert variant="danger" title="Fix failed" isInline>
+              <Alert variant="danger" title="Fix failed" isInline isLiveRegion component="p">
                 {fixError}
               </Alert>
             </PageSection>
@@ -418,7 +419,7 @@ export const TroubleshootingPage: React.FC = () => {
             <PageSection>
               <Bullseye>
                 <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                  <FlexItem><Spinner size="md" /></FlexItem>
+                  <FlexItem><Spinner size="md" aria-label="Re-scanning" /></FlexItem>
                   <FlexItem><Content component="p">Re-scanning...</Content></FlexItem>
                 </Flex>
               </Bullseye>
@@ -441,7 +442,7 @@ export const TroubleshootingPage: React.FC = () => {
               <Content component="p">{confirmFix?.message}</Content>
             </StackItem>
             <StackItem>
-              <Alert variant="warning" title="This action will modify resources on the shared cluster." isInline isPlain />
+              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster." isInline isPlain />
             </StackItem>
           </Stack>
         </ModalBody>

@@ -1,5 +1,131 @@
 import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult } from '../types';
 
+/**
+ * Error thrown by every API helper. `status` is the HTTP status (0 when no
+ * response arrived), `errorCode` is the backend's machine-readable code from
+ * the JSON error body (writeError in pkg/api) or a client-side code, and
+ * `details` keeps the parsed body. Classify on status and errorCode, never on
+ * the message text: messages can echo user input such as an image digest.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorCode: string;
+  readonly details?: unknown;
+
+  constructor(init: { status: number; errorCode: string; message: string; details?: unknown }) {
+    super(init.message);
+    this.name = 'ApiError';
+    this.status = init.status;
+    this.errorCode = init.errorCode;
+    this.details = init.details;
+  }
+}
+
+/** Error codes produced in the browser, for failures without a backend errorCode. */
+export const CLIENT_ERROR_CODES = {
+  network: 'network',
+  timeout: 'timeout',
+  aborted: 'aborted',
+  sessionExpired: 'session_expired',
+  operationFailed: 'operation_failed',
+  unknown: 'unknown',
+} as const;
+
+const SESSION_EXPIRED_MESSAGE = 'Session expired. Please refresh the page to re-authenticate.';
+
+/** Mirrors defaultErrorCode in pkg/api/handlers.go, for bodies without an errorCode. */
+function defaultErrorCode(status: number): string {
+  switch (status) {
+    case 400: return 'bad_request';
+    case 401: return 'unauthorized';
+    case 403: return 'forbidden';
+    case 404: return 'not_found';
+    case 409: return 'conflict';
+    case 422: return 'unprocessable';
+    case 429: return 'rate_limited';
+    case 503: return 'unavailable';
+    default: return 'internal';
+  }
+}
+
+/** True for ApiError instances, including ones created in another JS realm. */
+export function isApiError(e: unknown): e is ApiError {
+  if (e instanceof ApiError) return true;
+  if (typeof e !== 'object' || e === null) return false;
+  const candidate = e as { name?: unknown; status?: unknown; errorCode?: unknown };
+  return candidate.name === 'ApiError' && typeof candidate.status === 'number' && typeof candidate.errorCode === 'string';
+}
+
+/**
+ * Build an ApiError from a non-OK response. The backend always answers with
+ * {"error", "errorCode"} JSON; proxies and the router may answer with text or HTML.
+ */
+export async function parseErrorResponse(resp: Response): Promise<ApiError> {
+  let text = '';
+  try {
+    text = await resp.text();
+  } catch {
+    // The body is optional for classification.
+  }
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed && typeof parsed === 'object') {
+    const body = parsed as { error?: unknown; message?: unknown; errorCode?: unknown };
+    const message = typeof body.error === 'string' && body.error ? body.error
+      : typeof body.message === 'string' && body.message ? body.message
+        : `Request failed (HTTP ${resp.status})`;
+    const errorCode = typeof body.errorCode === 'string' && body.errorCode ? body.errorCode : defaultErrorCode(resp.status);
+    return new ApiError({ status: resp.status, errorCode, message, details: parsed });
+  }
+  const contentType = resp.headers.get('content-type') || '';
+  const trimmed = text.trim();
+  const message = !trimmed || contentType.includes('text/html')
+    ? `Request failed (HTTP ${resp.status})`
+    : `${resp.status}: ${trimmed.slice(0, 300)}`;
+  return new ApiError({ status: resp.status, errorCode: defaultErrorCode(resp.status), message, details: trimmed || undefined });
+}
+
+/** Normalize anything thrown by fetch or an API helper into an ApiError. */
+export function toApiError(e: unknown, fallbackMessage = 'Request failed'): ApiError {
+  if (isApiError(e)) return e;
+  const name = typeof e === 'object' && e !== null ? (e as { name?: unknown }).name : undefined;
+  const rawMessage = typeof e === 'object' && e !== null && typeof (e as { message?: unknown }).message === 'string'
+    ? (e as { message: string }).message
+    : typeof e === 'string' ? e : '';
+  if (name === 'TimeoutError') {
+    return new ApiError({ status: 0, errorCode: CLIENT_ERROR_CODES.timeout, message: 'The request timed out. The server may be busy; try again.' });
+  }
+  if (name === 'AbortError') {
+    return new ApiError({ status: 0, errorCode: CLIENT_ERROR_CODES.aborted, message: 'The request was cancelled.' });
+  }
+  if (name === 'TypeError') {
+    // fetch() rejects with a TypeError when no response arrives at all.
+    return new ApiError({
+      status: 0,
+      errorCode: CLIENT_ERROR_CODES.network,
+      message: 'Cannot reach the updater server. Check your connection and try again.',
+      details: rawMessage || undefined,
+    });
+  }
+  return new ApiError({ status: 0, errorCode: CLIENT_ERROR_CODES.unknown, message: rawMessage || fallbackMessage });
+}
+
+/** The message to show for any caught error. */
+export function errorMessage(e: unknown, fallbackMessage = 'Request failed'): string {
+  return toApiError(e, fallbackMessage).message;
+}
+
+function withTimeout(signal: AbortSignal | null | undefined, ms: number): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  if (!signal) return timeout;
+  // Keep both the caller's cancellation and the timeout where supported.
+  return typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : signal;
+}
+
 interface RequestOptions extends RequestInit {
   /** HTTP status codes to treat as non-errors (e.g. 422 for validation responses) */
   acceptStatuses?: number[];
@@ -14,30 +140,33 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   if (fetchOptions?.body || (method !== 'GET' && method !== 'HEAD')) {
     headers['Content-Type'] = 'application/json';
   }
-  const resp = await fetch(path, {
-    ...fetchOptions,
-    headers,
-    signal: fetchOptions?.signal ?? AbortSignal.timeout(120_000),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(path, {
+      ...fetchOptions,
+      headers,
+      signal: withTimeout(fetchOptions?.signal, 120_000),
+    });
+  } catch (e) {
+    throw toApiError(e);
+  }
   if (!resp.ok && !acceptStatuses?.includes(resp.status)) {
-    const text = await resp.text();
-    try {
-      const parsed = JSON.parse(text);
-      throw new Error(resp.status + ': ' + (parsed.error || parsed.message || text));
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith(String(resp.status) + ':')) throw e;
-      throw new Error(`${resp.status}: ${text}`);
-    }
+    throw await parseErrorResponse(resp);
   }
   const contentType = resp.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
-    throw new Error('Session expired. Please refresh the page to re-authenticate.');
+    // oauth-proxy answers an expired session with its HTML sign-in page.
+    throw new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE });
   }
-  return resp.json();
+  try {
+    return await resp.json();
+  } catch (e) {
+    throw toApiError(e, 'The server sent an unreadable response.');
+  }
 }
 
-export function getStatus(): Promise<StatusResponse> {
-  return request('/api/status');
+export function getStatus(signal?: AbortSignal): Promise<StatusResponse> {
+  return request('/api/status', { signal });
 }
 
 export function updateOperator(image: string, dryRun: boolean): Promise<OperationResponse> {
@@ -52,8 +181,8 @@ export function testPullSecret(): Promise<OperationResponse> {
   return request('/api/test-pull-secret');
 }
 
-export function verifyNodes(): Promise<OperationResponse> {
-  return request('/api/verify-nodes');
+export function verifyNodes(signal?: AbortSignal): Promise<OperationResponse> {
+  return request('/api/verify-nodes', { signal });
 }
 
 export function createPullSecret(auth: string): Promise<OperationResponse> {
@@ -63,20 +192,20 @@ export function createPullSecret(auth: string): Promise<OperationResponse> {
   });
 }
 
-export function fetchLatestNightly(): Promise<LatestNightlyResponse> {
-  return request('/api/latest-nightly');
+export function fetchLatestNightly(signal?: AbortSignal): Promise<LatestNightlyResponse> {
+  return request('/api/latest-nightly', { signal });
 }
 
 export function fetchNightlyTags(): Promise<NightlyTagsResponse> {
   return request('/api/nightly-tags');
 }
 
-export function getComponents(): Promise<ComponentsResponse> {
-  return request('/api/components');
+export function getComponents(signal?: AbortSignal): Promise<ComponentsResponse> {
+  return request('/api/components', { signal });
 }
 
-export function getComponentsWithLabels(): Promise<ComponentsResponse> {
-  return request('/api/components?labels=true');
+export function getComponentsWithLabels(signal?: AbortSignal): Promise<ComponentsResponse> {
+  return request('/api/components?labels=true', { signal });
 }
 
 export function getBuildExplorerTags(includeDates = false): Promise<NightlyTagsResponse> {
@@ -103,10 +232,10 @@ export function getUserPermissions(): Promise<UserPermissions> {
   return request('/api/user/permissions');
 }
 
-export function getBuildExplorerContent(image: string, labels?: boolean): Promise<FBCContentResponse> {
+export function getBuildExplorerContent(image: string, labels?: boolean, signal?: AbortSignal): Promise<FBCContentResponse> {
   const params = new URLSearchParams({ image });
   if (labels) params.set('labels', 'true');
-  return request(`/api/build-explorer/content?${params}`);
+  return request(`/api/build-explorer/content?${params}`, { signal });
 }
 
 export function getDashboardState(): Promise<DashboardState> {
@@ -136,7 +265,7 @@ export function getResourcesStatus(): Promise<ResourcesStatus> {
   return request('/api/resources/status');
 }
 
-export function getDSProjects(): Promise<{ projects: string[] }> {
+export function getDSProjects(): Promise<{ projects: string[] | null }> {
   return request('/api/resources/projects');
 }
 
@@ -181,22 +310,89 @@ export function teardownPipelineServer(project: string): Promise<OperationRespon
 }
 
 /**
+ * Why a stream ended without an operation result. The backend keeps running
+ * the operation after the client goes away (context.WithoutCancel in pkg/api),
+ * so in every case the caller should fall back to status polling.
+ * - aborted: the caller aborted the controller.
+ * - connection_lost: reading the response body failed.
+ * - ended_without_result: the body ended before operation_complete.
+ * - stalled: no bytes (not even the 15 s heartbeat) arrived for the idle timeout.
+ */
+export type StreamDetachReason = 'aborted' | 'connection_lost' | 'ended_without_result' | 'stalled';
+
+export type StreamDoneHandler = (success: boolean, error?: string, apiError?: ApiError) => void;
+export type StreamDetachHandler = (reason: StreamDetachReason) => void;
+
+export interface StreamOptions {
+  /** Abort and report `stalled` when nothing arrives for this long (default 90 s). */
+  idleTimeoutMs?: number;
+}
+
+/** The backend sends a heartbeat every 15 s, so 90 s of silence means the connection is gone. */
+export const STREAM_IDLE_TIMEOUT_MS = 90_000;
+
+/**
  * Shared SSE stream reader. Opens a POST SSE connection, parses UpdateStep
  * events, and invokes the provided callbacks. Returns an AbortController
- * so the caller can cancel.
+ * so the caller can stop listening.
  *
- * Requires an explicit operation_complete result before reporting success. If the connection drops mid-stream, invokes
- * onConnectionDrop (if provided) so the caller can fall back to polling
- * instead of treating it as a hard failure.
+ * Exactly one of onDone and onConnectionDrop is called, exactly once, for
+ * every stream, including when the controller is aborted. onDone(true) needs
+ * an explicit operation_complete success event. HTTP rejections (400, 403,
+ * 409 cluster_busy, 429, 503) and a failed operation_complete call
+ * onDone(false, message, apiError) with the backend's errorCode. Anything
+ * that ends the stream without a result calls onConnectionDrop(reason); without
+ * an onConnectionDrop handler it becomes onDone(false, message).
  */
 export function streamSSE(
   url: string,
   body: unknown | null,
   onStep: (step: UpdateStep) => void,
-  onDone: (success: boolean, error?: string) => void,
-  onConnectionDrop?: () => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+  options: StreamOptions = {},
 ): AbortController {
   const controller = new AbortController();
+  const idleTimeoutMs = options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
+  let settled = false;
+  let detachReason: StreamDetachReason | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearIdle = () => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+  const armIdle = () => {
+    clearIdle();
+    idleTimer = setTimeout(() => {
+      if (settled) return;
+      detachReason = 'stalled';
+      controller.abort();
+    }, idleTimeoutMs);
+  };
+
+  const finishDone = (success: boolean, error?: string, apiError?: ApiError) => {
+    if (settled) return;
+    settled = true;
+    clearIdle();
+    onDone(success, error, apiError);
+  };
+  const finishDetached = (reason: StreamDetachReason) => {
+    if (settled) return;
+    settled = true;
+    clearIdle();
+    if (onConnectionDrop) {
+      onConnectionDrop(reason);
+    } else {
+      onDone(false, reason === 'ended_without_result'
+        ? 'Connection ended before the operation result. Refresh status to check progress.'
+        : 'Lost the connection during the operation. It continues on the server; refresh status to check progress.');
+    }
+  };
+
+  // Aborting must still end the stream for the caller; otherwise the UI waits
+  // for a result that never comes.
+  controller.signal.addEventListener('abort', () => finishDetached(detachReason ?? 'aborted'));
 
   const fetchOptions: RequestInit = {
     method: 'POST',
@@ -207,83 +403,94 @@ export function streamSSE(
     fetchOptions.body = JSON.stringify(body);
   }
 
+  const handleLine = (line: string, setTerminal: (step: UpdateStep) => void) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data: ')) return;
+    let step: UpdateStep;
+    try {
+      step = JSON.parse(trimmed.slice(6));
+    } catch {
+      return; // skip malformed lines
+    }
+    if (step.step === 'operation_complete') setTerminal(step);
+    if (!settled) onStep(step);
+  };
+
+  armIdle();
   fetch(url, fetchOptions)
     .then(async (resp) => {
       if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`${resp.status}: ${text}`);
+        const apiError = await parseErrorResponse(resp);
+        finishDone(false, apiError.message, apiError);
+        return;
       }
 
       const contentType = resp.headers.get('content-type') || '';
       if (!contentType.includes('text/event-stream')) {
-        throw new Error('Session expired. Please refresh the page to re-authenticate.');
+        const apiError = new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE });
+        finishDone(false, apiError.message, apiError);
+        return;
       }
 
       const reader = resp.body?.getReader();
-      if (!reader) throw new Error('Streaming not supported');
+      if (!reader) {
+        const apiError = new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.unknown, message: 'Streaming is not supported by this browser.' });
+        finishDone(false, apiError.message, apiError);
+        return;
+      }
 
       const decoder = new TextDecoder();
       let buffer = '';
       let terminal: UpdateStep | undefined;
+      const setTerminal = (step: UpdateStep) => { terminal = step; };
 
       try {
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
+        while (!settled) {
           const { done, value } = await reader.read();
           if (done) break;
+          armIdle();
           buffer += decoder.decode(value, { stream: true });
 
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith(':')) continue;
-            if (trimmed.startsWith('data: ')) {
-              try {
-                const step: UpdateStep = JSON.parse(trimmed.slice(6));
-                if (step.step === 'operation_complete') terminal = step;
-                onStep(step);
-              } catch {
-                // skip malformed lines
-              }
-            }
-          }
-        }
-
-        // Flush remaining buffer
-        if (buffer.trim().startsWith('data: ')) {
-          try {
-            const step: UpdateStep = JSON.parse(buffer.trim().slice(6));
-            if (step.step === 'operation_complete') terminal = step;
-            onStep(step);
-          } catch {
-            // skip
-          }
-        }
-
-        if (terminal) {
-          onDone(terminal.status === 'success', terminal.status === 'failed' ? terminal.message : undefined);
-        } else if (onConnectionDrop) {
-          onConnectionDrop();
-        } else {
-          onDone(false, 'Connection ended before the operation result. Refresh status to check progress.');
+          for (const line of lines) handleLine(line, setTerminal);
         }
       } catch {
-        // reader.read() rejected - connection dropped mid-stream
-        if (controller.signal.aborted) return;
-        if (onConnectionDrop) {
-          onConnectionDrop();
+        // reader.read() rejected: the connection dropped or was aborted.
+        finishDetached(controller.signal.aborted ? (detachReason ?? 'aborted') : 'connection_lost');
+        return;
+      }
+      if (settled) return;
+
+      // Flush the remaining buffer.
+      handleLine(buffer, setTerminal);
+
+      if (terminal) {
+        const finalStep: UpdateStep = terminal;
+        if (finalStep.status === 'success') {
+          finishDone(true);
         } else {
-          onDone(false, 'Connection lost during operation.');
+          const apiError = new ApiError({
+            status: resp.status,
+            errorCode: finalStep.errorCode || CLIENT_ERROR_CODES.operationFailed,
+            message: finalStep.message || 'The operation failed.',
+            details: finalStep,
+          });
+          finishDone(false, apiError.message, apiError);
         }
+      } else {
+        finishDetached('ended_without_result');
       }
     })
     .catch((err) => {
-      if (controller.signal.aborted) return;
-      // HTTP validation, authorization and lock errors are real failures, not
-      // evidence that an operation was accepted and continues in the backend.
-      onDone(false, err instanceof Error ? err.message : String(err));
+      if (controller.signal.aborted) {
+        finishDetached(detachReason ?? 'aborted');
+        return;
+      }
+      // No response at all: the request may never have reached the backend,
+      // so this is a failure, not evidence that an operation is running.
+      const apiError = toApiError(err, 'Could not start the operation.');
+      finishDone(false, apiError.message, apiError);
     });
 
   return controller;
@@ -291,34 +498,28 @@ export function streamSSE(
 
 /**
  * Stream an update operation via SSE. Each event is an UpdateStep JSON object.
- * Returns an AbortController so the caller can cancel.
+ * Returns an AbortController so the caller can stop listening.
  */
 export function streamUpdate(
   image: string,
   onStep: (step: UpdateStep) => void,
-  onDone: (success: boolean, error?: string) => void,
-  onConnectionDrop?: () => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
-  return streamSSE(
-    '/api/update/stream',
-    { image },
-    onStep,
-    onDone,
-    onConnectionDrop,
-  );
+  return streamSSE('/api/update/stream', { image }, onStep, onDone, onConnectionDrop);
 }
 
 /**
  * Stream a reinstall operation via SSE. Each event is an UpdateStep JSON object.
- * Returns an AbortController so the caller can cancel.
+ * Returns an AbortController so the caller can stop listening.
  */
 export function streamReinstall(
   targetType: 'stable' | 'nightly' | 'custom',
   image: string | undefined,
   channel: string | undefined,
   onStep: (step: UpdateStep) => void,
-  onDone: (success: boolean, error?: string) => void,
-  onConnectionDrop?: () => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE(
     '/api/rollback/stream',
@@ -331,20 +532,14 @@ export function streamReinstall(
 
 /**
  * Stream a refresh operation via SSE. Each event is an UpdateStep JSON object.
- * Returns an AbortController so the caller can cancel.
+ * Returns an AbortController so the caller can stop listening.
  */
 export function streamRefresh(
   onStep: (step: UpdateStep) => void,
-  onDone: (success: boolean, error?: string) => void,
-  onConnectionDrop?: () => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
-  return streamSSE(
-    '/api/refresh/stream',
-    null,
-    onStep,
-    onDone,
-    onConnectionDrop,
-  );
+  return streamSSE('/api/refresh/stream', null, onStep, onDone, onConnectionDrop);
 }
 
 export function assistRollout(): Promise<OperationResponse> {
@@ -363,8 +558,15 @@ export function fixProblem(problemId: string): Promise<OperationResponse> {
   });
 }
 
-export async function getDSCPreview(): Promise<{ yaml: string; operatorVersion: string; branch: string; sourceURL: string }> {
-  return request<{ yaml: string; operatorVersion: string; branch: string; sourceURL: string }>('/api/setup/dsc/preview');
+export interface DSCPreviewResponse {
+  yaml: string;
+  operatorVersion: string;
+  branch: string;
+  sourceURL: string;
+}
+
+export async function getDSCPreview(): Promise<DSCPreviewResponse> {
+  return request<DSCPreviewResponse>('/api/setup/dsc/preview');
 }
 
 export async function createDSC(): Promise<OperationResponse> {

@@ -38,10 +38,45 @@ import {
 } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import type { NightlyTag, FBCContentResponse } from "../types";
-import { getBuildExplorerTags, getBuildExplorerContent } from "../services/api";
+import { ApiError, getBuildExplorerTags, getBuildExplorerContent, toApiError } from "../services/api";
 import { formatRelativeTime, truncateImage } from "../utils";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
+import { CopyableText } from "../components/CopyableText";
+import { useFbcContent } from "../hooks/useFbcContent";
+
+const CATEGORY_LABELS: Record<string, string> = {
+  core: "Core",
+  runtime: "Runtimes",
+  workbench: "Workbenches",
+  pipeline: "Pipelines",
+  training: "Training",
+  infra: "Infra",
+  other: "Other",
+};
+
+/** Category filter as a ToggleGroup, so the selection is exposed (aria-pressed), not only coloured. */
+const CategoryToggle: React.FC<{
+  label: string;
+  categories: Record<string, number>;
+  total: number;
+  active: string;
+  onSelect: (cat: string) => void;
+}> = ({ label, categories, total, active, onSelect }) => (
+  <ToggleGroup aria-label={label} isCompact style={{ flexWrap: "wrap" }}>
+    <ToggleGroupItem text={`All (${total})`} isSelected={active === "all"} onChange={() => onSelect("all")} />
+    {Object.entries(categories)
+      .sort(([a], [b]) => categoryOrder(a) - categoryOrder(b))
+      .map(([cat, count]) => (
+        <ToggleGroupItem
+          key={cat}
+          text={`${CATEGORY_LABELS[cat] || cat} (${count})`}
+          isSelected={active === cat}
+          onChange={() => onSelect(cat)}
+        />
+      ))}
+  </ToggleGroup>
+);
 
 function categoryOrder(cat: string): number {
   const order: Record<string, number> = {
@@ -88,7 +123,7 @@ export const BuildExplorerPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [datesLoading, setDatesLoading] = useState(false);
   const tagsRequestId = useRef(0);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
@@ -108,44 +143,23 @@ export const BuildExplorerPage: React.FC = () => {
     {},
   );
 
-  // Custom image lookup
+  // Custom image lookup. useFbcContent cancels the lookup of a previous
+  // image, so a slow earlier lookup can't replace the current one.
   const [searchImage, setSearchImage] = useState("");
-  const [searchContent, setSearchContent] = useState<FBCContentResponse | null>(
-    null,
-  );
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [searchLabelsLoading, setSearchLabelsLoading] = useState(false);
+  const [searched, setSearched] = useState<{ image: string; nonce: number } | null>(null);
+  const searchResult = useFbcContent(searched?.image ?? null, searched?.nonce);
+  const searchContent = searchResult.data;
+  const searchLoading = searchResult.loading;
+  const searchLabelsLoading = searchResult.labelsLoading;
+  const searchError = searchResult.error?.message ?? null;
 
   // Auto-populate from URL param ?image=...
   const urlImageApplied = useRef(false);
 
-  const handleSearchSubmit = async () => {
+  const handleSearchSubmit = () => {
     const img = searchImage.trim();
     if (!img) return;
-    setSearchLoading(true);
-    setSearchError(null);
-    setSearchContent(null);
-    try {
-      const content = await getBuildExplorerContent(img);
-      setSearchContent(content);
-      // Phase 2: labels
-      if (content.relatedImages?.length > 0) {
-        setSearchLabelsLoading(true);
-        try {
-          const enriched = await getBuildExplorerContent(img, true);
-          setSearchContent(enriched);
-        } catch {
-          /* labels optional */
-        } finally {
-          setSearchLabelsLoading(false);
-        }
-      }
-    } catch (e) {
-      setSearchError(e instanceof Error ? e.message : "Failed to load content");
-    } finally {
-      setSearchLoading(false);
-    }
+    setSearched((prev) => ({ image: img, nonce: (prev?.nonce ?? 0) + 1 }));
   };
 
   const fetchTags = useCallback(async () => {
@@ -164,7 +178,7 @@ export const BuildExplorerPage: React.FC = () => {
       void getBuildExplorerTags(true)
         .then((enriched) => {
           if (requestId !== tagsRequestId.current) return;
-          const dates = new Map(enriched.tags.map((tag) => [tag.image, tag.buildDate]));
+          const dates = new Map((enriched.tags ?? []).map((tag) => [tag.image, tag.buildDate]));
           setTags((current) => current.map((tag) => ({
             ...tag,
             buildDate: dates.get(tag.image) || tag.buildDate,
@@ -176,7 +190,7 @@ export const BuildExplorerPage: React.FC = () => {
         });
     } catch (e) {
       if (requestId === tagsRequestId.current) {
-        setError(e instanceof Error ? e.message : "Failed to fetch tags");
+        setError(toApiError(e, "Failed to fetch tags"));
       }
     } finally {
       if (requestId === tagsRequestId.current) setLoading(false);
@@ -185,7 +199,9 @@ export const BuildExplorerPage: React.FC = () => {
 
   useEffect(() => {
     fetchTags();
-    return () => { tagsRequestId.current++; };
+    const requests = tagsRequestId;
+    // Invalidate in-flight tag requests when the page unmounts.
+    return () => { requests.current++; };
   }, [fetchTags]);
 
   useEffect(() => {
@@ -199,33 +215,7 @@ export const BuildExplorerPage: React.FC = () => {
     if (urlImage) {
       urlImageApplied.current = true;
       setSearchImage(urlImage);
-      // Trigger search on next tick after state update
-      (async () => {
-        setSearchLoading(true);
-        setSearchError(null);
-        setSearchContent(null);
-        try {
-          const content = await getBuildExplorerContent(urlImage);
-          setSearchContent(content);
-          if (content.relatedImages?.length > 0) {
-            setSearchLabelsLoading(true);
-            try {
-              const enriched = await getBuildExplorerContent(urlImage, true);
-              setSearchContent(enriched);
-            } catch {
-              /* labels optional */
-            } finally {
-              setSearchLabelsLoading(false);
-            }
-          }
-        } catch (e) {
-          setSearchError(
-            e instanceof Error ? e.message : "Failed to load content",
-          );
-        } finally {
-          setSearchLoading(false);
-        }
-      })();
+      setSearched({ image: urlImage, nonce: 1 });
     }
   }, [searchParams]);
 
@@ -288,13 +278,17 @@ export const BuildExplorerPage: React.FC = () => {
       } catch (e) {
         setFbcError((prev) => ({
           ...prev,
-          [key]: e instanceof Error ? e.message : "Failed to load content",
+          [key]: toApiError(e, "Failed to load content").message,
         }));
       } finally {
         setFbcLoading((prev) => ({ ...prev, [key]: false }));
       }
     }
   };
+
+  // The backend answers every tag-listing failure with 500 "failed to fetch
+  // nightly tags" and no specific errorCode yet; match that exact response.
+  const tagsUnavailable = !!error && error.status === 500 && error.message === "failed to fetch nightly tags";
 
   return (
     <>
@@ -305,11 +299,11 @@ export const BuildExplorerPage: React.FC = () => {
         onRefresh={fetchTags}
       />
 
-      {error && !error.includes("failed to fetch nightly tags") && <ErrorAlert error={error} genericTitle="Failed to load tags" />}
+      {error && !tagsUnavailable && <ErrorAlert error={error} genericTitle="Failed to load tags" />}
 
-      {error && error.includes("failed to fetch nightly tags") && (
+      {tagsUnavailable && (
         <PageSection>
-          <Alert variant="info" title="Pull secret not configured" isInline>
+          <Alert variant="info" title="Pull secret not configured" isInline component="p">
             <p>The build explorer needs a pull secret to access nightly builds on Quay.io.</p>
             <p style={{ marginTop: "0.5rem" }}>
               Go to the <Link to="/">Dashboard</Link> and configure the <strong>Pull Secret</strong> first.
@@ -337,8 +331,7 @@ export const BuildExplorerPage: React.FC = () => {
                   onSearch={handleSearchSubmit}
                   onClear={() => {
                     setSearchImage("");
-                    setSearchContent(null);
-                    setSearchError(null);
+                    setSearched(null);
                   }}
                   isDisabled={searchLoading}
                   aria-label="FBC image reference"
@@ -352,6 +345,8 @@ export const BuildExplorerPage: React.FC = () => {
                 title="Lookup failed"
                 isInline
                 isPlain
+                isLiveRegion
+                component="p"
                 style={{ marginTop: "0.5rem" }}
               >
                 {searchError}
@@ -376,31 +371,9 @@ export const BuildExplorerPage: React.FC = () => {
                 const allImages = searchContent.relatedImages || [];
                 const cats = searchContent.categories || {};
                 const activeCat = categoryFilter["__search__"] || "core";
-                const displayImages = allImages.filter(
+                const displayImages = activeCat === "all" ? allImages : allImages.filter(
                   (ri) => ri.category === activeCat,
                 );
-
-                const catLabels: Record<
-                  string,
-                  {
-                    label: string;
-                    color:
-                      | "blue"
-                      | "orange"
-                      | "purple"
-                      | "teal"
-                      | "grey"
-                      | "green";
-                  }
-                > = {
-                  core: { label: "Core", color: "blue" },
-                  runtime: { label: "Runtimes", color: "teal" },
-                  workbench: { label: "Workbenches", color: "purple" },
-                  pipeline: { label: "Pipelines", color: "orange" },
-                  training: { label: "Training", color: "orange" },
-                  infra: { label: "Infra", color: "grey" },
-                  other: { label: "Other", color: "grey" },
-                };
 
                 return (
                   <div style={{ marginTop: "0.75rem" }}>
@@ -416,31 +389,15 @@ export const BuildExplorerPage: React.FC = () => {
                           </Label>
                         </FlexItem>
                       )}
-                      {Object.entries(cats)
-                        .sort(([a], [b]) => categoryOrder(a) - categoryOrder(b))
-                        .map(([cat, count]) => {
-                          const info = catLabels[cat] || {
-                            label: cat,
-                            color: "grey" as const,
-                          };
-                          return (
-                            <FlexItem key={cat}>
-                              <Label
-                                isCompact
-                                color={activeCat === cat ? info.color : "grey"}
-                                onClick={() =>
-                                  setCategoryFilter((prev) => ({
-                                    ...prev,
-                                    ["__search__"]: cat,
-                                  }))
-                                }
-                                style={{ cursor: "pointer" }}
-                              >
-                                {info.label} ({count})
-                              </Label>
-                            </FlexItem>
-                          );
-                        })}
+                      <FlexItem>
+                        <CategoryToggle
+                          label="Lookup result category"
+                          categories={cats}
+                          total={allImages.length}
+                          active={activeCat}
+                          onSelect={(cat) => setCategoryFilter((prev) => ({ ...prev, ["__search__"]: cat }))}
+                        />
+                      </FlexItem>
                       {searchLabelsLoading && (
                         <FlexItem>
                           <Spinner size="sm" aria-label="Loading labels" />{" "}
@@ -479,11 +436,7 @@ export const BuildExplorerPage: React.FC = () => {
                             return (
                               <Tr key={ri.image}>
                                 <Td dataLabel="Component">
-                                  <Tooltip content={ri.image}>
-                                    <span>
-                                      {ri.name || truncateImage(ri.image)}
-                                    </span>
-                                  </Tooltip>
+                                  <CopyableText text={ri.name || truncateImage(ri.image)} value={ri.image} what="image reference" />
                                 </Td>
                                 <Td dataLabel="Commit">
                                   {searchLabelsLoading && !shortSha ? (
@@ -539,15 +492,7 @@ export const BuildExplorerPage: React.FC = () => {
                                   {searchLabelsLoading && !ri.buildDate ? (
                                     <Spinner size="sm" aria-label="Loading" />
                                   ) : ri.buildDate ? (
-                                    <Tooltip
-                                      content={new Date(
-                                        ri.buildDate,
-                                      ).toLocaleString()}
-                                    >
-                                      <Content component="small">
-                                        {formatRelativeTime(ri.buildDate)}
-                                      </Content>
-                                    </Tooltip>
+                                    <Content component="small"><time dateTime={ri.buildDate} title={new Date(ri.buildDate).toLocaleString()}>{formatRelativeTime(ri.buildDate)}</time></Content>
                                   ) : (
                                     "-"
                                   )}
@@ -677,7 +622,7 @@ export const BuildExplorerPage: React.FC = () => {
                               onToggle: () => handleToggleExpand(tag),
                             }}
                           />
-                          <Td dataLabel="Tag">
+                          <Td dataLabel="Tag" id={`simple-node${rowIndex}`} modifier="nowrap">
                             <strong>{tag.tag}</strong>
                           </Td>
                           <Td dataLabel="Type">
@@ -689,24 +634,14 @@ export const BuildExplorerPage: React.FC = () => {
                             {datesLoading && !tag.buildDate ? (
                               <Spinner size="sm" aria-label="Loading build date" />
                             ) : tag.buildDate ? (
-                              <Tooltip
-                                content={new Date(
-                                  tag.buildDate,
-                                ).toLocaleString()}
-                              >
-                                <Content component="small">
-                                  {formatRelativeTime(tag.buildDate)}
-                                </Content>
-                              </Tooltip>
+                              <Content component="small"><time dateTime={tag.buildDate} title={new Date(tag.buildDate).toLocaleString()}>{formatRelativeTime(tag.buildDate)}</time></Content>
                             ) : (
                               <Content component="small">-</Content>
                             )}
                           </Td>
                           <Td dataLabel="Image">
                             <Content component="small">
-                              <Tooltip content={tag.image}>
-                                <code>{truncateImage(tag.image)}</code>
-                              </Tooltip>
+                              <CopyableText text={truncateImage(tag.image)} value={tag.image} what="image reference" code />
                             </Content>
                           </Td>
                         </Tr>
@@ -735,7 +670,7 @@ export const BuildExplorerPage: React.FC = () => {
                               )}
 
                               {contentError && (
-                                <Alert
+                                <Alert component="p"
                                   variant="danger"
                                   title="Failed to load catalog content"
                                   isInline
@@ -750,43 +685,9 @@ export const BuildExplorerPage: React.FC = () => {
                                   const cats = content.categories || {};
                                   const activeCat =
                                     categoryFilter[key] || "core";
-                                  const displayImages = allImages.filter(
+                                  const displayImages = activeCat === "all" ? allImages : allImages.filter(
                                     (ri) => ri.category === activeCat,
                                   );
-
-                                  const catLabels: Record<
-                                    string,
-                                    {
-                                      label: string;
-                                      color:
-                                        | "blue"
-                                        | "orange"
-                                        | "purple"
-                                        | "teal"
-                                        | "grey"
-                                        | "green";
-                                    }
-                                  > = {
-                                    core: { label: "Core", color: "blue" },
-                                    runtime: {
-                                      label: "Runtimes",
-                                      color: "teal",
-                                    },
-                                    workbench: {
-                                      label: "Workbenches",
-                                      color: "purple",
-                                    },
-                                    pipeline: {
-                                      label: "Pipelines",
-                                      color: "orange",
-                                    },
-                                    training: {
-                                      label: "Training",
-                                      color: "orange",
-                                    },
-                                    infra: { label: "Infra", color: "grey" },
-                                    other: { label: "Other", color: "grey" },
-                                  };
 
                                   return (
                                     <>
@@ -804,41 +705,15 @@ export const BuildExplorerPage: React.FC = () => {
                                             </Label>
                                           </FlexItem>
                                         )}
-                                        {Object.entries(cats)
-                                          .sort(
-                                            ([a], [b]) =>
-                                              categoryOrder(a) -
-                                              categoryOrder(b),
-                                          )
-                                          .map(([cat, count]) => {
-                                            const info = catLabels[cat] || {
-                                              label: cat,
-                                              color: "grey" as const,
-                                            };
-                                            return (
-                                              <FlexItem key={cat}>
-                                                <Label
-                                                  isCompact
-                                                  color={
-                                                    activeCat === cat
-                                                      ? info.color
-                                                      : "grey"
-                                                  }
-                                                  onClick={() =>
-                                                    setCategoryFilter(
-                                                      (prev) => ({
-                                                        ...prev,
-                                                        [key]: cat,
-                                                      }),
-                                                    )
-                                                  }
-                                                  style={{ cursor: "pointer" }}
-                                                >
-                                                  {info.label} ({count})
-                                                </Label>
-                                              </FlexItem>
-                                            );
-                                          })}
+                                        <FlexItem>
+                                          <CategoryToggle
+                                            label={`Category for ${tag.tag}`}
+                                            categories={cats}
+                                            total={allImages.length}
+                                            active={activeCat}
+                                            onSelect={(cat) => setCategoryFilter((prev) => ({ ...prev, [key]: cat }))}
+                                          />
+                                        </FlexItem>
                                       </Flex>
 
                                       {isLoadingLabels && (
@@ -879,14 +754,7 @@ export const BuildExplorerPage: React.FC = () => {
                                               return (
                                                 <Tr key={ri.image}>
                                                   <Td dataLabel="Component">
-                                                    <Tooltip content={ri.image}>
-                                                      <span>
-                                                        {ri.name ||
-                                                          truncateImage(
-                                                            ri.image,
-                                                          )}
-                                                      </span>
-                                                    </Tooltip>
+                                                    <CopyableText text={ri.name || truncateImage(ri.image)} value={ri.image} what="image reference" />
                                                   </Td>
                                                   {!isLoadingLabels && (
                                                   <Td dataLabel="Commit">
@@ -955,17 +823,7 @@ export const BuildExplorerPage: React.FC = () => {
                                                   {!isLoadingLabels && (
                                                   <Td dataLabel="Built">
                                                     {ri.buildDate ? (
-                                                      <Tooltip
-                                                        content={new Date(
-                                                          ri.buildDate,
-                                                        ).toLocaleString()}
-                                                      >
-                                                        <Content component="small">
-                                                          {formatRelativeTime(
-                                                            ri.buildDate,
-                                                          )}
-                                                        </Content>
-                                                      </Tooltip>
+                                                      <Content component="small"><time dateTime={ri.buildDate} title={new Date(ri.buildDate).toLocaleString()}>{formatRelativeTime(ri.buildDate)}</time></Content>
                                                     ) : (
                                                       "-"
                                                     )}
@@ -984,7 +842,7 @@ export const BuildExplorerPage: React.FC = () => {
                                       )}
 
                                       {content.error && (
-                                        <Alert
+                                        <Alert component="p"
                                           variant="warning"
                                           title={content.error}
                                           isInline

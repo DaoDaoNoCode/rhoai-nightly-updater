@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   Alert,
-  AlertActionLink,
   ClipboardCopy,
   Content,
   ExpandableSection,
@@ -17,10 +16,6 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 import type { StatusResponse } from '../types';
-
-interface PrerequisitesPanelProps {
-  status: StatusResponse | null;
-}
 
 const IDMSInstructions: React.FC = () => (
   <Stack hasGutter>
@@ -71,7 +66,7 @@ const IDMSInstructions: React.FC = () => (
       </List>
     </StackItem>
     <StackItem>
-      <Alert
+      <Alert component="p"
         variant="info"
         title="Requires OCM write access"
         isInline
@@ -161,7 +156,7 @@ export const SetupModal: React.FC<{
 
           {pullSecretReady && idmsReady && (
             <StackItem>
-              <Alert
+              <Alert component="p"
                 variant="success"
                 title="All prerequisites are met"
                 isInline
@@ -175,40 +170,3 @@ export const SetupModal: React.FC<{
     </Modal>
   );
 };
-
-/**
- * PrerequisitesBanner -- an inline alert shown when prerequisites are not met.
- * Replaces the old cluttered expandable panel.
- */
-export const PrerequisitesBanner: React.FC<PrerequisitesPanelProps & { onOpenSetup: () => void }> = ({
-  status,
-  onOpenSetup,
-}) => {
-  if (!status) return null;
-
-  const pullSecretReady = status.pullSecret.exists;
-  const idmsReady = status.imageMirror.exists;
-  const allReady = pullSecretReady && idmsReady;
-
-  if (allReady) return null;
-
-  const missing: string[] = [];
-  if (!pullSecretReady) missing.push('Pull Secret');
-  if (!idmsReady) missing.push('Image Mirror');
-
-  return (
-    <Alert
-      variant="warning"
-      title="One-time cluster setup required"
-      isInline
-      actionLinks={
-        <AlertActionLink onClick={onOpenSetup}>
-          View setup instructions
-        </AlertActionLink>
-      }
-    >
-      Missing: {missing.join(', ')}. Complete the setup before installing nightly builds.
-    </Alert>
-  );
-};
-

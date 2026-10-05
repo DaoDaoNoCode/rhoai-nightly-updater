@@ -14,6 +14,15 @@ export function truncateImage(image: string, maxLen = 60): string {
   return image.slice(0, keep) + "..." + image.slice(-keep);
 }
 
+/** Elapsed time since startMs as "42s" or "3m 5s". */
+export function formatElapsed(startMs: number, now = Date.now()): string {
+  const elapsed = Math.max(0, Math.floor((now - startMs) / 1000));
+  if (elapsed < 60) return `${elapsed}s`;
+  const min = Math.floor(elapsed / 60);
+  const sec = elapsed % 60;
+  return `${min}m ${sec}s`;
+}
+
 export function formatRelativeTime(dateStr: string): string {
   try {
     const date = new Date(dateStr);
