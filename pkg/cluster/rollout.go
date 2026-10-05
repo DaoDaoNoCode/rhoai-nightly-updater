@@ -26,13 +26,48 @@ var rolloutNamespaces = []string{"redhat-ods-operator", "redhat-ods-applications
 // lets the Deployment controller stop one old pod; the scheduler then retries
 // the Unschedulable pod because a pod deletion frees node resources.
 //
-// The patch is not reverted by OLM: OLM only compares the
-// olm.deployment-spec-hash label with the CSV's deployment spec
-// (operator-lifecycle-manager pkg/controller/install/deployment.go,
-// checkForDeployments). Component operators server-side apply their
-// manifests with ForceOwnership, so they restore the strategy only when their
-// manifest sets it. The tool patches once per user action, so there is no
-// patch loop; the result message says that the setting can stay.
+// Who undoes the patch: OLM does not (it only compares the
+// olm.deployment-spec-hash label with the CSV's deployment spec,
+// operator-lifecycle-manager pkg/controller/install/deployment.go
+// checkForDeployments), so on rhods-operator the value stays until the next
+// CSV install. Platform and module operators server-side apply their
+// manifests with ForceOwnership and reset the field only if their manifest
+// sets it; such a Deployment shows that applier as the owner of
+// spec.strategy.rollingUpdate.maxUnavailable in managedFields, and the tool
+// refuses to patch it (the applier would undo it, and patching again would
+// fight it). Otherwise nothing resets the value, so the patch records the
+// original value in an annotation and diagnostics offers to restore it once
+// the rollout has finished.
+const assistRolloutAnnotation = "rhoai-nightly-updater.opendatahub.io/assist-rollout"
+
+type assistRecord struct {
+	MaxUnavailable interface{} `json:"maxUnavailable"` // original value; nil = unset (defaults to 25%)
+	PatchedAt      string      `json:"patchedAt"`
+}
+
+// strategyApplier returns the server-side-apply manager (other than this
+// tool) that owns spec.strategy.rollingUpdate.maxUnavailable, if any.
+func strategyApplier(managedFields []deploymentManagedField) string {
+	for _, mf := range managedFields {
+		if mf.Operation != "Apply" || mf.Manager == "rhoai-nightly-updater" {
+			continue
+		}
+		var fields map[string]map[string]map[string]map[string]json.RawMessage
+		if json.Unmarshal(mf.FieldsV1, &fields) != nil {
+			continue
+		}
+		if _, ok := fields["f:spec"]["f:strategy"]["f:rollingUpdate"]["f:maxUnavailable"]; ok {
+			return mf.Manager
+		}
+	}
+	return ""
+}
+
+type deploymentManagedField struct {
+	Manager   string          `json:"manager"`
+	Operation string          `json:"operation"`
+	FieldsV1  json.RawMessage `json:"fieldsV1"`
+}
 
 type rolloutAssessment struct {
 	Namespace       string
@@ -45,6 +80,8 @@ type rolloutAssessment struct {
 	NewReplicaSet   string
 	PendingPods     []string
 	OldReadyPods    int
+	// OriginalMaxUnavailable is the raw spec value (nil when unset).
+	OriginalMaxUnavailable interface{}
 }
 
 func (a rolloutAssessment) target() string { return a.Namespace + "/" + a.Deployment }
@@ -110,8 +147,9 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	}
 	var dep struct {
 		Metadata struct {
-			UID             string `json:"uid"`
-			ResourceVersion string `json:"resourceVersion"`
+			UID             string                   `json:"uid"`
+			ResourceVersion string                   `json:"resourceVersion"`
+			ManagedFields   []deploymentManagedField `json:"managedFields"`
 		} `json:"metadata"`
 		Spec struct {
 			Replicas *int `json:"replicas"`
@@ -141,6 +179,10 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	var rawUnavailable, rawSurge interface{}
 	if ru := dep.Spec.Strategy.RollingUpdate; ru != nil {
 		rawUnavailable, rawSurge = ru.MaxUnavailable, ru.MaxSurge
+	}
+	a.OriginalMaxUnavailable = rawUnavailable
+	if applier := strategyApplier(dep.Metadata.ManagedFields); applier != "" {
+		return notApplicable(a, fmt.Sprintf("%s manages its rollout strategy and would undo the change", applier)), nil
 	}
 	unavailable, unavailableStr, err := resolveIntOrPercent(rawUnavailable, a.Replicas, false, "25%")
 	if err != nil {
@@ -275,8 +317,8 @@ func assistConfirmMessage(a rolloutAssessment) string {
 	return fmt.Sprintf("This patches Deployment %s: spec.strategy.rollingUpdate.maxUnavailable %s -> 1 (%d replicas). "+
 		"Kubernetes then stops one of the %d old pod(s) so that the Unschedulable pod(s) %s can use its resources. "+
 		"One replica is unavailable during the switch. No pods are deleted by the tool.\n\n"+
-		"The new value can stay on the Deployment until its owner rewrites it (OLM on the next operator update, or the component operator if its manifest sets the strategy).",
-		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "))
+		"The original value is saved in the annotation %s. Nothing resets it automatically; once the rollout has finished, Diagnostics offers to restore it.",
+		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "), assistRolloutAnnotation)
 }
 
 // attachRolloutAssist offers the assist-rollout fix on an Unschedulable
@@ -322,8 +364,12 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 	if !a.Applicable {
 		return a, false, ""
 	}
+	record, _ := json.Marshal(assistRecord{MaxUnavailable: a.OriginalMaxUnavailable, PatchedAt: time.Now().UTC().Format(time.RFC3339)})
 	patch, _ := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"resourceVersion": a.ResourceVersion},
+		"metadata": map[string]interface{}{
+			"resourceVersion": a.ResourceVersion,
+			"annotations":     map[string]interface{}{assistRolloutAnnotation: string(record)},
+		},
 		"spec": map[string]interface{}{
 			"strategy": map[string]interface{}{"rollingUpdate": map[string]interface{}{"maxUnavailable": 1}},
 		},
@@ -387,7 +433,7 @@ func AssistRolloutFor(c *Client, namespace, name string) (*types.OperationRespon
 }
 
 func assistTargets(c *Client, targets []string, logs []string) (*types.OperationResponse, error) {
-	var patched, failed []string
+	var patched, failed, failures []string
 	for _, t := range targets {
 		ns, name, _ := strings.Cut(t, "/")
 		a, ok, failure := patchMaxUnavailable(c, ns, name)
@@ -397,6 +443,7 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 			logs = append(logs, fmt.Sprintf("Patched Deployment %s: maxUnavailable %s -> 1 (Unschedulable pods: %s)", a.target(), a.MaxUnavailable, strings.Join(a.PendingPods, ", ")))
 		case failure != "":
 			failed = append(failed, t)
+			failures = append(failures, failure)
 			logs = append(logs, "Error: "+failure)
 		default:
 			logs = append(logs, fmt.Sprintf("Skipped %s: %s", t, a.Reason))
@@ -421,7 +468,7 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 		}
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: "nothing_to_do"}, nil
 	case len(failed) > 0 && len(patched) == 0:
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not unblock %s. Nothing was changed.", strings.Join(failed, ", ")), Logs: logs}, nil
+		return &types.OperationResponse{Success: false, Message: "Could not unblock: " + strings.Join(failures, "; "), Logs: logs}, nil
 	case len(failed) > 0:
 		return &types.OperationResponse{
 			Success:   false,
@@ -432,7 +479,128 @@ func assistTargets(c *Client, targets []string, logs []string) (*types.Operation
 	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Set maxUnavailable=1 on %s. Kubernetes now replaces one old pod at a time; the rollout should finish within a few minutes.", strings.Join(patched, ", ")),
+		Message: fmt.Sprintf("Set maxUnavailable=1 on %s. Kubernetes now replaces one old pod at a time; the rollout should finish within a few minutes. Afterwards, Diagnostics offers to restore the original value.", strings.Join(patched, ", ")),
 		Logs:    logs,
 	}, nil
+}
+
+// RestoreRolloutStrategy puts back the maxUnavailable value that
+// assist-rollout saved in its annotation, once the rollout has finished.
+func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.OperationResponse, error) {
+	if !isRolloutNamespace(namespace) || !dns1123Name.MatchString(name) {
+		return &types.OperationResponse{Success: false, Message: "Unknown Deployment.", ErrorCode: "validation"}, nil
+	}
+	target := namespace + "/" + name
+	path := namespacedPath("apps/v1", "deployments", namespace, name)
+	body, _, err := c.get(path)
+	if IsK8sError(err, http.StatusNotFound) {
+		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
+	}
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
+	dep, err := parseRolloutDeployment(body)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: err.Error()}, nil
+	}
+	raw := dep.Metadata.Annotations[assistRolloutAnnotation]
+	if raw == "" {
+		return nothingToDo(fmt.Sprintf("Deployment %s has no saved rollout strategy. Nothing was changed.", target), nil), nil
+	}
+	if !dep.rolloutComplete() {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The rollout of %s has not finished yet; restoring now could block it again. Nothing was changed.", target), ErrorCode: "prerequisites"}, nil
+	}
+	var rec assistRecord
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The saved value on %s is not readable (%v); remove the annotation %s by hand.", target, err, assistRolloutAnnotation)}, nil
+	}
+
+	spec := map[string]interface{}{}
+	current := dep.currentMaxUnavailable()
+	restoring := current == "1"
+	if restoring {
+		// A strategic-merge null removes the field, so the API default (25%) applies again.
+		spec["strategy"] = map[string]interface{}{"rollingUpdate": map[string]interface{}{"maxUnavailable": rec.MaxUnavailable}}
+	}
+	patchObj := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"resourceVersion": dep.Metadata.ResourceVersion,
+			"annotations":     map[string]interface{}{assistRolloutAnnotation: nil},
+		},
+	}
+	if len(spec) > 0 {
+		patchObj["spec"] = spec
+	}
+	patch, _ := json.Marshal(patchObj)
+	if _, _, err := c.strategicPatch(path, patch); err != nil {
+		if IsK8sError(err, http.StatusConflict) {
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed while it was being checked; nothing was changed. Run diagnostics again.", target), ErrorCode: "conflict"}, nil
+		}
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to patch Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
+
+	original := "unset (Kubernetes default 25%)"
+	if rec.MaxUnavailable != nil {
+		original = fmt.Sprint(rec.MaxUnavailable)
+	}
+	msg := fmt.Sprintf("Restored maxUnavailable on %s to %s and removed the saved note.", target, original)
+	if !restoring {
+		msg = fmt.Sprintf("maxUnavailable on %s is already %s (changed by its owner), so it was left as is; the saved note was removed.", target, nonEmpty(current, "unset"))
+	}
+	RecordActivity(c, types.ActivityEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		User:      getUser(c),
+		Action:    "restore-rollout-strategy",
+		Detail:    msg,
+		Success:   true,
+	})
+	return &types.OperationResponse{Success: true, Message: msg}, nil
+}
+
+type rolloutDeployment struct {
+	Metadata struct {
+		Name            string            `json:"name"`
+		Namespace       string            `json:"namespace"`
+		ResourceVersion string            `json:"resourceVersion"`
+		Generation      int64             `json:"generation"`
+		Annotations     map[string]string `json:"annotations"`
+	} `json:"metadata"`
+	Spec struct {
+		Replicas *int `json:"replicas"`
+		Strategy struct {
+			RollingUpdate *struct {
+				MaxUnavailable interface{} `json:"maxUnavailable"`
+			} `json:"rollingUpdate"`
+		} `json:"strategy"`
+	} `json:"spec"`
+	Status struct {
+		ObservedGeneration int64 `json:"observedGeneration"`
+		Replicas           int   `json:"replicas"`
+		UpdatedReplicas    int   `json:"updatedReplicas"`
+		ReadyReplicas      int   `json:"readyReplicas"`
+	} `json:"status"`
+}
+
+func parseRolloutDeployment(body []byte) (rolloutDeployment, error) {
+	var d rolloutDeployment
+	if err := json.Unmarshal(body, &d); err != nil {
+		return d, fmt.Errorf("parse deployment: %w", err)
+	}
+	return d, nil
+}
+
+func (d rolloutDeployment) rolloutComplete() bool {
+	replicas := 1
+	if d.Spec.Replicas != nil {
+		replicas = *d.Spec.Replicas
+	}
+	return d.Status.ObservedGeneration >= d.Metadata.Generation && d.Status.UpdatedReplicas == replicas &&
+		d.Status.ReadyReplicas == replicas && d.Status.Replicas == replicas
+}
+
+func (d rolloutDeployment) currentMaxUnavailable() string {
+	if d.Spec.Strategy.RollingUpdate == nil || d.Spec.Strategy.RollingUpdate.MaxUnavailable == nil {
+		return ""
+	}
+	return fmt.Sprint(d.Spec.Strategy.RollingUpdate.MaxUnavailable)
 }

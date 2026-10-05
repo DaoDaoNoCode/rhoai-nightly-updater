@@ -967,6 +967,13 @@ func ApplyFix(c *Client, problemID string) (*types.OperationResponse, error) {
 		}
 		return AssistRolloutFor(c, ns, name)
 	}
+	if target, ok := strings.CutPrefix(problemID, "restore-rollout-strategy:"); ok {
+		ns, name, found := strings.Cut(target, "/")
+		if !found {
+			return &types.OperationResponse{Success: false, Message: "restore-rollout-strategy needs <namespace>/<deployment>", ErrorCode: "validation"}, nil
+		}
+		return RestoreRolloutStrategy(c, ns, name)
+	}
 	if compName, ok := strings.CutPrefix(problemID, "disable-component:"); ok {
 		return applyFixDisableComponent(c, compName)
 	}
