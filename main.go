@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,23 +29,33 @@ func main() {
 		logLevel = slog.LevelInfo
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	api.LogStartupVersion()
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+	devMode := os.Getenv("DEV_MODE") == "true"
+
+	staticDir := "./frontend/dist"
+	if dir := os.Getenv("STATIC_DIR"); dir != "" {
+		staticDir = dir
+	}
+	absStaticDir, err := filepath.Abs(staticDir)
+	if err != nil {
+		slog.Error("failed to resolve static dir", "error", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /api/health", api.HandleHealth)
-	mux.HandleFunc("GET /api/health/ready", api.HandleReady)
+	registerProbes(mux)
+	mux.HandleFunc("GET /api/version", api.HandleVersion)
 	mux.HandleFunc("GET /api/status", api.HandleStatus)
-	mux.HandleFunc("POST /api/update", api.HandleUpdate)
+	mux.HandleFunc("GET /api/operation", api.HandleOperation)
+	mux.HandleFunc("POST /api/update", api.HandleUpdate) // dry run only
 	mux.HandleFunc("POST /api/update/stream", api.HandleUpdateStream)
-	mux.HandleFunc("POST /api/rollback", api.HandleRollback)
 	mux.HandleFunc("POST /api/rollback/stream", api.HandleReinstallStream)
 	mux.HandleFunc("POST /api/components/dsc/repair", api.HandleRepairDSC)
-	mux.HandleFunc("POST /api/refresh", api.HandleRefreshOperator)
 	mux.HandleFunc("POST /api/refresh/stream", api.HandleRefreshStream)
 	mux.HandleFunc("POST /api/assist-rollout", api.HandleAssistRollout)
 	mux.HandleFunc("GET /api/activity", api.HandleActivity)
@@ -76,44 +87,27 @@ func main() {
 	mux.HandleFunc("POST /api/diagnostics/fix", api.HandleDiagnosticsFix)
 	mux.HandleFunc("GET /api/setup/dsc/preview", api.HandleDSCPreview)
 	mux.HandleFunc("POST /api/setup/dsc", api.HandleCreateDSC)
-	mux.HandleFunc("GET /metrics", api.HandleMetrics)
 	mux.HandleFunc("POST /api/pageview", api.HandlePageView)
+	mux.HandleFunc("/api/", middleware.APINotFound)
+	mux.Handle("/", middleware.StaticFiles(absStaticDir))
 
-	staticDir := "./frontend/dist"
-	if dir := os.Getenv("STATIC_DIR"); dir != "" {
-		staticDir = dir
-	}
-
-	absStaticDir, err := filepath.Abs(staticDir)
-	if err != nil {
-		slog.Error("failed to resolve static dir", "error", err)
-		os.Exit(1)
-	}
-
-	fs := http.FileServer(http.Dir(absStaticDir))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Clean the path and verify it stays within staticDir to prevent traversal
-		cleanPath := filepath.Clean(r.URL.Path)
-		fullPath := filepath.Join(absStaticDir, cleanPath)
-		if !strings.HasPrefix(fullPath, absStaticDir) {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
+	var handler http.Handler = middleware.SecurityHeaders(middleware.RequireJSONForMutations(mux))
+	if devMode {
+		// DEV_MODE authenticates every request with the developer's own
+		// token: accept only this machine's host names (DNS rebinding).
+		frontendPort := os.Getenv("DEV_FRONTEND_PORT")
+		if frontendPort == "" {
+			frontendPort = "9000"
 		}
+		handler = middleware.LocalOnly([]string{port, frontendPort}, handler)
+	}
+	handler = middleware.RequestID(middleware.AccessLog(handler))
 
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) && r.URL.Path != "/" {
-			http.ServeFile(w, r, filepath.Join(absStaticDir, "index.html"))
-			return
-		}
-		fs.ServeHTTP(w, r)
-	})
-
-	handler := middleware.RequestID(middleware.SecurityHeaders(middleware.RequireJSONForMutations(mux)))
-
-	// DEV_MODE authenticates every request with the developer's own token, so
-	// it must only be reachable from this machine. In-cluster the backend
-	// listens on all interfaces for oauth-proxy and Prometheus.
+	// DEV_MODE must only be reachable from this machine. In-cluster the
+	// template sets BIND_ADDRESS=127.0.0.1 so that only oauth-proxy (same
+	// pod) reaches the API; probes and metrics use METRICS_PORT.
 	bindAddress := os.Getenv("BIND_ADDRESS")
-	if bindAddress == "" && os.Getenv("DEV_MODE") == "true" {
+	if bindAddress == "" && devMode {
 		bindAddress = "127.0.0.1"
 	}
 
@@ -124,18 +118,38 @@ func main() {
 		WriteTimeout: 180 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+	servers := []*http.Server{srv}
+
+	// The metrics listener serves only probes and /metrics, so the Service
+	// can expose it without exposing the API.
+	if metricsPort := os.Getenv("METRICS_PORT"); metricsPort != "" {
+		metricsMux := http.NewServeMux()
+		registerProbes(metricsMux)
+		metricsMux.HandleFunc("GET /metrics", api.HandleMetrics)
+		servers = append(servers, &http.Server{
+			Addr:         ":" + metricsPort,
+			Handler:      middleware.RequestID(middleware.AccessLog(metricsMux)),
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		})
+	} else {
+		mux.HandleFunc("GET /metrics", api.HandleMetrics)
+	}
 
 	// Graceful shutdown on SIGTERM/SIGINT
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	go func() {
-		slog.Info("starting server", "address", srv.Addr, "staticDir", absStaticDir)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	}()
+	for _, s := range servers {
+		go func(s *http.Server) {
+			slog.Info("starting server", "address", s.Addr, "staticDir", absStaticDir)
+			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("server error", "address", s.Addr, "error", err)
+				os.Exit(1)
+			}
+		}(s)
+	}
 
 	<-ctx.Done()
 	slog.Info("shutting down server")
@@ -160,9 +174,18 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("server shutdown error", "error", err)
-		os.Exit(1)
+	exitCode := 0
+	for _, s := range servers {
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			slog.Error("server shutdown error", "address", s.Addr, "error", err)
+			exitCode = 1
+		}
 	}
 	slog.Info("server stopped")
+	os.Exit(exitCode)
+}
+
+func registerProbes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/health", api.HandleHealth)
+	mux.HandleFunc("GET /api/health/ready", api.HandleReady)
 }

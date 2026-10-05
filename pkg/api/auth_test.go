@@ -1,13 +1,24 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// Tokens understood by the fake identity lookup installed by setupDevMode.
+const (
+	expiredToken = "expired-token" // the API server answers 401
+	apiDownToken = "api-down"      // the API server cannot be reached
 )
 
 func setupDevMode(t *testing.T) {
@@ -20,6 +31,48 @@ func setupDevMode(t *testing.T) {
 	cachedTokenValue = ""
 	cachedTokenAt = time.Time{}
 	cachedTokenMu.Unlock()
+	resetPackageState(t)
+	// "user:<name>" tokens belong to <name>; any other token to test-user.
+	lookupUser = func(_ context.Context, token string) (string, error) {
+		switch {
+		case token == expiredToken:
+			return "", fmt.Errorf("identify user: %w", cluster.ErrUnauthenticated)
+		case token == apiDownToken:
+			return "", errors.New("identify user: connection refused")
+		case strings.HasPrefix(token, "user:"):
+			return strings.TrimPrefix(token, "user:"), nil
+		}
+		return "test-user", nil
+	}
+}
+
+// resetPackageState gives each test fresh package-level state (rate
+// limiter, lock, in-flight operation, caches) and restores the seams, so
+// tests are repeatable with -count=N and independent of their order.
+func resetPackageState(t *testing.T) {
+	t.Helper()
+	origLimiter, origLookup, origPermission := mutationLimiter, lookupUser, mutationPermission
+	origSave, origClear, origRead := saveOperationMarker, clearOperationMarker, readOperationMarker
+	origCheck, origPerm := checkAPIVersion, checkPermission
+	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
+	mutationLimiter = newRateLimiter(30 * time.Second)
+	identities.reset()
+	apiReady.reset()
+	inflight.clear()
+	clusterMutationInProgress.Store(false)
+	saveOperationMarker = func(*Operation) {}
+	clearOperationMarker = func(*cluster.Client) {}
+	readOperationMarker = func(*cluster.Client) (*types.OperationMarker, error) { return nil, nil }
+	t.Cleanup(func() {
+		mutationLimiter, lookupUser, mutationPermission = origLimiter, origLookup, origPermission
+		saveOperationMarker, clearOperationMarker, readOperationMarker = origSave, origClear, origRead
+		checkAPIVersion, checkPermission = origCheck, origPerm
+		runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream = origU, origD, origR, origF
+		identities.reset()
+		apiReady.reset()
+		inflight.clear()
+		clusterMutationInProgress.Store(false)
+	})
 }
 
 func TestWithAuth_MissingToken_Returns401(t *testing.T) {

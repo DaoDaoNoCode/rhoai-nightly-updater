@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,10 +44,31 @@ func RecordRollback() { rollbacksTotal.Add(1) }
 // RecordReinstall increments the reinstall counter.
 func RecordReinstall() { reinstallsTotal.Add(1) }
 
-// Allowed page and action names (prevent label cardinality explosion)
-var validMetricLabel = regexp.MustCompile(`^[a-z_]{1,30}$`)
+// Page and feature names the UI reports. The lists are fixed so a client
+// cannot add metric series: anything else is counted as "other". Hyphens
+// are accepted for the resource actions the UI sends with hyphens.
+var (
+	knownPages = map[string]bool{
+		"dashboard": true, "components": true, "build_explorer": true, "dashboard_dev": true, "diagnostics": true,
+	}
+	knownFeatures = map[string]bool{
+		"update": true, "dry_run": true, "refresh_operator": true, "create_dsc": true,
+		"reinstall_stable": true, "reinstall_nightly": true, "reinstall_custom": true,
+		"deploy_pr": true, "deploy_dashboard_main": true, "revert_dashboard": true, "assist_rollout": true,
+		"setup_minio": true, "teardown_minio": true, "setup_mlflow": true, "teardown_mlflow": true,
+		"deploy_mlflow_pr": true, "revert_mlflow": true,
+		"setup_pipeline_server": true, "teardown_pipeline_server": true,
+	}
+)
 
-const maxMetricLabels = 100
+// metricLabel maps a reported name to a bounded label value.
+func metricLabel(name string, known map[string]bool) string {
+	name = strings.ReplaceAll(name, "-", "_")
+	if known[name] {
+		return name
+	}
+	return "other"
+}
 
 func getOrCreateCounter(mu *sync.RWMutex, m map[string]*atomic.Int64, key string) *atomic.Int64 {
 	mu.RLock()
@@ -61,40 +82,26 @@ func getOrCreateCounter(mu *sync.RWMutex, m map[string]*atomic.Int64, key string
 	if c, ok = m[key]; ok {
 		return c
 	}
-	if len(m) >= maxMetricLabels {
-		return nil
-	}
 	m[key] = &atomic.Int64{}
 	return m[key]
 }
 
 // RecordPageView increments the counter for a specific page.
 func RecordPageView(page string) {
-	if !validMetricLabel.MatchString(page) {
-		return
-	}
-	if c := getOrCreateCounter(&pageViewsMu, pageViews, page); c != nil {
-		c.Add(1)
-	}
+	getOrCreateCounter(&pageViewsMu, pageViews, metricLabel(page, knownPages)).Add(1)
 }
 
 // RecordFeatureUsage increments the counter for a specific feature action.
 func RecordFeatureUsage(action string) {
-	if !validMetricLabel.MatchString(action) {
-		return
-	}
-	if c := getOrCreateCounter(&featureUsageMu, featureUsage, action); c != nil {
-		c.Add(1)
-	}
+	getOrCreateCounter(&featureUsageMu, featureUsage, metricLabel(action, knownFeatures)).Add(1)
 }
 
 // HandlePageView records a page view or feature usage event.
-// Body: {"page": "dashboard"} or {"action": "update_clicked"}
-// No user identity is stored — only aggregate counters.
-// Requires authentication (X-Forwarded-Access-Token from oauth-proxy).
+// Body: {"page": "dashboard"} or {"action": "update"}
+// No user identity is stored, only aggregate counters. The caller's token
+// is verified like on every other API request.
 func HandlePageView(w http.ResponseWriter, r *http.Request) {
-	if extractUserToken(r) == "" {
-		w.WriteHeader(http.StatusUnauthorized)
+	if _, _, ok := requestUser(w, r); !ok {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 256)

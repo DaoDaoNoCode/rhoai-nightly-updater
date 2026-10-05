@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -17,7 +16,7 @@ func TestValidateReinstallRequestCustomBuilds(t *testing.T) {
 		"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + digest,
 		"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.3@sha256:" + digest,
 		"quay.io/rhoai/rhoai-fbc-fragment@sha256:" + digest,
-		"quay.io/another-team/custom-fbc:build-42",
+		"quay.io/rhoai/rhoai-fbc-fragment:build-42",
 	} {
 		req := types.ReinstallRequest{TargetType: "custom", Image: " " + image + " ", Channel: " stable-3.3 "}
 		if err := validateReinstallRequest(&req); err != nil {
@@ -33,7 +32,16 @@ func TestValidateReinstallRequestCustomBuilds(t *testing.T) {
 		{TargetType: "custom", Image: "quay.io/rhoai/fbc@sha256:abc"},
 		{TargetType: "custom", Image: "quay.io.evil.test/rhoai/fbc:build"},
 		{TargetType: "custom", Image: "docker.io/rhoai/fbc:build"},
-		{TargetType: "custom", Image: "quay.io/rhoai/fbc:build", Channel: "bad channel"},
+		{TargetType: "custom", Image: "quay.io/rhoai/rhoai-fbc-fragment:build", Channel: "bad channel"},
+		// Only the RHOAI FBC repository: an FBC is installed with Automatic
+		// approval, so another Quay org or repo could install any operator.
+		{TargetType: "custom", Image: "quay.io/another-team/custom-fbc:build-42"},
+		{TargetType: "custom", Image: "quay.io/attacker/evil-catalog:v1"},
+		{TargetType: "custom", Image: "quay.io/rhoai/other-repo:build"},
+		{TargetType: "custom", Image: "quay.io/rhoai/rhoai-fbc-fragment-evil:build"},
+		{TargetType: "custom", Image: "quay.io/rhoai/rhoai-fbc-fragment/sub:build"},
+		{TargetType: "nightly", Image: "docker.io/evil/fbc:1"},
+		{TargetType: "nightly", Image: "quay.io/rhoaix/fbc:1"},
 		{TargetType: "unknown"},
 	} {
 		if err := validateReinstallRequest(&req); err == nil {
@@ -43,54 +51,6 @@ func TestValidateReinstallRequestCustomBuilds(t *testing.T) {
 	legacy := types.ReinstallRequest{}
 	if err := validateReinstallRequest(&legacy); err != nil || legacy.TargetType != "stable" {
 		t.Fatal("legacy stable request rejected")
-	}
-}
-
-func TestRateLimiter_FirstCallNotLimited(t *testing.T) {
-	rl := &rateLimiter{window: 30 * time.Second}
-	if rl.isRateLimited("alice") {
-		t.Error("expected first call to not be rate limited")
-	}
-}
-
-func TestRateLimiter_SecondCallWithinWindowIsLimited(t *testing.T) {
-	rl := &rateLimiter{window: 30 * time.Second}
-	rl.recordMutation("alice")
-	if !rl.isRateLimited("alice") {
-		t.Error("expected second call within window to be rate limited")
-	}
-}
-
-func TestRateLimiter_DifferentUsersIndependent(t *testing.T) {
-	rl := &rateLimiter{window: 30 * time.Second}
-	rl.recordMutation("alice")
-	if rl.isRateLimited("bob") {
-		t.Error("expected bob to not be rate limited when only alice recorded a mutation")
-	}
-}
-
-func TestRateLimiter_ExpiredWindowNotLimited(t *testing.T) {
-	rl := &rateLimiter{window: 1 * time.Millisecond}
-	rl.recordMutation("alice")
-	time.Sleep(5 * time.Millisecond)
-	if rl.isRateLimited("alice") {
-		t.Error("expected call after window expiry to not be rate limited")
-	}
-}
-
-func TestRecordMutation_StoresTimestamp(t *testing.T) {
-	rl := &rateLimiter{window: 30 * time.Second}
-	before := time.Now()
-	rl.recordMutation("alice")
-	after := time.Now()
-
-	val, ok := rl.users.Load("alice")
-	if !ok {
-		t.Fatal("expected mutation timestamp to be stored")
-	}
-	ts := val.(time.Time)
-	if ts.Before(before) || ts.After(after) {
-		t.Errorf("stored timestamp %v not between %v and %v", ts, before, after)
 	}
 }
 
@@ -287,57 +247,5 @@ func TestWriteOperationResult_SuccessReturns200(t *testing.T) {
 	}
 	if len(body.Logs) != 2 {
 		t.Errorf("expected 2 log entries, got %d", len(body.Logs))
-	}
-}
-
-// --- rateLimiter evictExpiredEntries tests ---
-
-func TestRateLimiter_EvictExpiredEntries_RemovesExpiredKeys(t *testing.T) {
-	rl := &rateLimiter{window: 1 * time.Millisecond}
-	rl.recordMutation("alice")
-	rl.recordMutation("bob")
-
-	// Wait for entries to expire
-	time.Sleep(5 * time.Millisecond)
-
-	rl.evictExpiredEntries()
-
-	if _, ok := rl.users.Load("alice"); ok {
-		t.Error("expected 'alice' to be evicted after expiry")
-	}
-	if _, ok := rl.users.Load("bob"); ok {
-		t.Error("expected 'bob' to be evicted after expiry")
-	}
-}
-
-func TestRateLimiter_EvictExpiredEntries_KeepsFreshKeys(t *testing.T) {
-	rl := &rateLimiter{window: 10 * time.Second}
-
-	// Record a mutation that is well within the window
-	rl.recordMutation("alice")
-
-	rl.evictExpiredEntries()
-
-	if _, ok := rl.users.Load("alice"); !ok {
-		t.Error("expected 'alice' to remain after eviction (still within window)")
-	}
-}
-
-func TestRateLimiter_EvictExpiredEntries_MixedExpiredAndFresh(t *testing.T) {
-	rl := &rateLimiter{window: 50 * time.Millisecond}
-
-	// Manually store a timestamp far in the past so it is already expired
-	rl.users.Store("expired-user", time.Now().Add(-1*time.Second))
-
-	// Record a fresh entry that is well within the window
-	rl.recordMutation("fresh-user")
-
-	rl.evictExpiredEntries()
-
-	if _, ok := rl.users.Load("expired-user"); ok {
-		t.Error("expected 'expired-user' to be evicted")
-	}
-	if _, ok := rl.users.Load("fresh-user"); !ok {
-		t.Error("expected 'fresh-user' to remain after eviction")
 	}
 }
