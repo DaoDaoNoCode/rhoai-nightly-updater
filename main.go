@@ -49,7 +49,6 @@ func main() {
 
 	mux := http.NewServeMux()
 	registerProbes(mux)
-	mux.HandleFunc("GET /api/version", api.HandleVersion)
 	mux.HandleFunc("GET /api/status", api.HandleStatus)
 	mux.HandleFunc("GET /api/operation", api.HandleOperation)
 	mux.HandleFunc("POST /api/update", api.HandleUpdate) // dry run only
@@ -91,7 +90,7 @@ func main() {
 	mux.HandleFunc("/api/", middleware.APINotFound)
 	mux.Handle("/", middleware.StaticFiles(absStaticDir))
 
-	var handler http.Handler = middleware.SecurityHeaders(middleware.RequireJSONForMutations(mux))
+	handler := middleware.SecurityHeaders(middleware.RequireJSONForMutations(mux))
 	if devMode {
 		// DEV_MODE authenticates every request with the developer's own
 		// token: accept only this machine's host names (DNS rebinding).
@@ -188,4 +187,5 @@ func main() {
 func registerProbes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/health", api.HandleHealth)
 	mux.HandleFunc("GET /api/health/ready", api.HandleReady)
+	mux.HandleFunc("GET /api/version", api.HandleVersion)
 }
