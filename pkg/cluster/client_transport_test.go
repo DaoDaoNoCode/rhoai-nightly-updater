@@ -17,7 +17,7 @@ import (
 func TestAPIServerTransportUsesHTTP2AndReusesConnections(t *testing.T) {
 	var newConns atomic.Int32
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, r.Proto)
+		_, _ = io.WriteString(w, r.Proto)
 	}))
 	srv.EnableHTTP2 = true
 	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
@@ -41,7 +41,7 @@ func TestAPIServerTransportUsesHTTP2AndReusesConnections(t *testing.T) {
 			t.Error(err)
 			return ""
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
 		return string(b)
 	}

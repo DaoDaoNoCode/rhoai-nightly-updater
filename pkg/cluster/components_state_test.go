@@ -48,13 +48,13 @@ func componentsAPI(t *testing.T, latency time.Duration, dscV2, dscV1 mockRespons
 		resp, ok := routes[r.URL.Path]
 		if !ok {
 			w.WriteHeader(404)
-			fmt.Fprint(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
+			_, _ = fmt.Fprint(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
 			return
 		}
 		if resp.statusCode != 0 {
 			w.WriteHeader(resp.statusCode)
 		}
-		fmt.Fprint(w, resp.body)
+		_, _ = fmt.Fprint(w, resp.body)
 	}))
 	t.Cleanup(srv.Close)
 	consoleURLCache.Purge()

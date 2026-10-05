@@ -41,11 +41,11 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	notFound := func() {
 		w.WriteHeader(404)
-		fmt.Fprint(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
+		_, _ = fmt.Fprint(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
 	}
 	if fail != 0 {
 		w.WriteHeader(fail)
-		fmt.Fprintf(w, `{"kind":"Status","status":"Failure","code":%d}`, fail)
+		_, _ = fmt.Fprintf(w, `{"kind":"Status","status":"Failure","code":%d}`, fail)
 		return
 	}
 	p := r.URL.Path
@@ -56,18 +56,18 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 			notFound()
 			return
 		}
-		fmt.Fprint(w, a.sub)
+		_, _ = fmt.Fprint(w, a.sub)
 	case p == csvPrefix:
-		fmt.Fprint(w, a.csvList)
+		_, _ = fmt.Fprint(w, a.csvList)
 	case strings.HasPrefix(p, csvPrefix+"/"):
 		body, ok := a.csvByNm[strings.TrimPrefix(p, csvPrefix+"/")]
 		if !ok {
 			notFound()
 			return
 		}
-		fmt.Fprint(w, body)
+		_, _ = fmt.Fprint(w, body)
 	case p == namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""):
-		fmt.Fprint(w, stableManifestJSON("redhat-operators", "stable-3.5", []map[string]interface{}{
+		_, _ = fmt.Fprint(w, stableManifestJSON("redhat-operators", "stable-3.5", []map[string]interface{}{
 			{"name": "stable-3.5", "currentCSV": "rhods-operator.v3.5.0", "currentCSVDesc": map[string]string{"version": "3.5.0"}},
 		}))
 	case p == namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName):
@@ -75,18 +75,18 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 			notFound()
 			return
 		}
-		fmt.Fprintf(w, `{"spec":{"image":%q},"status":{"connectionState":{"lastObservedState":"READY"}}}`, a.csImage)
+		_, _ = fmt.Fprintf(w, `{"spec":{"image":%q},"status":{"connectionState":{"lastObservedState":"READY"}}}`, a.csImage)
 	case p == "/apis/config.openshift.io/v1/consoles/cluster":
-		fmt.Fprint(w, `{"status":{"consoleURL":"https://console.example"}}`)
+		_, _ = fmt.Fprint(w, `{"status":{"consoleURL":"https://console.example"}}`)
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
 		cfg := base64.StdEncoding.EncodeToString([]byte(`{"auths":{"quay.io/rhoai":{"auth":"dXNlcjpwYXNz"}}}`))
-		fmt.Fprintf(w, `{"data":{".dockerconfigjson":%q}}`, cfg)
+		_, _ = fmt.Fprintf(w, `{"data":{".dockerconfigjson":%q}}`, cfg)
 	case strings.HasSuffix(p, "/datascienceclusters"):
-		fmt.Fprint(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+		_, _ = fmt.Fprint(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 	case strings.HasSuffix(p, "/configmaps/rhoai-updater-activity"):
-		fmt.Fprint(w, `{"data":{}}`)
+		_, _ = fmt.Fprint(w, `{"data":{}}`)
 	default:
-		fmt.Fprint(w, `{"items":[]}`)
+		_, _ = fmt.Fprint(w, `{"items":[]}`)
 	}
 }
 

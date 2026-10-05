@@ -116,7 +116,7 @@ func TestFlightGroupCollapsesConcurrentCalls(t *testing.T) {
 		}
 	}
 	// Later calls run again (no result caching in the group itself).
-	g.Do(context.Background(), "k", func(context.Context) (int, error) { calls.Add(1); return 1, nil })
+	_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) { calls.Add(1); return 1, nil })
 	if calls.Load() != 2 {
 		t.Fatalf("expected a fresh call after completion, got %d", calls.Load())
 	}
@@ -158,7 +158,9 @@ func TestFlightGroupWaiterHonorsOwnContext(t *testing.T) {
 	var g flightGroup[int]
 	block := make(chan struct{})
 	defer close(block)
-	go g.Do(context.Background(), "k", func(context.Context) (int, error) { <-block; return 1, nil })
+	go func() {
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) { <-block; return 1, nil })
+	}()
 	time.Sleep(10 * time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

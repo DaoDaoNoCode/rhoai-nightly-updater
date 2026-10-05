@@ -131,14 +131,6 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 	return op, nil
 }
 
-func installedOperatorVersion(c *Client) (string, error) {
-	op, err := getInstalledOperator(c)
-	if err != nil {
-		return "", err
-	}
-	return op.Version, nil
-}
-
 // dscFromALMExamples returns the DataScienceCluster example that the
 // installed operator bundle ships in its CSV's alm-examples annotation. It is
 // the exact sample of the installed build (the GitHub branch can move ahead
