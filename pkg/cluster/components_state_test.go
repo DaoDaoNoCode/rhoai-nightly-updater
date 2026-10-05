@@ -62,7 +62,7 @@ func componentsAPI(t *testing.T, latency time.Duration, dscV2, dscV1 mockRespons
 	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, &requests
 }
 
-var notFound = mockResponse{statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`}
+var notFoundResp = mockResponse{statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`}
 
 func TestGetComponents_DSCStates(t *testing.T) {
 	cases := []struct {
@@ -72,10 +72,10 @@ func TestGetComponents_DSCStates(t *testing.T) {
 		wantErr   int // K8s status expected in the error
 	}{
 		{"operator installed, no DSC yet", mockResponse{body: `{"items":[]}`}, mockResponse{body: `{"items":[]}`}, DSCStateNoDSC, 0},
-		{"no CRD", notFound, notFound, DSCStateNoCRD, 0},
-		{"forbidden is an error, not a missing DSC", mockResponse{statusCode: 403, body: `{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}`}, notFound, "", 403},
+		{"no CRD", notFoundResp, notFoundResp, DSCStateNoCRD, 0},
+		{"forbidden is an error, not a missing DSC", mockResponse{statusCode: 403, body: `{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}`}, notFoundResp, "", 403},
 		{"API throttled", mockResponse{statusCode: 429, body: `{}`}, mockResponse{statusCode: 429, body: `{}`}, "", 429},
-		{"DSC present", mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Removed"}}},"status":{"phase":"Ready","conditions":[{"type":"DashboardReady","status":"True"}]}}]}`}, notFound, DSCStatePresent, 0},
+		{"DSC present", mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Removed"}}},"status":{"phase":"Ready","conditions":[{"type":"DashboardReady","status":"True"}]}}]}`}, notFoundResp, DSCStatePresent, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGetComponents_DSCStates(t *testing.T) {
 
 func TestGetComponents_DeploymentsAndPodsTyped(t *testing.T) {
 	installFakeRegistry(t, newFakeRegistry())
-	c, _ := componentsAPI(t, 0, mockResponse{body: `{"items":[]}`}, notFound, "")
+	c, _ := componentsAPI(t, 0, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
 	resp, err := GetComponents(c, false)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestGetComponents_ReadsRunInParallel(t *testing.T) {
 	installFakeRegistry(t, newFakeRegistry())
 	const latency = 60 * time.Millisecond
 	dsc := mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}]}`}
-	c, requests := componentsAPI(t, latency, dsc, notFound, almExamplesJSON)
+	c, requests := componentsAPI(t, latency, dsc, notFoundResp, almExamplesJSON)
 	start := time.Now()
 	if _, err := GetComponents(c, false); err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestGetComponents_UsesCachedLabelsWithoutQuay(t *testing.T) {
 	f := newFakeRegistry()
 	installFakeRegistry(t, f)
 	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
-	c, _ := componentsAPI(t, 0, mockResponse{body: `{"items":[]}`}, notFound, "")
+	c, _ := componentsAPI(t, 0, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
 	resp, err := GetComponents(c, false)
 	if err != nil {
 		t.Fatal(err)
