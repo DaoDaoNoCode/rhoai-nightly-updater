@@ -26,7 +26,6 @@ import {
   Spinner,
   Stack,
   StackItem,
-  Tooltip,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
@@ -40,6 +39,7 @@ import { truncateImage } from "../utils";
 import type { StatusResponse } from "../types";
 import { prerequisitesMet as checkPrereqs } from "../utils";
 import { PullSecretCard } from "./PullSecretCard";
+import { CopyableText } from "./CopyableText";
 
 interface StatusCardsProps {
   status: StatusResponse | null;
@@ -85,18 +85,6 @@ function phaseLabel(phase: string) {
   }
 }
 
-function existsLabel(exists: boolean) {
-  return exists ? (
-    <Label color="green" icon={<CheckCircleIcon />}>
-      Ready
-    </Label>
-  ) : (
-    <Label color="red" icon={<ExclamationCircleIcon />}>
-      Missing
-    </Label>
-  );
-}
-
 function cardStatusIcon(ok: boolean) {
   return (
     <Icon status={ok ? "success" : "danger"}>
@@ -133,7 +121,7 @@ export const StatusCards: React.FC<StatusCardsProps> = ({
 
   if (error) {
     return (
-      <Alert variant="danger" title="Failed to load status" isInline>
+      <Alert component="p" variant="danger" title="Failed to load status" isInline>
         {error}
       </Alert>
     );
@@ -157,7 +145,7 @@ export const StatusCards: React.FC<StatusCardsProps> = ({
     <Stack hasGutter>
       {reconciling && (
         <StackItem>
-          <Alert
+          <Alert component="p"
             variant="info"
             title="Reconciling... See progress below."
             isInline
@@ -168,7 +156,7 @@ export const StatusCards: React.FC<StatusCardsProps> = ({
 
       {errors && errors.length > 0 && (
         <StackItem>
-          <Alert
+          <Alert component="p"
             variant="warning"
             title="Some status checks reported errors"
             isInline
@@ -370,11 +358,7 @@ export const StatusCards: React.FC<StatusCardsProps> = ({
                         <DescriptionListTerm>Image</DescriptionListTerm>
                         <DescriptionListDescription>
                           <Content component="small">
-                            <Tooltip content={status.catalogSource.image}>
-                              <code>
-                                {truncateImage(status.catalogSource.image)}
-                              </code>
-                            </Tooltip>
+                            <CopyableText text={truncateImage(status.catalogSource.image)} value={status.catalogSource.image} what="catalog image reference" code />
                           </Content>
                         </DescriptionListDescription>
                       </DescriptionListGroup>

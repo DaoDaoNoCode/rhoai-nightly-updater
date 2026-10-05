@@ -255,14 +255,14 @@ export const ComponentsPage: React.FC = () => {
             <PageSection>
               <Stack hasGutter>
                 {data.dscCompatibility.validationError && (
-                  <StackItem><Alert variant="warning" title="DSC field validation unavailable" isInline>{data.dscCompatibility.validationError}</Alert></StackItem>
+                  <StackItem><Alert component="p" variant="warning" title="DSC field validation unavailable" isInline>{data.dscCompatibility.validationError}</Alert></StackItem>
                 )}
                 {data.dscCompatibility.defaultsError && (
-                  <StackItem><Alert variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
+                  <StackItem><Alert component="p" variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
                 )}
                 {(data.dscCompatibility.invalidFields.length > 0 || data.dscCompatibility.missingComponents.length > 0 || (data.dscCompatibility.extraComponents?.length ?? 0) > 0) && (
                   <StackItem>
-                    <Alert variant="warning" title="DSC field names differ from the installed operator" isInline>
+                    <Alert component="p" variant="warning" title="DSC field names differ from the installed operator" isInline>
                       <Stack hasGutter>
                         {data.dscCompatibility.invalidFields.length > 0 && <StackItem>
                           <Content component="p">Invalid or deprecated fields in the installed CRD:</Content>
@@ -291,7 +291,7 @@ export const ComponentsPage: React.FC = () => {
                     </Alert>
                   </StackItem>
                 )}
-                {repairResult && <StackItem><Alert variant={repairResult.success ? "success" : "danger"} title={repairResult.message} isInline /></StackItem>}
+                {repairResult && <StackItem><Alert component="p" variant={repairResult.success ? "success" : "danger"} title={repairResult.message} isInline /></StackItem>}
               </Stack>
             </PageSection>
           )}
@@ -621,7 +621,7 @@ export const ComponentsPage: React.FC = () => {
                                           {pod.schedulingReason && (
                                             <Tr>
                                               <Td colSpan={6} style={{ padding: "0.25rem 0.5rem" }}>
-                                                <Alert
+                                                <Alert component="p"
                                                   variant="warning"
                                                   title={pod.schedulingReason}
                                                   isInline
@@ -754,7 +754,7 @@ export const ComponentsPage: React.FC = () => {
               : `Remove only invalid keys from ${data?.dscName}. Valid settings and management states will be preserved.`}</Content></StackItem>
             {repairMode === "remove-invalid" && <StackItem><List>{data?.dscCompatibility?.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List></StackItem>}
             {repairMode === "remove-extra-components" && <StackItem><List>{data?.dscCompatibility?.extraComponents?.map(name => <ListItem key={name}><code>{name}</code></ListItem>)}</List></StackItem>}
-            {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
+            {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert component="p" variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
               : defaultsPreview ? <CodeBlock><CodeBlockCode>{defaultsPreview}</CodeBlockCode></CodeBlock> : <Spinner aria-label="Loading DSC defaults" />}</StackItem>}
           </Stack>
         </ModalBody>
@@ -782,7 +782,7 @@ export const ComponentsPage: React.FC = () => {
               </Content>
             </StackItem>
             <StackItem>
-              <Alert variant="warning" title="This action will modify resources on the shared cluster." isInline />
+              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster." isInline />
             </StackItem>
           </Stack>
         </ModalBody>
@@ -813,7 +813,7 @@ export const ComponentsPage: React.FC = () => {
               <Content component="p">{fixConfirm?.message}</Content>
             </StackItem>
             <StackItem>
-              <Alert variant="warning" title="This action will modify resources on the shared cluster." isInline />
+              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster." isInline />
             </StackItem>
           </Stack>
         </ModalBody>

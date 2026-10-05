@@ -499,13 +499,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
-              <Alert variant="warning" title="Shared cluster impact" isInline>
+              <Alert component="p" variant="warning" title="Shared cluster impact" isInline>
                 {getTeardownWarning(teardownConfirm)}
               </Alert>
             </StackItem>
             {teardownConfirm === "minio" && (resStatus?.pipelineServers?.length ?? 0) > 0 && (
               <StackItem>
-                <Alert variant="danger" title="Pipeline servers depend on MinIO" isInline>
+                <Alert component="p" variant="danger" title="Pipeline servers depend on MinIO" isInline>
                   Pipeline servers are running in: {(resStatus?.pipelineServers || []).map((ps) => ps.namespace).join(", ")}. Tear them down first, or the backend will block this operation.
                 </Alert>
               </StackItem>
@@ -546,7 +546,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
               <Content component="small">This will create a DSPA (DataSciencePipelinesApplication) and S3 credentials in project <strong>{setupConfirmProject}</strong>, backed by MinIO storage.</Content>
             </StackItem>
             <StackItem>
-              <Alert variant="info" title="The pipeline server will take 1-3 minutes to become ready." isInline isPlain />
+              <Alert component="p" variant="info" title="The pipeline server will take 1-3 minutes to become ready." isInline isPlain />
             </StackItem>
           </Stack>
         </ModalBody>
@@ -583,7 +583,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
-              <Alert variant="warning" title="This action will modify resources on the shared cluster" isInline>
+              <Alert component="p" variant="warning" title="This action will modify resources on the shared cluster" isInline>
                 {getSetupWarning(setupConfirm)}
               </Alert>
             </StackItem>

@@ -670,7 +670,7 @@ export const BuildExplorerPage: React.FC = () => {
                               )}
 
                               {contentError && (
-                                <Alert
+                                <Alert component="p"
                                   variant="danger"
                                   title="Failed to load catalog content"
                                   isInline
@@ -842,7 +842,7 @@ export const BuildExplorerPage: React.FC = () => {
                                       )}
 
                                       {content.error && (
-                                        <Alert
+                                        <Alert component="p"
                                           variant="warning"
                                           title={content.error}
                                           isInline

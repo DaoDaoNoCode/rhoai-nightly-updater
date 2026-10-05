@@ -145,7 +145,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <Alert variant="warning" title="Destructive operation" isInline>
+        <Alert component="p" variant="warning" title="Destructive operation" isInline>
           <Content component="small">
             This will fully uninstall the current RHOAI operator and reinstall
             it from the selected target. The operator will be unavailable for
@@ -188,7 +188,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
               isDisabled={loading}
             />
             {targetType === "stable" && status?.stableDiscoveryError && (
-              <Alert variant="warning" title="Could not discover the latest stable release" isInline style={{ marginTop: "0.5rem" }}>
+              <Alert component="p" variant="warning" title="Could not discover the latest stable release" isInline style={{ marginTop: "0.5rem" }}>
                 <Content component="small">{status.stableDiscoveryError}. Refresh cluster status after resolving the catalog issue.</Content>
               </Alert>
             )}
@@ -226,7 +226,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
           {targetType !== "stable" && (
             <StackItem>
               {!prerequisitesMet && (
-                <Alert
+                <Alert component="p"
                   variant="warning"
                   title="Prerequisites required for nightly installs"
                   isInline
@@ -411,7 +411,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
-              <Alert
+              <Alert component="p"
                 variant="danger"
                 title="This will fully uninstall the current RHOAI operator and reinstall it. This is a destructive operation."
                 isInline
@@ -453,7 +453,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
               </List>
             </StackItem>
             <StackItem>
-              <Alert
+              <Alert component="p"
                 variant="warning"
                 title="During this process (5-10 minutes), the RHOAI operator will be unavailable. Existing workloads (notebooks, model serving, pipelines) will continue running but cannot be modified until the operator is reinstalled."
                 isInline

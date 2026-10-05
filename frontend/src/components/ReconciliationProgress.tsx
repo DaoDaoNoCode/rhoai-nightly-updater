@@ -27,9 +27,11 @@ import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/excl
 import WrenchIcon from "@patternfly/react-icons/dist/esm/icons/wrench-icon";
 import { Link } from "react-router-dom";
 import type { StatusResponse, Problem, OperationResponse } from "../types";
-import { getDiagnostics, assistRollout, fixProblem } from "../services/api";
+import { getDiagnostics, assistRollout, fixProblem, toApiError } from "../services/api";
+import { formatElapsed } from "../utils";
 
-export type OperationType = "update" | "refresh" | "reinstall";
+export type { ReconcileKind as OperationType } from "../operationSteps";
+import type { ReconcileKind as OperationType } from "../operationSteps";
 
 interface ReconciliationProgressProps {
   status: StatusResponse | null;
@@ -39,13 +41,6 @@ interface ReconciliationProgressProps {
   operationType?: OperationType;
 }
 
-function formatElapsed(startMs: number): string {
-  const elapsed = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-  if (elapsed < 60) return `${elapsed}s`;
-  const min = Math.floor(elapsed / 60);
-  const sec = elapsed % 60;
-  return `${min}m ${sec}s`;
-}
 
 type Phase = "initiated" | "waiting" | "installing" | "succeeded" | "failed";
 
@@ -155,7 +150,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
 
   if (diagLoading) {
     return (
-      <Alert variant="info" title="Checking for problems..." isInline isPlain>
+      <Alert component="p" variant="info" title="Checking for problems..." isInline isPlain>
         <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
           <FlexItem><Spinner size="sm" aria-label="Diagnosing" /></FlexItem>
           <FlexItem>Running diagnostics on the cluster...</FlexItem>
@@ -166,7 +161,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
 
   if (fixResult) {
     return (
-      <Alert
+      <Alert component="p"
         variant={fixResult.success ? "success" : "danger"}
         title={fixResult.message}
         isInline
@@ -182,7 +177,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
 
   if (fixError) {
     return (
-      <Alert variant="danger" title="Fix action failed" isInline>
+      <Alert component="p" variant="danger" title="Fix action failed" isInline>
         {fixError}
       </Alert>
     );
@@ -190,7 +185,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
 
   if (!topProblem) {
     return (
-      <Alert
+      <Alert component="p"
         variant={timedOut ? "warning" : "info"}
         title={timedOut ? "Reconciliation appears stuck" : "Taking longer than usual"}
         isInline
@@ -212,7 +207,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <Alert variant={alertVariant} title={topProblem.title} isInline
+        <Alert component="p" variant={alertVariant} title={topProblem.title} isInline
           customIcon={severityIcon(topProblem.severity)}
         >
           <Stack hasGutter>
@@ -374,7 +369,7 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
       }
       setFixResult(res);
     } catch (e) {
-      setFixError(e instanceof Error ? e.message : "Fix action failed");
+      setFixError(toApiError(e, "Fix action failed").message);
     } finally {
       setFixLoading(false);
       setFixConfirmProblem(null);
@@ -527,7 +522,7 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
               </Content>
             </StackItem>
             <StackItem>
-              <Alert
+              <Alert component="p"
                 variant="warning"
                 title="This action will modify resources on the shared cluster."
                 isInline

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Content, ExpandableSection, Flex, FlexItem, Label, Tooltip } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
 import type { DashboardDevImage } from "../types";
+import { CopyableText } from "./CopyableText";
 
 function componentName(container: string): string {
   if (container === "rhods-dashboard") return "Dashboard";
@@ -52,7 +53,7 @@ export const DashboardImages: React.FC<{ images: DashboardDevImage[] }> = ({ ima
                   </Content>
                   <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} className="pf-v6-u-mt-xs">
                     <FlexItem><Label isCompact color={current.tag === "main" || current.tag.startsWith("pr-") ? "blue" : "grey"}>{build}</Label></FlexItem>
-                    {current.digest && <FlexItem><Tooltip content={current.digest}><Content component="small"><code>{current.digest.slice(0, 19)}…</code></Content></Tooltip></FlexItem>}
+                    {current.digest && <FlexItem><Content component="small"><CopyableText text={`${current.digest.slice(0, 19)}…`} value={current.digest} what="image digest" code /></Content></FlexItem>}
                   </Flex>
                 </Td>
                 <Td dataLabel="Status">

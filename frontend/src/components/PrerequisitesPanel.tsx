@@ -71,7 +71,7 @@ const IDMSInstructions: React.FC = () => (
       </List>
     </StackItem>
     <StackItem>
-      <Alert
+      <Alert component="p"
         variant="info"
         title="Requires OCM write access"
         isInline
@@ -161,7 +161,7 @@ export const SetupModal: React.FC<{
 
           {pullSecretReady && idmsReady && (
             <StackItem>
-              <Alert
+              <Alert component="p"
                 variant="success"
                 title="All prerequisites are met"
                 isInline
@@ -197,7 +197,7 @@ export const PrerequisitesBanner: React.FC<PrerequisitesPanelProps & { onOpenSet
   if (!idmsReady) missing.push('Image Mirror');
 
   return (
-    <Alert
+    <Alert component="p"
       variant="warning"
       title="One-time cluster setup required"
       isInline

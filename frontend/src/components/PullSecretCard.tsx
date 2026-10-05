@@ -13,19 +13,16 @@ import {
   Icon,
   InputGroup,
   InputGroupItem,
-  InputGroupText,
   Label,
   Stack,
   StackItem,
   TextInput,
 } from "@patternfly/react-core";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
 import KeyIcon from "@patternfly/react-icons/dist/esm/icons/key-icon";
 import type { OperationResponse, PullSecretInfo } from "../types";
-import { createPullSecret, testPullSecret } from "../services/api";
+import { createPullSecret, testPullSecret, toApiError } from "../services/api";
 
 const isValidBase64Auth = (value: string): boolean => {
   const trimmed = value.trim();
@@ -42,26 +39,6 @@ interface PullSecretCardProps {
   pullSecret: PullSecretInfo;
   onStatusRefresh?: () => void;
   canMutate?: boolean;
-}
-
-function existsLabel(exists: boolean) {
-  return exists ? (
-    <Label color="green" icon={<CheckCircleIcon />}>
-      Ready
-    </Label>
-  ) : (
-    <Label color="red" icon={<ExclamationCircleIcon />}>
-      Missing
-    </Label>
-  );
-}
-
-function cardStatusIcon(ok: boolean) {
-  return (
-    <Icon status={ok ? "success" : "danger"}>
-      {ok ? <CheckCircleIcon /> : <ExclamationCircleIcon />}
-    </Icon>
-  );
 }
 
 export const PullSecretCard: React.FC<PullSecretCardProps> = ({
@@ -89,12 +66,12 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
         onStatusRefresh?.();
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed";
+      const err = toApiError(e, "Failed to save the pull secret");
       setAuthResult({
         success: false,
-        message: msg.includes("403")
+        message: err.status === 403
           ? "You don't have permission to create secrets in kube-system"
-          : msg,
+          : err.message,
         logs: [],
       });
     } finally {
@@ -111,7 +88,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
     } catch (e) {
       setTestResult({
         success: false,
-        message: e instanceof Error ? e.message : "Test failed",
+        message: toApiError(e, "Test failed").message,
         logs: [],
       });
     } finally {
@@ -183,7 +160,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
                 </StackItem>
                 {testResult && (
                   <StackItem>
-                    <Alert
+                    <Alert component="p"
                       variant={testResult.success ? "success" : "danger"}
                       title={testResult.success ? "Valid" : "Invalid"}
                       isInline
@@ -289,7 +266,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
 
             {authResult && (
               <StackItem>
-                <Alert
+                <Alert component="p"
                   variant={authResult.success ? "success" : "danger"}
                   title={authResult.message}
                   isInline
