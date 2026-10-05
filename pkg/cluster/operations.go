@@ -1262,14 +1262,19 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 	}
 
 	// --- Step 6: cleanup_webhooks ---
+	// Only configurations that can no longer be served are removed; operand
+	// webhooks such as KServe's keep serving while the operator is reinstalled.
 	emit(UpdateStepEvent{Step: "cleanup_webhooks", Status: "running", Message: "Cleaning up stale webhooks..."})
-	cleanedCount, webhookWarnings := cleanupStaleWebhooks(c)
-	logs = append(logs, fmt.Sprintf("Removed %d stale webhook configurations", cleanedCount))
+	removedWebhooks, webhookWarnings := removeStaleWebhooks(c)
+	logs = append(logs, fmt.Sprintf("Removed %d stale webhook configurations", len(removedWebhooks)))
+	for _, r := range removedWebhooks {
+		logs = append(logs, "  Removed "+r)
+	}
 	for _, w := range webhookWarnings {
 		slog.Warn("stale webhook cleanup issue", "detail", w)
 		logs = append(logs, fmt.Sprintf("Warning: %s", w))
 	}
-	emit(UpdateStepEvent{Step: "cleanup_webhooks", Status: "success", Message: fmt.Sprintf("Removed %d stale webhooks", cleanedCount)})
+	emit(UpdateStepEvent{Step: "cleanup_webhooks", Status: "success", Message: fmt.Sprintf("Removed %d stale webhooks", len(removedWebhooks))})
 
 	// --- Step 6b: cleanup_stale_component_crs ---
 	// After EA↔GA transitions, component CRs can get stuck with finalizers
@@ -1543,185 +1548,6 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 		Message: "Reinstall to stable initiated. OLM is installing the stable operator. This may take several minutes.",
 		Logs:    logs,
 	}, nil
-}
-
-func cleanupStaleWebhooks(c *Client) (int, []string) {
-	count := 0
-	var warnings []string
-
-	// Clean validating webhook configurations
-	vwhPath := clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", "")
-	body, _, err := c.get(vwhPath)
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list validating webhooks: %v", err))
-	} else {
-		var result map[string]interface{}
-		if unmarshalErr := json.Unmarshal(body, &result); unmarshalErr != nil {
-			warnings = append(warnings, fmt.Sprintf("failed to parse validating webhooks response: %v", unmarshalErr))
-		} else {
-			items, _ := result["items"].([]interface{})
-			for _, item := range items {
-				obj, _ := item.(map[string]interface{})
-				meta, _ := obj["metadata"].(map[string]interface{})
-				name, _ := meta["name"].(string)
-				labels, _ := meta["labels"].(map[string]interface{})
-
-				if isRHOAIWebhook(name, labels) {
-					delPath := vwhPath + "/" + name
-					_, delErr := c.delete(delPath)
-					if delErr != nil {
-						warnings = append(warnings, fmt.Sprintf("failed to delete validating webhook %s: %v", name, delErr))
-					} else {
-						count++
-					}
-				}
-			}
-		}
-	}
-
-	// Clean mutating webhook configurations
-	mwhPath := clusterPath("admissionregistration.k8s.io/v1", "mutatingwebhookconfigurations", "")
-	body, _, err = c.get(mwhPath)
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list mutating webhooks: %v", err))
-	} else {
-		var result map[string]interface{}
-		if unmarshalErr := json.Unmarshal(body, &result); unmarshalErr != nil {
-			warnings = append(warnings, fmt.Sprintf("failed to parse mutating webhooks response: %v", unmarshalErr))
-		} else {
-			items, _ := result["items"].([]interface{})
-			for _, item := range items {
-				obj, _ := item.(map[string]interface{})
-				meta, _ := obj["metadata"].(map[string]interface{})
-				name, _ := meta["name"].(string)
-				labels, _ := meta["labels"].(map[string]interface{})
-
-				if isRHOAIWebhook(name, labels) {
-					delPath := mwhPath + "/" + name
-					_, delErr := c.delete(delPath)
-					if delErr != nil {
-						warnings = append(warnings, fmt.Sprintf("failed to delete mutating webhook %s: %v", name, delErr))
-					} else {
-						count++
-					}
-				}
-			}
-		}
-	}
-
-	return count, warnings
-}
-
-// deleteStaleWebhooksOnly removes only RHOAI webhook configurations whose backing
-// service no longer exists. Unlike cleanupStaleWebhooks (which removes all RHOAI
-// webhooks for the Reinstall flow), this function is safe for the diagnostics
-// auto-fix path because it preserves webhooks that are still actively serving.
-func deleteStaleWebhooksOnly(c *Client) (int, []string) {
-	count := 0
-	var warnings []string
-
-	// Clean validating webhook configurations
-	vwhPath := clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", "")
-	body, _, err := c.get(vwhPath)
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list validating webhooks: %v", err))
-	} else {
-		var result map[string]interface{}
-		if unmarshalErr := json.Unmarshal(body, &result); unmarshalErr != nil {
-			warnings = append(warnings, fmt.Sprintf("failed to parse validating webhooks response: %v", unmarshalErr))
-		} else {
-			items, _ := result["items"].([]interface{})
-			for _, item := range items {
-				obj, _ := item.(map[string]interface{})
-				meta, _ := obj["metadata"].(map[string]interface{})
-				name, _ := meta["name"].(string)
-				labels, _ := meta["labels"].(map[string]interface{})
-
-				if isRHOAIWebhook(name, labels) && isWebhookStale(c, obj) {
-					delPath := vwhPath + "/" + name
-					_, delErr := c.delete(delPath)
-					if delErr != nil {
-						warnings = append(warnings, fmt.Sprintf("failed to delete validating webhook %s: %v", name, delErr))
-					} else {
-						count++
-					}
-				}
-			}
-		}
-	}
-
-	// Clean mutating webhook configurations
-	mwhPath := clusterPath("admissionregistration.k8s.io/v1", "mutatingwebhookconfigurations", "")
-	body, _, err = c.get(mwhPath)
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list mutating webhooks: %v", err))
-	} else {
-		var result map[string]interface{}
-		if unmarshalErr := json.Unmarshal(body, &result); unmarshalErr != nil {
-			warnings = append(warnings, fmt.Sprintf("failed to parse mutating webhooks response: %v", unmarshalErr))
-		} else {
-			items, _ := result["items"].([]interface{})
-			for _, item := range items {
-				obj, _ := item.(map[string]interface{})
-				meta, _ := obj["metadata"].(map[string]interface{})
-				name, _ := meta["name"].(string)
-				labels, _ := meta["labels"].(map[string]interface{})
-
-				if isRHOAIWebhook(name, labels) && isWebhookStale(c, obj) {
-					delPath := mwhPath + "/" + name
-					_, delErr := c.delete(delPath)
-					if delErr != nil {
-						warnings = append(warnings, fmt.Sprintf("failed to delete mutating webhook %s: %v", name, delErr))
-					} else {
-						count++
-					}
-				}
-			}
-		}
-	}
-
-	return count, warnings
-}
-
-// isRHOAIWebhook checks whether a webhook configuration belongs to the RHOAI operator
-// by inspecting the olm.owner label and the resource name.
-func isRHOAIWebhook(name string, labels map[string]interface{}) bool {
-	if labels != nil {
-		if ownerStr, ok := labels["olm.owner"].(string); ok {
-			if strings.Contains(ownerStr, "rhods") || strings.Contains(ownerStr, "opendatahub") {
-				return true
-			}
-		}
-	}
-	if strings.Contains(name, "opendatahub") || strings.Contains(name, "rhods") {
-		return true
-	}
-	return false
-}
-
-// isWebhookStale checks whether a webhook's backing service exists.
-// A webhook is stale if its service has been deleted (e.g., after an operator uninstall).
-func isWebhookStale(c *Client, webhookObj map[string]interface{}) bool {
-	webhooks, _ := webhookObj["webhooks"].([]interface{})
-	for _, wh := range webhooks {
-		whMap, _ := wh.(map[string]interface{})
-		clientConfig, _ := whMap["clientConfig"].(map[string]interface{})
-		svcRef, _ := clientConfig["service"].(map[string]interface{})
-		if svcRef == nil {
-			continue
-		}
-		svcName, _ := svcRef["name"].(string)
-		svcNS, _ := svcRef["namespace"].(string)
-		if svcName == "" || svcNS == "" {
-			continue
-		}
-		svcPath := fmt.Sprintf("/api/v1/namespaces/%s/services/%s", svcNS, svcName)
-		_, _, err := c.get(svcPath)
-		if err != nil && IsK8sError(err, 404) {
-			return true
-		}
-	}
-	return false
 }
 
 // cleanupStuckComponentCRs finds component CRs that have a deletionTimestamp
