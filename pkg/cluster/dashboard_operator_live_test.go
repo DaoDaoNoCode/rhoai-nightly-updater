@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -65,13 +66,26 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 	results := make(chan checked, len(images))
 	for _, image := range images {
 		go func(imageRepo, component string) {
-			main, found, err := resolveDashboardBuild(context.Background(), imageRepo, "main")
+			// Both flavors of "latest main" must exist: the default RHOAI build
+			// (odh-stable) and the OpenShift CI build (main).
+			main, _, found, err := resolveDashboardBuildTags(context.Background(), imageRepo, dashboardBuildTags("main", 0, DashboardFlavorRHOAI)[:1])
 			if err == nil && !found {
-				err = fmt.Errorf("main image missing")
+				err = fmt.Errorf("odh-stable image missing")
+			}
+			if err == nil {
+				_, _, found, err = resolveDashboardBuildTags(context.Background(), imageRepo, dashboardBuildTags("main", 0, DashboardFlavorODH))
+				if err == nil && !found {
+					err = fmt.Errorf("main image missing")
+				}
 			}
 			prFound := false
 			if err == nil && pr != "" {
-				_, prFound, err = resolveDashboardBuild(context.Background(), imageRepo, "pr-"+pr)
+				n, _ := strconv.Atoi(pr)
+				var tag string
+				_, tag, prFound, err = resolveDashboardBuildTags(context.Background(), imageRepo, dashboardBuildTags("pr", n, DashboardFlavorRHOAI))
+				if prFound {
+					component += " (" + tag + ")"
+				}
 			}
 			results <- checked{component, main, prFound, err}
 		}(image.Repository, image.Deployment+"/"+image.Container)
@@ -86,7 +100,7 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 		if r.prFound {
 			prCount++
 		}
-		t.Logf("%s: main verified; PR image available=%v", r.component, r.prFound)
+		t.Logf("%s: odh-stable and main verified; PR image available=%v", r.component, r.prFound)
 	}
 	t.Logf("%d installed dashboard containers verified; %d have the requested PR build", len(images), prCount)
 	if pr != "" && prCount == 0 {

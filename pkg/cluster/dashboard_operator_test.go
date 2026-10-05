@@ -28,6 +28,17 @@ type dashboardDevFixture struct {
 	conflicts        map[string]int
 	onConflict       func(*dashboardDeployment)
 	containerPatches map[string][][]string
+	// pods are returned for namespace pod lists without the operator selector.
+	pods []map[string]interface{}
+	// failOperatorPatch makes every dashboard-operator patch fail with this status.
+	failOperatorPatch int
+	// operatorConflicts makes the next N dashboard-operator patches conflict.
+	operatorConflicts int
+	podListCalls      int
+	// dashboardDeleting gives the Dashboard CR a deletionTimestamp.
+	dashboardDeleting bool
+	// readyOnResume reports the operator Ready as soon as it is scaled up.
+	readyOnResume bool
 }
 
 func dashboardFixtureDeployment(name, container, image, owner string) dashboardDeployment {
@@ -61,6 +72,12 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 		switch name {
 		case dashboardOperatorName:
 			json.NewEncoder(w).Encode(f.operator)
+		case "dashboards":
+			deletion := ""
+			if f.dashboardDeleting {
+				deletion = `,"deletionTimestamp":"2026-10-05T10:00:00Z"`
+			}
+			io.WriteString(w, `{"items":[{"metadata":{"name":"default-dashboard"`+deletion+`}}]}`)
 		case "deployments", "":
 			items := []dashboardDeployment{}
 			for _, d := range f.workloads {
@@ -68,7 +85,14 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
 		case "pods":
-			if f.operatorPods {
+			if !strings.Contains(r.URL.RawQuery, "labelSelector") {
+				f.podListCalls++
+				items := f.pods
+				if items == nil {
+					items = []map[string]interface{}{}
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+			} else if f.operatorPods {
 				io.WriteString(w, `{"items":[{"metadata":{"name":"still-running"}}]}`)
 			} else {
 				io.WriteString(w, `{"items":[]}`)
@@ -77,7 +101,8 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			if d, ok := f.workloads[name]; ok {
 				json.NewEncoder(w).Encode(d)
 			} else {
-				io.WriteString(w, `{}`)
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
 			}
 		}
 		return
@@ -97,13 +122,38 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `{"kind":"Status","message":"forbidden"}`)
 			return
 		}
-		f.operator.Spec.Replicas = &replicas
+		if f.failOperatorPatch != 0 {
+			w.WriteHeader(f.failOperatorPatch)
+			io.WriteString(w, `{"kind":"Status","status":"Failure","message":"injected"}`)
+			return
+		}
 		metadata := patch["metadata"].(map[string]interface{})
-		ann := metadata["annotations"].(map[string]interface{})[dashboardDevAnnotation]
-		if ann == nil {
-			delete(f.operator.Metadata.Annotations, dashboardDevAnnotation)
-		} else {
-			f.operator.Metadata.Annotations[dashboardDevAnnotation] = ann.(string)
+		if f.operatorConflicts > 0 {
+			f.operatorConflicts--
+			f.operator.Metadata.ResourceVersion += "-next"
+			w.WriteHeader(http.StatusConflict)
+			io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"Conflict","message":"object has been modified"}`)
+			return
+		}
+		if version, ok := metadata["resourceVersion"].(string); ok && version != f.operator.Metadata.ResourceVersion {
+			w.WriteHeader(http.StatusConflict)
+			io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"Conflict","message":"stale resourceVersion"}`)
+			return
+		}
+		f.operator.Spec.Replicas = &replicas
+		if f.operator.Metadata.Annotations == nil {
+			f.operator.Metadata.Annotations = map[string]string{}
+		}
+		for key, value := range metadata["annotations"].(map[string]interface{}) {
+			if value == nil {
+				delete(f.operator.Metadata.Annotations, key)
+			} else {
+				f.operator.Metadata.Annotations[key] = value.(string)
+			}
+		}
+		f.operator.Metadata.ResourceVersion += "+"
+		if f.readyOnResume && replicas > 0 {
+			f.operator.Status.Replicas, f.operator.Status.UpdatedReplicas, f.operator.Status.ReadyReplicas = replicas, replicas, replicas
 		}
 		json.NewEncoder(w).Encode(f.operator)
 		return
@@ -134,6 +184,25 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusConflict)
 			io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"stale resourceVersion"}`)
 			return
+		}
+		if uid, ok := metadata["uid"].(string); ok && uid != d.Metadata.UID {
+			w.WriteHeader(http.StatusConflict)
+			io.WriteString(w, `{"kind":"Status","reason":"Conflict","message":"uid precondition failed"}`)
+			return
+		}
+		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
+			merged := map[string]string{}
+			for k, v := range d.Metadata.Annotations {
+				merged[k] = v
+			}
+			for k, v := range annotations {
+				if v == nil {
+					delete(merged, k)
+				} else {
+					merged[k] = v.(string)
+				}
+			}
+			d.Metadata.Annotations = merged
 		}
 	}
 	if spec, ok := patch["spec"].(map[string]interface{}); ok {
@@ -311,7 +380,8 @@ func TestDashboardMainDiscoversOwnedComponentsAndRecoversAfterRestart(t *testing
 	if f.workloads["unrelated"].Spec.Template.Spec.Containers[0].Image != "release-host" || f.workloads["proxy"].Spec.Template.Spec.Containers[0].Image != "release-proxy" {
 		t.Fatal("changed uncontrolled or infrastructure images")
 	}
-	if got := f.workloads["future-workload"].Spec.Template.Spec.Containers[0].Image; !strings.Contains(got, "odh-mod-arch-future:main@sha256:") {
+	// The default RHOAI flavor deploys the Konflux odh-stable build of main.
+	if got := f.workloads["future-workload"].Spec.Template.Spec.Containers[0].Image; !strings.Contains(got, "odh-mod-arch-future:odh-stable@sha256:") {
 		t.Fatalf("future module not discovered: %s", got)
 	}
 	// Re-reading persisted session data must retain even nonstandard container names.
@@ -329,7 +399,7 @@ func TestDashboardMainDiscoversOwnedComponentsAndRecoversAfterRestart(t *testing
 		t.Fatal("session retained after successful revert")
 	}
 	// Images remain until the controller reconciles; the tool only resumes it.
-	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":main@") {
+	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":odh-stable@") {
 		t.Fatal("revert unexpectedly patched image directly")
 	}
 }
@@ -344,7 +414,7 @@ func TestDashboardPRSkipsUnbuiltComponents(t *testing.T) {
 	if f.workloads["notebooks-ui"].Spec.Template.Spec.Containers[0].Image != "release-notebooks" {
 		t.Fatal("unbuilt component patched")
 	}
-	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":pr-123@") {
+	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":odh-pr-123@") {
 		t.Fatal("host PR not patched")
 	}
 	var state types.DashboardState
@@ -396,7 +466,7 @@ func TestDashboardPreflightFailuresDoNotPauseOrPatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockDashboardRegistry(t, map[string]int{"odh-mod-arch-notebooks": tc.status})
 			f, c := newDashboardDevFixture(t)
-			result, err := deployDashboardBuild(c, tc.mode, 123)
+			result, err := deployDashboardBuild(c, tc.mode, 123, "")
 			if err != nil || result.Success || len(f.writes) > 0 {
 				t.Fatalf("result=%+v err=%v writes=%v", result, err, f.writes)
 			}

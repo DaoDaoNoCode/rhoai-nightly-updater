@@ -303,6 +303,17 @@ type DashboardState struct {
 	SchedulingFailureReason string              `json:"schedulingFailureReason,omitempty"`
 	CanAssistRollout        bool                `json:"canAssistRollout"`
 	DashboardURL            string              `json:"dashboardURL,omitempty"`
+	// Override describes a Dashboard Dev session or an otherwise paused
+	// dashboard-operator (who, when, what, and whether RHOAI changed since).
+	Override *DashboardOverride `json:"override,omitempty"`
+	// Flavor is the build flavor of the active session: "rhoai" or "odh".
+	Flavor           string   `json:"flavor,omitempty"`
+	DefaultFlavor    string   `json:"defaultFlavor,omitempty"`
+	AvailableFlavors []string `json:"availableFlavors,omitempty"`
+	// RolloutStuck is true when a Dashboard Dev workload reports the
+	// ProgressDeadlineExceeded condition; StuckReason names the workload and cause.
+	RolloutStuck bool   `json:"rolloutStuck"`
+	StuckReason  string `json:"stuckReason,omitempty"`
 }
 
 type DashboardDevImage struct {
@@ -317,11 +328,91 @@ type DashboardDevImage struct {
 	MatchesTarget bool   `json:"matchesTarget"`
 	WorkloadUID   string `json:"-"`
 	OwnerUID      string `json:"-"`
+	// TargetSource is what the session asked this container to run: "pr",
+	// "main" or "baseline" (no build for the target; release image).
+	TargetSource string `json:"targetSource,omitempty"`
+	TargetTag    string `json:"targetTag,omitempty"`
+	// Running classifies CurrentImage: "release" (operator default), "pr",
+	// "main" or "other"; RunningPR and Flavor ("rhoai"/"odh") describe PR/main builds.
+	Running       string `json:"running,omitempty"`
+	RunningPR     int    `json:"runningPR,omitempty"`
+	Flavor        string `json:"flavor,omitempty"`
+	BaselineImage string `json:"baselineImage,omitempty"`
+	// Rollout diagnostics, from the Deployment's Progressing condition and its
+	// newest not-ready pod.
+	RolloutStuck   bool   `json:"rolloutStuck,omitempty"`
+	RolloutMessage string `json:"rolloutMessage,omitempty"`
+	WaitingReason  string `json:"waitingReason,omitempty"`
+	WaitingMessage string `json:"waitingMessage,omitempty"`
+	Restarts       int    `json:"restarts,omitempty"`
+	PodName        string `json:"podName,omitempty"`
+}
+
+// DashboardOverride summarizes a paused dashboard-operator. It is cheap to
+// compute (one read of the dashboard-operator Deployment) so any page can show it.
+type DashboardOverride struct {
+	// Active is true while the dashboard-operator is paused or a Dashboard Dev
+	// session is recorded; the dashboard then does not follow RHOAI updates.
+	Active         bool `json:"active"`
+	OperatorPaused bool `json:"operatorPaused"`
+	// SessionRecorded is false when the operator was paused outside the tool
+	// or the session annotation was lost; SessionError explains a corrupt one.
+	SessionRecorded bool   `json:"sessionRecorded"`
+	SessionError    string `json:"sessionError,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	PRNumber        int    `json:"prNumber,omitempty"`
+	Flavor          string `json:"flavor,omitempty"`
+	StartedAt       string `json:"startedAt,omitempty"`
+	StartedBy       string `json:"startedBy,omitempty"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
+	UpdatedBy       string `json:"updatedBy,omitempty"`
+	// ReleaseVersionAtStart is the platform version stamped on the
+	// dashboard-operator when the session started; ReleaseVersion is the current one.
+	ReleaseVersionAtStart string `json:"releaseVersionAtStart,omitempty"`
+	ReleaseVersion        string `json:"releaseVersion,omitempty"`
+	// Stale is true when RHOAI was updated while paused: the operator would
+	// now deploy different images than when the session started.
+	Stale        bool     `json:"stale"`
+	StaleReasons []string `json:"staleReasons,omitempty"`
+	// DashboardDeleting is true when a Dashboard CR is being deleted while the
+	// operator is paused: its finalizer waits until the operator resumes.
+	DashboardDeleting bool `json:"dashboardDeleting"`
+	// Warnings are user-facing explanations of the risks above.
+	Warnings   []string                     `json:"warnings,omitempty"`
+	Components []DashboardOverrideComponent `json:"components,omitempty"`
+	LastAction *DashboardDevAction          `json:"lastAction,omitempty"`
+}
+
+// DashboardOverrideComponent is one container a session targets.
+type DashboardOverrideComponent struct {
+	Deployment string `json:"deployment"`
+	Container  string `json:"container"`
+	Image      string `json:"image,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Tag        string `json:"tag,omitempty"`
+}
+
+// DashboardDevAction records the last Dashboard Dev deploy or revert start
+// ("deploy-pr", "deploy-main" or "revert"); At is server time (RFC 3339, UTC).
+// The outcome is in the operation response and the activity log.
+type DashboardDevAction struct {
+	Action string `json:"action"`
+	By     string `json:"by"`
+	At     string `json:"at"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // DeployPRRequest is the JSON body for the POST /api/dashboard/deploy-pr endpoint.
 type DeployPRRequest struct {
 	PR int `json:"pr"`
+	// Flavor selects the dashboard build: "rhoai" (Konflux, BUILD_MODE=RHOAI,
+	// the default) or "odh" (OpenShift CI). The MLflow endpoint ignores it.
+	Flavor string `json:"flavor,omitempty"`
+}
+
+// DeployMainRequest is the optional JSON body for POST /api/dashboard/deploy-main.
+type DeployMainRequest struct {
+	Flavor string `json:"flavor,omitempty"`
 }
 
 // ResourcesStatus reports the state of test infrastructure.
