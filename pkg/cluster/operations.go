@@ -2084,10 +2084,12 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}
 	}
 
-	// Validate base64 encoding
+	// Validate base64 encoding. CRI-O reads the secret through
+	// containers/image, which decodes "auth" with base64.StdEncoding only
+	// (pkg/docker/config/config.go decodeDockerAuth) and rejects unpadded
+	// input. Accept an unpadded value but store its padded form.
 	decoded, err := base64.StdEncoding.DecodeString(auth)
 	if err != nil {
-		// Try URL-safe or raw encoding as fallback
 		decoded, err = base64.RawStdEncoding.DecodeString(auth)
 		if err != nil {
 			return &types.OperationResponse{
@@ -2097,6 +2099,8 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 				ErrorCode: "validation",
 			}, nil
 		}
+		auth = base64.StdEncoding.EncodeToString(decoded)
+		logs = append(logs, "Auth value was missing base64 padding; stored the padded form that CRI-O can decode")
 	}
 
 	// Validate it looks like username:password with both parts present
