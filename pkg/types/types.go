@@ -309,6 +309,9 @@ type ResourcesStatus struct {
 	MinIO           ResourceState   `json:"minio"`
 	MLflow          ResourceState   `json:"mlflow"`
 	PipelineServers []ResourceState `json:"pipelineServers"`
+	// UnmanagedPipelineProjects lists visible projects that already have a
+	// pipeline server this tool did not create. Setup is refused there.
+	UnmanagedPipelineProjects []string `json:"unmanagedPipelineProjects,omitempty"`
 }
 
 // ResourceState describes the deployment state of a single resource group.
@@ -320,6 +323,35 @@ type ResourceState struct {
 	APIRoute     string `json:"apiRoute,omitempty"`
 	UIRoute      string `json:"uiRoute,omitempty"`
 	CurrentImage string `json:"currentImage,omitempty"`
+	// Name is the object name when it is not fixed (pipeline server DSPA name).
+	Name string `json:"name,omitempty"`
+	// ManagedByTool is true when this tool created the resource. Teardown is
+	// offered only for managed resources.
+	ManagedByTool bool `json:"managedByTool"`
+	// Terminating is true while the resource is being deleted.
+	Terminating bool `json:"terminating,omitempty"`
+	// SetupBlockedReason explains why setup cannot run (for example a
+	// namespace that exists but was not created by this tool).
+	SetupBlockedReason string `json:"setupBlockedReason,omitempty"`
+	// TeardownBlockedReason explains why teardown is unavailable.
+	TeardownBlockedReason string `json:"teardownBlockedReason,omitempty"`
+	// WaitingReason is the pod-level reason the resource is not ready, such
+	// as ImagePullBackOff, CrashLoopBackOff or Unschedulable.
+	WaitingReason string `json:"waitingReason,omitempty"`
+	// TerminalError is true when the resource will not become ready without
+	// user action. Clients should stop fast polling.
+	TerminalError bool `json:"terminalError,omitempty"`
+	// DataPVCs lists the PersistentVolumeClaims (and so the data) that
+	// teardown deletes.
+	DataPVCs []string `json:"dataPVCs,omitempty"`
+	// PROverride is true when an MLflow PR image deployed by this tool (or an
+	// odh-pr-N image) is active, independent of readiness.
+	PROverride bool `json:"prOverride,omitempty"`
+	// PRNumber is the MLflow PR number of the active override, when known.
+	PRNumber int `json:"prNumber,omitempty"`
+	// RevertImage is the image Revert restores. Empty with PROverride set
+	// means the operator default (spec.image.image removed).
+	RevertImage string `json:"revertImage,omitempty"`
 }
 
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.

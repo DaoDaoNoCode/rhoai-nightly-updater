@@ -84,10 +84,15 @@ objects:
       - apiGroups: ["admissionregistration.k8s.io"]
         resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
         verbs: ["get", "list", "delete"]
-      # Patch CRDs during rollback
+      # Patch CRDs during rollback; list them to find dead conversion
+      # webhooks before deleting a namespace (MinIO teardown)
       - apiGroups: ["apiextensions.k8s.io"]
         resources: ["customresourcedefinitions"]
-        verbs: ["get", "patch"]
+        verbs: ["get", "list", "patch"]
+      # Check that a conversion webhook Service has ready endpoints
+      - apiGroups: ["discovery.k8s.io"]
+        resources: ["endpointslices"]
+        verbs: ["list"]
       # Manage DSC (read + create for fresh installs)
       - apiGroups: ["datasciencecluster.opendatahub.io"]
         resources: ["datascienceclusters"]
