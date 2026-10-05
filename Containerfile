@@ -7,8 +7,9 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-# Type errors or failing frontend tests stop the build, so CI never publishes them.
-RUN npm run typecheck && npm test
+# Type errors, lint errors or failing frontend tests stop the build, so CI
+# never publishes them.
+RUN npm run typecheck && npm run lint && npm test
 RUN NODE_OPTIONS="--max-old-space-size=2048" npm run build
 
 # golang:1.27.1-alpine

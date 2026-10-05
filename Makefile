@@ -131,8 +131,8 @@ lint-go:  ## Run Go linters (gofmt, go vet, golangci-lint v2 with .golangci.yml)
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "Install golangci-lint v2: https://golangci-lint.run/docs/welcome/install/local/"; exit 1; }
 	golangci-lint run ./...
 
-lint-frontend:  ## Type-check (and lint, if configured) the frontend
-	cd frontend && npm run typecheck && npm run lint --if-present
+lint-frontend:  ## Type-check and lint the frontend
+	cd frontend && npm run typecheck && npm run lint
 
 test: test-go test-frontend  ## Run all tests
 

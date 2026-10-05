@@ -1,6 +1,5 @@
 # golangci-lint v2 configuration (https://golangci-lint.run/docs/configuration/file/).
-# CI reports only issues introduced by the change under test
-# (--new-from-rev); `make lint-go` shows every issue.
+# CI and `make lint-go` fail on any issue; keep the tree at zero.
 version: "2"
 
 run:

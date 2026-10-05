@@ -40,15 +40,9 @@ go:
 golangci-lint:
   extends: .test
   image: $GOLANGCI_IMAGE
-  variables:
-    GIT_DEPTH: "0"
   script:
-    # Only issues introduced since the base are reported until the existing
-    # ones are cleaned up; then drop --new-from-rev.
-    - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
-      if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE="HEAD~1"; fi
-      golangci-lint run --new-from-rev="$BASE" ./...
+    # The tree is lint-clean: every issue fails the pipeline.
+    - golangci-lint run ./...
 
 frontend:
   extends: .test
@@ -61,7 +55,7 @@ frontend:
     - cd frontend
     - npm ci --cache .npm --prefer-offline
     - npm run typecheck
-    - npm run lint --if-present
+    - npm run lint
     - npm test
     - npm audit --omit=dev --audit-level=high
     - npm run build
@@ -100,7 +94,7 @@ build-main:
 # Manual trigger for any other branch → :<branch-slug>
 build-branch:
   extends: .kaniko-build
-  needs: [go, frontend]
+  needs: [go, golangci-lint, frontend]
   script:
     - >-
       /kaniko/executor
