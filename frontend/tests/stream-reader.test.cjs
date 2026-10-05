@@ -29,7 +29,7 @@ test('stream results distinguish rejection, disconnect, pending and terminal fai
       { name: 'empty stream', text: '', drop: true },
       { name: 'pending InstallPlan', text: event('verify_installplan', 'skipped', 'Pending') + event('operation_complete', 'success', 'Installation initiated'), success: true },
       { name: 'terminal failure', text: event('operation_complete', 'failed', 'Catalog validation failed'), success: false, error: /Catalog validation failed/ },
-      { name: 'session expired', contentType: 'text/html', text: 'Login', success: false, error: /Session expired/ },
+      { name: 'session expired', contentType: 'text/html', text: 'Login', success: false, error: /session has expired/i },
     ]) {
       global.fetch = async () => new Response(tc.text, { status: tc.status || 200, headers: { 'Content-Type': tc.contentType || 'text/event-stream' } });
       const actual = await new Promise((resolve) => streamSSE('/api/test', {}, () => {}, (success, error) => resolve({ success, error }), () => resolve({ drop: true })));

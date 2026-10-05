@@ -1,8 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import type { StatusResponse, UpdateStep } from "../types";
+import type { OperationStatusResponse, ServerOperation, StatusResponse, UpdateStep } from "../types";
 import {
   ApiError,
+  getOperation,
   getStatus,
   toApiError,
   type StreamDetachHandler,
@@ -11,6 +12,8 @@ import {
 } from "../services/api";
 import {
   BACKGROUND_POLL_MS,
+  OPERATION_POLL_BUSY_MS,
+  OPERATION_POLL_IDLE_MS,
   RECONCILE_POLL_FAST_MS,
   RECONCILE_POLL_FAST_UNTIL_MS,
   RECONCILE_POLL_MEDIUM_MS,
@@ -20,7 +23,7 @@ import {
   STREAM_MAX_MS,
 } from "../constants";
 import { usePolling } from "../hooks/usePolling";
-import { OPERATION_NAMES, STEP_SETS, stepLabel, type OperationKind, type ReconcileKind } from "../operationSteps";
+import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel, type OperationKind, type ReconcileKind } from "../operationSteps";
 import {
   initialOperationState,
   isRunning,
@@ -71,10 +74,31 @@ export interface ServerOperationSnapshot {
   steps: UpdateStep[];
   message?: string;
   errorCode?: string;
+  /** What the operation targets (image, reinstall target). */
+  detail?: string;
+  /** Who started it. */
+  user?: string;
+}
+
+/**
+ * What the backend reports about cluster operations (GET /api/operation):
+ * the one holding the mutation lock, started by anyone from any tab, and an
+ * operation a previous updater pod never finished.
+ */
+export interface ServerOperationState {
+  /** At least one answer arrived. */
+  loaded: boolean;
+  inProgress: boolean;
+  operation: ServerOperation | null;
+  interrupted: OperationStatusResponse["interrupted"] | null;
 }
 
 export interface OperationContextValue {
   state: OperationState;
+  /** The backend's view of the running operation (any user, any tab). */
+  server: ServerOperationState;
+  /** Poll GET /api/operation now (e.g. after a cluster_busy rejection). */
+  refreshServerOperation: () => void;
   run: OperationRun | null;
   /** True while a run has no result yet. Mutations should stay disabled. */
   running: boolean;
@@ -174,13 +198,76 @@ function outcomeAnnouncement(kind: OperationKind, outcome: OperationOutcome): { 
 interface AppStateProviderProps {
   /** Injected for tests. */
   fetchStatus?: (signal?: AbortSignal) => Promise<StatusResponse>;
+  /** Injected for tests. */
+  fetchOperation?: (signal?: AbortSignal) => Promise<OperationStatusResponse>;
+}
+
+/** How long after this tab's own run ended a matching server report is still that run. */
+const OWN_RUN_GRACE_MS = 15_000;
+
+/**
+ * True when a server-reported operation of `kind` is most likely this tab's
+ * own run that just ended (the lock is released right after the last
+ * event). A run the backend rejected (409 cluster_busy, 400...) never held
+ * the lock, so an operation reported after it belongs to someone else.
+ */
+export function isOwnRecentRun(run: OperationRun | null, kind: OperationKind | undefined, now: number): boolean {
+  if (!run || run.source !== "stream" || !run.endedAt || run.kind !== kind) return false;
+  if (run.outcome?.status === "failed" && run.outcome.rejected) return false;
+  return now - run.endedAt < OWN_RUN_GRACE_MS;
+}
+
+/**
+ * The ServerOperationSnapshot of a backend operation, for the streamed kinds
+ * only. The backend reports just the latest step, and steps run in order,
+ * so every earlier step of the pipeline is shown as done.
+ */
+export function snapshotFromServer(op: ServerOperation): ServerOperationSnapshot | null {
+  const kind = operationKindForServerType(op.type, op.target);
+  if (!kind) return null;
+  const startedAt = Date.parse(op.startedAt);
+  const steps: UpdateStep[] = [];
+  if (op.step) {
+    const defs = STEP_SETS[kind];
+    const index = defs.findIndex((d) => d.id === op.step);
+    for (let i = 0; i < index; i++) steps.push({ step: defs[i].id, status: "success", message: "", elapsedMs: 0 });
+    const status = op.stepStatus === "success" || op.stepStatus === "failed" || op.stepStatus === "skipped" ? op.stepStatus : "running";
+    steps.push({ step: op.step, status, message: op.message ?? "", elapsedMs: 0 });
+  }
+  return {
+    id: op.id,
+    kind,
+    startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
+    state: "running",
+    steps,
+    detail: op.target,
+    user: op.user,
+  };
+}
+
+/** The running operation named in a 409 cluster_busy body, if any. */
+export function busyOperationFrom(e: ApiError | undefined): ServerOperation | undefined {
+  const details = e?.details as { operation?: unknown } | undefined;
+  const op = details?.operation as Partial<ServerOperation> | undefined;
+  if (!op || typeof op !== "object" || typeof op.id !== "string" || typeof op.type !== "string") return undefined;
+  return {
+    id: op.id,
+    type: op.type,
+    label: typeof op.label === "string" ? op.label : op.type,
+    user: typeof op.user === "string" ? op.user : "",
+    startedAt: typeof op.startedAt === "string" ? op.startedAt : new Date().toISOString(),
+    target: typeof op.target === "string" ? op.target : undefined,
+    step: typeof op.step === "string" ? op.step : undefined,
+    stepStatus: typeof op.stepStatus === "string" ? op.stepStatus : undefined,
+    message: typeof op.message === "string" ? op.message : undefined,
+  };
 }
 
 /**
  * Owns the cluster status and the operator-operation lifecycle for the whole
  * app, so leaving the Dashboard page never aborts or forgets an operation.
  */
-export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProviderProps>> = ({ children, fetchStatus = getStatus }) => {
+export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProviderProps>> = ({ children, fetchStatus = getStatus, fetchOperation = getOperation }) => {
   const announce = useAnnounce();
 
   // --- Status ---------------------------------------------------------------
@@ -191,8 +278,10 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const statusRef = useRef<StatusResponse | null>(null);
   const latestStatusRequest = useRef(0);
   const fetchStatusRef = useRef(fetchStatus);
+  const fetchOperationRef = useRef(fetchOperation);
   useEffect(() => {
     fetchStatusRef.current = fetchStatus;
+    fetchOperationRef.current = fetchOperation;
   });
 
   // --- Operation ------------------------------------------------------------
@@ -342,6 +431,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
             errorCode: apiError?.errorCode,
             httpStatus: apiError?.status,
             rejected,
+            busyOperation: apiError?.errorCode === "cluster_busy" ? busyOperationFrom(apiError) : undefined,
           });
         }
       },
@@ -358,6 +448,9 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     // This tab's own stream is the richer source while it is open.
     if (isRunning(current) && current.source === "stream") return;
     const now = Date.now();
+    // The backend releases its lock just after the final event, so a poll
+    // right after this tab's own run can still report that run.
+    if (snapshot && isOwnRecentRun(current, snapshot.kind, now)) return;
     if (!snapshot) {
       if (isRunning(current) && current.source === "server") {
         dispatch({ type: "end", id: current.id, outcome: { status: "detached", reason: "server_lost", message: DETACH_MESSAGES.server_lost }, now });
@@ -372,7 +465,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     } else {
       if (snapshot.state !== "running") return; // finished before this tab saw it
       id = ++nextRunId.current;
-      dispatch({ type: "start", id, kind: snapshot.kind, source: "server", now: snapshot.startedAt, serverId: snapshot.id, steps: snapshot.steps });
+      dispatch({ type: "start", id, kind: snapshot.kind, source: "server", now: snapshot.startedAt, serverId: snapshot.id, steps: snapshot.steps, detail: snapshot.detail, user: snapshot.user });
     }
     if (snapshot.state === "succeeded") {
       dispatch({ type: "end", id, outcome: { status: "succeeded", message: snapshot.message || `${OPERATION_NAMES[snapshot.kind]} completed.` }, now });
@@ -380,6 +473,54 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       dispatch({ type: "end", id, outcome: { status: "failed", message: snapshot.message || `${OPERATION_NAMES[snapshot.kind]} failed.`, errorCode: snapshot.errorCode, rejected: false }, now });
     }
   }, []);
+
+  // --- Server-side operation (GET /api/operation) ---------------------------
+  const [server, setServer] = useState<ServerOperationState>({ loaded: false, inProgress: false, operation: null, interrupted: null });
+  const serverRef = useRef(server);
+  serverRef.current = server;
+
+  const applyServerOperation = useCallback((res: OperationStatusResponse) => {
+    const op = res.inProgress ? res.operation : null;
+    const run = stateRef.current.run;
+    const ownFinishedRun = !!op && isOwnRecentRun(run, snapshotFromServer(op)?.kind, Date.now());
+    const next: ServerOperationState = {
+      loaded: true,
+      inProgress: res.inProgress && !ownFinishedRun,
+      operation: ownFinishedRun ? null : op,
+      interrupted: res.interrupted ?? null,
+    };
+    serverRef.current = next;
+    setServer(next);
+    syncServerOperation(op && !ownFinishedRun ? snapshotFromServer(op) : null);
+  }, [syncServerOperation]);
+
+  const pollServerOperation = useCallback(async () => {
+    const current = stateRef.current.run;
+    // While this tab streams its own operation, the stream is the source.
+    if (isRunning(current) && current.source === "stream" && Date.now() - current.startedAt < STREAM_MAX_MS) return;
+    try {
+      applyServerOperation(await fetchOperationRef.current());
+    } catch {
+      // Keep the last answer: a failed poll says nothing about the cluster.
+    }
+  }, [applyServerOperation]);
+
+  const operationPoller = usePolling(pollServerOperation, {
+    delay: () => (serverRef.current.inProgress || isRunning(stateRef.current.run) ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
+    runImmediately: true,
+  });
+  const refreshServerOperation = useCallback(() => operationPoller.reset({ runNow: true }), [operationPoller]);
+
+  // After a run of this tab ends, look again soon: the lock is free by then,
+  // or a cluster_busy rejection named the operation that holds it.
+  useEffect(() => {
+    if (runId === undefined || !outcome) return;
+    if (outcome.status === "failed" && outcome.busyOperation) {
+      applyServerOperation({ inProgress: true, operation: outcome.busyOperation });
+    }
+    const id = setTimeout(() => operationPoller.reset({ runNow: true }), 1_500);
+    return () => clearTimeout(id);
+  }, [runId, outcome, applyServerOperation, operationPoller]);
 
   const dismissTimeout = useCallback(() => dispatch({ type: "dismissTimeout" }), []);
   const dismissFinished = useCallback(() => dispatch({ type: "dismissFinished" }), []);
@@ -401,6 +542,8 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const operationValue = useMemo<OperationContextValue>(
     () => ({
       state,
+      server,
+      refreshServerOperation,
       run: state.run,
       running: isRunning(state.run),
       phase: operationPhase(state),
@@ -409,7 +552,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       dismissTimeout,
       dismissFinished,
     }),
-    [state, start, syncServerOperation, dismissTimeout, dismissFinished],
+    [state, server, refreshServerOperation, start, syncServerOperation, dismissTimeout, dismissFinished],
   );
 
   return (

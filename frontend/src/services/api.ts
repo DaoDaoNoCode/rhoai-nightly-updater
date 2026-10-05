@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -31,7 +31,33 @@ export const CLIENT_ERROR_CODES = {
   unknown: 'unknown',
 } as const;
 
-const SESSION_EXPIRED_MESSAGE = 'Session expired. Please refresh the page to re-authenticate.';
+const SESSION_EXPIRED_MESSAGE = 'Your OpenShift session has expired. Sign in again to continue.';
+
+/**
+ * True when the error means the user's OpenShift session is gone: the
+ * backend's 401 session_expired (the API server rejected the user's token,
+ * pkg/api writeAuthError) or oauth-proxy's HTML sign-in page instead of JSON.
+ * Other 401s (for example the app's own ServiceAccount being rejected) are
+ * not the user's session and are shown as ordinary errors.
+ */
+export function isSessionExpired(e: unknown): boolean {
+  return isApiError(e) && e.errorCode === CLIENT_ERROR_CODES.sessionExpired;
+}
+
+type SessionListener = () => void;
+const sessionListeners = new Set<SessionListener>();
+
+/** Subscribe to "the session expired" (any API call got a 401). Returns the unsubscribe function. */
+export function onSessionExpired(listener: SessionListener): () => void {
+  sessionListeners.add(listener);
+  return () => sessionListeners.delete(listener);
+}
+
+/** Tell every subscriber once per error that the session is gone. */
+function reportIfSessionExpired(e: ApiError): ApiError {
+  if (isSessionExpired(e)) sessionListeners.forEach((l) => l());
+  return e;
+}
 
 /** Mirrors defaultErrorCode in pkg/api/handlers.go, for bodies without an errorCode. */
 function defaultErrorCode(status: number): string {
@@ -151,12 +177,12 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
     throw toApiError(e);
   }
   if (!resp.ok && !acceptStatuses?.includes(resp.status)) {
-    throw await parseErrorResponse(resp);
+    throw reportIfSessionExpired(await parseErrorResponse(resp));
   }
   const contentType = resp.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
     // oauth-proxy answers an expired session with its HTML sign-in page.
-    throw new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE });
+    throw reportIfSessionExpired(new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE }));
   }
   try {
     return await resp.json();
@@ -167,6 +193,16 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
 
 export function getStatus(signal?: AbortSignal): Promise<StatusResponse> {
   return request('/api/status', { signal });
+}
+
+/** The cluster operation holding the backend lock, if any (cheap; safe to poll). */
+export function getOperation(signal?: AbortSignal): Promise<OperationStatusResponse> {
+  return request('/api/operation', { signal });
+}
+
+/** Build and deployment-template information of the running updater. */
+export function getVersion(signal?: AbortSignal): Promise<VersionInfo> {
+  return request('/api/version', { signal });
 }
 
 export function updateOperator(image: string, dryRun: boolean): Promise<OperationResponse> {
@@ -238,8 +274,8 @@ export function getBuildExplorerContent(image: string, labels?: boolean, signal?
   return request(`/api/build-explorer/content?${params}`, { signal });
 }
 
-export function getDashboardState(): Promise<DashboardState> {
-  return request('/api/dashboard/state');
+export function getDashboardState(signal?: AbortSignal): Promise<DashboardState> {
+  return request('/api/dashboard/state', { signal });
 }
 
 export function deployPR(pr: number): Promise<OperationResponse> {
@@ -420,14 +456,14 @@ export function streamSSE(
   fetch(url, fetchOptions)
     .then(async (resp) => {
       if (!resp.ok) {
-        const apiError = await parseErrorResponse(resp);
+        const apiError = reportIfSessionExpired(await parseErrorResponse(resp));
         finishDone(false, apiError.message, apiError);
         return;
       }
 
       const contentType = resp.headers.get('content-type') || '';
       if (!contentType.includes('text/event-stream')) {
-        const apiError = new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE });
+        const apiError = reportIfSessionExpired(new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE }));
         finishDone(false, apiError.message, apiError);
         return;
       }
@@ -497,6 +533,18 @@ export function streamSSE(
 }
 
 /**
+ * Confirmations for operator operations. The backend refuses without them
+ * and changes nothing (errorCode dashboard_dev_active /
+ * downgrade_requires_confirmation).
+ */
+export interface OperatorOperationOptions {
+  /** End an active Dashboard Dev session (resume dashboard-operator) first. */
+  revertDashboardDev?: boolean;
+  /** Reinstall only: accept a target older than the installed operator. */
+  allowDowngrade?: boolean;
+}
+
+/**
  * Stream an update operation via SSE. Each event is an UpdateStep JSON object.
  * Returns an AbortController so the caller can stop listening.
  */
@@ -505,8 +553,11 @@ export function streamUpdate(
   onStep: (step: UpdateStep) => void,
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
+  options: OperatorOperationOptions = {},
 ): AbortController {
-  return streamSSE('/api/update/stream', { image }, onStep, onDone, onConnectionDrop);
+  const body: Record<string, unknown> = { image };
+  if (options.revertDashboardDev) body.revertDashboardDev = true;
+  return streamSSE('/api/update/stream', body, onStep, onDone, onConnectionDrop);
 }
 
 /**
@@ -520,30 +571,39 @@ export function streamReinstall(
   onStep: (step: UpdateStep) => void,
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
+  options: OperatorOperationOptions = {},
 ): AbortController {
-  return streamSSE(
-    '/api/rollback/stream',
-    { targetType, image, channel: channel || undefined },
-    onStep,
-    onDone,
-    onConnectionDrop,
-  );
+  const body: Record<string, unknown> = { targetType, image, channel: channel || undefined };
+  if (options.allowDowngrade) body.allowDowngrade = true;
+  if (options.revertDashboardDev) body.revertDashboardDev = true;
+  return streamSSE('/api/rollback/stream', body, onStep, onDone, onConnectionDrop);
 }
 
 /**
- * Stream a refresh operation via SSE. Each event is an UpdateStep JSON object.
+ * Stream a refresh (re-deploy the same operator version) via SSE.
  * Returns an AbortController so the caller can stop listening.
  */
 export function streamRefresh(
   onStep: (step: UpdateStep) => void,
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
+  options: OperatorOperationOptions = {},
 ): AbortController {
-  return streamSSE('/api/refresh/stream', null, onStep, onDone, onConnectionDrop);
+  const body = options.revertDashboardDev ? { revertDashboardDev: true } : null;
+  return streamSSE('/api/refresh/stream', body, onStep, onDone, onConnectionDrop);
 }
 
-export function assistRollout(): Promise<OperationResponse> {
-  return request('/api/assist-rollout', { method: 'POST' });
+/**
+ * Unblock stuck rollouts. With a target only that Deployment is changed.
+ * "Nothing to do" is a 422 with errorCode nothing_to_do, returned as a
+ * result rather than thrown.
+ */
+export function assistRollout(target?: { namespace: string; deployment: string }): Promise<OperationResponse> {
+  return request('/api/assist-rollout', {
+    method: 'POST',
+    body: target ? JSON.stringify(target) : undefined,
+    acceptStatuses: [422],
+  });
 }
 
 export function getDiagnostics(): Promise<DiagnosticResult> {

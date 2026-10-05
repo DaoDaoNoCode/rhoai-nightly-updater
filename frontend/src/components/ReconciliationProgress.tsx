@@ -9,6 +9,8 @@ import {
   Flex,
   FlexItem,
   Label,
+  List,
+  ListItem,
   Modal,
   ModalBody,
   ModalFooter,
@@ -23,12 +25,14 @@ import {
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
-import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import WrenchIcon from "@patternfly/react-icons/dist/esm/icons/wrench-icon";
 import { Link } from "react-router-dom";
 import type { StatusResponse, Problem, OperationResponse } from "../types";
-import { getDiagnostics, assistRollout, fixProblem, toApiError } from "../services/api";
+import { getDiagnostics, fixProblem, toApiError } from "../services/api";
 import { formatElapsed } from "../utils";
+import { describeServerOperation, usePermissions } from "../state/AppInfo";
+import { useOperation } from "../state/AppState";
+import { TooltipButton } from "./TooltipButton";
 
 export type { ReconcileKind as OperationType } from "../operationSteps";
 import type { ReconcileKind as OperationType } from "../operationSteps";
@@ -50,33 +54,23 @@ interface Step {
   description: string;
 }
 
+const STARTED_LABELS: Record<OperationType, string> = {
+  update: "Update applied",
+  refresh: "Re-deploy applied",
+  reinstall: "Reinstall applied",
+};
+
+/** OLM's side after the tool's steps: the CSV phases it moves through. */
 function buildSteps(operationType: OperationType): Step[] {
-  switch (operationType) {
-    case "reinstall":
-      return [
-        { id: "initiated", label: "Full uninstall/reinstall initiated", description: "CSV deleted; OLM will recreate the operator" },
-        { id: "waiting", label: "Resolving", description: "OLM is creating an InstallPlan (this may take several minutes for a full reinstall)" },
-        { id: "installing", label: "Installing", description: "Operator is being deployed" },
-        { id: "succeeded", label: "Complete", description: "Operator is running with updated images" },
-      ];
-    case "refresh":
-      return [
-        { id: "initiated", label: "Operator refresh initiated", description: "CSV deleted to trigger image refresh" },
-        { id: "waiting", label: "Resolving", description: "OLM is creating an InstallPlan" },
-        { id: "installing", label: "Installing", description: "Operator is being deployed" },
-        { id: "succeeded", label: "Complete", description: "Operator is running with updated images" },
-      ];
-    default:
-      return [
-        { id: "initiated", label: "Operation initiated", description: "Request submitted to the cluster" },
-        { id: "waiting", label: "Resolving", description: "OLM is creating an InstallPlan" },
-        { id: "installing", label: "Installing", description: "Operator is being deployed" },
-        { id: "succeeded", label: "Complete", description: "Operator is running with updated images" },
-      ];
-  }
+  return [
+    { id: "initiated", label: STARTED_LABELS[operationType], description: "The tool's steps are done; OLM takes over" },
+    { id: "waiting", label: "Resolving", description: "OLM creates an InstallPlan for the new CSV" },
+    { id: "installing", label: "Installing", description: "OLM deploys the operator" },
+    { id: "succeeded", label: "Operator running", description: "The CSV reached Succeeded" },
+  ];
 }
 
-const FAILED_STEP: Step = { id: "failed", label: "Failed", description: "Check pod logs for details" };
+const FAILED_STEP: Step = { id: "failed", label: "Failed", description: "OLM reports the CSV as Failed; Diagnostics shows why" };
 
 function phaseToStep(csvPhase: string): Phase {
   switch (csvPhase) {
@@ -112,18 +106,9 @@ interface StuckGuidanceCardProps {
   fixLoading: boolean;
   fixResult: OperationResponse | null;
   fixError: string | null;
+  /** Why a fix can't run now (permissions, another operation), or null. */
+  fixDisabledReason: string | null;
   onFix: (problem: Problem) => void;
-}
-
-function severityIcon(severity: string): React.ReactNode {
-  switch (severity) {
-    case "critical":
-      return <ExclamationCircleIcon color="var(--pf-t--global--color--status--danger--default)" />;
-    case "warning":
-      return <ExclamationTriangleIcon color="var(--pf-t--global--color--status--warning--default)" />;
-    default:
-      return <ExclamationTriangleIcon color="var(--pf-t--global--color--status--info--default)" />;
-  }
 }
 
 function severityToAlertVariant(severity: string): "danger" | "warning" | "info" {
@@ -137,6 +122,12 @@ function severityToAlertVariant(severity: string): "danger" | "warning" | "info"
   }
 }
 
+/** A fix result: nothing_to_do is information, not a failure (B2 contract). */
+export function fixResultVariant(result: OperationResponse): "success" | "info" | "danger" {
+  if (result.success) return "success";
+  return result.errorCode === "nothing_to_do" ? "info" : "danger";
+}
+
 const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
   timedOut,
   problems,
@@ -144,28 +135,23 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
   fixLoading,
   fixResult,
   fixError,
+  fixDisabledReason,
   onFix,
 }) => {
   const topProblem = problems.length > 0 ? problems[0] : null;
 
   if (diagLoading) {
     return (
-      <Alert component="p" variant="info" title="Checking for problems..." isInline isPlain>
-        <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-          <FlexItem><Spinner size="sm" aria-label="Diagnosing" /></FlexItem>
-          <FlexItem>Running diagnostics on the cluster...</FlexItem>
-        </Flex>
+      <Alert component="p" variant="info" title="Checking for problems..." isInline isPlain customIcon={<Spinner size="sm" aria-label="Diagnosing" />}>
+        Running read-only diagnostics on the cluster.
       </Alert>
     );
   }
 
   if (fixResult) {
     return (
-      <Alert component="p"
-        variant={fixResult.success ? "success" : "danger"}
-        title={fixResult.message}
-        isInline
-      >
+      <Alert component="p" variant={fixResultVariant(fixResult)} title={fixResult.message} isInline isLiveRegion>
+        {fixResult.errorCode === "conflict" && "The object changed since the diagnosis. Open Diagnostics to scan again. "}
         {fixResult.logs && fixResult.logs.length > 0 && (
           <Content component="small" style={{ whiteSpace: "pre-wrap", marginTop: "0.25rem" }}>
             {fixResult.logs.join("\n")}
@@ -177,7 +163,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
 
   if (fixError) {
     return (
-      <Alert component="p" variant="danger" title="Fix action failed" isInline>
+      <Alert component="p" variant="danger" title="The fix could not run" isInline isLiveRegion>
         {fixError}
       </Alert>
     );
@@ -187,73 +173,59 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
     return (
       <Alert component="p"
         variant={timedOut ? "warning" : "info"}
-        title={timedOut ? "Reconciliation appears stuck" : "Taking longer than usual"}
+        title={timedOut ? "The operator install looks stuck" : "Taking longer than usual"}
         isInline
         isPlain
       >
-        <Stack hasGutter>
-          <StackItem>
-            Reconciliation is taking longer than expected. The operation may still be in progress.
-          </StackItem>
-          <StackItem>
-            <Link to="/diagnostics">View detailed diagnostics</Link>
-          </StackItem>
-        </Stack>
+        Diagnostics found no specific problem; OLM may still be working. <Link to="/diagnostics">Open Diagnostics</Link>
       </Alert>
     );
   }
 
-  const alertVariant = severityToAlertVariant(topProblem.severity);
+  const fixable = !!(topProblem.autoFixable && topProblem.autoFixAction);
+  const evidence = (topProblem.evidence ?? []).slice(0, 3);
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Alert component="p" variant={alertVariant} title={topProblem.title} isInline
-          customIcon={severityIcon(topProblem.severity)}
-        >
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p" style={{ marginTop: "0.25rem" }}>
-                {topProblem.description}
-              </Content>
-            </StackItem>
-            <StackItem>
-              {topProblem.autoFixable && topProblem.autoFixAction ? (
-                <Button
-                  variant="primary"
-                  icon={<WrenchIcon />}
-                  onClick={() => onFix(topProblem)}
-                  isLoading={fixLoading}
-                  isDisabled={fixLoading}
-                  size="sm"
-                >
-                  Fix: {topProblem.fix}
-                </Button>
-              ) : topProblem.fix ? (
-                <Content component="small">
-                  <strong>How to fix:</strong> {topProblem.fix}
-                </Content>
-              ) : null}
-            </StackItem>
-            {problems.length > 1 && (
-              <StackItem>
-                <Content component="small">
-                  <Link to="/diagnostics">
-                    View all diagnostics ({problems.length} problem{problems.length !== 1 ? "s" : ""} found)
-                  </Link>
-                </Content>
-              </StackItem>
-            )}
-            {problems.length === 1 && (
-              <StackItem>
-                <Content component="small">
-                  <Link to="/diagnostics">View all diagnostics</Link>
-                </Content>
-              </StackItem>
-            )}
-          </Stack>
-        </Alert>
-      </StackItem>
-    </Stack>
+    <Alert component="p" variant={severityToAlertVariant(topProblem.severity)} title={topProblem.title} isInline>
+      <Stack hasGutter>
+        <StackItem>{topProblem.description}</StackItem>
+        {evidence.length > 0 && (
+          <StackItem>
+            <List isPlain>
+              {evidence.map((line, i) => (
+                <ListItem key={i}><Content component="small" style={{ overflowWrap: "anywhere" }}>{line}</Content></ListItem>
+              ))}
+            </List>
+          </StackItem>
+        )}
+        {topProblem.fix && (
+          <StackItem>
+            <Content component="small"><strong>{fixable ? "Suggested fix:" : "What to do:"}</strong> {topProblem.fix}</Content>
+          </StackItem>
+        )}
+        {fixable && (
+          <StackItem>
+            <TooltipButton
+              variant="secondary"
+              icon={<WrenchIcon />}
+              onClick={() => onFix(topProblem)}
+              isLoading={fixLoading}
+              isDisabled={fixLoading}
+              disabledReason={fixDisabledReason}
+              size="sm"
+            >
+              Apply fix...
+            </TooltipButton>
+          </StackItem>
+        )}
+        <StackItem>
+          <Content component="small">
+            <Link to="/diagnostics">
+              {problems.length > 1 ? `All diagnostics (${problems.length} problems)` : "All diagnostics"}
+            </Link>
+          </Content>
+        </StackItem>
+      </Stack>
+    </Alert>
   );
 };
 
@@ -279,6 +251,13 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
   const [fixResult, setFixResult] = useState<OperationResponse | null>(null);
   const [fixError, setFixError] = useState<string | null>(null);
   const [fixConfirmProblem, setFixConfirmProblem] = useState<Problem | null>(null);
+
+  // A fix is a cluster change: it needs the permission and a free lock. The
+  // reconcile in progress itself is not a reason (that is what is stuck).
+  const permissions = usePermissions();
+  const { server } = useOperation();
+  const fixDisabledReason = permissions.reason
+    ?? (server.inProgress ? (server.operation ? `${describeServerOperation(server.operation, status?.cluster.user)}. Wait for it to finish.` : "Another operation is running.") : null);
 
   // Reset when a new reconciliation starts (keyed on startTime changing)
   useEffect(() => {
@@ -359,15 +338,11 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
     setFixError(null);
     setFixResult(null);
     try {
-      let res: OperationResponse;
-      if (fixConfirmProblem.autoFixAction === "assist-rollout" || fixConfirmProblem.autoFixAction?.includes("rollout")) {
-        res = await assistRollout();
-      } else if (fixConfirmProblem.autoFixAction) {
-        res = await fixProblem(fixConfirmProblem.autoFixAction);
-      } else {
-        return;
-      }
-      setFixResult(res);
+      // Every action, including assist-rollout:<ns>/<deployment> and
+      // restore-rollout-strategy:<ns>/<deployment>, goes to the diagnostics
+      // fix endpoint as-is (B2 contract); it re-checks before acting.
+      if (!fixConfirmProblem.autoFixAction) return;
+      setFixResult(await fixProblem(fixConfirmProblem.autoFixAction));
     } catch (e) {
       setFixError(toApiError(e, "Fix action failed").message);
     } finally {
@@ -409,9 +384,9 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
           <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
             <FlexItem>
               {displayPhase === "succeeded" ? (
-                <Label color="green" icon={<CheckCircleIcon />}>Reconciliation complete</Label>
+                <Label color="green" icon={<CheckCircleIcon />}>Operator running</Label>
               ) : (
-                <Label color="red" icon={<ExclamationCircleIcon />}>Reconciliation failed</Label>
+                <Label color="red" icon={<ExclamationCircleIcon />}>Operator install failed</Label>
               )}
             </FlexItem>
             <FlexItem>
@@ -434,7 +409,7 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
           <FlexItem>
             <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
               <FlexItem>
-                <Title headingLevel="h4" size="md">Reconciliation Progress</Title>
+                <Title headingLevel="h3" size="md">Waiting for the operator</Title>
               </FlexItem>
               {!isFinal && <FlexItem><Spinner size="sm" aria-label="Reconciling" /></FlexItem>}
             </Flex>
@@ -496,6 +471,7 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
                 fixLoading={fixLoading}
                 fixResult={fixResult}
                 fixError={fixError}
+                fixDisabledReason={fixDisabledReason}
                 onFix={(problem) => setFixConfirmProblem(problem)}
               />
             </StackItem>
@@ -511,34 +487,43 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
         onClose={() => setFixConfirmProblem(null)}
       >
         <ModalHeader
-          title="Confirm: Apply Fix"
+          title={`Apply the fix for "${fixConfirmProblem?.title ?? ""}"?`}
           labelId="confirm-fix-stuck-title"
         />
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
               <Content component="p">
-                {fixConfirmProblem?.confirmMessage || "This will modify resources on the shared cluster to resolve the detected problem."}
+                {fixConfirmProblem?.confirmMessage || fixConfirmProblem?.fix || "This changes cluster objects to resolve the problem."}
               </Content>
             </StackItem>
+            {(fixConfirmProblem?.affectedObjects?.length ?? 0) > 0 && (
+              <StackItem>
+                <Content component="p"><strong>Objects it may change</strong></Content>
+                <List>
+                  {fixConfirmProblem?.affectedObjects?.map((obj) => (
+                    <ListItem key={obj}><code style={{ overflowWrap: "anywhere" }}>{obj}</code></ListItem>
+                  ))}
+                </List>
+              </StackItem>
+            )}
             <StackItem>
-              <Alert component="p"
-                variant="warning"
-                title="This action will modify resources on the shared cluster."
-                isInline
-              />
+              <Content component="small" className="rhoai-subtle">
+                The fix checks the problem again first and changes nothing if it is already gone.
+              </Content>
             </StackItem>
           </Stack>
         </ModalBody>
         <ModalFooter>
-          <Button
+          <TooltipButton
             variant="primary"
             onClick={handleFixConfirm}
             isLoading={fixLoading}
             isDisabled={fixLoading}
+            disabledReason={fixDisabledReason}
           >
-            Confirm
-          </Button>
+            Apply fix
+          </TooltipButton>
           <Button
             variant="link"
             onClick={() => setFixConfirmProblem(null)}

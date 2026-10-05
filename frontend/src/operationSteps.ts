@@ -18,58 +18,69 @@ export interface PipelineStepDef {
   description: string;
 }
 
-// Pipeline step definitions (mirror the backend execution order).
+// Pipeline step definitions. They mirror the order and the step ids that
+// pkg/cluster/operations.go emits (UpdateStreamWithOptions,
+// ReinstallStreamWithOptions, RefreshOperatorStreamWithOptions), so the
+// confirmation dialogs and the progress view describe what really runs.
 
 const UPDATE_STEPS: PipelineStepDef[] = [
-  { id: "validate_prerequisites", label: "Validate Prerequisites", description: "Check pull secret, image mirror, and operator group" },
-  { id: "save_snapshot", label: "Save Snapshot", description: "Record current deployment state for change detection" },
-  { id: "apply_catalog_source", label: "Apply CatalogSource", description: "Create or update the nightly catalog with the FBC image" },
-  { id: "wait_catalog_ready", label: "CatalogSource Loading", description: "Wait for the catalog pod to pull the image and serve content" },
-  { id: "detect_channel", label: "Detect Channel", description: "Find the best channel from the catalog for this version" },
-  { id: "apply_subscription", label: "Apply Subscription", description: "Point the operator subscription to the nightly catalog" },
-  { id: "delete_csv", label: "Delete CSV", description: "Remove old operator to trigger fresh install" },
-  { id: "verify_installplan", label: "Verify InstallPlan", description: "Confirm OLM created a new install plan" },
+  { id: "validate_prerequisites", label: "Check prerequisites", description: "Pull secret, image mirror and OperatorGroup; verify the image in a temporary catalog; refuse an older build" },
+  { id: "save_snapshot", label: "Save snapshot", description: "Record the current deployments to show what changed afterwards" },
+  { id: "apply_catalog_source", label: "Replace the nightly catalog", description: "Remove the Subscription (the operator keeps running) and point the nightly CatalogSource at the new image" },
+  { id: "wait_catalog_ready", label: "Wait for the catalog", description: "The catalog pod pulls the image and starts serving it" },
+  { id: "detect_channel", label: "Detect the channel", description: "Pick the channel that carries this build" },
+  { id: "delete_csv", label: "Remove the old operator version", description: "Delete the old CSV and InstallPlan so OLM installs the new build" },
+  { id: "apply_subscription", label: "Create the Subscription", description: "Same settings as before (config, approval mode), new catalog and channel" },
+  { id: "verify_installplan", label: "Wait for the operator install", description: "OLM installs the new CSV; this usually takes a few minutes (the tool waits up to 8)" },
+];
+
+const REINSTALL_COMMON_STEPS: PipelineStepDef[] = [
+  { id: "save_snapshot", label: "Save snapshot", description: "Record the current deployments to show what changed afterwards" },
+  { id: "delete_catalog_source", label: "Remove the nightly catalog", description: "Delete the nightly CatalogSource, if there is one" },
+  { id: "delete_subscription", label: "Remove the Subscription", description: "Delete the operator Subscription" },
+  { id: "delete_csv", label: "Remove the operator", description: "Delete the installed CSV; OLM removes the operator Deployment" },
+  { id: "cleanup_webhooks", label: "Remove dead webhooks", description: "Remove webhook configurations whose service or operator no longer exists" },
+  { id: "patch_crds", label: "Check CRD conversions", description: "Switch DSC/DSCI conversion to None only if no operator serves it any more" },
+  { id: "wait_propagation", label: "Wait for cleanup", description: "Give the API server time to finish the deletions" },
 ];
 
 const REINSTALL_STABLE_STEPS: PipelineStepDef[] = [
-  { id: "validate_target", label: "Validate Target", description: "Verify the target stable version is available" },
-  { id: "save_snapshot", label: "Save Snapshot", description: "Record current deployment state before reinstall" },
-  { id: "delete_catalog_source", label: "Delete CatalogSource", description: "Remove the nightly catalog source" },
-  { id: "delete_subscription", label: "Delete Subscription", description: "Remove the current operator subscription" },
-  { id: "delete_csv", label: "Delete CSV", description: "Remove the installed ClusterServiceVersion" },
-  { id: "cleanup_webhooks", label: "Cleanup Webhooks", description: "Remove orphaned webhook configurations" },
-  { id: "patch_crds", label: "Patch CRDs", description: "Remove owner references from CRDs to allow re-adoption" },
-  { id: "wait_propagation", label: "Wait Propagation", description: "Wait for resource deletion to propagate across the cluster" },
-  { id: "create_subscription", label: "Create Subscription", description: "Create a new subscription to the stable channel" },
-  { id: "verify_installplan", label: "Verify InstallPlan", description: "Confirm OLM created a new install plan for the stable version" },
+  { id: "validate_target", label: "Check the target", description: "Find the stable release in the cluster catalog and compare it with the installed version" },
+  ...REINSTALL_COMMON_STEPS,
+  { id: "create_subscription", label: "Create the Subscription", description: "Subscribe to the stable channel with the previous settings" },
+  { id: "verify_installplan", label: "Wait for the operator install", description: "OLM installs the stable CSV; this usually takes a few minutes" },
 ];
 
 const REINSTALL_NIGHTLY_STEPS: PipelineStepDef[] = [
-  { id: "validate_target", label: "Validate Target", description: "Verify the target nightly image is accessible" },
-  { id: "save_snapshot", label: "Save Snapshot", description: "Record current deployment state before reinstall" },
-  { id: "delete_catalog_source", label: "Delete CatalogSource", description: "Remove the existing catalog source" },
-  { id: "delete_subscription", label: "Delete Subscription", description: "Remove the current operator subscription" },
-  { id: "delete_csv", label: "Delete CSV", description: "Remove the installed ClusterServiceVersion" },
-  { id: "cleanup_webhooks", label: "Cleanup Webhooks", description: "Remove orphaned webhook configurations" },
-  { id: "patch_crds", label: "Patch CRDs", description: "Remove owner references from CRDs to allow re-adoption" },
-  { id: "wait_propagation", label: "Wait Propagation", description: "Wait for resource deletion to propagate across the cluster" },
-  { id: "create_catalog_source", label: "Create CatalogSource", description: "Create a new catalog source pointing to the nightly FBC image" },
-  { id: "wait_catalog_ready", label: "CatalogSource Loading", description: "Wait for the catalog pod to pull the image and serve content" },
-  { id: "detect_channel", label: "Detect Channel", description: "Find the best channel from the catalog for this version" },
-  { id: "create_subscription", label: "Create Subscription", description: "Create a new subscription to the nightly catalog" },
-  { id: "verify_installplan", label: "Verify InstallPlan", description: "Confirm OLM created a new install plan for the nightly version" },
+  { id: "validate_target", label: "Check the target", description: "Verify the image in a temporary catalog and compare it with the installed version" },
+  ...REINSTALL_COMMON_STEPS,
+  { id: "create_catalog_source", label: "Create the nightly catalog", description: "Point the nightly CatalogSource at the selected image" },
+  { id: "wait_catalog_ready", label: "Wait for the catalog", description: "The catalog pod pulls the image and starts serving it" },
+  { id: "detect_channel", label: "Detect the channel", description: "Pick the channel that carries this build" },
+  { id: "create_subscription", label: "Create the Subscription", description: "Subscribe to the nightly catalog with the previous settings" },
+  { id: "verify_installplan", label: "Wait for the operator install", description: "OLM installs the new CSV; this usually takes a few minutes" },
 ];
 
 const REFRESH_STEPS: PipelineStepDef[] = [
-  { id: "verify_csv", label: "Verify CSV", description: "Check the current ClusterServiceVersion exists and is healthy" },
-  { id: "save_snapshot", label: "Save Snapshot", description: "Record current deployment state before refresh" },
-  { id: "get_subscription", label: "Get Subscription", description: "Retrieve current subscription details for recreation" },
-  { id: "delete_csv", label: "Delete CSV", description: "Remove the installed ClusterServiceVersion" },
-  { id: "delete_subscription", label: "Delete Subscription", description: "Remove the current operator subscription" },
-  { id: "wait_cleanup", label: "Wait Cleanup", description: "Wait for OLM to finish cleaning up removed resources" },
-  { id: "recreate_subscription", label: "Recreate Subscription", description: "Re-create the subscription to trigger a fresh install" },
-  { id: "verify_installplan", label: "Verify InstallPlan", description: "Confirm OLM created a new install plan" },
+  { id: "verify_csv", label: "Check the operator", description: "Find the installed CSV" },
+  { id: "save_snapshot", label: "Save snapshot", description: "Record the current deployments to show what changed afterwards" },
+  { id: "get_subscription", label: "Read the Subscription", description: "Keep its catalog, channel, config and approval mode" },
+  { id: "delete_subscription", label: "Remove the Subscription", description: "The operator keeps running meanwhile" },
+  { id: "delete_csv", label: "Remove the operator", description: "Delete the installed CSV" },
+  { id: "wait_cleanup", label: "Wait for cleanup", description: "Wait until the CSV is gone" },
+  { id: "recreate_subscription", label: "Recreate the Subscription", description: "Same catalog, channel and settings as before" },
+  { id: "verify_installplan", label: "Wait for the operator install", description: "OLM installs the same version again" },
 ];
+
+/**
+ * Shown after the regular steps when the backend undoes a failed attempt
+ * (pkg/cluster/operator_recovery.go restoreStepName).
+ */
+export const RESTORE_STEP: PipelineStepDef = {
+  id: "restore_previous_operator",
+  label: "Restore the previous state",
+  description: "Undo this attempt's changes after the failure",
+};
 
 /** Map operation type to its step definitions. */
 export const STEP_SETS: Record<OperationKind, PipelineStepDef[]> = {
@@ -81,10 +92,10 @@ export const STEP_SETS: Record<OperationKind, PipelineStepDef[]> = {
 
 /** Map operation type to a human-readable pipeline title. */
 export const PIPELINE_TITLES: Record<OperationKind, string> = {
-  update: "Update Pipeline",
-  reinstall_stable: "Reinstall Pipeline (Stable)",
-  reinstall_nightly: "Reinstall Pipeline (Nightly)",
-  refresh: "Refresh Pipeline",
+  update: "Update",
+  reinstall_stable: "Reinstall (stable)",
+  reinstall_nightly: "Reinstall (nightly)",
+  refresh: "Re-deploy operator",
 };
 
 /** Short operation names for status messages. */
@@ -92,9 +103,29 @@ export const OPERATION_NAMES: Record<OperationKind, string> = {
   update: "Update",
   reinstall_stable: "Reinstall (stable)",
   reinstall_nightly: "Reinstall (nightly)",
-  refresh: "Operator refresh",
+  refresh: "Operator re-deploy",
 };
 
 export function stepLabel(kind: OperationKind, stepId: string): string {
+  if (stepId === RESTORE_STEP.id) return RESTORE_STEP.label;
   return STEP_SETS[kind].find((s) => s.id === stepId)?.label ?? stepId.replace(/_/g, " ");
+}
+
+/**
+ * The streamed operation kind of a backend operation (GET /api/operation
+ * `type`, pkg/api operationTypes), or null for operations without steps
+ * (Dashboard Dev deploys, test resources, fixes...). A reinstall's target is
+ * "stable" or "nightly <image>" / "custom <image>" (HandleReinstallStream).
+ */
+export function operationKindForServerType(type: string, target?: string): OperationKind | null {
+  switch (type) {
+    case "update":
+      return "update";
+    case "refresh":
+      return "refresh";
+    case "reinstall":
+      return target?.startsWith("stable") ? "reinstall_stable" : "reinstall_nightly";
+    default:
+      return null;
+  }
 }

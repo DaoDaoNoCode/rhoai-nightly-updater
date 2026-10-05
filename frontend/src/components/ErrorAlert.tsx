@@ -10,35 +10,55 @@ interface ErrorAlertProps {
   error: unknown;
   /** Override the generic error title (default: "Error") */
   genericTitle?: string;
+  /** Offer a Retry action. */
+  onRetry?: () => void;
+  /** Extra actions after Retry (for example a link to Diagnostics). */
+  extraActions?: React.ReactNode;
+  /** Render without the PageSection wrapper (inside a card or a stack). */
+  inline?: boolean;
 }
+
+/** Where oauth-proxy starts a new sign-in (it also clears the old session cookie). */
+export const SIGN_IN_URL = "/oauth/sign_in";
 
 /**
  * Shared error alert. Picks the title by HTTP status and errorCode (session
- * expired, access denied, cluster busy, ...) and announces itself to screen
- * readers.
+ * expired, access denied, cluster busy, API unavailable, ...), shows the
+ * cause and the next step, and announces itself to screen readers.
  */
 export const ErrorAlert: React.FC<ErrorAlertProps> = React.memo(({
   error,
   genericTitle = "Error",
+  onRetry,
+  extraActions,
+  inline = false,
 }) => {
-  const { title, body, variant, reload } = describeError(error, genericTitle);
-  return (
-    <PageSection padding={{ default: "noPadding" }}>
-      <Alert
-        variant={variant}
-        title={title}
-        isInline
-        isLiveRegion
-        component="p"
-        actionLinks={reload ? (
-          <AlertActionLink onClick={() => window.location.reload()}>
-            Reload page
-          </AlertActionLink>
-        ) : undefined}
-      >
-        {body}
-      </Alert>
-    </PageSection>
+  const { title, body, variant, reload, hint } = describeError(error, genericTitle);
+  const actions = reload ? (
+    <>
+      <AlertActionLink component="a" href={SIGN_IN_URL}>Sign in again</AlertActionLink>
+      <AlertActionLink onClick={() => window.location.reload()}>Reload page</AlertActionLink>
+    </>
+  ) : onRetry || extraActions ? (
+    <>
+      {onRetry && <AlertActionLink onClick={onRetry}>Retry</AlertActionLink>}
+      {extraActions}
+    </>
+  ) : undefined;
+  const alert = (
+    <Alert
+      variant={variant}
+      title={title}
+      isInline
+      isLiveRegion
+      component="p"
+      actionLinks={actions}
+    >
+      {body}
+      {hint && <> {hint}</>}
+    </Alert>
   );
+  if (inline) return alert;
+  return <PageSection padding={{ default: "noPadding" }}>{alert}</PageSection>;
 });
 ErrorAlert.displayName = "ErrorAlert";

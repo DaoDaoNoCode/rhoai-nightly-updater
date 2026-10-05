@@ -11,17 +11,20 @@ import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
 
 interface PageHeaderProps {
   title: string;
+  /** One sentence on what the page is for. */
+  description?: React.ReactNode;
   lastRefreshed: Date | null;
   loading: boolean;
   onRefresh: () => void;
 }
 
 /**
- * Shared page header with title, "Last refreshed" timestamp, and a Refresh button.
- * Used by StatusPage, ComponentsPage, and DebugPage.
+ * Shared page header: title, optional description, "Last refreshed" time and
+ * a Refresh button.
  */
 export const PageHeader: React.FC<PageHeaderProps> = ({
   title,
+  description,
   lastRefreshed,
   loading,
   onRefresh,
@@ -29,21 +32,19 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   <PageSection padding={{ default: "padding" }}>
     <Flex
       justifyContent={{ default: "justifyContentSpaceBetween" }}
-      alignItems={{ default: "alignItemsCenter" }}
+      alignItems={{ default: "alignItemsFlexStart" }}
       gap={{ default: "gapSm" }}
     >
-      <FlexItem>
+      <FlexItem flex={{ default: "flex_1" }} style={{ minWidth: "16rem" }}>
         <Title headingLevel="h1" size="xl">{title}</Title>
+        {description && <Content component="p" className="rhoai-subtle" style={{ marginTop: "var(--pf-t--global--spacer--xs)" }}>{description}</Content>}
       </FlexItem>
       <FlexItem>
-        <Flex
-          alignItems={{ default: "alignItemsCenter" }}
-          gap={{ default: "gapSm" }}
-        >
+        <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
           {lastRefreshed && (
             <FlexItem>
               <Content component="small">
-                Last refreshed: {lastRefreshed.toLocaleString()}
+                Updated <time dateTime={lastRefreshed.toISOString()}>{lastRefreshed.toLocaleTimeString()}</time>
               </Content>
             </FlexItem>
           )}

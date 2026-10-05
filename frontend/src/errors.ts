@@ -1,11 +1,14 @@
 import { toApiError, type ApiError } from "./services/api";
+import { sentence } from "./build";
 
 export interface ErrorDescription {
   title: string;
   body: string;
   variant: "danger" | "warning";
-  /** The error clears on reload (session expiry). */
+  /** The error clears by signing in again (session expiry). */
   reload?: boolean;
+  /** What the user can do next, when the title and body don't say it. */
+  hint?: string;
 }
 
 /**
@@ -14,37 +17,75 @@ export interface ErrorDescription {
  * written for users (pkg/api writeError).
  */
 const SESSION_EXPIRED: ErrorDescription = {
-  title: "Session expired",
-  body: "Your session has expired. Reload the page to sign in again.",
+  title: "Your session expired",
+  body: "Your OpenShift session has expired.",
+  hint: "Sign in again to continue; nothing on the cluster was changed.",
   variant: "danger",
   reload: true,
 };
 
+/** The backend's 409 body names the running operation ("alice is running ..."). */
+function clusterBusyBody(err: ApiError): string {
+  const details = err.details as { operation?: unknown } | undefined;
+  if (details?.operation) return err.message;
+  return "Another operation is already changing this cluster.";
+}
+
 export function describeError(e: unknown, genericTitle = "Error"): ErrorDescription {
+  const d = describeErrorRaw(e, genericTitle);
+  // Backend messages often have no final period; the hint follows as a new sentence.
+  return d.hint ? { ...d, body: sentence(d.body) } : d;
+}
+
+function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
   const err: ApiError = toApiError(e);
   switch (err.errorCode) {
-    case "unauthorized":
     case "session_expired":
       return SESSION_EXPIRED;
+    case "unauthorized":
+      // pkg/api: no token at all; behind oauth-proxy that means signed out.
+      return err.status === 401 ? SESSION_EXPIRED : { title: "The cluster rejected the updater's credentials", body: err.message, variant: "danger", hint: "Check the updater's ServiceAccount (oc get sa -n <namespace>) and redeploy it." };
     case "forbidden":
       return { title: "Access denied", body: err.message, variant: "danger" };
     case "cluster_busy":
-      return { title: "Cluster busy", body: "Another operation is already changing this cluster. Wait for it to finish, then try again.", variant: "warning" };
+      return { title: "Cluster busy", body: clusterBusyBody(err), hint: "Nothing was changed. Wait for it to finish, then try again.", variant: "warning" };
     case "rate_limited":
-      return { title: "Too many requests", body: err.message, variant: "warning" };
+      return { title: "The OpenShift API is throttling requests", body: err.message, hint: "Wait a minute, then retry.", variant: "warning" };
     case "shutting_down":
-      return { title: "The updater is restarting", body: err.message, variant: "warning" };
+      return { title: "The updater is restarting", body: err.message, hint: "Retry in a minute.", variant: "warning" };
     case "authorization_unavailable":
-      return { title: "Permissions could not be checked", body: err.message, variant: "warning" };
+      return { title: "Could not check your identity or permissions", body: err.message, hint: "The OpenShift API did not answer. Retry shortly.", variant: "warning" };
     case "network":
-      return { title: "Cannot reach the server", body: err.message, variant: "danger" };
+      return { title: err.status === 0 ? "Cannot reach the updater" : "Cannot reach the OpenShift API", body: err.message, hint: err.status === 0 ? "Check your connection or VPN. The updater pod may be restarting." : "The cluster API did not answer. Retry in a minute.", variant: "danger" };
     case "timeout":
-      return { title: "Request timed out", body: err.message, variant: "warning" };
+      return { title: err.status === 0 ? "Request timed out" : "The OpenShift API timed out", body: err.message, hint: "Retry in a moment.", variant: "warning" };
+    case "cluster_unavailable":
+    case "cluster_error":
+      return { title: "The OpenShift API returned an error", body: err.message, hint: "Retry in a minute. If it persists, check the cluster in the OpenShift console.", variant: "danger" };
+    case "catalog_image_pull":
+      return { title: genericTitle, body: err.message, hint: "The cluster could not pull the catalog image: check the pull secret under Cluster setup.", variant: "danger" };
+    case "registry_auth":
+      return { title: "Quay rejected the pull secret", body: err.message, hint: "Replace the pull secret under Cluster setup.", variant: "danger" };
+    case "registry_unavailable":
+      return { title: "Cannot reach Quay", body: err.message, hint: "Retry in a minute.", variant: "warning" };
+    case "internal":
+      if (err.status >= 500) return { title: genericTitle, body: err.message, hint: "Retry. If it persists, check the updater logs: oc logs deploy/rhoai-nightly-updater -c app", variant: "danger" };
   }
   if (err.status === 401) return SESSION_EXPIRED;
   if (err.status === 403) return { title: "Access denied", body: err.message, variant: "danger" };
-  if (err.status === 409) return { title: "Cluster busy", body: err.message, variant: "warning" };
+  if (err.status === 409) return { title: "Cluster busy", body: clusterBusyBody(err), hint: "Nothing was changed. Wait for it to finish, then try again.", variant: "warning" };
   return { title: genericTitle, body: err.message, variant: "danger" };
+}
+
+/** describeError for a failed run's outcome (the store keeps code and status, not the ApiError). */
+export function describeOutcomeError(outcome: { message: string; errorCode?: string; httpStatus?: number; busyOperation?: unknown }, genericTitle: string): ErrorDescription {
+  return describeError({
+    name: "ApiError",
+    status: outcome.httpStatus ?? 0,
+    errorCode: outcome.errorCode ?? "operation_failed",
+    message: outcome.message,
+    details: outcome.busyOperation ? { operation: outcome.busyOperation } : undefined,
+  }, genericTitle);
 }
 
 /** True when the error means the user may not mutate (or is signed out). */
