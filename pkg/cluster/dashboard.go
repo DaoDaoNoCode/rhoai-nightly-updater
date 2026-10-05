@@ -3,8 +3,10 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -66,10 +68,43 @@ var containerEnvVarMap = map[string]string{
 	"core-bff":          "RELATED_IMAGE_ODH_CORE_BFF_IMAGE",
 }
 
+// ErrDashboardNotDeployed is returned by GetDashboardState when the
+// rhods-dashboard Deployment does not exist.
+var ErrDashboardNotDeployed = errors.New("RHOAI Dashboard is not deployed")
+
+// DashboardStateError maps a GetDashboardState error to an HTTP status, an
+// errorCode and a message, so "not deployed" is not confused with RBAC, API
+// or network failures. The not-deployed message keeps the historical
+// "failed to get dashboard state" prefix the page matches on.
+func DashboardStateError(err error) (status int, code, message string) {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, ErrDashboardNotDeployed):
+		return http.StatusNotFound, "dashboard_not_deployed", "failed to get dashboard state: RHOAI Dashboard is not deployed (no rhods-dashboard Deployment in " + dashboardNamespace + ")"
+	case IsK8sError(err, http.StatusUnauthorized):
+		return http.StatusBadGateway, "unauthorized", "Cannot read dashboard state: the Kubernetes API rejected the updater's credentials (HTTP 401)."
+	case IsK8sError(err, http.StatusForbidden):
+		return http.StatusForbidden, "forbidden", "Cannot read dashboard state: the updater is not allowed to read the rhods-dashboard Deployment (HTTP 403)."
+	case IsK8sError(err, http.StatusTooManyRequests):
+		return http.StatusTooManyRequests, "rate_limited", "Cannot read dashboard state: the Kubernetes API is throttling requests (HTTP 429). Retry shortly."
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()):
+		return http.StatusGatewayTimeout, "timeout", "Cannot read dashboard state: the Kubernetes API did not respond in time."
+	case IsNetworkError(err):
+		return http.StatusServiceUnavailable, "network", "Cannot read dashboard state: the Kubernetes API is unreachable."
+	case IsK8sError(err, 0):
+		return http.StatusBadGateway, "upstream_error", "Cannot read dashboard state: " + err.Error()
+	default:
+		return http.StatusInternalServerError, "internal", "Cannot read dashboard state: " + err.Error()
+	}
+}
+
 // GetDashboardState returns the current state of the rhods-dashboard deployment.
 func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
 	body, _, err := c.get(deployPath)
+	if IsK8sError(err, http.StatusNotFound) {
+		return nil, fmt.Errorf("%w: deployment %s/%s not found", ErrDashboardNotDeployed, dashboardNamespace, dashboardDeploymentName)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get dashboard deployment: %w", err)
 	}
@@ -118,12 +153,9 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			state.CurrentImage = container.Image
 		}
 		if repo, ok := prContainerRepos[container.Name]; ok {
-			prPrefix := fmt.Sprintf("quay.io/%s:pr-", repo)
-			if strings.HasPrefix(container.Image, prPrefix) {
+			if kind, n, _, _ := parseDashboardBuild(repo, container.Image); kind == "pr" {
 				state.PRContainers = append(state.PRContainers, container.Name)
-				tagPart := container.Image[strings.LastIndex(container.Image, ":")+1:]
-				prStr := strings.TrimPrefix(tagPart, "pr-")
-				if n, err := strconv.Atoi(prStr); err == nil && state.PRNumber == 0 {
+				if state.PRNumber == 0 {
 					state.PRNumber = n
 				}
 			}
@@ -141,12 +173,9 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			if image == "" {
 				continue
 			}
-			prPrefix := fmt.Sprintf("quay.io/%s:pr-", repo)
-			if strings.HasPrefix(image, prPrefix) {
+			if kind, n, _, _ := parseDashboardBuild(repo, image); kind == "pr" {
 				state.PRContainers = append(state.PRContainers, containerName)
-				tagPart := image[strings.LastIndex(image, ":")+1:]
-				prStr := strings.TrimPrefix(tagPart, "pr-")
-				if n, err := strconv.Atoi(prStr); err == nil && state.PRNumber == 0 {
+				if state.PRNumber == 0 {
 					state.PRNumber = n
 				}
 			}
@@ -273,16 +302,29 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 // It checks all 8 dashboard container repos on Quay for pr-N tags and
 // patches every container that has a published image.
 func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
+	return DeployPRImageWithFlavor(c, prNumber, "")
+}
+
+// DeployPRImageWithFlavor deploys a dashboard PR build of the given flavor
+// ("" means the RHOAI build). Clusters without dashboard-operator (RHOAI 2.x)
+// use the legacy flow, which only knows the OpenShift CI pr-N builds.
+func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.OperationResponse, error) {
+	if !ValidDashboardFlavor(flavor) {
+		return &types.OperationResponse{Success: false, Message: "Unknown dashboard build flavor " + strconv.Quote(flavor) + "; use rhoai or odh.", ErrorCode: "validation"}, nil
+	}
 	if prNumber > 0 {
 		operator, err := readDashboardOperator(c)
 		if err != nil {
 			return &types.OperationResponse{Success: false, Message: "Cannot verify dashboard-operator: " + err.Error(), ErrorCode: "prerequisites"}, nil
 		}
 		if operator != nil {
-			return deployDashboardBuild(c, "pr", prNumber)
+			return deployDashboardBuild(c, "pr", prNumber, flavor)
 		}
 	}
 	logs := []string{}
+	if flavor == DashboardFlavorRHOAI {
+		logs = append(logs, "This cluster has no dashboard-operator; the legacy flow deploys the OpenShift CI pr-N (ODH) builds.")
+	}
 
 	if prNumber <= 0 {
 		return &types.OperationResponse{
@@ -380,6 +422,13 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 
 	// Patch the main dashboard deployment with core images
 	if len(coreImages) > 0 {
+		annotations, err := legacyDeployAnnotations(c)
+		if err != nil {
+			return &types.OperationResponse{
+				Success: false, Message: fmt.Sprintf("Cannot read %s before patching: %v. No changes were made.", dashboardDeploymentName, err),
+				Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+			}, nil
+		}
 		var containerPatches []map[string]interface{}
 		for name, image := range coreImages {
 			containerPatches = append(containerPatches, map[string]interface{}{
@@ -389,9 +438,7 @@ func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
 		}
 		patchData, err := json.Marshal(map[string]interface{}{
 			"metadata": map[string]interface{}{
-				"annotations": map[string]interface{}{
-					"opendatahub.io/managed": "false",
-				},
+				"annotations": annotations,
 			},
 			"spec": map[string]interface{}{
 				"template": map[string]interface{}{
@@ -576,11 +623,16 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	}
 
 	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
+	restored, err := legacyRevertAnnotations(c)
+	if err != nil {
+		return &types.OperationResponse{
+			Success: false, Message: fmt.Sprintf("Cannot read %s before reverting: %v", dashboardDeploymentName, err),
+			Logs: logs, ErrorCode: errorCodeFromK8sErr(err),
+		}, nil
+	}
 	revertPatch := map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"annotations": map[string]interface{}{
-				"opendatahub.io/managed": "true",
-			},
+			"annotations": restored,
 		},
 	}
 	if len(containerPatches) > 0 {
@@ -604,7 +656,11 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 		}, nil
 	}
 	logs = append(logs, fmt.Sprintf("OK: %d container images restored", len(containerPatches)))
-	logs = append(logs, "OK: Operator management re-enabled")
+	if value, ok := restored["opendatahub.io/managed"].(string); ok {
+		logs = append(logs, fmt.Sprintf("OK: opendatahub.io/managed restored to its original value %q", value))
+	} else {
+		logs = append(logs, "OK: opendatahub.io/managed removed (it was not set before the PR deployment)")
+	}
 
 	// Revert standalone module deployments
 	totalReverted := len(containerPatches)
@@ -638,6 +694,74 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 		Message: fmt.Sprintf("All %d containers restored to operator-managed images.", totalReverted),
 		Logs:    logs,
 	}, nil
+}
+
+// legacyOriginalManagedAnnotation saves the opendatahub.io/managed value that
+// rhods-dashboard had before the first legacy PR deployment set it to "false",
+// so revert restores it instead of forcing "true". With "true" the operator
+// resets replicas and resources on every reconcile (opendatahub-operator
+// v2.25.0 pkg/controller/actions/deploy/action_deploy.go).
+const legacyOriginalManagedAnnotation = "rhoai-nightly-updater.opendatahub.io/original-managed"
+
+type legacyManagedRecord struct {
+	Present bool   `json:"present"`
+	Value   string `json:"value,omitempty"`
+}
+
+func getDeploymentAnnotations(c *Client, name string) (map[string]string, error) {
+	body, _, err := c.get(namespacedPath("apps/v1", "deployments", dashboardNamespace, name))
+	if err != nil {
+		return nil, err
+	}
+	var d struct {
+		Metadata struct {
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(body, &d); err != nil {
+		return nil, err
+	}
+	return d.Metadata.Annotations, nil
+}
+
+// legacyDeployAnnotations returns the annotations a legacy PR deployment sets:
+// managed=false and, on the first deployment only, the original value. A
+// pre-existing "false" without a record was left by an earlier PR deployment
+// of this tool, so it is recorded as absent.
+func legacyDeployAnnotations(c *Client) (map[string]interface{}, error) {
+	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
+	if err != nil {
+		return nil, err
+	}
+	annotations := map[string]interface{}{"opendatahub.io/managed": "false"}
+	if _, saved := current[legacyOriginalManagedAnnotation]; !saved {
+		record := legacyManagedRecord{}
+		if value, ok := current["opendatahub.io/managed"]; ok && value != "false" {
+			record = legacyManagedRecord{Present: true, Value: value}
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		annotations[legacyOriginalManagedAnnotation] = string(raw)
+	}
+	return annotations, nil
+}
+
+// legacyRevertAnnotations restores opendatahub.io/managed to the saved
+// original (null removes it) and drops the record. Without a record the
+// annotation is removed, which is the operator's default.
+func legacyRevertAnnotations(c *Client) (map[string]interface{}, error) {
+	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
+	if err != nil {
+		return nil, err
+	}
+	var managed interface{}
+	var record legacyManagedRecord
+	if raw, ok := current[legacyOriginalManagedAnnotation]; ok && json.Unmarshal([]byte(raw), &record) == nil && record.Present && record.Value != "false" {
+		managed = record.Value
+	}
+	return map[string]interface{}{"opendatahub.io/managed": managed, legacyOriginalManagedAnnotation: nil}, nil
 }
 
 // getOriginalImages reads all dashboard container images from the operator's

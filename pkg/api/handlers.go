@@ -847,8 +847,24 @@ var HandleDebug = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *htt
 var HandleDashboardState = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	state, err := cluster.GetDashboardState(c)
 	if err != nil {
-		slog.Error("dashboard state error", "error", err)
-		writeError(w, "failed to get dashboard state", http.StatusInternalServerError)
+		status, code, message := cluster.DashboardStateError(err)
+		if status != http.StatusNotFound {
+			slog.Error("dashboard state error", "error", err, "errorCode", code)
+			writeError(w, message, status, code)
+			return
+		}
+		// Not deployed: still report a paused dashboard-operator so the page
+		// can offer Revert (for example while a Dashboard CR deletion waits
+		// for the paused operator to process its finalizer).
+		body := map[string]interface{}{"error": message, "errorCode": code}
+		if override, oErr := cluster.DashboardOverrideSummary(c); oErr == nil && override != nil && override.Active {
+			body["override"] = override
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			slog.Error("response encode error", "label", "dashboard-state", "error", err)
+		}
 		return
 	}
 	writeJSON(w, state, "dashboard-state")
@@ -871,10 +887,14 @@ var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.Re
 		writeError(w, "pr must be a positive integer", http.StatusBadRequest, "validation")
 		return
 	}
+	if !cluster.ValidDashboardFlavor(req.Flavor) {
+		writeError(w, "flavor must be rhoai or odh", http.StatusBadRequest, "validation")
+		return
+	}
 
-	slog.Info("mutation", "op", "deploy-pr", "pr", req.PR)
+	slog.Info("mutation", "op", "deploy-pr", "pr", req.PR, "flavor", req.Flavor)
 
-	result, err := cluster.DeployPRImage(c, req.PR)
+	result, err := cluster.DeployPRImageWithFlavor(c, req.PR, req.Flavor)
 	if err != nil {
 		slog.Error("deploy-pr failed", "error", err)
 		writeError(w, "deploy PR image failed", http.StatusInternalServerError)
@@ -905,7 +925,19 @@ var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.
 		return
 	}
 	defer releaseClusterMutationLock()
-	result, err := cluster.DeployDashboardMain(c)
+	// The body is optional; an empty body deploys the default (RHOAI) flavor.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.DeployMainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if !cluster.ValidDashboardFlavor(req.Flavor) {
+		writeError(w, "flavor must be rhoai or odh", http.StatusBadRequest, "validation")
+		return
+	}
+	slog.Info("mutation", "op", "deploy-dashboard-main", "flavor", req.Flavor)
+	result, err := cluster.DeployDashboardMainWithFlavor(c, req.Flavor)
 	if err != nil {
 		slog.Error("deploy dashboard main failed", "error", err)
 		writeError(w, "deploy dashboard main failed", http.StatusInternalServerError)
