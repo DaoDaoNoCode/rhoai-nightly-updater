@@ -3,6 +3,7 @@ frontend/dist/
 .git/
 *.md
 deploy/
+!deploy/template.yaml
 .env
 .env.*
 nightly-updater/
