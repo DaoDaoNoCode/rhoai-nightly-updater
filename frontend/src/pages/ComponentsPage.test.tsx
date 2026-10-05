@@ -1,0 +1,170 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { ComponentsPage } from "./ComponentsPage";
+import { stubApi, jsonResponse } from "../test/apiStub";
+import { resetPermissionsCache } from "../hooks/usePermissions";
+import type { ComponentsResponse, DeploymentInfo } from "../types";
+
+function dep(name: string, over: Partial<DeploymentInfo> = {}): DeploymentInfo {
+  return {
+    name, namespace: "redhat-ods-applications", ready: 1, desired: 1, available: 1,
+    image: `registry.redhat.io/rhoai/odh-${name}-rhel9@sha256:${"a".repeat(64)}`,
+    unavailableReplicas: 0, updatedReplicas: 1, rolloutStuck: false,
+    pods: [{ name: `${name}-abc`, namespace: "redhat-ods-applications", phase: "Running", node: "n", ready: true, restarts: 0, image: "", imageID: "", age: "2d" }],
+    ...over,
+  };
+}
+
+function present(deployments: DeploymentInfo[]): ComponentsResponse {
+  return {
+    components: [{ name: "dashboard", managementState: "Managed", status: "Available" }],
+    deployments, dscName: "default-dsc", dscPhase: "Ready", changedCount: 0, dscExists: true, dscState: "present",
+  };
+}
+
+function renderPage() {
+  return render(<MemoryRouter><ComponentsPage /></MemoryRouter>);
+}
+
+beforeEach(() => resetPermissionsCache());
+
+describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
+  it("no-dsc shows the create flow with the operator's defaults, not 'not installed'", async () => {
+    const api = stubApi({
+      "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded" },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster\nmetadata:\n  name: default-dsc", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "", source: "csv", sourceDescription: "alm-examples of the installed CSV rhods-operator.3.6.0" },
+      "POST /api/setup/dsc": { success: true, message: "DataScienceCluster default-dsc created", logs: [] },
+    });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "No DataScienceCluster yet" })).toBeInTheDocument();
+    expect(screen.getByText(/RHOAI operator 3.6.0 is installed \(Succeeded\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/not installed/i)).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: "Preview and create DataScienceCluster" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview and create DataScienceCluster" })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(screen.getByRole("button", { name: "Preview and create DataScienceCluster" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText(/kind: DataScienceCluster/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/alm-examples of the installed CSV/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("DataScienceCluster default-dsc created")).toBeInTheDocument();
+    expect(api.calls.filter((c) => c === "POST /api/setup/dsc")).toHaveLength(1);
+  });
+
+  it("no-crd says RHOAI is not installed and links to the Dashboard", async () => {
+    stubApi({ "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-crd" } });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "RHOAI is not installed" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /install RHOAI/ })).toHaveAttribute("href", "/");
+  });
+
+  it.each([
+    [403, "forbidden", "Access denied"],
+    [502, "cluster_unavailable", "The cluster API returned an error"],
+    [504, "timeout", "The request timed out"],
+    [503, "rate_limited", "The cluster API is throttling requests"],
+    [500, "internal", "Could not load components"],
+  ])("HTTP %i %s is an error with Retry, never an empty state", async (status, errorCode, title) => {
+    stubApi({ "/api/components": () => jsonResponse({ error: "Could not read components: boom", errorCode }, status) });
+    renderPage();
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getByText(/Could not read components: boom/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.queryByText(/not installed/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
+  const deployments = [
+    dep("agent-ops-ui"),
+    dep("odh-observability", { ready: 0, rolloutStuck: true, pods: [{ name: "odh-observability-1", namespace: "redhat-ods-applications", phase: "Pending", node: "n", ready: false, restarts: 0, image: "", imageID: "", age: "2d", containers: [{ name: "manager", ready: false, restarts: 0, state: "waiting", reason: "ContainerCreating" }] }] }),
+    dep("gen-ai-ui", { buildDate: "2026-10-01T00:00:00Z" }),
+  ];
+
+  function rowNames(): string[] {
+    const table = screen.getByRole("grid", { name: "Deployments" });
+    return within(table).getAllByRole("row").slice(1)
+      .map((r) => r.querySelector('td[data-label="Name"] span')?.textContent ?? "")
+      .filter(Boolean);
+  }
+
+  it("shows problems first with their cause, and filters by status and text", async () => {
+    stubApi({ "/api/components": present(deployments) });
+    renderPage();
+    await screen.findByRole("grid", { name: "Deployments" });
+    expect(rowNames()).toEqual(["odh-observability", "agent-ops-ui", "gen-ai-ui"]);
+    expect(screen.getByText("ContainerCreating for 2d")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Needs attention (1)" }));
+    expect(screen.getByRole("button", { name: "Needs attention (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(rowNames()).toEqual(["odh-observability"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "All (3)" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /Filter deployments/ }), { target: { value: "gen-ai" } });
+    expect(rowNames()).toEqual(["gen-ai-ui"]);
+    expect(screen.getByText("Showing 1 of 3")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: /Filter deployments/ }), { target: { value: "nothing-matches" } });
+    expect(screen.getByText("No deployments match the filters")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]);
+    expect(rowNames()).toHaveLength(3);
+  });
+
+  it("sorts by name when the Name header is clicked", async () => {
+    stubApi({ "/api/components": present(deployments) });
+    renderPage();
+    await screen.findByRole("grid", { name: "Deployments" });
+    fireEvent.click(screen.getByRole("button", { name: "Name" }));
+    expect(rowNames()).toEqual(["agent-ops-ui", "gen-ai-ui", "odh-observability"]);
+    fireEvent.click(screen.getByRole("button", { name: "Name" }));
+    expect(rowNames()).toEqual(["odh-observability", "gen-ai-ui", "agent-ops-ui"]);
+  });
+
+  it("an expanded row shows the full image and a keyboard-reachable copy button", async () => {
+    stubApi({ "/api/components": present([dep("agent-ops-ui")]) });
+    renderPage();
+    await screen.findByRole("grid", { name: "Deployments" });
+    fireEvent.click(screen.getByRole("button", { name: /agent-ops-ui/ }));
+    const image = deployments[0].image;
+    expect(screen.getByText(image)).toBeVisible();
+    expect(screen.getByRole("button", { name: `Copy image reference ${image}` })).toBeInTheDocument();
+  });
+
+  it("Unblock rollout names the Deployment and sends it; nothing to do is info, not an error", async () => {
+    const stuck = dep("rhods-dashboard", {
+      ready: 1, desired: 1,
+      pods: [
+        { name: "old", namespace: "redhat-ods-applications", phase: "Running", node: "n", ready: true, restarts: 0, image: "", imageID: "", age: "2d", podTemplateHash: "a" },
+        { name: "new", namespace: "redhat-ods-applications", phase: "Pending", node: "", ready: false, restarts: 0, image: "", imageID: "", age: "1m", podTemplateHash: "b", schedulingReason: "Unschedulable", schedulingMessage: "0/2 nodes are available: 2 Insufficient cpu." },
+      ],
+    });
+    const api = stubApi({
+      "/api/components": present([stuck]),
+      "POST /api/assist-rollout": () => jsonResponse({ success: false, message: "Nothing to do: the rollout is no longer blocked.", logs: [], errorCode: "nothing_to_do" }, 422),
+    });
+    renderPage();
+    await screen.findByRole("button", { name: "Unblock rollout" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unblock rollout" })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(screen.getByRole("button", { name: "Unblock rollout" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Deployment redhat-ods-applications/rhods-dashboard")).toBeInTheDocument();
+    expect(within(dialog).getByText("spec.strategy.rollingUpdate.maxUnavailable")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Unblock rollout" }));
+    expect(await screen.findByText("Nothing to do")).toBeInTheDocument();
+    expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "redhat-ods-applications", deployment: "rhods-dashboard" }]);
+  });
+
+  it("read-only users cannot open the unblock dialog", async () => {
+    const stuck = dep("x", { pods: [
+      { name: "old", namespace: "redhat-ods-applications", phase: "Running", node: "n", ready: true, restarts: 0, image: "", imageID: "", age: "2d", podTemplateHash: "a" },
+      { name: "new", namespace: "redhat-ods-applications", phase: "Pending", node: "", ready: false, restarts: 0, image: "", imageID: "", age: "1m", podTemplateHash: "b", schedulingReason: "Unschedulable" },
+    ] });
+    stubApi({ "/api/components": present([stuck]), "/api/user/permissions": { canMutate: false, user: "viewer" } });
+    renderPage();
+    await screen.findByRole("button", { name: "Unblock rollout" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unblock rollout" })).toHaveAttribute("aria-disabled", "true"));
+    await new Promise((r) => setTimeout(r, 50));
+    fireEvent.click(screen.getByRole("button", { name: "Unblock rollout" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
