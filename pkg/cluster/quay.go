@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,18 +60,23 @@ func parseTag(tag string) (parsedTag, bool) {
 	if m == nil {
 		return parsedTag{}, false
 	}
-	major, minor, patch := 0, 0, 0
-	ea := -1
-	fmt.Sscanf(m[1], "%d", &major)
-	fmt.Sscanf(m[2], "%d", &minor)
-	if m[3] != "" {
-		fmt.Sscanf(m[3], "%d", &patch)
-	}
-	if m[4] != "" {
-		ea = 0
-		if m[5] != "" {
-			fmt.Sscanf(m[5], "%d", &ea)
+	// The regex only captures digits, so Atoi fails only on overflow.
+	num := func(s string, fallback int) (int, bool) {
+		if s == "" {
+			return fallback, true
 		}
+		n, err := strconv.Atoi(s)
+		return n, err == nil
+	}
+	major, ok1 := num(m[1], 0)
+	minor, ok2 := num(m[2], 0)
+	patch, ok3 := num(m[3], 0)
+	ea, ok4 := -1, true
+	if m[4] != "" {
+		ea, ok4 = num(m[5], 0)
+	}
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return parsedTag{}, false
 	}
 	return parsedTag{raw: tag, major: major, minor: minor, patch: patch, ea: ea}, true
 }

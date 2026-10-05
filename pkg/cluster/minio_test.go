@@ -141,7 +141,7 @@ func TestMinioCredentials_HexCharacters(t *testing.T) {
 		t.Errorf("expected password length 32, got %d", len(pw))
 	}
 	for _, ch := range pw {
-		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
 			t.Errorf("password contains unexpected character %q", ch)
 		}
 	}

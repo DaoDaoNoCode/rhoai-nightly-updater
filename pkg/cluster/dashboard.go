@@ -354,11 +354,12 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 				return
 			}
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			switch resp.StatusCode {
+			case http.StatusOK:
 				resultCh <- checkResult{name, image, "found"}
-			} else if resp.StatusCode == http.StatusNotFound {
+			case http.StatusNotFound:
 				resultCh <- checkResult{name, "", "not built"}
-			} else {
+			default:
 				resultCh <- checkResult{name, "", "error"}
 			}
 		}(containerName, repo)

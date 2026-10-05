@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -339,7 +340,7 @@ func dashboardSession(operator *dashboardDeployment) (*dashboardDevSession, erro
 		return nil, fmt.Errorf("invalid Dashboard Dev recovery annotation: %w", err)
 	}
 	if s.OperatorUID != operator.Metadata.UID || s.Replicas <= 0 {
-		return nil, fmt.Errorf("Dashboard Dev recovery annotation does not match this operator")
+		return nil, errors.New("the Dashboard Dev recovery annotation does not match this operator")
 	}
 	return &s, nil
 }
@@ -901,11 +902,11 @@ func resolveDashboardBuild(ctx context.Context, repo, tag string) (string, bool,
 		return "", false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", false, fmt.Errorf("Quay returned HTTP %d for %s:%s", resp.StatusCode, repo, tag)
+		return "", false, fmt.Errorf("quay.io returned HTTP %d for %s:%s", resp.StatusCode, repo, tag)
 	}
 	digest := resp.Header.Get("Docker-Content-Digest")
 	if !dashboardDigestPattern.MatchString(digest) {
-		return "", false, fmt.Errorf("Quay returned an invalid image digest for %s:%s", repo, tag)
+		return "", false, fmt.Errorf("quay.io returned an invalid image digest for %s:%s", repo, tag)
 	}
 	return "quay.io/" + repo + ":" + tag + "@" + digest, true, nil
 }

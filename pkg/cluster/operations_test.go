@@ -20,7 +20,6 @@ const succeededCSV = `{"metadata":{"name":"rhods-operator.v3.5.0"},"spec":{"disp
 type mockResponse struct {
 	body       string
 	statusCode int
-	err        error
 }
 
 // newMockClient creates a test Client backed by an httptest.Server.

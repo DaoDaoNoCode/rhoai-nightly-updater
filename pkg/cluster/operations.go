@@ -1674,10 +1674,10 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	dockerConfig := map[string]interface{}{}
 	if secretExists {
 		existing, problem := decodeDockerConfigSecret(existingBody)
-		switch {
-		case problem == "":
+		switch problem {
+		case "":
 			dockerConfig = existing
-		case problem == "Secret has no data" || problem == "Secret is missing .dockerconfigjson key":
+		case "Secret has no data", "Secret is missing .dockerconfigjson key":
 			// Nothing to preserve.
 		default:
 			// The kubelet cannot use an unreadable config either, so nothing

@@ -63,6 +63,25 @@ var allowedImagePrefixes = []string{
 	"registry.redhat.io/rhoai/",
 }
 
+// forwardSteps returns an emitter that streams pipeline steps to the client.
+// A failed write means the client went away; the operation keeps running
+// (it is detached from the request) and SSEWriter still records the step
+// for GET /api/operation, so the error is only logged.
+func forwardSteps(sseWriter *SSEWriter) func(cluster.UpdateStepEvent) {
+	return func(event cluster.UpdateStepEvent) {
+		if err := sseWriter.SendStep(UpdateStep{
+			Step:      event.Step,
+			Status:    event.Status,
+			Message:   event.Message,
+			Detail:    event.Detail,
+			ElapsedMs: time.Since(sseWriter.StartTime()).Milliseconds(),
+			ErrorCode: event.ErrorCode,
+		}); err != nil {
+			slog.Debug("sse: step not delivered; the operation continues", "step", event.Step, "error", err)
+		}
+	}
+}
+
 // sseHeartbeat sends periodic SSE comments to keep the connection alive
 // through proxies with idle timeouts. Stops when done is closed.
 func sseHeartbeat(w *SSEWriter, done <-chan struct{}) {
@@ -646,16 +665,7 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	setOperationTarget(w, req.Image)
 	slog.Info("mutation", "op", "update-stream", "image", req.Image)
 
-	result, updateErr := runUpdateStream(c, req.Image, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, func(event cluster.UpdateStepEvent) {
-		sseWriter.SendStep(UpdateStep{
-			Step:      event.Step,
-			Status:    event.Status,
-			Message:   event.Message,
-			Detail:    event.Detail,
-			ElapsedMs: time.Since(sseWriter.StartTime()).Milliseconds(),
-			ErrorCode: event.ErrorCode,
-		})
-	})
+	result, updateErr := runUpdateStream(c, req.Image, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, forwardSteps(sseWriter))
 
 	sendOperationResult(sseWriter, result, updateErr)
 
@@ -1060,16 +1070,7 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	slog.Info("mutation", "op", "reinstall-stream", "targetType", req.TargetType, "image", req.Image)
 
 	opts := cluster.OperationOptions{AllowDowngrade: req.AllowDowngrade, RevertDashboardDev: req.RevertDashboardDev}
-	result, reinstallErr := runReinstallStream(c, req.TargetType, req.Image, req.Channel, opts, func(event cluster.UpdateStepEvent) {
-		sseWriter.SendStep(UpdateStep{
-			Step:      event.Step,
-			Status:    event.Status,
-			Message:   event.Message,
-			Detail:    event.Detail,
-			ElapsedMs: time.Since(sseWriter.StartTime()).Milliseconds(),
-			ErrorCode: event.ErrorCode,
-		})
-	})
+	result, reinstallErr := runReinstallStream(c, req.TargetType, req.Image, req.Channel, opts, forwardSteps(sseWriter))
 
 	sendOperationResult(sseWriter, result, reinstallErr)
 
@@ -1120,16 +1121,7 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 
 	slog.Info("mutation", "op", "refresh-stream")
 
-	result, refreshErr := runRefreshStream(c, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, func(event cluster.UpdateStepEvent) {
-		sseWriter.SendStep(UpdateStep{
-			Step:      event.Step,
-			Status:    event.Status,
-			Message:   event.Message,
-			Detail:    event.Detail,
-			ElapsedMs: time.Since(sseWriter.StartTime()).Milliseconds(),
-			ErrorCode: event.ErrorCode,
-		})
-	})
+	result, refreshErr := runRefreshStream(c, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, forwardSteps(sseWriter))
 
 	sendOperationResult(sseWriter, result, refreshErr)
 
