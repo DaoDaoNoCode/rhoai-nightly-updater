@@ -283,8 +283,11 @@ var (
 	quayTokenFlight flightGroup[string]
 )
 
-// quayTokenBatch bounds the scopes of one token request so its URL stays short.
-const quayTokenBatch = 40
+// quayTokenBatch bounds the scopes of one token. The token lists every
+// scope, growing ~180 bytes per repository (measured live: 10 scopes 2.6 KB,
+// 40 scopes 8 KB), and Quay's nginx rejects a 40-scope bearer header with
+// "400 Request Header Or Cookie Too Large". 10 keeps the header near 2.6 KB.
+const quayTokenBatch = 10
 
 func quayTokenKey(basicAuth, repo string) string {
 	sum := sha256.Sum256([]byte(basicAuth))
@@ -402,7 +405,7 @@ func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	if tokenRejected(resp.StatusCode) {
 		return "", &registryAuthError{what: "manifest HEAD", status: resp.StatusCode}
 	}
 	if resp.StatusCode != http.StatusOK {

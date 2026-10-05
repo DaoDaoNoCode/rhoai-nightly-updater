@@ -64,11 +64,13 @@ func TestResolveRelatedImageLabels_OneSecretReadAndBatchedTokens(t *testing.T) {
 	if n := secretReads.Load(); n != 1 {
 		t.Fatalf("pull secret read %d times, want 1 per batch", n)
 	}
-	if n := f.count("quay-token"); n != 1 {
-		t.Fatalf("token requests %d, want 1 multi-scope token", n)
+	if n := f.count("quay-token"); n != 2 {
+		t.Fatalf("token requests %d, want 2 multi-scope tokens for 20 repositories", n)
 	}
-	if len(f.scopes) != 1 || len(f.scopes[0]) != 20 {
-		t.Fatalf("expected one token request with 20 scopes, got %v", f.scopes)
+	for _, scopes := range f.scopes {
+		if len(scopes) > quayTokenBatch {
+			t.Fatalf("token with %d scopes exceeds the header-size bound %d", len(scopes), quayTokenBatch)
+		}
 	}
 	if f.count("github") != 0 {
 		t.Fatal("FBC label resolution must not call GitHub")
@@ -76,7 +78,7 @@ func TestResolveRelatedImageLabels_OneSecretReadAndBatchedTokens(t *testing.T) {
 
 	// Second request: labels are immutable per digest, so nothing is fetched.
 	ResolveRelatedImageLabels(context.Background(), c, relatedImages(20, "img"))
-	if f.count("quay-blob") != 20 || f.count("quay-manifest") != 20 || f.count("quay-token") != 1 {
+	if f.count("quay-blob") != 20 || f.count("quay-manifest") != 20 || f.count("quay-token") != 2 {
 		t.Fatalf("warm request hit the registry: %v", f.counts)
 	}
 }
@@ -290,5 +292,35 @@ func TestGitHubRateLimitReset(t *testing.T) {
 	}
 	if got := githubRateLimitReset(h("X-Ratelimit-Reset", "garbage"), now); !got.Equal(now.Add(5 * time.Minute)) {
 		t.Fatalf("default: %v", got)
+	}
+}
+
+func TestImageLabels_OversizedTokenAndUnknownManifest(t *testing.T) {
+	f := newFakeRegistry()
+	labelFixture(f, 1)
+	installFakeRegistry(t, f)
+	// Quay answers 400 when the bearer header is too large; the image must
+	// then be read with a single-scope token instead of failing.
+	quayHTTPClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/manifests/") && strings.HasSuffix(r.Header.Get("Authorization"), "BIG") {
+			return &http.Response{StatusCode: 400, Header: http.Header{}, Body: http.NoBody, Request: r}, nil
+		}
+		return f.RoundTrip(r)
+	})
+	quayTokenCache.Add(quayTokenKey("a", "rhoai/img0"), "BIG", time.Hour)
+	if labels, err := imageLabelsWithAuth(context.Background(), "a", "quay.io/rhoai/img0@"+digestOf(0), false); err != nil || labels.GitCommit == "" {
+		t.Fatalf("labels=%+v err=%v", labels, err)
+	}
+
+	// A garbage-collected digest (404) is remembered instead of re-read on every page load.
+	f.setStatus("quay-manifest", 404)
+	gone := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-2.17@" + digestOf(5)
+	for i := 0; i < 3; i++ {
+		if _, err := imageLabelsWithAuth(context.Background(), "a", gone, false); err == nil {
+			t.Fatal("expected an error for an unknown manifest")
+		}
+	}
+	if n := f.count("quay-manifest"); n != 2 {
+		t.Fatalf("manifest reads %d, want 2 (1 for img0, 1 for the unknown digest)", n)
 	}
 }

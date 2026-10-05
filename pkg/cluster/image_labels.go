@@ -124,7 +124,7 @@ func imageLabelsWithAuth(ctx context.Context, basicAuth, imageID string, withCom
 				return v, nil
 			}
 			labels, err := fetchImageLabels(ctx, basicAuth, repo, digest)
-			if errors.Is(err, errNoImageLabels) {
+			if errors.Is(err, errNoImageLabels) || errors.Is(err, errManifestUnknown) {
 				v := labelCacheValue{noLabels: true}
 				labelCache.Add(key, v, labelNegativeTTL)
 				return v, nil
@@ -242,8 +242,18 @@ func fetchImageLabels(ctx context.Context, basicAuth, repo, digest string) (*Ima
 	}
 }
 
-// registryAuthError marks a 401/403 from a registry read, which can mean an
-// expired or under-scoped bearer token.
+// tokenRejected reports a registry status that can mean the bearer token is
+// unusable: 401/403 (expired or under-scoped), or 400 (Quay's nginx answers
+// "Request Header Or Cookie Too Large" to an oversized multi-scope token).
+func tokenRejected(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusBadRequest
+}
+
+// errManifestUnknown marks a digest the registry does not have (404). Old
+// FBC builds are garbage-collected, so this is remembered like "no labels".
+var errManifestUnknown = errors.New("manifest unknown")
+
+// registryAuthError marks a registry read rejected for its token (see tokenRejected).
 type registryAuthError struct {
 	what   string
 	status int
@@ -295,8 +305,11 @@ func getConfigDigestFromManifest(ctx context.Context, httpClient *http.Client, b
 	if err != nil {
 		return "", err
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	if tokenRejected(resp.StatusCode) {
 		return "", &registryAuthError{what: "manifest GET", status: resp.StatusCode}
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return "", errManifestUnknown
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("manifest GET returned %d: %s", resp.StatusCode, string(body))
@@ -416,7 +429,7 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	if tokenRejected(resp.StatusCode) {
 		return nil, &registryAuthError{what: "config blob GET", status: resp.StatusCode}
 	}
 	if resp.StatusCode != http.StatusOK {
