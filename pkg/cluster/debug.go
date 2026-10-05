@@ -5,55 +5,47 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // GetDebugInfo collects pod details from RHOAI-related namespaces for debugging.
-// If some namespace queries fail, partial data is returned with warnings.
-// If all namespace queries fail, an error is returned.
+// The three namespaces are read in parallel. If some namespace queries fail,
+// partial data is returned with warnings. If all fail, an error is returned.
 func GetDebugInfo(c *Client) (*types.DebugResponse, error) {
+	namespaces := []string{"redhat-ods-operator", "redhat-ods-applications", "openshift-marketplace"}
+	pods := make([][]types.PodInfo, len(namespaces))
+	errs := make([]error, len(namespaces))
+	var wg sync.WaitGroup
+	for i, ns := range namespaces {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pods[i], errs[i] = getPodsInNamespace(c, ns)
+		}()
+	}
+	wg.Wait()
+
 	resp := &types.DebugResponse{}
 	var warnings []string
-	failCount := 0
-	totalNamespaces := 3
-
-	// Get pods from redhat-ods-operator
-	pods, err := getPodsInNamespace(c, "redhat-ods-operator")
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list pods in redhat-ods-operator: %v", err))
-		failCount++
-	} else {
-		resp.OperatorPods = pods
-	}
-
-	// Get pods from redhat-ods-applications
-	pods, err = getPodsInNamespace(c, "redhat-ods-applications")
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list pods in redhat-ods-applications: %v", err))
-		failCount++
-	} else {
-		resp.ApplicationPods = pods
-	}
-
-	// Get catalog pods from openshift-marketplace (filtered to rhoai)
-	allMarketplace, err := getPodsInNamespace(c, "openshift-marketplace")
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("failed to list pods in openshift-marketplace: %v", err))
-		failCount++
-	} else {
-		for _, p := range allMarketplace {
-			if strings.Contains(p.Name, "rhoai") {
-				resp.MarketplacePods = append(resp.MarketplacePods, p)
-			}
+	for i, ns := range namespaces {
+		if errs[i] != nil {
+			warnings = append(warnings, fmt.Sprintf("failed to list pods in %s: %v", ns, errs[i]))
 		}
 	}
-
-	if failCount == totalNamespaces {
-		return nil, fmt.Errorf("failed to list pods in all namespaces: %s", strings.Join(warnings, "; "))
+	if len(warnings) == len(namespaces) {
+		return nil, fmt.Errorf("failed to list pods in all namespaces: %s: %w", strings.Join(warnings, "; "), errs[0])
 	}
-
+	resp.OperatorPods = pods[0]
+	resp.ApplicationPods = pods[1]
+	// Catalog pods from openshift-marketplace, filtered to rhoai
+	for _, p := range pods[2] {
+		if strings.Contains(p.Name, "rhoai") {
+			resp.MarketplacePods = append(resp.MarketplacePods, p)
+		}
+	}
 	resp.Warnings = warnings
 	return resp, nil
 }

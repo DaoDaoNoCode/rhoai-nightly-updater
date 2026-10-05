@@ -46,6 +46,7 @@ type StatusResponse struct {
 	StableChannelPinned  bool              `json:"stableChannelPinned,omitempty"`
 	StableDiscoveryError string            `json:"stableDiscoveryError,omitempty"`
 	DSCExists            bool              `json:"dscExists"`
+	Nightly              *NightlyStatus    `json:"nightly,omitempty"`
 	Activity             []ActivityEntry   `json:"activity,omitempty"`
 	Errors               []string          `json:"errors,omitempty"`
 }
@@ -153,9 +154,34 @@ type OperationResponse struct {
 
 // LatestNightlyResponse contains the latest nightly tag and full image reference.
 type LatestNightlyResponse struct {
-	Tag   string `json:"tag"`
-	Image string `json:"image"`
-	Error string `json:"error,omitempty"`
+	Tag       string `json:"tag"`
+	Image     string `json:"image"`
+	Digest    string `json:"digest,omitempty"`    // sha256:... of Image, when resolved
+	BuildDate string `json:"buildDate,omitempty"` // build-date label of the FBC image
+	Error     string `json:"error,omitempty"`
+}
+
+// NightlyBuild describes one nightly FBC catalog build.
+type NightlyBuild struct {
+	Image           string `json:"image"`                     // full image reference
+	Tag             string `json:"tag,omitempty"`             // stream tag, e.g. "rhoai-3.6"
+	Digest          string `json:"digest,omitempty"`          // "sha256:..."
+	BuildDate       string `json:"buildDate,omitempty"`       // build-date label of the FBC image
+	DashboardCommit string `json:"dashboardCommit,omitempty"` // odh-dashboard commit in this build, once known
+	DashboardGitURL string `json:"dashboardGitURL,omitempty"`
+}
+
+// NightlyStatus compares the installed nightly catalog with the newest build
+// of the same stream (tag). It is only set while the operator Subscription
+// uses the nightly CatalogSource.
+type NightlyStatus struct {
+	Installed *NightlyBuild `json:"installed,omitempty"`
+	Latest    *NightlyBuild `json:"latest,omitempty"`
+	// UpdateAvailable is installed digest != latest digest of the same tag;
+	// absent when either digest is unknown.
+	UpdateAvailable *bool  `json:"updateAvailable,omitempty"`
+	CheckedAt       string `json:"checkedAt,omitempty"` // when Latest was read from Quay (RFC3339)
+	Error           string `json:"error,omitempty"`     // why Latest is missing
 }
 
 // NightlyTag pairs a version tag with its full image reference.
@@ -214,6 +240,8 @@ type DSCCompatibility struct {
 	ExtraComponents   []string `json:"extraComponents"`
 	ValidationError   string   `json:"validationError,omitempty"`
 	DefaultsError     string   `json:"defaultsError,omitempty"`
+	// DefaultsSource is "csv" (alm-examples of the installed CSV) or "github" (branch sample).
+	DefaultsSource string `json:"defaultsSource,omitempty"`
 }
 
 // ComponentsResponse groups DSC component statuses with deployment details.
@@ -222,11 +250,18 @@ type ComponentsResponse struct {
 	Components       []ComponentInfo   `json:"components"`
 	Deployments      []DeploymentInfo  `json:"deployments"`
 	DSCName          string            `json:"dscName"`
-	DSCPhase         string            `json:"dscPhase"`
-	DSCReason        string            `json:"dscReason,omitempty"`
-	SnapshotTime     string            `json:"snapshotTime,omitempty"`
-	ChangedCount     int               `json:"changedCount"`
-	ConsoleURL       string            `json:"consoleURL,omitempty"`
+	// DSCExists is false when no DataScienceCluster exists; DSCState then
+	// says why: "no-dsc" (CRD installed, no DSC yet) or "no-crd" (operator
+	// not installed or its CRD not created yet). DSCState is "present" otherwise.
+	DSCExists       bool   `json:"dscExists"`
+	DSCState        string `json:"dscState"`
+	OperatorVersion string `json:"operatorVersion,omitempty"` // installed rhods-operator CSV version
+	OperatorPhase   string `json:"operatorPhase,omitempty"`   // its CSV phase, e.g. "Succeeded"
+	DSCPhase        string `json:"dscPhase"`
+	DSCReason       string `json:"dscReason,omitempty"`
+	SnapshotTime    string `json:"snapshotTime,omitempty"`
+	ChangedCount    int    `json:"changedCount"`
+	ConsoleURL      string `json:"consoleURL,omitempty"`
 }
 
 // ContainerInfo holds per-container status within a pod.

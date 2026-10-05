@@ -2,13 +2,16 @@ package cluster
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,7 +22,6 @@ import (
 )
 
 const (
-	quayAuthURL = "https://quay.io/v2/auth?service=quay.io&scope=repository:rhoai/rhoai-fbc-fragment:pull"
 	quayTagsURL = "https://quay.io/v2/rhoai/rhoai-fbc-fragment/tags/list"
 	quayImage   = "quay.io/rhoai/rhoai-fbc-fragment"
 )
@@ -32,8 +34,8 @@ var quayHTTPClient = &http.Client{
 		// Honor HTTP(S)_PROXY/NO_PROXY like http.DefaultTransport does, so
 		// registry calls work on clusters that require an egress proxy.
 		Proxy:               http.ProxyFromEnvironment,
-		MaxIdleConns:        20,
-		MaxIdleConnsPerHost: 10,
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 16,
 		IdleConnTimeout:     90 * time.Second,
 	},
 }
@@ -233,7 +235,21 @@ func isQuayCredentialRejection(err error) bool {
 }
 
 func getQuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", quayAuthURL, nil)
+	return fetchQuayToken(ctx, httpClient, basicAuth, []string{quayFBCRepo})
+}
+
+// quayFBCRepo is the repository of the nightly FBC catalog images.
+const quayFBCRepo = "rhoai/rhoai-fbc-fragment"
+
+// fetchQuayToken requests one pull token for the given repositories. Quay
+// honours repeated scope parameters (the Docker token protocol allows them),
+// so a single token can cover a whole batch of images.
+func fetchQuayToken(ctx context.Context, httpClient *http.Client, basicAuth string, repos []string) (string, error) {
+	authURL := "https://quay.io/v2/auth?service=quay.io"
+	for _, repo := range repos {
+		authURL += "&scope=" + url.QueryEscape("repository:"+repo+":pull")
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", authURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating auth request: %w", err)
 	}
@@ -256,7 +272,131 @@ func getQuayBearerToken(ctx context.Context, httpClient *http.Client, basicAuth 
 	if err := json.NewDecoder(resp.Body).Decode(&tokenData); err != nil {
 		return "", fmt.Errorf("decoding auth response: %w", err)
 	}
+	if tokenData.Token == "" {
+		return "", fmt.Errorf("quay auth response has no token")
+	}
 	return tokenData.Token, nil
+}
+
+var (
+	quayTokenCache  = newLRU[string, string](1024)
+	quayTokenFlight flightGroup[string]
+)
+
+// quayTokenBatch bounds the scopes of one token. The token lists every
+// scope, growing ~180 bytes per repository (measured live: 10 scopes 2.6 KB,
+// 40 scopes 8 KB), and Quay's nginx rejects a 40-scope bearer header with
+// "400 Request Header Or Cookie Too Large". 10 keeps the header near 2.6 KB.
+const quayTokenBatch = 10
+
+func quayTokenKey(basicAuth, repo string) string {
+	sum := sha256.Sum256([]byte(basicAuth))
+	return hex.EncodeToString(sum[:]) + "|" + repo
+}
+
+// quayTokenTTL returns how long a bearer token may be reused: until five
+// minutes before the "exp" claim of the JWT Quay issues (3600s lifetime,
+// verified live). The token is only decoded to read its expiry; checking its
+// signature is Quay's job. Without a readable expiry the token is kept for
+// 30s, half of the Docker token protocol's 60s default lifetime.
+func quayTokenTTL(token string, now time.Time) time.Duration {
+	const fallback = 30 * time.Second
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return fallback
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return fallback
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.Exp == 0 {
+		return fallback
+	}
+	remaining := time.Unix(claims.Exp, 0).Sub(now)
+	switch {
+	case remaining <= 0:
+		return 0
+	case remaining > 10*time.Minute:
+		remaining -= 5 * time.Minute
+	default:
+		remaining /= 2
+	}
+	if remaining > time.Hour {
+		remaining = time.Hour
+	}
+	return remaining
+}
+
+func storeQuayToken(basicAuth, repo, token string) {
+	if ttl := quayTokenTTL(token, time.Now()); ttl > 0 {
+		quayTokenCache.Add(quayTokenKey(basicAuth, repo), token, ttl)
+	}
+}
+
+// cachedQuayToken returns a pull token for repo, reusing it until shortly
+// before it expires. Concurrent requests for the same token share one call.
+func cachedQuayToken(ctx context.Context, basicAuth, repo string) (string, error) {
+	key := quayTokenKey(basicAuth, repo)
+	if token, ok := quayTokenCache.Get(key); ok {
+		return token, nil
+	}
+	token, err, _ := quayTokenFlight.Do(ctx, key, func(ctx context.Context) (string, error) {
+		if token, ok := quayTokenCache.Get(key); ok {
+			return token, nil
+		}
+		token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, []string{repo})
+		if err != nil {
+			return "", err
+		}
+		storeQuayToken(basicAuth, repo, token)
+		return token, nil
+	})
+	return token, err
+}
+
+// prefetchQuayTokens fills the token cache for repos that have no token yet,
+// using one multi-scope token per batch. Failures are ignored: each image
+// then requests its own token.
+func prefetchQuayTokens(ctx context.Context, basicAuth string, repos []string) {
+	var missing []string
+	seen := map[string]bool{}
+	for _, repo := range repos {
+		if seen[repo] {
+			continue
+		}
+		seen[repo] = true
+		if _, ok := quayTokenCache.Get(quayTokenKey(basicAuth, repo)); !ok {
+			missing = append(missing, repo)
+		}
+	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for start := 0; start < len(missing); start += quayTokenBatch {
+		batch := missing[start:min(start+quayTokenBatch, len(missing))]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, batch)
+			if err != nil {
+				slog.Debug("quay token prefetch failed", "repos", len(batch), "error", err)
+				return
+			}
+			for _, repo := range batch {
+				storeQuayToken(basicAuth, repo, token)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// forgetQuayToken drops a cached token that a registry rejected.
+func forgetQuayToken(basicAuth, repo string) {
+	quayTokenCache.Remove(quayTokenKey(basicAuth, repo))
 }
 
 func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag string) (string, error) {
@@ -274,6 +414,9 @@ func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag
 	}
 	defer resp.Body.Close()
 
+	if tokenRejected(resp.StatusCode) {
+		return "", &registryAuthError{what: "manifest HEAD", status: resp.StatusCode}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("manifest HEAD returned %d", resp.StatusCode)
 	}
@@ -285,20 +428,66 @@ func getTagDigest(ctx context.Context, httpClient *http.Client, bearerToken, tag
 	return digest, nil
 }
 
+// Nightly tags such as rhoai-3.6 are re-pushed with every build, so a tag's
+// digest is reused for at most the caller's maxAge.
+var (
+	tagDigestCache  = newLRU[string, string](512)
+	tagDigestFlight flightGroup[string]
+)
+
+// cachedTagDigest resolves tag to its current digest, reusing a lookup no
+// older than maxAge.
+func cachedTagDigest(ctx context.Context, basicAuth, tag string, maxAge time.Duration) (string, error) {
+	fresh := func() (string, bool) {
+		digest, stored, ok := tagDigestCache.GetWithAge(tag)
+		return digest, ok && time.Since(stored) < maxAge
+	}
+	if digest, ok := fresh(); ok {
+		return digest, nil
+	}
+	digest, err, _ := tagDigestFlight.Do(ctx, tag, func(ctx context.Context) (string, error) {
+		if digest, ok := fresh(); ok {
+			return digest, nil
+		}
+		for attempt := 0; ; attempt++ {
+			token, err := cachedQuayToken(ctx, basicAuth, quayFBCRepo)
+			if err != nil {
+				return "", err
+			}
+			digest, err := getTagDigest(ctx, quayHTTPClient, token, tag)
+			var authErr *registryAuthError
+			if attempt == 0 && errors.As(err, &authErr) {
+				forgetQuayToken(basicAuth, quayFBCRepo)
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+			tagDigestCache.Add(tag, digest, tagScanCacheTTL)
+			return digest, nil
+		}
+	})
+	return digest, err
+}
+
 // FetchNightlyTags returns the top `limit` nightly version tags (sorted descending),
 // each with its full image reference including digest.
 func FetchNightlyTags(ctx context.Context, c *Client, limit int) (*types.NightlyTagsResponse, error) {
+	return fetchNightlyTags(ctx, getQuayAuth(c), limit, false)
+}
+
+// FetchNightlyTagsWithBuildDates is FetchNightlyTags plus each build's date,
+// read from the (cached) FBC image labels. It never calls GitHub.
+func FetchNightlyTagsWithBuildDates(ctx context.Context, c *Client, limit int) (*types.NightlyTagsResponse, error) {
+	return fetchNightlyTags(ctx, getQuayAuth(c), limit, true)
+}
+
+func fetchNightlyTags(ctx context.Context, basicAuth string, limit int, buildDates bool) (*types.NightlyTagsResponse, error) {
 	if limit < 0 {
 		limit = 5
 	}
 
-	quayAuth := getQuayAuth(c)
-	bearerToken, err := getQuayBearerToken(ctx, quayHTTPClient, quayAuth)
-	if err != nil {
-		return nil, err
-	}
-
-	parsed, err := fetchAndParseTags(ctx, quayHTTPClient, bearerToken)
+	parsed, err := scanNightlyTags(ctx, basicAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +516,7 @@ func FetchNightlyTags(ctx context.Context, c *Client, limit int) (*types.Nightly
 			defer func() { <-sem }()
 
 			t := topTags[len(topTags)-1-i]
-			digest, err := getTagDigest(ctx, quayHTTPClient, bearerToken, t.raw)
+			digest, err := cachedTagDigest(ctx, basicAuth, t.raw, tagScanCacheTTL)
 			var image string
 			if err != nil {
 				image = fmt.Sprintf("%s:%s", quayImage, t.raw)
@@ -339,39 +528,46 @@ func FetchNightlyTags(ctx context.Context, c *Client, limit int) (*types.Nightly
 	}
 	wg.Wait()
 
+	if buildDates {
+		enrichTagsWithBuildDates(ctx, basicAuth, tags)
+	}
 	return &types.NightlyTagsResponse{Tags: tags}, nil
 }
 
-// EnrichTagsWithBuildDates fetches the OCI image config "created" timestamp for each tag in parallel.
+// scanNightlyTags returns the parsed release tags. A failed scan drops the
+// cached token so a rejected token is not reused until it expires.
+func scanNightlyTags(ctx context.Context, basicAuth string) ([]parsedTag, error) {
+	bearerToken, err := cachedQuayToken(ctx, basicAuth, quayFBCRepo)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := fetchAndParseTags(ctx, quayHTTPClient, bearerToken)
+	if err != nil {
+		forgetQuayToken(basicAuth, quayFBCRepo)
+		return nil, err
+	}
+	return parsed, nil
+}
+
+// EnrichTagsWithBuildDates sets each tag's build date from its FBC image labels.
 func EnrichTagsWithBuildDates(ctx context.Context, c *Client, tags []types.NightlyTag) {
-	type result struct {
-		index int
-		date  string
+	enrichTagsWithBuildDates(ctx, getQuayAuth(c), tags)
+}
+
+// enrichTagsWithBuildDates reads the build-date label of each digest-pinned
+// tag image. Labels are cached by digest. The GitHub commit date is not
+// fetched: the response only carries the build date.
+func enrichTagsWithBuildDates(ctx context.Context, basicAuth string, tags []types.NightlyTag) {
+	refs := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if strings.Contains(t.Image, "@sha256:") {
+			refs = append(refs, t.Image)
+		}
 	}
-	results := make(chan result, len(tags))
-	sem := make(chan struct{}, 10)
-
-	for i, t := range tags {
-		go func(idx int, imageRef string) {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			imgCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-			defer cancel()
-
-			labels, err := GetImageLabels(imgCtx, c, imageRef)
-			if err != nil || labels == nil {
-				results <- result{idx, ""}
-				return
-			}
-			results <- result{idx, labels.BuildDate}
-		}(i, t.Image)
-	}
-
-	for range tags {
-		r := <-results
-		if r.date != "" {
-			tags[r.index].BuildDate = r.date
+	labels := resolveImageLabels(ctx, basicAuth, refs, false)
+	for i := range tags {
+		if l := labels[tags[i].Image]; l != nil && l.BuildDate != "" {
+			tags[i].BuildDate = l.BuildDate
 		}
 	}
 }
@@ -568,23 +764,18 @@ func fetchTagPage(ctx context.Context, httpClient *http.Client, bearerToken, las
 	return quayTagsResponse{}, 0, lastErr
 }
 
-// FetchLatestNightly returns the highest-versioned nightly tag and its image reference.
+// FetchLatestNightly returns the highest-versioned nightly tag, its digest
+// and, when its labels can be read, its build date. It shares the cached tag
+// scan, token and tag digest with the tag list.
 func FetchLatestNightly(ctx context.Context, c *Client) (*types.LatestNightlyResponse, error) {
-	quayAuth := getQuayAuth(c)
-	bearerToken, err := getQuayBearerToken(ctx, quayHTTPClient, quayAuth)
-	if err != nil {
-		return nil, err
-	}
-
-	parsed, err := fetchAndParseTags(ctx, quayHTTPClient, bearerToken)
+	basicAuth := getQuayAuth(c)
+	parsed, err := scanNightlyTags(ctx, basicAuth)
 	if err != nil {
 		return nil, err
 	}
 
 	latest := parsed[len(parsed)-1].raw
-
-	// Fetch the digest for the tag by doing a HEAD on the manifest
-	digest, err := getTagDigest(ctx, quayHTTPClient, bearerToken, latest)
+	digest, err := cachedTagDigest(ctx, basicAuth, latest, tagScanCacheTTL)
 	if err != nil {
 		// Fall back to tag-only if digest fetch fails
 		return &types.LatestNightlyResponse{
@@ -593,8 +784,15 @@ func FetchLatestNightly(ctx context.Context, c *Client) (*types.LatestNightlyRes
 		}, nil
 	}
 
-	return &types.LatestNightlyResponse{
-		Tag:   latest,
-		Image: fmt.Sprintf("%s:%s@%s", quayImage, latest, digest),
-	}, nil
+	resp := &types.LatestNightlyResponse{
+		Tag:    latest,
+		Image:  fmt.Sprintf("%s:%s@%s", quayImage, latest, digest),
+		Digest: digest,
+	}
+	labelCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
+	defer cancel()
+	if labels, err := imageLabelsWithAuth(labelCtx, basicAuth, resp.Image, false); err == nil {
+		resp.BuildDate = labels.BuildDate
+	}
+	return resp, nil
 }

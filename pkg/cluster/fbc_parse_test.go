@@ -153,7 +153,8 @@ func TestSizeLimitedReader(t *testing.T) {
 }
 
 func TestExtractFBCContent_CachesOnlyDigestPinnedReferences(t *testing.T) {
-	resetFBCCache()
+	resetRegistryCaches()
+	t.Cleanup(resetRegistryCaches)
 	blob := gzipTar(t, map[string][]byte{"configs/rhods-operator/catalog.json": []byte(fbcBundleJSON("rhods-operator.3.5.0", "dash"))})
 	var manifests int32
 	original := quayHTTPClient

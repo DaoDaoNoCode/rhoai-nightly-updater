@@ -99,17 +99,21 @@ func TestCreateDefaultDSC_CreatesSuccessfully(t *testing.T) {
 		t.Errorf("expected success, got failure: %s\nlogs: %v", result.Message, result.Logs)
 	}
 
-	// Verify apply was called (c.apply uses PATCH internally but path may have query params)
-	var applyCalled bool
+	// The DSC is created with POST to the collection (never an apply, which
+	// could take over a DSC the operator creates concurrently).
+	var created bool
 	for _, rec := range *records {
-		if rec.Method == "PATCH" && strings.HasPrefix(rec.Path, dscApplyPath) {
-			applyCalled = true
-			break
+		if strings.Contains(rec.Path, "datascienceclusters") && (rec.Method == "PATCH" || rec.Method == "PUT") {
+			t.Errorf("unexpected %s %s", rec.Method, rec.Path)
+		}
+		if rec.Method == "POST" && rec.Path == dscListPathV2 {
+			created = true
 		}
 	}
-	if !applyCalled {
-		t.Error("expected PATCH request to create DSC, but none was made")
+	if !created {
+		t.Error("expected POST request to create DSC, but none was made")
 	}
+	_ = dscApplyPath
 }
 
 // TestCreateDefaultDSC_CRDNotInstalled verifies that CreateDefaultDSC returns
@@ -163,13 +167,14 @@ func TestCreateDefaultDSC_ApplyFailure(t *testing.T) {
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 	dscApplyPath := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
 
-	client, cleanup := newMockClient(map[string]mockResponse{
+	client, _, cleanup := newRecordingMockClient(map[string]mockResponse{
 		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
-		dscListPathV2: {body: string(emptyListJSON)},
-		dscListPathV1: {body: string(emptyListJSON)},
-		dscApplyPath:  {body: errorResponse, statusCode: 500},
+		"GET " + dscListPathV2:  {body: string(emptyListJSON)},
+		dscListPathV1:           {body: string(emptyListJSON)},
+		"POST " + dscListPathV2: {body: errorResponse, statusCode: 500},
 	})
 	defer cleanup()
+	_ = dscApplyPath
 
 	result, err := CreateDefaultDSC(client)
 	if err != nil {

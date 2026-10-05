@@ -13,39 +13,88 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sync"
 	"time"
 )
-
-var tlsWarningOnce sync.Once
 
 // maxResponseBody is the upper limit on K8s API response body reads (50 MB).
 const maxResponseBody = 50 << 20
 
+// inClusterCAFile is the service account CA bundle mounted into every pod.
+const inClusterCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
 // sharedTransport is a package-level http.Transport reused by all Client instances.
-// The in-cluster CA cert is loaded once at init time; only the bearer token varies per Client.
+// The CA is loaded once at init time; only the bearer token varies per Client.
 var sharedTransport *http.Transport
 
 func init() {
-	tlsConfig := &tls.Config{}
+	tlsConfig, warning := apiServerTLSConfig(os.Getenv, os.ReadFile)
+	if warning != "" {
+		slog.Warn(warning)
+	}
+	sharedTransport = newAPIServerTransport(tlsConfig)
+}
 
-	caCert, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
-	if err == nil {
-		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
-		tlsConfig.RootCAs = caCertPool
-	} else if os.Getenv("DEV_MODE") == "true" || os.Getenv("GO_TEST") == "true" {
-		tlsWarningOnce.Do(func() {
-			slog.Warn("DEV_MODE: in-cluster CA not found, using insecure TLS")
-		})
+// newAPIServerTransport returns the transport used for every API server call.
+// A custom TLSClientConfig disables HTTP/2 unless ForceAttemptHTTP2 is set
+// (net/http.Transport docs), and the default of 2 idle connections per host
+// made each parallel status poll open 6-8 new TLS connections. With HTTP/2
+// the parallel requests share one connection. No Proxy is set: the in-cluster
+// API server must be reached directly.
+func newAPIServerTransport(tlsConfig *tls.Config) *http.Transport {
+	return &http.Transport{
+		TLSClientConfig:       tlsConfig,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// apiServerTLSConfig chooses how the API server certificate is verified:
+//   - in a pod, the service account CA;
+//   - KUBE_CA_FILE, when set (for clusters whose API certificate is signed by a
+//     private CA, e.g. the certificate-authority-data of the kubeconfig);
+//   - otherwise the system trust store (ROSA/OSD API certificates are publicly
+//     trusted);
+//   - verification is skipped only in DEV_MODE with DEV_INSECURE_TLS=true.
+//
+// The returned warning, if any, must be logged.
+func apiServerTLSConfig(getenv func(string) string, readFile func(string) ([]byte, error)) (*tls.Config, string) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if caFile := getenv("KUBE_CA_FILE"); caFile != "" {
+		pool, err := loadCAPool(readFile, caFile)
+		if err != nil {
+			// Fail closed: an unusable CA must not silently fall back to another trust source.
+			tlsConfig.RootCAs = x509.NewCertPool()
+			return tlsConfig, fmt.Sprintf("KUBE_CA_FILE %s is unusable (%v); API server requests will fail TLS verification", caFile, err)
+		}
+		tlsConfig.RootCAs = pool
+		return tlsConfig, ""
+	}
+	if pool, err := loadCAPool(readFile, inClusterCAFile); err == nil {
+		tlsConfig.RootCAs = pool
+		return tlsConfig, ""
+	}
+	if getenv("DEV_MODE") == "true" && getenv("DEV_INSECURE_TLS") == "true" {
 		tlsConfig.InsecureSkipVerify = true
+		return tlsConfig, "DEV_INSECURE_TLS=true: API server TLS verification is DISABLED. Your token can be intercepted on this network; unset DEV_INSECURE_TLS or set KUBE_CA_FILE instead"
 	}
-	// If not DEV_MODE and CA not found, sharedTransport will have default (strict) TLS.
-	// NewClientWithContext will log the error and exit at call time if needed.
+	// System roots (RootCAs nil).
+	return tlsConfig, ""
+}
 
-	sharedTransport = &http.Transport{
-		TLSClientConfig: tlsConfig,
+func loadCAPool(readFile func(string) ([]byte, error), path string) (*x509.CertPool, error) {
+	pem, err := readFile(path)
+	if err != nil {
+		return nil, err
 	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("no PEM certificates found")
+	}
+	return pool, nil
 }
 
 // K8sError represents a parsed Kubernetes API error response.
@@ -304,4 +353,41 @@ func (c *Client) GetVersion() (string, error) {
 		return "", fmt.Errorf("failed to parse version response: %w", err)
 	}
 	return info.GitVersion, nil
+}
+
+// HTTPStatusForError maps a cluster read error to the HTTP status and
+// errorCode a handler returns, so the UI can tell missing permissions,
+// throttling and outages apart instead of seeing a generic 500.
+func HTTPStatusForError(err error) (int, string) {
+	var k8sErr *K8sError
+	var quayErr *quayAuthError
+	switch {
+	case errors.As(err, &quayErr):
+		if isQuayCredentialRejection(err) {
+			return http.StatusBadGateway, "registry_auth"
+		}
+		return http.StatusBadGateway, "registry_unavailable"
+	case errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout, "timeout"
+	case errors.Is(err, context.Canceled):
+		// The caller went away; nobody reads this status.
+		return http.StatusServiceUnavailable, "canceled"
+	case errors.As(err, &k8sErr):
+		switch {
+		case k8sErr.Status == http.StatusUnauthorized:
+			return http.StatusUnauthorized, "unauthorized"
+		case k8sErr.Status == http.StatusForbidden:
+			return http.StatusForbidden, "forbidden"
+		case k8sErr.Status == http.StatusNotFound:
+			return http.StatusNotFound, "not_found"
+		case k8sErr.Status == http.StatusTooManyRequests:
+			return http.StatusServiceUnavailable, "rate_limited"
+		case k8sErr.Status >= 500:
+			return http.StatusBadGateway, "cluster_unavailable"
+		}
+		return http.StatusBadGateway, "cluster_error"
+	case IsNetworkError(err):
+		return http.StatusBadGateway, "network"
+	}
+	return http.StatusInternalServerError, "internal"
 }

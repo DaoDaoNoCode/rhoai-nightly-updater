@@ -1,176 +1,94 @@
 package cluster
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// resetFBCCache clears the global cache for test isolation.
-func resetFBCCache() {
-	fbcContentCacheMu.Lock()
-	fbcContentCache = make(map[string]*types.FBCContentResponse)
-	fbcContentCacheMu.Unlock()
-}
-
-// fillFBCCache populates the global cache with n entries keyed "key-0" .. "key-(n-1)".
-func fillFBCCache(n int) {
-	fbcContentCacheMu.Lock()
-	for i := 0; i < n; i++ {
-		fbcContentCache[fmt.Sprintf("key-%d", i)] = &types.FBCContentResponse{
-			Tag:   fmt.Sprintf("tag-%d", i),
-			Image: fmt.Sprintf("image-%d", i),
-		}
-	}
-	fbcContentCacheMu.Unlock()
-}
-
 func TestFBCCache_StoreAndRetrieve(t *testing.T) {
-	resetFBCCache()
+	fbcContentCache.Purge()
+	t.Cleanup(fbcContentCache.Purge)
 
-	entry := &types.FBCContentResponse{
-		Tag:        "rhoai-3.5",
-		Image:      "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5",
-		BundleName: "rhods-operator.3.5.0",
-	}
-
-	fbcContentCacheMu.Lock()
-	fbcContentCache["sha256:abc123"] = entry
-	fbcContentCacheMu.Unlock()
-
-	fbcContentCacheMu.RLock()
-	got, ok := fbcContentCache["sha256:abc123"]
-	fbcContentCacheMu.RUnlock()
-
+	ref := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5@" + digestOf(1)
+	key, ok := fbcCacheKey(ref)
 	if !ok {
-		t.Fatal("expected cache hit, got miss")
+		t.Fatal("digest-pinned reference must be cacheable")
 	}
-	if got.Tag != "rhoai-3.5" {
-		t.Errorf("tag = %q, want %q", got.Tag, "rhoai-3.5")
-	}
-	if got.BundleName != "rhods-operator.3.5.0" {
-		t.Errorf("bundleName = %q, want %q", got.BundleName, "rhods-operator.3.5.0")
-	}
-	if got.Image != "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5" {
-		t.Errorf("image = %q, want %q", got.Image, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5")
-	}
-}
+	fbcContentCache.Add(key, &types.FBCContentResponse{Tag: "rhoai-3.5", BundleName: "rhods-operator.3.5.0"}, 0)
 
-func TestFBCCache_EvictRemovesAbout20Percent(t *testing.T) {
-	resetFBCCache()
-	fillFBCCache(fbcCacheMaxEntries) // fill to exactly max (100)
-
-	before := len(fbcContentCache)
-	if before != fbcCacheMaxEntries {
-		t.Fatalf("precondition: cache has %d entries, want %d", before, fbcCacheMaxEntries)
+	got, ok := cachedFBCContent(ref)
+	if !ok || got.Tag != "rhoai-3.5" || got.BundleName != "rhods-operator.3.5.0" {
+		t.Fatalf("cache miss or wrong entry: %+v %v", got, ok)
 	}
-
-	// evictFBCCache must be called with the lock held
-	fbcContentCacheMu.Lock()
-	evictFBCCache()
-	after := len(fbcContentCache)
-	fbcContentCacheMu.Unlock()
-
-	removed := before - after
-	// Target size is 75% of max = 75, so 25 entries should be removed.
-	// That is 25% of 100, which is "about 20%".
-	expectedRemoved := fbcCacheMaxEntries - (fbcCacheMaxEntries * 3 / 4) // 25
-	if removed != expectedRemoved {
-		t.Errorf("eviction removed %d entries, want %d (from %d down to %d)",
-			removed, expectedRemoved, before, after)
+	// The tag selects the bundle, so the same digest under another tag is another entry.
+	if _, ok := cachedFBCContent("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5-ea.1@" + digestOf(1)); ok {
+		t.Fatal("a different tag must not share the entry")
 	}
-
-	// Verify final size matches target (75% of max)
-	expectedSize := fbcCacheMaxEntries * 3 / 4
-	if after != expectedSize {
-		t.Errorf("cache size after eviction = %d, want %d", after, expectedSize)
+	if _, ok := fbcCacheKey("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5"); ok {
+		t.Fatal("tag-only references move and must not be cached")
 	}
 }
 
-func TestFBCCache_EvictDoesNotRemoveAll(t *testing.T) {
-	resetFBCCache()
-	fillFBCCache(fbcCacheMaxEntries)
-
-	fbcContentCacheMu.Lock()
-	evictFBCCache()
-	after := len(fbcContentCache)
-	fbcContentCacheMu.Unlock()
-
-	if after == 0 {
-		t.Fatal("eviction removed ALL entries; expected some to survive")
+func TestFBCCache_BoundedAndKeepsRecentlyUsed(t *testing.T) {
+	fbcContentCache.Purge()
+	t.Cleanup(fbcContentCache.Purge)
+	for i := 0; i < fbcCacheMaxEntries; i++ {
+		fbcContentCache.Add(fmt.Sprintf("key-%d", i), &types.FBCContentResponse{Tag: fmt.Sprint(i)}, 0)
 	}
-
-	// At least 75% of max should survive
-	minSurvivors := fbcCacheMaxEntries * 3 / 4
-	if after < minSurvivors {
-		t.Errorf("only %d entries survived, want at least %d", after, minSurvivors)
+	fbcContentCache.Get("key-0") // most recently used now
+	for i := 0; i < 50; i++ {
+		fbcContentCache.Add(fmt.Sprintf("new-%d", i), &types.FBCContentResponse{}, 0)
 	}
-}
-
-func TestFBCCache_EvictNoOpWhenBelowCapacity(t *testing.T) {
-	resetFBCCache()
-	fillFBCCache(10) // well under the 100 max
-
-	fbcContentCacheMu.Lock()
-	before := len(fbcContentCache)
-	evictFBCCache()
-	after := len(fbcContentCache)
-	fbcContentCacheMu.Unlock()
-
-	if before != after {
-		t.Errorf("eviction changed cache size from %d to %d; should be no-op below capacity", before, after)
+	if n := fbcContentCache.Len(); n != fbcCacheMaxEntries {
+		t.Fatalf("cache size %d, want %d", n, fbcCacheMaxEntries)
+	}
+	if _, ok := fbcContentCache.Get("key-0"); !ok {
+		t.Fatal("recently used entry was evicted")
+	}
+	if _, ok := fbcContentCache.Get("key-1"); ok {
+		t.Fatal("least recently used entry should be evicted")
+	}
+	if _, ok := fbcContentCache.Get("key-51"); !ok {
+		t.Fatal("only as many entries as were added beyond the bound may be evicted")
 	}
 }
 
-func TestFBCCache_DoesNotGrowBeyondMax(t *testing.T) {
-	resetFBCCache()
+func TestExtractFBCContent_ConcurrentRequestsDownloadOnce(t *testing.T) {
+	f := newFakeRegistry()
+	digest := digestOf(7)
+	f.fbcLayers[digest] = gzipTar(t, map[string][]byte{
+		"configs/rhods-operator/catalog.json": []byte(fbcPackage + "\n" + fbcBundleJSON("rhods-operator.3.6.0", "odh-dashboard-rhel9")),
+	})
+	installFakeRegistry(t, f)
+	ref := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@" + digest
 
-	// Fill beyond max by simulating the pattern used in ExtractFBCContent:
-	// check capacity, evict if needed, then insert.
-	for i := 0; i < fbcCacheMaxEntries+50; i++ {
-		key := fmt.Sprintf("digest-%d", i)
-		entry := &types.FBCContentResponse{
-			Tag:   fmt.Sprintf("tag-%d", i),
-			Image: fmt.Sprintf("image-%d", i),
-		}
-
-		fbcContentCacheMu.Lock()
-		if len(fbcContentCache) >= fbcCacheMaxEntries {
-			evictFBCCache()
-		}
-		fbcContentCache[key] = entry
-		fbcContentCacheMu.Unlock()
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			content, err := extractFBCContentWithAuth(context.Background(), "auth", ref)
+			if err != nil || content.BundleName != "rhods-operator.3.6.0" || len(content.RelatedImages) != 1 {
+				t.Errorf("content=%+v err=%v", content, err)
+			}
+		}()
 	}
-
-	fbcContentCacheMu.RLock()
-	size := len(fbcContentCache)
-	fbcContentCacheMu.RUnlock()
-
-	// After eviction + one insert, the cache should never exceed max.
-	// The maximum possible is targetSize + 1 = 76 (right after eviction + insert).
-	// But since we loop 50 more times after hitting max the first time,
-	// the cache must stay at or below fbcCacheMaxEntries.
-	if size > fbcCacheMaxEntries {
-		t.Errorf("cache size %d exceeds max %d", size, fbcCacheMaxEntries)
+	wg.Wait()
+	if n := f.count("quay-layer"); n != 1 {
+		t.Fatalf("expected one layer download for 5 concurrent requests, got %d", n)
 	}
-}
-
-func TestFBCCache_EvictSurvivorsAreValid(t *testing.T) {
-	resetFBCCache()
-	fillFBCCache(fbcCacheMaxEntries)
-
-	fbcContentCacheMu.Lock()
-	evictFBCCache()
-	// Verify all surviving entries are non-nil and have expected fields
-	for key, val := range fbcContentCache {
-		if val == nil {
-			t.Errorf("surviving entry %q is nil", key)
-			continue
-		}
-		if val.Tag == "" {
-			t.Errorf("surviving entry %q has empty tag", key)
-		}
+	if n := f.count("quay-token"); n != 1 {
+		t.Fatalf("expected one token, got %d", n)
 	}
-	fbcContentCacheMu.Unlock()
+	// Later requests are served from the cache.
+	if _, err := extractFBCContentWithAuth(context.Background(), "auth", ref); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count("quay-manifest"); n != 1 {
+		t.Fatalf("cached content must not refetch the manifest, got %d", n)
+	}
 }

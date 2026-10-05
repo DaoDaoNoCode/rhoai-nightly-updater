@@ -5,40 +5,132 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// GetComponents returns DSC component statuses and deployment information.
-// If includeLabels is true, it also fetches git commit/build info from Quay (slower).
-func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, error) {
-	resp := &types.ComponentsResponse{}
+// DSCState values reported by GetComponents.
+const (
+	DSCStatePresent = "present"
+	DSCStateNoDSC   = "no-dsc" // CRD installed, no DataScienceCluster yet
+	DSCStateNoCRD   = "no-crd" // operator not installed, or its CRDs not created yet
+)
 
-	// Step 1: Get the DataScienceCluster (try v2 first, fall back to v1 for older RHOAI versions)
-	dscBody, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")
+// readFirstDSC returns the first DataScienceCluster (v2, falling back to v1
+// for older RHOAI versions) and the DSC state.
+func readFirstDSC(c *Client) (map[string]interface{}, string, error) {
+	body, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")
 	if err != nil {
-		dscBody, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters")
+		v2Err := err
+		body, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters")
 		if err != nil {
-			return nil, fmt.Errorf("fetching DSC list: %w", err)
+			if IsK8sError(err, 404) && IsK8sError(v2Err, 404) {
+				return nil, DSCStateNoCRD, nil
+			}
+			if IsK8sError(err, 404) {
+				err = v2Err // v1 is gone but v2 failed for another reason
+			}
+			return nil, "", fmt.Errorf("fetching DSC list: %w", err)
 		}
 	}
+	var list struct {
+		Items []map[string]interface{} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, "", fmt.Errorf("parsing DSC list: %w", err)
+	}
+	if len(list.Items) == 0 {
+		return nil, DSCStateNoDSC, nil
+	}
+	return list.Items[0], DSCStatePresent, nil
+}
 
-	var dscList map[string]interface{}
-	if err := json.Unmarshal(dscBody, &dscList); err != nil {
-		return nil, fmt.Errorf("parsing DSC list: %w", err)
+// GetComponents returns DSC component statuses and deployment information.
+// A cluster without a DSC (or without the DSC CRD) is a normal state, reported
+// through DSCExists/DSCState rather than an error. Labels already in the cache
+// are always added; includeLabels also fetches missing ones from Quay (slower).
+func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, error) {
+	resp := &types.ComponentsResponse{Components: []types.ComponentInfo{}}
+
+	// Every read below is independent of the DSC, so they run while it is read.
+	var wg sync.WaitGroup
+	run := func(fn func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fn()
+		}()
+	}
+	var (
+		appDeps, opDeps    []types.DeploymentInfo
+		appErr, opDepsErr  error
+		appPods, opPods    []types.PodInfo
+		snapshot           map[string]string
+		snapshotTime       string
+		installedOp        *installedOperator
+		installedOpErr     error
+		installedOpReadyCh = make(chan struct{})
+	)
+	run(func() { appDeps, appErr = getDeployments(c, "redhat-ods-applications") })
+	run(func() { opDeps, opDepsErr = getDeployments(c, "redhat-ods-operator") })
+	run(func() { appPods, _ = getPodsInNamespace(c, "redhat-ods-applications") })
+	run(func() { opPods, _ = getPodsInNamespace(c, "redhat-ods-operator") })
+	run(func() { resp.ConsoleURL = cachedConsoleURL(c) })
+	run(func() { snapshot, snapshotTime = GetDeploymentSnapshot(c) })
+	run(func() {
+		defer close(installedOpReadyCh)
+		installedOp, installedOpErr = getInstalledOperator(c)
+	})
+
+	dsc, state, err := readFirstDSC(c)
+	if err != nil {
+		wg.Wait()
+		return nil, err
+	}
+	resp.DSCState = state
+	resp.DSCExists = dsc != nil
+	if dsc != nil {
+		<-installedOpReadyCh
+		resp.DSCCompatibility = checkDSCCompatibilityFor(c, dsc, installedOp, installedOpErr)
+		addDSCComponents(resp, dsc)
+	}
+	wg.Wait()
+
+	if installedOp != nil {
+		resp.OperatorVersion = installedOp.Version
+		resp.OperatorPhase = installedOp.Phase
+	}
+	if appErr == nil {
+		resp.Deployments = append(resp.Deployments, appDeps...)
+	}
+	if opDepsErr == nil {
+		resp.Deployments = append(resp.Deployments, opDeps...)
+	}
+	if resp.Deployments == nil {
+		resp.Deployments = []types.DeploymentInfo{}
+	}
+	matchPodsToDeployments(appPods, "redhat-ods-applications", resp.Deployments)
+	matchPodsToDeployments(opPods, "redhat-ods-operator", resp.Deployments)
+
+	// Compare against last snapshot to detect changes
+	if snapshot != nil {
+		resp.SnapshotTime = snapshotTime
+		resp.ChangedCount = CompareDeployments(resp.Deployments, snapshot)
 	}
 
-	items, _ := dscList["items"].([]interface{})
-	if len(items) == 0 {
-		return nil, fmt.Errorf("no DataScienceCluster found")
-	}
+	fetchImageLabelsForDeployments(c, resp.Deployments, includeLabels)
+	return resp, nil
+}
 
-	dsc, _ := items[0].(map[string]interface{})
+// addDSCComponents fills the DSC fields and the component list from the DSC.
+func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}) {
 	meta, _ := dsc["metadata"].(map[string]interface{})
 	resp.DSCName, _ = meta["name"].(string)
-	resp.DSCCompatibility = checkDSCCompatibility(c, dsc)
 
 	// Extract DSC phase from status
 	dscStatus, _ := dsc["status"].(map[string]interface{})
@@ -163,118 +255,60 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 		enrichComponentFix(&comp, ci.reason)
 		resp.Components = append(resp.Components, comp)
 	}
-
-	// Step 2: Get deployments from redhat-ods-applications namespace
-	appDeps, err := getDeployments(c, "redhat-ods-applications")
-	if err == nil {
-		resp.Deployments = append(resp.Deployments, appDeps...)
-	}
-
-	// Also get deployments from redhat-ods-operator namespace
-	opDeps, err := getDeployments(c, "redhat-ods-operator")
-	if err == nil {
-		resp.Deployments = append(resp.Deployments, opDeps...)
-	}
-
-	// Match pods to deployments
-	matchPodsToDeployments(c, "redhat-ods-applications", resp.Deployments)
-	matchPodsToDeployments(c, "redhat-ods-operator", resp.Deployments)
-
-	// Add console URL for log links
-	resp.ConsoleURL = getConsoleURL(c)
-
-	// Compare against last snapshot to detect changes
-	snapshot, snapshotTime := GetDeploymentSnapshot(c)
-	if snapshot != nil {
-		resp.SnapshotTime = snapshotTime
-		resp.ChangedCount = CompareDeployments(resp.Deployments, snapshot)
-	}
-
-	// Fetch image labels (git commit, build date, etc.) — only if requested.
-	if includeLabels {
-		fetchImageLabelsForDeployments(c, resp.Deployments)
-	}
-
-	return resp, nil
+	// Map iteration order is random; keep the response stable between polls.
+	sort.Slice(resp.Components, func(i, j int) bool { return resp.Components[i].Name < resp.Components[j].Name })
 }
 
-// fetchImageLabelsForDeployments populates GitCommit/GitURL/BuildDate/Version
-// on each deployment by fetching OCI image config labels from Quay.
-func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInfo) {
-	// Deduplicate by image reference
-	type fetchEntry struct {
-		imageRef string
-		indices  []int // indices into deployments slice
-	}
-	seen := make(map[string]*fetchEntry)
-	for i, dep := range deployments {
-		if dep.Image == "" || !isRHOAIImage(dep.Image) {
-			continue
-		}
-		if entry, ok := seen[dep.Image]; ok {
-			entry.indices = append(entry.indices, i)
-		} else {
-			seen[dep.Image] = &fetchEntry{
-				imageRef: dep.Image,
-				indices:  []int{i},
-			}
+// fetchImageLabelsForDeployments populates GitCommit/GitURL/CommitDate/BuildDate/Version
+// on each deployment from its image's OCI config labels. Cached labels are
+// always used; fetch also reads missing ones from Quay with one pull-secret
+// read for the whole batch.
+func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInfo, fetch bool) {
+	var refs []string
+	for _, dep := range deployments {
+		if dep.Image != "" && isRHOAIImage(dep.Image) {
+			refs = append(refs, dep.Image)
 		}
 	}
-
-	if len(seen) == 0 {
+	if len(refs) == 0 {
 		return
 	}
-
-	labelCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-	defer cancel()
-
-	// Fetch labels in parallel (up to 5 concurrent)
-	type labelResult struct {
-		imageRef string
-		labels   *ImageLabels
+	labels := make(map[string]*ImageLabels, len(refs))
+	var missing []string
+	for _, ref := range refs {
+		if l, ok := cachedImageLabels(ref); ok && (l.CommitDate != "" || l.GitURL == "" || l.GitCommit == "") {
+			labels[ref] = l
+		} else {
+			missing = append(missing, ref)
+		}
 	}
-
-	results := make(chan labelResult, len(seen))
-	sem := make(chan struct{}, 5) // concurrency limiter
-
-	for _, entry := range seen {
-		go func(ref string) {
-			sem <- struct{}{}        // acquire
-			defer func() { <-sem }() // release
-
-			imageCtx, imageCancel := context.WithTimeout(labelCtx, 8*time.Second)
-			defer imageCancel()
-
-			labels, err := GetImageLabels(imageCtx, c, ref)
-			if err != nil {
-				slog.Warn("failed to fetch image labels", "image", truncateForLog(ref), "error", err)
-				results <- labelResult{imageRef: ref, labels: nil}
-				return
+	if fetch && len(missing) > 0 {
+		labelCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		defer cancel()
+		for ref, l := range resolveImageLabels(labelCtx, getQuayAuth(c), missing, true) {
+			labels[ref] = l
+		}
+	} else {
+		for _, ref := range missing {
+			if l, ok := cachedImageLabels(ref); ok {
+				labels[ref] = l
 			}
-			results <- labelResult{imageRef: ref, labels: labels}
-		}(entry.imageRef)
+		}
 	}
-
-	// Collect results
-	for range seen {
-		res := <-results
-		if res.labels == nil {
+	for i := range deployments {
+		l := labels[deployments[i].Image]
+		if l == nil {
 			continue
 		}
-		if entry, ok := seen[res.imageRef]; ok {
-			for _, idx := range entry.indices {
-				deployments[idx].GitCommit = res.labels.GitCommit
-				deployments[idx].GitURL = res.labels.GitURL
-				deployments[idx].CommitDate = res.labels.CommitDate
-				deployments[idx].BuildDate = res.labels.BuildDate
-				deployments[idx].Version = res.labels.Version
-			}
-		}
+		deployments[i].GitCommit = l.GitCommit
+		deployments[i].GitURL = l.GitURL
+		deployments[i].CommitDate = l.CommitDate
+		deployments[i].BuildDate = l.BuildDate
+		deployments[i].Version = l.Version
 	}
 }
 
-func matchPodsToDeployments(c *Client, namespace string, deployments []types.DeploymentInfo) {
-	pods, _ := getPodsInNamespace(c, namespace)
+func matchPodsToDeployments(pods []types.PodInfo, namespace string, deployments []types.DeploymentInfo) {
 	for i := range deployments {
 		if deployments[i].Namespace != namespace {
 			continue
@@ -309,10 +343,6 @@ func podMatchesDeployment(pod types.PodInfo, dep types.DeploymentInfo) bool {
 	return strings.HasPrefix(pod.Name, dep.Name+"-")
 }
 
-// checkComponentCRReady queries the actual component CR to see if it reports
-// READY:True, regardless of what the DSC condition says. This detects stale
-// conditions after EA↔GA transitions.
-
 // enrichComponentFix adds fix buttons only for cases where the operator's own
 // message explicitly tells us what to do. We never replace the operator's message.
 func enrichComponentFix(comp *types.ComponentInfo, reason string) {
@@ -320,18 +350,15 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 		return
 	}
 
-	switch {
-	// Operator says "deprecated, please set it to Removed" — offer the button
-	case comp.Name == "llamastackoperator" && strings.Contains(comp.Message, "deprecated"):
+	// Operator says "deprecated, please set it to Removed" — offer the button.
+	// (A MaaS gateway "fix" used to be offered here for a "missing required
+	// annotations" message that no current operator emits; its patch set
+	// opendatahub.io/managed=false, which stops the operator reconciling the
+	// gateway rather than meeting a documented requirement, so it was removed.)
+	if comp.Name == "llamastackoperator" && strings.Contains(comp.Message, "deprecated") {
 		comp.FixAction = "disable-component:" + comp.Name
 		comp.FixTitle = "Disable LlamaStack"
 		comp.FixConfirm = "This will set llamastackoperator to Removed in your DataScienceCluster, as the operator message recommends."
-
-	// Operator says "missing required annotations" on MaaS gateway — documented fix
-	case comp.Name == "maasprerequisites" && strings.Contains(comp.Message, "missing required annotations"):
-		comp.FixAction = "fix-maas-gateway-annotation"
-		comp.FixTitle = "Fix gateway"
-		comp.FixConfirm = "This will add the opendatahub.io/managed annotation to the MaaS gateway. This is a documented requirement for MaaS."
 	}
 }
 
@@ -343,46 +370,36 @@ type conditionInfo struct {
 
 // CreateDefaultDSC creates a DataScienceCluster with default component configuration.
 // If a DSC already exists, it returns success without modification.
+//
+// The DSC is created with a plain create, never an apply: on Managed RHOAI the
+// operator creates default-dsc itself at startup (bootstrap.RunLeaderElectionInit,
+// platform ManagedRhoai only), and an apply racing it would take over and
+// overwrite its fields. A create that loses the race gets 409 AlreadyExists,
+// and the operator's validating webhook rejects a second DSC under another
+// name ("Only one instance of DataScienceCluster object is allowed").
 func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
 	// Step 1: Check if a DSC already exists
 	logs = append(logs, "Checking for existing DataScienceCluster...")
-	dscBody, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")
+	_, state, err := readFirstDSC(c)
 	if err != nil {
-		// Fall back to v1
-		dscBody, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters")
-		if err != nil {
-			// 404 means the CRD is not installed
-			if IsK8sError(err, 404) {
-				return &types.OperationResponse{
-					Success:   false,
-					Message:   "DataScienceCluster CRD not found. Install the RHOAI operator first.",
-					Logs:      logs,
-					ErrorCode: "prerequisites",
-				}, nil
-			}
-			return &types.OperationResponse{
-				Success:   false,
-				Message:   fmt.Sprintf("Failed to check for existing DSC: %v", err),
-				Logs:      logs,
-				ErrorCode: errorCodeFromK8sErr(err),
-			}, nil
-		}
-	}
-
-	var dscList map[string]interface{}
-	if err := json.Unmarshal(dscBody, &dscList); err != nil {
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Failed to parse DSC list: %v", err),
+			Message:   fmt.Sprintf("Failed to check for existing DSC: %v", err),
 			Logs:      logs,
-			ErrorCode: "internal",
+			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
-
-	items, _ := dscList["items"].([]interface{})
-	if len(items) > 0 {
+	switch state {
+	case DSCStateNoCRD:
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   "DataScienceCluster CRD not found. Install the RHOAI operator first.",
+			Logs:      logs,
+			ErrorCode: "prerequisites",
+		}, nil
+	case DSCStatePresent:
 		logs = append(logs, "DataScienceCluster already exists")
 		return &types.OperationResponse{
 			Success: true,
@@ -391,22 +408,30 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 		}, nil
 	}
 
-	// Step 2: Fetch the sample matching the installed operator version.
+	// Step 2: Use the sample shipped with the installed operator version.
 	logs = append(logs, "Creating default DataScienceCluster...")
 	defaults, fetchErr := fetchDefaultDSCSpec(c)
 	if fetchErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
-	logs = append(logs, fmt.Sprintf("DSC spec source: %s (%s)", defaults.SourceURL, defaults.Version))
+	logs = append(logs, fmt.Sprintf("DSC spec source: %s (%s)", defaults.SourceDescription, defaults.Version))
 
-	path := "/apis/" + defaults.Spec["apiVersion"].(string) + "/datascienceclusters/default-dsc"
-	_, _, applyErr := c.apply(path, defaults.Spec)
-	if applyErr != nil {
+	apiVersion, _ := defaults.Spec["apiVersion"].(string)
+	body, err := json.Marshal(defaults.Spec)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to encode DSC: %v", err), Logs: logs, ErrorCode: "internal"}, nil
+	}
+	_, _, createErr := c.post("/apis/"+apiVersion+"/datascienceclusters?fieldManager=rhoai-nightly-updater", body)
+	if IsK8sError(createErr, http.StatusConflict) {
+		logs = append(logs, "DataScienceCluster already exists (created concurrently)")
+		return &types.OperationResponse{Success: true, Message: "DataScienceCluster already exists", Logs: logs}, nil
+	}
+	if createErr != nil {
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Failed to create DataScienceCluster: %v", applyErr),
+			Message:   fmt.Sprintf("Failed to create DataScienceCluster: %v", createErr),
 			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(applyErr),
+			ErrorCode: errorCodeFromK8sErr(createErr),
 		}, nil
 	}
 
@@ -430,6 +455,42 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	}, nil
 }
 
+// deploymentList is the part of a Deployment list GetComponents reads.
+// Decoding into typed structs instead of maps cuts CPU about 3x and
+// allocations about 50x on the live 800 KB list (perf03 bench).
+type deploymentList struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Replicas *int `json:"replicas"`
+			Selector struct {
+				MatchLabels map[string]string `json:"matchLabels"`
+			} `json:"selector"`
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Image string `json:"image"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+		Status struct {
+			ReadyReplicas       int `json:"readyReplicas"`
+			AvailableReplicas   int `json:"availableReplicas"`
+			UnavailableReplicas int `json:"unavailableReplicas"`
+			UpdatedReplicas     int `json:"updatedReplicas"`
+			Conditions          []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+		} `json:"status"`
+	} `json:"items"`
+}
+
 func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error) {
 	path := namespacedPath("apps/v1", "deployments", namespace, "")
 	body, _, err := c.get(path)
@@ -437,96 +498,47 @@ func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error)
 		return nil, fmt.Errorf("fetching deployments in %s: %w", namespace, err)
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
+	var list deploymentList
+	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("parsing deployments: %w", err)
 	}
 
-	items, _ := result["items"].([]interface{})
 	var deps []types.DeploymentInfo
-	for _, item := range items {
-		obj, _ := item.(map[string]interface{})
-		meta, _ := obj["metadata"].(map[string]interface{})
-		name, _ := meta["name"].(string)
-
-		spec, _ := obj["spec"].(map[string]interface{})
+	for _, item := range list.Items {
 		replicas := 1
-		if r, ok := spec["replicas"].(float64); ok {
-			replicas = int(r)
-		}
-
-		status, _ := obj["status"].(map[string]interface{})
-		readyReplicas := 0
-		if r, ok := status["readyReplicas"].(float64); ok {
-			readyReplicas = int(r)
-		}
-		availableReplicas := 0
-		if r, ok := status["availableReplicas"].(float64); ok {
-			availableReplicas = int(r)
-		}
-		unavailableReplicas := 0
-		if r, ok := status["unavailableReplicas"].(float64); ok {
-			unavailableReplicas = int(r)
-		}
-		updatedReplicas := 0
-		if r, ok := status["updatedReplicas"].(float64); ok {
-			updatedReplicas = int(r)
+		if item.Spec.Replicas != nil {
+			replicas = *item.Spec.Replicas
 		}
 
 		// Check for stuck rollout via Progressing condition
 		rolloutStuck := false
 		rolloutMessage := ""
-		if conditions, ok := status["conditions"].([]interface{}); ok {
-			for _, cond := range conditions {
-				condMap, _ := cond.(map[string]interface{})
-				condType, _ := condMap["type"].(string)
-				condStatus, _ := condMap["status"].(string)
-				condReason, _ := condMap["reason"].(string)
-				if condType == "Progressing" && condStatus == "False" && condReason == "ProgressDeadlineExceeded" {
-					rolloutStuck = true
-					rolloutMessage, _ = condMap["message"].(string)
-					break
-				}
+		for _, cond := range item.Status.Conditions {
+			if cond.Type == "Progressing" && cond.Status == "False" && cond.Reason == "ProgressDeadlineExceeded" {
+				rolloutStuck = true
+				rolloutMessage = cond.Message
+				break
 			}
 		}
 
 		// Get the first container image
 		image := ""
-		if tmpl, ok := spec["template"].(map[string]interface{}); ok {
-			if tmplSpec, ok := tmpl["spec"].(map[string]interface{}); ok {
-				if containers, ok := tmplSpec["containers"].([]interface{}); ok && len(containers) > 0 {
-					if container, ok := containers[0].(map[string]interface{}); ok {
-						image, _ = container["image"].(string)
-					}
-				}
-			}
-		}
-
-		// Extract label selector for pod matching
-		var matchLabels map[string]string
-		if selector, ok := spec["selector"].(map[string]interface{}); ok {
-			if ml, ok := selector["matchLabels"].(map[string]interface{}); ok {
-				matchLabels = make(map[string]string)
-				for k, v := range ml {
-					if vs, ok := v.(string); ok {
-						matchLabels[k] = vs
-					}
-				}
-			}
+		if containers := item.Spec.Template.Spec.Containers; len(containers) > 0 {
+			image = containers[0].Image
 		}
 
 		deps = append(deps, types.DeploymentInfo{
-			Name:                name,
+			Name:                item.Metadata.Name,
 			Namespace:           namespace,
-			Ready:               readyReplicas,
+			Ready:               item.Status.ReadyReplicas,
 			Desired:             replicas,
-			Available:           availableReplicas,
-			UnavailableReplicas: unavailableReplicas,
-			UpdatedReplicas:     updatedReplicas,
+			Available:           item.Status.AvailableReplicas,
+			UnavailableReplicas: item.Status.UnavailableReplicas,
+			UpdatedReplicas:     item.Status.UpdatedReplicas,
 			RolloutStuck:        rolloutStuck,
 			RolloutMessage:      rolloutMessage,
 			Image:               image,
-			MatchLabels:         matchLabels,
+			MatchLabels:         item.Spec.Selector.MatchLabels,
 		})
 	}
 
