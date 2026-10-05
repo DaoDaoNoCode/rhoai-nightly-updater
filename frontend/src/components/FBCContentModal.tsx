@@ -55,7 +55,7 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
     try {
       const result = await getBuildExplorerContent(img);
       setData(result);
-      if (result.relatedImages?.length > 0) {
+      if ((result.relatedImages?.length ?? 0) > 0) {
         getBuildExplorerContent(img, true)
           .then(enriched => setLabelsData(enriched.relatedImages))
           .catch(() => {});

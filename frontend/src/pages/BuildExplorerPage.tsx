@@ -130,7 +130,7 @@ export const BuildExplorerPage: React.FC = () => {
       const content = await getBuildExplorerContent(img);
       setSearchContent(content);
       // Phase 2: labels
-      if (content.relatedImages?.length > 0) {
+      if ((content.relatedImages?.length ?? 0) > 0) {
         setSearchLabelsLoading(true);
         try {
           const enriched = await getBuildExplorerContent(img, true);
@@ -164,7 +164,7 @@ export const BuildExplorerPage: React.FC = () => {
       void getBuildExplorerTags(true)
         .then((enriched) => {
           if (requestId !== tagsRequestId.current) return;
-          const dates = new Map(enriched.tags.map((tag) => [tag.image, tag.buildDate]));
+          const dates = new Map((enriched.tags ?? []).map((tag) => [tag.image, tag.buildDate]));
           setTags((current) => current.map((tag) => ({
             ...tag,
             buildDate: dates.get(tag.image) || tag.buildDate,
@@ -207,7 +207,7 @@ export const BuildExplorerPage: React.FC = () => {
         try {
           const content = await getBuildExplorerContent(urlImage);
           setSearchContent(content);
-          if (content.relatedImages?.length > 0) {
+          if ((content.relatedImages?.length ?? 0) > 0) {
             setSearchLabelsLoading(true);
             try {
               const enriched = await getBuildExplorerContent(urlImage, true);

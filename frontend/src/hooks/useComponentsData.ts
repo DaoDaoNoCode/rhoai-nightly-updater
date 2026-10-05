@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentsResponse, DeploymentInfo } from "../types";
+import type { ComponentInfo, ComponentsResponse, DSCCompatibility, DeploymentInfo } from "../types";
 import { ApiError, getComponents, getComponentsWithLabels, toApiError } from "../services/api";
 import { COMPONENTS_POLL_MS } from "../constants";
 import { usePolling } from "./usePolling";
@@ -50,8 +50,16 @@ function missingLabelKeys(resp: ComponentsResponse, labels: Map<string, Deployme
 /** How long the first labels request may take before a fast plain request paints the page. */
 export const LABELS_FIRST_PAINT_MS = 1_500;
 
+/** ComponentsResponse with Go's null slices replaced by empty arrays. */
+export type NormalizedDSCCompatibility = DSCCompatibility & { invalidFields: string[]; missingComponents: string[]; extraComponents: string[] };
+export type NormalizedComponents = Omit<ComponentsResponse, "components" | "deployments" | "dscCompatibility"> & {
+  components: ComponentInfo[];
+  deployments: DeploymentInfo[];
+  dscCompatibility?: NormalizedDSCCompatibility;
+};
+
 export interface ComponentsData {
-  data: ComponentsResponse | null;
+  data: NormalizedComponents | null;
   loading: boolean;
   labelsLoading: boolean;
   error: ApiError | null;
@@ -168,9 +176,20 @@ export function useComponentsData(): ComponentsData {
     void fetchLabels().then(() => poller.reset());
   }, [fetchLabels, poller]);
 
-  const data = useMemo<ComponentsResponse | null>(() => {
+  const data = useMemo<NormalizedComponents | null>(() => {
     if (!raw) return null;
-    return { ...raw, deployments: mergeDeploymentLabels(raw.deployments ?? [], labels) };
+    const compat = raw.dscCompatibility;
+    return {
+      ...raw,
+      components: raw.components ?? [],
+      deployments: mergeDeploymentLabels(raw.deployments ?? [], labels),
+      dscCompatibility: compat ? {
+        ...compat,
+        invalidFields: compat.invalidFields ?? [],
+        missingComponents: compat.missingComponents ?? [],
+        extraComponents: compat.extraComponents ?? [],
+      } : undefined,
+    };
   }, [raw, labels]);
 
   return { data, loading, labelsLoading, error, lastRefreshed, refresh };
