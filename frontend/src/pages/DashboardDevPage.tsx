@@ -291,7 +291,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
       <PageSection>
         <Tabs activeKey={activeTab} onSelect={(_e, key) => setActiveTab(key as number)}>
           <Tab eventKey={0} title={<TabTitleText>Image Deploy</TabTitleText>}>
-              <div className="pf-v6-u-pt-md">
+              <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
                 <Card>
                   <CardHeader>
                   <CardTitle>
@@ -487,7 +487,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
           </Tab>
 
           <Tab eventKey={1} title={<TabTitleText>Resources</TabTitleText>}>
-              <div className="pf-v6-u-pt-md">
+              <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
                 <QuickResourceCreator canMutate={canMutate} />
               </div>
           </Tab>
