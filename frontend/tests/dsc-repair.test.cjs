@@ -25,7 +25,10 @@ test('DSC repair rejects validation errors with the backend explanation', async 
     const message = 'operator version changed since the defaults preview; refresh and review defaults';
     const { repairDSC } = serviceWithResponse(422, { error: message, errorCode: 'validation' });
     await assert.rejects(repairDSC('default-dsc', mode, '3.6.0'), (err) => {
-      assert.equal(err.message, '422: ' + message);
+      // ApiError carries the status and code separately from the message.
+      assert.equal(err.message, message);
+      assert.equal(err.status, 422);
+      assert.equal(err.errorCode, 'validation');
       return true;
     });
   }
