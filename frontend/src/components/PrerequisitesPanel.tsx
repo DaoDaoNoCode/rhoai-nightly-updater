@@ -88,7 +88,13 @@ export const SetupModal: React.FC<{
   status: StatusResponse | null;
 }> = ({ isOpen, onClose, status }) => {
   const pullSecretReady = (status?.pullSecret.exists && status?.pullSecret.valid) ?? false;
+  const pullSecretInvalid = !!status?.pullSecret.exists && !status.pullSecret.valid;
   const idmsReady = status?.imageMirror.exists ?? false;
+  const pullSecretDescription = pullSecretReady
+    ? 'additional-pull-secret in kube-system can pull from quay.io/rhoai'
+    : pullSecretInvalid
+      ? `additional-pull-secret exists but is invalid${status?.pullSecret.detail ? `: ${status.pullSecret.detail}` : ''}`
+      : 'additional-pull-secret is missing from kube-system';
   const [idmsExpanded, setIdmsExpanded] = useState(!idmsReady);
 
   return (
@@ -111,13 +117,11 @@ export const SetupModal: React.FC<{
           <StackItem>
             <ProgressStepper isVertical>
               <ProgressStep
-                variant={pullSecretReady ? 'success' : 'danger'}
+                variant={pullSecretReady ? 'success' : pullSecretInvalid ? 'warning' : 'danger'}
                 id="step-pull-secret"
                 titleId="step-pull-secret-title"
                 aria-label="Pull secret step"
-                description={pullSecretReady
-                  ? 'additional-pull-secret exists in kube-system'
-                  : 'additional-pull-secret is missing from kube-system'}
+                description={pullSecretDescription}
               >
                 Pull Secret
               </ProgressStep>
@@ -138,8 +142,10 @@ export const SetupModal: React.FC<{
           <StackItem>
             <Content component="p">
               {pullSecretReady
-                ? 'Pull secret is configured. You can test or update it from the Pull Secret status card.'
-                : 'Pull secret is missing. Use the Pull Secret status card to create it.'}
+                ? 'The pull secret is ready. You can test or replace it from the Pull secret card on the Status page.'
+                : pullSecretInvalid
+                  ? 'Replace the token from the Pull secret card on the Status page.'
+                  : 'Create it from the Pull secret card on the Status page.'}
             </Content>
           </StackItem>
 

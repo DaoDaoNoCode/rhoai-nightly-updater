@@ -1,7 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import {
-  Alert,
-  AlertActionCloseButton,
   Bullseye,
   Button,
   EmptyState,
@@ -48,12 +46,13 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { getUserPermissions, trackPageView } from "./services/api";
-import { isPermissionError } from "./errors";
+import { trackPageView } from "./services/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
+import { GlobalBanners } from "./components/GlobalBanners";
 import { NAV_ITEMS } from "./constants";
 import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
+import { AppInfoProvider, usePermissions, useSessionExpired, useVersion } from "./state/AppInfo";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 
 // Route-level code splitting: each page is its own chunk.
@@ -75,7 +74,7 @@ const NotFoundPage: React.FC = () => {
         </EmptyStateBody>
         <EmptyStateFooter>
           <EmptyStateActions>
-            <Button variant="primary" onClick={() => navigate("/")}>Go to Dashboard</Button>
+            <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
           </EmptyStateActions>
           <EmptyStateActions>
             <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
@@ -124,13 +123,14 @@ function initialDarkMode(): boolean {
 }
 
 const AppLayout: React.FC = () => {
-  const { status } = useClusterStatus();
-  const { state: operationState, dismissTimeout } = useOperation();
+  const { status, error: statusError } = useClusterStatus();
+  const { state: operationState } = useOperation();
+  const { canMutate } = usePermissions();
+  const sessionExpired = useSessionExpired();
+  const version = useVersion();
   const reconciling = operationState.reconcile.active;
-  const [setupOpen, setSetupOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
-  const [canMutate, setCanMutate] = useState(true); // default true until checked
   const [isDark, setIsDark] = useState(initialDarkMode);
 
   const location = useLocation();
@@ -140,17 +140,6 @@ const AppLayout: React.FC = () => {
     const page = PAGE_VIEW_NAMES[location.pathname];
     if (page) trackPageView(page);
   }, [location.pathname]);
-
-  // Fetch user permissions once on mount
-  useEffect(() => {
-    getUserPermissions()
-      .then((p) => setCanMutate(p.canMutate))
-      .catch((err) => {
-        // 401/403 fail closed: the user likely lacks permissions. Other
-        // errors fail open for UX; the backend still enforces every mutation.
-        if (isPermissionError(err)) setCanMutate(false);
-      });
-  }, []);
 
   // Dark mode: toggle CSS class on <html> and persist preference
   useEffect(() => {
@@ -276,6 +265,11 @@ const AppLayout: React.FC = () => {
                         <DropdownItem key="cluster" isDisabled description={`OCP ${status.cluster.version}`}>
                           {status.cluster.user}
                         </DropdownItem>
+                        {version && (
+                          <DropdownItem key="version" isDisabled description={version.buildDate && version.buildDate !== "unknown" ? `Built ${version.buildDate}` : undefined}>
+                            Updater build {version.version}
+                          </DropdownItem>
+                        )}
                         <DropdownItem
                           key="logout"
                           onClick={() => { window.location.href = "/oauth/sign_in"; }}
@@ -286,6 +280,14 @@ const AppLayout: React.FC = () => {
                     </Dropdown>
                   </ToolbarItem>
                 </>
+              ) : sessionExpired ? (
+                <ToolbarItem>
+                  <Label isCompact color="red" variant="outline">Signed out</Label>
+                </ToolbarItem>
+              ) : statusError ? (
+                <ToolbarItem>
+                  <Label isCompact color="red" variant="outline">Cluster unavailable</Label>
+                </ToolbarItem>
               ) : (
                 <ToolbarItem>
                   <Spinner size="sm" aria-label="Loading cluster info" />
@@ -328,25 +330,10 @@ const AppLayout: React.FC = () => {
       skipToContent={<SkipToContent href={`#${MAIN_CONTENT_ID}`}>Skip to content</SkipToContent>}
       mainContainerId={MAIN_CONTENT_ID}
     >
-      {operationState.reconcile.timedOut && (
-        <Alert
-          variant="warning"
-          title="Reconciliation monitoring timed out"
-          isInline
-          component="p"
-          actionClose={<AlertActionCloseButton onClose={dismissTimeout} />}
-          style={{ margin: "var(--pf-t--global--spacer--md)" }}
-        >
-          Automatic status polling has stopped after 10 minutes of active monitoring. The operator may still be reconciling.
-          Please check the cluster status manually or refresh the page.
-        </Alert>
-      )}
+      <GlobalBanners />
       <Suspense fallback={<PageLoading />}>
         <Routes>
-          <Route
-            path="/"
-            element={<StatusPage setupOpen={setupOpen} setSetupOpen={setSetupOpen} canMutate={canMutate} />}
-          />
+          <Route path="/" element={<StatusPage />} />
           <Route path="/components" element={<ComponentsPage />} />
           <Route path="/builds" element={<BuildExplorerPage />} />
           <Route path="/dashboard-dev" element={<DashboardDevPage canMutate={canMutate} />} />
@@ -365,7 +352,9 @@ export const App: React.FC = () => {
       <ErrorBoundary>
         <LiveAnnouncerProvider>
           <AppStateProvider>
-            <AppLayout />
+            <AppInfoProvider>
+              <AppLayout />
+            </AppInfoProvider>
           </AppStateProvider>
         </LiveAnnouncerProvider>
       </ErrorBoundary>

@@ -2,20 +2,27 @@ import React, { useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
   Flex,
   FlexItem,
+  Form,
   FormGroup,
   HelperText,
   HelperTextItem,
+  Label,
   List,
   ListItem,
   MenuToggle,
   Modal,
-  ModalVariant,
-  ModalHeader,
   ModalBody,
   ModalFooter,
+  ModalHeader,
+  ModalVariant,
   Radio,
   Select,
   SelectList,
@@ -24,447 +31,393 @@ import {
   Stack,
   StackItem,
   TextInput,
-  Form,
 } from "@patternfly/react-core";
 import type { NightlyTag, StatusResponse } from "../types";
-import { streamReinstall, trackFeature } from "../services/api";
-import { describeError } from "../errors";
+import type { OperatorOperationOptions } from "../services/api";
+import { describeOutcomeError } from "../errors";
 import { useOperation } from "../state/AppState";
-import { TooltipButton, NO_PERMISSION_REASON, OPERATION_RUNNING_REASON } from "./TooltipButton";
+import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
+import { STEP_SETS } from "../operationSteps";
+import { compareTagToInstalled, compareVersions, parseImageRef, shortDigest } from "../build";
+import { TooltipButton } from "./TooltipButton";
+import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, type OperatorRequest, type ReinstallTargetType } from "./OperatorActions";
+
+/** pkg/api customFBCImageRegex: only builds of the RHOAI FBC repository, with a tag and/or digest. */
+export const CUSTOM_FBC_IMAGE = /^quay\.io\/rhoai\/rhoai-fbc-fragment(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$/;
+const CHANNEL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+export function isValidCustomImage(image: string): boolean {
+  const m = CUSTOM_FBC_IMAGE.exec(image.trim());
+  return !!m && !!(m[1] || m[2]);
+}
+
+type Direction = "downgrade" | "upgrade" | "same" | "same-line" | "unknown";
+
+const DIRECTION_LABELS: Record<Direction, React.ReactNode> = {
+  downgrade: <Label isCompact color="red">Downgrade</Label>,
+  upgrade: <Label isCompact color="green">Newer</Label>,
+  same: <Label isCompact color="grey">Same version</Label>,
+  "same-line": <Label isCompact color="grey">Same release line</Label>,
+  unknown: null,
+};
 
 interface ReinstallPanelProps {
   status: StatusResponse | null;
   nightlyTags: NightlyTag[];
   tagsLoading: boolean;
-  canMutate: boolean;
   prerequisitesMet: boolean;
+  runOperator: (request: OperatorRequest, options?: OperatorOperationOptions) => boolean;
 }
 
 export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   status,
   nightlyTags,
   tagsLoading,
-  canMutate,
   prerequisitesMet,
+  runOperator,
 }) => {
-  // Target mode
-  const [targetType, setTargetType] = useState<"stable" | "nightly" | "custom">("stable");
-
-  // Nightly version selection
+  // No target is preselected: the stable target is often a downgrade.
+  const [targetType, setTargetType] = useState<ReinstallTargetType | null>(null);
   const [tagSelectOpen, setTagSelectOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState("");
   const [customImage, setCustomImage] = useState("");
   const [channelOverride, setChannelOverride] = useState("");
-
-  // Confirmation modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [downgradeAck, setDowngradeAck] = useState(false);
 
-  // The operation itself lives in the app-level store, so navigating away
-  // neither aborts it nor loses its result.
   const operation = useOperation();
-  const loading = operation.running;
+  const blocker = useMutationBlocker();
+  const { override } = useDashboardOverride();
   const reinstallRun = operation.run && (operation.run.kind === "reinstall_stable" || operation.run.kind === "reinstall_nightly") ? operation.run : null;
   const outcome = reinstallRun?.outcome;
-  const failure = outcome?.status === "failed"
-    ? describeError({ name: "ApiError", status: outcome.httpStatus ?? 0, errorCode: outcome.errorCode ?? "operation_failed", message: outcome.message }, "Reinstall failed")
-    : null;
-  const succeededMessage = outcome?.status === "succeeded" ? outcome.message : null;
-  const succeededStable = reinstallRun?.kind === "reinstall_stable";
+  const running = !!reinstallRun && !outcome;
 
-  // Tags come from props (shared with StatusPage)
-  const tags = nightlyTags;
+  const installedVersion = status?.csv.phase && status.csv.phase !== "Not Found" ? status.csv.version : undefined;
+  const channelValid = !channelOverride.trim() || CHANNEL_NAME.test(channelOverride.trim());
+  const targetImage = targetType === "custom" ? customImage.trim() : targetType === "nightly" ? selectedImage.trim() : "";
+  const customImageValid = isValidCustomImage(customImage);
+  const selectedTag = targetType === "nightly"
+    ? nightlyTags.find((t) => t.image === selectedImage)?.tag
+    : targetType === "custom" ? parseImageRef(customImage).tag : undefined;
 
-  const channelValid = !channelOverride.trim() || /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(channelOverride.trim());
-  const targetImage = targetType === "custom" ? customImage.trim() : selectedImage.trim();
-  const customImageValid = /^quay\.io\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+(?::[a-zA-Z0-9._-]+)?(?:@sha256:[a-f0-9]{64})?$/.test(customImage.trim()) && /(?::[^/]+|@sha256:[a-f0-9]{64})$/.test(customImage.trim());
-  const canConfirm =
-    channelValid && (
-      (targetType === "stable" && !!status?.stableChannel && !status?.stableDiscoveryError) ||
-      (!!targetImage && (targetType !== "custom" || customImageValid) && prerequisitesMet)
-    );
+  const stableDirection = ((): Direction => {
+    const cmp = compareVersions(status?.stableVersion, installedVersion);
+    if (cmp === null) return "unknown";
+    return cmp < 0 ? "downgrade" : cmp > 0 ? "upgrade" : "same";
+  })();
+  const tagDirection = (tag?: string): Direction => {
+    switch (compareTagToInstalled(tag, installedVersion)) {
+      case "older": return "downgrade";
+      case "newer": return "upgrade";
+      case "same-line": return "same-line";
+      default: return "unknown";
+    }
+  };
+  const direction: Direction = targetType === "stable" ? stableDirection : targetType ? tagDirection(selectedTag) : "unknown";
+  const knownDowngrade = direction === "downgrade";
 
-  const handleReinstall = () => {
-    trackFeature(targetType === "stable" ? "reinstall_stable" : targetType === "custom" ? "reinstall_custom" : "reinstall_nightly");
+  const targetReason = (() => {
+    if (!targetType) return "Choose what to reinstall first.";
+    if (targetType === "stable") {
+      return status?.stableChannel && !status.stableDiscoveryError ? null : "The stable release could not be found in the cluster catalog.";
+    }
+    if (!prerequisitesMet) return "Finish the one-time cluster setup first (pull secret and image mirror).";
+    if (targetType === "nightly" && !selectedImage) return "Select a nightly build first.";
+    if (targetType === "custom" && !customImageValid) return "Enter a quay.io/rhoai/rhoai-fbc-fragment image with a tag or a digest.";
+    if (!channelValid) return "The channel override is not a valid channel name.";
+    return null;
+  })();
+  const disabledReason = blocker ?? targetReason;
 
-    // Close modal immediately
+  const closeConfirm = () => {
     setConfirmOpen(false);
     setConfirmText("");
-
-    const type = targetType;
-    const image = type !== "stable" ? targetImage : undefined;
-    const channel = type !== "stable" && channelOverride.trim() ? channelOverride.trim() : undefined;
-    operation.start(
-      type !== "stable" ? "reinstall_nightly" : "reinstall_stable",
-      (h) => streamReinstall(type, image, channel, h.onStep, h.onDone, h.onDetach),
-      type === "stable" ? `${status?.stableSource ?? "stable"} / ${status?.stableChannel ?? ""}` : image,
-    );
+    setDowngradeAck(false);
   };
 
-  const handleTagSelect = (
-    _event?: React.MouseEvent<Element, MouseEvent>,
-    value?: string | number,
-  ) => {
-    if (typeof value === "string") {
-      setSelectedImage(value);
-    }
-    setTagSelectOpen(false);
+  const handleReinstall = () => {
+    if (!targetType) return;
+    const image = targetType !== "stable" ? targetImage : undefined;
+    const channel = targetType !== "stable" && channelOverride.trim() ? channelOverride.trim() : undefined;
+    const detail = targetType === "stable" ? `${status?.stableSource ?? "stable"} / ${status?.stableChannel ?? ""}` : targetImage;
+    const options: OperatorOperationOptions = {};
+    if (knownDowngrade && downgradeAck) options.allowDowngrade = true;
+    if (override?.active) options.revertDashboardDev = true;
+    closeConfirm();
+    runOperator({ kind: "reinstall", targetType, image, channel, detail }, options);
   };
 
-  // Build the toggle for the Select dropdown
-  const toggleRef = React.useRef<HTMLButtonElement>(null);
-  const toggle = (
-    <MenuToggle
-      ref={toggleRef}
-      onClick={() => setTagSelectOpen(!tagSelectOpen)}
-      isExpanded={tagSelectOpen}
-      isDisabled={loading || targetType !== "nightly"}
-      variant="secondary"
-      style={{ minWidth: "180px" }}
-    >
-      {tagsLoading ? (
-        <>
-          <Spinner size="sm" aria-label="Loading tags" /> Loading tags...
-        </>
-      ) : selectedImage ? (
-        tags.find((t) => t.image === selectedImage)?.tag || "Selected"
-      ) : (
-        "Select version"
-      )}
-    </MenuToggle>
-  );
+  const failure = outcome?.status === "failed" ? describeOutcomeError(outcome, "Reinstall failed") : null;
+  const succeededMessage = outcome?.status === "succeeded" ? outcome.message : null;
+  const alreadyOnStable = !!succeededMessage?.startsWith("Already on stable");
 
-  const targetDescription =
-    targetType === "stable"
-      ? `${status?.stableSource} / ${status?.stableChannel}${status?.stableVersion ? ` (GA ${status.stableVersion})` : ""}`
-      : targetImage
-        ? targetImage +
-          (channelOverride.trim() ? ` (channel: ${channelOverride.trim()})` : " (channel: auto-detect)")
-        : "No FBC image selected";
+  const targetName = targetType === "stable"
+    ? `RHOAI ${status?.stableVersion ?? ""} (GA, ${status?.stableSource} / ${status?.stableChannel})`
+    : selectedTag
+      ? `${selectedTag}${shortDigest(parseImageRef(targetImage).digest) ? ` · ${shortDigest(parseImageRef(targetImage).digest)}` : ""}`
+      : targetImage;
+  const modalTitle = knownDowngrade
+    ? targetType === "stable"
+      ? `Reinstall RHOAI ${status?.stableVersion} (downgrade from ${installedVersion})?`
+      : `Reinstall an older release (${selectedTag}) over ${installedVersion}?`
+    : "Reinstall the RHOAI operator?";
+  const steps = STEP_SETS[targetType === "stable" ? "reinstall_stable" : "reinstall_nightly"];
+
+  const tagToggleRef = React.useRef<HTMLButtonElement>(null);
+  const selectedTagInfo = nightlyTags.find((t) => t.image === selectedImage);
 
   return (
     <Stack hasGutter>
       <StackItem>
-        <Alert component="p" variant="warning" title="Destructive operation" isInline>
-          <Content component="small">
-            This will fully uninstall the current RHOAI operator and reinstall
-            it from the selected target. The operator will be unavailable for
-            5-10 minutes during this process.
-          </Content>
-        </Alert>
+        <Content component="p">
+          Uninstalls the operator and installs it again from the target you choose. Use it to move to the GA release, to an
+          older build, or when Update and Re-deploy can&apos;t recover the operator. RHOAI can&apos;t be changed for about
+          5-10 minutes; running workloads keep running.
+        </Content>
       </StackItem>
 
       <StackItem>
-        <Stack hasGutter>
-          <StackItem>
-            <Radio
-              id="reinstall-stable"
-              name="reinstall-target"
-              label={status?.stableChannelPinned ? "Configured GA channel" : "Latest stable"}
-              description={
-                <HelperText>
-                  <HelperTextItem>
-                    {status?.stableChannel ? (
-                      <>
-                        Reinstall from <strong>{status.stableSource}</strong> /{" "}
-                        <strong>{status.stableChannel}</strong>
-                        {status.stableVersion && <> — GA {status.stableVersion}</>}
-                        {!status.stableChannelPinned && <>. Latest GA available in this cluster's catalog.</>}
-                      </>
-                    ) : status?.stableDiscoveryError ? (
-                      "Stable release unavailable"
-                    ) : (
-                      "Discovering stable releases from the cluster catalog..."
-                    )}
+        <FormGroup role="radiogroup" fieldId="reinstall-target" label="Reinstall to" isStack>
+          <Radio
+            id="reinstall-stable"
+            name="reinstall-target"
+            label={
+              <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                <FlexItem>{status?.stableChannelPinned ? "Configured GA channel" : "Latest stable (GA)"}{status?.stableVersion ? ` ${status.stableVersion}` : ""}</FlexItem>
+                {DIRECTION_LABELS[stableDirection] && <FlexItem>{DIRECTION_LABELS[stableDirection]}</FlexItem>}
+              </Flex>
+            }
+            description={
+              status?.stableChannel
+                ? `From ${status.stableSource} / ${status.stableChannel}${stableDirection === "downgrade" ? `; older than the installed ${installedVersion}` : ""}.`
+                : status?.stableDiscoveryError ? "The stable release could not be found in the cluster catalog." : "Looking up the stable release in the cluster catalog..."
+            }
+            isChecked={targetType === "stable"}
+            onChange={() => { setTargetType("stable"); setChannelOverride(""); }}
+            isDisabled={running}
+          />
+          {targetType === "stable" && status?.stableDiscoveryError && (
+            <Alert component="p" variant="warning" title="Could not find the stable release" isInline isPlain>
+              {status.stableDiscoveryError}. Refresh the status after fixing the catalog.
+            </Alert>
+          )}
+          <Radio
+            id="reinstall-nightly"
+            name="reinstall-target"
+            label="A nightly build"
+            description="Pick one of the recent nightly builds."
+            isChecked={targetType === "nightly"}
+            onChange={() => setTargetType("nightly")}
+            isDisabled={running}
+          />
+          <Radio
+            id="reinstall-custom"
+            name="reinstall-target"
+            label="A specific FBC image"
+            description="Any build of quay.io/rhoai/rhoai-fbc-fragment, by tag or digest. A digest pins that exact build."
+            isChecked={targetType === "custom"}
+            onChange={() => setTargetType("custom")}
+            isDisabled={running}
+          />
+        </FormGroup>
+      </StackItem>
+
+      {(targetType === "nightly" || targetType === "custom") && (
+        <StackItem>
+          {!prerequisitesMet && (
+            <Alert component="p" variant="warning" title="Finish the cluster setup first" isInline isPlain>
+              Nightly builds need the pull secret and the image mirror.
+            </Alert>
+          )}
+          <Form onSubmit={(e) => e.preventDefault()}>
+            {targetType === "custom" ? (
+              <FormGroup label="FBC image" fieldId="reinstall-custom-image" isRequired>
+                <TextInput
+                  id="reinstall-custom-image"
+                  value={customImage}
+                  onChange={(_e, value) => setCustomImage(value)}
+                  placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
+                  isDisabled={running}
+                  validated={customImage.trim() && !customImageValid ? "error" : "default"}
+                  aria-describedby="reinstall-custom-image-help"
+                />
+                <HelperText id="reinstall-custom-image-help">
+                  <HelperTextItem variant={customImage.trim() && !customImageValid ? "error" : "default"}>
+                    {customImage.trim() && !customImageValid
+                      ? "Only quay.io/rhoai/rhoai-fbc-fragment images, with a tag, a full sha256 digest, or both."
+                      : "The digest is used exactly, even if its tag now points to a newer build."}
                   </HelperTextItem>
                 </HelperText>
-              }
-              isChecked={targetType === "stable"}
-              onChange={() => {
-                setTargetType("stable");
-                setSelectedImage("");
-                setChannelOverride("");
-              }}
-              isDisabled={loading}
-            />
-            {targetType === "stable" && status?.stableDiscoveryError && (
-              <Alert component="p" variant="warning" title="Could not discover the latest stable release" isInline style={{ marginTop: "0.5rem" }}>
-                <Content component="small">{status.stableDiscoveryError}. Refresh cluster status after resolving the catalog issue.</Content>
-              </Alert>
-            )}
-          </StackItem>
-          <StackItem>
-            <Radio
-              id="reinstall-nightly"
-              name="reinstall-target"
-              label="Specific nightly"
-              description={
-                <HelperText>
-                  <HelperTextItem>
-                    Reinstall with a specific nightly FBC image
-                  </HelperTextItem>
-                </HelperText>
-              }
-              isChecked={targetType === "nightly"}
-              onChange={() => setTargetType("nightly")}
-              isDisabled={loading}
-            />
-          </StackItem>
-
-          <StackItem>
-            <Radio
-              id="reinstall-custom"
-              name="reinstall-target"
-              label="Custom version"
-              description="Reinstall any version or build using a Quay FBC image. Include a SHA256 digest to pin an exact build."
-              isChecked={targetType === "custom"}
-              onChange={() => setTargetType("custom")}
-              isDisabled={loading}
-            />
-          </StackItem>
-
-          {targetType !== "stable" && (
-            <StackItem>
-              {!prerequisitesMet && (
-                <Alert component="p"
-                  variant="warning"
-                  title="Prerequisites required for nightly installs"
-                  isInline
-                  style={{ marginBottom: "1rem" }}
-                >
-                  <Content component="small">
-                    The pull secret and image mirror must be configured before
-                    reinstalling with a nightly build. Use the Setup panel to
-                    complete prerequisite configuration.
-                  </Content>
-                </Alert>
-              )}
-              <Form>
-                {targetType === "custom" ? (
-                  <FormGroup label="Custom FBC image" fieldId="reinstall-custom-image" isRequired>
-                    <TextInput
-                      id="reinstall-custom-image"
-                      value={customImage}
-                      onChange={(_e, value) => setCustomImage(value)}
-                      placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
-                      isDisabled={loading}
-                      validated={customImage.trim() && !customImageValid ? "error" : "default"}
-                      aria-describedby="reinstall-custom-image-help"
-                    />
-                    <HelperText id="reinstall-custom-image-help">
-                      <HelperTextItem variant={customImage.trim() && !customImageValid ? "error" : "default"}>
-                        {customImage.trim() && !customImageValid
-                          ? "Enter a Quay image reference with a tag or a full 64-character SHA256 digest."
-                          : "The supplied digest is used exactly, even when its tag now points to a newer build. Any version or build can be selected."}
-                      </HelperTextItem>
-                    </HelperText>
-                  </FormGroup>
-                ) : (
-                <FormGroup
-                  label="Nightly version"
-                  fieldId="reinstall-nightly-image"
-                >
-                  <Flex
-                    gap={{ default: "gapSm" }}
-                    alignItems={{ default: "alignItemsCenter" }}
-                  >
-                    <FlexItem>
-                      <Select
-                        isOpen={tagSelectOpen}
-                        selected={selectedImage || undefined}
-                        onSelect={handleTagSelect}
-                        onOpenChange={(open) => setTagSelectOpen(open)}
-                        toggle={{
-                          toggleNode: toggle,
-                          toggleRef: toggleRef,
-                        }}
-                        shouldFocusToggleOnSelect
+              </FormGroup>
+            ) : (
+              <FormGroup label="Nightly build" fieldId="reinstall-nightly-image">
+                <Select
+                  isOpen={tagSelectOpen}
+                  selected={selectedImage || undefined}
+                  onSelect={(_e, value) => {
+                    if (typeof value === "string") setSelectedImage(value);
+                    setTagSelectOpen(false);
+                  }}
+                  onOpenChange={setTagSelectOpen}
+                  toggle={{
+                    toggleRef: tagToggleRef,
+                    toggleNode: (
+                      <MenuToggle
+                        ref={tagToggleRef}
+                        id="reinstall-nightly-image"
+                        onClick={() => setTagSelectOpen(!tagSelectOpen)}
+                        isExpanded={tagSelectOpen}
+                        isDisabled={running}
+                        style={{ minWidth: "14rem" }}
                       >
-                        <SelectList aria-label="Nightly version">
-                          {!tagsLoading && tags.length === 0 && (
-                            <SelectOption value="" isDisabled>
-                              No tags available
-                            </SelectOption>
-                          )}
-                          {tags.length > 0 &&
-                            tags.map((t) => (
-                              <SelectOption
-                                key={t.tag}
-                                value={t.image}
-                                description={
-                                  t.image.length > 60
-                                    ? t.image.slice(0, 60) + "..."
-                                    : t.image
-                                }
-                              >
-                                {t.tag}
-                              </SelectOption>
-                            ))}
-                        </SelectList>
-                      </Select>
-                    </FlexItem>
-                  </Flex>
-                </FormGroup>
-                )}
-                <FormGroup
-                  label="Channel override"
-                  fieldId="reinstall-channel-override"
+                        {tagsLoading ? <><Spinner size="sm" aria-label="Loading builds" /> Loading builds...</> : selectedTagInfo?.tag || "Select a build"}
+                      </MenuToggle>
+                    ),
+                  }}
+                  shouldFocusToggleOnSelect
                 >
-                  <TextInput
-                    id="reinstall-channel-override"
-                    value={channelOverride}
-                    onChange={(_e, val) => setChannelOverride(val)}
-                    placeholder="Leave empty to detect a channel from the selected catalog"
-                    isDisabled={loading}
-                    validated={channelValid ? "default" : "error"}
-                  />
+                  <SelectList aria-label="Nightly builds">
+                    {!tagsLoading && nightlyTags.length === 0 && <SelectOption value="" isDisabled>No builds found</SelectOption>}
+                    {nightlyTags.map((t) => {
+                      const dir = tagDirection(t.tag);
+                      return (
+                        <SelectOption
+                          key={t.image}
+                          value={t.image}
+                          description={`${shortDigest(parseImageRef(t.image).digest) ?? ""}${dir === "downgrade" ? " · older than installed" : ""}`}
+                        >
+                          {t.tag}
+                        </SelectOption>
+                      );
+                    })}
+                  </SelectList>
+                </Select>
+                {selectedTag && DIRECTION_LABELS[direction] && (
                   <HelperText>
                     <HelperTextItem>
-                      Optional. Override the auto-detected channel if the update picks the wrong one.
+                      {direction === "downgrade"
+                        ? `Older release line than the installed ${installedVersion}.`
+                        : direction === "same-line"
+                          ? `Same release line as the installed ${installedVersion}; the exact version is checked before anything changes.`
+                          : `Newer than the installed ${installedVersion}.`}
                     </HelperTextItem>
                   </HelperText>
-                </FormGroup>
-              </Form>
-            </StackItem>
-          )}
-        </Stack>
-      </StackItem>
+                )}
+              </FormGroup>
+            )}
+            <FormGroup label="Channel override" fieldId="reinstall-channel-override">
+              <TextInput
+                id="reinstall-channel-override"
+                value={channelOverride}
+                onChange={(_e, val) => setChannelOverride(val)}
+                placeholder="Detected from the catalog"
+                isDisabled={running}
+                validated={channelValid ? "default" : "error"}
+                aria-describedby="reinstall-channel-help"
+              />
+              <HelperText id="reinstall-channel-help">
+                <HelperTextItem variant={channelValid ? "default" : "error"}>
+                  {channelValid ? "Optional. Only set it if the detected channel is wrong." : "Letters, digits, '.', '_' and '-' only."}
+                </HelperTextItem>
+              </HelperText>
+            </FormGroup>
+          </Form>
+        </StackItem>
+      )}
 
       <StackItem>
         <TooltipButton
           variant="danger"
           onClick={() => setConfirmOpen(true)}
-          isDisabled={loading}
-          disabledReason={
-            !canMutate ? NO_PERMISSION_REASON
-            : loading ? OPERATION_RUNNING_REASON
-            : !canConfirm ? (targetType === "stable"
-              ? "The stable release could not be discovered from the cluster catalog."
-              : !prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)."
-              : !channelValid ? "The channel override is not a valid channel name."
-              : "Select or enter a valid FBC image first.")
-            : null
-          }
-          isLoading={loading && !!reinstallRun && !reinstallRun.outcome}
+          disabledReason={disabledReason}
+          isLoading={running}
         >
-          Reinstall Operator
+          {running ? "Reinstalling..." : "Reinstall operator..."}
         </TooltipButton>
       </StackItem>
 
       {failure && (
         <StackItem>
           <Alert variant={failure.variant} title={failure.title} isInline component="p">
-            {failure.body}
+            {failure.body}{failure.hint && <> {failure.hint}</>}
+          </Alert>
+        </StackItem>
+      )}
+      {succeededMessage && (
+        <StackItem>
+          <Alert variant={alreadyOnStable ? "info" : "success"} title={succeededMessage} isInline component="p">
+            {reinstallRun?.kind === "reinstall_stable" && !alreadyOnStable && "The nightly catalog was removed."}
           </Alert>
         </StackItem>
       )}
 
-      {succeededMessage && (
-        <StackItem>
-          <Stack hasGutter>
-            <StackItem>
-              <Alert
-                variant={
-                  succeededMessage.includes("Already on stable") && status?.csv.phase !== "Succeeded"
-                    ? "warning"
-                    : "success"
-                }
-                title={succeededMessage}
-                isInline
-                component="p"
-              >
-                {succeededMessage.includes("Already on stable") && status?.csv.phase !== "Succeeded" && (
-                  "The operator is on the stable channel but is not in a healthy state. Consider using Refresh Operator to re-deploy it."
-                )}
-              </Alert>
-            </StackItem>
-            {succeededStable && (
-              <StackItem>
-                <Alert
-                  variant="info"
-                  title="The nightly CatalogSource has been cleaned up"
-                  isInline
-                  isPlain
-                  component="p"
-                />
-              </StackItem>
-            )}
-          </Stack>
-        </StackItem>
-      )}
-
-      {/* --- Confirm Reinstall Modal --- */}
       <Modal
         aria-labelledby="confirm-reinstall-title"
         variant={ModalVariant.medium}
         isOpen={confirmOpen}
-        onClose={() => {
-          setConfirmOpen(false);
-          setConfirmText("");
-        }}
+        onClose={closeConfirm}
       >
-        <ModalHeader
-          title="Reinstall Operator — Destructive Operation"
-          titleIconVariant="warning"
-          labelId="confirm-reinstall-title"
-        />
+        <ModalHeader title={modalTitle} titleIconVariant="warning" labelId="confirm-reinstall-title" />
         <ModalBody>
           <Stack hasGutter>
             <StackItem>
-              <Alert component="p"
-                variant="danger"
-                title="This will fully uninstall the current RHOAI operator and reinstall it. This is a destructive operation."
-                isInline
-              />
+              <DescriptionList isHorizontal isCompact horizontalTermWidthModifier={{ default: "10ch" }}>
+                <DescriptionListGroup>
+                  <DescriptionListTerm>Installed</DescriptionListTerm>
+                  <DescriptionListDescription>
+                    {status?.csv.name || "nothing"}{status?.subscription.source ? ` (${status.subscription.source} / ${status.subscription.channel})` : ""}
+                  </DescriptionListDescription>
+                </DescriptionListGroup>
+                <DescriptionListGroup>
+                  <DescriptionListTerm>Target</DescriptionListTerm>
+                  <DescriptionListDescription>
+                    <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+                      <FlexItem style={{ overflowWrap: "anywhere" }}>{targetName}</FlexItem>
+                      {DIRECTION_LABELS[direction] && <FlexItem>{DIRECTION_LABELS[direction]}</FlexItem>}
+                    </Flex>
+                    {channelOverride.trim() && <span className="rhoai-subtle">Channel: {channelOverride.trim()}</span>}
+                  </DescriptionListDescription>
+                </DescriptionListGroup>
+              </DescriptionList>
             </StackItem>
+            {knownDowngrade && (
+              <StackItem>
+                <Alert variant="danger" isInline component="p" title="This installs an older operator version">
+                  OLM cannot downgrade an operator, so Reinstall removes it and installs the older one. The CRDs keep the
+                  newer schema, and the older operator may reject or ignore fields that the newer version created in
+                  your DataScienceCluster and DSCInitialization.
+                </Alert>
+                <Checkbox
+                  id="reinstall-downgrade-ack"
+                  isChecked={downgradeAck}
+                  onChange={(_e, checked) => setDowngradeAck(checked)}
+                  label="I understand and want to install the older version"
+                  style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}
+                />
+              </StackItem>
+            )}
+            {override?.active && (
+              <StackItem>
+                <Alert variant="warning" isInline component="p" title="A Dashboard Dev session is active">
+                  dashboard-operator is paused ({describeDashboardSession(override)}). The reinstall ends that session first.
+                  {" "}{REVERT_DASHBOARD_EXPLANATION}
+                </Alert>
+              </StackItem>
+            )}
             <StackItem>
-              <Content component="p">
-                <strong>Current:</strong> {status?.subscription.source} /{" "}
-                {status?.subscription.channel}
-              </Content>
-              <Content component="p">
-                <strong>Target:</strong> <span style={{ overflowWrap: "anywhere" }}>{targetDescription}</span>
-              </Content>
-            </StackItem>
-            <StackItem>
-              <Content component="p">
-                The following steps will be performed:
-              </Content>
-              <List isPlain={false} component="ol">
-                {targetType !== "stable" && <ListItem>Validate the selected image and channel in a fresh temporary catalog</ListItem>}
-                <ListItem>Remove the nightly CatalogSource</ListItem>
-                <ListItem>Delete the current operator Subscription</ListItem>
-                <ListItem>
-                  Remove the current ClusterServiceVersion (operator)
-                </ListItem>
-                <ListItem>
-                  Clean up stale validating and mutating webhooks
-                </ListItem>
-                <ListItem>
-                  Patch CRD conversion webhooks to prevent API failures during
-                  transition
-                </ListItem>
-                <ListItem>Wait for cleanup to propagate</ListItem>
-                <ListItem>
-                  {targetType === "stable"
-                    ? "Create a fresh Subscription to the stable catalog"
-                    : "Create CatalogSource with the selected FBC image and fresh Subscription"}
-                </ListItem>
+              <Content component="p"><strong>What happens</strong></Content>
+              <List component="ol">
+                {steps.map((step) => (
+                  <ListItem key={step.id}>{step.label}<span className="rhoai-subtle">: {step.description}</span></ListItem>
+                ))}
               </List>
             </StackItem>
             <StackItem>
-              <Alert component="p"
-                variant="warning"
-                title="During this process (5-10 minutes), the RHOAI operator will be unavailable. Existing workloads (notebooks, model serving, pipelines) will continue running but cannot be modified until the operator is reinstalled."
-                isInline
-              />
-            </StackItem>
-            <StackItem>
               <Content component="p">
-                <strong>Note:</strong> DSCI, DSC, CRDs, and user workloads will
-                NOT be deleted. The operator will pick them up and reconcile. Do
-                NOT manually delete DSCI or DSC resources during the reinstall —
-                their finalizers require the operator to be running.
+                DSCInitialization, DataScienceCluster, CRDs and your workloads are not deleted; the new operator adopts them.
+                Don&apos;t delete the DSC or DSCI while the operator is gone: their finalizers need it. If the new install fails,
+                the previous operator is restored.
               </Content>
             </StackItem>
             <StackItem>
@@ -483,24 +436,15 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
           </Stack>
         </ModalBody>
         <ModalFooter>
-          <Button
+          <TooltipButton
             variant="danger"
             onClick={handleReinstall}
-            isLoading={loading}
-            isDisabled={confirmText !== "reinstall" || loading || !canConfirm || !canMutate}
+            isDisabled={confirmText !== "reinstall" || (knownDowngrade && !downgradeAck)}
+            disabledReason={disabledReason}
           >
-            {loading ? "Reinstalling..." : "Confirm Reinstall"}
-          </Button>
-          <Button
-            variant="link"
-            onClick={() => {
-              setConfirmOpen(false);
-              setConfirmText("");
-            }}
-            isDisabled={loading}
-          >
-            Cancel
-          </Button>
+            {knownDowngrade ? "Reinstall older version" : "Reinstall"}
+          </TooltipButton>
+          <Button variant="link" onClick={closeConfirm}>Cancel</Button>
         </ModalFooter>
       </Modal>
     </Stack>

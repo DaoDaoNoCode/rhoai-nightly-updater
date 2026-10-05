@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import {
   Alert,
+  AlertActionCloseButton,
+  AlertActionLink,
   Card,
   CardBody,
   Content,
@@ -12,20 +14,26 @@ import {
   StackItem,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { UpdatePipeline } from "./UpdatePipeline";
 import { ReconciliationProgress } from "./ReconciliationProgress";
-import { OPERATION_NAMES } from "../operationSteps";
+import { BuildSummary } from "./BuildSummary";
+import { OPERATION_NAMES, type ReconcileKind } from "../operationSteps";
 import { isRunning } from "../state/operation";
 import { useClusterStatus, useOperation } from "../state/AppState";
 
-const COMPLETE_TITLES = {
+const COMPLETE_TITLES: Record<ReconcileKind, string> = {
   update: "Update complete",
-  refresh: "Refresh complete",
+  refresh: "Re-deploy complete",
   reinstall: "Reinstall complete",
-} as const;
+};
+
+const FAILED_TITLES: Record<ReconcileKind, string> = {
+  update: "The operator did not come up after the update",
+  refresh: "The operator did not come up after the re-deploy",
+  reinstall: "The operator did not come up after the reinstall",
+};
 
 /** True when the progress card has something to show. */
 export function useHasOperationProgress(): boolean {
@@ -36,11 +44,14 @@ export function useHasOperationProgress(): boolean {
 /**
  * Unified progress for the current operation: connecting, streamed steps,
  * then OLM reconciliation and the final result. Reads the app-level
- * operation store, so it shows the same state after navigating away and back.
+ * operation store, so it shows the same state after navigating away and
+ * back, after a reload (reconcile tracking is persisted), and for an
+ * operation another tab or teammate started (GET /api/operation).
  */
 export const OperationProgress: React.FC = () => {
-  const { state } = useOperation();
+  const { state, dismissFinished } = useOperation();
   const { status } = useClusterStatus();
+  const navigate = useNavigate();
   const { run, reconcile } = state;
   const running = isRunning(run);
 
@@ -58,6 +69,8 @@ export const OperationProgress: React.FC = () => {
     return () => clearInterval(id);
   }, [connecting, runStartedAt]);
 
+  const startedBy = run?.source === "server" ? run.user || "another session" : undefined;
+
   if (running && connecting) {
     return (
       <Card isCompact>
@@ -68,20 +81,13 @@ export const OperationProgress: React.FC = () => {
                 <FlexItem><Spinner size="md" aria-label={`${OPERATION_NAMES[run.kind]} starting`} /></FlexItem>
                 <FlexItem>
                   <Content component="p" style={{ fontWeight: 600, margin: 0 }}>
-                    {run.kind === "update" ? "Applying update to cluster..." : `${OPERATION_NAMES[run.kind]}: starting...`}
+                    {OPERATION_NAMES[run.kind]}: starting...
                   </Content>
-                  <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
-                    Steps will appear as they complete.
-                  </Content>
+                  <Content component="small" className="rhoai-subtle">Steps appear as they run.</Content>
                 </FlexItem>
               </Flex>
             </FlexItem>
-            <FlexItem>
-              <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-                {connectingElapsed > 0 && <FlexItem><Content component="small">Elapsed: {connectingElapsed}s</Content></FlexItem>}
-                <FlexItem><Link to="/components">View pods</Link></FlexItem>
-              </Flex>
-            </FlexItem>
+            {connectingElapsed > 0 && <FlexItem><Content component="small">Elapsed: {connectingElapsed}s</Content></FlexItem>}
           </Flex>
         </CardBody>
       </Card>
@@ -89,18 +95,22 @@ export const OperationProgress: React.FC = () => {
   }
 
   if (running) {
-    return <UpdatePipeline steps={run.steps} active startedAt={run.startedAt} operationType={run.kind} />;
+    return <UpdatePipeline steps={run.steps} active startedAt={run.startedAt} operationType={run.kind} startedBy={startedBy} />;
   }
 
   const outcome = run?.outcome;
   const completedSteps = run ? run.steps.filter((s) => s.status === "success").length : 0;
+  const csvPhase = status?.csv.phase || "";
+  const succeeded = csvPhase === "Succeeded";
+  const failed = csvPhase === "Failed";
+  const installedBuild = status?.nightly?.installed;
 
   return (
     <Stack hasGutter>
       {/* A failed run keeps its step list, with the failed step's details. */}
       {run && outcome?.status === "failed" && run.steps.length > 0 && (
         <StackItem>
-          <UpdatePipeline steps={run.steps} active={false} operationType={run.kind} />
+          <UpdatePipeline steps={run.steps} active={false} operationType={run.kind} startedBy={startedBy} />
         </StackItem>
       )}
 
@@ -110,11 +120,11 @@ export const OperationProgress: React.FC = () => {
             <CardBody>
               {outcome.status === "detached" ? (
                 <Label color="orange" icon={<ExclamationTriangleIcon />} isCompact>
-                  Live progress interrupted after {completedSteps} steps; following the operator status instead
+                  Live progress stopped after {completedSteps} steps; following the operator status instead
                 </Label>
               ) : (
                 <Label color="green" icon={<CheckCircleIcon />} isCompact>
-                  Applied {OPERATION_NAMES[run.kind].toLowerCase()} ({completedSteps} steps completed)
+                  {OPERATION_NAMES[run.kind]} applied ({completedSteps} steps)
                 </Label>
               )}
             </CardBody>
@@ -136,59 +146,32 @@ export const OperationProgress: React.FC = () => {
 
       {!reconcile.active && reconcile.finished && (
         <StackItem>
-          {(() => {
-            const csvPhase = status?.csv?.phase || "";
-            const csvName = status?.csv?.name || "";
-            const succeeded = csvPhase === "Succeeded";
-            const failed = csvPhase === "Failed";
-
-            return (
-              <Card isCompact>
-                <CardBody>
-                  <Stack hasGutter>
-                    <StackItem>
-                      <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-                        <FlexItem>
-                          {succeeded ? (
-                            <Label color="green" icon={<CheckCircleIcon />}>{COMPLETE_TITLES[reconcile.kind]}</Label>
-                          ) : failed ? (
-                            <Label color="red" icon={<ExclamationCircleIcon />}>Operator install failed</Label>
-                          ) : (
-                            <Label color="green" icon={<CheckCircleIcon />}>Operator installed</Label>
-                          )}
-                        </FlexItem>
-                        {csvName && (
-                          <FlexItem>
-                            <Content component="small">{csvName}</Content>
-                          </FlexItem>
-                        )}
-                      </Flex>
-                    </StackItem>
-                    <StackItem>
-                      <Alert
-                        variant={succeeded ? "success" : failed ? "danger" : "info"}
-                        title={succeeded
-                          ? "The operator has been updated successfully."
-                          : failed
-                          ? "The operator installation failed. Check pod logs for details."
-                          : "The operator is installed. OLM reconciliation is complete."
-                        }
-                        isInline
-                        isPlain
-                        component="p"
-                      >
-                        <Content component="small" style={{ marginTop: "0.25rem" }}>
-                          Some components may still be rolling out new pods. Check the{" "}
-                          <Link to="/components">Components page</Link> to verify all deployments are
-                          ready and the DSC has finished reconciling.
-                        </Content>
-                      </Alert>
-                    </StackItem>
-                  </Stack>
-                </CardBody>
-              </Card>
-            );
-          })()}
+          <Alert
+            variant={failed ? "danger" : succeeded ? "success" : "info"}
+            isInline
+            component="p"
+            title={failed ? FAILED_TITLES[reconcile.kind] : COMPLETE_TITLES[reconcile.kind]}
+            actionClose={<AlertActionCloseButton onClose={dismissFinished} />}
+            actionLinks={failed ? (
+              <AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>
+            ) : (
+              <AlertActionLink onClick={() => navigate("/components")}>Check components</AlertActionLink>
+            )}
+          >
+            <Stack>
+              <StackItem>
+                {status?.csv.name ? <>Operator {status.csv.name} is {csvPhase || "installed"}.</> : "The operator is installed."}
+                {installedBuild && !failed && (
+                  <span> Running <BuildSummary build={installedBuild} inline /></span>
+                )}
+              </StackItem>
+              <StackItem>
+                {failed
+                  ? "OLM reports the new operator version as Failed. Diagnostics shows the reason; updating to another build usually fixes a broken nightly."
+                  : <>Components may still be rolling out new pods; the <Link to="/components">Components page</Link> shows when every deployment is ready.</>}
+              </StackItem>
+            </Stack>
+          </Alert>
         </StackItem>
       )}
     </Stack>
