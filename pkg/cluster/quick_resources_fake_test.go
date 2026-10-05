@@ -14,12 +14,12 @@ import (
 	"time"
 )
 
-// fakeAPI is a small stateful Kubernetes API server for the quick-resource
+// resourceFake is a small stateful Kubernetes API server for the quick-resource
 // tests. It stores objects by path and implements GET (object and list, with
 // equality label selectors), POST, server-side apply and merge PATCH (with
 // resourceVersion checks), and DELETE (with UID preconditions, finalizers and
 // namespace cascade). It records every request.
-type fakeAPI struct {
+type resourceFake struct {
 	t       *testing.T
 	mu      sync.Mutex
 	objects map[fakeKey]map[string]interface{}
@@ -41,9 +41,9 @@ type fakeKey struct {
 	gv, ns, plural, name string
 }
 
-func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
+func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
-	f := &fakeAPI{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}}
+	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
@@ -91,7 +91,7 @@ func fakePath(k fakeKey) string {
 }
 
 // put stores an object at path, filling in defaults for metadata.
-func (f *fakeAPI) put(path string, obj map[string]interface{}) {
+func (f *resourceFake) put(path string, obj map[string]interface{}) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k, _ := parseFakePath(path)
@@ -114,7 +114,7 @@ func (f *fakeAPI) put(path string, obj map[string]interface{}) {
 }
 
 // putJSON stores an object given as JSON.
-func (f *fakeAPI) putJSON(path, body string) {
+func (f *resourceFake) putJSON(path, body string) {
 	var obj map[string]interface{}
 	if err := json.Unmarshal([]byte(body), &obj); err != nil {
 		f.t.Fatalf("bad fixture for %s: %v", path, err)
@@ -122,16 +122,16 @@ func (f *fakeAPI) putJSON(path, body string) {
 	f.put(path, obj)
 }
 
-func (f *fakeAPI) get(path string) map[string]interface{} {
+func (f *resourceFake) get(path string) map[string]interface{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k, _ := parseFakePath(path)
 	return f.objects[k]
 }
 
-func (f *fakeAPI) has(path string) bool { return f.get(path) != nil }
+func (f *resourceFake) has(path string) bool { return f.get(path) != nil }
 
-func (f *fakeAPI) mutations() []string {
+func (f *resourceFake) mutations() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
@@ -171,13 +171,13 @@ func mergePatch(dst, patch map[string]interface{}) {
 	}
 }
 
-func (f *fakeAPI) write(w http.ResponseWriter, code int, obj interface{}) {
+func (f *resourceFake) write(w http.ResponseWriter, code int, obj interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(obj)
 }
 
-func (f *fakeAPI) status(w http.ResponseWriter, code int, msg string) {
+func (f *resourceFake) status(w http.ResponseWriter, code int, msg string) {
 	f.write(w, code, map[string]interface{}{"kind": "Status", "status": "Failure", "message": msg, "code": code})
 }
 
@@ -195,17 +195,17 @@ func matchesSelector(obj map[string]interface{}, selector string) bool {
 	return true
 }
 
-func (f *fakeAPI) bumpRV(meta map[string]interface{}) {
+func (f *resourceFake) bumpRV(meta map[string]interface{}) {
 	n, _ := strconv.Atoi(fmt.Sprint(meta["resourceVersion"]))
 	meta["resourceVersion"] = strconv.Itoa(n + 1)
 }
 
-func (f *fakeAPI) addManagedField(meta map[string]interface{}, manager, op string) {
+func (f *resourceFake) addManagedField(meta map[string]interface{}, manager, op string) {
 	entries, _ := meta["managedFields"].([]interface{})
 	meta["managedFields"] = append(entries, map[string]interface{}{"manager": manager, "operation": op, "time": time.Now().UTC().Format(time.RFC3339)})
 }
 
-func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
+func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	defer f.mu.Unlock()

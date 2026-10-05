@@ -201,7 +201,7 @@ func TestSetupMinIO_ResponseDoesNotLeakPassword(t *testing.T) {
 	for _, bucketErr := range []error{nil, fmt.Errorf("S3 PUT bucket returned 403")} {
 		fastMinIOTimings(t)
 		minioBucketCreator = func(*Client, string) error { return bucketErr }
-		f, client := newFakeAPI(t)
+		f, client := newResourceFake(t)
 		readyAfterApply(f)
 		f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"bWluaW8=","minio_root_password":"dGVzdHBhc3M="}}`)
 

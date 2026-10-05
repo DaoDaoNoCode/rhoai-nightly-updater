@@ -1,11 +1,16 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -29,8 +34,12 @@ type Problem struct {
 	AutoFixable    bool     `json:"autoFixable"`
 	AutoFixAction  string   `json:"autoFixAction,omitempty"`
 	ConfirmMessage string   `json:"confirmMessage,omitempty"`
-	LearnMore      string   `json:"learnMore,omitempty"`
-	TechnicalCmd   string   `json:"technicalCmd,omitempty"`
+	// AffectedObjects lists the cluster objects the problem is about, as
+	// "<Kind> <namespace>/<name>" or "<Kind> <name>". For auto-fixable
+	// problems these are exactly the objects the fix may change.
+	AffectedObjects []string `json:"affectedObjects,omitempty"`
+	LearnMore       string   `json:"learnMore,omitempty"`
+	TechnicalCmd    string   `json:"technicalCmd,omitempty"`
 }
 
 // DiagnosticsResponse is the response for the diagnostics endpoint.
@@ -44,47 +53,105 @@ type checkOutput struct {
 	check    CheckResult
 }
 
+type diagnosticCheck struct {
+	name string
+	fn   func(*Client) checkOutput
+}
+
+// diagnosticChecks run independently of each other; results are reported in
+// this order.
+var diagnosticChecks = []diagnosticCheck{
+	{"Catalog health", checkCatalogHealth},
+	{"Operator pods", checkOperatorPods},
+	{"Subscription health", checkSubscriptionHealth},
+	{"Operator installed", checkCSVHealth},
+	{"Install plan", checkInstallPlanHealth},
+	{"Pull secret", checkPullSecretHealth},
+	{"Image mirror", checkImageMirror},
+	{"Stale webhooks", checkStaleWebhooks},
+	{"Node capacity", checkNodeCapacity},
+	{"DataScienceCluster", checkDataScienceCluster},
+	{"RHOAI pods", checkRHOAIPods},
+	{"Platform modules", checkPlatformModules},
+	{"Operator-managed config", checkManagedConfig},
+}
+
+var (
+	// diagnosticsCheckTimeout bounds each check so one slow API call cannot
+	// hold up the whole report.
+	diagnosticsCheckTimeout = 20 * time.Second
+	// diagnosticsParallelism bounds concurrent checks (and API requests).
+	diagnosticsParallelism = 6
+	// operatorStuckAfter is how long a Subscription may sit in a transitional
+	// state before diagnostics reports it. It matches OLM's default
+	// --bundle-unpack-timeout (10m, operator-lifecycle-manager
+	// cmd/catalog/start.go), after which OLM itself fails a stuck InstallPlan.
+	operatorStuckAfter = 10 * time.Minute
+)
+
 // DiagnoseCluster inspects the cluster for common RHOAI issues and returns
 // a list of problems with suggested fixes and a set of health check results.
+// Checks run concurrently, each with its own timeout.
 func DiagnoseCluster(c *Client) (*DiagnosticsResponse, error) {
-	resp := &DiagnosticsResponse{}
-
-	checks := []func(*Client) checkOutput{
-		checkCatalogHealth,
-		checkOperatorPods,
-		checkSubscriptionHealth,
-		checkCSVHealth,
-		checkInstallPlanHealth,
-		checkPullSecretHealth,
-		checkImageMirror,
-		checkStaleWebhooks,
-		checkNodeCapacity,
+	outputs := make([]checkOutput, len(diagnosticChecks))
+	sem := make(chan struct{}, diagnosticsParallelism)
+	var wg sync.WaitGroup
+	for i, chk := range diagnosticChecks {
+		wg.Add(1)
+		go func(i int, chk diagnosticCheck) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			outputs[i] = runCheck(c, chk)
+		}(i, chk)
 	}
+	wg.Wait()
 
-	for _, fn := range checks {
-		out := fn(c)
-		resp.Checks = append(resp.Checks, out.check)
-		resp.Problems = append(resp.Problems, out.problems...)
-	}
-
-	// Deduplicate problems by ID
+	resp := &DiagnosticsResponse{Problems: []Problem{}, Checks: []CheckResult{}}
 	seen := make(map[string]bool)
-	deduped := resp.Problems[:0]
-	for _, p := range resp.Problems {
-		if !seen[p.ID] {
-			seen[p.ID] = true
-			deduped = append(deduped, p)
+	for _, out := range outputs {
+		resp.Checks = append(resp.Checks, out.check)
+		for _, p := range out.problems {
+			if !seen[p.ID] {
+				seen[p.ID] = true
+				resp.Problems = append(resp.Problems, p)
+			}
 		}
 	}
-	resp.Problems = deduped
 
-	// Sort problems by severity: critical first, then warning, then info
+	// Critical first, then warning, then info; check order within a severity.
 	severityOrder := map[string]int{"critical": 0, "warning": 1, "info": 2}
-	sort.Slice(resp.Problems, func(i, j int) bool {
+	sort.SliceStable(resp.Problems, func(i, j int) bool {
 		return severityOrder[resp.Problems[i].Severity] < severityOrder[resp.Problems[j].Severity]
 	})
-
 	return resp, nil
+}
+
+func runCheck(c *Client, chk diagnosticCheck) checkOutput {
+	ctx, cancel := context.WithTimeout(c.ctx, diagnosticsCheckTimeout)
+	defer cancel()
+	done := make(chan checkOutput, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- checkOutput{check: CheckResult{Name: chk.name, Status: "warn", Detail: fmt.Sprintf("Check failed: %v", r)}}
+			}
+		}()
+		done <- chk.fn(c.WithContext(ctx))
+	}()
+	start := time.Now()
+	select {
+	case out := <-done:
+		out.check.Name = chk.name
+		slog.Debug("diagnostics check finished", "check", chk.name, "duration", time.Since(start))
+		return out
+	case <-ctx.Done():
+		detail := fmt.Sprintf("Check did not finish within %s", diagnosticsCheckTimeout)
+		if errors.Is(c.ctx.Err(), context.Canceled) {
+			detail = "Check cancelled"
+		}
+		return checkOutput{check: CheckResult{Name: chk.name, Status: "warn", Detail: detail}}
+	}
 }
 
 // --- Health check functions ---
@@ -158,106 +225,195 @@ func checkCatalogHealth(c *Client) checkOutput {
 	}
 }
 
+// rhoaiPodNamespaces are the namespaces whose pods the "RHOAI pods" check
+// scans, besides namespaces labelled platform.opendatahub.io/part-of (which
+// the operator creates for platform modules). The operator namespace is
+// covered by the "Operator pods" check. User workbench namespaces such as
+// rhods-notebooks are left out on purpose.
+var rhoaiPodNamespaces = []string{"redhat-ods-applications", "redhat-ods-monitoring"}
+
 func checkOperatorPods(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: "Operator pods", Status: "pass", Detail: "All operator pods healthy"}}
+	const name = "Operator pods"
+	issues, podCount, scanned, errs := scanPods(c, []string{SubNS}, time.Now())
+	if len(errs) > 0 {
+		return checkOutput{check: CheckResult{Name: name, Status: "warn", Detail: "Could not list operator pods: " + strings.Join(errs, "; ")}}
+	}
+	if len(scanned) == 0 {
+		return checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: "No operator namespace (operator not installed yet)"}}
+	}
+	if podCount == 0 {
+		return checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: "No operator pods (operator not installed yet)"}}
+	}
+	return podIssuesOutput(c, name, issues, podCount, scanned, true)
+}
 
-	pods, err := getPodsInNamespace(c, SubNS)
-	if err != nil {
-		if IsK8sError(err, 404) {
-			out.check = CheckResult{Name: "Operator pods", Status: "pass", Detail: "No operator namespace (operator not installed yet)"}
-			return out
+func checkRHOAIPods(c *Client) checkOutput {
+	const name = "RHOAI pods"
+	namespaces := append([]string{}, rhoaiPodNamespaces...)
+	// Platform module namespaces (for example opendatahub-ogx-system).
+	body, _, err := c.do(http.MethodGet, clusterPath("v1", "namespaces", ""), "", nil,
+		url.Values{"labelSelector": {"platform.opendatahub.io/part-of"}})
+	if err == nil {
+		var list struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			} `json:"items"`
 		}
-		out.check = CheckResult{Name: "Operator pods", Status: "warn", Detail: "Could not list operator pods"}
-		return out
-	}
-
-	if len(pods) == 0 {
-		out.check = CheckResult{Name: "Operator pods", Status: "pass", Detail: "No operator pods (operator not installed yet)"}
-		return out
-	}
-
-	for _, pod := range pods {
-		for _, container := range pod.Containers {
-			if container.Reason == "CrashLoopBackOff" {
-				out.check = CheckResult{Name: "Operator pods", Status: "fail", Detail: fmt.Sprintf("Pod %s: CrashLoopBackOff", pod.Name)}
-				out.problems = append(out.problems, Problem{
-					ID:          fmt.Sprintf("operator-crashloop-%s", pod.Name),
-					Severity:    "critical",
-					Title:       "The operator is crashing repeatedly",
-					Description: fmt.Sprintf("Pod %s has container '%s' in CrashLoopBackOff with %d restarts. The operator cannot function while crashing.", pod.Name, container.Name, container.Restarts),
-					Evidence:    []string{fmt.Sprintf("Pod: %s, Container: %s, Restarts: %d, State: CrashLoopBackOff", pod.Name, container.Name, container.Restarts)},
-					Fix:         "Check the operator logs for errors. This is often caused by a broken nightly build. Try rolling back to a stable version or updating to a different nightly.",
-					LearnMore: "**CrashLoopBackOff:** Check operator logs: `oc logs -n redhat-ods-operator -l name=rhods-operator --tail=50`\n\n" +
-						"If the operator was recently reinstalled, stale webhooks may be blocking it.",
-					TechnicalCmd: fmt.Sprintf("oc logs -n %s %s -c %s --tail=50", SubNS, pod.Name, container.Name),
-				})
-			}
-			if container.Reason == "ImagePullBackOff" || container.Reason == "ErrImagePull" {
-				out.check = CheckResult{Name: "Operator pods", Status: "fail", Detail: fmt.Sprintf("Pod %s: %s", pod.Name, container.Reason)}
-				out.problems = append(out.problems, Problem{
-					ID:             fmt.Sprintf("operator-pod-%s", container.Reason),
-					Severity:       "critical",
-					Title:          fmt.Sprintf("Operator pod %s: %s", pod.Name, container.Reason),
-					Description:    fmt.Sprintf("Container %s in pod %s is in %s state.", container.Name, pod.Name, container.Reason),
-					Evidence:       []string{fmt.Sprintf("Pod: %s", pod.Name), fmt.Sprintf("Container: %s", container.Name), fmt.Sprintf("State: %s", container.Reason)},
-					Fix:            "The pull secret may be expired or the IDMS hasn't propagated to all nodes yet (wait 2-3 minutes after setup).",
-					LearnMore:      "**ImagePullBackOff:** The pull secret may be expired or the IDMS hasn't propagated to all nodes yet (wait 2-3 minutes after setup).",
-					AutoFixable:    true,
-					AutoFixAction:  "recreate-subscription",
-					ConfirmMessage: "This will delete and recreate the operator Subscription, CSV, and clean up stale webhooks. The operator will be briefly unavailable.\n\nImportant: Do NOT manually delete DSCI or DSC resources while the operator is down.",
-					TechnicalCmd:   "oc logs -n redhat-ods-operator -l name=rhods-operator --tail=50",
-				})
+		if json.Unmarshal(body, &list) == nil {
+			for _, item := range list.Items {
+				if item.Metadata.Name != SubNS && !containsString(namespaces, item.Metadata.Name) {
+					namespaces = append(namespaces, item.Metadata.Name)
+				}
 			}
 		}
-		if pod.Phase == "Pending" {
-			reason := getPodSchedulingReason(c, SubNS, pod.Name)
-			out.check = CheckResult{Name: "Operator pods", Status: "warn", Detail: fmt.Sprintf("Pod %s is Pending", pod.Name)}
-			out.problems = append(out.problems, Problem{
-				ID:             fmt.Sprintf("operator-pending-%s", pod.Name),
-				Severity:       "warning",
-				Title:          fmt.Sprintf("Pod %s in %s cannot be scheduled", pod.Name, SubNS),
-				Description:    fmt.Sprintf("Pod %s in namespace %s is stuck in Pending state. The scheduler cannot place this pod on any node.", pod.Name, SubNS),
-				Evidence:       []string{fmt.Sprintf("Pod: %s, Namespace: %s, Phase: Pending", pod.Name, SubNS), fmt.Sprintf("Scheduling reason: %s", reason)},
-				Fix:            "Unblock the rollout by allowing Kubernetes to replace one old pod at a time.",
-				AutoFixable:    true,
-				AutoFixAction:  "assist-rollout",
-				ConfirmMessage: "This will patch the deployment's rollout strategy to allow terminating one old pod, freeing resources for the new pod to schedule. The deployment may be briefly unavailable (1-2 minutes) during the transition.",
-				TechnicalCmd:   fmt.Sprintf("oc describe pod %s -n %s", pod.Name, SubNS),
-			})
-		}
 	}
 
+	issues, podCount, scanned, errs := scanPods(c, namespaces, time.Now())
+	out := podIssuesOutput(c, name, issues, podCount, scanned, false)
+	if len(errs) > 0 {
+		if out.check.Status == "pass" {
+			out.check.Status = "warn"
+		}
+		out.check.Detail += "; could not list pods in " + strings.Join(errs, "; ")
+	}
 	return out
 }
 
-func checkSubscriptionHealth(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: "Subscription health", Status: "pass", Detail: "Subscription active"}}
-
-	sub, err := getSubscription(c)
-	if err != nil {
-		if IsK8sError(err, 404) {
-			out.check = CheckResult{Name: "Subscription health", Status: "fail", Detail: "Subscription not found"}
-			out.problems = append(out.problems, Problem{
-				ID:          "subscription-missing",
-				Severity:    "critical",
-				Title:       "Operator Subscription not found",
-				Description: "The rhods-operator Subscription does not exist. The operator cannot be installed without it.",
-				Fix:         "Reinstall the operator to create a fresh Subscription.",
-				LearnMore: "The Subscription tells OLM which operator to install and from which catalog. Without it, " +
-					"no InstallPlan or CSV will be created.\n\nUse the Reinstall panel on the Dashboard page to create a new Subscription.",
-				AutoFixable:    true,
-				AutoFixAction:  "recreate-subscription",
-				ConfirmMessage: "This will create a new operator Subscription pointing to the nightly catalog.\n\nImportant: Do NOT manually delete DSCI or DSC resources while the operator is down.",
-			})
-		} else {
-			out.check = CheckResult{Name: "Subscription health", Status: "warn", Detail: "Could not read Subscription"}
+func podIssuesOutput(c *Client, name string, issues []podIssue, podCount int, scanned []string, critical bool) checkOutput {
+	if len(issues) == 0 {
+		return checkOutput{check: CheckResult{Name: name, Status: "pass",
+			Detail: fmt.Sprintf("%d pod(s) healthy in %s", podCount, strings.Join(scanned, ", "))}}
+	}
+	out := checkOutput{}
+	var summaries []string
+	failing := false
+	for _, g := range groupPodIssues(issues) {
+		p := podGroupProblem(c, g, critical)
+		out.problems = append(out.problems, p)
+		summaries = append(summaries, p.Title)
+		if g.Kind != issueUnschedulable && g.Kind != issueNotScheduled {
+			failing = true
 		}
+	}
+	status := "warn"
+	if failing {
+		status = "fail"
+	}
+	out.check = CheckResult{Name: name, Status: status, Detail: strings.Join(summaries, "; ")}
+	return out
+}
+
+// subscriptionState is the part of the operator Subscription diagnostics uses.
+type subscriptionState struct {
+	Exists       bool
+	Source       string
+	Channel      string
+	State        string
+	InstallPlan  string
+	InstalledCSV string
+	CurrentCSV   string
+	Changed      time.Time // status.lastUpdated, else creationTimestamp
+	Conditions   []struct {
+		Type               string `json:"type"`
+		Status             string `json:"status"`
+		Reason             string `json:"reason"`
+		Message            string `json:"message"`
+		LastTransitionTime string `json:"lastTransitionTime"`
+	}
+}
+
+func readSubscriptionState(c *Client) (subscriptionState, error) {
+	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
+	if err != nil {
+		if IsK8sError(err, http.StatusNotFound) {
+			return subscriptionState{}, nil
+		}
+		return subscriptionState{}, err
+	}
+	var sub struct {
+		Metadata struct {
+			CreationTimestamp string `json:"creationTimestamp"`
+		} `json:"metadata"`
+		Spec struct {
+			Source  string `json:"source"`
+			Channel string `json:"channel"`
+		} `json:"spec"`
+		Status struct {
+			State          string `json:"state"`
+			LastUpdated    string `json:"lastUpdated"`
+			InstalledCSV   string `json:"installedCSV"`
+			CurrentCSV     string `json:"currentCSV"`
+			InstallPlanRef *struct {
+				Name string `json:"name"`
+			} `json:"installPlanRef"`
+			Conditions []struct {
+				Type               string `json:"type"`
+				Status             string `json:"status"`
+				Reason             string `json:"reason"`
+				Message            string `json:"message"`
+				LastTransitionTime string `json:"lastTransitionTime"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(body, &sub); err != nil {
+		return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
+	}
+	s := subscriptionState{
+		Exists: true, Source: sub.Spec.Source, Channel: sub.Spec.Channel, State: sub.Status.State,
+		InstalledCSV: sub.Status.InstalledCSV, CurrentCSV: sub.Status.CurrentCSV,
+	}
+	s.Conditions = sub.Status.Conditions
+	if sub.Status.InstallPlanRef != nil {
+		s.InstallPlan = sub.Status.InstallPlanRef.Name
+	}
+	if t, ok := parseK8sTime(sub.Status.LastUpdated); ok {
+		s.Changed = t
+	} else if t, ok := parseK8sTime(sub.Metadata.CreationTimestamp); ok {
+		s.Changed = t
+	}
+	return s, nil
+}
+
+// settled reports whether the Subscription has been in its state for at
+// least operatorStuckAfter (true when the time is unknown).
+func (s subscriptionState) settled(now time.Time) bool {
+	return s.Changed.IsZero() || now.Sub(s.Changed) >= operatorStuckAfter
+}
+
+// recoveryGuidance is shared by the operator-level problems. These problems
+// are guidance only: recovering a failed operator means deleting the CSV,
+// InstallPlan and Subscription in the right order (OLM docs, "Opting into
+// UnsafeFailForward upgrades": a failed CSV blocks upgrades until it is
+// deleted). The Update, Refresh operator and Reinstall flows do that with a
+// saved Subscription and restore on failure; a one-click fix here would not.
+const recoveryGuidance = "Use Update on the Status page to move to a newer nightly (the usual fix for a broken build), or Refresh operator to reinstall the same build. Both delete and recreate the CSV, InstallPlan and Subscription and keep the DSC, DSCI and workloads."
+
+func checkSubscriptionHealth(c *Client) checkOutput {
+	const name = "Subscription health"
+	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	now := time.Now()
+
+	sub, err := readSubscriptionState(c)
+	if err != nil {
+		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Could not read Subscription: %v", err)}
 		return out
 	}
-
-	switch sub.State {
-	case "Not Installed":
-		out.check = CheckResult{Name: "Subscription health", Status: "pass", Detail: "No subscription (operator not installed yet)"}
+	if !sub.Exists {
+		csv, csvErr := getCSV(c)
+		if csvErr == nil && csv.Name != "" && csv.Phase != "Not Found" {
+			out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("No Subscription, but %s is installed", csv.Name)}
+			out.problems = append(out.problems, Problem{
+				ID:          "subscription-missing",
+				Severity:    "warning",
+				Title:       "The operator has no Subscription",
+				Description: fmt.Sprintf("%s is installed, but the %s Subscription does not exist, so OLM will not update or repair the operator. This happens when an update or reinstall stopped part-way.", csv.Name, SubName),
+				Fix:         "Use Update on the Status page to install a nightly; it recreates the Subscription. Reinstall Operator also works.",
+			})
+			return out
+		}
+		out.check.Detail = "No subscription (operator not installed yet)"
 		out.problems = append(out.problems, Problem{
 			ID:          "subscription-missing",
 			Severity:    "info",
@@ -265,91 +421,156 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Description: "The rhods-operator Subscription does not exist. This is normal on a fresh cluster before the first nightly install.",
 			Fix:         "Use the Update panel on the Dashboard to install a nightly build. This will create the Subscription automatically.",
 		})
-	case "AtLatestKnown":
-		out.check.Detail = fmt.Sprintf("Subscription active (channel: %s, source: %s)", sub.Channel, sub.Source)
-	case "UpgradePending":
-		out.check = CheckResult{Name: "Subscription health", Status: "warn", Detail: "Subscription: UpgradePending"}
+		return out
+	}
+
+	// OLM reports resolution and unpack failures as Subscription conditions
+	// (operator-framework/api subscription_types.go).
+	failureConditions := map[string]struct {
+		severity string
+		terminal bool
+	}{
+		"ResolutionFailed":        {"critical", false},
+		"BundleUnpackFailed":      {"critical", true},
+		"InstallPlanFailed":       {"critical", true},
+		"CatalogSourcesUnhealthy": {"warning", false},
+		"InstallPlanMissing":      {"warning", false},
+	}
+	for _, cond := range sub.Conditions {
+		fc, ok := failureConditions[cond.Type]
+		if !ok || cond.Status != "True" {
+			continue
+		}
+		if !fc.terminal {
+			if t, ok := parseK8sTime(cond.LastTransitionTime); ok && now.Sub(t) < operatorStuckAfter {
+				continue
+			}
+		}
+		out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Subscription condition %s", cond.Type)}
 		out.problems = append(out.problems, Problem{
-			ID:             "subscription-upgrade-pending",
-			Severity:       "warning",
-			Title:          "Subscription is waiting for an upgrade",
-			Description:    fmt.Sprintf("The operator Subscription is in UpgradePending state (source: %s, channel: %s). OLM may be processing the InstallPlan.", sub.Source, sub.Channel),
-			Fix:            "Wait a few minutes for OLM to process the InstallPlan. If the state persists, reinstall.",
-			LearnMore:      "UpgradePending means OLM found a new version but hasn't completed the upgrade yet. Check that the InstallPlan was approved.",
-			AutoFixable:    true,
-			AutoFixAction:  "recreate-subscription",
-			ConfirmMessage: "This will delete and recreate the operator Subscription. The operator will be briefly unavailable.",
-			TechnicalCmd:   "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status}'",
-		})
-	case "UpgradeAvailable":
-		out.check.Detail = fmt.Sprintf("An upgrade is available (channel: %s, source: %s)", sub.Channel, sub.Source)
-	case "UpgradeFailed":
-		out.check = CheckResult{Name: "Subscription health", Status: "fail", Detail: "Subscription: UpgradeFailed"}
-		out.problems = append(out.problems, Problem{
-			ID:             "subscription-upgrade-failed",
-			Severity:       "critical",
-			Title:          "Subscription upgrade failed",
-			Description:    fmt.Sprintf("The operator Subscription upgrade failed (source: %s, channel: %s).", sub.Source, sub.Channel),
-			Fix:            "Reinstall the operator subscription to force a fresh install.",
-			AutoFixable:    true,
-			AutoFixAction:  "recreate-subscription",
-			ConfirmMessage: "This will delete and recreate the operator Subscription, CSV, and clean up stale webhooks.",
-			TechnicalCmd:   "oc describe subscription " + SubName + " -n " + SubNS,
-		})
-	case "", "Unknown":
-		out.check = CheckResult{Name: "Subscription health", Status: "warn", Detail: fmt.Sprintf("Subscription state: %q", sub.State)}
-		out.problems = append(out.problems, Problem{
-			ID:          "subscription-stuck",
-			Severity:    "warning",
-			Title:       fmt.Sprintf("Subscription in %q state", sub.State),
-			Description: fmt.Sprintf("The operator Subscription is in %q state (source: %s, channel: %s). It may be waiting for an InstallPlan or stuck.", sub.State, sub.Source, sub.Channel),
-			Fix:         "Wait a few minutes for OLM to process the InstallPlan. If the state persists, reinstall.",
-			LearnMore: "**Channel mismatch:** The subscription channel may not exist in the nightly catalog. " +
-				"Check available channels: `oc get packagemanifest rhods-operator -o jsonpath='{.status.channels[*].name}'`",
-			AutoFixable:    true,
-			AutoFixAction:  "recreate-subscription",
-			ConfirmMessage: "This will delete and recreate the operator Subscription, CSV, and clean up stale webhooks.",
-			TechnicalCmd:   "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status.state}'",
+			ID:           "subscription-" + strings.ToLower(cond.Type),
+			Severity:     fc.severity,
+			Title:        fmt.Sprintf("OLM reports %s for the operator Subscription", cond.Type),
+			Description:  fmt.Sprintf("Subscription %s (source %s, channel %s) has condition %s=True.", SubName, sub.Source, sub.Channel, cond.Type),
+			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, truncate(cond.Message, 600))},
+			Fix:          subscriptionConditionFix(cond.Type),
+			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status.conditions}'",
 		})
 	}
 
+	if p := channelHeadBehind(c, sub); p != nil {
+		if out.check.Status == "pass" {
+			out.check = CheckResult{Name: name, Status: "warn", Detail: p.Title}
+		}
+		out.problems = append(out.problems, *p)
+	}
+
+	age := formatDuration(now.Sub(sub.Changed))
+	switch sub.State {
+	case "AtLatestKnown":
+		if out.check.Detail == "" {
+			out.check.Detail = fmt.Sprintf("Subscription active (channel: %s, source: %s)", sub.Channel, sub.Source)
+		}
+	case "UpgradeAvailable":
+		if out.check.Detail == "" {
+			out.check.Detail = fmt.Sprintf("An upgrade is available (channel: %s, source: %s)", sub.Channel, sub.Source)
+		}
+	case "UpgradePending":
+		if !sub.settled(now) {
+			if out.check.Detail == "" {
+				out.check = CheckResult{Name: name, Status: "pass", Detail: fmt.Sprintf("Upgrade in progress (InstallPlan %s, %s)", nonEmpty(sub.InstallPlan, "pending"), age)}
+			}
+			break
+		}
+		if out.check.Status == "pass" {
+			out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Subscription UpgradePending for %s", age)}
+		}
+		out.problems = append(out.problems, Problem{
+			ID:           "subscription-upgrade-pending",
+			Severity:     "warning",
+			Title:        fmt.Sprintf("The operator upgrade has been pending for %s", age),
+			Description:  fmt.Sprintf("OLM created InstallPlan %s for %s but has not finished it. UpgradePending is normal for a few minutes during every update; after %s it usually means the InstallPlan or the new CSV is stuck.", nonEmpty(sub.InstallPlan, "(none)"), nonEmpty(sub.CurrentCSV, "the new version"), formatDuration(operatorStuckAfter)),
+			Evidence:     []string{fmt.Sprintf("Subscription state UpgradePending since %s, InstallPlan %s, currentCSV %s", sub.Changed.UTC().Format(time.RFC3339), nonEmpty(sub.InstallPlan, "-"), nonEmpty(sub.CurrentCSV, "-"))},
+			Fix:          "Check the Install plan and Operator installed results below for the cause. " + recoveryGuidance,
+			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status}'",
+		})
+	case "Failed":
+		out.check = CheckResult{Name: name, Status: "fail", Detail: "Subscription state Failed"}
+		out.problems = append(out.problems, Problem{
+			ID:           "subscription-failed",
+			Severity:     "critical",
+			Title:        "The operator Subscription is Failed",
+			Description:  fmt.Sprintf("OLM marked the Subscription Failed because the InstallPlan or CSV for %s failed.", nonEmpty(sub.CurrentCSV, "the target version")),
+			Fix:          recoveryGuidance,
+			TechnicalCmd: "oc describe subscription " + SubName + " -n " + SubNS,
+		})
+	default: // "" or no status yet
+		if !sub.settled(now) {
+			if out.check.Detail == "" {
+				out.check.Detail = fmt.Sprintf("OLM is resolving the Subscription (%s)", age)
+			}
+			break
+		}
+		if out.check.Status == "pass" {
+			out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Subscription has no state after %s", age)}
+		}
+		out.problems = append(out.problems, Problem{
+			ID:          "subscription-stuck",
+			Severity:    "warning",
+			Title:       fmt.Sprintf("OLM has not resolved the Subscription after %s", age),
+			Description: fmt.Sprintf("The operator Subscription (source: %s, channel: %s) has no state. OLM normally resolves it within seconds; a missing channel or an unhealthy catalog keeps it here.", sub.Source, sub.Channel),
+			Fix:         "Check the Catalog health result and that the channel exists in the catalog. " + recoveryGuidance,
+			LearnMore: "**Channel mismatch:** The subscription channel may not exist in the nightly catalog. " +
+				"Check available channels: `oc get packagemanifest rhods-operator -o jsonpath='{.status.channels[*].name}'`",
+			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status}'",
+		})
+	}
 	return out
 }
 
+func subscriptionConditionFix(condType string) string {
+	fix := "Read the message above; it names the bundle, catalog or constraint that failed. " + recoveryGuidance
+	if condType == "BundleUnpackFailed" {
+		// OpenShift Operators guide, "Refreshing failing subscriptions".
+		fix += " A failed bundle unpack is retried only after its unpack Job and ConfigMap in openshift-marketplace are deleted " +
+			"(oc get job,configmap -n openshift-marketplace -o name | grep <bundle hash>); the tool does not delete them."
+	}
+	return fix
+}
+
 func checkCSVHealth(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: "Operator installed", Status: "pass", Detail: "CSV present and Succeeded"}}
+	const name = "Operator installed"
+	out := checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: "CSV present and Succeeded"}}
 
 	csv, err := getCSV(c)
 	if err != nil {
-		out.check = CheckResult{Name: "Operator installed", Status: "warn", Detail: "Could not query CSV"}
+		out.check = CheckResult{Name: name, Status: "warn", Detail: "Could not query CSV"}
 		return out
 	}
 
 	if csv.Phase == "Not Found" || csv.Name == "" {
-		sub, subErr := getSubscription(c)
-		hasSubscription := subErr == nil && sub.Name != "" && sub.State != "Not Installed"
-		if !hasSubscription {
-			out.check = CheckResult{Name: "Operator installed", Status: "pass", Detail: "No operator installed yet (normal for fresh clusters)"}
+		sub, subErr := readSubscriptionState(c)
+		if subErr != nil || !sub.Exists {
+			out.check = CheckResult{Name: name, Status: "pass", Detail: "No operator installed yet (normal for fresh clusters)"}
 			return out
 		}
-		out.check = CheckResult{Name: "Operator installed", Status: "fail", Detail: "No CSV found — operator not installed"}
-		if hasSubscription {
-			out.problems = append(out.problems, Problem{
-				ID:          "csv-not-found",
-				Severity:    "critical",
-				Title:       "Operator not installed (no CSV found)",
-				Description: fmt.Sprintf("A Subscription exists (source: %s, channel: %s) but no ClusterServiceVersion was found. OLM may be unable to install the operator.", sub.Source, sub.Channel),
-				Fix:         "Wait for OLM to process the InstallPlan (may take several minutes). If this persists, reinstall the operator.",
-				LearnMore: "The operator CSV is created by OLM after the InstallPlan completes. If the CSV doesn't appear after 5 minutes, check:\n\n" +
-					"1. Is the Subscription pointing to the correct catalog?\n" +
-					"2. Is the InstallPlan created and approved?\n" +
-					"3. Are there dependency resolution errors? Check subscription conditions.",
-				AutoFixable:    true,
-				AutoFixAction:  "recreate-subscription",
-				ConfirmMessage: "This will delete and recreate the operator Subscription, CSV, and clean up stale webhooks.\n\nImportant: Do NOT manually delete DSCI or DSC resources while the operator is down.",
-				TechnicalCmd:   "oc get csv -n " + SubNS,
-			})
+		if !sub.settled(time.Now()) {
+			out.check = CheckResult{Name: name, Status: "warn", Detail: "Waiting for OLM to install the operator"}
+			return out
 		}
+		out.check = CheckResult{Name: name, Status: "fail", Detail: "No CSV found — operator not installed"}
+		out.problems = append(out.problems, Problem{
+			ID:          "csv-not-found",
+			Severity:    "critical",
+			Title:       "Operator not installed (no CSV found)",
+			Description: fmt.Sprintf("A Subscription exists (source: %s, channel: %s, state: %q) but OLM has not created a ClusterServiceVersion for %s.", sub.Source, sub.Channel, sub.State, formatDuration(time.Since(sub.Changed))),
+			Fix:         "Check the Subscription health and Install plan results for the cause. " + recoveryGuidance,
+			LearnMore: "The operator CSV is created by OLM after the InstallPlan completes. If the CSV doesn't appear, check:\n\n" +
+				"1. Is the Subscription pointing to the correct catalog?\n" +
+				"2. Is the InstallPlan created and approved?\n" +
+				"3. Are there dependency resolution errors? Check subscription conditions.",
+			TechnicalCmd: "oc get csv -n " + SubNS,
+		})
 		return out
 	}
 
@@ -357,21 +578,32 @@ func checkCSVHealth(c *Client) checkOutput {
 	case "Succeeded":
 		out.check.Detail = fmt.Sprintf("%s (%s)", csv.Name, csv.Phase)
 	case "Failed":
-		out.check = CheckResult{Name: "Operator installed", Status: "fail", Detail: fmt.Sprintf("Operator installation failed (%s)", csv.Name)}
+		evidence := []string{fmt.Sprintf("Operator: %s, Phase: Failed", csv.Name)}
+		body, _, getErr := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
+		if getErr == nil {
+			var full struct {
+				Status struct {
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				} `json:"status"`
+			}
+			if json.Unmarshal(body, &full) == nil && (full.Status.Reason != "" || full.Status.Message != "") {
+				evidence = append(evidence, fmt.Sprintf("Reason %s: %s", full.Status.Reason, truncate(full.Status.Message, 600)))
+			}
+		}
+		out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Operator installation failed (%s)", csv.Name)}
 		out.problems = append(out.problems, Problem{
-			ID:             "operator-failed",
-			Severity:       "critical",
-			Title:          "The operator installation failed",
-			Description:    fmt.Sprintf("The operator %s is in Failed state. OLM could not complete the installation.", csv.Name),
-			Evidence:       []string{fmt.Sprintf("Operator: %s, Phase: Failed", csv.Name)},
-			Fix:            "Run a reinstall to clear the failed state and try again. If the problem persists with nightly, try switching to stable.",
-			AutoFixable:    true,
-			AutoFixAction:  "recreate-subscription",
-			ConfirmMessage: "This will delete the failed CSV and recreate the Subscription for a fresh install.",
-			TechnicalCmd:   fmt.Sprintf("oc describe csv %s -n %s", csv.Name, SubNS),
+			ID:           "operator-failed",
+			Severity:     "critical",
+			Title:        "The operator installation failed",
+			Description:  fmt.Sprintf("The operator %s is in Failed state. OLM keeps re-checking a Failed CSV and reinstalls it if the cause goes away, but OLM will not upgrade away from a Failed CSV until it is deleted.", csv.Name),
+			Evidence:     evidence,
+			Fix:          recoveryGuidance,
+			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed CSV, the existing CSV is deleted so that a new InstallPlan can be generated.",
+			TechnicalCmd: fmt.Sprintf("oc describe csv %s -n %s", csv.Name, SubNS),
 		})
 	case "Installing":
-		out.check = CheckResult{Name: "Operator installed", Status: "warn", Detail: fmt.Sprintf("Operator is being installed (%s)", csv.Name)}
+		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Operator is being installed (%s)", csv.Name)}
 		out.problems = append(out.problems, Problem{
 			ID:          "operator-installing",
 			Severity:    "info",
@@ -381,95 +613,120 @@ func checkCSVHealth(c *Client) checkOutput {
 			Fix:         "Wait a few minutes for the installation to complete, then check again.",
 		})
 	default:
-		out.check = CheckResult{Name: "Operator installed", Status: "warn", Detail: fmt.Sprintf("CSV phase: %s (%s)", csv.Phase, csv.Name)}
+		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("CSV phase: %s (%s)", csv.Phase, csv.Name)}
 	}
 
 	return out
 }
 
-func checkInstallPlanHealth(c *Client) checkOutput {
-	ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
-	body, _, err := c.get(ipPath)
+type installPlanItem struct {
+	Metadata struct {
+		Name              string `json:"name"`
+		UID               string `json:"uid"`
+		ResourceVersion   string `json:"resourceVersion"`
+		CreationTimestamp string `json:"creationTimestamp"`
+	} `json:"metadata"`
+	Spec struct {
+		Approved                   bool     `json:"approved"`
+		Approval                   string   `json:"approval"`
+		ClusterServiceVersionNames []string `json:"clusterServiceVersionNames"`
+	} `json:"spec"`
+	Status struct {
+		Phase      string `json:"phase"`
+		Conditions []struct {
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Reason  string `json:"reason"`
+		} `json:"conditions"`
+	} `json:"status"`
+}
+
+func listInstallPlans(c *Client) ([]installPlanItem, error) {
+	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
 	if err != nil {
-		if IsK8sError(err, 404) {
-			_, subErr := getSubscription(c)
-			if subErr == nil {
-				return checkOutput{
-					check: CheckResult{Name: "Install plan", Status: "warn", Detail: "No install plan found but subscription exists"},
-					problems: []Problem{{
-						ID:           "installplan-missing",
-						Severity:     "warning",
-						Title:        "OLM hasn't created an install plan yet",
-						Description:  "A subscription exists but no install plan has been created. OLM may be processing the subscription or the catalog may not be ready.",
-						Evidence:     []string{fmt.Sprintf("No install plans found in namespace '%s'", SubNS)},
-						Fix:          "Wait a few minutes. If no install plan appears, check the catalog health and use the Reinstall panel.",
-						TechnicalCmd: fmt.Sprintf("oc get installplans -n %s", SubNS),
-					}},
-				}
-			}
-			return checkOutput{
-				check: CheckResult{Name: "Install plan", Status: "pass", Detail: "No install plan (no subscription active)"},
-			}
-		}
-		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "fail", Detail: fmt.Sprintf("Failed to check install plans: %v", err)},
-		}
+		return nil, err
 	}
+	var list struct {
+		Items []installPlanItem `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("parse install plans: %w", err)
+	}
+	return list.Items, nil
+}
 
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name              string `json:"name"`
-				CreationTimestamp string `json:"creationTimestamp"`
-			} `json:"metadata"`
-			Spec struct {
-				Approved bool `json:"approved"`
-			} `json:"spec"`
-			Status struct {
-				Phase      string `json:"phase"`
-				Conditions []struct {
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Message string `json:"message"`
-					Reason  string `json:"reason"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "fail", Detail: "Failed to parse install plans"},
+func installPlanFailureReason(ip installPlanItem) string {
+	for _, cond := range ip.Status.Conditions {
+		if cond.Message != "" && (cond.Status == "False" || cond.Reason == "InstallComponentFailed" || cond.Status == "True") {
+			return cond.Message
 		}
 	}
+	return ""
+}
 
-	if len(result.Items) == 0 {
-		sub, subErr := getSubscription(c)
+// installPlanDeletable decides whether a Failed InstallPlan may be deleted.
+// Only phase Failed is terminal: "" is a plan OLM has not processed yet
+// (InstallPlanPhaseNone) and the other phases are in flight. A plan the
+// Subscription references is deleted only while the Subscription is
+// UpgradePending: OLM then clears the reference and resolves again
+// (operator-lifecycle-manager catalog/subscription/reconciler.go,
+// InstallPlanNotFound; the OLM docs' recovery for a failed InstallPlan is
+// to delete it). In any other state OLM only sets InstallPlanMissing, so
+// deleting it would not trigger a new install.
+func installPlanDeletable(ip installPlanItem, sub subscriptionState) (bool, string) {
+	if ip.Status.Phase != "Failed" {
+		return false, fmt.Sprintf("phase %q", ip.Status.Phase)
+	}
+	if sub.Exists && sub.InstallPlan == ip.Metadata.Name {
+		if sub.State == "UpgradePending" {
+			return true, "Failed; the Subscription waits on it, so OLM resolves again after it is deleted"
+		}
+		return false, fmt.Sprintf("Failed, but the Subscription (state %q) references it and OLM would not resolve again; use Update or Refresh operator", sub.State)
+	}
+	return true, "Failed and not used by the Subscription"
+}
+
+func checkInstallPlanHealth(c *Client) checkOutput {
+	const name = "Install plan"
+	missing := func() checkOutput {
+		sub, subErr := readSubscriptionState(c)
 		if subErr != nil {
-			return checkOutput{
-				check: CheckResult{Name: "Install plan", Status: "warn", Detail: "Could not verify subscription status"},
-			}
+			return checkOutput{check: CheckResult{Name: name, Status: "warn", Detail: "Could not verify subscription status"}}
 		}
-		if sub.State == "Not Installed" || sub.Name == "" {
-			return checkOutput{
-				check: CheckResult{Name: "Install plan", Status: "pass", Detail: "No install plans (no subscription active)"},
-			}
+		if !sub.Exists {
+			return checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: "No install plans (no subscription active)"}}
+		}
+		if !sub.settled(time.Now()) {
+			return checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: "No install plan yet (OLM is resolving the Subscription)"}}
 		}
 		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "warn", Detail: "No install plans found but subscription exists"},
+			check: CheckResult{Name: name, Status: "warn", Detail: "No install plans found but subscription exists"},
 			problems: []Problem{{
 				ID:           "installplan-missing",
 				Severity:     "warning",
-				Title:        "OLM hasn't created an install plan yet",
-				Description:  "A subscription exists but no install plan has been created. OLM may be processing the subscription or the catalog may not be ready.",
+				Title:        "OLM hasn't created an install plan",
+				Description:  "A subscription exists but no install plan has been created. OLM may be unable to resolve the subscription or the catalog may not be ready.",
 				Evidence:     []string{fmt.Sprintf("No install plans found in namespace '%s'", SubNS)},
-				Fix:          "Wait a few minutes. If no install plan appears, check the catalog health and use the Reinstall panel.",
+				Fix:          "Check the Catalog health and Subscription health results. " + recoveryGuidance,
 				TechnicalCmd: fmt.Sprintf("oc get installplans -n %s", SubNS),
 			}},
 		}
 	}
 
-	latest := result.Items[0]
-	for _, ip := range result.Items[1:] {
+	plans, err := listInstallPlans(c)
+	if err != nil {
+		if IsK8sError(err, http.StatusNotFound) {
+			return missing()
+		}
+		return checkOutput{check: CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Failed to check install plans: %v", err)}}
+	}
+	if len(plans) == 0 {
+		return missing()
+	}
+
+	latest := plans[0]
+	for _, ip := range plans[1:] {
 		if ip.Metadata.CreationTimestamp > latest.Metadata.CreationTimestamp {
 			latest = ip
 		}
@@ -477,39 +734,69 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 
 	switch latest.Status.Phase {
 	case "Complete":
-		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "pass", Detail: fmt.Sprintf("Latest install plan completed (%s)", latest.Metadata.Name)},
-		}
+		return checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: fmt.Sprintf("Latest install plan completed (%s)", latest.Metadata.Name)}}
 	case "Failed":
-		var reason string
-		for _, cond := range latest.Status.Conditions {
-			if cond.Status == "True" && cond.Message != "" {
-				reason = cond.Message
-				break
+		reason := installPlanFailureReason(latest)
+		sub, _ := readSubscriptionState(c)
+		var deletable, affected, kept, evidence []string
+		for _, ip := range plans {
+			if ip.Status.Phase != "Failed" {
+				continue
+			}
+			ok, why := installPlanDeletable(ip, sub)
+			if ok {
+				deletable = append(deletable, fmt.Sprintf("%s (%s)", ip.Metadata.Name, why))
+				affected = append(affected, fmt.Sprintf("InstallPlan %s/%s", SubNS, ip.Metadata.Name))
+			} else {
+				kept = append(kept, fmt.Sprintf("%s: %s", ip.Metadata.Name, why))
 			}
 		}
-		evidence := []string{fmt.Sprintf("Install plan: %s, Phase: Failed", latest.Metadata.Name)}
+		sort.Strings(deletable)
+		sort.Strings(affected)
+		evidence = append(evidence, fmt.Sprintf("Install plan: %s, Phase: Failed, CSVs: %s", latest.Metadata.Name, strings.Join(latest.Spec.ClusterServiceVersionNames, ", ")))
 		if reason != "" {
-			evidence = append(evidence, fmt.Sprintf("Reason: %s", reason))
+			evidence = append(evidence, fmt.Sprintf("Reason: %s", truncate(reason, 600)))
+		}
+		for _, k := range kept {
+			evidence = append(evidence, "Not deleted automatically: "+k)
+		}
+		p := Problem{
+			ID:           "installplan-failed",
+			Severity:     "critical",
+			Title:        "The install plan failed",
+			Description:  fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, truncate(reason, 300)),
+			Evidence:     evidence,
+			Fix:          "Update to a newer nightly or use Refresh operator. If the same build fails again, the build itself is broken.",
+			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed InstallPlan, the user deletes it and a new InstallPlan is generated.",
+			TechnicalCmd: fmt.Sprintf("oc describe installplan %s -n %s", latest.Metadata.Name, SubNS),
+		}
+		if len(deletable) > 0 {
+			p.Fix = "Delete the failed install plans so that OLM resolves the Subscription again and creates a new one. If the same build fails again, update to a newer nightly."
+			p.AutoFixable = true
+			p.AutoFixAction = "delete-stale-installplans"
+			p.AffectedObjects = affected
+			p.ConfirmMessage = fmt.Sprintf("This deletes these install plans in %s:\n- %s\n\nPlans in any other phase are kept, and each plan is checked again and deleted only if it is unchanged. "+
+				"If the catalog still offers the same build, OLM's new plan may fail the same way.", SubNS, strings.Join(deletable, "\n- "))
 		}
 		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "fail", Detail: fmt.Sprintf("Install plan failed: %s", latest.Metadata.Name)},
+			check:    CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Install plan failed: %s", latest.Metadata.Name)},
+			problems: []Problem{p},
+		}
+	case "RequiresApproval":
+		return checkOutput{
+			check: CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Install plan %s is waiting for approval", latest.Metadata.Name)},
 			problems: []Problem{{
-				ID:             "installplan-failed",
-				Severity:       "critical",
-				Title:          "The install plan failed",
-				Description:    fmt.Sprintf("OLM could not execute the install plan. %s", reason),
-				Evidence:       evidence,
-				Fix:            "Delete the failed install plans and trigger a fresh installation by running a reinstall.",
-				AutoFixable:    true,
-				AutoFixAction:  "delete-stale-installplans",
-				ConfirmMessage: "This will delete failed install plans. Only plans with 'Failed' status are removed — active or completed plans are preserved.",
-				TechnicalCmd:   fmt.Sprintf("oc describe installplan %s -n %s", latest.Metadata.Name, SubNS),
+				ID:           "installplan-requires-approval",
+				Severity:     "warning",
+				Title:        "An install plan is waiting for manual approval",
+				Description:  fmt.Sprintf("The Subscription uses Manual approval, so OLM waits until install plan %s (%s) is approved.", latest.Metadata.Name, strings.Join(latest.Spec.ClusterServiceVersionNames, ", ")),
+				Fix:          "Approve the install plan in the OpenShift console (Operators > Installed Operators) if you want this version.",
+				TechnicalCmd: fmt.Sprintf("oc patch installplan %s -n %s --type merge -p '{\"spec\":{\"approved\":true}}'", latest.Metadata.Name, SubNS),
 			}},
 		}
 	case "Installing":
 		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "warn", Detail: fmt.Sprintf("Install plan is in progress (%s)", latest.Metadata.Name)},
+			check: CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Install plan is in progress (%s)", latest.Metadata.Name)},
 			problems: []Problem{{
 				ID:          "installplan-installing",
 				Severity:    "info",
@@ -521,7 +808,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 		}
 	default:
 		return checkOutput{
-			check: CheckResult{Name: "Install plan", Status: "warn", Detail: fmt.Sprintf("Install plan phase: %s (%s)", latest.Status.Phase, latest.Metadata.Name)},
+			check: CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Install plan phase: %q (%s)", latest.Status.Phase, latest.Metadata.Name)},
 		}
 	}
 }
@@ -596,53 +883,6 @@ func checkImageMirror(c *Client) checkOutput {
 	}
 }
 
-func checkStaleWebhooks(c *Client) checkOutput {
-	out := checkOutput{check: CheckResult{Name: "Stale webhooks", Status: "pass", Detail: "No stale webhooks found"}}
-
-	staleCount := 0
-	var staleNames []string
-
-	vwhPath := clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", "")
-	body, _, err := c.get(vwhPath)
-	if err == nil {
-		cnt, names := countRHOAIWebhooksWithNames(body)
-		staleCount += cnt
-		staleNames = append(staleNames, names...)
-	}
-
-	mwhPath := clusterPath("admissionregistration.k8s.io/v1", "mutatingwebhookconfigurations", "")
-	body, _, err = c.get(mwhPath)
-	if err == nil {
-		cnt, names := countRHOAIWebhooksWithNames(body)
-		staleCount += cnt
-		staleNames = append(staleNames, names...)
-	}
-
-	csv, csvErr := getCSV(c)
-	operatorRunning := csvErr == nil && csv.Phase == "Succeeded"
-
-	if staleCount > 0 && !operatorRunning {
-		out.check = CheckResult{Name: "Stale webhooks", Status: "warn", Detail: fmt.Sprintf("%d stale webhook(s) found", staleCount)}
-		out.problems = append(out.problems, Problem{
-			ID:          "stale-webhooks",
-			Severity:    "warning",
-			Title:       fmt.Sprintf("%d stale RHOAI webhook configuration(s) detected", staleCount),
-			Description: "RHOAI webhook configurations exist but the operator is not running. These can block API calls.",
-			Evidence:    staleNames,
-			Fix:         "Delete stale webhooks or reinstall the operator (which recreates them).",
-			LearnMore: "Stale webhooks are left behind when an operator is uninstalled but its webhook configurations remain. " +
-				"They can block API calls to create notebooks, inference services, or modify DSC/DSCI resources.\n\n" +
-				"**Safe to delete:** Yes — the operator will recreate them when reinstalled.",
-			AutoFixable:    true,
-			AutoFixAction:  "delete-stale-webhooks",
-			ConfirmMessage: "This will delete stale RHOAI webhook configurations. The operator will recreate them when reinstalled.",
-			TechnicalCmd:   "oc get validatingwebhookconfigurations,mutatingwebhookconfigurations | grep -i opendatahub",
-		})
-	}
-
-	return out
-}
-
 func checkNodeCapacity(c *Client) checkOutput {
 	out := checkOutput{check: CheckResult{Name: "Node capacity", Status: "pass", Detail: "All nodes healthy"}}
 
@@ -705,115 +945,10 @@ func checkNodeCapacity(c *Client) checkOutput {
 		return out
 	}
 
-	pendingDetails := checkPendingPods(c)
-	if len(pendingDetails) > 0 {
-		evidence := make([]string, 0, len(pendingDetails))
-		var podSummaries []string
-		for _, pd := range pendingDetails {
-			evidence = append(evidence, fmt.Sprintf("Pod %s in %s is Pending: %s", pd.name, pd.namespace, pd.reason))
-			podSummaries = append(podSummaries, fmt.Sprintf("%s/%s", pd.namespace, pd.name))
-		}
-		out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: fmt.Sprintf("%d pod(s) stuck in Pending: %s", len(pendingDetails), strings.Join(podSummaries, ", "))}
-		out.problems = append(out.problems, Problem{
-			ID:             "high-cpu-allocation",
-			Severity:       "warning",
-			Title:          fmt.Sprintf("%d pod(s) cannot be scheduled due to insufficient resources", len(pendingDetails)),
-			Description:    fmt.Sprintf("The following pods are stuck in Pending state because the cluster does not have enough resources to schedule them: %s.", strings.Join(podSummaries, ", ")),
-			Evidence:       evidence,
-			Fix:            "Unblock the rollout by allowing Kubernetes to replace one old pod at a time.",
-			AutoFixable:    true,
-			AutoFixAction:  "assist-rollout",
-			ConfirmMessage: "This will patch the deployment's rollout strategy to allow terminating one old pod, freeing resources for the new pod to schedule. The deployment may be briefly unavailable (1-2 minutes) during the transition.",
-		})
-		return out
-	}
-
-	out.check.Detail = fmt.Sprintf("All %d nodes are healthy", totalNodes)
+	// Pods that cannot be scheduled are reported by the Operator pods and
+	// RHOAI pods checks, with the scheduler's own reason.
+	out.check.Detail = fmt.Sprintf("All %d nodes are ready", totalNodes)
 	return out
-}
-
-// --- Helper functions ---
-
-func countRHOAIWebhooksWithNames(body []byte) (int, []string) {
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return 0, nil
-	}
-	items, _ := result["items"].([]interface{})
-	count := 0
-	var names []string
-	for _, item := range items {
-		obj, _ := item.(map[string]interface{})
-		meta, _ := obj["metadata"].(map[string]interface{})
-		name, _ := meta["name"].(string)
-		labels, _ := meta["labels"].(map[string]interface{})
-		if isRHOAIWebhook(name, labels) {
-			count++
-			names = append(names, name)
-		}
-	}
-	return count, names
-}
-
-func getPodSchedulingReason(c *Client, namespace, podName string) string {
-	path := namespacedPath("v1", "pods", namespace, podName)
-	body, _, err := c.get(path)
-	if err != nil {
-		return "Could not retrieve scheduling details."
-	}
-
-	var pod struct {
-		Status struct {
-			Conditions []struct {
-				Type    string `json:"type"`
-				Status  string `json:"status"`
-				Reason  string `json:"reason"`
-				Message string `json:"message"`
-			} `json:"conditions"`
-		} `json:"status"`
-	}
-	if err := json.Unmarshal(body, &pod); err != nil {
-		return "Could not parse pod details."
-	}
-
-	for _, cond := range pod.Status.Conditions {
-		if cond.Type == "PodScheduled" && cond.Status == "False" {
-			if cond.Message != "" {
-				return cond.Message
-			}
-			if cond.Reason != "" {
-				return fmt.Sprintf("Scheduling failed: %s", cond.Reason)
-			}
-		}
-	}
-	return "The scheduler has not reported a reason yet."
-}
-
-type pendingPodDetail struct {
-	name      string
-	namespace string
-	reason    string
-}
-
-func checkPendingPods(c *Client) []pendingPodDetail {
-	var details []pendingPodDetail
-	for _, ns := range []string{SubNS, "redhat-ods-applications"} {
-		pods, err := getPodsInNamespace(c, ns)
-		if err != nil {
-			continue
-		}
-		for _, pod := range pods {
-			if pod.Phase == "Pending" {
-				reason := getPodSchedulingReason(c, ns, pod.Name)
-				details = append(details, pendingPodDetail{
-					name:      pod.Name,
-					namespace: ns,
-					reason:    reason,
-				})
-			}
-		}
-	}
-	return details
 }
 
 // --- Auto-fix ---
@@ -823,276 +958,159 @@ func RunDiagnostics(c *Client) (*DiagnosticsResponse, error) {
 	return DiagnoseCluster(c)
 }
 
-// ApplyFix executes the automatic fix for a known problem.
+// removedFixes are fix IDs an older page may still send. They are refused
+// with the reason instead of "Unknown fix action".
+var removedFixes = map[string]string{
+	"recreate-subscription": "This automatic fix was removed: deleting and recreating only the Subscription does not recover a failed operator, because OLM keeps the existing CSV. " + recoveryGuidance,
+	"fix-maas-gateway-annotation": "This automatic fix was removed: no RHOAI 3.x operator reports the condition it was written for, and setting opendatahub.io/managed=false " +
+		"on a Gateway stops the operator from managing it rather than fixing it. Nothing was changed.",
+	"restart-operator": "This automatic fix was removed: diagnostics never offered it. Nothing was changed.",
+}
+
+// ApplyFix executes the automatic fix for a known problem. Every fix
+// re-checks its precondition right before acting and reports what it
+// actually changed; errorCode "nothing_to_do" means nothing needed changing.
 func ApplyFix(c *Client, problemID string) (*types.OperationResponse, error) {
 	switch problemID {
 	case "delete-stale-webhooks":
 		return applyFixDeleteStaleWebhooks(c)
-	case "recreate-subscription":
-		return applyFixRecreateSubscription(c)
 	case "delete-stale-installplans":
 		return applyFixDeleteStaleInstallPlans(c)
 	case "assist-rollout":
 		return AssistRollout(c)
-	case "fix-maas-gateway-annotation":
-		return applyFixMaaSGatewayAnnotation(c)
-	case "restart-operator":
-		return applyFixRestartOperator(c)
-	default:
-		if strings.HasPrefix(problemID, "disable-component:") {
-			compName := strings.TrimPrefix(problemID, "disable-component:")
-			return applyFixDisableComponent(c, compName)
+	}
+	if msg, ok := removedFixes[problemID]; ok {
+		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "validation"}, nil
+	}
+	if target, ok := strings.CutPrefix(problemID, "assist-rollout:"); ok {
+		ns, name, found := strings.Cut(target, "/")
+		if !found {
+			return &types.OperationResponse{Success: false, Message: "assist-rollout needs <namespace>/<deployment>", ErrorCode: "validation"}, nil
 		}
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Unknown fix action: %s", problemID),
-			ErrorCode: "validation",
-		}, nil
+		return AssistRolloutFor(c, ns, name)
 	}
-}
-
-func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
-	count, warnings := cleanupStaleWebhooks(c)
-	logs := []string{fmt.Sprintf("Removed %d stale webhook configuration(s)", count)}
-	for _, w := range warnings {
-		logs = append(logs, fmt.Sprintf("Warning: %s", w))
+	if target, ok := strings.CutPrefix(problemID, "restore-rollout-strategy:"); ok {
+		ns, name, found := strings.Cut(target, "/")
+		if !found {
+			return &types.OperationResponse{Success: false, Message: "restore-rollout-strategy needs <namespace>/<deployment>", ErrorCode: "validation"}, nil
+		}
+		return RestoreRolloutStrategy(c, ns, name)
 	}
-
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "fix-delete-stale-webhooks",
-		Detail:    fmt.Sprintf("removed %d webhooks", count),
-		Success:   true,
-	})
-
+	if compName, ok := strings.CutPrefix(problemID, "disable-component:"); ok {
+		return applyFixDisableComponent(c, compName)
+	}
 	return &types.OperationResponse{
-		Success: true,
-		Message: fmt.Sprintf("Removed %d stale webhook configuration(s). The operator will recreate the webhooks it needs when reinstalled.", count),
-		Logs:    logs,
+		Success:   false,
+		Message:   fmt.Sprintf("Unknown fix action: %s", problemID),
+		ErrorCode: "validation",
 	}, nil
 }
 
-func applyFixRecreateSubscription(c *Client) (*types.OperationResponse, error) {
-	logs := []string{}
-
-	origSub, origSubErr := getSubscription(c)
-	source, channel := "", ""
-	cs, csErr := getCatalogSource(c)
-	if csErr != nil {
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the catalog source: %v", csErr)}, nil
-	}
-	if cs.Exists {
-		source = CatalogName
-		var chErr error
-		channel, chErr = detectNightlyChannel(c, cs.Image)
-		if chErr != nil || channel == "" {
-			return &types.OperationResponse{Success: false, Message: "Cannot determine the catalog channel; existing Subscription was retained."}, nil
-		}
-	} else {
-		target, discoveryErr := resolveStableTarget(c)
-		if discoveryErr != nil {
-			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the stable channel: %v", discoveryErr)}, nil
-		}
-		source, channel = target.Source, target.Channel
-	}
-	origSource, origChannel := source, channel
-	if origSubErr == nil && origSub.Source != "" && origSub.Channel != "" {
-		origSource = origSub.Source
-		origChannel = origSub.Channel
-	}
-
-	subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	_, delErr := c.delete(subPath)
-	if delErr != nil && !IsK8sError(delErr, 404) {
-		logs = append(logs, fmt.Sprintf("Warning: failed to delete existing subscription: %v", delErr))
-	} else {
-		logs = append(logs, "Deleted existing subscription (if any)")
-	}
-
-	select {
-	case <-c.ctx.Done():
-		return &types.OperationResponse{Success: false, Message: "Operation cancelled.", Logs: logs}, c.ctx.Err()
-	case <-time.After(3 * time.Second):
-	}
-
-	logs = append(logs, fmt.Sprintf("Recreating subscription (source: %s, channel: %s)...", source, channel))
-
-	newSub := map[string]interface{}{
-		"apiVersion": "operators.coreos.com/v1alpha1",
-		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec": map[string]interface{}{
-			"channel":             channel,
-			"installPlanApproval": "Automatic",
-			"name":                SubName,
-			"source":              source,
-			"sourceNamespace":     CatalogNS,
-		},
-	}
-
-	subApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-
-	var applyErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		_, _, applyErr = c.apply(subApplyPath, newSub)
-		if applyErr == nil {
-			break
-		}
-		slog.Warn("Subscription apply failed, retrying", "attempt", attempt, "error", applyErr)
-		logs = append(logs, fmt.Sprintf("  Attempt %d/3 failed: %v", attempt, applyErr))
-		if attempt < 3 {
-			select {
-			case <-c.ctx.Done():
-				return &types.OperationResponse{Success: false, Message: "Operation cancelled during retry.", Logs: logs}, c.ctx.Err()
-			case <-time.After(2 * time.Second):
-			}
-		}
-	}
-
-	if applyErr != nil {
-		logs = append(logs, "All retries exhausted. Attempting to restore original Subscription...")
-		restoreSub := map[string]interface{}{
-			"apiVersion": "operators.coreos.com/v1alpha1",
-			"kind":       "Subscription",
-			"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-			"spec": map[string]interface{}{
-				"channel":             origChannel,
-				"installPlanApproval": "Automatic",
-				"name":                SubName,
-				"source":              origSource,
-				"sourceNamespace":     CatalogNS,
-			},
-		}
-		_, _, restoreErr := c.apply(subApplyPath, restoreSub)
-		if restoreErr != nil {
-			logs = append(logs, fmt.Sprintf("  CRITICAL: failed to restore original Subscription: %v", restoreErr))
-		} else {
-			logs = append(logs, fmt.Sprintf("  OK: Original Subscription restored (source=%s, channel=%s)", origSource, origChannel))
-		}
-
-		RecordActivity(c, types.ActivityEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			User:      getUser(c),
-			Action:    "fix-recreate-subscription",
-			Detail:    fmt.Sprintf("failed after 3 attempts: %v", applyErr),
-			Success:   false,
-		})
-
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Failed to recreate subscription after 3 attempts: %v", applyErr),
-			Logs:      logs,
-			ErrorCode: errorCodeFromK8sErr(applyErr),
-		}, nil
-	}
-
-	logs = append(logs, "Subscription recreated successfully")
-
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "fix-recreate-subscription",
-		Detail:    fmt.Sprintf("source=%s channel=%s", source, channel),
-		Success:   true,
-	})
-
-	return &types.OperationResponse{
-		Success: true,
-		Message: "Subscription recreated. OLM will begin installing the operator.",
-		Logs:    logs,
-	}, nil
+func nothingToDo(msg string, logs []string) *types.OperationResponse {
+	return &types.OperationResponse{Success: false, Message: "Nothing to do: " + msg, Logs: logs, ErrorCode: "nothing_to_do"}
 }
 
 func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error) {
-	logs := []string{}
-
-	ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
-	body, _, err := c.get(ipPath)
+	plans, err := listInstallPlans(c)
 	if err != nil {
+		if IsK8sError(err, http.StatusNotFound) {
+			return nothingToDo("there are no install plans. Nothing was deleted.", nil), nil
+		}
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to list install plans: %v", err),
-			Logs:      logs,
 			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
 
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
+	sub, err := readSubscriptionState(c)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to read the Subscription: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   "Failed to parse install plans",
-			Logs:      logs,
-			ErrorCode: "validation",
-		}, nil
-	}
-
-	deleted := 0
-	for _, ip := range result.Items {
-		phase := ip.Status.Phase
-		if phase != "Failed" && phase != "" {
-			logs = append(logs, fmt.Sprintf("Skipped install plan %s (phase: %s)", ip.Metadata.Name, phase))
+	var logs, deleted, failed, changed []string
+	for _, ip := range plans {
+		if ok, why := installPlanDeletable(ip, sub); !ok {
+			logs = append(logs, fmt.Sprintf("Kept install plan %s: %s", ip.Metadata.Name, why))
 			continue
 		}
-		delPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ip.Metadata.Name)
-		_, delErr := c.delete(delPath)
-		if delErr != nil && !IsK8sError(delErr, 404) {
-			logs = append(logs, fmt.Sprintf("Warning: failed to delete install plan %s: %v", ip.Metadata.Name, delErr))
-		} else {
-			deleted++
-			logs = append(logs, fmt.Sprintf("Deleted install plan: %s (phase: %s)", ip.Metadata.Name, phase))
+		path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ip.Metadata.Name)
+		err := deleteExact(c, path, ip.Metadata.UID, ip.Metadata.ResourceVersion)
+		switch {
+		case err == nil:
+			deleted = append(deleted, ip.Metadata.Name)
+			logs = append(logs, fmt.Sprintf("Deleted install plan %s (phase Failed)", ip.Metadata.Name))
+		case IsK8sError(err, http.StatusNotFound):
+			logs = append(logs, fmt.Sprintf("Install plan %s was already gone", ip.Metadata.Name))
+		case IsK8sError(err, http.StatusConflict):
+			changed = append(changed, ip.Metadata.Name)
+			logs = append(logs, fmt.Sprintf("Kept install plan %s: it changed after it was checked", ip.Metadata.Name))
+		default:
+			failed = append(failed, ip.Metadata.Name)
+			logs = append(logs, fmt.Sprintf("Error: could not delete install plan %s: %v", ip.Metadata.Name, err))
 		}
 	}
 
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "fix-delete-stale-installplans",
-		Detail:    fmt.Sprintf("deleted %d install plans", deleted),
-		Success:   true,
-	})
+	if len(deleted) > 0 {
+		RecordActivity(c, types.ActivityEntry{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			User:      getUser(c),
+			Action:    "fix-delete-stale-installplans",
+			Detail:    "deleted Failed install plans: " + strings.Join(deleted, ", "),
+			Success:   len(failed) == 0,
+		})
+	}
 
+	switch {
+	case len(deleted) == 0 && len(failed) == 0 && len(changed) > 0:
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Install plan(s) %s changed after they were checked, so nothing was deleted. Run diagnostics again.", strings.Join(changed, ", ")), Logs: logs, ErrorCode: "conflict"}, nil
+	case len(deleted) == 0 && len(failed) == 0:
+		return nothingToDo("no failed install plan can be deleted safely (see the log). Nothing was deleted.", logs), nil
+	case len(failed) > 0 && len(deleted) == 0:
+		return &types.OperationResponse{Success: false, Message: "Could not delete the failed install plans: " + strings.Join(failed, ", "), Logs: logs}, nil
+	case len(failed) > 0:
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Deleted %s; could not delete %s.", strings.Join(deleted, ", "), strings.Join(failed, ", ")),
+			Logs:      logs,
+			ErrorCode: "partial_failure",
+		}, nil
+	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Deleted %d failed install plan(s). OLM will create new ones if needed.", deleted),
+		Message: fmt.Sprintf("Deleted %d failed install plan(s): %s. OLM resolves the Subscription again if it was waiting on one of them.", len(deleted), strings.Join(deleted, ", ")),
 		Logs:    logs,
 	}, nil
+}
+
+// disableableComponents are DSC components the tool may set to Removed. All
+// are top-level keys of spec.components in the v1 or v2 DataScienceCluster
+// CRD (a key the CRD does not define would be pruned silently).
+var disableableComponents = map[string]bool{
+	"llamastackoperator": true,
+	"feastoperator":      true,
+	"trustyai":           true,
+	"ray":                true,
+	"kueue":              true,
+	"sparkoperator":      true,
+	"trainer":            true,
+	"trainingoperator":   true,
 }
 
 func applyFixDisableComponent(c *Client, compName string) (*types.OperationResponse, error) {
 	if compName == "" {
 		return &types.OperationResponse{Success: false, Message: "Component name is required", ErrorCode: "validation"}, nil
 	}
-
-	allowedComponents := map[string]bool{
-		"llamastackoperator": true,
-		"feastoperator":      true,
-		"trustyai":           true,
-		"ray":                true,
-		"kueue":              true,
-		"sparkoperator":      true,
-		"trainer":            true,
-		"trainingoperator":   true,
-		"modelsasservice":    true,
+	if reason, refused := refusedComponents[compName]; refused {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil
 	}
-	if !allowedComponents[compName] {
+	if !disableableComponents[compName] {
 		return &types.OperationResponse{
-			Success: false,
-			Message: fmt.Sprintf("Component %q cannot be disabled through this tool. Use the OpenShift Console to edit the DSC directly.", compName),
+			Success:   false,
+			Message:   fmt.Sprintf("Component %q cannot be disabled through this tool. Use the OpenShift Console to edit the DSC directly.", compName),
+			ErrorCode: "validation",
 		}, nil
 	}
 
-	patch := fmt.Sprintf(`{"spec":{"components":{%q:{"managementState":"Removed"}}}}`, compName)
 	dscPath, err := dataScienceClusterPath(c)
 	if err != nil {
 		return &types.OperationResponse{
@@ -1101,12 +1119,41 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
-	_, _, err = c.patch(dscPath, []byte(patch))
+
+	// Re-check: the component must be in the DSC and not already Removed.
+	body, _, err := c.get(dscPath)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
+	state, present := componentManagementState(body, compName)
+	if !present {
+		return nothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil
+	}
+	if state == "Removed" {
+		return nothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
+	}
+	if blockers := disableBlockers(c, compName); len(blockers) > 0 {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Not removing %s now, because it could leave the component stuck in deletion: %s. Nothing was changed.", compName, strings.Join(blockers, "; ")),
+			Logs:      blockers,
+			ErrorCode: "prerequisites",
+		}, nil
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"components":{%q:{"managementState":"Removed"}}}}`, compName)
+	respBody, _, err := c.patch(dscPath, []byte(patch))
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to patch DataScienceCluster: %v", err),
 			ErrorCode: errorCodeFromK8sErr(err),
+		}, nil
+	}
+	if after, _ := componentManagementState(respBody, compName); after != "Removed" {
+		return &types.OperationResponse{
+			Success: false,
+			Message: fmt.Sprintf("The API accepted the patch, but %s is %q instead of Removed in the returned DataScienceCluster.", compName, after),
 		}, nil
 	}
 
@@ -1120,71 +1167,23 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Set %s to Removed. The operator will clean up the component.", compName),
+		Message: fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, nonEmpty(state, "unset")),
 	}, nil
 }
 
-func applyFixMaaSGatewayAnnotation(c *Client) (*types.OperationResponse, error) {
-	gwPath := "/apis/gateway.networking.k8s.io/v1/namespaces/openshift-ingress/gateways/maas-default-gateway"
-	patch := `{"metadata":{"annotations":{"opendatahub.io/managed":"false"}}}`
-	_, _, err := c.patch(gwPath, []byte(patch))
-	if err != nil {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Failed to patch gateway: %v", err),
-			ErrorCode: errorCodeFromK8sErr(err),
-		}, nil
+func componentManagementState(dscJSON []byte, compName string) (string, bool) {
+	var dsc struct {
+		Spec struct {
+			Components map[string]struct {
+				ManagementState string `json:"managementState"`
+			} `json:"components"`
+		} `json:"spec"`
 	}
-
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "fix-maas-gateway",
-		Detail:    "added opendatahub.io/managed=false annotation",
-		Success:   true,
-	})
-
-	return &types.OperationResponse{
-		Success: true,
-		Message: "Gateway annotation added. MaaS prerequisites should resolve shortly.",
-	}, nil
-}
-
-func applyFixRestartOperator(c *Client) (*types.OperationResponse, error) {
-	depPath := namespacedPath("apps/v1", "deployments", SubNS, "rhods-operator")
-	patchData, _ := json.Marshal(map[string]interface{}{
-		"spec": map[string]interface{}{
-			"template": map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"annotations": map[string]interface{}{
-						"kubectl.kubernetes.io/restartedAt": time.Now().Format(time.RFC3339),
-					},
-				},
-			},
-		},
-	})
-
-	_, _, err := c.strategicPatch(depPath, patchData)
-	if err != nil {
-		return &types.OperationResponse{
-			Success:   false,
-			Message:   fmt.Sprintf("Failed to restart operator: %v", err),
-			ErrorCode: errorCodeFromK8sErr(err),
-		}, nil
+	if json.Unmarshal(dscJSON, &dsc) != nil {
+		return "", false
 	}
-
-	RecordActivity(c, types.ActivityEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		User:      getUser(c),
-		Action:    "restart-operator",
-		Detail:    "rolling restart triggered",
-		Success:   true,
-	})
-
-	return &types.OperationResponse{
-		Success: true,
-		Message: "Operator restart triggered. The operator has multiple replicas so there will be no downtime. DSC conditions should refresh within 1-2 minutes.",
-	}, nil
+	comp, ok := dsc.Spec.Components[compName]
+	return comp.ManagementState, ok
 }
 
 // dataScienceClusterPath returns the API path of the cluster's

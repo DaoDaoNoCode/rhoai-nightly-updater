@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func webhookConfig(name string, labels map[string]string, owner string, svcNS, svcName string) map[string]interface{} {
+func cleanupWebhookConfig(name string, labels map[string]string, owner string, svcNS, svcName string) map[string]interface{} {
 	meta := map[string]interface{}{"name": name}
 	if labels != nil {
 		meta["labels"] = labels
@@ -36,21 +36,21 @@ func TestCleanupStaleWebhooks_KeepsLiveWebhooks(t *testing.T) {
 		return map[string]string{"olm.owner": csv, "olm.owner.namespace": SubNS, "olm.owner.kind": "ClusterServiceVersion"}
 	}
 	validating := []interface{}{
-		webhookConfig("datasciencecluster-v2-validator.opendatahub.io-nfzvz", olmLabels("rhods-operator.3.6.0"), "", SubNS, "rhods-operator-service"),
-		webhookConfig("dscinitialization-v1-validator.opendatahub.io-old", olmLabels("rhods-operator.3.5.0"), "", SubNS, "rhods-operator-service"),
+		cleanupWebhookConfig("datasciencecluster-v2-validator.opendatahub.io-nfzvz", olmLabels("rhods-operator.3.6.0"), "", SubNS, "rhods-operator-service"),
+		cleanupWebhookConfig("dscinitialization-v1-validator.opendatahub.io-old", olmLabels("rhods-operator.3.5.0"), "", SubNS, "rhods-operator-service"),
 		// OLM-owned, Service gone, but the CSV exists: OLM heals it, keep.
-		webhookConfig("dscinitialization-v2-validator.opendatahub.io-x", olmLabels("rhods-operator.3.6.0"), "", SubNS, "gone-operator-service"),
-		webhookConfig("validating.odh-model-controller.opendatahub.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "odh-model-controller-webhook-service"),
-		webhookConfig("inferenceservice.serving.kserve.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "gone-kserve-service"),
-		webhookConfig("authorino.example.io", map[string]string{"olm.owner": "authorino-operator.v1.4.3", "olm.owner.namespace": "openshift-operators"}, "", "openshift-operators", "gone-authorino"),
-		webhookConfig("legacy.opendatahub.io", nil, "", "redhat-ods-applications", "gone-legacy"),
-		webhookConfig("legacy-live.opendatahub.io", nil, "", "redhat-ods-applications", "odh-model-controller-webhook-service"),
-		webhookConfig("broken-lookup.opendatahub.io", nil, "", "redhat-ods-applications", "error-service"),
+		cleanupWebhookConfig("dscinitialization-v2-validator.opendatahub.io-x", olmLabels("rhods-operator.3.6.0"), "", SubNS, "gone-operator-service"),
+		cleanupWebhookConfig("validating.odh-model-controller.opendatahub.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "odh-model-controller-webhook-service"),
+		cleanupWebhookConfig("inferenceservice.serving.kserve.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "gone-kserve-service"),
+		cleanupWebhookConfig("authorino.example.io", map[string]string{"olm.owner": "authorino-operator.v1.4.3", "olm.owner.namespace": "openshift-operators"}, "", "openshift-operators", "gone-authorino"),
+		cleanupWebhookConfig("legacy.opendatahub.io", nil, "", "redhat-ods-applications", "gone-legacy"),
+		cleanupWebhookConfig("legacy-live.opendatahub.io", nil, "", "redhat-ods-applications", "odh-model-controller-webhook-service"),
+		cleanupWebhookConfig("broken-lookup.opendatahub.io", nil, "", "redhat-ods-applications", "error-service"),
 	}
 	mutating := []interface{}{
-		webhookConfig("kuberay-mutating-webhook-configuration", nil, "", "redhat-ods-applications", "gone-kuberay"),
-		webhookConfig("mutating.odh-model-controller.opendatahub.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "odh-model-controller-webhook-service"),
-		webhookConfig("podmonitor-injector.opendatahub.io-4z47n", olmLabels("rhods-operator.3.6.0"), "", SubNS, "rhods-operator-service"),
+		cleanupWebhookConfig("kuberay-mutating-webhook-configuration", nil, "", "redhat-ods-applications", "gone-kuberay"),
+		cleanupWebhookConfig("mutating.odh-model-controller.opendatahub.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "odh-model-controller-webhook-service"),
+		cleanupWebhookConfig("podmonitor-injector.opendatahub.io-4z47n", olmLabels("rhods-operator.3.6.0"), "", SubNS, "rhods-operator-service"),
 	}
 	existingServices := map[string]bool{
 		SubNS + "/rhods-operator-service":                              true,

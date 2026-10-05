@@ -183,7 +183,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	var (
 		wg    sync.WaitGroup
 		host  string
-		issue podIssue
+		issue workloadPodIssue
 		pvcs  []string
 	)
 	wg.Add(3)

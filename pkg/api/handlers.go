@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -876,9 +877,27 @@ var HandleAssistRollout = withMutationAuth(func(c *cluster.Client, w http.Respon
 	}
 	defer releaseClusterMutationLock()
 
-	slog.Info("mutation", "op", "assist-rollout")
+	// Optional body {"namespace":"...","deployment":"..."} limits the action
+	// to one Deployment; an empty body checks all RHOAI Deployments.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req struct {
+		Namespace  string `json:"namespace"`
+		Deployment string `json:"deployment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
 
-	result, err := cluster.AssistRollout(c)
+	slog.Info("mutation", "op", "assist-rollout", "namespace", req.Namespace, "deployment", req.Deployment)
+
+	var result *types.OperationResponse
+	var err error
+	if req.Deployment != "" {
+		result, err = cluster.AssistRolloutFor(c, req.Namespace, req.Deployment)
+	} else {
+		result, err = cluster.AssistRollout(c)
+	}
 	if err != nil {
 		slog.Error("assist-rollout failed", "error", err)
 		writeError(w, "assist-rollout failed", http.StatusInternalServerError)

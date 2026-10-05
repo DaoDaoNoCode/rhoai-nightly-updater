@@ -582,16 +582,16 @@ var (
 // current image reports a terminal waiting reason (ImagePullBackOff,
 // CrashLoopBackOff, ...), and errMinIONotReady on timeout, with the last
 // observed pod issue.
-func waitMinIOReady(c *Client) (podIssue, error) {
+func waitMinIOReady(c *Client) (workloadPodIssue, error) {
 	deadline := time.Now().Add(MinIOReadyTimeout)
-	var last podIssue
+	var last workloadPodIssue
 	for {
 		body, _, err := c.get(namespacedPath("apps/v1", "deployments", minioNamespace, "minio"))
 		if err == nil {
 			var deploy minioDeployment
 			if json.Unmarshal(body, &deploy) == nil {
 				if deploy.rolledOut() {
-					return podIssue{}, nil
+					return workloadPodIssue{}, nil
 				}
 				// Only judge pods once the controller has seen the new
 				// template, and only pods running the image just applied, so

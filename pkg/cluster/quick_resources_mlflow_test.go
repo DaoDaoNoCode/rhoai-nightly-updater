@@ -10,19 +10,19 @@ import (
 
 const mlflowPath = "/apis/" + mlflowAPIGroup + "/mlflows/" + mlflowCRName
 
-func putMLflow(f *fakeAPI, labels, manager, op, extraMeta, spec, status string) {
+func putMLflow(f *resourceFake, labels, manager, op, extraMeta, spec, status string) {
 	f.putJSON(mlflowPath, `{"metadata":{"labels":`+labels+`,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(manager, op)+extraMeta+`},
 		"spec":`+spec+`,"status":`+status+`}`)
 }
 
-func mlflowImageOf(f *fakeAPI) (string, bool) {
+func mlflowImageOf(f *resourceFake) (string, bool) {
 	spec, _ := f.get(mlflowPath)["spec"].(map[string]interface{})
 	img, _ := spec["image"].(map[string]interface{})
 	v, ok := img["image"].(string)
 	return v, ok
 }
 
-func mlflowAnnotations(f *fakeAPI) map[string]interface{} {
+func mlflowAnnotations(f *resourceFake) map[string]interface{} {
 	a, _ := f.get(mlflowPath)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
 	return a
 }
@@ -37,7 +37,7 @@ func stubPRResolver(t *testing.T, fn func(pr int) (string, bool, error)) {
 const notAvailable = `{"conditions":[{"type":"Available","status":"False","reason":"DeploymentNotReady","message":"MLflow deployment is not ready"}]}`
 
 func TestGetMLflowStatus_BrowserCreatedCRIsNotManaged(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putMLflow(f, `{}`, "Mozilla", "Update", "", `{"image":{"image":"quay.io/opendatahub/mlflow:odh-stable"}}`,
 		`{"conditions":[{"type":"Available","status":"True"}]}`)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/mlflow-pvc", `{"metadata":{}}`)
@@ -48,7 +48,7 @@ func TestGetMLflowStatus_BrowserCreatedCRIsNotManaged(t *testing.T) {
 }
 
 func TestGetMLflowStatus_PROverrideIsReportedWhileBroken(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putMLflow(f, toolLabelJSON, toolFieldManager, "Update", `,"annotations":{"`+mlflowOriginalImageAnnotation+`":""}`,
 		`{"image":{"image":"quay.io/opendatahub/mlflow:odh-pr-42@sha256:`+strings.Repeat("a", 64)+`"}}`, notAvailable)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/pods/mlflow-1", `{"metadata":{"labels":{"app":"mlflow"}},"spec":{"containers":[{"image":"x"}]},
@@ -63,7 +63,7 @@ func TestGetMLflowStatus_PROverrideIsReportedWhileBroken(t *testing.T) {
 }
 
 func TestGetMLflowStatus_LegacyApplyIsManagedAndOwnedPVCListed(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putMLflow(f, `{}`, toolFieldManager, "Apply", `,"uid":"cr-uid"`, `{}`, `{}`)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/mlflow-pvc", `{"metadata":{"ownerReferences":[{"kind":"MLflow","name":"mlflow","uid":"cr-uid"}]}}`)
 	f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/other", `{"metadata":{}}`)
@@ -75,7 +75,7 @@ func TestGetMLflowStatus_LegacyApplyIsManagedAndOwnedPVCListed(t *testing.T) {
 
 func TestSetupMLflow(t *testing.T) {
 	t.Run("creates a labelled CR without pinning an image", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		if resp, _ := SetupMLflow(c); !resp.Success {
 			t.Fatalf("got %+v", resp)
 		}
@@ -91,14 +91,14 @@ func TestSetupMLflow(t *testing.T) {
 		}
 	})
 	t.Run("CRD missing", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		f.fail["POST /apis/"+mlflowAPIGroup+"/mlflows"] = 404
 		if resp, _ := SetupMLflow(c); resp.Success || resp.ErrorCode != "prerequisites" {
 			t.Fatalf("got %+v", resp)
 		}
 	})
 	t.Run("created concurrently", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		f.fail["POST /apis/"+mlflowAPIGroup+"/mlflows"] = 409
 		if resp, _ := SetupMLflow(c); resp.Success || resp.ErrorCode != "conflict" {
 			t.Fatalf("got %+v", resp)
@@ -114,7 +114,7 @@ func TestTeardownMLflow(t *testing.T) {
 	}
 	t.Run("browser-created CR is never deleted", func(t *testing.T) {
 		fast(t)
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, `{}`, "Mozilla", "Update", "", `{}`, `{}`)
 		resp, _ := TeardownMLflow(c)
 		if resp.Success || resp.ErrorCode != "not_managed" || hasMutation(f, "DELETE") || !f.has(mlflowPath) {
@@ -123,7 +123,7 @@ func TestTeardownMLflow(t *testing.T) {
 	})
 	t.Run("tool CR is deleted and data loss is stated", func(t *testing.T) {
 		fast(t)
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", `,"uid":"cr-uid"`, `{}`, `{}`)
 		f.putJSON("/api/v1/namespaces/redhat-ods-applications/persistentvolumeclaims/mlflow-pvc", `{"metadata":{"ownerReferences":[{"uid":"cr-uid"}]}}`)
 		resp, _ := TeardownMLflow(c)
@@ -133,7 +133,7 @@ func TestTeardownMLflow(t *testing.T) {
 	})
 	t.Run("stuck finalizer is reported", func(t *testing.T) {
 		fast(t)
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", `,"finalizers":["example.com/hold"]`, `{}`, `{}`)
 		resp, _ := TeardownMLflow(c)
 		if resp.Success || resp.ErrorCode != "in_progress" || !strings.Contains(resp.Message, "example.com/hold") {
@@ -147,7 +147,7 @@ func TestTeardownMLflow(t *testing.T) {
 	})
 	t.Run("already gone", func(t *testing.T) {
 		fast(t)
-		_, c := newFakeAPI(t)
+		_, c := newResourceFake(t)
 		if resp, _ := TeardownMLflow(c); !resp.Success {
 			t.Fatalf("got %+v", resp)
 		}
@@ -169,7 +169,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	})
 
 	t.Run("user image is restored on revert", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, `{}`, "Mozilla", "Update", "", `{"image":{"image":"registry.example.com/custom-mlflow:1"}}`, notAvailable)
 		current = digestA
 		if resp, _ := DeployMLflowPR(c, 7); !resp.Success {
@@ -208,7 +208,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	})
 
 	t.Run("unset image reverts to the operator default", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`)
 		current = digestA
 		if resp, _ := DeployMLflowPR(c, 7); !resp.Success {
@@ -223,7 +223,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	})
 
 	t.Run("PR image from an older version reverts to the operator default", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, `{}`, toolFieldManager, "Apply", "", `{"image":{"image":"quay.io/opendatahub/mlflow:odh-pr-3"}}`, `{}`)
 		if st := getMLflowStatus(c); !st.PROverride || st.PRNumber != 3 {
 			t.Fatalf("legacy PR image not detected: %+v", st)
@@ -237,7 +237,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	})
 
 	t.Run("same build is a no-op", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		current = digestA
 		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", `,"annotations":{"`+mlflowOriginalImageAnnotation+`":""}`, `{"image":{"image":"`+digestA+`"}}`, `{}`)
 		if resp, _ := DeployMLflowPR(c, 7); !resp.Success || hasMutation(f, "PATCH") {
@@ -248,13 +248,13 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	errCases := []struct {
 		name  string
 		pr    int
-		setup func(f *fakeAPI)
+		setup func(f *resourceFake)
 		code  string
 	}{
-		{"not deployed", 7, func(*fakeAPI) {}, "prerequisites"},
-		{"image not found", 404, func(f *fakeAPI) { putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`) }, "validation"},
-		{"quay error", 500, func(f *fakeAPI) { putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`) }, "network"},
-		{"concurrent change", 7, func(f *fakeAPI) {
+		{"not deployed", 7, func(*resourceFake) {}, "prerequisites"},
+		{"image not found", 404, func(f *resourceFake) { putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`) }, "validation"},
+		{"quay error", 500, func(f *resourceFake) { putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`) }, "network"},
+		{"concurrent change", 7, func(f *resourceFake) {
 			putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`)
 			f.onGet = func(k fakeKey, obj map[string]interface{}) {
 				if k.plural == "mlflows" {
@@ -265,7 +265,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	}
 	for _, tc := range errCases {
 		t.Run(tc.name, func(t *testing.T) {
-			f, c := newFakeAPI(t)
+			f, c := newResourceFake(t)
 			current = digestA
 			tc.setup(f)
 			resp, _ := DeployMLflowPR(c, tc.pr)
@@ -279,7 +279,7 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 	}
 
 	t.Run("revert without override", func(t *testing.T) {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`)
 		if resp, _ := RevertMLflowImage(c); resp.Success || resp.ErrorCode != "validation" || hasMutation(f, "PATCH") {
 			t.Fatalf("got %+v", resp)

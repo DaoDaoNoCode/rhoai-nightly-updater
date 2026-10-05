@@ -18,7 +18,7 @@ func secretPath(ns, name string) string {
 const toolLabelJSON = `{"` + managedByLabelKey + `":"` + managedByLabelValue + `"}`
 
 // putDSPA stores a DSPA. labels is a JSON object, manager the creator.
-func putDSPA(f *fakeAPI, ns, name, labels, manager, op, host, secret, extraMeta, status string) {
+func putDSPA(f *resourceFake, ns, name, labels, manager, op, host, secret, extraMeta, status string) {
 	if status == "" {
 		status = `{}`
 	}
@@ -26,17 +26,17 @@ func putDSPA(f *fakeAPI, ns, name, labels, manager, op, host, secret, extraMeta,
 		"spec":{"objectStorage":{"externalStorage":{"host":"`+host+`","s3CredentialsSecret":{"secretName":"`+secret+`"}}}},"status":`+status+`}`)
 }
 
-func putDSProject(f *fakeAPI, ns string) {
+func putDSProject(f *resourceFake, ns string) {
 	f.putJSON("/api/v1/namespaces/"+ns, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 }
 
-func putReadyManagedMinIO(f *fakeAPI) {
+func putReadyManagedMinIO(f *resourceFake) {
 	putNamespace(f, toolLabelJSON, toolFieldManager)
 	putMinIODeployment(f, toolFieldManager, 1)
 	f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"bWluaW8=","minio_root_password":"cGFzcw=="}}`)
 }
 
-func putDSPO(f *fakeAPI, ready int) {
+func putDSPO(f *resourceFake, ready int) {
 	f.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/data-science-pipelines-operator-controller-manager",
 		`{"metadata":{"labels":{"app.kubernetes.io/name":"data-science-pipelines-operator"}},"status":{"readyReplicas":`+itoa(ready)+`}}`)
 }
@@ -49,7 +49,7 @@ func fastPipelineTimings(t *testing.T) {
 }
 
 func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putReadyManagedMinIO(f)
 	for _, ns := range []string{"mine", "legacy-apply", "legacy-post", "dashboard", "dashboard-same-spec"} {
 		putDSProject(f, ns)
@@ -103,7 +103,7 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 
 func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
 	count := func(projects int) int {
-		f, c := newFakeAPI(t)
+		f, c := newResourceFake(t)
 		putReadyManagedMinIO(f)
 		for i := 0; i < projects; i++ {
 			ns := "p" + itoa(i)
@@ -121,7 +121,7 @@ func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
 }
 
 func TestGetResourcesStatus_FreshClusterWithoutDSPACRD(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	f.fail["GET "+dspaListPath] = 404
 	st, err := GetResourcesStatus(c)
 	if err != nil || len(st.PipelineServers) != 0 || st.MinIO.Deployed || st.MLflow.Deployed {
@@ -130,7 +130,7 @@ func TestGetResourcesStatus_FreshClusterWithoutDSPACRD(t *testing.T) {
 }
 
 func TestGetResourcesStatus_DSPAListErrorFails(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	f.fail["GET "+dspaListPath] = 500
 	if _, err := GetResourcesStatus(c); err == nil {
 		t.Fatal("a failed DSPA list must not be reported as no pipeline servers")
@@ -138,7 +138,7 @@ func TestGetResourcesStatus_DSPAListErrorFails(t *testing.T) {
 }
 
 func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putReadyManagedMinIO(f)
 
 	resp, _ := SetupPipelineServer(c, "new-project")
@@ -172,37 +172,37 @@ func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T)
 func TestSetupPipelineServer_Refusals(t *testing.T) {
 	cases := []struct {
 		name     string
-		setup    func(f *fakeAPI)
+		setup    func(f *resourceFake)
 		wantCode string
 	}{
-		{"MinIO missing", func(f *fakeAPI) {}, "prerequisites"},
-		{"MinIO not created by the tool", func(f *fakeAPI) {
+		{"MinIO missing", func(f *resourceFake) {}, "prerequisites"},
+		{"MinIO not created by the tool", func(f *resourceFake) {
 			putNamespace(f, `{}`, "kubectl-create")
 			putMinIODeployment(f, "kubectl-client-side-apply", 1)
 		}, "prerequisites"},
-		{"project has a dashboard pipeline server", func(f *fakeAPI) {
+		{"project has a dashboard pipeline server", func(f *resourceFake) {
 			putReadyManagedMinIO(f)
 			putDSProject(f, "proj")
 			putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", minioS3Host(), legacyDSPASecretName, "", "")
 		}, "not_managed"},
-		{"project has a pipeline server from an earlier version", func(f *fakeAPI) {
+		{"project has a pipeline server from an earlier version", func(f *resourceFake) {
 			putReadyManagedMinIO(f)
 			putDSProject(f, "proj")
 			putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", minioS3Host(), legacyDSPASecretName, "", "")
 		}, "validation"},
-		{"secret name taken by someone else", func(f *fakeAPI) {
+		{"secret name taken by someone else", func(f *resourceFake) {
 			putReadyManagedMinIO(f)
 			putDSProject(f, "proj")
 			f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{}}`)
 		}, "not_managed"},
-		{"no DSPA CRD", func(f *fakeAPI) {
+		{"no DSPA CRD", func(f *resourceFake) {
 			putReadyManagedMinIO(f)
 			f.fail["GET /apis/"+dspaAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 404
 		}, "prerequisites"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f, c := newFakeAPI(t)
+			f, c := newResourceFake(t)
 			tc.setup(f)
 			resp, _ := SetupPipelineServer(c, "proj")
 			if resp.Success || resp.ErrorCode != tc.wantCode {
@@ -218,7 +218,7 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 }
 
 func TestSetupPipelineServer_RerunIsIdempotent(t *testing.T) {
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putReadyManagedMinIO(f)
 	for i := 0; i < 2; i++ {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
@@ -231,7 +231,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 	withFinalizer := `,"finalizers":["` + dspaFinalizer + `"]`
 	cases := []struct {
 		name          string
-		setup         func(f *fakeAPI)
+		setup         func(f *resourceFake)
 		wantOK        bool
 		wantCode      string
 		wantDSPAGone  string // DSPA path that must be gone
@@ -242,7 +242,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 	}{
 		{
 			name: "tool pipeline server",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 			},
@@ -250,7 +250,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "dashboard pipeline server is never deleted",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", minioS3Host(), legacyDSPASecretName, "", "")
 				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{}}`)
 			},
@@ -258,7 +258,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "legacy pipeline server and secret",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", minioS3Host(), legacyDSPASecretName, "", "")
 				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`}}`)
 			},
@@ -266,7 +266,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "legacy pipeline server whose secret someone else created",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", "dspa", `{}`, toolFieldManager, "Apply", minioS3Host(), legacyDSPASecretName, "", "")
 				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON("unknown", "Update")+`}}`)
 			},
@@ -274,7 +274,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "finalizer and operator not running",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, withFinalizer, "")
 				putDSPO(f, 0)
 			},
@@ -282,7 +282,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "finalizer and operator running",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, withFinalizer, "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				putDSPO(f, 1)
@@ -292,7 +292,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "finalizer never completes",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, withFinalizer, "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				putDSPO(f, 1)
@@ -301,7 +301,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "secret shared with another live pipeline server",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
 				putDSPA(f, "proj", "other", `{}`, "unknown", "Update", minioS3Host(), dspaSecretName, "", "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
@@ -310,7 +310,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name: "secret delete fails",
-			setup: func(f *fakeAPI) {
+			setup: func(f *resourceFake) {
 				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				f.fail["DELETE "+secretPath("proj", dspaSecretName)] = 500
@@ -319,14 +319,14 @@ func TestTeardownPipelineServer(t *testing.T) {
 		},
 		{
 			name:   "nothing to remove",
-			setup:  func(f *fakeAPI) {},
+			setup:  func(f *resourceFake) {},
 			wantOK: true, wantNoDeletes: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fastPipelineTimings(t)
-			f, c := newFakeAPI(t)
+			f, c := newResourceFake(t)
 			tc.setup(f)
 			resp, err := TeardownPipelineServer(c, "proj")
 			if err != nil {
@@ -364,7 +364,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 
 func TestTeardownPipelineServer_RerunWhileTerminatingDoesNotDeleteAgain(t *testing.T) {
 	fastPipelineTimings(t)
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName,
 		`,"deletionTimestamp":"`+created+`","finalizers":["`+dspaFinalizer+`"]`, "")
 	resp, _ := TeardownPipelineServer(c, "proj")
@@ -378,7 +378,7 @@ func TestTeardownPipelineServer_RerunWhileTerminatingDoesNotDeleteAgain(t *testi
 
 func TestPipelineTeardown_RerunRemovesOrphanSecret(t *testing.T) {
 	fastPipelineTimings(t)
-	f, c := newFakeAPI(t)
+	f, c := newResourceFake(t)
 	f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	resp, _ := TeardownPipelineServer(c, "proj")
 	if !resp.Success || f.has(secretPath("proj", dspaSecretName)) {

@@ -125,8 +125,8 @@ func withToolFieldManager(path string) string {
 	return path + "?fieldManager=" + url.QueryEscape(toolFieldManager)
 }
 
-// podIssue is the most relevant reason a workload's pods are not ready.
-type podIssue struct {
+// workloadPodIssue is the most relevant reason a workload's pods are not ready.
+type workloadPodIssue struct {
 	Reason   string
 	Message  string
 	Terminal bool
@@ -148,10 +148,10 @@ var terminalWaitingReasons = map[string]bool{
 // inspectPods returns why the pods matching selector are not ready, preferring
 // terminal reasons. An empty Reason means nothing specific was found. When
 // wantImage is set, only pods with a container running that image count.
-func inspectPods(c *Client, namespace, selector, wantImage string) (podIssue, error) {
+func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodIssue, error) {
 	body, _, err := c.get(namespacedPath("v1", "pods", namespace, "") + "?labelSelector=" + url.QueryEscape(selector))
 	if err != nil {
-		return podIssue{}, err
+		return workloadPodIssue{}, err
 	}
 	var list struct {
 		Items []struct {
@@ -174,10 +174,10 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (podIssue, er
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return podIssue{}, fmt.Errorf("parse pod list: %w", err)
+		return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
 	}
-	var best podIssue
-	consider := func(p podIssue) {
+	var best workloadPodIssue
+	consider := func(p workloadPodIssue) {
 		if p.Reason == "" {
 			return
 		}
@@ -200,7 +200,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (podIssue, er
 		}
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == "PodScheduled" && cond.Status == "False" {
-				consider(podIssue{Reason: firstNonEmpty(cond.Reason, "Unschedulable"), Message: cond.Message})
+				consider(workloadPodIssue{Reason: firstNonEmpty(cond.Reason, "Unschedulable"), Message: cond.Message})
 			}
 		}
 		statuses := append(append([]containerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)
@@ -210,7 +210,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (podIssue, er
 				if t := cs.LastState.Terminated; t != nil && w.Reason == "CrashLoopBackOff" {
 					msg = strings.TrimSpace(fmt.Sprintf("%s (last exit: %s, code %d)", msg, t.Reason, t.ExitCode))
 				}
-				consider(podIssue{Reason: w.Reason, Message: msg, Terminal: terminalWaitingReasons[w.Reason]})
+				consider(workloadPodIssue{Reason: w.Reason, Message: msg, Terminal: terminalWaitingReasons[w.Reason]})
 			}
 		}
 	}
@@ -242,7 +242,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 // applyPodIssue copies a pod issue into a resource state.
-func applyPodIssue(state *types.ResourceState, issue podIssue) {
+func applyPodIssue(state *types.ResourceState, issue workloadPodIssue) {
 	if issue.Reason == "" {
 		return
 	}
