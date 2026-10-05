@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, toApiError } from "../services/api";
+import { usePolling } from "./usePolling";
 
 interface AsyncDataResult<T> {
   data: T | null;
   loading: boolean;
-  error: string | null;
+  error: ApiError | null;
   lastRefreshed: Date | null;
-  refresh: () => void;
+  refresh: () => Promise<void>;
 }
 
 /**
@@ -13,7 +15,7 @@ interface AsyncDataResult<T> {
  *
  * Handles:
  *  - Initial fetch on mount
- *  - Polling at `pollInterval` (when provided)
+ *  - Polling at `pollInterval` (when provided), one request at a time
  *  - Skipping polls while the tab is hidden (`document.hidden`)
  *  - Immediate refresh when tab becomes visible again
  *  - Loading, error, and last-refreshed state
@@ -29,67 +31,53 @@ export function useAsyncData<T>(
 ): AsyncDataResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   // Keep fetchFn in a ref so the effect/callback identity never changes
   // when callers pass an unstable (inline) function reference.
   const fetchRef = useRef(fetchFn);
-  fetchRef.current = fetchFn;
+  useEffect(() => {
+    fetchRef.current = fetchFn;
+  });
 
   // Tracks whether data has loaded, without reading state inside an updater.
   const hasDataRef = useRef(false);
-  // Polls can overlap with slow requests; only the newest request may update
-  // state, so an older response never overwrites a newer one.
+  // Polls can overlap with slow manual refreshes; only the newest request may
+  // update state, so an older response never overwrites a newer one.
   const latestRequestRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const refresh = useCallback(async () => {
     const requestId = ++latestRequestRef.current;
     // Only show the loading spinner on the initial fetch.
     // Subsequent refreshes keep stale data visible to avoid a flash of spinner.
     if (!hasDataRef.current) setLoading(true);
-    setError(null);
     try {
       const result = await fetchRef.current();
-      if (requestId !== latestRequestRef.current) return;
+      if (!mountedRef.current || requestId !== latestRequestRef.current) return;
       hasDataRef.current = true;
       setData(result);
+      setError(null);
       setLastRefreshed(new Date());
     } catch (e) {
-      if (requestId !== latestRequestRef.current) return;
-      setError(e instanceof Error ? e.message : "Request failed");
+      if (!mountedRef.current || requestId !== latestRequestRef.current) return;
+      setError(toApiError(e));
     } finally {
-      if (requestId === latestRequestRef.current) setLoading(false);
+      if (mountedRef.current && requestId === latestRequestRef.current) setLoading(false);
     }
   }, []);
 
   // Fetch on mount (runs exactly once because refresh identity is stable)
   useEffect(() => {
+    mountedRef.current = true;
     refresh();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [refresh]);
 
-  // Optional polling + visibility-change listener
-  useEffect(() => {
-    if (!pollInterval) return;
-
-    const id = setInterval(() => {
-      if (document.hidden) return;
-      refresh();
-    }, pollInterval);
-
-    // Refresh immediately when the user returns to the tab
-    const onVisibilityChange = () => {
-      if (!document.hidden) {
-        refresh();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [pollInterval, refresh]);
+  usePolling(refresh, { delay: pollInterval ?? 0, enabled: !!pollInterval });
 
   return { data, loading, error, lastRefreshed, refresh };
 }
