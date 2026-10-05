@@ -26,6 +26,7 @@ import KeyIcon from "@patternfly/react-icons/dist/esm/icons/key-icon";
 import type { OperationResponse, PullSecretInfo } from "../types";
 import { createPullSecret, testPullSecret, toApiError } from "../services/api";
 import { describeError } from "../errors";
+import { sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
 
 export const isValidBase64Auth = (value: string): boolean => {
@@ -191,7 +192,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
             {invalid && (
               <StackItem>
                 <Alert variant="warning" isInline isPlain component="p" title="The cluster can't pull nightly images with this secret">
-                  {pullSecret.detail || "The secret has no usable quay.io/rhoai entry."} Replace the token below.
+                  {sentence(pullSecret.detail || "The secret has no usable quay.io/rhoai entry")} Replace the token below.
                 </Alert>
               </StackItem>
             )}

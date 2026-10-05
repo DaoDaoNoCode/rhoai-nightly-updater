@@ -1,5 +1,12 @@
 import type { NightlyBuild, StatusResponse } from "./types";
 
+/** Ends a backend message with a period so it can be followed by another sentence. */
+export function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+  return /[.!?:)]$/.test(t) ? t : `${t}.`;
+}
+
 /** Digest prefix length, the same as the backend's activity "build" field (pkg/cluster/activity.go). */
 export const SHORT_DIGEST_LEN = 12;
 export const SHORT_COMMIT_LEN = 7;
@@ -22,6 +29,21 @@ export function parseImageRef(image: string): ImageRef {
   const tag = colon > lastSlash ? name.slice(colon + 1) : undefined;
   const repository = colon > lastSlash ? name.slice(0, colon) : name;
   return { repository, tag: tag || undefined, digest: digest || undefined };
+}
+
+/**
+ * A backend operation target ("quay.io/...:rhoai-3.6@sha256:...",
+ * "nightly <image>", "stable") with image references shortened to
+ * "rhoai-3.6 · 0b3f9b4d0812".
+ */
+export function shortTarget(target: string): string {
+  return target.split(/\s+/).map((part) => {
+    if (!part.includes("/")) return part;
+    const ref = parseImageRef(part);
+    const digest = shortDigest(ref.digest);
+    const name = ref.tag ?? ref.repository.split("/").pop() ?? part;
+    return digest ? `${name} · ${digest}` : name;
+  }).join(" ");
 }
 
 /** "sha256:4eff06d6..." -> "4eff06d6a1b2" */

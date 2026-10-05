@@ -206,6 +206,18 @@ interface AppStateProviderProps {
 const OWN_RUN_GRACE_MS = 15_000;
 
 /**
+ * True when a server-reported operation of `kind` is most likely this tab's
+ * own run that just ended (the lock is released right after the last
+ * event). A run the backend rejected (409 cluster_busy, 400...) never held
+ * the lock, so an operation reported after it belongs to someone else.
+ */
+export function isOwnRecentRun(run: OperationRun | null, kind: OperationKind | undefined, now: number): boolean {
+  if (!run || run.source !== "stream" || !run.endedAt || run.kind !== kind) return false;
+  if (run.outcome?.status === "failed" && run.outcome.rejected) return false;
+  return now - run.endedAt < OWN_RUN_GRACE_MS;
+}
+
+/**
  * The ServerOperationSnapshot of a backend operation, for the streamed kinds
  * only. The backend reports just the latest step, and steps run in order,
  * so every earlier step of the pipeline is shown as done.
@@ -438,7 +450,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     const now = Date.now();
     // The backend releases its lock just after the final event, so a poll
     // right after this tab's own run can still report that run.
-    if (snapshot && current?.source === "stream" && current.endedAt && now - current.endedAt < OWN_RUN_GRACE_MS && snapshot.kind === current.kind) return;
+    if (snapshot && isOwnRecentRun(current, snapshot.kind, now)) return;
     if (!snapshot) {
       if (isRunning(current) && current.source === "server") {
         dispatch({ type: "end", id: current.id, outcome: { status: "detached", reason: "server_lost", message: DETACH_MESSAGES.server_lost }, now });
@@ -470,8 +482,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const applyServerOperation = useCallback((res: OperationStatusResponse) => {
     const op = res.inProgress ? res.operation : null;
     const run = stateRef.current.run;
-    const ownFinishedRun = !!op && run?.source === "stream" && !!run.endedAt && Date.now() - run.endedAt < OWN_RUN_GRACE_MS
-      && snapshotFromServer(op)?.kind === run.kind;
+    const ownFinishedRun = !!op && isOwnRecentRun(run, snapshotFromServer(op)?.kind, Date.now());
     const next: ServerOperationState = {
       loaded: true,
       inProgress: res.inProgress && !ownFinishedRun,

@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  AlertActionCloseButton,
+  AlertGroup,
   Button,
   Checkbox,
   Content,
@@ -17,6 +19,8 @@ import type { DashboardOverride } from "../types";
 import { useOperation } from "../state/AppState";
 import { useDashboardOverride } from "../state/AppInfo";
 import { formatRelativeTime } from "../utils";
+import { describeOutcomeError } from "../errors";
+import { sentence } from "../build";
 
 export type ReinstallTargetType = "stable" | "nightly" | "custom";
 
@@ -74,6 +78,7 @@ export function useOperatorActions(): {
   const [dashboardConflict, setDashboardConflict] = useState<PendingFollowUp | null>(null);
   const [downgrade, setDowngrade] = useState<PendingFollowUp | null>(null);
   const [downgradeAck, setDowngradeAck] = useState(false);
+  const [busyNotice, setBusyNotice] = useState<string | null>(null);
 
   const { start } = operation;
   const runOperator = useCallback((request: OperatorRequest, options: OperatorOperationOptions = {}): boolean => {
@@ -109,7 +114,10 @@ export function useOperatorActions(): {
     const last = lastRef.current;
     if (!run || !last || run.id !== last.runId || outcome?.status !== "failed") return;
     lastRef.current = null;
-    if (outcome.errorCode === "dashboard_dev_active" && !last.options.revertDashboardDev) {
+    if (outcome.errorCode === "cluster_busy") {
+      // The progress area switches to the other operation, so say why this one did not run.
+      setBusyNotice(describeOutcomeError(outcome, "Cluster busy").body);
+    } else if (outcome.errorCode === "dashboard_dev_active" && !last.options.revertDashboardDev) {
       setDashboardConflict({ request: last.request, options: last.options, message: outcome.message });
     } else if (outcome.errorCode === "downgrade_requires_confirmation" && !last.options.allowDowngrade && last.request.kind === "reinstall") {
       setDowngradeAck(false);
@@ -120,6 +128,19 @@ export function useOperatorActions(): {
   const action = dashboardConflict ? ACTION_NAMES[dashboardConflict.request.kind] : "";
   const followUps = (
     <>
+      <AlertGroup isToast isLiveRegion>
+        {busyNotice && (
+          <Alert
+            variant="warning"
+            title="Cluster busy: your request did not run"
+            timeout={10_000}
+            onTimeout={() => setBusyNotice(null)}
+            actionClose={<AlertActionCloseButton onClose={() => setBusyNotice(null)} />}
+          >
+            {sentence(busyNotice)} Nothing was changed; its progress is shown on this page.
+          </Alert>
+        )}
+      </AlertGroup>
       <Modal
         variant={ModalVariant.small}
         isOpen={!!dashboardConflict}

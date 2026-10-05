@@ -122,11 +122,16 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
 
   let primary: React.ReactNode = null;
   if (!installed) {
-    primary = target ? (
-      <TooltipButton variant="primary" onClick={() => onUpdate(target)} disabledReason={actionReason}>
-        Install latest nightly{target.tag ? ` (${target.tag})` : ""}
+    // Before the setup the newest build can't be read yet; show the action anyway, with the reason.
+    primary = (
+      <TooltipButton
+        variant="primary"
+        onClick={() => target && onUpdate(target)}
+        disabledReason={actionReason ?? (target ? null : latestLoading ? "Looking up the latest nightly..." : "The latest nightly could not be read from Quay; choose a build below.")}
+      >
+        Install latest nightly{target?.tag ? ` (${target.tag})` : ""}
       </TooltipButton>
-    ) : null;
+    );
   } else if (!onNightly) {
     primary = target ? (
       <TooltipButton variant="primary" onClick={() => onUpdate(target)} disabledReason={actionReason}>
@@ -202,9 +207,6 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 <DescriptionListTerm>{onNightly ? "Latest" : "Latest nightly"}</DescriptionListTerm>
                 <DescriptionListDescription>
                   {latestRow}
-                  {onNightly && updateAvailable === false && (
-                    <span className="rhoai-subtle"> (same build)</span>
-                  )}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
@@ -291,9 +293,14 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
           {onNightly && updateAvailable === false && (
             <FlexItem><Content component="small">You have the newest {nightly?.installed?.tag} build.</Content></FlexItem>
           )}
-          <FlexItem>
-            <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
-          </FlexItem>
+          {!prerequisitesMet && (
+            <FlexItem><Content component="small">Finish the cluster setup above first.</Content></FlexItem>
+          )}
+          {prerequisitesMet && (
+            <FlexItem>
+              <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
+            </FlexItem>
+          )}
           {target && (
             <FlexItem>
               <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(target.image)}>

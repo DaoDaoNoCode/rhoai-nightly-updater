@@ -163,11 +163,6 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
               <FlexItem>
                 <Title headingLevel="h3" size="md">{pipelineTitle}{active ? " in progress" : anyFailed ? " failed" : ""}</Title>
               </FlexItem>
-              {active && (
-                <FlexItem>
-                  <Spinner size="sm" aria-label={`${pipelineTitle} running`} />
-                </FlexItem>
-              )}
               {startedBy && (
                 <FlexItem>
                   <Label isCompact variant="outline">Started by {startedBy}</Label>
@@ -189,7 +184,7 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
           )}
 
           <StackItem>
-            <ProgressStepper isVertical isCompact aria-label={`${pipelineTitle} progress`}>
+            <ProgressStepper isVertical aria-label={`${pipelineTitle} progress`}>
               {pipelineSteps.map((def, index) => {
                 const event = latestEventForStep(def.id, events);
                 const duration = event && event.status !== "running" ? stepDuration(pipelineSteps, index, events) : 0;

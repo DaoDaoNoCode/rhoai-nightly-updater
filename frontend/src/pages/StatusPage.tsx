@@ -45,7 +45,7 @@ import { FBCContentModal } from "../components/FBCContentModal";
 import { OperationProgress, useHasOperationProgress } from "../components/OperationProgress";
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, useOperatorActions } from "../components/OperatorActions";
 import { TooltipButton } from "../components/TooltipButton";
-import { describeError, describeOutcomeError } from "../errors";
+import { describeError } from "../errors";
 import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
 import { useDashboardOverride, useMutationBlocker, usePermissions } from "../state/AppInfo";
@@ -120,8 +120,6 @@ export const StatusPage: React.FC = () => {
 
   // --- Re-deploy (refresh) result ---
   const refreshRun = operation.run?.kind === "refresh" ? operation.run : null;
-  const refreshOutcome = refreshRun?.outcome;
-  const refreshFailure = refreshOutcome?.status === "failed" ? describeOutcomeError(refreshOutcome, "Re-deploy failed") : null;
 
   // --- DSC creation ---
   const [dscLoading, setDscLoading] = useState(false);
@@ -398,18 +396,6 @@ export const StatusPage: React.FC = () => {
                     Re-deploy operator...
                   </TooltipButton>
                 </StackItem>
-                {refreshFailure && (
-                  <StackItem>
-                    <Alert variant={refreshFailure.variant} title={refreshFailure.title} isInline component="p">
-                      {refreshFailure.body}{refreshFailure.hint && <> {refreshFailure.hint}</>}
-                    </Alert>
-                  </StackItem>
-                )}
-                {refreshOutcome?.status === "succeeded" && (
-                  <StackItem>
-                    <Alert variant="success" title={refreshOutcome.message || "Re-deploy complete"} isInline component="p" />
-                  </StackItem>
-                )}
                 <StackItem><Divider /></StackItem>
                 <StackItem>
                   <ExpandableSection

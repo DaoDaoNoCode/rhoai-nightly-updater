@@ -19,7 +19,11 @@ import { Link, useNavigate } from "react-router-dom";
 import { UpdatePipeline } from "./UpdatePipeline";
 import { ReconciliationProgress } from "./ReconciliationProgress";
 import { BuildSummary } from "./BuildSummary";
-import { OPERATION_NAMES, type ReconcileKind } from "../operationSteps";
+import { OPERATION_NAMES, STEP_SETS, type ReconcileKind } from "../operationSteps";
+import { describeOutcomeError } from "../errors";
+
+/** Backend refusals that guarantee nothing changed on the cluster (pkg/cluster operations). */
+const NOTHING_CHANGED_CODES = new Set(["dashboard_dev_active", "downgrade_requires_confirmation", "validation", "prerequisites", "catalog_image_pull", "cluster_busy"]);
 import { isRunning } from "../state/operation";
 import { useClusterStatus, useOperation } from "../state/AppState";
 
@@ -70,6 +74,7 @@ export const OperationProgress: React.FC = () => {
   }, [connecting, runStartedAt]);
 
   const startedBy = run?.source === "server" ? run.user || "another session" : undefined;
+  const [dismissedRun, setDismissedRun] = useState<number | null>(null);
 
   if (running && connecting) {
     return (
@@ -105,10 +110,31 @@ export const OperationProgress: React.FC = () => {
   const failed = csvPhase === "Failed";
   const installedBuild = status?.nightly?.installed;
 
+  // A run that failed before its first step finished changed nothing: one
+  // alert says so, instead of a pipeline of pending steps.
+  const firstStep = run ? STEP_SETS[run.kind][0].id : "";
+  const notStarted = !!run && outcome?.status === "failed" && run.steps.every((s) => s.step === firstStep || s.step === "operation_complete");
+  const notStartedText = notStarted && outcome?.status === "failed" ? describeOutcomeError(outcome, `${OPERATION_NAMES[run.kind]} did not start`) : null;
+  const nothingChanged = outcome?.status === "failed" && (outcome.rejected || NOTHING_CHANGED_CODES.has(outcome.errorCode ?? ""));
+
   return (
     <Stack hasGutter>
+      {notStartedText && run && dismissedRun !== run.id && (
+        <StackItem>
+          <Alert
+            variant={nothingChanged ? "warning" : notStartedText.variant}
+            isInline
+            component="p"
+            title={nothingChanged ? `${OPERATION_NAMES[run.kind]} did not start; nothing was changed` : notStartedText.title}
+            actionClose={<AlertActionCloseButton onClose={() => setDismissedRun(run.id)} />}
+          >
+            {notStartedText.body}{notStartedText.hint && <> {notStartedText.hint}</>}
+          </Alert>
+        </StackItem>
+      )}
+
       {/* A failed run keeps its step list, with the failed step's details. */}
-      {run && outcome?.status === "failed" && run.steps.length > 0 && (
+      {run && outcome?.status === "failed" && !notStarted && run.steps.length > 0 && (
         <StackItem>
           <UpdatePipeline steps={run.steps} active={false} operationType={run.kind} startedBy={startedBy} />
         </StackItem>

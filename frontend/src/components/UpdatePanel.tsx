@@ -56,7 +56,7 @@ import {
   toApiError,
   type OperatorOperationOptions,
 } from "../services/api";
-import { describeError, describeOutcomeError, describeQuayError, describeQuayText } from "../errors";
+import { describeError, describeQuayError, describeQuayText } from "../errors";
 import { useOperation } from "../state/AppState";
 import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
@@ -263,7 +263,6 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
   const operation = useOperation();
   const blocker = useMutationBlocker();
   const { override } = useDashboardOverride();
-  const run = operation.run;
 
   const [image, setImage] = useState("");
   const [dryRunning, setDryRunning] = useState(false);
@@ -389,10 +388,6 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
     onRequestUpdate(known ?? buildFromImage(trimmed));
   };
 
-  // Result of the latest update run, shown here even after navigating away and back.
-  const updateRun = run?.kind === "update" ? run : null;
-  const updateOutcome = updateRun?.outcome;
-  const failure = updateOutcome?.status === "failed" ? describeOutcomeError(updateOutcome, "Update failed") : null;
 
   return (
     <Stack hasGutter>
@@ -497,17 +492,6 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
             <Alert variant="danger" title={error.title} isInline isLiveRegion component="p">
               {error.body}
             </Alert>
-          )}
-          {failure && (
-            <Alert variant={failure.variant} title={failure.title} isInline component="p">
-              {failure.body}{failure.hint && <> {failure.hint}</>}
-              {updateOutcome?.status === "failed" && updateOutcome.errorCode === "catalog_image_pull" && (
-                <> Check the pull secret under Cluster setup.</>
-              )}
-            </Alert>
-          )}
-          {updateOutcome?.status === "succeeded" && (
-            <Alert variant="success" title={updateOutcome.message || "Update complete"} isInline component="p" />
           )}
         </Form>
       </StackItem>

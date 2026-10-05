@@ -1,4 +1,5 @@
 import { toApiError, type ApiError } from "./services/api";
+import { sentence } from "./build";
 
 export interface ErrorDescription {
   title: string;
@@ -31,6 +32,12 @@ function clusterBusyBody(err: ApiError): string {
 }
 
 export function describeError(e: unknown, genericTitle = "Error"): ErrorDescription {
+  const d = describeErrorRaw(e, genericTitle);
+  // Backend messages often have no final period; the hint follows as a new sentence.
+  return d.hint ? { ...d, body: sentence(d.body) } : d;
+}
+
+function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
   const err: ApiError = toApiError(e);
   switch (err.errorCode) {
     case "session_expired":
@@ -55,6 +62,8 @@ export function describeError(e: unknown, genericTitle = "Error"): ErrorDescript
     case "cluster_unavailable":
     case "cluster_error":
       return { title: "The OpenShift API returned an error", body: err.message, hint: "Retry in a minute. If it persists, check the cluster in the OpenShift console.", variant: "danger" };
+    case "catalog_image_pull":
+      return { title: genericTitle, body: err.message, hint: "The cluster could not pull the catalog image: check the pull secret under Cluster setup.", variant: "danger" };
     case "registry_auth":
       return { title: "Quay rejected the pull secret", body: err.message, hint: "Replace the pull secret under Cluster setup.", variant: "danger" };
     case "registry_unavailable":

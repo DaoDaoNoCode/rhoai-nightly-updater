@@ -34,7 +34,6 @@ import {
 } from "@patternfly/react-core";
 import type { NightlyTag, StatusResponse } from "../types";
 import type { OperatorOperationOptions } from "../services/api";
-import { describeOutcomeError } from "../errors";
 import { useOperation } from "../state/AppState";
 import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
@@ -148,7 +147,6 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
     runOperator({ kind: "reinstall", targetType, image, channel, detail }, options);
   };
 
-  const failure = outcome?.status === "failed" ? describeOutcomeError(outcome, "Reinstall failed") : null;
   const succeededMessage = outcome?.status === "succeeded" ? outcome.message : null;
   const alreadyOnStable = !!succeededMessage?.startsWith("Already on stable");
 
@@ -337,13 +335,6 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
         </TooltipButton>
       </StackItem>
 
-      {failure && (
-        <StackItem>
-          <Alert variant={failure.variant} title={failure.title} isInline component="p">
-            {failure.body}{failure.hint && <> {failure.hint}</>}
-          </Alert>
-        </StackItem>
-      )}
       {succeededMessage && (
         <StackItem>
           <Alert variant={alreadyOnStable ? "info" : "success"} title={succeededMessage} isInline component="p">
@@ -388,12 +379,15 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                   newer schema, and the older operator may reject or ignore fields that the newer version created in
                   your DataScienceCluster and DSCInitialization.
                 </Alert>
+              </StackItem>
+            )}
+            {knownDowngrade && (
+              <StackItem>
                 <Checkbox
                   id="reinstall-downgrade-ack"
                   isChecked={downgradeAck}
                   onChange={(_e, checked) => setDowngradeAck(checked)}
                   label="I understand and want to install the older version"
-                  style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}
                 />
               </StackItem>
             )}

@@ -3,8 +3,8 @@ import {
   Alert,
   AlertActionCloseButton,
   AlertActionLink,
-  Spinner,
 } from "@patternfly/react-core";
+import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { DashboardOverride, InterruptedOperation, ServerOperation } from "../types";
 import { useClusterStatus, useOperation } from "../state/AppState";
@@ -19,6 +19,7 @@ import {
 import { isRunning } from "../state/operation";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { formatElapsed, formatRelativeTime } from "../utils";
+import { sentence, shortTarget } from "../build";
 import { SIGN_IN_URL } from "./ErrorAlert";
 
 const INTERRUPTED_DISMISS_KEY = "rhoai-interrupted-dismissed";
@@ -85,7 +86,7 @@ const OperationBanner: React.FC<{ onStatusPage: boolean }> = ({ onStatusPage }) 
         variant="info"
         isInline
         component="p"
-        customIcon={<Spinner size="md" aria-hidden="true" />}
+        customIcon={<InProgressIcon />}
         title={`Your ${OPERATION_NAMES[ownStream.kind].toLowerCase()} is running: ${step} (${formatElapsed(ownStream.startedAt, now)})`}
         actionLinks={<AlertActionLink onClick={() => navigate("/")}>View progress</AlertActionLink>}
       >
@@ -96,7 +97,7 @@ const OperationBanner: React.FC<{ onStatusPage: boolean }> = ({ onStatusPage }) 
   if (!server.inProgress) return null;
   if (!op) {
     return (
-      <Alert variant="info" isInline component="p" customIcon={<Spinner size="md" aria-hidden="true" />} title="Another operation is changing this cluster">
+      <Alert variant="info" isInline component="p" customIcon={<InProgressIcon />} title="Another operation is changing this cluster">
         Changes are disabled until it finishes.
       </Alert>
     );
@@ -113,11 +114,11 @@ const OperationBanner: React.FC<{ onStatusPage: boolean }> = ({ onStatusPage }) 
       variant="info"
       isInline
       component="p"
-      customIcon={<Spinner size="md" aria-hidden="true" />}
+      customIcon={<InProgressIcon />}
       title={`${describeServerOperation(op, status?.cluster.user)}${step ? `: ${step}` : ""}${elapsed}`}
       actionLinks={link ? <AlertActionLink onClick={() => navigate(link[0])}>{link[1]}</AlertActionLink> : undefined}
     >
-      {op.target && <>Target: <code style={{ overflowWrap: "anywhere" }}>{op.target}</code>. </>}
+      {op.target && <>Target: <span className="rhoai-build-id" title={op.target}>{shortTarget(op.target)}</span>. </>}
       Cluster changes from this tool are disabled until it finishes.
     </Alert>
   );
@@ -137,7 +138,7 @@ const InterruptedBanner: React.FC = () => {
       actionClose={<AlertActionCloseButton onClose={() => { writeSession(INTERRUPTED_DISMISS_KEY, op.startedAt); setDismissed(op.startedAt); }} />}
     >
       {op.user || "Someone"} started it {formatRelativeTime(op.startedAt)}
-      {op.target && <> (target <code style={{ overflowWrap: "anywhere" }}>{op.target}</code>)</>}, and the updater pod
+      {op.target && <> (target <span className="rhoai-build-id" title={op.target}>{shortTarget(op.target)}</span>)</>}, and the updater pod
       {op.pod ? ` ${op.pod}` : ""} stopped before it finished. {interruptedGuidance(op)}
     </Alert>
   );
@@ -177,7 +178,7 @@ export const DashboardOverrideBanner: React.FC<{ onDashboardDevPage: boolean }> 
     >
       {overrideWhat(override)}; dashboard-operator stays paused until someone reverts it on the Dashboard Dev page.
       {override.stale && " The dashboard still runs the images from before the update."}
-      {reasons.length > 0 && <> {reasons.join(" ")}</>}
+      {reasons.length > 0 && <> {reasons.map(sentence).join(" ")}</>}
       {" "}Update, Re-deploy and Reinstall offer to revert it first.
     </Alert>
   );
@@ -215,7 +216,7 @@ const PermissionBanner: React.FC = () => {
         title="Your permissions could not be checked; changes are disabled"
         actionLinks={<AlertActionLink onClick={permissions.retry}>Retry</AlertActionLink>}
       >
-        {permissions.error?.message || "The OpenShift API did not answer."} The page stays read-only until the check
+        {sentence(permissions.error?.message || "The OpenShift API did not answer")} The page stays read-only until the check
         succeeds; it is retried automatically.
       </Alert>
     );
