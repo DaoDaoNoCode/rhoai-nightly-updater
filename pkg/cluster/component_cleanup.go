@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 )
 
 const componentAPIGroup = "components.platform.opendatahub.io"
@@ -60,13 +61,38 @@ func componentResources(c *Client) (string, []string, error) {
 	return "/apis/" + gv, names, nil
 }
 
-// cleanupStuckComponentCRs removes the finalizers of component CRs that are
-// already being deleted (deletionTimestamp set). It runs during Reinstall
-// after the old CSV is gone, when no controller is left to run those
-// finalizers; CRs that are not being deleted are never touched. This is the
-// documented pattern for unblocking a stuck deletion:
+// StuckComponentCRAge is how long a component CR must have been deleting
+// before its finalizers may be removed.
+var StuckComponentCRAge = 10 * time.Minute
+
+// componentFinalizerOwners maps each component CR kind to the module operator
+// Deployment in redhat-ods-applications that removes its finalizer (RHOAI
+// 3.6: these Deployments are owned by the Platform CR, not by the CSV, so
+// they keep running while rhods-operator is reinstalled). Kinds that are not
+// listed (kueues is handled inside rhods-operator itself; mcplifecycleoperators
+// and datasciencepipelines have no verified owner) are never unblocked.
+var componentFinalizerOwners = map[string]string{
+	"dashboards":      "dashboard-operator",
+	"workbenches":     "workbenches-operator",
+	"aipipelines":     "data-science-pipelines-operator-controller-manager",
+	"kserves":         "kserve-module-controller-manager",
+	"rays":            "ray-module-operator-controller-manager",
+	"trainers":        "trainer-operator-controller-manager",
+	"trustyais":       "trustyai-operator-module-controller-manager",
+	"feastoperators":  "opendatahub-feast-operator",
+	"ogxs":            "opendatahub-ogx-operator",
+	"aihubs":          "aihub-controller-manager",
+	"mlflowoperators": "mlflow-operator-controller-manager",
+}
+
+// cleanupStuckComponentCRs removes the finalizers of a component CR only when
+// nothing else can: the CR has been deleting for StuckComponentCRAge and the
+// module operator that owns its finalizer does not exist. Stripping a
+// finalizer whose operator is still running would skip that operator's
+// cleanup and orphan its operands, so every other case is left alone and
+// logged. This is the documented pattern for unblocking a stuck deletion:
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
-// It returns the number of CRs unblocked and any problems found.
+// It returns the number of CRs unblocked and the problems or skips to log.
 func cleanupStuckComponentCRs(c *Client) (int, []string) {
 	base, resources, err := componentResources(c)
 	if err != nil {
@@ -95,15 +121,36 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			continue
 		}
 		for _, item := range list.Items {
-			if item.Metadata.DeletionTimestamp == nil || len(item.Metadata.Finalizers) == 0 {
+			m := item.Metadata
+			if m.DeletionTimestamp == nil || len(m.Finalizers) == 0 {
 				continue
 			}
-			if _, _, err := c.patch(listPath+"/"+item.Metadata.Name, []byte(`{"metadata":{"finalizers":[]}}`)); err != nil {
-				warnings = append(warnings, fmt.Sprintf("remove finalizers from %s/%s: %v", resource, item.Metadata.Name, err))
+			id := resource + "/" + m.Name
+			since, err := time.Parse(time.RFC3339, *m.DeletionTimestamp)
+			if err != nil || time.Since(since) < StuckComponentCRAge {
+				warnings = append(warnings, fmt.Sprintf("%s is being deleted; its finalizers were left for its operator", id))
 				continue
 			}
-			slog.Info("removed stuck finalizer from component CR",
-				"resource", resource, "name", item.Metadata.Name, "finalizers", item.Metadata.Finalizers)
+			owner, known := componentFinalizerOwners[resource]
+			if !known {
+				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but the operator that owns its finalizers %v is unknown; left untouched", id, *m.DeletionTimestamp, m.Finalizers))
+				continue
+			}
+			_, _, depErr := c.get(namespacedPath("apps/v1", "deployments", "redhat-ods-applications", owner))
+			if depErr == nil {
+				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but its operator %s still exists and will finish the deletion; left untouched", id, *m.DeletionTimestamp, owner))
+				continue
+			}
+			if !IsK8sError(depErr, 404) {
+				warnings = append(warnings, fmt.Sprintf("cannot check operator %s for %s: %v; left untouched", owner, id, depErr))
+				continue
+			}
+			if _, _, err := c.patch(listPath+"/"+m.Name, []byte(`{"metadata":{"finalizers":[]}}`)); err != nil {
+				warnings = append(warnings, fmt.Sprintf("remove finalizers from %s: %v", id, err))
+				continue
+			}
+			slog.Info("removed stuck finalizer from component CR whose operator is gone",
+				"resource", resource, "name", m.Name, "finalizers", m.Finalizers, "operator", owner)
 			unstuck++
 		}
 	}

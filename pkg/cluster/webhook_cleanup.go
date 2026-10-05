@@ -18,8 +18,13 @@ import (
 //     redhat-ods-applications. These keep serving while the operator is
 //     reinstalled and must not be removed while their Service exists.
 //
-// A configuration is only deleted when it can do nothing but fail requests:
-// its owning RHOAI CSV is gone, or a Service it calls no longer exists.
+// A configuration is only deleted when it can do nothing but fail requests
+// and nothing will fix it (RHOAI_OPERATOR_NOTES §3.4):
+//   - OLM-owned: its CSV is gone. While the CSV exists OLM heals the configs
+//     itself, so they are never touched.
+//   - Runtime/operand: a Service it calls is NotFound and no RHOAI CSV is
+//     being installed. A Service without ready endpoints is not treated as
+//     stale (a restarting pod is not staleness).
 
 // isRHOAIWebhook reports whether a webhook configuration was installed by OLM
 // for the RHOAI operator CSV, or carries an RHOAI name without any owner
@@ -77,6 +82,7 @@ func staleRHOAIWebhooks(c *Client) ([]staleWebhook, []string) {
 	var warnings []string
 	csvGone := map[string]bool{}
 	serviceMissing := map[string]bool{}
+	var installing *bool
 
 	for _, kind := range []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"} {
 		listPath := clusterPath("admissionregistration.k8s.io/v1", kind, "")
@@ -96,7 +102,7 @@ func staleRHOAIWebhooks(c *Client) ([]staleWebhook, []string) {
 			meta, _ := obj["metadata"].(map[string]interface{})
 			name, _ := meta["name"].(string)
 			labels, _ := meta["labels"].(map[string]interface{})
-			if name == "" || !(isRHOAIWebhook(name, labels) || ownedByRHOAIComponent(meta)) {
+			if name == "" || (!isRHOAIWebhook(name, labels) && !ownedByRHOAIComponent(meta)) {
 				continue
 			}
 			reason := ""
@@ -110,11 +116,24 @@ func staleRHOAIWebhooks(c *Client) ([]staleWebhook, []string) {
 					}
 					csvGone[owner] = gone
 				}
-				if gone {
-					reason = "its operator CSV " + owner + " was removed"
+				if !gone {
+					// OLM recreates and heals the configs of an existing CSV.
+					continue
 				}
-			}
-			if reason == "" {
+				reason = "its operator CSV " + owner + " was removed"
+			} else {
+				if installing == nil {
+					busy, err := rhoaiCSVInstalling(c)
+					if err != nil {
+						warnings = append(warnings, fmt.Sprintf("cannot check whether the operator is being installed: %v", err))
+						busy = true
+					}
+					installing = &busy
+				}
+				if *installing {
+					// An install in progress re-applies these; do not race it.
+					continue
+				}
 				svc, missing, svcErr := missingWebhookService(c, obj, serviceMissing)
 				if svcErr != nil {
 					warnings = append(warnings, fmt.Sprintf("cannot check the Service of %s: %v", name, svcErr))
@@ -130,6 +149,42 @@ func staleRHOAIWebhooks(c *Client) ([]staleWebhook, []string) {
 		}
 	}
 	return stale, warnings
+}
+
+// rhoaiCSVInstalling reports whether an RHOAI CSV is mid-install (Pending,
+// InstallReady, Installing or Replacing); runtime webhooks are then about to
+// be re-applied and must not be touched.
+func rhoaiCSVInstalling(c *Client) (bool, error) {
+	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
+	if IsK8sError(err, 404) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				Phase string `json:"phase"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return false, err
+	}
+	for _, item := range list.Items {
+		if !strings.HasPrefix(item.Metadata.Name, SubName+".") {
+			continue
+		}
+		switch item.Status.Phase {
+		case "Pending", "InstallReady", "Installing", "Replacing":
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // rhoaiCSVGone reports whether the CSV no longer exists or is being deleted.

@@ -38,6 +38,8 @@ func TestCleanupStaleWebhooks_KeepsLiveWebhooks(t *testing.T) {
 	validating := []interface{}{
 		webhookConfig("datasciencecluster-v2-validator.opendatahub.io-nfzvz", olmLabels("rhods-operator.3.6.0"), "", SubNS, "rhods-operator-service"),
 		webhookConfig("dscinitialization-v1-validator.opendatahub.io-old", olmLabels("rhods-operator.3.5.0"), "", SubNS, "rhods-operator-service"),
+		// OLM-owned, Service gone, but the CSV exists: OLM heals it, keep.
+		webhookConfig("dscinitialization-v2-validator.opendatahub.io-x", olmLabels("rhods-operator.3.6.0"), "", SubNS, "gone-operator-service"),
 		webhookConfig("validating.odh-model-controller.opendatahub.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "odh-model-controller-webhook-service"),
 		webhookConfig("inferenceservice.serving.kserve.io", nil, "components.platform.opendatahub.io/v1alpha1", "redhat-ods-applications", "gone-kserve-service"),
 		webhookConfig("authorino.example.io", map[string]string{"olm.owner": "authorino-operator.v1.4.3", "olm.owner.namespace": "openshift-operators"}, "", "openshift-operators", "gone-authorino"),
@@ -55,52 +57,66 @@ func TestCleanupStaleWebhooks_KeepsLiveWebhooks(t *testing.T) {
 		"redhat-ods-applications/odh-model-controller-webhook-service": true,
 	}
 
-	var mu sync.Mutex
-	var deleted []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		switch {
-		case r.Method == http.MethodDelete:
-			mu.Lock()
-			deleted = append(deleted, p[strings.LastIndex(p, "/")+1:])
-			mu.Unlock()
-			fmt.Fprint(w, `{}`)
-		case strings.HasSuffix(p, "/validatingwebhookconfigurations"):
-			json.NewEncoder(w).Encode(map[string]interface{}{"items": validating})
-		case strings.HasSuffix(p, "/mutatingwebhookconfigurations"):
-			json.NewEncoder(w).Encode(map[string]interface{}{"items": mutating})
-		case strings.HasSuffix(p, "/clusterserviceversions/rhods-operator.3.6.0"):
-			fmt.Fprint(w, `{"metadata":{"name":"rhods-operator.3.6.0"}}`)
-		case strings.Contains(p, "/services/error-service"):
-			w.WriteHeader(500)
-			fmt.Fprint(w, `{"kind":"Status","code":500}`)
-		case strings.Contains(p, "/services/"):
-			parts := strings.Split(p, "/")
-			if existingServices[parts[4]+"/"+parts[6]] {
-				fmt.Fprint(w, `{}`)
-				return
-			}
-			w.WriteHeader(404)
-			fmt.Fprint(w, `{"kind":"Status","code":404}`)
-		default:
-			w.WriteHeader(404)
-			fmt.Fprint(w, `{"kind":"Status","code":404}`)
-		}
-	}))
-	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	for _, tc := range []struct {
+		name     string
+		csvPhase string
+		want     []string
+		warnings int
+	}{
+		{"operator settled", "Succeeded", []string{"dscinitialization-v1-validator.opendatahub.io-old", "inferenceservice.serving.kserve.io", "legacy.opendatahub.io"}, 1},
+		// While an install is running only configs of removed CSVs go.
+		{"operator installing", "Installing", []string{"dscinitialization-v1-validator.opendatahub.io-old"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var deleted []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				p := r.URL.Path
+				switch {
+				case r.Method == http.MethodDelete:
+					mu.Lock()
+					deleted = append(deleted, p[strings.LastIndex(p, "/")+1:])
+					mu.Unlock()
+					_, _ = fmt.Fprint(w, `{}`)
+				case strings.HasSuffix(p, "/validatingwebhookconfigurations"):
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": validating})
+				case strings.HasSuffix(p, "/mutatingwebhookconfigurations"):
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": mutating})
+				case strings.HasSuffix(p, "/clusterserviceversions/rhods-operator.3.6.0"):
+					_, _ = fmt.Fprint(w, `{"metadata":{"name":"rhods-operator.3.6.0"}}`)
+				case strings.HasSuffix(p, "/clusterserviceversions"):
+					_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhods-operator.3.6.0"},"status":{"phase":%q}}]}`, tc.csvPhase)
+				case strings.Contains(p, "/services/error-service"):
+					w.WriteHeader(500)
+					_, _ = fmt.Fprint(w, `{"kind":"Status","code":500}`)
+				case strings.Contains(p, "/services/"):
+					parts := strings.Split(p, "/")
+					if existingServices[parts[4]+"/"+parts[6]] {
+						_, _ = fmt.Fprint(w, `{}`)
+						return
+					}
+					w.WriteHeader(404)
+					_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
+				default:
+					w.WriteHeader(404)
+					_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
+				}
+			}))
+			defer srv.Close()
+			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
 
-	removed, warnings := removeStaleWebhooks(c)
-	sort.Strings(deleted)
-	want := []string{"dscinitialization-v1-validator.opendatahub.io-old", "inferenceservice.serving.kserve.io", "legacy.opendatahub.io"}
-	if fmt.Sprint(deleted) != fmt.Sprint(want) {
-		t.Fatalf("deleted %v, want %v", deleted, want)
-	}
-	if len(removed) != 3 || len(warnings) != 1 || !strings.Contains(warnings[0], "broken-lookup") {
-		t.Fatalf("removed=%v warnings=%v", removed, warnings)
-	}
-	if !strings.Contains(strings.Join(removed, "\n"), "operator CSV rhods-operator.3.5.0 was removed") {
-		t.Fatalf("removal reasons not reported: %v", removed)
+			removed, warnings := removeStaleWebhooks(c)
+			sort.Strings(deleted)
+			if fmt.Sprint(deleted) != fmt.Sprint(tc.want) {
+				t.Fatalf("deleted %v, want %v", deleted, tc.want)
+			}
+			if len(removed) != len(tc.want) || len(warnings) != tc.warnings {
+				t.Fatalf("removed=%v warnings=%v", removed, warnings)
+			}
+			if !strings.Contains(strings.Join(removed, "\n"), "operator CSV rhods-operator.3.5.0 was removed") {
+				t.Fatalf("removal reasons not reported: %v", removed)
+			}
+		})
 	}
 }
 
