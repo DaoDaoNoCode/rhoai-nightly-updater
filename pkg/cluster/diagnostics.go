@@ -643,6 +643,28 @@ func installPlanFailureReason(ip installPlanItem) string {
 	return ""
 }
 
+// installPlanDeletable decides whether a Failed InstallPlan may be deleted.
+// Only phase Failed is terminal: "" is a plan OLM has not processed yet
+// (InstallPlanPhaseNone) and the other phases are in flight. A plan the
+// Subscription references is deleted only while the Subscription is
+// UpgradePending: OLM then clears the reference and resolves again
+// (operator-lifecycle-manager catalog/subscription/reconciler.go,
+// InstallPlanNotFound; the OLM docs' recovery for a failed InstallPlan is
+// to delete it). In any other state OLM only sets InstallPlanMissing, so
+// deleting it would not trigger a new install.
+func installPlanDeletable(ip installPlanItem, sub subscriptionState) (bool, string) {
+	if ip.Status.Phase != "Failed" {
+		return false, fmt.Sprintf("phase %q", ip.Status.Phase)
+	}
+	if sub.Exists && sub.InstallPlan == ip.Metadata.Name {
+		if sub.State == "UpgradePending" {
+			return true, "Failed; the Subscription waits on it, so OLM resolves again after it is deleted"
+		}
+		return false, fmt.Sprintf("Failed, but the Subscription (state %q) references it and OLM would not resolve again; use Update or Refresh operator", sub.State)
+	}
+	return true, "Failed and not used by the Subscription"
+}
+
 func checkInstallPlanHealth(c *Client) checkOutput {
 	const name = "Install plan"
 	missing := func() checkOutput {
@@ -693,38 +715,50 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 		return checkOutput{check: CheckResult{Name: name, Status: "pass", Detail: fmt.Sprintf("Latest install plan completed (%s)", latest.Metadata.Name)}}
 	case "Failed":
 		reason := installPlanFailureReason(latest)
-		var failed, affected, evidence []string
+		sub, _ := readSubscriptionState(c)
+		var deletable, affected, kept, evidence []string
 		for _, ip := range plans {
-			if ip.Status.Phase == "Failed" {
-				failed = append(failed, ip.Metadata.Name)
+			if ip.Status.Phase != "Failed" {
+				continue
+			}
+			ok, why := installPlanDeletable(ip, sub)
+			if ok {
+				deletable = append(deletable, fmt.Sprintf("%s (%s)", ip.Metadata.Name, why))
 				affected = append(affected, fmt.Sprintf("InstallPlan %s/%s", SubNS, ip.Metadata.Name))
+			} else {
+				kept = append(kept, fmt.Sprintf("%s: %s", ip.Metadata.Name, why))
 			}
 		}
-		sort.Strings(failed)
+		sort.Strings(deletable)
 		sort.Strings(affected)
 		evidence = append(evidence, fmt.Sprintf("Install plan: %s, Phase: Failed, CSVs: %s", latest.Metadata.Name, strings.Join(latest.Spec.ClusterServiceVersionNames, ", ")))
 		if reason != "" {
 			evidence = append(evidence, fmt.Sprintf("Reason: %s", truncate(reason, 600)))
 		}
+		for _, k := range kept {
+			evidence = append(evidence, "Not deleted automatically: "+k)
+		}
+		p := Problem{
+			ID:           "installplan-failed",
+			Severity:     "critical",
+			Title:        "The install plan failed",
+			Description:  fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, truncate(reason, 300)),
+			Evidence:     evidence,
+			Fix:          "Update to a newer nightly or use Refresh operator. If the same build fails again, the build itself is broken.",
+			LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed InstallPlan, the user deletes it and a new InstallPlan is generated.",
+			TechnicalCmd: fmt.Sprintf("oc describe installplan %s -n %s", latest.Metadata.Name, SubNS),
+		}
+		if len(deletable) > 0 {
+			p.Fix = "Delete the failed install plans so that OLM resolves the Subscription again and creates a new one. If the same build fails again, update to a newer nightly."
+			p.AutoFixable = true
+			p.AutoFixAction = "delete-stale-installplans"
+			p.AffectedObjects = affected
+			p.ConfirmMessage = fmt.Sprintf("This deletes these install plans in %s:\n- %s\n\nPlans in any other phase are kept, and each plan is checked again and deleted only if it is unchanged. "+
+				"If the catalog still offers the same build, OLM's new plan may fail the same way.", SubNS, strings.Join(deletable, "\n- "))
+		}
 		return checkOutput{
-			check: CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Install plan failed: %s", latest.Metadata.Name)},
-			problems: []Problem{{
-				ID:          "installplan-failed",
-				Severity:    "critical",
-				Title:       "The install plan failed",
-				Description: fmt.Sprintf("OLM could not execute install plan %s. %s", latest.Metadata.Name, truncate(reason, 300)),
-				Evidence:    evidence,
-				Fix: "Delete the failed install plans so that OLM resolves the Subscription again and creates a new one. " +
-					"If the same build fails again, update to a newer nightly.",
-				AutoFixable:     true,
-				AutoFixAction:   "delete-stale-installplans",
-				AffectedObjects: affected,
-				ConfirmMessage: fmt.Sprintf("This deletes the install plans in %s whose phase is Failed: %s. Plans in any other phase are kept, and each plan is re-checked right before it is deleted.\n\n"+
-					"While the Subscription waits on a deleted plan, OLM clears its reference and resolves again, creating a new install plan (this is OLM's documented recovery for a failed InstallPlan). "+
-					"If the catalog still offers the same build, the new plan may fail the same way.", SubNS, strings.Join(failed, ", ")),
-				LearnMore:    "OLM documentation, \"Opting into UnsafeFailForward upgrades\": to recover from a failed InstallPlan, the user deletes it and a new InstallPlan is generated.",
-				TechnicalCmd: fmt.Sprintf("oc describe installplan %s -n %s", latest.Metadata.Name, SubNS),
-			}},
+			check:    CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Install plan failed: %s", latest.Metadata.Name)},
+			problems: []Problem{p},
 		}
 	case "RequiresApproval":
 		return checkOutput{
@@ -960,13 +994,14 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 		}, nil
 	}
 
-	// Only phase Failed is terminal. Phase "" is a plan OLM has not
-	// processed yet (InstallPlanPhaseNone), and Planning, RequiresApproval
-	// and Installing are in flight.
+	sub, err := readSubscriptionState(c)
+	if err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to read the Subscription: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
+	}
 	var logs, deleted, failed, changed []string
 	for _, ip := range plans {
-		if ip.Status.Phase != "Failed" {
-			logs = append(logs, fmt.Sprintf("Kept install plan %s (phase %q)", ip.Metadata.Name, ip.Status.Phase))
+		if ok, why := installPlanDeletable(ip, sub); !ok {
+			logs = append(logs, fmt.Sprintf("Kept install plan %s: %s", ip.Metadata.Name, why))
 			continue
 		}
 		path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ip.Metadata.Name)
@@ -1000,7 +1035,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	case len(deleted) == 0 && len(failed) == 0 && len(changed) > 0:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Install plan(s) %s changed after they were checked, so nothing was deleted. Run diagnostics again.", strings.Join(changed, ", ")), Logs: logs, ErrorCode: "conflict"}, nil
 	case len(deleted) == 0 && len(failed) == 0:
-		return nothingToDo("no install plan is in phase Failed. Nothing was deleted.", logs), nil
+		return nothingToDo("no failed install plan can be deleted safely (see the log). Nothing was deleted.", logs), nil
 	case len(failed) > 0 && len(deleted) == 0:
 		return &types.OperationResponse{Success: false, Message: "Could not delete the failed install plans: " + strings.Join(failed, ", "), Logs: logs}, nil
 	case len(failed) > 0:

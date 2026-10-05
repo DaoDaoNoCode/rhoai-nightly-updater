@@ -192,6 +192,41 @@ func TestDeleteStaleInstallPlans_DeletesOnlyFailedPlansWithPreconditions(t *test
 	}
 }
 
+func TestDeleteStaleInstallPlans_ReferencedPlan(t *testing.T) {
+	plans := map[string]interface{}{"items": []interface{}{installPlan("install-failed", "Failed", "u1", "1", "2026-10-02T00:00:00Z")}}
+	sub := func(state string) string {
+		return `{"spec":{"source":"rhoai-catalog-dev","channel":"stable-3.x"},"status":{"state":"` + state + `","installPlanRef":{"name":"install-failed"}}}`
+	}
+	for _, tt := range []struct {
+		state      string
+		wantDelete bool
+	}{{"UpgradePending", true}, {"AtLatestKnown", false}, {"UpgradeFailed", false}} {
+		t.Run(tt.state, func(t *testing.T) {
+			f, c := newFakeAPI(t)
+			f.obj("GET", ipListPath, plans)
+			f.json("GET", "/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-operator/subscriptions/rhods-operator", http.StatusOK, sub(tt.state))
+			f.json("DELETE", ipListPath+"/install-failed", http.StatusOK, `{}`)
+			res, _ := ApplyFix(c, "delete-stale-installplans")
+			if tt.wantDelete {
+				assertWrites(t, f, "DELETE "+ipListPath+"/install-failed")
+				if !res.Success {
+					t.Fatalf("result = %+v", res)
+				}
+				return
+			}
+			assertWrites(t, f)
+			if res.ErrorCode != "nothing_to_do" {
+				t.Fatalf("result = %+v", res)
+			}
+			// The check offers no auto-fix either, so the two agree.
+			out := checkInstallPlanHealth(c)
+			if len(out.problems) != 1 || out.problems[0].AutoFixable {
+				t.Fatalf("problems = %+v", out.problems)
+			}
+		})
+	}
+}
+
 func TestDeleteStaleInstallPlans_Outcomes(t *testing.T) {
 	failedOnly := map[string]interface{}{"items": []interface{}{installPlan("install-failed", "Failed", "u1", "1", "2026-10-02T00:00:00Z")}}
 	tests := []struct {
