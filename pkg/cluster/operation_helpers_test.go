@@ -68,33 +68,6 @@ func TestApplySubscriptionWithRetry_CanceledWhileWaiting(t *testing.T) {
 	}
 }
 
-func TestWaitForInstallPlan(t *testing.T) {
-	for _, field := range []string{"installPlanRef", "installplan"} {
-		var polls int32
-		c, _ := helperServer(t, func(w http.ResponseWriter, r *http.Request) {
-			if atomic.AddInt32(&polls, 1) < 3 {
-				fmt.Fprint(w, `{"status":{}}`)
-				return
-			}
-			fmt.Fprintf(w, `{"status":{%q:{"name":"install-abc"}}}`, field)
-		})
-		if name, err := waitForInstallPlan(c, "/sub"); err != nil || name != "install-abc" {
-			t.Fatalf("%s: name=%q err=%v", field, name, err)
-		}
-	}
-
-	c, _ := helperServer(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"status":{}}`) })
-	if name, err := waitForInstallPlan(c, "/sub"); err != nil || name != "" {
-		t.Fatalf("timeout: name=%q err=%v", name, err)
-	}
-
-	c, cancel := helperServer(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"status":{}}`) })
-	cancel()
-	if _, err := waitForInstallPlan(c, "/sub"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled: err=%v", err)
-	}
-}
-
 func TestWaitForNightlyCatalogReady(t *testing.T) {
 	var polls int32
 	c, _ := helperServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +79,7 @@ func TestWaitForNightlyCatalogReady(t *testing.T) {
 	})
 	var logs []string
 	var events []UpdateStepEvent
-	ready, err := waitForNightlyCatalogReady(c, func(e UpdateStepEvent) { events = append(events, e) }, &logs)
+	ready, err := waitForNightlyCatalogReady(c, "img", func(e UpdateStepEvent) { events = append(events, e) }, &logs)
 	if err != nil || !ready || len(logs) != 2 || len(events) != 2 || events[1].Detail != "READY" {
 		t.Fatalf("ready=%v err=%v logs=%v events=%v", ready, err, logs, events)
 	}
@@ -114,7 +87,7 @@ func TestWaitForNightlyCatalogReady(t *testing.T) {
 	c, _ = helperServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"status":{"connectionState":{"lastObservedState":"TRANSIENT_FAILURE"}}}`)
 	})
-	if ready, err := waitForNightlyCatalogReady(c, func(UpdateStepEvent) {}, &logs); ready || err != nil {
+	if ready, err := waitForNightlyCatalogReady(c, "img", func(UpdateStepEvent) {}, &logs); ready || err != nil {
 		t.Fatalf("timeout: ready=%v err=%v", ready, err)
 	}
 }

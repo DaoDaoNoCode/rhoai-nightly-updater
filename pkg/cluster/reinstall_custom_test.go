@@ -27,6 +27,9 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 			})}
 			t.Cleanup(func() { quayHTTPClient = oldQuayClient })
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if dashboardOperatorAbsent(w, r) {
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				switch {
 				case strings.Contains(r.URL.Path, "/catalogsources/"+CatalogName+"-verify-"):
@@ -54,9 +57,11 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 					io.WriteString(w, `{}`)
 				case r.URL.Path == subPath:
 					// Starting on stable must not short-circuit a custom reinstall.
-					io.WriteString(w, `{"spec":{"source":"`+getStableSource()+`","channel":"stable-3.6"},"status":{"installPlanRef":{"name":"old-build-install"}}}`)
+					io.WriteString(w, `{"spec":{"source":"`+getStableSource()+`","channel":"stable-3.6"},"status":{"currentCSV":"rhods-operator.test","installedCSV":"rhods-operator.test","installPlanRef":{"name":"old-build-install"}}}`)
 				case r.URL.Path == csPath:
 					io.WriteString(w, `{"spec":{"image":"`+image+`"},"status":{"connectionState":{"lastObservedState":"READY"}}}`)
+				case strings.Contains(r.URL.Path, "/clusterserviceversions/"):
+					io.WriteString(w, `{"metadata":{"name":"rhods-operator.test"},"status":{"phase":"Succeeded"}}`)
 				case strings.HasSuffix(r.URL.Path, "/clusterserviceversions"):
 					io.WriteString(w, csvListMock("3.6.0").body)
 				case strings.HasSuffix(r.URL.Path, "/packagemanifests"):
@@ -67,7 +72,11 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 			}))
 			defer server.Close()
 			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
-			result, err := Reinstall(c, tc.target, image, override)
+			// 3.6.0 -> 3.3 is a downgrade, which needs explicit confirmation.
+			if refused, _ := Reinstall(c, tc.target, image, override); refused.ErrorCode != errorCodeDowngrade || deletedCSV {
+				t.Fatalf("unconfirmed downgrade: %+v deletedCSV=%v", refused, deletedCSV)
+			}
+			result, err := ReinstallWithOptions(c, tc.target, image, override, OperationOptions{AllowDowngrade: true})
 			if err != nil || !result.Success {
 				t.Fatalf("reinstall: %+v, %v", result, err)
 			}

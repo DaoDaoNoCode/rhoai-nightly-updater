@@ -1,0 +1,630 @@
+package cluster
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// OLM semantics relied on below (operator-framework/api pkg/operators/v1alpha1
+// and operator-lifecycle-manager pkg/controller/operators/{catalog,olm}):
+//   - A new Subscription without startingCSV installs the head (currentCSV)
+//     of its channel; status.currentCSV names it and status.installedCSV is
+//     set once that CSV exists.
+//   - ResolutionFailed is set on every failed resolution and cleared by the
+//     next successful one; OLM keeps retrying, so it can be transient right
+//     after a catalog is recreated.
+//   - BundleUnpacking stays True (with an image-pull hint) while the unpack
+//     job cannot pull the bundle; BundleUnpackFailed and InstallPlanFailed
+//     report a finished failure.
+//   - InstallPlan phases end in Complete or Failed; RequiresApproval waits
+//     for spec.approved when the Subscription uses Manual approval.
+//   - A CSV moves Pending -> InstallReady -> Installing -> Succeeded. Failed
+//     is not final: OLM moves it back to Pending when requirements change or
+//     the deployment needs a reinstall, and an install that is not healthy
+//     after 5 minutes goes Installing -> Failed (InstallCheckFailed).
+//   - CatalogSourcesUnhealthy describes every catalog in scope, not only the
+//     Subscription's, so it is reported but never treated as a failure.
+var (
+	// OperatorInstallTimeout bounds the wait for OLM to install the new
+	// operator. Together with the catalog waits before it, an operation stays
+	// within the 15-minute mutation deadline.
+	OperatorInstallTimeout = 8 * time.Minute
+	// ResolutionFailedGrace is how long ResolutionFailed may persist before
+	// the operation is treated as failed.
+	ResolutionFailedGrace = 60 * time.Second
+	// BundlePullFailureGrace is how long the bundle unpack job may fail to
+	// pull its image before the operation is treated as failed.
+	BundlePullFailureGrace = 3 * time.Minute
+	// CSVFailedGrace is how long the new CSV may stay Failed before the
+	// operation is treated as failed.
+	CSVFailedGrace = 90 * time.Second
+	// CSVDeletionTimeout bounds the wait for a deleted CSV to disappear (OLM
+	// runs its csv-cleanup finalizer first).
+	CSVDeletionTimeout = 60 * time.Second
+)
+
+func subscriptionPath() string {
+	return namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
+}
+
+func csvPath(name string) string {
+	return namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, name)
+}
+
+// buildSubscription returns the Subscription for source/channel. Settings the
+// user put on the previous Subscription are carried over: spec.config (env,
+// resources, nodeSelector, tolerations, ...) and installPlanApproval. Only
+// startingCSV is dropped, because it names a version of the previous channel.
+func buildSubscription(previous map[string]interface{}, source, channel string) map[string]interface{} {
+	spec := map[string]interface{}{}
+	if prevSpec, ok := previous["spec"].(map[string]interface{}); ok {
+		for k, v := range prevSpec {
+			spec[k] = v
+		}
+	}
+	delete(spec, "startingCSV")
+	spec["name"] = SubName
+	spec["channel"] = channel
+	spec["source"] = source
+	spec["sourceNamespace"] = CatalogNS
+	if approval, _ := spec["installPlanApproval"].(string); approval != "Manual" {
+		spec["installPlanApproval"] = "Automatic"
+	}
+	return map[string]interface{}{
+		"apiVersion": "operators.coreos.com/v1alpha1",
+		"kind":       "Subscription",
+		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"spec":       spec,
+	}
+}
+
+// ensureOperatorNamespaceAndGroup makes sure the operator namespace has
+// exactly one OperatorGroup that RHOAI can use. RHOAI CSVs support only the
+// AllNamespaces install mode, which needs a global OperatorGroup (no
+// targetNamespaces, no selector); with two OperatorGroups OLM fails the CSV
+// with TooManyOperatorGroups (OLM doc/design/operatorgroups.md). A missing
+// namespace or OperatorGroup is created; an existing unusable one is reported
+// and left alone. With dryRun nothing is created.
+func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, problem string, errorCode string) {
+	nsPath := "/api/v1/namespaces/" + SubNS
+	_, _, err := c.get(nsPath)
+	nsMissing := IsK8sError(err, 404)
+	switch {
+	case nsMissing && dryRun:
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", SubNS))
+	case nsMissing:
+		slog.Info("creating operator namespace", "namespace", SubNS)
+		ns := map[string]interface{}{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]interface{}{"name": SubNS}}
+		if _, _, err := c.apply(nsPath, ns); err != nil {
+			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+		}
+		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", SubNS))
+	case err != nil:
+		return logs, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+	}
+
+	var groups []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			TargetNamespaces []string    `json:"targetNamespaces"`
+			Selector         interface{} `json:"selector"`
+		} `json:"spec"`
+	}
+	if !nsMissing {
+		body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
+		if err != nil && !IsK8sError(err, 404) {
+			return logs, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+		}
+		if err == nil {
+			var list struct {
+				Items json.RawMessage `json:"items"`
+			}
+			if err := json.Unmarshal(body, &list); err != nil {
+				return logs, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
+			}
+			if len(list.Items) > 0 {
+				if err := json.Unmarshal(list.Items, &groups); err != nil {
+					return logs, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
+				}
+			}
+		}
+	}
+
+	switch {
+	case len(groups) > 1:
+		var names []string
+		for _, g := range groups {
+			names = append(names, g.Metadata.Name)
+		}
+		return logs, fmt.Sprintf("Namespace %s has %d OperatorGroups (%s). OLM fails the RHOAI CSV with TooManyOperatorGroups; delete all but one global OperatorGroup and retry. Nothing was changed.", SubNS, len(groups), strings.Join(names, ", ")), "prerequisites"
+	case len(groups) == 1:
+		g := groups[0]
+		if len(g.Spec.TargetNamespaces) > 0 || g.Spec.Selector != nil {
+			return logs, fmt.Sprintf("OperatorGroup %s in %s targets specific namespaces, but RHOAI supports only the AllNamespaces install mode. Remove spec.targetNamespaces and spec.selector from it and retry. Nothing was changed.", g.Metadata.Name, SubNS), "prerequisites"
+		}
+		logs = append(logs, fmt.Sprintf("OK: OperatorGroup %s exists in %s", g.Metadata.Name, SubNS))
+	case dryRun:
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", SubNS))
+	default:
+		slog.Info("creating OperatorGroup", "namespace", SubNS)
+		og := map[string]interface{}{
+			"apiVersion": "operators.coreos.com/v1",
+			"kind":       "OperatorGroup",
+			"metadata":   map[string]interface{}{"name": "rhods-operator", "namespace": SubNS},
+			"spec":       map[string]interface{}{},
+		}
+		if _, _, err := c.apply(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator"), og); err != nil {
+			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+		}
+		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", SubNS))
+	}
+	return logs, "", ""
+}
+
+// deleteCSVAndWait deletes a CSV and waits, up to CSVDeletionTimeout, until it
+// is gone. OLM's csv-cleanup finalizer removes the CSV's webhooks and cluster
+// RBAC first; a new CSV with the same name cannot be created while the old
+// one still exists. A timeout is reported but not fatal.
+func deleteCSVAndWait(c *Client, name string) (gone bool, err error) {
+	if _, err := c.delete(csvPath(name)); err != nil && !IsK8sError(err, 404) {
+		return false, err
+	}
+	return waitForCSVGone(c, name)
+}
+
+// waitForCSVGone waits, up to CSVDeletionTimeout, until a deleted CSV no
+// longer exists. It returns false on timeout and the context error if the
+// operation is canceled.
+func waitForCSVGone(c *Client, name string) (bool, error) {
+	deadline := time.Now().Add(CSVDeletionTimeout)
+	for {
+		_, _, err := c.get(csvPath(name))
+		if IsK8sError(err, 404) {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		select {
+		case <-c.ctx.Done():
+			return false, c.ctx.Err()
+		case <-time.After(InstallPlanPollInterval):
+		}
+	}
+}
+
+// installOutcome is OLM's verdict on a new Subscription.
+type installOutcome struct {
+	succeeded bool
+	csv       string
+	message   string
+	errorCode string
+	// keepNewInstall is set when the wait ended while OLM was still
+	// installing (InstallPlan created, CSV not Failed): undoing that would
+	// throw away a probably working install.
+	keepNewInstall bool
+	// note is extra information for a successful install (e.g. a pending
+	// admin acknowledgement).
+	note string
+}
+
+type olmCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+func describeCondition(c olmCondition) string {
+	switch {
+	case c.Reason != "" && c.Message != "":
+		return c.Reason + ": " + c.Message
+	case c.Message != "":
+		return c.Message
+	default:
+		return c.Reason
+	}
+}
+
+// waitForOperatorInstall follows the Subscription until OLM has installed its
+// CSV (phase Succeeded and recorded as installedCSV), reports a failure, or
+// OperatorInstallTimeout passes. Every wait is bounded. Progress is emitted
+// under step. An InstallPlan that needs approval because the Subscription
+// uses Manual approval is approved when it installs only RHOAI CSVs: the
+// user asked for exactly this install.
+func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery) installOutcome {
+	deadline := time.Now().Add(OperatorInstallTimeout)
+	var resolutionSince, pullSince, csvFailedSince time.Time
+	var ipName, csvName, lastState, lastProgress string
+	var sawCSVFailed, catalogsNoted bool
+	approved := map[string]bool{}
+
+	progress := func(msg string) {
+		lastState = msg
+		if msg != lastProgress {
+			lastProgress = msg
+			*logs = append(*logs, "  "+msg)
+			emit(UpdateStepEvent{Step: step, Status: "running", Message: msg})
+		}
+	}
+	failed := func(code, msg string) installOutcome {
+		*logs = append(*logs, msg)
+		return installOutcome{csv: csvName, message: msg, errorCode: code}
+	}
+	stopped := func(code, why string) installOutcome {
+		keep := ipName != "" && !sawCSVFailed
+		state := lastState
+		if state == "" {
+			state = "OLM had not reported progress"
+		}
+		msg := fmt.Sprintf("%s (last state: %s).", why, state)
+		if keep {
+			msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Reinstall if it does not finish."
+		}
+		*logs = append(*logs, msg)
+		return installOutcome{csv: csvName, message: msg, errorCode: code, keepNewInstall: keep}
+	}
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			if errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+				return stopped("timeout", "The operation deadline passed before OLM finished installing the operator")
+			}
+			return stopped("cancelled", "The operation was cancelled before OLM finished installing the operator")
+		case <-time.After(InstallPlanPollInterval):
+		}
+		if time.Now().After(deadline) {
+			return stopped("install_timeout", fmt.Sprintf("OLM did not finish installing the operator within %s", OperatorInstallTimeout))
+		}
+
+		body, _, err := c.get(subscriptionPath())
+		if IsK8sError(err, 404) {
+			return failed("olm_install_failed", "The Subscription was deleted while OLM was installing the operator; another user or tool may have changed it.")
+		}
+		if err != nil {
+			slog.Debug("error polling Subscription", "error", err)
+			continue
+		}
+		var sub struct {
+			Spec struct {
+				Source  string `json:"source"`
+				Channel string `json:"channel"`
+			} `json:"spec"`
+			Status struct {
+				CurrentCSV     string `json:"currentCSV"`
+				InstalledCSV   string `json:"installedCSV"`
+				InstallPlanRef struct {
+					Name string `json:"name"`
+				} `json:"installPlanRef"`
+				InstallPlan struct {
+					Name string `json:"name"`
+				} `json:"installplan"`
+				Conditions []olmCondition `json:"conditions"`
+			} `json:"status"`
+		}
+		if json.Unmarshal(body, &sub) != nil {
+			continue
+		}
+
+		resolutionFailing, pullFailing := false, false
+		for _, cond := range sub.Status.Conditions {
+			if cond.Status != "True" {
+				continue
+			}
+			switch cond.Type {
+			case "InstallPlanFailed":
+				return failed("installplan_failed", "OLM reports that the InstallPlan failed: "+describeCondition(cond))
+			case "BundleUnpackFailed":
+				return failed("bundle_unpack_failed", "OLM could not unpack the operator bundle: "+describeCondition(cond)+
+					". If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in openshift-marketplace (label operatorframework.io/bundle-unpack-ref), then run the operation again.")
+			case "ResolutionFailed":
+				resolutionFailing = true
+				if resolutionSince.IsZero() {
+					resolutionSince = time.Now()
+				}
+				if time.Since(resolutionSince) >= ResolutionFailedGrace {
+					return failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond)))
+				}
+				progress("OLM resolution failed, retrying: " + describeCondition(cond))
+			case "BundleUnpacking":
+				if strings.Contains(strings.ToLower(cond.Message), "pull") {
+					pullFailing = true
+					if pullSince.IsZero() {
+						pullSince = time.Now()
+					}
+					if time.Since(pullSince) >= BundlePullFailureGrace {
+						return failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+IDMSSource+" and the pull secret.")
+					}
+					progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
+				}
+			case "CatalogSourcesUnhealthy":
+				if !catalogsNoted {
+					catalogsNoted = true
+					*logs = append(*logs, "  Note: OLM reports unhealthy CatalogSources: "+describeCondition(cond))
+				}
+			}
+		}
+		if !resolutionFailing {
+			resolutionSince = time.Time{}
+		}
+		if !pullFailing {
+			pullSince = time.Time{}
+		}
+
+		if name := sub.Status.InstallPlanRef.Name; name != "" {
+			ipName = name
+		} else if name := sub.Status.InstallPlan.Name; name != "" {
+			ipName = name
+		}
+		if ipName != "" {
+			if outcome, done := checkInstallPlan(c, ipName, approved, logs, progress); done {
+				outcome.csv = csvName
+				*logs = append(*logs, outcome.message)
+				return outcome
+			}
+		}
+
+		name := sub.Status.CurrentCSV
+		if name == "" {
+			name = sub.Status.InstalledCSV
+		}
+		if name == "" {
+			if ipName == "" && !resolutionFailing && !pullFailing {
+				progress("Waiting for OLM to resolve the Subscription")
+			}
+			continue
+		}
+		csvName = name
+		recovery.noteAttemptCSV(name)
+		csvBody, _, err := c.get(csvPath(name))
+		if IsK8sError(err, 404) {
+			if ipName != "" {
+				progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
+			}
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		var csv struct {
+			Status struct {
+				Phase   string `json:"phase"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"status"`
+		}
+		if json.Unmarshal(csvBody, &csv) != nil {
+			continue
+		}
+		phase := csv.Status.Phase
+		if phase == "Failed" {
+			sawCSVFailed = true
+			if csvFailedSince.IsZero() {
+				csvFailedSince = time.Now()
+			}
+			detail := describeCondition(olmCondition{Reason: csv.Status.Reason, Message: csv.Status.Message})
+			if time.Since(csvFailedSince) >= CSVFailedGrace {
+				return failed("csv_failed", fmt.Sprintf("CSV %s failed to install: %s", name, detail))
+			}
+			progress(fmt.Sprintf("CSV %s: Failed (%s); waiting to see whether OLM retries", name, detail))
+			continue
+		}
+		csvFailedSince = time.Time{}
+		if phase == "Succeeded" && sub.Status.InstalledCSV == name {
+			*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
+			outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c)}
+			if outcome.note != "" {
+				*logs = append(*logs, "Warning: "+outcome.note)
+			}
+			return outcome
+		}
+		if phase == "" {
+			phase = "created"
+		}
+		progress(fmt.Sprintf("CSV %s: %s", name, strings.TrimSpace(phase+" "+parenthesize(csv.Status.Reason))))
+	}
+}
+
+func parenthesize(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "(" + s + ")"
+}
+
+// checkInstallPlan inspects the Subscription's InstallPlan. It returns done
+// with a failed outcome when the plan failed or needs an approval this tool
+// must not give.
+func checkInstallPlan(c *Client, name string, approved map[string]bool, logs *[]string, progress func(string)) (installOutcome, bool) {
+	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name)
+	body, _, err := c.get(path)
+	if err != nil {
+		return installOutcome{}, false
+	}
+	var ip struct {
+		Spec struct {
+			Approved bool     `json:"approved"`
+			CSVNames []string `json:"clusterServiceVersionNames"`
+		} `json:"spec"`
+		Status struct {
+			Phase      string         `json:"phase"`
+			Message    string         `json:"message"`
+			Conditions []olmCondition `json:"conditions"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(body, &ip) != nil {
+		return installOutcome{}, false
+	}
+	switch ip.Status.Phase {
+	case "Failed":
+		detail := ip.Status.Message
+		for _, cond := range ip.Status.Conditions {
+			if cond.Status == "False" && (cond.Reason != "" || cond.Message != "") {
+				detail = describeCondition(cond)
+			}
+		}
+		if detail == "" {
+			detail = "no reason given"
+		}
+		return installOutcome{message: fmt.Sprintf("OLM InstallPlan %s failed: %s", name, detail), errorCode: "installplan_failed"}, true
+	case "RequiresApproval":
+		if ip.Spec.Approved || approved[name] {
+			return installOutcome{}, false
+		}
+		for _, csv := range ip.Spec.CSVNames {
+			if !strings.HasPrefix(csv, SubName+".") {
+				return installOutcome{
+					message:   fmt.Sprintf("InstallPlan %s needs manual approval and also installs %s, so it was not approved automatically. Approve it in the console (Operators > Installed Operators) if that is intended.", name, strings.Join(ip.Spec.CSVNames, ", ")),
+					errorCode: "approval_required",
+				}, true
+			}
+		}
+		if _, _, err := c.patch(path, []byte(`{"spec":{"approved":true}}`)); err != nil {
+			return installOutcome{message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), errorCode: errorCodeOr(err, "approval_required")}, true
+		}
+		approved[name] = true
+		*logs = append(*logs, fmt.Sprintf("OK: Approved InstallPlan %s for %s (the Subscription keeps Manual approval for later upgrades)", name, strings.Join(ip.Spec.CSVNames, ", ")))
+		return installOutcome{}, false
+	case "":
+		progress(fmt.Sprintf("InstallPlan %s created", name))
+	default:
+		progress(fmt.Sprintf("InstallPlan %s: %s", name, ip.Status.Phase))
+	}
+	return installOutcome{}, false
+}
+
+func errorCodeOr(err error, fallback string) string {
+	if code := errorCodeFromK8sErr(err); code != "" {
+		return code
+	}
+	return fallback
+}
+
+// downgradeCheck compares what the target would install with the installed
+// CSV. targetCSV is the bundle the target catalog installs (its channel
+// head); when it is unknown the release tag is used, and a tag without a
+// patch number ("rhoai-3.5") is treated as matching the installed patch,
+// because a minor-stream build can ship any 3.5.z. It returns a blocking
+// message for a real downgrade, plus a note to log.
+func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (blocked string, note string) {
+	if installed.Name == "" {
+		return "", ""
+	}
+	current, ok := parseCSVVersion(installed.Name)
+	if !ok && installed.Version != "" {
+		current, ok = parseCSVVersion(SubName + "." + installed.Version)
+	}
+	if !ok {
+		return "", fmt.Sprintf("Warning: cannot parse the installed version %q; downgrade check skipped", installed.Name)
+	}
+	if targetCSV != "" {
+		if target, ok := parseCSVVersion(targetCSV); ok {
+			if compareTags(target, current) < 0 {
+				return fmt.Sprintf("Downgrade detected: the selected build installs %s, which is older than the installed %s. OLM does not support downgrades. Use Reinstall instead.", targetCSV, installed.Name), ""
+			}
+			return "", fmt.Sprintf("Target operator version: %s (installed: %s)", targetCSV, installed.Name)
+		}
+	}
+	target, ok := parseTag(targetTag)
+	if !ok {
+		return "", fmt.Sprintf("Warning: cannot tell which operator version %q installs; downgrade check skipped", targetTag)
+	}
+	if m := tagParseRegex.FindStringSubmatch(targetTag); m != nil && m[3] == "" {
+		target.patch = current.patch
+	}
+	if compareTags(target, current) < 0 {
+		return fmt.Sprintf("Downgrade detected: target %s is older than the installed %s. OLM does not support downgrades. Use Reinstall instead.", targetTag, installed.Name), ""
+	}
+	return "", fmt.Sprintf("Warning: the bundle version of %s is unknown; compared the release tag only", targetTag)
+}
+
+// stepTracker remembers the last pipeline step so a failure that returns
+// early can mark the step that was running as failed.
+type stepTracker struct {
+	emit   func(UpdateStepEvent)
+	step   string
+	status string
+}
+
+func (t *stepTracker) send(e UpdateStepEvent) {
+	if e.Step != restoreStepName {
+		t.step, t.status = e.Step, e.Status
+	}
+	t.emit(e)
+}
+
+// finish runs on every return path of a pipeline. It guarantees a result that
+// keeps the collected logs, turns a context error into a failed result (so
+// the message and restore details reach the user), marks the running step
+// failed, restores the previous operator on failure, and records the
+// activity once.
+func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr *error, logs []string, recovery *operatorRecovery, record func(bool)) {
+	if *result == nil {
+		*result = &types.OperationResponse{Success: false, Message: "Operation failed", Logs: logs}
+	}
+	r := *result
+	if *opErr != nil {
+		code := "cancelled"
+		if errors.Is(*opErr, context.DeadlineExceeded) {
+			code = "timeout"
+		}
+		r.Success = false
+		if r.ErrorCode == "" {
+			r.ErrorCode = code
+		}
+		if !strings.Contains(r.Message, (*opErr).Error()) {
+			r.Message = strings.TrimSpace(r.Message + " (" + (*opErr).Error() + ")")
+		}
+		*opErr = nil
+	}
+	if !r.Success && t.status == "running" {
+		t.send(UpdateStepEvent{Step: t.step, Status: "failed", Message: r.Message, ErrorCode: r.ErrorCode})
+	}
+	if recovery != nil {
+		recovery.restore(c, r, t.send)
+	}
+	if record != nil {
+		record(r.Success)
+	}
+}
+
+// adminAckNote reports when the newly installed operator holds provisioning
+// for an admin acknowledgement (Platform "default" condition
+// ProvisioningProgress=False, reason AdminAckRequired; rhods-operator
+// docs/upgrade-ordering.md "Admin ack gates"). That is a manual gate, not a
+// failed install. The Platform API does not exist before RHOAI 3.6 or right
+// after a fresh install, which is not an error.
+func adminAckNote(c *Client) string {
+	body, _, err := c.get(clusterPath("config.opendatahub.io/v1alpha1", "platforms", "default"))
+	if err != nil {
+		return ""
+	}
+	var platform struct {
+		Status struct {
+			Conditions []olmCondition `json:"conditions"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(body, &platform) != nil {
+		return ""
+	}
+	for _, cond := range platform.Status.Conditions {
+		if cond.Type == "ProvisioningProgress" && cond.Reason == "AdminAckRequired" {
+			msg := "The operator is installed, but it does not provision components until an administrator acknowledges the upgrade (AdminAckRequired)"
+			if cond.Message != "" {
+				msg += ": " + cond.Message
+			}
+			return msg + ". Set the listed keys to \"true\" in ConfigMap odh-upgrade-acks in " + SubNS + "."
+		}
+	}
+	return ""
+}

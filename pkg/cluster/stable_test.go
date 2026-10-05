@@ -73,6 +73,9 @@ func TestStableDiscoveryScopesCatalogAndRefreshes(t *testing.T) {
 	t.Setenv("STABLE_CHANNEL", "")
 	version := "3.5.0"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		if r.URL.Query().Get("labelSelector") != "catalog=mirrored-operators" {
 			t.Errorf("unscoped package query: %s", r.URL.String())
 		}
@@ -101,6 +104,9 @@ func TestStableDiscoveryFailureDoesNotRemoveOperator(t *testing.T) {
 	t.Setenv("STABLE_CHANNEL", "")
 	var deletes int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		if r.Method == "DELETE" {
 			deletes++
 		}
@@ -159,6 +165,9 @@ func TestStableReinstallMovesOlderChannelToLatestGA(t *testing.T) {
 	subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 	var appliedChannel string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		switch {
 		case r.Method == "PATCH" && r.URL.Path == subPath:
 			var body struct {
@@ -170,7 +179,9 @@ func TestStableReinstallMovesOlderChannelToLatestGA(t *testing.T) {
 			appliedChannel = body.Spec.Channel
 			io.WriteString(w, `{}`)
 		case r.URL.Path == subPath:
-			io.WriteString(w, `{"spec":{"source":"redhat-operators","channel":"stable-3.4"},"status":{"installPlanRef":{"name":"install-ga"}}}`)
+			io.WriteString(w, `{"spec":{"source":"redhat-operators","channel":"stable-3.4"},"status":{"currentCSV":"rhods-operator.v3.5.0","installedCSV":"rhods-operator.v3.5.0","installPlanRef":{"name":"install-ga"}}}`)
+		case strings.Contains(r.URL.Path, "/clusterserviceversions/"):
+			io.WriteString(w, succeededCSV)
 		case strings.HasSuffix(r.URL.Path, "/packagemanifests"):
 			io.WriteString(w, stableCatalogMock("redhat-operators", "stable-3.5", "3.5.0").body)
 		default:
