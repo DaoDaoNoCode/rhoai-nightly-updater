@@ -391,8 +391,8 @@ func TestDiagnostics_StaleWebhooks(t *testing.T) {
 
 	for _, ch := range resp.Checks {
 		if ch.Name == "Stale webhooks" {
-			if ch.Status != "warn" {
-				t.Errorf("expected stale webhooks check status 'warn', got %q", ch.Status)
+			if ch.Status != "fail" {
+				t.Errorf("expected stale webhooks check status 'fail', got %q", ch.Status)
 			}
 			break
 		}
@@ -558,6 +558,11 @@ func TestDiagnostics_ApplyFix_DeleteStaleWebhooks(t *testing.T) {
 			statusCode: 404,
 		},
 		activityCM: {
+			body:       `{"kind":"Status","status":"Failure","message":"not found","reason":"NotFound","code":404}`,
+			statusCode: 404,
+		},
+		// The owning CSV is gone, so OLM will not recreate the webhooks.
+		"/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-operator/clusterserviceversions/rhods-operator": {
 			body:       `{"kind":"Status","status":"Failure","message":"not found","reason":"NotFound","code":404}`,
 			statusCode: 404,
 		},
