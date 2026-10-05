@@ -100,13 +100,6 @@ func extractRepoAndDigest(imageID string) (repo, digest string, ok bool) {
 	return repo, digest, true
 }
 
-// GetImageLabels fetches the OCI image config labels from Quay for a given
-// imageID, including the commit date. Batches should resolve the credential
-// once and call resolveImageLabels instead.
-func GetImageLabels(ctx context.Context, c *Client, imageID string) (*ImageLabels, error) {
-	return imageLabelsWithAuth(ctx, getQuayAuth(c), imageID, true)
-}
-
 // imageLabelsWithAuth returns the labels of a digest-pinned image. Images are
 // read from quay.io (IDMS mirrors registry.redhat.io/rhoai to quay.io/rhoai).
 // Identical concurrent lookups share one registry read.

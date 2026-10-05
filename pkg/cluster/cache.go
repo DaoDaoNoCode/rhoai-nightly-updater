@@ -88,21 +88,6 @@ func (c *lruCache[K, V]) Remove(key K) {
 	}
 }
 
-// Len returns the number of stored entries, including expired ones not yet removed.
-func (c *lruCache[K, V]) Len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ll.Len()
-}
-
-// Purge removes every entry.
-func (c *lruCache[K, V]) Purge() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.ll.Init()
-	c.items = make(map[K]*list.Element)
-}
-
 // flightGroup collapses concurrent calls for the same key into one, like
 // golang.org/x/sync/singleflight, without adding a dependency. A waiter whose
 // own context ends stops waiting; if the shared call failed only because the

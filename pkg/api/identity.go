@@ -65,12 +65,6 @@ func (c *identityCache) put(key [32]byte, user string, now time.Time) {
 	c.entries[key] = identityEntry{user: user, expires: now.Add(identityCacheTTL)}
 }
 
-func (c *identityCache) reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries = map[[32]byte]identityEntry{}
-}
-
 // authenticate verifies the request's user token and returns the user it
 // belongs to. The identity comes from the API server, not from the
 // X-Forwarded-User header, so activity entries cannot be attributed to

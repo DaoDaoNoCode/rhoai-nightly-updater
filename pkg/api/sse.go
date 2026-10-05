@@ -96,29 +96,6 @@ func (s *SSEWriter) SendStep(step UpdateStep) error {
 	return nil
 }
 
-// EmitStep creates an UpdateStep with the elapsed time auto-calculated from
-// when the SSEWriter was created, then sends it as an SSE event.
-func (s *SSEWriter) EmitStep(step, status, message string) error {
-	return s.SendStep(UpdateStep{
-		Step:      step,
-		Status:    status,
-		Message:   message,
-		ElapsedMs: time.Since(s.start).Milliseconds(),
-	})
-}
-
-// EmitStepWithDetail is like EmitStep but also sets the Detail field for
-// additional context (e.g., an image URL or channel name).
-func (s *SSEWriter) EmitStepWithDetail(step, status, message, detail string) error {
-	return s.SendStep(UpdateStep{
-		Step:      step,
-		Status:    status,
-		Message:   message,
-		Detail:    detail,
-		ElapsedMs: time.Since(s.start).Milliseconds(),
-	})
-}
-
 // SendHeartbeat writes an SSE comment (": heartbeat\n\n") to keep the
 // connection alive through proxies with idle timeouts. Per the SSE spec,
 // lines starting with ":" are comments and are ignored by EventSource clients.

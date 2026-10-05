@@ -298,13 +298,6 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	return state, nil
 }
 
-// DeployPRImage patches the rhods-dashboard deployment with PR images.
-// It checks all 8 dashboard container repos on Quay for pr-N tags and
-// patches every container that has a published image.
-func DeployPRImage(c *Client, prNumber int) (*types.OperationResponse, error) {
-	return DeployPRImageWithFlavor(c, prNumber, "")
-}
-
 // DeployPRImageWithFlavor deploys a dashboard PR build of the given flavor
 // ("" means the RHOAI build). Clusters without dashboard-operator (RHOAI 2.x)
 // use the legacy flow, which only knows the OpenShift CI pr-N builds.

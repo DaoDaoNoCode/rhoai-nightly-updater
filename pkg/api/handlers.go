@@ -137,13 +137,6 @@ func (rl *rateLimiter) release(key string, takenAt time.Time) {
 	}
 }
 
-func (rl *rateLimiter) isRateLimited(key string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	last, ok := rl.users[key]
-	return ok && time.Since(last) < rl.window
-}
-
 // withMutationAuth wraps a handler that performs a cluster mutation.
 // It verifies the user's identity and cluster-admin permission with the
 // user's own token before anything is done with the ServiceAccount token,
@@ -481,12 +474,6 @@ func (a *apiReachability) ready(ctx context.Context, token string) (bool, error)
 		}
 	}
 	return !a.lastSuccess.IsZero() && now.Sub(a.lastSuccess) < apiReadyGrace, a.lastErr
-}
-
-func (a *apiReachability) reset() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lastCheck, a.lastSuccess, a.lastErr = time.Time{}, time.Time{}, nil
 }
 
 // HandleReady performs deeper readiness checks for kubelet readiness probes.

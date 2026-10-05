@@ -549,11 +549,6 @@ func scanNightlyTags(ctx context.Context, basicAuth string) ([]parsedTag, error)
 	return parsed, nil
 }
 
-// EnrichTagsWithBuildDates sets each tag's build date from its FBC image labels.
-func EnrichTagsWithBuildDates(ctx context.Context, c *Client, tags []types.NightlyTag) {
-	enrichTagsWithBuildDates(ctx, getQuayAuth(c), tags)
-}
-
 // enrichTagsWithBuildDates reads the build-date label of each digest-pinned
 // tag image. Labels are cached by digest. The GitHub commit date is not
 // fetched: the response only carries the build date.

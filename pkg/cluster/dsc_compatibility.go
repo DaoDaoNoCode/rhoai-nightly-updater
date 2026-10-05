@@ -82,11 +82,6 @@ func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, pat
 	}
 }
 
-func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCCompatibility {
-	op, err := getInstalledOperator(c)
-	return checkDSCCompatibilityFor(c, dsc, op, err)
-}
-
 // checkDSCCompatibilityFor compares a DSC with the installed schema and the
 // defaults of the already-read installed operator.
 func checkDSCCompatibilityFor(c *Client, dsc map[string]interface{}, op *installedOperator, opErr error) *types.DSCCompatibility {

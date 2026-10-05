@@ -3,12 +3,13 @@ package api
 import (
 	"context"
 	"errors"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
 
 func TestMutationAuthorizationAndPermissionsAgree(t *testing.T) {

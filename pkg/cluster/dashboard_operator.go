@@ -520,11 +520,6 @@ func dashboardOverrideFromOperator(operator *dashboardDeployment) *types.Dashboa
 	return o
 }
 
-func populateDashboardDevState(c *Client, state *types.DashboardState) {
-	operator, err := readDashboardOperator(c)
-	populateDashboardDevStateWithOperator(c, state, operator, err)
-}
-
 func populateDashboardDevStateWithOperator(c *Client, state *types.DashboardState, operator *dashboardDeployment, err error) {
 	state.DefaultFlavor = DashboardFlavorRHOAI
 	state.AvailableFlavors = []string{DashboardFlavorRHOAI, DashboardFlavorODH}
@@ -926,10 +921,6 @@ func resolveDashboardBuildTags(ctx context.Context, repo string, tags []string) 
 	return "", "", false, nil
 }
 
-func DeployDashboardMain(c *Client) (*types.OperationResponse, error) {
-	return deployDashboardBuild(c, "main", 0, "")
-}
-
 // DeployDashboardMainWithFlavor deploys the latest main build of the given
 // flavor ("" means the RHOAI build).
 func DeployDashboardMainWithFlavor(c *Client, flavor string) (*types.OperationResponse, error) {
@@ -1123,10 +1114,6 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 		code = "partial_failure"
 	}
 	return &types.OperationResponse{Success: success, Message: message, Logs: logs, ErrorCode: code}, nil
-}
-
-func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, image types.DashboardDevImage, target string) error {
-	return patchControlledDashboardImages(c, operator, []dashboardImagePatch{{Image: image, Target: target}})
 }
 
 type dashboardImagePatch struct {
