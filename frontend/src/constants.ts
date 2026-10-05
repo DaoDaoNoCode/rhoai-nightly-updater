@@ -30,9 +30,26 @@ export const RESOURCE_POLL_MAX_MS = 30_000;
 /** Stop polling a resource that is still not ready after this long (ms). */
 export const RESOURCE_SETTLE_MAX_MS = 10 * 60_000;
 
-/** Navigation items for the sidebar. */
+/**
+ * GET /api/operation polling. The endpoint makes no cluster call while an
+ * operation runs and one ConfigMap read otherwise (pkg/api/operation.go), so
+ * every tab can afford to watch for teammates' operations.
+ */
+export const OPERATION_POLL_BUSY_MS = 3_000;
+export const OPERATION_POLL_IDLE_MS = 15_000;
+
+/** Dashboard Dev session check for the global "dashboard-operator paused" banner (ms). */
+export const DASHBOARD_OVERRIDE_POLL_MS = 120_000;
+
+/** Retry a permission check that could not be answered (503) after this long (ms). */
+export const PERMISSION_RETRY_MS = 30_000;
+
+/**
+ * Navigation items for the sidebar. "Status" is this tool's home page;
+ * "Dashboard Dev" deploys builds of the RHOAI (odh-dashboard) web UI.
+ */
 export const NAV_ITEMS = [
-  { path: "/", label: "Dashboard" },
+  { path: "/", label: "Status" },
   { path: "/components", label: "Components" },
   { path: "/builds", label: "Build Explorer" },
   { path: "/dashboard-dev", label: "Dashboard Dev" },

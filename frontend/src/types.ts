@@ -8,6 +8,12 @@ export interface ActivityEntry {
   action: string;
   detail: string;
   success: boolean;
+  /** Read-time fields from the backend: a readable name for `action`. */
+  label?: string;
+  /** "operator" | "dashboard-dev" | "setup" | "diagnostics" | "other". */
+  category?: string;
+  /** Operator actions only: "<tag> · <12-hex digest>". */
+  build?: string;
 }
 
 export interface StatusResponse {
@@ -26,6 +32,28 @@ export interface StatusResponse {
   activity?: ActivityEntry[];
   errors?: string[];
   dscExists: boolean;
+  /** Installed vs latest nightly; only while the Subscription uses the nightly catalog. */
+  nightly?: NightlyStatus;
+}
+
+/** One nightly FBC catalog build (pkg/types NightlyBuild). */
+export interface NightlyBuild {
+  image: string;
+  tag?: string;
+  digest?: string;
+  buildDate?: string;
+  dashboardCommit?: string;
+  dashboardGitURL?: string;
+}
+
+export interface NightlyStatus {
+  installed?: NightlyBuild;
+  latest?: NightlyBuild;
+  /** Installed digest differs from the latest digest of the same tag; absent when unknown. */
+  updateAvailable?: boolean;
+  checkedAt?: string;
+  /** Why `latest` is missing. */
+  error?: string;
 }
 
 export interface ClusterInfo {
@@ -77,6 +105,8 @@ export interface OperationResponse {
 export interface LatestNightlyResponse {
   tag: string;
   image: string;
+  digest?: string;
+  buildDate?: string;
   error?: string;
 }
 
@@ -222,6 +252,32 @@ export interface DashboardState {
   schedulingFailureReason?: string;
   canAssistRollout: boolean;
   dashboardURL?: string;
+  /** Present whenever dashboard-operator exists; `active` while it is paused. */
+  override?: DashboardOverride;
+}
+
+/** A paused dashboard-operator / Dashboard Dev session (pkg/types DashboardOverride). */
+export interface DashboardOverride {
+  active: boolean;
+  operatorPaused: boolean;
+  sessionRecorded: boolean;
+  sessionError?: string;
+  mode?: string;
+  prNumber?: number;
+  flavor?: string;
+  startedAt?: string;
+  startedBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  releaseVersionAtStart?: string;
+  releaseVersion?: string;
+  /** RHOAI was updated while paused. */
+  stale: boolean;
+  staleReasons?: string[] | null;
+  /** A Dashboard CR deletion is waiting for the paused operator. */
+  dashboardDeleting: boolean;
+  warnings?: string[] | null;
+  lastAction?: { action: string; by: string; at: string; detail?: string };
 }
 
 export interface DashboardDevImage {
@@ -284,10 +340,60 @@ export interface Problem {
   confirmMessage?: string;
   learnMore?: string;
   technicalCmd?: string;
+  /** The objects an auto-fix may change, e.g. "Deployment ns/name". */
+  affectedObjects?: string[];
 }
 
 export interface CheckResult {
   name: string;
   status: "pass" | "fail" | "warn" | "info";
   detail: string;
+}
+
+// --- GET /api/operation (pkg/api OperationStatus) ---
+
+/** The cluster operation that holds the backend's mutation lock. */
+export interface ServerOperation {
+  id: string;
+  /** update, reinstall, refresh, deploy-dashboard-pr, setup-minio, ... */
+  type: string;
+  label: string;
+  user: string;
+  target?: string;
+  /** RFC 3339. */
+  startedAt: string;
+  updatedAt?: string;
+  /** Step id of the latest progress event (streamed operations only). */
+  step?: string;
+  stepStatus?: string;
+  message?: string;
+  pod?: string;
+}
+
+/** An operation a previous updater pod started and never finished. */
+export interface InterruptedOperation {
+  type: string;
+  label: string;
+  user: string;
+  target?: string;
+  startedAt: string;
+  pod?: string;
+}
+
+export interface OperationStatusResponse {
+  inProgress: boolean;
+  operation: ServerOperation | null;
+  interrupted?: InterruptedOperation;
+}
+
+/** GET /api/version */
+export interface VersionInfo {
+  version: string;
+  commit: string;
+  buildDate: string;
+  goVersion?: string;
+  templateRevision?: string;
+  expectedTemplateRevision?: string;
+  /** The Deployment predates the template this build expects (run make upgrade). */
+  templateOutdated: boolean;
 }

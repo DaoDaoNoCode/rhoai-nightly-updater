@@ -61,6 +61,9 @@ const SyncButton: React.FC<{ snapshot: ServerOperationSnapshot | null }> = ({ sn
   return <button onClick={() => op.syncServerOperation(snapshot)}>sync</button>;
 };
 
+/** GET /api/operation answering "nothing running" (these tests stub fetch for the stream only). */
+const idleOperation = async () => ({ inProgress: false, operation: null });
+
 function probe() {
   return JSON.parse(screen.getByTestId("probe").textContent || "{}");
 }
@@ -69,7 +72,7 @@ function renderApp(fetchStatus: () => Promise<StatusResponse>, extra?: React.Rea
   return render(
     <LiveAnnouncerProvider>
       <MemoryRouter>
-        <AppStateProvider fetchStatus={fetchStatus}>
+        <AppStateProvider fetchStatus={fetchStatus} fetchOperation={idleOperation}>
           <Probe />
           <NavButton />
           {extra}

@@ -1,4 +1,4 @@
-import type { UpdateStep } from "../types";
+import type { ServerOperation, UpdateStep } from "../types";
 import type { StreamDetachReason } from "../services/api";
 import { reconcileKindFor, type OperationKind, type ReconcileKind } from "../operationSteps";
 
@@ -20,6 +20,8 @@ export type OperationOutcome =
       httpStatus?: number;
       /** True when the backend refused the request, so nothing changed on the cluster. */
       rejected: boolean;
+      /** For a cluster_busy rejection: the operation that holds the lock. */
+      busyOperation?: ServerOperation;
     }
   | { status: "detached"; reason: OperationDetachReason; message: string };
 
@@ -36,6 +38,8 @@ export interface OperationRun {
   serverId?: string;
   /** What the run targets, e.g. the FBC image of an update. */
   detail?: string;
+  /** Who started it, for runs reported by the server (another tab or user). */
+  user?: string;
 }
 
 export interface ReconcileState {
@@ -54,7 +58,7 @@ export interface OperationState {
 }
 
 export type OperationAction =
-  | { type: "start"; id: number; kind: OperationKind; source: OperationSource; now: number; serverId?: string; steps?: UpdateStep[]; detail?: string }
+  | { type: "start"; id: number; kind: OperationKind; source: OperationSource; now: number; serverId?: string; steps?: UpdateStep[]; detail?: string; user?: string }
   | { type: "step"; id: number; step: UpdateStep }
   | { type: "end"; id: number; outcome: OperationOutcome; now: number }
   | { type: "statusPolled"; csvPhase: string }
@@ -99,6 +103,7 @@ export function operationReducer(state: OperationState, action: OperationAction)
           steps: action.steps ?? [],
           serverId: action.serverId,
           detail: action.detail,
+          user: action.user,
         },
         // A new run supersedes the previous run's reconcile result.
         reconcile: { ...state.reconcile, timedOut: false, finished: false },
