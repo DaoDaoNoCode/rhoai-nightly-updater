@@ -61,6 +61,7 @@ func runtimeWebhookFixture(f *fakeAPI) {
 		},
 	}})
 	f.json("GET", mwcPath, http.StatusOK, `{"items":[]}`)
+	serveComponentGroup(f)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK,
 		`{"resources":[{"name":"kserves","kind":"Kserve"},{"name":"kserves/status","kind":"Kserve"}]}`)
 }

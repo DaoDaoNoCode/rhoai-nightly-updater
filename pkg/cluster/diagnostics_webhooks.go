@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,391 +11,53 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// Stale admission webhooks and CRD conversion webhooks.
-//
-// A webhook configuration is stale only when every Service it calls is
-// NotFound AND its producer is not coming back (RHOAI operator notes §3.4):
-//   - OLM-owned configs (label olm.owner=<csv>): OLM recreates missing
-//     webhooks while the CSV exists (the CSV goes Failed/ComponentUnhealthy,
-//     then Pending/NeedsReinstall and is reinstalled; operator-lifecycle-
-//     manager olm/operator.go updateInstallStatus) and deletes them with the
-//     CSV (olm/operator.go, CSV deletion cleanup). So they are stale only
-//     when the CSV is gone.
-//   - Configs applied by the platform for a module (label
-//     platform.opendatahub.io/part-of=<module>): rhods-operator re-applies
-//     them while the module CR exists, so they are stale only when no CR of
-//     that module exists.
-//   - Anything else: the producer is unknown, so no automatic deletion.
-// While the operator CSV is Pending, InstallReady, Installing or Replacing
-// an upgrade is in flight and nothing is deleted.
-// A Service with no ready endpoints is not checked: the app has no RBAC for
-// EndpointSlices, and a restarting pod must not count as stale.
-
-type admissionConfig struct {
-	Kind     string `json:"-"`
-	Resource string `json:"-"`
-	Metadata struct {
-		Name            string            `json:"name"`
-		UID             string            `json:"uid"`
-		ResourceVersion string            `json:"resourceVersion"`
-		Labels          map[string]string `json:"labels"`
-		OwnerReferences []struct {
-			APIVersion string `json:"apiVersion"`
-			Kind       string `json:"kind"`
-			Name       string `json:"name"`
-		} `json:"ownerReferences"`
-	} `json:"metadata"`
-	Webhooks []struct {
-		Name          string  `json:"name"`
-		FailurePolicy *string `json:"failurePolicy"`
-		ClientConfig  struct {
-			Service *struct {
-				Namespace string `json:"namespace"`
-				Name      string `json:"name"`
-			} `json:"service"`
-		} `json:"clientConfig"`
-	} `json:"webhooks"`
-}
-
-func (a admissionConfig) ref() string { return a.Kind + " " + a.Metadata.Name }
-
-func (a admissionConfig) isRHOAI() bool {
-	labels := map[string]interface{}{}
-	for k, v := range a.Metadata.Labels {
-		labels[k] = v
-	}
-	if isRHOAIWebhook(a.Metadata.Name, labels) || a.Metadata.Labels["platform.opendatahub.io/part-of"] != "" {
-		return true
-	}
-	for _, o := range a.Metadata.OwnerReferences {
-		if strings.Contains(o.APIVersion, "opendatahub.io") {
-			return true
-		}
-	}
-	return false
-}
-
-func (a admissionConfig) services() []string {
-	var out []string
-	for _, wh := range a.Webhooks {
-		if svc := wh.ClientConfig.Service; svc != nil && svc.Name != "" && svc.Namespace != "" {
-			ref := svc.Namespace + "/" + svc.Name
-			if !containsString(out, ref) {
-				out = append(out, ref)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func (a admissionConfig) blocking() bool {
-	for _, wh := range a.Webhooks {
-		// admissionregistration/v1 defaults failurePolicy to Fail.
-		if wh.FailurePolicy == nil || *wh.FailurePolicy == "Fail" {
-			return true
-		}
-	}
-	return false
-}
-
-type webhookVerdict struct {
-	Config    admissionConfig
-	Missing   []string // all referenced Services, all NotFound
-	Deletable bool
-	Reason    string // why it is (not) safe to delete
-}
-
-// webhookEnv caches lookups shared by all configs of one evaluation.
-type webhookEnv struct {
-	c           *Client
-	services    map[string]error // nil = exists
-	csvs        map[string]error
-	modules     map[string]moduleState
-	moduleKinds map[string]string // lowercase kind -> resource
-	upgrading   string            // non-empty: CSV name and phase of an in-flight upgrade
-}
-
-type moduleState struct {
-	exists bool
-	err    error
-}
-
-func newWebhookEnv(c *Client) *webhookEnv {
-	env := &webhookEnv{c: c, services: map[string]error{}, csvs: map[string]error{}, modules: map[string]moduleState{}}
-	if csvs, err := listOperatorCSVs(c); err == nil {
-		for _, csv := range csvs {
-			switch csv.Phase {
-			case "Pending", "InstallReady", "Installing", "Replacing":
-				env.upgrading = fmt.Sprintf("%s is %s", csv.Name, csv.Phase)
-			}
-		}
-	}
-	return env
-}
-
-func (e *webhookEnv) service(ref string) error {
-	if err, ok := e.services[ref]; ok {
-		return err
-	}
-	ns, name, _ := strings.Cut(ref, "/")
-	_, _, err := e.c.get(namespacedPath("v1", "services", ns, name))
-	e.services[ref] = err
-	return err
-}
-
-func (e *webhookEnv) csvExists(ns, name string) error {
-	key := ns + "/" + name
-	if err, ok := e.csvs[key]; ok {
-		return err
-	}
-	_, _, err := e.c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
-	e.csvs[key] = err
-	return err
-}
-
-// moduleCRExists reports whether any CR of the platform module exists, using
-// discovery of components.platform.opendatahub.io to map the module name
-// (the lower-case kind, e.g. kserve, aihub, ogx) to its resource.
-func (e *webhookEnv) moduleCRExists(module string) moduleState {
-	if st, ok := e.modules[module]; ok {
-		return st
-	}
-	if e.moduleKinds == nil {
-		e.moduleKinds = map[string]string{}
-		body, _, err := e.c.get("/apis/components.platform.opendatahub.io/v1alpha1")
-		if err != nil {
-			st := moduleState{err: fmt.Errorf("discover module kinds: %w", err)}
-			e.modules[module] = st
-			e.moduleKinds = nil
-			return st
-		}
-		var disc struct {
-			Resources []struct {
-				Name string `json:"name"`
-				Kind string `json:"kind"`
-			} `json:"resources"`
-		}
-		_ = json.Unmarshal(body, &disc)
-		for _, r := range disc.Resources {
-			if !strings.Contains(r.Name, "/") {
-				e.moduleKinds[strings.ToLower(r.Kind)] = r.Name
-			}
-		}
-	}
-	resource, ok := e.moduleKinds[module]
-	if !ok {
-		st := moduleState{err: fmt.Errorf("no module kind %q is served", module)}
-		e.modules[module] = st
-		return st
-	}
-	body, _, err := e.c.get("/apis/components.platform.opendatahub.io/v1alpha1/" + resource)
-	if err != nil {
-		st := moduleState{err: err}
-		e.modules[module] = st
-		return st
-	}
-	var list struct {
-		Items []json.RawMessage `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		st := moduleState{err: err}
-		e.modules[module] = st
-		return st
-	}
-	st := moduleState{exists: len(list.Items) > 0}
-	e.modules[module] = st
-	return st
-}
-
-// evaluate returns nil when the config is not stale.
-func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
-	svcs := cfg.services()
-	if len(svcs) == 0 {
-		return nil
-	}
-	for _, s := range svcs {
-		// Any Service that exists, or that cannot be checked, means the
-		// config is not (provably) stale. Deleting a config removes all of
-		// its webhooks, so every Service must be gone.
-		if err := e.service(s); !IsK8sError(err, http.StatusNotFound) {
-			return nil
-		}
-	}
-	v := &webhookVerdict{Config: cfg, Missing: svcs}
-	labels := cfg.Metadata.Labels
-	switch {
-	case e.upgrading != "":
-		v.Reason = "an operator upgrade is in progress (" + e.upgrading + "); OLM and the operator recreate webhooks when it finishes"
-	case labels["olm.owner"] != "":
-		ns := nonEmpty(labels["olm.owner.namespace"], SubNS)
-		err := e.csvExists(ns, labels["olm.owner"])
-		switch {
-		case err == nil:
-			v.Reason = fmt.Sprintf("its CSV %s still exists, so OLM recreates it; the operator pods are probably down (see Operator pods)", labels["olm.owner"])
-		case IsK8sError(err, http.StatusNotFound):
-			v.Deletable = true
-			v.Reason = fmt.Sprintf("its CSV %s no longer exists", labels["olm.owner"])
-		default:
-			v.Reason = fmt.Sprintf("could not check its CSV %s: %v", labels["olm.owner"], err)
-		}
-	case labels["platform.opendatahub.io/part-of"] != "" && labels["platform.opendatahub.io/part-of"] != "platform":
-		module := labels["platform.opendatahub.io/part-of"]
-		st := e.moduleCRExists(module)
-		switch {
-		case st.err != nil:
-			v.Reason = fmt.Sprintf("could not check whether module %s is installed: %v", module, st.err)
-		case st.exists:
-			v.Reason = fmt.Sprintf("module %s is installed, so the operator re-applies its Service and webhooks; check the module's pods", module)
-		default:
-			v.Deletable = true
-			v.Reason = fmt.Sprintf("module %s has no CR any more (it was removed)", module)
-		}
-	default:
-		v.Reason = "the tool cannot tell which operator owns it"
-	}
-	return v
-}
-
-func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
-	var out []admissionConfig
-	var errs []string
-	for _, wk := range webhookKinds {
-		body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""))
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("list %s: %v", wk.resource, err))
-			continue
-		}
-		var list struct {
-			Items []admissionConfig `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
-			continue
-		}
-		for _, item := range list.Items {
-			item.Kind, item.Resource = wk.kind, wk.resource
-			if item.isRHOAI() {
-				out = append(out, item)
-			}
-		}
-	}
-	return out, errs
-}
-
-var webhookKinds = []struct{ kind, resource string }{
-	{"ValidatingWebhookConfiguration", "validatingwebhookconfigurations"},
-	{"MutatingWebhookConfiguration", "mutatingwebhookconfigurations"},
-}
-
-func findStaleWebhooks(c *Client) ([]webhookVerdict, []string) {
-	configs, errs := listAdmissionConfigs(c)
-	env := newWebhookEnv(c)
-	// Look up all referenced Services concurrently; evaluate() then reads
-	// the cache.
-	var refs []string
-	for _, cfg := range configs {
-		for _, ref := range cfg.services() {
-			if !containsString(refs, ref) {
-				refs = append(refs, ref)
-			}
-		}
-	}
-	results := make([]error, len(refs))
-	parallelFor(len(refs), 8, func(i int) {
-		ns, name, _ := strings.Cut(refs[i], "/")
-		_, _, results[i] = c.get(namespacedPath("v1", "services", ns, name))
-	})
-	for i, ref := range refs {
-		env.services[ref] = results[i]
-	}
-	var out []webhookVerdict
-	for _, cfg := range configs {
-		if v := env.evaluate(cfg); v != nil {
-			out = append(out, *v)
-		}
-	}
-	return out, errs
-}
+// The "Stale webhooks" diagnostics check and the delete-stale-webhooks fix.
+// Detection lives in stale_webhooks.go (RHOAI operator notes §3.4); this
+// file only turns its verdicts into problems and fix results.
 
 type staleConversion struct {
-	CRD            string
-	Service        string
-	StoredVersions []string
-	Module         string // DSC component the Service name points to, if any
-	ModuleState    string
+	deadConversion
+	Module      string // DSC component the Service name points to, if any
+	ModuleState string
 }
 
-// rhoaiCRDSelectors select the CRDs RHOAI installs: the operator's own
-// (OLM package label, e.g. DSC and DSCI) and those the platform applies for
-// modules. Listing all CRDs would download every schema (13 MB live).
-var rhoaiCRDSelectors = []string{
-	"operators.coreos.com/" + SubName + "." + SubNS,
-	"platform.opendatahub.io/part-of",
-}
-
-func findStaleConversions(c *Client) ([]staleConversion, error) {
-	type crdItem struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Spec struct {
-			Conversion *struct {
-				Strategy string `json:"strategy"`
-				Webhook  *struct {
-					ClientConfig struct {
-						Service *struct {
-							Namespace string `json:"namespace"`
-							Name      string `json:"name"`
-						} `json:"service"`
-					} `json:"clientConfig"`
-				} `json:"webhook"`
-			} `json:"conversion"`
-		} `json:"spec"`
-		Status struct {
-			StoredVersions []string `json:"storedVersions"`
-		} `json:"status"`
+// findStaleConversions reports RHOAI CRDs whose conversion webhook Service is
+// missing, or has had no ready endpoint for longer than the grace period.
+func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
+	crds, err := listRHOAIConversionCRDs(c)
+	if IsK8sError(err, http.StatusNotFound) {
+		return nil, nil, nil
 	}
-	var items []crdItem
-	seen := map[string]bool{}
-	for _, sel := range rhoaiCRDSelectors {
-		body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {sel}})
-		if IsK8sError(err, http.StatusNotFound) {
-			return nil, nil
+	if err != nil {
+		return nil, nil, err
+	}
+	var candidates []conversionCRD
+	for _, crd := range crds {
+		ref := crd.conversionService()
+		if ref == "" {
+			continue
 		}
-		if err != nil {
-			return nil, err
+		if ns, _, _ := strings.Cut(ref, "/"); !strings.HasPrefix(ns, "redhat-ods") && !strings.Contains(crd.Metadata.Name, "opendatahub") {
+			continue
 		}
-		var list struct {
-			Items []crdItem `json:"items"`
+		candidates = append(candidates, crd)
+	}
+	dead, unknown := deadConversions(candidates, newServiceHealthCache(c, staleServiceGrace))
+	var errs []string
+	for _, u := range unknown {
+		if !u.Health.exists {
+			errs = append(errs, fmt.Sprintf("conversion Service of CRD %s: %v", u.CRD, u.Health.err))
 		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			return nil, fmt.Errorf("parse CRDs: %w", err)
-		}
-		for _, it := range list.Items {
-			if !seen[it.Metadata.Name] {
-				seen[it.Metadata.Name] = true
-				items = append(items, it)
-			}
-		}
+	}
+	if len(dead) == 0 {
+		return nil, errs, nil
 	}
 	components := readDSCComponents(c)
-	var out []staleConversion
-	for _, crd := range items {
-		conv := crd.Spec.Conversion
-		if conv == nil || conv.Strategy != "Webhook" || conv.Webhook == nil || conv.Webhook.ClientConfig.Service == nil {
-			continue
-		}
-		svc := conv.Webhook.ClientConfig.Service
-		if !strings.HasPrefix(svc.Namespace, "redhat-ods") && !strings.Contains(crd.Metadata.Name, "opendatahub") {
-			continue
-		}
-		_, _, err := c.get(namespacedPath("v1", "services", svc.Namespace, svc.Name))
-		if !IsK8sError(err, http.StatusNotFound) {
-			continue
-		}
-		sc := staleConversion{CRD: crd.Metadata.Name, Service: svc.Namespace + "/" + svc.Name, StoredVersions: crd.Status.StoredVersions}
-		normalized := strings.ReplaceAll(svc.Name, "-", "")
+	out := make([]staleConversion, 0, len(dead))
+	for _, d := range dead {
+		sc := staleConversion{deadConversion: d}
+		_, svcName, _ := strings.Cut(d.Service, "/")
+		normalized := strings.ReplaceAll(svcName, "-", "")
 		for name, state := range components {
 			if len(name) > len(sc.Module) && strings.Contains(normalized, name) {
 				sc.Module, sc.ModuleState = name, state
@@ -405,8 +65,7 @@ func findStaleConversions(c *Client) ([]staleConversion, error) {
 		}
 		out = append(out, sc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CRD < out[j].CRD })
-	return out, nil
+	return out, errs, nil
 }
 
 // readDSCComponents returns spec.components managementState by component
@@ -441,17 +100,18 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	const name = "Stale webhooks"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
 	var conversions []staleConversion
+	var convErrs []string
 	var convErr error
 	convDone := make(chan struct{})
 	go func() {
 		defer close(convDone)
-		conversions, convErr = findStaleConversions(c)
+		conversions, convErrs, convErr = findStaleConversions(c)
 	}()
-	stale, errs := findStaleWebhooks(c)
+	scan := scanStaleWebhooks(c)
 	<-convDone
 
 	var deletable, guidance []webhookVerdict
-	for _, v := range stale {
+	for _, v := range scan.Verdicts {
 		if v.Deletable {
 			deletable = append(deletable, v)
 		} else {
@@ -466,18 +126,18 @@ func checkStaleWebhooks(c *Client) checkOutput {
 			if v.Config.blocking() {
 				severity = "critical"
 			}
-			evidence = append(evidence, fmt.Sprintf("%s: Service %s not found; %s", v.Config.ref(), strings.Join(v.Missing, ", "), v.Reason))
+			evidence = append(evidence, fmt.Sprintf("%s: Service %s; %s", v.Config.ref(), v.downText(), v.Reason))
 			affected = append(affected, v.Config.ref())
-			lines = append(lines, fmt.Sprintf("- %s (Service %s; %s)", v.Config.ref(), strings.Join(v.Missing, ", "), v.Reason))
+			lines = append(lines, fmt.Sprintf("- %s (Service %s; %s)", v.Config.ref(), v.downText(), v.Reason))
 		}
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-webhooks",
 			Severity: severity,
-			Title:    fmt.Sprintf("%d leftover RHOAI webhook configuration(s) point to a Service that no longer exists", len(deletable)),
+			Title:    fmt.Sprintf("%d leftover RHOAI webhook configuration(s) point to a Service that cannot serve them", len(deletable)),
 			Description: "The API server calls these webhooks, but nothing serves them and their owner is gone, so nothing will recreate them. " +
 				"With failurePolicy Fail (the default), every matching request is rejected until the configuration is deleted.",
 			Evidence: evidence,
-			Fix:      "Delete these leftover webhook configurations. Only configurations whose Services are all missing and whose owner (CSV or module) no longer exists are deleted.",
+			Fix:      "Delete these leftover webhook configurations. Only configurations whose Services are all missing or without ready endpoints, and whose owner (CSV or module) no longer exists, are deleted.",
 			LearnMore: "OLM deletes the webhooks of a CSV when the CSV is deleted, and recreates them while the CSV exists. " +
 				"rhods-operator re-applies a module's webhooks while the module exists. A configuration is a leftover only when both are gone.",
 			AutoFixable:     true,
@@ -490,20 +150,26 @@ func checkStaleWebhooks(c *Client) checkOutput {
 	}
 
 	if len(guidance) > 0 {
-		severity := "warning"
+		// failurePolicy Ignore webhooks are skipped by the API server when
+		// they cannot be called, so they only lose their effect.
+		severity := "info"
 		var evidence, affected []string
 		for _, v := range guidance {
 			if v.Config.blocking() {
 				severity = "critical"
 			}
-			evidence = append(evidence, fmt.Sprintf("%s: Service %s not found; not deleted automatically because %s", v.Config.ref(), strings.Join(v.Missing, ", "), v.Reason))
+			policy := "failurePolicy Fail: matching requests are rejected"
+			if !v.Config.blocking() {
+				policy = "failurePolicy Ignore: requests are not blocked, but the webhook has no effect"
+			}
+			evidence = append(evidence, fmt.Sprintf("%s: Service %s (%s); not deleted automatically because %s", v.Config.ref(), v.downText(), policy, v.Reason))
 			affected = append(affected, v.Config.ref())
 		}
 		out.problems = append(out.problems, Problem{
 			ID:       "webhook-service-missing",
 			Severity: severity,
-			Title:    fmt.Sprintf("%d RHOAI webhook configuration(s) call a missing Service", len(guidance)),
-			Description: "Requests that these webhooks intercept are rejected while their Service is missing. Their owner still exists (or is unknown), " +
+			Title:    fmt.Sprintf("%d RHOAI webhook configuration(s) call a Service that cannot serve them", len(guidance)),
+			Description: "Requests that these webhooks intercept are rejected while their Service is missing or has no ready pods. Their owner still exists (or is unknown), " +
 				"so deleting them would not help: the owner recreates them, or they may still be needed.",
 			Evidence:        evidence,
 			AffectedObjects: affected,
@@ -516,7 +182,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		var evidence, affected []string
 		var hints []string
 		for _, sc := range conversions {
-			line := fmt.Sprintf("CRD %s: conversion Service %s not found (storedVersions %s)", sc.CRD, sc.Service, strings.Join(sc.StoredVersions, ", "))
+			line := fmt.Sprintf("CRD %s: conversion Service %s (storedVersions %s)", sc.CRD, sc.Health.describe(sc.Service), strings.Join(sc.StoredVersions, ", "))
 			if sc.Module != "" {
 				line += fmt.Sprintf("; the Service belongs to DSC component %s, which is %s", sc.Module, nonEmpty(sc.ModuleState, "not set"))
 				if sc.ModuleState == "Removed" {
@@ -534,7 +200,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-crd-conversion",
 			Severity: "critical",
-			Title:    fmt.Sprintf("%d CRD(s) use a conversion webhook whose Service is missing", len(conversions)),
+			Title:    fmt.Sprintf("%d CRD(s) use a conversion webhook whose Service cannot serve", len(conversions)),
 			Description: "Reading or writing these objects at a version other than the one they are stored in fails, which also breaks garbage collection " +
 				"and makes namespace deletion hang in Terminating. The tool does not change this automatically: switching the CRD to conversion strategy None changes how stored objects are read.",
 			Evidence:        evidence,
@@ -547,13 +213,16 @@ func checkStaleWebhooks(c *Client) checkOutput {
 
 	var details []string
 	switch {
-	case len(stale) == 0 && len(conversions) == 0:
-		details = append(details, "No RHOAI webhook or CRD conversion points to a missing Service")
+	case len(scan.Verdicts) == 0 && len(conversions) == 0:
+		details = append(details, "No RHOAI webhook or CRD conversion points to a Service that cannot serve it")
 	default:
 		out.check.Status = "fail"
-		details = append(details, fmt.Sprintf("%d webhook configuration(s) and %d CRD conversion(s) point to a missing Service", len(stale), len(conversions)))
+		details = append(details, fmt.Sprintf("%d webhook configuration(s) and %d CRD conversion(s) point to a Service that cannot serve them", len(scan.Verdicts), len(conversions)))
 	}
-	if len(errs) > 0 {
+	if scan.Upgrading != "" {
+		details = append(details, "webhook configurations not checked while an operator install is in progress ("+scan.Upgrading+")")
+	}
+	if errs := append(append([]string{}, scan.Errors...), convErrs...); len(errs) > 0 {
 		details = append(details, "could not check: "+strings.Join(errs, "; "))
 		if out.check.Status == "pass" {
 			out.check.Status = "warn"
@@ -596,64 +265,47 @@ func deleteExact(c *Client, path, uid, resourceVersion string) error {
 // and deletes only the deletable stale ones, each guarded by its UID and
 // resourceVersion, so a configuration that changed since the check is kept.
 func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
-	stale, listErrs := findStaleWebhooks(c)
-	var logs, deleted, failed, changed []string
-	for _, v := range stale {
-		if !v.Deletable {
-			logs = append(logs, fmt.Sprintf("Kept %s: %s", v.Config.ref(), v.Reason))
-			continue
-		}
-		path := clusterPath("admissionregistration.k8s.io/v1", v.Config.Resource, v.Config.Metadata.Name)
-		err := deleteExact(c, path, v.Config.Metadata.UID, v.Config.Metadata.ResourceVersion)
-		switch {
-		case err == nil:
-			deleted = append(deleted, v.Config.ref())
-			logs = append(logs, fmt.Sprintf("Deleted %s (Service %s not found; %s)", v.Config.ref(), strings.Join(v.Missing, ", "), v.Reason))
-		case IsK8sError(err, http.StatusNotFound):
-			logs = append(logs, fmt.Sprintf("%s was already gone", v.Config.ref()))
-		case IsK8sError(err, http.StatusConflict):
-			changed = append(changed, v.Config.ref())
-			logs = append(logs, fmt.Sprintf("Kept %s: it changed after it was checked", v.Config.ref()))
-		default:
-			failed = append(failed, v.Config.ref())
-			logs = append(logs, fmt.Sprintf("Error: could not delete %s: %v", v.Config.ref(), err))
-		}
+	scan := scanStaleWebhooks(c)
+	if scan.Upgrading != "" {
+		return nothingToDo("an operator install is in progress ("+scan.Upgrading+"); OLM and the operator recreate webhooks when it finishes. Nothing was deleted.", nil), nil
 	}
-	for _, e := range listErrs {
+	d := deleteStaleWebhookConfigs(c, scan.Verdicts)
+	logs := d.Logs
+	for _, e := range scan.Errors {
 		logs = append(logs, "Warning: "+e)
 	}
 
-	if len(deleted) > 0 {
+	if len(d.Deleted) > 0 {
 		RecordActivity(c, types.ActivityEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			User:      getUser(c),
 			Action:    "fix-delete-stale-webhooks",
-			Detail:    "deleted leftover webhook configurations: " + strings.Join(deleted, ", "),
-			Success:   len(failed) == 0,
+			Detail:    "deleted leftover webhook configurations: " + strings.Join(d.Deleted, ", "),
+			Success:   len(d.Failed) == 0,
 		})
 	}
 
 	switch {
-	case len(deleted) == 0 && len(failed) == 0 && len(changed) > 0:
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s changed after the check, so nothing was deleted. Run diagnostics again.", strings.Join(changed, ", ")), Logs: logs, ErrorCode: "conflict"}, nil
-	case len(deleted) == 0 && len(failed) == 0:
-		if len(listErrs) > 0 {
-			return &types.OperationResponse{Success: false, Message: "Could not check webhooks: " + strings.Join(listErrs, "; "), Logs: logs}, nil
+	case len(d.Deleted) == 0 && len(d.Failed) == 0 && len(d.Changed) > 0:
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s changed after the check, so nothing was deleted. Run diagnostics again.", strings.Join(d.Changed, ", ")), Logs: logs, ErrorCode: "conflict"}, nil
+	case len(d.Deleted) == 0 && len(d.Failed) == 0:
+		if len(scan.Errors) > 0 {
+			return &types.OperationResponse{Success: false, Message: "Could not check webhooks: " + strings.Join(scan.Errors, "; "), Logs: logs}, nil
 		}
 		return nothingToDo("no leftover webhook configuration was found (a Service is back, its owner still exists, or an upgrade is in progress). Nothing was deleted.", logs), nil
-	case len(deleted) == 0:
-		return &types.OperationResponse{Success: false, Message: "Could not delete " + strings.Join(failed, ", "), Logs: logs}, nil
-	case len(failed) > 0:
+	case len(d.Deleted) == 0:
+		return &types.OperationResponse{Success: false, Message: "Could not delete " + strings.Join(d.Failed, ", "), Logs: logs}, nil
+	case len(d.Failed) > 0:
 		return &types.OperationResponse{
 			Success:   false,
-			Message:   fmt.Sprintf("Deleted %s; could not delete %s.", strings.Join(deleted, ", "), strings.Join(failed, ", ")),
+			Message:   fmt.Sprintf("Deleted %s; could not delete %s.", strings.Join(d.Deleted, ", "), strings.Join(d.Failed, ", ")),
 			Logs:      logs,
 			ErrorCode: "partial_failure",
 		}, nil
 	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Deleted %d leftover webhook configuration(s): %s.", len(deleted), strings.Join(deleted, ", ")),
+		Message: fmt.Sprintf("Deleted %d leftover webhook configuration(s): %s.", len(d.Deleted), strings.Join(d.Deleted, ", ")),
 		Logs:    logs,
 	}, nil
 }

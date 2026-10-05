@@ -5,60 +5,147 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
 const componentAPIGroup = "components.platform.opendatahub.io"
 
-// componentResources discovers the component CR kinds the cluster serves,
-// so the list follows whatever operator version installed the CRDs (3.6
-// added aihubs, aipipelines and mcplifecycleoperators). It returns the
-// group/version path and the plural resource names. A missing API group
-// (fresh cluster, or RHOAI 2.x) yields no resources and no error.
-func componentResources(c *Client) (string, []string, error) {
+// componentKind is one kind served by components.platform.opendatahub.io.
+type componentKind struct {
+	Resource string // plural, e.g. "kserves"
+	Kind     string // e.g. "Kserve"
+	Verbs    []string
+}
+
+// componentAPI is the served version of components.platform.opendatahub.io
+// and its kinds, discovered so the list follows whatever operator version
+// installed the CRDs (3.6 added aihubs, aipipelines and
+// mcplifecycleoperators). Version is "" when the group is not served
+// (fresh cluster, or RHOAI 2.x).
+type componentAPI struct {
+	Version string
+	Kinds   []componentKind
+}
+
+// componentListPath is the cluster-wide collection of one component
+// resource at the discovered version.
+func componentListPath(version, resource string) string {
+	return "/apis/" + componentAPIGroup + "/" + version + "/" + resource
+}
+
+// cachedComponentAPI returns a function that discovers the component API on
+// first use and then returns the same result.
+func cachedComponentAPI(c *Client) func() (componentAPI, error) {
+	var once sync.Once
+	var api componentAPI
+	var err error
+	return func() (componentAPI, error) {
+		once.Do(func() { api, err = discoverComponentAPI(c) })
+		return api, err
+	}
+}
+
+// moduleCRPresent reports whether any CR of the module (lower-case kind)
+// exists. A kind that is not served means no CR exists; discovery and list
+// errors are returned.
+func moduleCRPresent(c *Client, discover func() (componentAPI, error), module string) (bool, error) {
+	items, err := listModuleCRs(c, discover, module)
+	return len(items) > 0, err
+}
+
+// moduleCRItem is the metadata of a module CR.
+type moduleCRItem struct {
+	Metadata struct {
+		Name              string   `json:"name"`
+		Finalizers        []string `json:"finalizers"`
+		DeletionTimestamp string   `json:"deletionTimestamp"`
+	} `json:"metadata"`
+}
+
+// listModuleCRs lists the CRs of one module (lower-case kind).
+func listModuleCRs(c *Client, discover func() (componentAPI, error), module string) ([]moduleCRItem, error) {
+	api, err := discover()
+	if err != nil {
+		return nil, err
+	}
+	resource, ok := api.resourceForModule(module)
+	if !ok {
+		return nil, nil
+	}
+	body, _, err := c.get(componentListPath(api.Version, resource))
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", resource, err)
+	}
+	var list struct {
+		Items []moduleCRItem `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", resource, err)
+	}
+	return list.Items, nil
+}
+
+// resourceForModule maps a module name (the lower-case kind, e.g. kserve,
+// aihub, ogx, as used by platform.opendatahub.io/part-of) to its resource.
+func (a componentAPI) resourceForModule(module string) (string, bool) {
+	for _, k := range a.Kinds {
+		if strings.ToLower(k.Kind) == module {
+			return k.Resource, true
+		}
+	}
+	return "", false
+}
+
+// discoverComponentAPI reads the API discovery documents of the component
+// group (readable by every authenticated user through system:discovery). A
+// group that is not served yields an empty componentAPI and no error.
+func discoverComponentAPI(c *Client) (componentAPI, error) {
 	body, _, err := c.get("/apis/" + componentAPIGroup)
 	if IsK8sError(err, 404) {
-		return "", nil, nil
+		return componentAPI{}, nil
 	}
 	if err != nil {
-		return "", nil, fmt.Errorf("discover %s: %w", componentAPIGroup, err)
+		return componentAPI{}, fmt.Errorf("discover %s: %w", componentAPIGroup, err)
 	}
 	var group struct {
 		PreferredVersion struct {
 			GroupVersion string `json:"groupVersion"`
+			Version      string `json:"version"`
 		} `json:"preferredVersion"`
 	}
 	if err := json.Unmarshal(body, &group); err != nil {
-		return "", nil, fmt.Errorf("parse %s discovery: %w", componentAPIGroup, err)
+		return componentAPI{}, fmt.Errorf("parse %s discovery: %w", componentAPIGroup, err)
 	}
-	gv := group.PreferredVersion.GroupVersion
-	if gv == "" {
-		return "", nil, fmt.Errorf("%s discovery lists no preferred version", componentAPIGroup)
+	version := group.PreferredVersion.Version
+	if version == "" {
+		_, version, _ = strings.Cut(group.PreferredVersion.GroupVersion, "/")
 	}
-	body, _, err = c.get("/apis/" + gv)
+	if version == "" {
+		return componentAPI{}, fmt.Errorf("%s discovery lists no preferred version", componentAPIGroup)
+	}
+	body, _, err = c.get("/apis/" + componentAPIGroup + "/" + version)
 	if err != nil {
-		return "", nil, fmt.Errorf("discover %s resources: %w", gv, err)
+		return componentAPI{}, fmt.Errorf("discover %s/%s resources: %w", componentAPIGroup, version, err)
 	}
 	var list struct {
 		Resources []struct {
 			Name  string   `json:"name"`
+			Kind  string   `json:"kind"`
 			Verbs []string `json:"verbs"`
 		} `json:"resources"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return "", nil, fmt.Errorf("parse %s resources: %w", gv, err)
+		return componentAPI{}, fmt.Errorf("parse %s/%s resources: %w", componentAPIGroup, version, err)
 	}
-	var names []string
+	api := componentAPI{Version: version}
 	for _, r := range list.Resources {
 		if strings.Contains(r.Name, "/") {
 			continue // subresource such as kserves/status
 		}
-		verbs := strings.Join(r.Verbs, ",") + ","
-		if strings.Contains(verbs, "list,") && strings.Contains(verbs, "patch,") {
-			names = append(names, r.Name)
-		}
+		api.Kinds = append(api.Kinds, componentKind{Resource: r.Name, Kind: r.Kind, Verbs: r.Verbs})
 	}
-	return "/apis/" + gv, names, nil
+	return api, nil
 }
 
 // StuckComponentCRAge is how long a component CR must have been deleting
@@ -94,14 +181,19 @@ var componentFinalizerOwners = map[string]string{
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
 // It returns the number of CRs unblocked and the problems or skips to log.
 func cleanupStuckComponentCRs(c *Client) (int, []string) {
-	base, resources, err := componentResources(c)
+	api, err := discoverComponentAPI(c)
 	if err != nil {
 		return 0, []string{err.Error()}
 	}
 	unstuck := 0
 	var warnings []string
-	for _, resource := range resources {
-		listPath := base + "/" + resource
+	for _, kind := range api.Kinds {
+		verbs := strings.Join(kind.Verbs, ",") + ","
+		if !strings.Contains(verbs, "list,") || !strings.Contains(verbs, "patch,") {
+			continue
+		}
+		resource := kind.Resource
+		listPath := componentListPath(api.Version, resource)
 		body, _, err := c.get(listPath)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("list %s: %v", resource, err))

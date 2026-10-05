@@ -1171,16 +1171,8 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	// Only configurations that can no longer be served are removed; operand
 	// webhooks such as KServe's keep serving while the operator is reinstalled.
 	emit(UpdateStepEvent{Step: "cleanup_webhooks", Status: "running", Message: "Cleaning up stale webhooks..."})
-	removedWebhooks, webhookWarnings := removeStaleWebhooks(c)
-	logs = append(logs, fmt.Sprintf("Removed %d stale webhook configurations", len(removedWebhooks)))
-	for _, r := range removedWebhooks {
-		logs = append(logs, "  Removed "+r)
-	}
-	for _, w := range webhookWarnings {
-		slog.Warn("stale webhook cleanup issue", "detail", w)
-		logs = append(logs, fmt.Sprintf("Warning: %s", w))
-	}
-	emit(UpdateStepEvent{Step: "cleanup_webhooks", Status: "success", Message: fmt.Sprintf("Removed %d stale webhooks", len(removedWebhooks))})
+	removedWebhooks := cleanupStaleWebhooksForReinstall(c, &logs)
+	emit(UpdateStepEvent{Step: "cleanup_webhooks", Status: "success", Message: fmt.Sprintf("Removed %d stale webhooks", removedWebhooks)})
 
 	// --- Step 6b: cleanup_stale_component_crs ---
 	// After EA↔GA transitions, component CRs can get stuck with finalizers
@@ -1330,6 +1322,28 @@ func createSubscriptionAndWait(c *Client, source, channel, kind string, recovery
 		Message: strings.TrimSpace(fmt.Sprintf("Reinstall to %s complete: %s is installed. %s", kind, outcome.csv, outcome.note)),
 		Logs:    logs,
 	}, nil
+}
+
+// cleanupStaleWebhooksForReinstall removes leftover webhook configurations
+// with the same rules as the diagnostics fix (stale_webhooks.go), after the
+// Subscription and CSV are gone. It never fails the reinstall: a
+// configuration that cannot be checked or deleted is kept and logged.
+func cleanupStaleWebhooksForReinstall(c *Client, logs *[]string) int {
+	scan := scanStaleWebhooks(c)
+	if scan.Upgrading != "" {
+		*logs = append(*logs, "Webhook cleanup skipped: an operator install is in progress ("+scan.Upgrading+")")
+		return 0
+	}
+	d := deleteStaleWebhookConfigs(c, scan.Verdicts)
+	*logs = append(*logs, fmt.Sprintf("Removed %d stale webhook configurations", len(d.Deleted)))
+	for _, l := range d.Logs {
+		*logs = append(*logs, "  "+l)
+	}
+	for _, w := range scan.Errors {
+		slog.Warn("stale webhook cleanup issue", "detail", w)
+		*logs = append(*logs, "Warning: "+w)
+	}
+	return len(d.Deleted)
 }
 
 // patchCRDConversionWebhooks is a safety net for the DSC and DSCI CRDs after

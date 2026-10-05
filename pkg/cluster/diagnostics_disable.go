@@ -52,33 +52,15 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 	return true, ""
 }
 
-// moduleCR returns the module CR of a component, or found=false.
+// moduleCR returns the module CR of a component, or found=false. Discovery
+// and list errors are returned, so a precondition is never skipped because
+// the CR could not be read.
 func moduleCR(c *Client, component string) (finalizers []string, deleting bool, found bool, err error) {
-	env := newWebhookEnv(c)
-	env.moduleCRExists(component) // fills env.moduleKinds
-	resource, ok := env.moduleKinds[component]
-	if !ok {
-		return nil, false, false, nil
-	}
-	body, _, err := c.get("/apis/components.platform.opendatahub.io/v1alpha1/" + resource)
-	if err != nil {
+	items, err := listModuleCRs(c, cachedComponentAPI(c), component)
+	if err != nil || len(items) == 0 {
 		return nil, false, false, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Finalizers        []string `json:"finalizers"`
-				DeletionTimestamp string   `json:"deletionTimestamp"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, false, false, err
-	}
-	if len(list.Items) == 0 {
-		return nil, false, false, nil
-	}
-	m := list.Items[0].Metadata
+	m := items[0].Metadata
 	return m.Finalizers, m.DeletionTimestamp != "", true, nil
 }
 

@@ -41,6 +41,7 @@ func TestPlatformModules_AdminAckAndRunlevelTimeout(t *testing.T) {
 
 func TestPlatformModules_StuckDashboardWithPausedOperator(t *testing.T) {
 	f, c := newFakeAPI(t)
+	serveComponentGroup(f)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK,
 		`{"resources":[{"name":"dashboards","kind":"Dashboard"},{"name":"rays","kind":"Ray"}]}`)
 	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)

@@ -393,6 +393,7 @@ func TestDisableComponent_Preconditions(t *testing.T) {
 			f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 			f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tt.component+`":{"managementState":"Managed"}}}}`)
 			f.json("PATCH", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tt.component+`":{"managementState":"Removed"}}}}`)
+			serveComponentGroup(f)
 			f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[{"name":"rays","kind":"Ray"}]}`)
 			tt.setup(f)
 			res, err := ApplyFix(c, "disable-component:"+tt.component)

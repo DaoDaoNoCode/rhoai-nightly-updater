@@ -140,62 +140,32 @@ type stuckModule struct {
 }
 
 func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
-	body, _, err := c.get("/apis/components.platform.opendatahub.io/v1alpha1")
-	if IsK8sError(err, http.StatusNotFound) {
-		return nil, nil
-	}
+	api, err := discoverComponentAPI(c)
 	if err != nil {
 		return nil, err
 	}
-	var disc struct {
-		Resources []struct {
-			Name string `json:"name"`
-			Kind string `json:"kind"`
-		} `json:"resources"`
-	}
-	if err := json.Unmarshal(body, &disc); err != nil {
-		return nil, err
-	}
 	type listResult struct {
-		body []byte
-		err  error
+		items []moduleCRItem
+		err   error
 	}
-	results := make([]listResult, len(disc.Resources))
-	parallelFor(len(disc.Resources), 6, func(i int) {
-		if strings.Contains(disc.Resources[i].Name, "/") {
-			return
-		}
-		results[i].body, _, results[i].err = c.get("/apis/components.platform.opendatahub.io/v1alpha1/" + disc.Resources[i].Name)
+	discovered := func() (componentAPI, error) { return api, nil }
+	results := make([]listResult, len(api.Kinds))
+	parallelFor(len(api.Kinds), 6, func(i int) {
+		results[i].items, results[i].err = listModuleCRs(c, discovered, strings.ToLower(api.Kinds[i].Kind))
 	})
 	var out []stuckModule
 	var errs []string
-	for i, r := range disc.Resources {
-		if strings.Contains(r.Name, "/") {
+	for i, k := range api.Kinds {
+		if results[i].err != nil {
+			errs = append(errs, results[i].err.Error())
 			continue
 		}
-		listBody, err := results[i].body, results[i].err
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", r.Name, err))
-			continue
-		}
-		var list struct {
-			Items []struct {
-				Metadata struct {
-					Name              string   `json:"name"`
-					Finalizers        []string `json:"finalizers"`
-					DeletionTimestamp string   `json:"deletionTimestamp"`
-				} `json:"metadata"`
-			} `json:"items"`
-		}
-		if json.Unmarshal(listBody, &list) != nil {
-			continue
-		}
-		for _, it := range list.Items {
+		for _, it := range results[i].items {
 			t, ok := parseK8sTime(it.Metadata.DeletionTimestamp)
 			if !ok || now.Sub(t) < moduleDeletionGrace {
 				continue
 			}
-			out = append(out, stuckModule{Module: strings.ToLower(r.Kind), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t)})
+			out = append(out, stuckModule{Module: strings.ToLower(k.Kind), Name: it.Metadata.Name, Finalizers: it.Metadata.Finalizers, Since: now.Sub(t)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })

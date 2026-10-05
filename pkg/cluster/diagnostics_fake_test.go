@@ -154,3 +154,10 @@ func findCheck(resp *DiagnosticsResponse, name string) *CheckResult {
 	}
 	return nil
 }
+
+// serveComponentGroup serves the API group discovery document of
+// components.platform.opendatahub.io (preferred version v1alpha1).
+func serveComponentGroup(f *fakeAPI) {
+	f.json("GET", "/apis/components.platform.opendatahub.io", 200,
+		`{"kind":"APIGroup","name":"components.platform.opendatahub.io","preferredVersion":{"groupVersion":"components.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)
+}

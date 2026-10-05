@@ -254,9 +254,9 @@ func TestDowngradeCheck(t *testing.T) {
 		{"rhods-operator.3.5.2", "rhoai-3.5.1", "", true},
 		{"rhods-operator.3.6.0", "rhoai-3.5", "rhods-operator.3.6.1", false}, // bundle wins over tag
 		{"rhods-operator.3.5.2", "rhoai-3.5", "rhods-operator.3.5.1", true},
-		{"rhods-operator.3.6.0", "nightly-latest", "", true}, // target unknown: fail closed
+		{"rhods-operator.3.6.0", "nightly-latest", "", true},                 // target unknown: fail closed
 		{"rhods-operator.custom", "rhoai-3.6", "rhods-operator.3.6.0", true}, // installed unknown: fail closed
-		{"", "rhoai-3.5", "", false}, // nothing installed
+		{"", "rhoai-3.5", "", false},                                         // nothing installed
 	} {
 		blocked, _ := downgradeCheck(types.CSVInfo{Name: tc.installed}, tc.tag, tc.bundle)
 		if (blocked != "") != tc.blocked {
