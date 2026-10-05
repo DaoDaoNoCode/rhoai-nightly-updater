@@ -3,10 +3,14 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,34 +25,36 @@ type ImageLabels struct {
 	Version    string
 }
 
-const cacheTTL = 1 * time.Hour
-const cacheMaxEntries = 500
-
-type labelCacheEntry struct {
-	labels *ImageLabels
-	at     time.Time
-}
-
-type commitDateCacheEntry struct {
-	date string
-	at   time.Time
-}
-
-// In-memory caches with TTL-based lazy eviction.
-var (
-	labelCache        = make(map[string]labelCacheEntry)
-	labelCacheMu      sync.RWMutex
-	commitDateCache   = make(map[string]commitDateCacheEntry) // key: "owner/repo/sha" → date
-	commitDateCacheMu sync.RWMutex
+const (
+	// Labels are read from a digest-addressed config blob, so they never
+	// change: entries leave the cache only through LRU eviction.
+	labelCacheMax = 2000
+	// An image without labels is remembered briefly; transient errors are not cached.
+	labelNegativeTTL = 10 * time.Minute
+	// Commit dates are immutable per SHA.
+	commitDateCacheMax = 2000
+	// A missing commit (404/422) is retried after this long.
+	commitDateNegativeTTL = 10 * time.Minute
+	// Parallel registry reads per batch. quayHTTPClient keeps 10 idle
+	// connections per host; the rest are short-lived.
+	labelFetchConcurrency = 12
+	// labelFetchTimeout bounds each image of a batch.
+	labelFetchTimeout = 8 * time.Second
 )
 
-type skipCommitDateKey struct{}
+var errNoImageLabels = errors.New("no labels in config")
 
-// SkipCommitDate returns a context that signals GetImageLabels to skip the
-// GitHub API call for commit dates (saves rate limit and latency).
-func SkipCommitDate(ctx context.Context) context.Context {
-	return context.WithValue(ctx, skipCommitDateKey{}, true)
+type labelCacheValue struct {
+	labels   ImageLabels // CommitDate is never stored here
+	noLabels bool
 }
+
+var (
+	labelCache      = newLRU[string, labelCacheValue](labelCacheMax)
+	labelFlight     flightGroup[labelCacheValue]
+	commitDateCache = newLRU[string, string](commitDateCacheMax)
+	commitFlight    flightGroup[string]
+)
 
 // isRHOAIImage checks whether an image reference is an RHOAI component image.
 func isRHOAIImage(imageRef string) bool {
@@ -94,56 +100,160 @@ func extractRepoAndDigest(imageID string) (repo, digest string, ok bool) {
 	return repo, digest, true
 }
 
-// GetImageLabels fetches the OCI image config labels from Quay for a given imageID.
-// The imageID is the fully-qualified image reference with digest from the pod status.
-// Images are accessed via quay.io (IDMS mirrors registry.redhat.io -> quay.io).
+// GetImageLabels fetches the OCI image config labels from Quay for a given
+// imageID, including the commit date. Batches should resolve the credential
+// once and call resolveImageLabels instead.
 func GetImageLabels(ctx context.Context, c *Client, imageID string) (*ImageLabels, error) {
-	// Check cache first (skip stale entries)
-	labelCacheMu.RLock()
-	if entry, ok := labelCache[imageID]; ok && time.Since(entry.at) < cacheTTL {
-		labelCacheMu.RUnlock()
-		return entry.labels, nil
-	}
-	labelCacheMu.RUnlock()
+	return imageLabelsWithAuth(ctx, getQuayAuth(c), imageID, true)
+}
 
+// imageLabelsWithAuth returns the labels of a digest-pinned image. Images are
+// read from quay.io (IDMS mirrors registry.redhat.io/rhoai to quay.io/rhoai).
+// Identical concurrent lookups share one registry read.
+func imageLabelsWithAuth(ctx context.Context, basicAuth, imageID string, withCommitDate bool) (*ImageLabels, error) {
 	repo, digest, ok := extractRepoAndDigest(imageID)
 	if !ok {
 		return nil, fmt.Errorf("cannot parse image reference: %s", imageID)
 	}
-
-	// Get quay auth from the cluster pull secret
-	quayAuth := getQuayAuth(c)
-	if quayAuth == "" {
-		slog.Debug("image labels: proceeding without quay auth (pull secret may be missing or invalid)")
+	key := repo + "@" + digest
+	v, cached := labelCache.Get(key)
+	if !cached {
+		var err error
+		v, err, _ = labelFlight.Do(ctx, key, func(ctx context.Context) (labelCacheValue, error) {
+			if v, ok := labelCache.Get(key); ok {
+				return v, nil
+			}
+			labels, err := fetchImageLabels(ctx, basicAuth, repo, digest)
+			if errors.Is(err, errNoImageLabels) {
+				v := labelCacheValue{noLabels: true}
+				labelCache.Add(key, v, labelNegativeTTL)
+				return v, nil
+			}
+			if err != nil {
+				return labelCacheValue{}, err
+			}
+			v := labelCacheValue{labels: *labels}
+			labelCache.Add(key, v, 0)
+			return v, nil
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	// Get bearer token scoped to this repo
-	authURL := fmt.Sprintf("https://quay.io/v2/auth?service=quay.io&scope=repository:%s:pull", repo)
-	tokenReq, err := http.NewRequestWithContext(ctx, "GET", authURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating auth request: %w", err)
+	if v.noLabels {
+		return nil, errNoImageLabels
 	}
-	if quayAuth != "" {
-		tokenReq.Header.Set("Authorization", "Basic "+quayAuth)
+	out := v.labels
+	if withCommitDate && out.GitURL != "" && out.GitCommit != "" {
+		out.CommitDate = fetchCommitDate(ctx, out.GitURL, out.GitCommit)
 	}
+	return &out, nil
+}
 
-	tokenResp, err := quayHTTPClient.Do(tokenReq)
-	if err != nil {
-		return nil, fmt.Errorf("quay auth failed: %w", err)
+// cachedImageLabels returns labels already in the cache without any network
+// call. The commit date is included when it is cached too.
+func cachedImageLabels(imageID string) (*ImageLabels, bool) {
+	repo, digest, ok := extractRepoAndDigest(imageID)
+	if !ok {
+		return nil, false
 	}
-	defer tokenResp.Body.Close()
-
-	if tokenResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(tokenResp.Body, 1<<16))
-		return nil, fmt.Errorf("quay auth returned %d: %s", tokenResp.StatusCode, string(body))
+	v, ok := labelCache.Get(repo + "@" + digest)
+	if !ok || v.noLabels {
+		return nil, false
 	}
-
-	var tokenData quayTokenResponse
-	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenData); err != nil {
-		return nil, fmt.Errorf("decoding auth token: %w", err)
+	out := v.labels
+	if key, ok := commitDateKey(out.GitURL, out.GitCommit); ok {
+		out.CommitDate, _ = commitDateCache.Get(key)
 	}
-	bearerToken := tokenData.Token
+	return &out, true
+}
 
+// resolveImageLabels fetches labels for a batch of image references with one
+// Quay credential, bounded concurrency and a per-image timeout. Images whose
+// labels cannot be read are left out of the result.
+func resolveImageLabels(ctx context.Context, basicAuth string, refs []string, withCommitDate bool) map[string]*ImageLabels {
+	unique := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	var repos []string
+	for _, ref := range refs {
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		unique = append(unique, ref)
+		if repo, digest, ok := extractRepoAndDigest(ref); ok {
+			if _, cached := labelCache.Get(repo + "@" + digest); !cached {
+				repos = append(repos, repo)
+			}
+		}
+	}
+	// One multi-scope token covers many repositories (Quay honours repeated
+	// scope parameters), instead of one token request per image.
+	prefetchQuayTokens(ctx, basicAuth, repos)
+
+	out := make(map[string]*ImageLabels, len(unique))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, labelFetchConcurrency)
+	for _, ref := range unique {
+		wg.Add(1)
+		go func(ref string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			imageCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
+			defer cancel()
+			labels, err := imageLabelsWithAuth(imageCtx, basicAuth, ref, withCommitDate)
+			if err != nil {
+				if !errors.Is(err, errNoImageLabels) {
+					slog.Warn("failed to fetch image labels", "image", truncateForLog(ref), "error", err)
+				}
+				return
+			}
+			mu.Lock()
+			out[ref] = labels
+			mu.Unlock()
+		}(ref)
+	}
+	wg.Wait()
+	return out
+}
+
+// fetchImageLabels reads the manifest and config blob of one image. A
+// rejected cached token is dropped and the read retried once with a token
+// for this repository alone.
+func fetchImageLabels(ctx context.Context, basicAuth, repo, digest string) (*ImageLabels, error) {
+	for attempt := 0; ; attempt++ {
+		bearerToken, err := cachedQuayToken(ctx, basicAuth, repo)
+		if err != nil {
+			return nil, err
+		}
+		labels, err := fetchImageLabelsWithToken(ctx, bearerToken, repo, digest)
+		var authErr *registryAuthError
+		if attempt == 0 && errors.As(err, &authErr) {
+			forgetQuayToken(basicAuth, repo)
+			continue
+		}
+		return labels, err
+	}
+}
+
+// registryAuthError marks a 401/403 from a registry read, which can mean an
+// expired or under-scoped bearer token.
+type registryAuthError struct {
+	what   string
+	status int
+}
+
+func (e *registryAuthError) Error() string {
+	return fmt.Sprintf("%s returned %d", e.what, e.status)
+}
+
+func fetchImageLabelsWithToken(ctx context.Context, bearerToken, repo, digest string) (*ImageLabels, error) {
 	// Fetch the manifest (may be an image index or a single manifest)
 	manifestURL := fmt.Sprintf("https://quay.io/v2/%s/manifests/%s", repo, digest)
 	configDigest, err := getConfigDigestFromManifest(ctx, quayHTTPClient, bearerToken, manifestURL, repo)
@@ -157,15 +267,6 @@ func GetImageLabels(ctx context.Context, c *Client, imageID string) (*ImageLabel
 	if err != nil {
 		return nil, fmt.Errorf("fetching config blob: %w", err)
 	}
-
-	// Cache the result with timestamp for TTL-based eviction
-	labelCacheMu.Lock()
-	if len(labelCache) >= cacheMaxEntries {
-		evictStaleEntries(labelCache)
-	}
-	labelCache[imageID] = labelCacheEntry{labels: labels, at: time.Now()}
-	labelCacheMu.Unlock()
-
 	return labels, nil
 }
 
@@ -193,6 +294,9 @@ func getConfigDigestFromManifest(ctx context.Context, httpClient *http.Client, b
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", err
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", &registryAuthError{what: "manifest GET", status: resp.StatusCode}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("manifest GET returned %d: %s", resp.StatusCode, string(body))
@@ -312,6 +416,9 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, &registryAuthError{what: "config blob GET", status: resp.StatusCode}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("config blob GET returned %d", resp.StatusCode)
 	}
@@ -327,7 +434,7 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 
 	labels := config.Config.Labels
 	if labels == nil {
-		return nil, fmt.Errorf("no labels in config")
+		return nil, errNoImageLabels
 	}
 
 	result := &ImageLabels{}
@@ -351,57 +458,130 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 		result.Version = v
 	}
 
-	// Fetch commit date from GitHub API if we have both gitURL and gitCommit
-	// Skip when caller sets skipCommitDate in context (e.g., FBC label resolution)
-	if result.GitURL != "" && result.GitCommit != "" && ctx.Value(skipCommitDateKey{}) == nil {
-		result.CommitDate = fetchCommitDate(ctx, result.GitURL, result.GitCommit)
-	}
-
 	return result, nil
 }
 
-// fetchCommitDate gets the commit timestamp from the GitHub API.
-// Returns empty string on any error (non-critical).
+var (
+	githubNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
+	githubSHAPattern  = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
+)
+
+// commitDateKey returns the cache key for a commit, or false when the URL is
+// not a GitHub repository or the SHA is malformed (label values come from
+// image metadata and are used to build an API path).
+func commitDateKey(gitURL, sha string) (string, bool) {
+	u := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(gitURL), "/"), ".git")
+	u = strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+	parts := strings.Split(u, "/")
+	if len(parts) != 3 || parts[0] != "github.com" || !githubNamePattern.MatchString(parts[1]) ||
+		!githubNamePattern.MatchString(parts[2]) || !githubSHAPattern.MatchString(sha) {
+		return "", false
+	}
+	return parts[1] + "/" + parts[2] + "/" + sha, true
+}
+
+// githubAPIBase is the GitHub REST API root; tests replace the transport, not this.
+const githubAPIBase = "https://api.github.com"
+
+// githubBackoff stops GitHub calls until the rate limit resets. Without a
+// token the limit is 60 requests per hour per egress IP, shared by every user
+// of an in-cluster deployment.
+var githubBackoff struct {
+	sync.Mutex
+	until time.Time
+}
+
+func githubBackoffActive() bool {
+	githubBackoff.Lock()
+	defer githubBackoff.Unlock()
+	return time.Now().Before(githubBackoff.until)
+}
+
+func setGitHubBackoff(until time.Time) {
+	githubBackoff.Lock()
+	defer githubBackoff.Unlock()
+	if until.After(githubBackoff.until) {
+		githubBackoff.until = until
+	}
+}
+
+// githubRateLimitReset reads when a rate-limited request may be retried
+// (Retry-After for secondary limits, x-ratelimit-reset for the primary one).
+func githubRateLimitReset(resp *http.Response, now time.Time) time.Time {
+	if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
+		return now.Add(time.Duration(s) * time.Second)
+	}
+	if epoch, err := strconv.ParseInt(resp.Header.Get("X-Ratelimit-Reset"), 10, 64); err == nil {
+		if reset := time.Unix(epoch, 0); reset.After(now) && reset.Sub(now) <= 2*time.Hour {
+			return reset
+		}
+	}
+	return now.Add(5 * time.Minute)
+}
+
+// fetchCommitDate gets the commit timestamp from the GitHub API. It returns
+// an empty string on any error: the date is optional, and a rate limit must
+// never fail the page. Set GITHUB_TOKEN to raise the limit from 60 to 5000
+// requests per hour.
 func fetchCommitDate(ctx context.Context, gitURL, sha string) string {
-	// Parse owner/repo from gitURL like "https://github.com/red-hat-data-services/odh-dashboard"
-	parts := strings.Split(strings.TrimSuffix(gitURL, "/"), "/")
-	if len(parts) < 2 {
+	key, ok := commitDateKey(gitURL, sha)
+	if !ok {
 		return ""
 	}
-	owner := parts[len(parts)-2]
-	repo := parts[len(parts)-1]
-
-	// Check cache (skip stale entries)
-	cacheKey := owner + "/" + repo + "/" + sha
-	commitDateCacheMu.RLock()
-	if entry, ok := commitDateCache[cacheKey]; ok && time.Since(entry.at) < cacheTTL {
-		commitDateCacheMu.RUnlock()
-		return entry.date
+	if date, ok := commitDateCache.Get(key); ok {
+		return date
 	}
-	commitDateCacheMu.RUnlock()
+	if githubBackoffActive() {
+		return ""
+	}
+	date, _, _ := commitFlight.Do(ctx, key, func(ctx context.Context) (string, error) {
+		if date, ok := commitDateCache.Get(key); ok {
+			return date, nil
+		}
+		return requestCommitDate(ctx, key)
+	})
+	return date
+}
 
-	// Use the SHA-specific endpoint with minimal data by reading only what we need
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/commits/%s", owner, repo, sha)
+func requestCommitDate(ctx context.Context, key string) (string, error) {
+	parts := strings.SplitN(key, "/", 3)
+	// git/commits returns ~1KB, the commits endpoint ~200KB.
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/git/commits/%s", githubAPIBase, parts[0], parts[1], parts[2])
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		slog.Debug("fetchCommitDate: failed to create request", "url", apiURL, "error", err)
-		return ""
+		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "rhoai-nightly-updater")
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := quayHTTPClient.Do(req)
 	if err != nil {
 		slog.Debug("fetchCommitDate: request failed", "url", apiURL, "error", err)
-		return ""
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		slog.Debug("fetchCommitDate: non-200 response", "status", resp.StatusCode, "repo", owner+"/"+repo)
-		return ""
+	switch {
+	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusTooManyRequests ||
+		(resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-Ratelimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "")):
+		until := githubRateLimitReset(resp, time.Now())
+		setGitHubBackoff(until)
+		slog.Warn("GitHub API rate limit reached; commit dates are skipped until it resets (set GITHUB_TOKEN to raise the limit)",
+			"status", resp.StatusCode, "until", until.UTC().Format(time.RFC3339))
+		return "", fmt.Errorf("github rate limited")
+	case resp.StatusCode >= 500:
+		return "", fmt.Errorf("github returned %d", resp.StatusCode)
+	default:
+		// 401/403/404/422: unknown commit or private repository. Retry later.
+		slog.Debug("fetchCommitDate: non-200 response", "status", resp.StatusCode, "commit", key)
+		commitDateCache.Add(key, "", commitDateNegativeTTL)
+		return "", nil
 	}
 
-	// git/commits endpoint returns a small response (~1KB) vs commits endpoint (~200KB)
 	var commitData struct {
 		Committer struct {
 			Date string `json:"date"`
@@ -409,23 +589,18 @@ func fetchCommitDate(ctx context.Context, gitURL, sha string) string {
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // 64KB limit
 	if err != nil {
-		slog.Debug("fetchCommitDate: failed to read response body", "error", err)
-		return ""
+		return "", err
 	}
 	if err := json.Unmarshal(body, &commitData); err != nil {
-		slog.Debug("fetchCommitDate: failed to parse response JSON", "error", err)
-		return ""
+		return "", fmt.Errorf("parse commit: %w", err)
 	}
 	date := commitData.Committer.Date
-	if date != "" {
-		commitDateCacheMu.Lock()
-		if len(commitDateCache) >= cacheMaxEntries {
-			evictStaleCommitEntries(commitDateCache)
-		}
-		commitDateCache[cacheKey] = commitDateCacheEntry{date: date, at: time.Now()}
-		commitDateCacheMu.Unlock()
+	if date == "" {
+		commitDateCache.Add(key, "", commitDateNegativeTTL)
+		return "", nil
 	}
-	return date
+	commitDateCache.Add(key, date, 0)
+	return date, nil
 }
 
 // truncateForLog shortens an image reference for log output.
@@ -434,26 +609,4 @@ func truncateForLog(s string) string {
 		return s[:77] + "..."
 	}
 	return s
-}
-
-// evictStaleEntries removes entries older than cacheTTL from the label cache.
-// Must be called with labelCacheMu held.
-func evictStaleEntries(cache map[string]labelCacheEntry) {
-	now := time.Now()
-	for k, v := range cache {
-		if now.Sub(v.at) > cacheTTL {
-			delete(cache, k)
-		}
-	}
-}
-
-// evictStaleCommitEntries removes entries older than cacheTTL from the commit date cache.
-// Must be called with commitDateCacheMu held.
-func evictStaleCommitEntries(cache map[string]commitDateCacheEntry) {
-	now := time.Now()
-	for k, v := range cache {
-		if now.Sub(v.at) > cacheTTL {
-			delete(cache, k)
-		}
-	}
 }

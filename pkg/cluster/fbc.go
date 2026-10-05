@@ -9,20 +9,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
+// fbcContentCache holds parsed catalogs of digest-pinned FBC images. The
+// content of a digest never changes, so entries leave only by LRU eviction.
 var (
-	fbcContentCache   = make(map[string]*types.FBCContentResponse)
-	fbcContentCacheMu sync.RWMutex
+	fbcContentCache  = newLRU[string, *types.FBCContentResponse](fbcCacheMaxEntries)
+	fbcContentFlight flightGroup[*types.FBCContentResponse]
 )
 
 const (
@@ -43,28 +42,61 @@ type fbcRelatedImage struct {
 	Image string `json:"image" yaml:"image"`
 }
 
+// fbcCacheKey returns the cache key of a digest-pinned reference. The tag is
+// part of the key because it selects the bundle to show.
+func fbcCacheKey(imageRef string) (string, bool) {
+	_, digest, ok := extractRepoAndDigest(imageRef)
+	return digest + "|" + extractTagFromRef(imageRef), ok
+}
+
+// cachedFBCContent returns a parsed catalog without any network call.
+func cachedFBCContent(imageRef string) (*types.FBCContentResponse, bool) {
+	key, ok := fbcCacheKey(imageRef)
+	if !ok {
+		return nil, false
+	}
+	return fbcContentCache.Get(key)
+}
+
 // ExtractFBCContent downloads an FBC catalog image from Quay, parses its
 // layers to find olm.bundle entries, and returns the relatedImages list.
+// The returned value is shared: callers must copy RelatedImages before changing it.
 func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.FBCContentResponse, error) {
 	// Only digest-pinned references are cached: a tag can move to a new build.
-	// The tag is part of the key because it selects the bundle to show.
-	_, digest, cacheable := extractRepoAndDigest(imageRef)
-	cacheKey := digest + "|" + extractTagFromRef(imageRef)
+	if cached, ok := cachedFBCContent(imageRef); ok {
+		return cached, nil
+	}
+	return extractFBCContentWithAuth(ctx, getQuayAuth(c), imageRef)
+}
 
-	if cacheable {
-		fbcContentCacheMu.RLock()
-		if cached, ok := fbcContentCache[cacheKey]; ok {
-			fbcContentCacheMu.RUnlock()
+func extractFBCContentWithAuth(ctx context.Context, basicAuth, imageRef string) (*types.FBCContentResponse, error) {
+	key, cacheable := fbcCacheKey(imageRef)
+	if !cacheable {
+		return downloadFBCContent(ctx, basicAuth, imageRef)
+	}
+	if cached, ok := fbcContentCache.Get(key); ok {
+		return cached, nil
+	}
+	// Two tabs opening the same build download its catalog once.
+	result, err, _ := fbcContentFlight.Do(ctx, key, func(ctx context.Context) (*types.FBCContentResponse, error) {
+		if cached, ok := fbcContentCache.Get(key); ok {
 			return cached, nil
 		}
-		fbcContentCacheMu.RUnlock()
-	}
+		result, err := downloadFBCContent(ctx, basicAuth, imageRef)
+		if err != nil {
+			return nil, err
+		}
+		fbcContentCache.Add(key, result, 0)
+		return result, nil
+	})
+	return result, err
+}
 
-	basicAuth := getQuayAuth(c)
+func downloadFBCContent(ctx context.Context, basicAuth, imageRef string) (*types.FBCContentResponse, error) {
 	if basicAuth == "" {
 		slog.Debug("fbc: proceeding without quay auth (pull secret may be missing or invalid)")
 	}
-	bearerToken, err := getQuayBearerToken(ctx, quayHTTPClient, basicAuth)
+	bearerToken, err := cachedQuayToken(ctx, basicAuth, quayFBCRepo)
 	if err != nil {
 		return nil, fmt.Errorf("quay auth: %w", err)
 	}
@@ -92,6 +124,10 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// Do not keep reusing a token the registry rejected.
+		forgetQuayToken(basicAuth, quayFBCRepo)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("manifest fetch returned HTTP %d", resp.StatusCode)
 	}
@@ -191,94 +227,40 @@ func ExtractFBCContent(ctx context.Context, c *Client, imageRef string) (*types.
 		categories[ri.Category]++
 	}
 
-	result := &types.FBCContentResponse{
+	return &types.FBCContentResponse{
 		Tag:           tag,
 		Image:         imageRef,
 		BundleName:    bundleName,
 		RelatedImages: deduped,
 		Categories:    categories,
-	}
-
-	if cacheable {
-		fbcContentCacheMu.Lock()
-		if len(fbcContentCache) >= fbcCacheMaxEntries {
-			evictFBCCache()
-		}
-		fbcContentCache[cacheKey] = result
-		fbcContentCacheMu.Unlock()
-	}
-
-	return result, nil
-}
-
-// evictFBCCache removes random entries to bring the cache down to 75% capacity.
-// Must be called while fbcContentCacheMu is held for writing.
-func evictFBCCache() {
-	targetSize := fbcCacheMaxEntries * 3 / 4 // 75% of max
-	toRemove := len(fbcContentCache) - targetSize
-	if toRemove <= 0 {
-		return
-	}
-
-	// Collect keys and shuffle to pick random victims
-	keys := make([]string, 0, len(fbcContentCache))
-	for k := range fbcContentCache {
-		keys = append(keys, k)
-	}
-
-	// Fisher-Yates partial shuffle: only need toRemove random picks
-	for i := 0; i < toRemove && i < len(keys); i++ {
-		j := i + rand.Intn(len(keys)-i)
-		keys[i], keys[j] = keys[j], keys[i]
-		delete(fbcContentCache, keys[i])
-	}
+	}, nil
 }
 
 // ResolveRelatedImageLabels enriches related images with git commit info from Quay image labels.
-// It skips the GitHub API call for commit merge dates to avoid rate limit exhaustion (60/hr).
+// The pull secret is read once for the whole batch. It skips the GitHub API
+// call for commit merge dates to avoid rate limit exhaustion (60/hr).
 func ResolveRelatedImageLabels(ctx context.Context, c *Client, images []types.RelatedImage) []types.RelatedImage {
-	type labelResult struct {
-		index  int
-		labels *ImageLabels
+	refs := make([]string, 0, len(images))
+	for _, img := range images {
+		if isRHOAIImage(img.Image) {
+			refs = append(refs, img.Image)
+		}
 	}
-
-	results := make(chan labelResult, len(images))
-	sem := make(chan struct{}, 5)
-
-	for i, img := range images {
-		if !isRHOAIImage(img.Image) {
-			results <- labelResult{index: i, labels: nil}
+	if len(refs) == 0 {
+		return images
+	}
+	labels := resolveImageLabels(ctx, getQuayAuth(c), refs, false)
+	for i := range images {
+		l := labels[images[i].Image]
+		if l == nil {
 			continue
 		}
-		go func(idx int, ref string) {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			imageCtx, cancel := context.WithTimeout(SkipCommitDate(ctx), 8*time.Second)
-			defer cancel()
-
-			labels, err := GetImageLabels(imageCtx, c, ref)
-			if err != nil {
-				slog.Warn("failed to fetch image labels", "image", truncateForLog(ref), "error", err)
-				results <- labelResult{index: idx, labels: nil}
-				return
-			}
-			results <- labelResult{index: idx, labels: labels}
-		}(i, img.Image)
-	}
-
-	for range images {
-		res := <-results
-		if res.labels == nil {
-			continue
-		}
-		images[res.index].GitCommit = res.labels.GitCommit
-		images[res.index].GitURL = res.labels.GitURL
+		images[i].GitCommit = l.GitCommit
+		images[i].GitURL = l.GitURL
 		// Skip CommitDate — it comes from GitHub API (60/hr rate limit)
-		images[res.index].BuildDate = res.labels.BuildDate
-		images[res.index].Version = res.labels.Version
+		images[i].BuildDate = l.BuildDate
+		images[i].Version = l.Version
 	}
-
 	return images
 }
 
