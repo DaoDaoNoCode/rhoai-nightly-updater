@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// succeededCSV is the CSV the simulated OLM reports after installing.
+const succeededCSV = `{"metadata":{"name":"rhods-operator.v3.5.0"},"spec":{"displayName":"Red Hat OpenShift AI","version":"3.5.0"},"status":{"phase":"Succeeded"}}`
+
 type mockResponse struct {
 	body       string
 	statusCode int
@@ -24,6 +27,9 @@ type mockResponse struct {
 // The handler map keys are request paths; values are the responses to return.
 func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		resp, ok := responses[r.URL.Path]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -183,6 +189,7 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 			body:       string(subJSON),
 			statusCode: 200,
 		},
+		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): {body: `{"items":[` + succeededCSV + `]}`},
 	})
 	defer cleanup()
 
@@ -213,6 +220,9 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 	var records []requestRecord
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		mu.Lock()
 		records = append(records, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
@@ -709,7 +719,9 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
-			"state": "AtLatestKnown",
+			"state":        "AtLatestKnown",
+			"currentCSV":   "rhods-operator.v3.5.0",
+			"installedCSV": "rhods-operator.v3.5.0",
 			"installPlanRef": map[string]interface{}{
 				"name": "install-plan-abc123",
 			},
@@ -782,15 +794,16 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	ogPath := fmt.Sprintf("/apis/operators.coreos.com/v1/namespaces/%s/operatorgroups", SubNS)
 
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		pullSecretPath:  {body: string(secretJSON)},
-		idmsPath:        {body: string(idmsJSON)},
-		csPath:          {body: string(csJSON)},
-		subPath:         {body: string(subJSON)},
-		csvListPath:     {body: string(csvJSON)},
-		csvDeletePath:   {body: `{"kind":"Status","status":"Success"}`},
-		dashDeployPath:  {body: string(dashDeployJSON)},
-		dashPodsPath:    {body: string(emptyPodList)},
-		pkgManifestPath: {body: string(pkgManifestJSON)},
+		pullSecretPath:         {body: string(secretJSON)},
+		idmsPath:               {body: string(idmsJSON)},
+		csPath:                 {body: string(csJSON)},
+		subPath:                {body: string(subJSON)},
+		csvListPath:            {body: string(csvJSON)},
+		csvDeletePath:          {body: `{"kind":"Status","status":"Success"}`},
+		"GET " + csvDeletePath: {body: succeededCSV},
+		dashDeployPath:         {body: string(dashDeployJSON)},
+		dashPodsPath:           {body: string(emptyPodList)},
+		pkgManifestPath:        {body: string(pkgManifestJSON)},
 		strings.TrimSuffix(pkgManifestPath, "/"+SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
 		appDeployListPath: {body: string(emptyDeployList)},
 		opDeployListPath:  {body: string(emptyDeployList)},
@@ -850,8 +863,9 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	if csApplyIdx >= subApplyIdx {
 		t.Errorf("CatalogSource apply (idx %d) should happen before Subscription apply (idx %d)", csApplyIdx, subApplyIdx)
 	}
-	if subApplyIdx >= csvDelIdx {
-		t.Errorf("Subscription apply (idx %d) should happen before CSV delete (idx %d)", subApplyIdx, csvDelIdx)
+	// The Subscription is created once, after the old CSV is gone (A01-14).
+	if csvDelIdx >= subApplyIdx {
+		t.Errorf("CSV delete (idx %d) should happen before Subscription apply (idx %d)", csvDelIdx, subApplyIdx)
 	}
 
 	// Verify logs mention key steps
@@ -889,52 +903,8 @@ func TestReinstall_Subscription404(t *testing.T) {
 	}
 }
 
-// TestReinstall_StableCSVFailed verifies that when the subscription source already
-// matches stable, Reinstall short-circuits with "Already on stable" regardless of
-// the CSV phase. To recover a Failed CSV without changing the catalog source, use
-// RefreshOperator instead.
-func TestReinstall_StableCSVFailed(t *testing.T) {
-	stableSource := "redhat-operators"
-	stableChannel := "stable-3.5"
-	if v := os.Getenv("STABLE_SOURCE"); v != "" {
-		stableSource = v
-	}
-	if v := os.Getenv("STABLE_CHANNEL"); v != "" {
-		stableChannel = v
-	}
-
-	// Subscription pointing to stable source (CSV phase is irrelevant to the short-circuit)
-	subResponse := map[string]interface{}{
-		"apiVersion": "operators.coreos.com/v1alpha1",
-		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
-		"spec": map[string]interface{}{
-			"source":  stableSource,
-			"channel": stableChannel,
-		},
-		"status": map[string]interface{}{"state": "AtLatestKnown"},
-	}
-	subJSON, _ := json.Marshal(subResponse)
-
-	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-
-	client, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""): stableCatalogMock(stableSource, stableChannel, "3.5.0"),
-		subPath: {body: string(subJSON)},
-	})
-	defer cleanup()
-
-	result, err := Reinstall(client, "stable", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.Success {
-		t.Errorf("expected success, got failure: %s", result.Message)
-	}
-	if result.Message != "Already on stable. Nothing to reinstall." {
-		t.Errorf("expected 'Already on stable' message, got: %s", result.Message)
-	}
-}
+// An unhealthy install on the stable target is reinstalled; see
+// TestReinstallStableTargets.
 
 func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	stableSource := "redhat-operators"
@@ -1009,7 +979,7 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 			"source":  CatalogName,
 			"channel": "fast",
 		},
-		"status": map[string]interface{}{"state": "AtLatestKnown"},
+		"status": map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
@@ -1061,18 +1031,19 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	})
 
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		subPath:             {body: string(subJSON)},
-		csvListPath:         {body: string(csvJSON)},
-		csvDeletePath:       {body: `{"kind":"Status","status":"Success"}`},
-		csPath:              {body: string(csReadyResponse)},
-		pkgManifestListPath: {body: wrapPkgManifestList(string(pkgManifestJSON))},
-		pkgManifestPath:     {body: string(pkgManifestJSON)},
-		vwhPath:             {body: string(emptyList)},
-		mwhPath:             {body: string(emptyList)},
-		crd1Path:            {body: `{"kind":"CustomResourceDefinition"}`},
-		crd2Path:            {body: `{"kind":"CustomResourceDefinition"}`},
-		appDeployListPath:   {body: string(emptyList)},
-		opDeployListPath:    {body: string(emptyList)},
+		subPath:                {body: string(subJSON)},
+		csvListPath:            {body: string(csvJSON)},
+		csvDeletePath:          {body: `{"kind":"Status","status":"Success"}`},
+		"GET " + csvDeletePath: {body: succeededCSV},
+		csPath:                 {body: string(csReadyResponse)},
+		pkgManifestListPath:    {body: wrapPkgManifestList(string(pkgManifestJSON))},
+		pkgManifestPath:        {body: string(pkgManifestJSON)},
+		vwhPath:                {body: string(emptyList)},
+		mwhPath:                {body: string(emptyList)},
+		crd1Path:               {body: `{"kind":"CustomResourceDefinition"}`},
+		crd2Path:               {body: `{"kind":"CustomResourceDefinition"}`},
+		appDeployListPath:      {body: string(emptyList)},
+		opDeployListPath:       {body: string(emptyList)},
 	})
 	defer cleanup()
 
@@ -1145,7 +1116,7 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":   map[string]interface{}{"state": "AtLatestKnown"},
+		"status":   map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
@@ -1160,11 +1131,12 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 	}
 
 	responses := map[string]mockResponse{
-		csvListPath:       {body: string(csvJSON)},
-		csvDeletePath:     {body: `{"kind":"Status","status":"Success"}`},
-		subPath:           {body: string(subJSON)},
-		appDeployListPath: {body: string(emptyDeployList)},
-		opDeployListPath:  {body: string(emptyDeployList)},
+		csvListPath:            {body: string(csvJSON)},
+		csvDeletePath:          {body: `{"kind":"Status","status":"Success"}`},
+		"GET " + csvDeletePath: {body: succeededCSV},
+		subPath:                {body: string(subJSON)},
+		appDeployListPath:      {body: string(emptyDeployList)},
+		opDeployListPath:       {body: string(emptyDeployList)},
 	}
 
 	return responses, paths
@@ -1211,7 +1183,9 @@ func TestRefreshOperator_Success(t *testing.T) {
 		t.Error("expected Subscription apply (PATCH) request")
 	}
 
-	// Verify ordering: CSV delete -> Sub delete -> Sub apply (PATCH)
+	// Verify ordering: Sub delete -> CSV delete -> Sub apply (PATCH). With the
+	// Subscription still present OLM would start reinstalling as soon as the
+	// CSV is gone, and deleting the Subscription then would cut that short.
 	var csvDelIdx, subDelIdx, subApplyIdx int
 	for i, rec := range *records {
 		switch {
@@ -1227,11 +1201,11 @@ func TestRefreshOperator_Success(t *testing.T) {
 	if csvDelIdx == 0 || subDelIdx == 0 || subApplyIdx == 0 {
 		t.Fatal("not all expected requests were found")
 	}
-	if csvDelIdx >= subDelIdx {
-		t.Errorf("CSV delete (idx %d) should happen before Subscription delete (idx %d)", csvDelIdx, subDelIdx)
+	if subDelIdx >= csvDelIdx {
+		t.Errorf("Subscription delete (idx %d) should happen before CSV delete (idx %d)", subDelIdx, csvDelIdx)
 	}
-	if subDelIdx >= subApplyIdx {
-		t.Errorf("Subscription delete (idx %d) should happen before Subscription apply (idx %d)", subDelIdx, subApplyIdx)
+	if csvDelIdx >= subApplyIdx {
+		t.Errorf("CSV delete (idx %d) should happen before Subscription apply (idx %d)", csvDelIdx, subApplyIdx)
 	}
 
 	// Verify logs contain the key steps
@@ -1269,7 +1243,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
-		"status":   map[string]interface{}{"state": "AtLatestKnown"},
+		"status":   map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
 	subJSON, _ := json.Marshal(subResponse)
 
@@ -1281,6 +1255,9 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 	patchAttempts := 0
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		mu.Lock()
 		records = append(records, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
@@ -1309,6 +1286,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 			"GET " + csvListPath:       {body: string(csvJSON)},
 			"GET " + subPath:           {body: string(subJSON)},
 			"DELETE " + csvDeletePath:  {body: `{"kind":"Status","status":"Success"}`},
+			"GET " + csvDeletePath:     {body: succeededCSV},
 			"DELETE " + subPath:        {body: `{"kind":"Status","status":"Success"}`},
 			"GET " + appDeployListPath: {body: string(emptyDeployList)},
 			"GET " + opDeployListPath:  {body: string(emptyDeployList)},
@@ -1393,6 +1371,9 @@ func TestRefreshOperator_ContextCancellation(t *testing.T) {
 	var mu sync.Mutex
 	var recs []requestRecord
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		mu.Lock()
 		recs = append(recs, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
@@ -1513,7 +1494,9 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
-			"state": "AtLatestKnown",
+			"state":        "AtLatestKnown",
+			"currentCSV":   "rhods-operator.v3.5.0",
+			"installedCSV": "rhods-operator.v3.5.0",
 			"installPlanRef": map[string]interface{}{
 				"name": "install-plan-abc123",
 			},
@@ -1602,15 +1585,16 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	}
 
 	responses := map[string]mockResponse{
-		pullSecretPath:  {body: string(secretJSON)},
-		idmsPath:        {body: string(idmsJSON)},
-		csPath:          {body: string(csJSON)},
-		subPath:         {body: string(subJSON)},
-		csvListPath:     {body: string(csvJSON)},
-		csvDeletePath:   {body: `{"kind":"Status","status":"Success"}`},
-		dashDeployPath:  {body: string(dashDeployJSON)},
-		dashPodsPath:    {body: string(emptyPodList)},
-		pkgManifestPath: {body: string(pkgManifestJSON)},
+		pullSecretPath:         {body: string(secretJSON)},
+		idmsPath:               {body: string(idmsJSON)},
+		csPath:                 {body: string(csJSON)},
+		subPath:                {body: string(subJSON)},
+		csvListPath:            {body: string(csvJSON)},
+		csvDeletePath:          {body: `{"kind":"Status","status":"Success"}`},
+		"GET " + csvDeletePath: {body: succeededCSV},
+		dashDeployPath:         {body: string(dashDeployJSON)},
+		dashPodsPath:           {body: string(emptyPodList)},
+		pkgManifestPath:        {body: string(pkgManifestJSON)},
 		strings.TrimSuffix(pkgManifestPath, "/"+SubName): {body: wrapPkgManifestList(string(pkgManifestJSON))},
 		appDeployListPath: {body: string(emptyDeployList)},
 		opDeployListPath:  {body: string(emptyDeployList)},
@@ -1655,8 +1639,8 @@ func TestUpdateStream(t *testing.T) {
 		"apply_catalog_source",
 		"wait_catalog_ready",
 		"detect_channel",
-		"apply_subscription",
 		"delete_csv",
+		"apply_subscription",
 		"verify_installplan",
 	}
 
@@ -1806,6 +1790,9 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	}
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dashboardOperatorAbsent(w, r) {
+			return
+		}
 		mu.Lock()
 		recs = append(recs, requestRecord{Method: r.Method, Path: r.URL.Path})
 		mu.Unlock()
@@ -1908,6 +1895,8 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state":          "AtLatestKnown",
+			"currentCSV":     "rhods-operator.v3.5.0",
+			"installedCSV":   "rhods-operator.v3.5.0",
 			"installPlanRef": map[string]interface{}{"name": "install-plan-compat"},
 		},
 	}

@@ -113,6 +113,14 @@ type CatalogPodInfo struct {
 type UpdateRequest struct {
 	Image  string `json:"image"`
 	DryRun bool   `json:"dryRun"`
+	// RevertDashboardDev ends an active Dashboard Dev session before the
+	// update; without it the update is refused (errorCode dashboard_dev_active).
+	RevertDashboardDev bool `json:"revertDashboardDev,omitempty"`
+}
+
+// RefreshRequest is the optional JSON body for POST /api/refresh/stream.
+type RefreshRequest struct {
+	RevertDashboardDev bool `json:"revertDashboardDev,omitempty"`
 }
 
 // ReinstallRequest is the JSON body for the POST /api/rollback endpoint.
@@ -122,6 +130,12 @@ type ReinstallRequest struct {
 	TargetType string `json:"targetType"` // "stable", "nightly", or "custom"
 	Image      string `json:"image,omitempty"`
 	Channel    string `json:"channel,omitempty"` // optional channel override (e.g., "stable-3.5", "beta")
+	// AllowDowngrade confirms a target older than the installed operator;
+	// without it such a reinstall is refused (errorCode
+	// downgrade_requires_confirmation).
+	AllowDowngrade bool `json:"allowDowngrade,omitempty"`
+	// RevertDashboardDev ends an active Dashboard Dev session first.
+	RevertDashboardDev bool `json:"revertDashboardDev,omitempty"`
 }
 
 // CreatePullSecretRequest is the JSON body for the POST /api/setup/pull-secret endpoint.

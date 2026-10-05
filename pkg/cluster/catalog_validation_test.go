@@ -50,7 +50,7 @@ func TestPreflightReinstallCatalog_ExplainsFailure(t *testing.T) {
 func TestPreflightReinstallCatalog_ReturnsOverride(t *testing.T) {
 	channels := `[{"name":"fast","currentCSV":"rhods-operator.3.5.0"}]`
 	ch, err := preflightReinstallCatalog(verificationCatalogServer(t, "READY", channels), "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5", "fast")
-	if err != nil || ch != "fast" {
+	if err != nil || ch.Channel != "fast" || ch.HeadCSV != "rhods-operator.3.5.0" {
 		t.Fatalf("got %q, %v", ch, err)
 	}
 }

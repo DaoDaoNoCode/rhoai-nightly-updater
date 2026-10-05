@@ -657,7 +657,7 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	setOperationTarget(w, req.Image)
 	slog.Info("mutation", "op", "update-stream", "image", req.Image)
 
-	result, updateErr := runUpdateStream(c, req.Image, func(event cluster.UpdateStepEvent) {
+	result, updateErr := runUpdateStream(c, req.Image, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, func(event cluster.UpdateStepEvent) {
 		sseWriter.SendStep(UpdateStep{
 			Step:      event.Step,
 			Status:    event.Status,
@@ -1046,7 +1046,8 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	setOperationTarget(w, target)
 	slog.Info("mutation", "op", "reinstall-stream", "targetType", req.TargetType, "image", req.Image)
 
-	result, reinstallErr := runReinstallStream(c, req.TargetType, req.Image, req.Channel, func(event cluster.UpdateStepEvent) {
+	opts := cluster.OperationOptions{AllowDowngrade: req.AllowDowngrade, RevertDashboardDev: req.RevertDashboardDev}
+	result, reinstallErr := runReinstallStream(c, req.TargetType, req.Image, req.Channel, opts, func(event cluster.UpdateStepEvent) {
 		sseWriter.SendStep(UpdateStep{
 			Step:      event.Step,
 			Status:    event.Status,
@@ -1085,6 +1086,13 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 	}()
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.RefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+
 	sseWriter, err := NewSSEWriter(w)
 	if err != nil {
 		writeError(w, "streaming not supported", http.StatusInternalServerError)
@@ -1099,7 +1107,7 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 
 	slog.Info("mutation", "op", "refresh-stream")
 
-	result, refreshErr := runRefreshStream(c, func(event cluster.UpdateStepEvent) {
+	result, refreshErr := runRefreshStream(c, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, func(event cluster.UpdateStepEvent) {
 		sseWriter.SendStep(UpdateStep{
 			Step:      event.Step,
 			Status:    event.Status,

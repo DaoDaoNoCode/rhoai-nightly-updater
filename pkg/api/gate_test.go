@@ -166,7 +166,7 @@ func TestImageAllowlistOnEveryImageEndpoint(t *testing.T) {
 			setupDevMode(t)
 			allowMutations(t)
 			called := false
-			runUpdateStream = func(*cluster.Client, string, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+			runUpdateStream = func(*cluster.Client, string, cluster.OperationOptions, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 				called = true
 				return &types.OperationResponse{Success: true}, nil
 			}
@@ -256,7 +256,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 
 	image := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"
 	stepped, release := make(chan struct{}), make(chan struct{})
-	runUpdateStream = func(_ *cluster.Client, _ string, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+	runUpdateStream = func(_ *cluster.Client, _ string, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		emit(cluster.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog"})
 		close(stepped)
 		<-release
@@ -323,7 +323,7 @@ func TestLockReleasedWhenOperationPanics(t *testing.T) {
 	setupDevMode(t)
 	stubOperations(t)
 	allowMutations(t)
-	runRefreshStream = func(*cluster.Client, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+	runRefreshStream = func(*cluster.Client, cluster.OperationOptions, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		panic("boom")
 	}
 	w := httptest.NewRecorder()

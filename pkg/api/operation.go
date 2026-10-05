@@ -251,7 +251,7 @@ var (
 	runUpdateDryRun = func(c *cluster.Client, image string) (*types.OperationResponse, error) {
 		return cluster.Update(c, image, true)
 	}
-	runUpdateStream    = cluster.UpdateStream
-	runReinstallStream = cluster.ReinstallStream
-	runRefreshStream   = cluster.RefreshOperatorStream
+	runUpdateStream    = cluster.UpdateStreamWithOptions
+	runReinstallStream = cluster.ReinstallStreamWithOptions
+	runRefreshStream   = cluster.RefreshOperatorStreamWithOptions
 )

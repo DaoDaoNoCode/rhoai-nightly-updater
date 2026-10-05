@@ -18,6 +18,12 @@ func TestMain(m *testing.M) {
 	SubRetryBackoffs = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
 	ChannelRetryDelay = 10 * time.Millisecond
 	PackageManifestPropagationWait = 10 * time.Millisecond
+	OperatorInstallTimeout = 400 * time.Millisecond
+	ResolutionFailedGrace = 60 * time.Millisecond
+	BundlePullFailureGrace = 60 * time.Millisecond
+	CSVFailedGrace = 60 * time.Millisecond
+	CSVDeletionTimeout = 50 * time.Millisecond
+	CatalogImagePullGrace = 30 * time.Millisecond
 
 	// Skip real Quay credential verification in tests.
 	// Individual tests override this to test rejection behavior.
