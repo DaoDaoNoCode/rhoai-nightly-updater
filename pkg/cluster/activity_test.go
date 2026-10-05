@@ -75,7 +75,7 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Accept both the specific ConfigMap path and the collection path (for POST)
 		if r.URL.Path != "/api/v1/namespaces/test-ns/configmaps/rhoai-nightly-updater-activity" &&
-			!(r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/test-ns/configmaps") {
+			(r.Method != http.MethodPost || r.URL.Path != "/api/v1/namespaces/test-ns/configmaps") {
 			// Activity recording must touch only its own ConfigMap.
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotImplemented)
@@ -258,7 +258,7 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/namespaces/test-ns/configmaps/rhoai-nightly-updater-activity" &&
-			!(r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/test-ns/configmaps") {
+			(r.Method != http.MethodPost || r.URL.Path != "/api/v1/namespaces/test-ns/configmaps") {
 			// Activity recording must touch only its own ConfigMap.
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotImplemented)
