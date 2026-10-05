@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   Alert,
-  AlertActionLink,
   ClipboardCopy,
   Content,
   ExpandableSection,
@@ -17,10 +16,6 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 import type { StatusResponse } from '../types';
-
-interface PrerequisitesPanelProps {
-  status: StatusResponse | null;
-}
 
 const IDMSInstructions: React.FC = () => (
   <Stack hasGutter>
@@ -175,40 +170,3 @@ export const SetupModal: React.FC<{
     </Modal>
   );
 };
-
-/**
- * PrerequisitesBanner -- an inline alert shown when prerequisites are not met.
- * Replaces the old cluttered expandable panel.
- */
-export const PrerequisitesBanner: React.FC<PrerequisitesPanelProps & { onOpenSetup: () => void }> = ({
-  status,
-  onOpenSetup,
-}) => {
-  if (!status) return null;
-
-  const pullSecretReady = status.pullSecret.exists;
-  const idmsReady = status.imageMirror.exists;
-  const allReady = pullSecretReady && idmsReady;
-
-  if (allReady) return null;
-
-  const missing: string[] = [];
-  if (!pullSecretReady) missing.push('Pull Secret');
-  if (!idmsReady) missing.push('Image Mirror');
-
-  return (
-    <Alert component="p"
-      variant="warning"
-      title="One-time cluster setup required"
-      isInline
-      actionLinks={
-        <AlertActionLink onClick={onOpenSetup}>
-          View setup instructions
-        </AlertActionLink>
-      }
-    >
-      Missing: {missing.join(', ')}. Complete the setup before installing nightly builds.
-    </Alert>
-  );
-};
-
