@@ -397,6 +397,9 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 			continue
 		}
 		var csv struct {
+			Metadata struct {
+				DeletionTimestamp *string `json:"deletionTimestamp"`
+			} `json:"metadata"`
 			Status struct {
 				Phase   string `json:"phase"`
 				Reason  string `json:"reason"`
@@ -404,6 +407,11 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 			} `json:"status"`
 		}
 		if json.Unmarshal(csvBody, &csv) != nil {
+			continue
+		}
+		if csv.Metadata.DeletionTimestamp != nil {
+			// The previous CSV of the same name is still being removed.
+			progress(fmt.Sprintf("Waiting for the previous CSV %s to finish deleting", name))
 			continue
 		}
 		phase := csv.Status.Phase

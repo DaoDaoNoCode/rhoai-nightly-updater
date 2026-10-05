@@ -528,3 +528,14 @@ func TestAdminAckReported(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+// A same-name CSV that is still being deleted is not the new install.
+func TestWaitIgnoresDeletingCSV(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	f.csvs["rhods-operator.3.6.0"]["metadata"] = map[string]interface{}{"name": "rhods-operator.3.6.0", "deletionTimestamp": "2026-10-05T00:00:00Z"}
+	var logs []string
+	outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{})
+	if outcome.succeeded || outcome.errorCode != "install_timeout" {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
