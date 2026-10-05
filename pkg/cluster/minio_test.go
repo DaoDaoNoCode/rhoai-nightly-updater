@@ -196,55 +196,31 @@ func TestMinioCredentials_ReadErrorDoesNotRotate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSetupMinIO_ResponseDoesNotLeakPassword(t *testing.T) {
-	// SetupMinIO has multiple return paths. In a unit-test environment the
-	// S3 bucket creation always fails (no real MinIO), so we exercise the
-	// deployment path and verify that every response message is credential-free.
-	//
-	// The response must not reveal the stored password.
+	// Exercise the success path and the bucket-failure path and verify that
+	// no response message or log line reveals the stored password.
+	for _, bucketErr := range []error{nil, fmt.Errorf("S3 PUT bucket returned 403")} {
+		fastMinIOTimings(t)
+		minioBucketCreator = func(*Client, string) error { return bucketErr }
+		f, client := newFakeAPI(t)
+		readyAfterApply(f)
+		f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"bWluaW8=","minio_root_password":"dGVzdHBhc3M="}}`)
 
-	nsJSON, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1", "kind": "Namespace",
-		"metadata": map[string]interface{}{"name": "minio"},
-		"status":   map[string]interface{}{"phase": "Active"},
-	})
-
-	deployReady, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "apps/v1", "kind": "Deployment",
-		"metadata": map[string]interface{}{"name": "minio", "namespace": "minio"},
-		"status": map[string]interface{}{
-			"readyReplicas": 1,
-			"replicas":      1,
-		},
-	})
-
-	// Provide a minio-secret that createMinioBucket reads.
-	secretJSON, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1", "kind": "Secret",
-		"data": map[string]interface{}{
-			"minio_root_user":     "bWluaW8=",     // base64("minio")
-			"minio_root_password": "dGVzdHBhc3M=", // base64("testpass")
-		},
-	})
-
-	deployPath := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", "minio", "minio")
-	secretPath := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", "minio", "minio-secret")
-
-	client, _, cleanup := newRecordingMockClient(map[string]mockResponse{
-		"/api/v1/namespaces/minio": {body: string(nsJSON), statusCode: 200},
-		"/api/v1/namespaces":       {body: `{}`, statusCode: 201},
-		deployPath:                 {body: string(deployReady), statusCode: 200},
-		secretPath:                 {body: string(secretJSON), statusCode: 200},
-	})
-	defer cleanup()
-
-	resp, err := SetupMinIO(client)
-	if err != nil {
-		t.Fatalf("SetupMinIO returned error: %v", err)
+		resp, err := SetupMinIO(client)
+		if err != nil {
+			t.Fatalf("SetupMinIO returned error: %v", err)
+		}
+		if resp.Success != (bucketErr == nil) {
+			t.Fatalf("unexpected result %+v", resp)
+		}
+		assertNoCredentialLeak(t, resp.Message, resp.Logs)
 	}
+}
 
+func assertNoCredentialLeak(t *testing.T, message string, logs []string) {
+	t.Helper()
 	// Combine message and all log lines into one blob for scanning.
-	allText := resp.Message
-	for _, l := range resp.Logs {
+	allText := message
+	for _, l := range logs {
 		allText += "\n" + l
 	}
 

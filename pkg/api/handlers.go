@@ -1123,13 +1123,7 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 // Uses the SA client to list all DS projects -- this is an internal team tool
 // where all authenticated users see all projects.
 var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	projects, err := cluster.GetDSProjects(c)
-	if err != nil {
-		slog.Error("resources status: failed to list projects", "error", err)
-		writeError(w, "failed to get resources status", http.StatusInternalServerError)
-		return
-	}
-	status, err := cluster.GetResourcesStatus(c, projects)
+	status, err := cluster.GetResourcesStatus(c)
 	if err != nil {
 		slog.Error("resources status error", "error", err)
 		writeError(w, "failed to get resources status", http.StatusInternalServerError)
