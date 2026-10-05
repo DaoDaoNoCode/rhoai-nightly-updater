@@ -2,6 +2,14 @@ apiVersion: template.openshift.io/v1
 kind: Template
 metadata:
   name: rhoai-nightly-updater
+  annotations:
+    description: >-
+      RHOAI Nightly Updater. Requires cluster-admin to apply. Before the first
+      apply, create the oauth-proxy session secret once (it is kept across
+      re-applies, so sessions survive upgrades):
+      oc create secret generic <APP_NAME>-proxy -n <NAMESPACE>
+      --from-literal=session_secret="$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)".
+      `make deploy` / `make upgrade` do this for you.
 parameters:
   - name: IMAGE
     required: true
@@ -9,9 +17,6 @@ parameters:
     value: rhoai-nightly-updater
   - name: APP_NAME
     value: rhoai-nightly-updater
-  - name: COOKIE_SECRET
-    generate: expression
-    from: '[a-zA-Z0-9]{32}'
   - name: OAUTH_PROXY_IMAGE
     # Match the tag to your cluster's OCP minor version (e.g., v4.17 for OCP 4.17.x).
     # Find available tags: oc image info registry.redhat.io/openshift4/ose-oauth-proxy-rhel9 --filter-by-os=linux/amd64
@@ -26,101 +31,296 @@ objects:
       annotations:
         serviceaccounts.openshift.io/oauth-redirectreference.primary: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"${APP_NAME}"}}'
 
+  # RBAC: exactly the requests the backend makes with this ServiceAccount,
+  # including the restore, revert and cleanup paths (webhook deletes, CRD
+  # conversion patches, finalizer removal, dashboard-operator scaling,
+  # Subscription/CatalogSource restore). pkg/cluster/rbac_coverage_test.go
+  # derives every API call from the code and fails when a rule is missing or
+  # unused. Rules are namespaced Roles where the namespace always exists when
+  # the template is applied; operator namespaces (redhat-ods-*, minio) are
+  # created later by RHOAI or by this tool, so their rules are cluster-wide
+  # but limited to fixed object names where the API allows it. "create"
+  # cannot be limited by name
+  # (https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources).
+  # Cluster-scoped names carry the namespace so two installs do not collide.
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
-      name: ${APP_NAME}
+      name: ${APP_NAME}-${NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     rules:
-      # Read cluster info
+      # Cluster information and capacity diagnostics
       - apiGroups: ["config.openshift.io"]
-        resources: ["clusterversions", "consoles", "imagedigestmirrorsets"]
-        verbs: ["get", "list"]
-      # Read node status for capacity diagnostics
+        resources: ["clusterversions"]
+        resourceNames: ["version"]
+        verbs: ["get"]
+      - apiGroups: ["config.openshift.io"]
+        resources: ["consoles"]
+        resourceNames: ["cluster"]
+        verbs: ["get"]
+      - apiGroups: ["config.openshift.io"]
+        resources: ["imagedigestmirrorsets"]
+        verbs: ["list"]
       - apiGroups: [""]
         resources: ["nodes"]
-        verbs: ["get", "list"]
-      # Manage RHOAI operator (subscriptions, CSVs, catalogsources)
-      - apiGroups: ["operators.coreos.com"]
-        resources: ["subscriptions", "clusterserviceversions", "catalogsources", "installplans", "operatorgroups"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
-      # Read package manifests
-      - apiGroups: ["packages.operators.coreos.com"]
-        resources: ["packagemanifests"]
-        verbs: ["get", "list"]
-      # Manage secrets — needed across multiple namespaces:
-      #   kube-system (pull secret), minio (credentials), user DS projects (DSPA secrets)
-      # Cannot be namespace-scoped because pipeline projects are dynamic.
-      # Server-side validation restricts actual access to known namespaces.
+        verbs: ["list"]
+      # Namespaces: list DS projects; create redhat-ods-operator, minio and
+      # pipeline projects; only minio is ever deleted.
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["get", "list", "create"]
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        resourceNames: ["redhat-ods-operator"]
+        verbs: ["patch"]
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        resourceNames: ["minio"]
+        verbs: ["delete"]
+      # Secrets: no list and no general read. MinIO credentials and the
+      # pipeline-server connection secret in user projects.
       - apiGroups: [""]
         resources: ["secrets"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
-      # Pods, namespaces, services, PVCs for Quick Resource Creator
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["minio-secret"]
+        verbs: ["get", "patch"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["dashboard-dspa-secret"]
+        verbs: ["patch", "delete"]
+      # Webhook backing services (stale-webhook check) and MinIO
+      - apiGroups: [""]
+        resources: ["services"]
+        verbs: ["get", "create"]
+      - apiGroups: [""]
+        resources: ["services"]
+        resourceNames: ["minio-service"]
+        verbs: ["patch"]
+      - apiGroups: [""]
+        resources: ["persistentvolumeclaims"]
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["persistentvolumeclaims"]
+        resourceNames: ["minio-pvc"]
+        verbs: ["patch"]
+      # Pods in redhat-ods-operator/-applications and openshift-marketplace:
+      # status, debug info and the stuck-rollout assist (deletes a pod)
       - apiGroups: [""]
         resources: ["pods"]
         verbs: ["get", "list", "delete"]
-      # Namespaces: get/list is broad (needed for DS project listing),
-      # create/delete restricted to known prefixes by server-side validation.
-      - apiGroups: [""]
-        resources: ["namespaces"]
-        verbs: ["get", "list", "create", "patch", "delete"]
-      - apiGroups: [""]
-        resources: ["services", "persistentvolumeclaims"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
+      # Deployments: dashboard image overrides, dashboard-operator pause and
+      # restore, operator restart, rollout assist, MinIO
       - apiGroups: ["apps"]
-        resources: ["deployments", "replicasets"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
-      # User permission checks
-      - apiGroups: ["authorization.k8s.io"]
-        resources: ["selfsubjectaccessreviews"]
-        verbs: ["create"]
+        resources: ["deployments"]
+        verbs: ["get", "list", "patch", "create"]
+      - apiGroups: ["apps"]
+        resources: ["replicasets"]
+        verbs: ["list"]
       - apiGroups: ["route.openshift.io"]
         resources: ["routes"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
-      # Activity log ConfigMap
-      - apiGroups: [""]
-        resources: ["configmaps"]
-        verbs: ["get", "create", "update", "patch"]
-      # Manage webhooks during rollback
+        resourceNames: ["rhods-dashboard", "mlflow", "minio-api", "minio-ui"]
+        verbs: ["get"]
+      - apiGroups: ["route.openshift.io"]
+        resources: ["routes"]
+        resourceNames: ["minio-api", "minio-ui"]
+        verbs: ["patch"]
+      - apiGroups: ["route.openshift.io"]
+        resources: ["routes"]
+        verbs: ["create"]
+      # The RHOAI operator (redhat-ods-operator namespace)
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions"]
+        resourceNames: ["rhods-operator"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions", "operatorgroups"]
+        verbs: ["create"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["operatorgroups"]
+        verbs: ["list"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["operatorgroups"]
+        resourceNames: ["rhods-operator"]
+        verbs: ["patch"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["clusterserviceversions"]
+        verbs: ["get", "list", "delete"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["installplans"]
+        verbs: ["list", "delete"]
+      # Stale webhooks are removed during reinstall and by diagnostics
       - apiGroups: ["admissionregistration.k8s.io"]
         resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
-        verbs: ["get", "list", "delete"]
-      # Patch CRDs during rollback
+        verbs: ["list", "delete"]
+      # DSC schema check, and conversion-webhook removal while the operator is down
       - apiGroups: ["apiextensions.k8s.io"]
         resources: ["customresourcedefinitions"]
-        verbs: ["get", "patch"]
-      # Manage DSC (read + create for fresh installs)
+        resourceNames: ["datascienceclusters.datasciencecluster.opendatahub.io"]
+        verbs: ["get"]
+      - apiGroups: ["apiextensions.k8s.io"]
+        resources: ["customresourcedefinitions"]
+        resourceNames: ["datascienceclusters.datasciencecluster.opendatahub.io", "dscinitializations.dscinitialization.opendatahub.io"]
+        verbs: ["patch"]
       - apiGroups: ["datasciencecluster.opendatahub.io"]
         resources: ["datascienceclusters"]
-        verbs: ["get", "list", "create", "update", "patch"]
-      # Component CRs: stale condition cross-check and finalizer cleanup during reinstall
+        verbs: ["get", "list", "patch", "create"]
+      # Component CRs: finalizer cleanup of stuck CRs during reinstall
       - apiGroups: ["components.platform.opendatahub.io"]
-        resources: ["*"]
-        verbs: ["get", "list", "patch"]
-      # Patch MaaS gateway for annotation fixes
-      - apiGroups: ["gateway.networking.k8s.io"]
-        resources: ["gateways"]
-        verbs: ["get", "patch"]
-      # Manage DSPAs (pipeline server)
+        resources: ["codeflares", "dashboards", "datasciencepipelines", "feastoperators", "kserves", "kueues", "llamastackoperators", "mlflowoperators", "modelcontrollers", "modelmeshservings", "modelregistries", "modelsasservices", "ogxs", "rays", "sparkoperators", "trainers", "trainingoperators", "trustyais", "workbenches"]
+        verbs: ["list", "patch"]
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
-      # MLflow CR management
+        resourceNames: ["dspa"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
+        resources: ["datasciencepipelinesapplications"]
+        verbs: ["create"]
       - apiGroups: ["mlflow.opendatahub.io"]
         resources: ["mlflows"]
-        verbs: ["get", "list", "create", "update", "patch", "delete"]
-      # Read user identity
-      - apiGroups: ["user.openshift.io"]
-        resources: ["users"]
-        verbs: ["get"]
+        resourceNames: ["mlflow"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["mlflow.opendatahub.io"]
+        resources: ["mlflows"]
+        verbs: ["create"]
 
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: ${APP_NAME}
+      name: ${APP_NAME}-${NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # The app's own state: activity log, deployment snapshot, running operation
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
       name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+    rules:
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["rhoai-nightly-updater-activity", "rhoai-nightly-updater-snapshot", "rhoai-nightly-updater-operation"]
+        verbs: ["get"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["rhoai-nightly-updater-activity"]
+        verbs: ["update"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["rhoai-nightly-updater-snapshot", "rhoai-nightly-updater-operation"]
+        verbs: ["patch"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # The cluster pull secret for quay.io/rhoai (kube-system)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: kube-system
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["additional-pull-secret"]
+        verbs: ["get", "patch"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: kube-system
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # Nightly CatalogSources and package lookups (openshift-marketplace)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: openshift-marketplace
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["catalogsources"]
+        verbs: ["get", "create", "patch", "delete"]
+      - apiGroups: ["packages.operators.coreos.com"]
+        resources: ["packagemanifests"]
+        verbs: ["list"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: openshift-marketplace
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # MaaS gateway annotation fix (openshift-ingress)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: openshift-ingress
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        resourceNames: ["maas-default-gateway"]
+        verbs: ["patch"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: openshift-ingress
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
     subjects:
       - kind: ServiceAccount
         name: ${APP_NAME}
@@ -169,26 +369,37 @@ objects:
           containers:
             - name: app
               image: ${IMAGE}
+              env:
+                # The API listens on localhost only: oauth-proxy (same pod)
+                # is its only client. Probes and /metrics use METRICS_PORT.
+                - name: BIND_ADDRESS
+                  value: 127.0.0.1
+                - name: METRICS_PORT
+                  value: "9090"
+                # Must match api.ExpectedTemplateRevision; bump both when a
+                # template change matters to the running code.
+                - name: TEMPLATE_REVISION
+                  value: "2"
               ports:
-                - containerPort: 8080
-                  name: http
+                - containerPort: 9090
+                  name: metrics
               startupProbe:
                 httpGet:
                   path: /api/health
-                  port: 8080
+                  port: 9090
                 failureThreshold: 10
                 periodSeconds: 3
               readinessProbe:
                 httpGet:
                   path: /api/health/ready
-                  port: 8080
+                  port: 9090
                 initialDelaySeconds: 2
                 periodSeconds: 10
                 timeoutSeconds: 5
               livenessProbe:
                 httpGet:
                   path: /api/health
-                  port: 8080
+                  port: 9090
                 initialDelaySeconds: 5
                 periodSeconds: 30
                 timeoutSeconds: 3
@@ -210,19 +421,21 @@ objects:
 
             - name: oauth-proxy
               image: ${OAUTH_PROXY_IMAGE}
-              env:
-                - name: COOKIE_SECRET
-                  value: ${COOKIE_SECRET}
               args:
                 - --https-address=:8443
                 - --provider=openshift
                 - --openshift-service-account=${APP_NAME}
-                - --upstream=http://localhost:8080
+                - --upstream=http://127.0.0.1:8080
                 - --upstream-timeout=960s
                 - --upstream-flush=200ms
                 - --tls-cert=/etc/tls/private/tls.crt
                 - --tls-key=/etc/tls/private/tls.key
-                - --cookie-secret=$(COOKIE_SECRET)
+                # Kept in a Secret that re-applies do not change.
+                - --cookie-secret-file=/etc/proxy/secrets/session_secret
+                # Below the OAuth access token lifetime (OAuth
+                # accessTokenMaxAgeSeconds, 86400s by default), so the session
+                # ends before the token it carries stops working.
+                - --cookie-expire=23h
                 - --cookie-samesite=strict
                 - --pass-access-token=true
                 - --pass-user-headers=true
@@ -230,21 +443,29 @@ objects:
               ports:
                 - containerPort: 8443
                   name: https
+              # oauth-proxy answers /oauth/healthz before authentication.
               readinessProbe:
-                tcpSocket:
+                httpGet:
+                  path: /oauth/healthz
                   port: 8443
+                  scheme: HTTPS
                 initialDelaySeconds: 3
                 periodSeconds: 10
                 timeoutSeconds: 3
               livenessProbe:
-                tcpSocket:
+                httpGet:
+                  path: /oauth/healthz
                   port: 8443
+                  scheme: HTTPS
                 initialDelaySeconds: 10
                 periodSeconds: 30
                 timeoutSeconds: 3
               volumeMounts:
                 - name: tls
                   mountPath: /etc/tls/private
+                  readOnly: true
+                - name: proxy-secret
+                  mountPath: /etc/proxy/secrets
                   readOnly: true
               resources:
                 requests:
@@ -265,6 +486,9 @@ objects:
             - name: tls
               secret:
                 secretName: ${APP_NAME}-tls
+            - name: proxy-secret
+              secret:
+                secretName: ${APP_NAME}-proxy
 
   - apiVersion: v1
     kind: Service
@@ -282,9 +506,10 @@ objects:
         - name: https
           port: 8443
           targetPort: 8443
+        # Serves only /metrics and the health probes, never the API.
         - name: metrics
-          port: 8080
-          targetPort: 8080
+          port: 9090
+          targetPort: 9090
           protocol: TCP
 
   - apiVersion: networking.k8s.io/v1
@@ -314,7 +539,7 @@ objects:
                 matchLabels:
                   kubernetes.io/metadata.name: openshift-user-workload-monitoring
           ports:
-            - port: 8080
+            - port: 9090
               protocol: TCP
 
   - apiVersion: route.openshift.io/v1
@@ -333,6 +558,10 @@ objects:
       tls:
         termination: reencrypt
 
+  # Metrics and alerts take effect only when user workload monitoring is
+  # enabled on the cluster (it is off by default; see the OpenShift docs
+  # "Enabling monitoring for user-defined projects"). Without it these two
+  # objects are inert.
   - apiVersion: monitoring.coreos.com/v1
     kind: ServiceMonitor
     metadata:
@@ -349,18 +578,6 @@ objects:
           path: /metrics
           interval: 60s
 
-  - apiVersion: console.openshift.io/v1
-    kind: ConsoleLink
-    metadata:
-      name: ${APP_NAME}
-    spec:
-      applicationMenu:
-        section: Red Hat Applications
-        imageURL: data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==
-      href: https://placeholder.apps.example.com
-      location: ApplicationMenu
-      text: RHOAI Nightly Updater
-
   - apiVersion: monitoring.coreos.com/v1
     kind: PrometheusRule
     metadata:
@@ -373,7 +590,8 @@ objects:
         - name: ${APP_NAME}.rules
           rules:
             - alert: NightlyUpdaterDown
-              expr: up{job="${APP_NAME}"} == 0
+              # absent() also fires when the target is gone entirely.
+              expr: up{job="${APP_NAME}", namespace="${NAMESPACE}"} == 0 or absent(up{job="${APP_NAME}", namespace="${NAMESPACE}"})
               for: 5m
               labels:
                 severity: warning

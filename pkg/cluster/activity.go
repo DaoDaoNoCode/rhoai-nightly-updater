@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -14,9 +15,129 @@ import (
 const maxConflictRetries = 3
 
 const (
-	activityConfigMapName = "rhoai-nightly-updater-activity"
-	maxActivityEntries    = 20
+	activityConfigMapName  = "rhoai-nightly-updater-activity"
+	operationConfigMapName = "rhoai-nightly-updater-operation"
+	// maxActivityEntries is the retention of a category without its own.
+	maxActivityEntries = 20
+	// maxActivityBytes keeps the stored log far below the 1 MiB ConfigMap
+	// limit (https://kubernetes.io/docs/concepts/configuration/configmap/).
+	maxActivityBytes  = 256 << 10
+	maxActivityDetail = 1024
 )
+
+// Retention per category, so frequent Dashboard Dev changes do not evict
+// the operator history. At most 50+30+20+20+20 = 140 entries are kept.
+var activityRetention = map[string]int{
+	"operator":      50,
+	"dashboard-dev": 30,
+	"setup":         20,
+	"diagnostics":   20,
+}
+
+// activityActions maps each recorded action to its category and label.
+var activityActions = map[string][2]string{
+	"update":                        {"operator", "Updated to nightly"},
+	"refresh":                       {"operator", "Operator refreshed"},
+	"reinstall":                     {"operator", "Operator reinstalled"},
+	"rollback":                      {"operator", "Rolled back to stable"},
+	"deploy-pr":                     {"dashboard-dev", "Dashboard PR deployed"},
+	"deploy-dashboard-pr":           {"dashboard-dev", "Dashboard PR deployed"},
+	"deploy-dashboard-main":         {"dashboard-dev", "Dashboard main deployed"},
+	"revert-dashboard":              {"dashboard-dev", "Dashboard reverted"},
+	"setup-minio":                   {"dashboard-dev", "MinIO set up"},
+	"teardown-minio":                {"dashboard-dev", "MinIO torn down"},
+	"setup-pipeline-server":         {"dashboard-dev", "Pipeline server set up"},
+	"teardown-pipeline-server":      {"dashboard-dev", "Pipeline server torn down"},
+	"setup-mlflow":                  {"dashboard-dev", "MLflow set up"},
+	"teardown-mlflow":               {"dashboard-dev", "MLflow torn down"},
+	"deploy-mlflow-pr":              {"dashboard-dev", "MLflow PR deployed"},
+	"revert-mlflow":                 {"dashboard-dev", "MLflow reverted"},
+	"create-pull-secret":            {"setup", "Pull secret configured"},
+	"create-dsc":                    {"setup", "DataScienceCluster created"},
+	"repair-dsc":                    {"setup", "DataScienceCluster repaired"},
+	"assist-rollout":                {"diagnostics", "Stuck rollout assisted"},
+	"fix-delete-stale-webhooks":     {"diagnostics", "Stale webhooks deleted"},
+	"fix-recreate-subscription":     {"diagnostics", "Subscription recreated"},
+	"fix-delete-stale-installplans": {"diagnostics", "Failed InstallPlans deleted"},
+	"fix-maas-gateway":              {"diagnostics", "MaaS gateway fixed"},
+	"disable-component":             {"diagnostics", "Component disabled"},
+	"restart-operator":              {"diagnostics", "Operator restarted"},
+}
+
+func activityCategory(action string) string {
+	if a, ok := activityActions[action]; ok {
+		return a[0]
+	}
+	return "other"
+}
+
+// imageRefPattern finds an image reference with a tag and/or digest.
+var imageRefPattern = regexp.MustCompile(`[a-z0-9.-]+(?::[0-9]+)?/[a-zA-Z0-9._/-]+?(?::([a-zA-Z0-9._-]+))?(?:@sha256:([a-f0-9]{64}))?(?:\s|$)`)
+
+// activityBuild returns "<tag> · <short digest>" for the image in detail.
+func activityBuild(detail string) string {
+	m := imageRefPattern.FindStringSubmatch(detail)
+	if m == nil || (m[1] == "" && m[2] == "") {
+		return ""
+	}
+	tag, digest := m[1], m[2]
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	switch {
+	case tag != "" && digest != "":
+		return tag + " · " + digest
+	case tag != "":
+		return tag
+	default:
+		return "sha256:" + digest
+	}
+}
+
+// describeActivity fills the read-time fields of an entry.
+func describeActivity(e *types.ActivityEntry) {
+	e.Category = activityCategory(e.Action)
+	if a, ok := activityActions[e.Action]; ok {
+		e.Label = a[1]
+	} else {
+		e.Label = strings.ReplaceAll(e.Action, "-", " ")
+	}
+	if e.Category == "operator" {
+		e.Build = activityBuild(e.Detail)
+	}
+}
+
+// trimActivity keeps the newest entries of each category within its
+// retention and the whole log within maxActivityBytes, preserving order.
+func trimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
+	counts := map[string]int{}
+	keep := make([]bool, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		cat := activityCategory(entries[i].Action)
+		limit, ok := activityRetention[cat]
+		if !ok {
+			limit = maxActivityEntries
+		}
+		if counts[cat] < limit {
+			counts[cat]++
+			keep[i] = true
+		}
+	}
+	out := make([]types.ActivityEntry, 0, len(entries))
+	for i, e := range entries {
+		if keep[i] {
+			out = append(out, e)
+		}
+	}
+	for len(out) > 1 {
+		data, err := json.Marshal(out)
+		if err != nil || len(data) <= maxActivityBytes {
+			break
+		}
+		out = out[1:]
+	}
+	return out
+}
 
 func getActivityNamespace() string {
 	if ns := os.Getenv("NAMESPACE"); ns != "" {
@@ -42,6 +163,11 @@ func RecordActivity(c *Client, entry types.ActivityEntry) {
 
 func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 	ns := getActivityNamespace()
+	// Read-time fields are derived, not stored.
+	entry.Label, entry.Category, entry.Build = "", "", ""
+	if len(entry.Detail) > maxActivityDetail {
+		entry.Detail = entry.Detail[:maxActivityDetail] + "…"
+	}
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
 	for attempt := 0; attempt < maxConflictRetries; attempt++ {
@@ -84,13 +210,8 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 			}
 		}
 
-		// Step 2: Modify the entries
-		entries = append(entries, entry)
-
-		// Trim to max entries (keep newest)
-		if len(entries) > maxActivityEntries {
-			entries = entries[len(entries)-maxActivityEntries:]
-		}
+		// Step 2: Modify the entries; keep the newest per category
+		entries = trimActivity(append(entries, entry))
 
 		entriesJSON, err := json.Marshal(entries)
 		if err != nil {
@@ -176,6 +297,60 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return nil, fmt.Errorf("parse activity entries: %w", err)
 	}
+	for i := range entries {
+		describeActivity(&entries[i])
+	}
 
 	return entries, nil
+}
+
+// SaveOperationMarker records the running operation in a ConfigMap, or
+// clears the record when marker is nil.
+func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
+	value := ""
+	if marker != nil {
+		data, err := json.Marshal(marker)
+		if err != nil {
+			return err
+		}
+		value = string(data)
+	}
+	ns := getActivityNamespace()
+	cm := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": operationConfigMapName, "namespace": ns},
+		"data":       map[string]interface{}{"operation": value},
+	}
+	if _, _, err := c.apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
+		return fmt.Errorf("save operation marker: %w", err)
+	}
+	return nil
+}
+
+// GetOperationMarker returns the recorded running operation, or nil.
+func GetOperationMarker(c *Client) (*types.OperationMarker, error) {
+	ns := getActivityNamespace()
+	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, operationConfigMapName))
+	if IsK8sError(err, 404) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get operation marker: %w", err)
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &cm); err != nil {
+		return nil, fmt.Errorf("parse operation marker: %w", err)
+	}
+	raw := cm.Data["operation"]
+	if raw == "" {
+		return nil, nil
+	}
+	var marker types.OperationMarker
+	if err := json.Unmarshal([]byte(raw), &marker); err != nil {
+		return nil, fmt.Errorf("parse operation marker: %w", err)
+	}
+	return &marker, nil
 }

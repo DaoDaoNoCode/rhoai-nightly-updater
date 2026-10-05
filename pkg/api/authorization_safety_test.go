@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMutationAuthorizationAndPermissionsAgree(t *testing.T) {
@@ -74,7 +75,13 @@ func TestAcceptedMutationSurvivesBrowserDisconnectAndKeepsLock(t *testing.T) {
 	})
 	r := httptest.NewRequest("POST", "/api/disconnect-safety", nil).WithContext(ctx)
 	go func() { defer close(finished); h(httptest.NewRecorder(), r) }()
-	<-started
+	select {
+	case <-started:
+	case <-finished:
+		t.Fatal("handler was not called")
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not start")
+	}
 	cancel()
 	if acquireClusterMutationLock() {
 		releaseClusterMutationLock()

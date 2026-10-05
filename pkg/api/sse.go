@@ -29,6 +29,9 @@ type SSEWriter struct {
 	w      http.ResponseWriter
 	rc     *http.ResponseController
 	start  time.Time
+	// onStep sees every progress event, also after the client has gone, so
+	// GET /api/operation can report the step of the running operation.
+	onStep func(UpdateStep)
 }
 
 // NewSSEWriter configures the ResponseWriter for SSE streaming.
@@ -41,11 +44,16 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	// server's ordinary response timeout.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
-	return &SSEWriter{
+	s := &SSEWriter{
 		w:     w,
 		rc:    http.NewResponseController(w),
 		start: time.Now(),
-	}, nil
+	}
+	if sw, ok := w.(*statusWriter); ok && sw.opID != "" {
+		id := sw.opID
+		s.onStep = func(step UpdateStep) { inflight.recordStep(id, step) }
+	}
+	return s, nil
 }
 
 // StartTime returns the time when the SSE writer was created, for computing
@@ -59,6 +67,9 @@ func (s *SSEWriter) StartTime() time.Time {
 func (s *SSEWriter) SendStep(step UpdateStep) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.onStep != nil {
+		s.onStep(step)
+	}
 	if s.closed {
 		return nil
 	}

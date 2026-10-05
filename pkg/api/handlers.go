@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
@@ -21,7 +20,12 @@ import (
 var imageRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]+(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$`)
 var namespaceRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var channelRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
-var customFBCImageRegex = regexp.MustCompile(`^quay\.io/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)+(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$`)
+
+// customFBCImageRegex accepts any build of the RHOAI FBC repository (by tag
+// and/or digest). An FBC is installed with Automatic approval into an
+// AllNamespaces OperatorGroup, so it must not come from an arbitrary
+// registry or Quay organization.
+var customFBCImageRegex = regexp.MustCompile(`^quay\.io/rhoai/rhoai-fbc-fragment(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$`)
 var dscNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
 
 func validateReinstallRequest(req *types.ReinstallRequest) error {
@@ -40,7 +44,7 @@ func validateReinstallRequest(req *types.ReinstallRequest) error {
 		if req.TargetType == "custom" {
 			match := customFBCImageRegex.FindStringSubmatch(req.Image)
 			if match == nil || (match[1] == "" && match[2] == "") {
-				return fmt.Errorf("provide a quay.io FBC image with a tag or a full SHA256 digest")
+				return fmt.Errorf("provide a quay.io/rhoai/rhoai-fbc-fragment image with a tag or a full SHA256 digest")
 			}
 		} else if !imageRegex.MatchString(req.Image) || !isAllowedImage(req.Image) {
 			return fmt.Errorf("provide a valid FBC image from quay.io/rhoai/ or registry.redhat.io/rhoai/")
@@ -56,35 +60,6 @@ func validateReinstallRequest(req *types.ReinstallRequest) error {
 var allowedImagePrefixes = []string{
 	"quay.io/rhoai/",
 	"registry.redhat.io/rhoai/",
-}
-
-// clusterMutationInProgress is a non-blocking mutex that prevents concurrent
-// cluster-level mutation operations (Update, Reinstall, RefreshOperator).
-// When true, a cluster mutation is in progress and new mutation requests
-// receive HTTP 409 Conflict instead of proceeding.
-var clusterMutationInProgress atomic.Bool
-
-// acquireClusterMutationLock tries to acquire the cluster mutation lock.
-// Returns true if the lock was acquired (caller must defer releaseClusterMutationLock).
-// Returns false if another operation is already in progress; the caller should
-// return HTTP 409.
-func acquireClusterMutationLock() bool {
-	return clusterMutationInProgress.CompareAndSwap(false, true)
-}
-
-// releaseClusterMutationLock releases the cluster mutation lock.
-func releaseClusterMutationLock() {
-	clusterMutationInProgress.Store(false)
-}
-
-// lockCluster acquires the cluster mutation lock or answers 409 Conflict.
-// When it returns true the caller must defer releaseClusterMutationLock.
-func lockCluster(w http.ResponseWriter) bool {
-	if acquireClusterMutationLock() {
-		return true
-	}
-	writeError(w, "Another cluster operation is in progress. Please wait.", http.StatusConflict, "cluster_busy")
-	return false
 }
 
 // sseHeartbeat sends periodic SSE comments to keep the connection alive
@@ -113,69 +88,71 @@ func isAllowedImage(image string) bool {
 	return false
 }
 
-// rateLimiter provides simple per-user rate limiting for mutation endpoints.
-// It stores the last mutation timestamp per username in a sync.Map.
-// This is protection against accidental double-clicks, not a DDoS defense.
-// A background goroutine periodically evicts expired entries to prevent
-// unbounded memory growth.
+// rateLimiter provides simple per-user rate limiting for mutation endpoints:
+// one accepted request per user and endpoint per window. This is protection
+// against double-clicks and duplicate tabs, not a DDoS defense. A slot is
+// taken atomically when the request is accepted (so concurrent duplicates
+// are refused while the first one runs) and given back when the request is
+// rejected or asks not to count.
 type rateLimiter struct {
-	// users maps username (string) -> last mutation time (time.Time)
-	users  sync.Map
+	mu     sync.Mutex
+	users  map[string]time.Time // key -> time the slot was taken
 	window time.Duration
 }
 
-// mutationLimiter is the package-level rate limiter for mutation endpoints.
-var mutationLimiter = &rateLimiter{window: 30 * time.Second}
-
-func init() {
-	mutationLimiter.startCleanup()
+func newRateLimiter(window time.Duration) *rateLimiter {
+	return &rateLimiter{users: map[string]time.Time{}, window: window}
 }
 
-func (rl *rateLimiter) isRateLimited(username string) bool {
-	if val, ok := rl.users.Load(username); ok {
-		if time.Since(val.(time.Time)) < rl.window {
-			return true
+// mutationLimiter is the package-level rate limiter for mutation endpoints.
+var mutationLimiter = newRateLimiter(30 * time.Second)
+
+// tryAcquire takes the slot for key unless it was taken within the window.
+// It returns the slot's timestamp for release.
+func (rl *rateLimiter) tryAcquire(key string) (time.Time, bool) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	if last, ok := rl.users[key]; ok && now.Sub(last) < rl.window {
+		return time.Time{}, false
+	}
+	if len(rl.users) > 256 {
+		for k, t := range rl.users {
+			if now.Sub(t) >= rl.window {
+				delete(rl.users, k)
+			}
 		}
 	}
-	return false
+	rl.users[key] = now
+	return now, true
 }
 
-func (rl *rateLimiter) recordMutation(username string) {
-	rl.users.Store(username, time.Now())
+// release gives back a slot taken at the given time (and not a newer one).
+func (rl *rateLimiter) release(key string, takenAt time.Time) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if t, ok := rl.users[key]; ok && t.Equal(takenAt) {
+		delete(rl.users, key)
+	}
 }
 
-func (rl *rateLimiter) evictExpiredEntries() {
-	rl.users.Range(func(key, value any) bool {
-		if time.Since(value.(time.Time)) >= rl.window {
-			rl.users.Delete(key)
-		}
-		return true
-	})
-}
-
-// startCleanup launches a background goroutine that periodically removes
-// expired entries from the rate limiter map to prevent unbounded growth.
-func (rl *rateLimiter) startCleanup() {
-	go func() {
-		// Sweep at 2x the window interval so entries are cleaned up promptly
-		// but we don't burn CPU on a tight loop.
-		ticker := time.NewTicker(rl.window * 2)
-		defer ticker.Stop()
-		for range ticker.C {
-			rl.evictExpiredEntries()
-		}
-	}()
+func (rl *rateLimiter) isRateLimited(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	last, ok := rl.users[key]
+	return ok && time.Since(last) < rl.window
 }
 
 // withMutationAuth wraps a handler that performs a cluster mutation.
-// It checks user RBAC before using the SA token, applies a per-user rate limit,
-// and gives accepted work a bounded lifetime independent of the browser.
+// It verifies the user's identity and cluster-admin permission with the
+// user's own token before anything is done with the ServiceAccount token,
+// applies a per-user rate limit, and gives accepted work a bounded lifetime
+// independent of the browser.
 func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		RecordRequest()
-		userToken := extractUserToken(r)
-		if userToken == "" {
-			writeError(w, "no auth token", http.StatusUnauthorized, "unauthorized")
+		username, r, ok := requestUser(w, r)
+		if !ok {
 			return
 		}
 		clusterToken := getClusterToken()
@@ -183,26 +160,27 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 			writeError(w, "cluster token not available", http.StatusInternalServerError)
 			return
 		}
-		username := resolveUsername(r)
-		allowed, permissionErr := mutationPermission(r.Context(), userToken)
+		allowed, permissionErr := mutationPermission(r.Context(), extractUserToken(r))
 		if permissionErr != nil {
-			writeError(w, "Cannot verify mutation permissions. No changes were made.", http.StatusServiceUnavailable, "authorization_unavailable")
+			writeAuthError(w, permissionErr, "Cannot verify mutation permissions. No changes were made.")
 			return
 		}
 		if !allowed {
-			writeError(w, "Read-only access: updating operator Subscriptions in redhat-ods-operator is required.", http.StatusForbidden, "forbidden")
+			writeError(w, readOnlyMessage, http.StatusForbidden, "forbidden")
 			return
 		}
 
 		rateLimitKey := username + ":" + r.URL.Path
-		if mutationLimiter.isRateLimited(rateLimitKey) {
-			slog.Warn("rate limited", "user", username)
+		slot, acquired := mutationLimiter.tryAcquire(rateLimitKey)
+		if !acquired {
+			slog.Warn("rate limited", "user", username, "path", r.URL.Path)
 			w.Header().Set("Retry-After", "30")
 			writeError(w, "Too many requests. Please wait 30 seconds before retrying.", http.StatusTooManyRequests, "rate_limited")
 			return
 		}
 
 		if !mutations.begin() {
+			mutationLimiter.release(rateLimitKey, slot)
 			w.Header().Set("Retry-After", "30")
 			writeError(w, "The updater is restarting. No changes were made; retry once it is back.", http.StatusServiceUnavailable, "shutting_down")
 			return
@@ -218,24 +196,45 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 		client := cluster.NewClientWithContext(opContext, clusterToken)
 		client.SetUsername(username)
 
-		sw := &statusWriter{ResponseWriter: w}
-		fn(client, sw, r)
-		if sw.status == 0 || sw.status < 400 {
-			if sw.Header().Get("X-Skip-Rate-Limit") != "true" {
-				mutationLimiter.recordMutation(rateLimitKey)
+		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, client: client}
+		completed := false
+		defer func() {
+			// Rejected requests (4xx/5xx status, including 409 busy),
+			// requests that opt out (dry runs) and handlers that panicked
+			// do not use up the user's slot.
+			if !completed || sw.status >= 400 || sw.Header().Get("X-Skip-Rate-Limit") == "true" {
+				mutationLimiter.release(rateLimitKey, slot)
 			}
-		}
+		}()
+		fn(client, sw, r)
+		completed = true
 	}
 }
 
+// statusWriter records the response status of a mutation and carries the
+// request's identity to lockCluster, which publishes the running operation.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
+
+	path   string
+	user   string
+	client *cluster.Client
+	opID   string // set by lockCluster
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
-	sw.status = code
+	if sw.status == 0 {
+		sw.status = code
+	}
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+func (sw *statusWriter) Write(b []byte) (int, error) {
+	if sw.status == 0 {
+		sw.status = http.StatusOK
+	}
+	return sw.ResponseWriter.Write(b)
 }
 
 // Unwrap lets ResponseController reach streaming and deadline support on the
@@ -309,7 +308,12 @@ func writeOperationResult(w http.ResponseWriter, result *types.OperationResponse
 	writeJSON(w, result, label)
 }
 
+// resolveUsername returns the request's user: the identity verified by
+// withAuth/withMutationAuth when present, otherwise the oauth-proxy header.
 func resolveUsername(r *http.Request) string {
+	if u, ok := r.Context().Value(identityKey{}).(string); ok && u != "" {
+		return u
+	}
 	if u := r.Header.Get("X-Forwarded-User"); u != "" {
 		return u
 	}
@@ -360,7 +364,7 @@ func getClusterToken() string {
 	}
 
 	// Always prefer the in-cluster SA token
-	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	data, err := os.ReadFile(serviceAccountTokenPath)
 	if err == nil && len(data) > 0 {
 		cachedTokenValue = string(data)
 		cachedTokenAt = time.Now()
@@ -377,15 +381,15 @@ func getClusterToken() string {
 }
 
 // withAuth wraps a handler that requires authentication.
-// It verifies the user is authenticated (via oauth-proxy) and creates a
-// Client using the ServiceAccount token for k8s API calls.
-// The logged-in user identity is captured from X-Forwarded-User header.
+// It verifies the user's token with the API server (the user's own token,
+// forwarded by oauth-proxy) and creates a Client using the ServiceAccount
+// token for k8s API calls. A request without a token, or whose token the API
+// server rejects, never reaches the handler.
 func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		RecordRequest()
-		userToken := extractUserToken(r)
-		if userToken == "" {
-			writeError(w, "no auth token", http.StatusUnauthorized, "unauthorized")
+		username, r, ok := requestUser(w, r)
+		if !ok {
 			return
 		}
 		clusterToken := getClusterToken()
@@ -393,7 +397,6 @@ func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)
 			writeError(w, "cluster token not available", http.StatusInternalServerError)
 			return
 		}
-		username := resolveUsername(r)
 		client := cluster.NewClientWithContext(r.Context(), clusterToken)
 		client.SetUsername(username)
 		fn(client, w, r)
@@ -401,12 +404,13 @@ func withAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)
 }
 
 // HandleUserPermissions reports whether the logged-in user may mutate, using
-// the same permission review that guards every mutation endpoint.
+// the same permission review that guards every mutation endpoint. A 503
+// means the answer is unknown: clients must treat it as read-only.
 var HandleUserPermissions = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	username := resolveUsername(r)
 	allowed, err := mutationPermission(r.Context(), extractUserToken(r))
 	if err != nil {
-		writeError(w, "Cannot verify mutation permissions", http.StatusServiceUnavailable, "authorization_unavailable")
+		writeAuthError(w, err, "Cannot verify mutation permissions")
 		return
 	}
 	writeJSON(w, map[string]interface{}{
@@ -431,11 +435,61 @@ func HandleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"}, "health")
+	writeJSON(w, map[string]string{"status": "ok", "version": Version, "commit": Commit}, "health")
+}
+
+// apiReachability caches the readiness probe's Kubernetes API check, so the
+// probe (every 10s) does not call the API each time, and a short burst of
+// throttling (429) or a slow API does not take the only pod out of the
+// Route. The pod stays ready while the API answered within apiReadyGrace.
+type apiReachability struct {
+	mu          sync.Mutex
+	lastCheck   time.Time
+	lastSuccess time.Time
+	lastErr     error
+}
+
+const (
+	apiCheckInterval = 30 * time.Second
+	apiReadyGrace    = 90 * time.Second
+)
+
+var apiReady = &apiReachability{}
+
+// checkAPIVersion is the API reachability check; tests replace it.
+var checkAPIVersion = func(ctx context.Context, token string) error {
+	_, err := cluster.NewClientWithContext(ctx, token).GetVersion()
+	return err
+}
+
+// ready reports whether the API was reachable recently, refreshing the
+// check when it is older than apiCheckInterval.
+func (a *apiReachability) ready(ctx context.Context, token string) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	if a.lastCheck.IsZero() || now.Sub(a.lastCheck) >= apiCheckInterval {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := checkAPIVersion(checkCtx, token)
+		cancel()
+		a.lastCheck, a.lastErr = now, err
+		if err == nil {
+			a.lastSuccess = now
+		} else {
+			slog.Warn("readiness check: kubernetes API unreachable", "error", err)
+		}
+	}
+	return !a.lastSuccess.IsZero() && now.Sub(a.lastSuccess) < apiReadyGrace, a.lastErr
+}
+
+func (a *apiReachability) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastCheck, a.lastSuccess, a.lastErr = time.Time{}, time.Time{}, nil
 }
 
 // HandleReady performs deeper readiness checks for kubelet readiness probes.
-// It verifies the Kubernetes API is reachable by calling the /version endpoint.
+// It verifies the Kubernetes API is reachable (cached, see apiReachability).
 func HandleReady(w http.ResponseWriter, r *http.Request) {
 	checks := map[string]string{}
 
@@ -470,13 +524,8 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	client := cluster.NewClientWithContext(ctx, token)
-	_, err := client.GetVersion()
-	if err != nil {
-		slog.Warn("readiness check: kubernetes API unreachable", "error", err)
+	ok, lastErr := apiReady.ready(r.Context(), token)
+	if !ok {
 		checks["kubernetes"] = "unreachable"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -490,6 +539,9 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	checks["kubernetes"] = "ok"
+	if lastErr != nil {
+		checks["kubernetes"] = "ok (last check failed; within grace period)"
+	}
 	writeJSON(w, map[string]interface{}{
 		"status": "ok",
 		"checks": checks,
@@ -507,7 +559,8 @@ var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *ht
 	writeJSON(w, status, "status")
 })
 
-// HandleUpdate applies a nightly catalog update to the cluster.
+// HandleUpdate validates a nightly catalog update with a server-side dry
+// run. Real updates go through HandleUpdateStream, which reports progress.
 var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
@@ -539,23 +592,20 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 		return
 	}
 
-	if req.DryRun {
-		w.Header().Set("X-Skip-Rate-Limit", "true")
-	}
-
-	slog.Info("mutation", "op", "update", "image", req.Image, "dryRun", req.DryRun)
-
-	result, err := cluster.Update(c, req.Image, req.DryRun)
-	if err != nil {
-		slog.Error("update failed", "error", err)
-		if !req.DryRun {
-			RecordUpdate(false)
-		}
-		writeError(w, "update failed", http.StatusInternalServerError)
+	if !req.DryRun {
+		writeError(w, "this endpoint only runs dry runs; use POST /api/update/stream to update", http.StatusBadRequest, "validation")
 		return
 	}
-	if !req.DryRun {
-		RecordUpdate(result.Success)
+	w.Header().Set("X-Skip-Rate-Limit", "true")
+	setOperationTarget(w, req.Image)
+
+	slog.Info("mutation", "op", "update", "image", req.Image, "dryRun", true)
+
+	result, err := runUpdateDryRun(c, req.Image)
+	if err != nil {
+		slog.Error("update dry run failed", "error", err)
+		writeError(w, "update failed", http.StatusInternalServerError)
+		return
 	}
 	writeOperationResult(w, result, "update")
 })
@@ -604,9 +654,10 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	defer close(done)
 	go sseHeartbeat(sseWriter, done)
 
+	setOperationTarget(w, req.Image)
 	slog.Info("mutation", "op", "update-stream", "image", req.Image)
 
-	result, updateErr := cluster.UpdateStream(c, req.Image, func(event cluster.UpdateStepEvent) {
+	result, updateErr := runUpdateStream(c, req.Image, func(event cluster.UpdateStepEvent) {
 		sseWriter.SendStep(UpdateStep{
 			Step:      event.Step,
 			Status:    event.Status,
@@ -643,6 +694,10 @@ var HandleTestPullSecret = withAuth(func(c *cluster.Client, w http.ResponseWrite
 
 // HandleCreatePullSecret creates or updates the quay.io pull secret.
 var HandleCreatePullSecret = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	var req types.CreatePullSecretRequest
@@ -914,69 +969,6 @@ var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.
 	writeOperationResult(w, result, "deploy-dashboard-main")
 })
 
-// HandleRefreshOperator deletes the current CSV to trigger OLM to reinstall
-// with updated images from the current catalog.
-var HandleRefreshOperator = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !lockCluster(w) {
-		return
-	}
-	defer releaseClusterMutationLock()
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in refresh handler", "error", rec)
-		}
-	}()
-
-	slog.Info("mutation", "op", "refresh")
-
-	result, err := cluster.RefreshOperator(c)
-	if err != nil {
-		slog.Error("refresh failed", "error", err)
-		writeError(w, "refresh failed", http.StatusInternalServerError)
-		return
-	}
-	writeOperationResult(w, result, "refresh")
-})
-
-// HandleRollback handles reinstall operations (rollback to stable or reinstall to a specific nightly).
-// It accepts an optional ReinstallRequest body. If the body is empty or targetType is "stable",
-// it performs the original rollback-to-stable flow. If targetType is "nightly" and an image is
-// provided, it reinstalls using the specified nightly FBC image.
-var HandleRollback = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !lockCluster(w) {
-		return
-	}
-	defer releaseClusterMutationLock()
-
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
-	var req types.ReinstallRequest
-	// Preserve the legacy empty-body stable rollback, but reject malformed JSON.
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
-		return
-	}
-	if err := validateReinstallRequest(&req); err != nil {
-		writeError(w, err.Error(), http.StatusBadRequest, "validation")
-		return
-	}
-
-	slog.Info("mutation", "op", "reinstall", "targetType", req.TargetType, "image", req.Image, "channelOverride", req.Channel)
-
-	result, err := cluster.Reinstall(c, req.TargetType, req.Image, req.Channel)
-	if err != nil {
-		slog.Error("reinstall failed", "error", err)
-		writeError(w, "reinstall failed", http.StatusInternalServerError)
-		return
-	}
-	if req.TargetType == "stable" {
-		RecordRollback()
-	} else {
-		RecordReinstall()
-	}
-	writeOperationResult(w, result, "rollback")
-})
-
 // HandleReinstallStream performs the full uninstall/cleanup/reinstall flow
 // and streams progress via SSE.
 var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
@@ -1015,9 +1007,14 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	defer close(done)
 	go sseHeartbeat(sseWriter, done)
 
+	target := req.TargetType
+	if req.Image != "" {
+		target += " " + req.Image
+	}
+	setOperationTarget(w, target)
 	slog.Info("mutation", "op", "reinstall-stream", "targetType", req.TargetType, "image", req.Image)
 
-	result, reinstallErr := cluster.ReinstallStream(c, req.TargetType, req.Image, req.Channel, func(event cluster.UpdateStepEvent) {
+	result, reinstallErr := runReinstallStream(c, req.TargetType, req.Image, req.Channel, func(event cluster.UpdateStepEvent) {
 		sseWriter.SendStep(UpdateStep{
 			Step:      event.Step,
 			Status:    event.Status,
@@ -1070,7 +1067,7 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 
 	slog.Info("mutation", "op", "refresh-stream")
 
-	result, refreshErr := cluster.RefreshOperatorStream(c, func(event cluster.UpdateStepEvent) {
+	result, refreshErr := runRefreshStream(c, func(event cluster.UpdateStepEvent) {
 		sseWriter.SendStep(UpdateStep{
 			Step:      event.Step,
 			Status:    event.Status,
@@ -1124,6 +1121,10 @@ var HandleDSProjects = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 
 // HandleMinIOSetup deploys MinIO with a bucket for pipeline artifacts.
 var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "setup-minio")
 	result, err := cluster.SetupMinIO(c)
 	if err != nil {
@@ -1136,6 +1137,10 @@ var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 
 // HandleMinIOTeardown deletes the MinIO namespace and all its resources.
 var HandleMinIOTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	slog.Info("mutation", "op", "teardown-minio")
 	result, err := cluster.TeardownMinIO(c)
 	if err != nil {
@@ -1148,6 +1153,10 @@ var HandleMinIOTeardown = withMutationAuth(func(c *cluster.Client, w http.Respon
 
 // HandlePipelineServerSetup creates a pipeline server (DSPA) in the specified project.
 var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.PipelineServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Project == "" {
@@ -1170,6 +1179,10 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 
 // HandlePipelineServerTeardown removes the pipeline server from the specified project.
 var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.PipelineServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Project == "" {

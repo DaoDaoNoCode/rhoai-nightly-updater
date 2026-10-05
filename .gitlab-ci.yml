@@ -1,42 +1,117 @@
+# Checks run on merge requests and on main before anything is published.
+# Every teammate's updater pod pulls :latest on restart, so build-main only
+# runs after all checks pass.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # A branch with an open MR is tested by the MR pipeline only.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
 stages:
+  - test
   - build
 
 variables:
   IMAGE: quay.io/juntao_wang/rhoai-nightly-updater
+  # Images pinned by digest; keep in step with the Containerfile.
+  GO_IMAGE: docker.io/library/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190
+  NODE_IMAGE: docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+  GOLANGCI_IMAGE: docker.io/golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
+  # Kaniko is archived upstream; it is kept pinned until a replacement
+  # (for example buildah) is validated on these runners.
+  KANIKO_IMAGE: gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
+
+.test:
+  stage: test
+  interruptible: true
+  needs: []
+
+go:
+  extends: .test
+  image: $GO_IMAGE
+  script:
+    - test -z "$(gofmt -l .)" || { gofmt -l .; echo "Run gofmt -w ."; exit 1; }
+    - go vet ./...
+    - go test -race -count=1 ./...
+    - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+golangci-lint:
+  extends: .test
+  image: $GOLANGCI_IMAGE
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    # Only issues introduced since the base are reported until the existing
+    # ones are cleaned up; then drop --new-from-rev.
+    - |
+      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
+      if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE="HEAD~1"; fi
+      golangci-lint run --new-from-rev="$BASE" ./...
+
+frontend:
+  extends: .test
+  image: $NODE_IMAGE
+  cache:
+    key:
+      files: [frontend/package-lock.json]
+    paths: [frontend/.npm/]
+  script:
+    - cd frontend
+    - npm ci --cache .npm --prefer-offline
+    - npm run typecheck
+    - npm run lint --if-present
+    - npm test
+    - npm audit --omit=dev --audit-level=high
+    - npm run build
 
 .kaniko-build:
   stage: build
   image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    name: $KANIKO_IMAGE
     entrypoint: [""]
   before_script:
     - mkdir -p /kaniko/.docker
     - echo "{\"auths\":{\"quay.io\":{\"auth\":\"$(printf '%s:%s' "${QUAY_USER}" "${QUAY_TOKEN}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
 
-# Auto-build on push to main → :latest + :sha
+# Push to main → :latest and the immutable 8-character commit tag
+# (CI_COMMIT_SHORT_SHA is the first eight characters of the commit).
 build-main:
   extends: .kaniko-build
+  needs: [go, golangci-lint, frontend]
+  # One publish at a time, so an older pipeline cannot overwrite :latest
+  # after a newer one (https://docs.gitlab.com/ci/resource_groups/).
+  resource_group: publish-latest
   script:
     - >-
       /kaniko/executor
       --context=$CI_PROJECT_DIR
       --dockerfile=Containerfile
-      --destination=$IMAGE:latest
+      --build-arg GIT_SHA=$CI_COMMIT_SHA
+      --build-arg VERSION=$CI_COMMIT_SHORT_SHA
+      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
       --destination=$IMAGE:$CI_COMMIT_SHORT_SHA
+      --destination=$IMAGE:latest
       --cache=true
   rules:
-    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
 
 # Manual trigger for any other branch → :<branch-slug>
 build-branch:
   extends: .kaniko-build
+  needs: [go, frontend]
   script:
     - >-
       /kaniko/executor
       --context=$CI_PROJECT_DIR
       --dockerfile=Containerfile
+      --build-arg GIT_SHA=$CI_COMMIT_SHA
+      --build-arg VERSION=$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
       --destination=$IMAGE:$CI_COMMIT_REF_SLUG
       --cache=true
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "main"
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
       when: manual
+      allow_failure: true
