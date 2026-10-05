@@ -487,6 +487,7 @@ export const ComponentsPage: React.FC = () => {
                               } : undefined}
                             />
                             <Td dataLabel="Name" id={`simple-node${rowIndex}`}>
+                              <div>
                               {dep.image ? <CopyableText text={dep.name} value={dep.image} what="image reference" /> : dep.name}
                               {dep.changeStatus === "updated" && <>{' '}<Label isCompact color="green">Updated</Label></>}
                               {dep.changeStatus === "new" && <>{' '}<Label isCompact color="blue">New</Label></>}
@@ -541,8 +542,10 @@ export const ComponentsPage: React.FC = () => {
                                   </>
                                 );
                               })()}
+                              </div>
                             </Td>
                             <Td dataLabel="Ready">
+                              <div>
                               {(() => {
                                 const rl = readyLabel(dep);
                                 return (
@@ -551,8 +554,10 @@ export const ComponentsPage: React.FC = () => {
                                   </Label>
                                 );
                               })()}
+                              </div>
                             </Td>
                             <Td dataLabel="Commit">
+                              <div>
                               {labelsLoading && !shortSha ? (
                                 <Spinner size="sm" aria-label="Loading commit info" />
                               ) : shortSha ? (
@@ -576,6 +581,7 @@ export const ComponentsPage: React.FC = () => {
                                   )}
                                 </>
                               ) : "-"}
+                              </div>
                             </Td>
                             <Td dataLabel="Built">
                               {labelsLoading && !dep.buildDate ? (
