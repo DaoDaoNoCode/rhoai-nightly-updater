@@ -4,8 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -211,8 +211,8 @@ func TestDiagnostics_AllHealthy(t *testing.T) {
 		}
 	}
 
-	if len(resp.Checks) != 9 {
-		t.Errorf("expected 9 checks, got %d", len(resp.Checks))
+	if len(resp.Checks) != len(diagnosticChecks) {
+		t.Errorf("expected %d checks, got %d", len(diagnosticChecks), len(resp.Checks))
 		for _, ch := range resp.Checks {
 			t.Logf("  check: %s = %s (%s)", ch.Name, ch.Status, ch.Detail)
 		}
@@ -343,6 +343,14 @@ func TestDiagnostics_StaleWebhooks(t *testing.T) {
 					"name":   "opendatahub-operator-validating-webhook",
 					"labels": map[string]interface{}{"olm.owner": "rhods-operator"},
 				},
+				// The backing Service does not exist (the mock answers 404).
+				"webhooks": []interface{}{
+					map[string]interface{}{
+						"clientConfig": map[string]interface{}{
+							"service": map[string]interface{}{"name": "rhods-operator-service", "namespace": "redhat-ods-operator"},
+						},
+					},
+				},
 			},
 		},
 	}
@@ -361,8 +369,9 @@ func TestDiagnostics_StaleWebhooks(t *testing.T) {
 	for _, p := range resp.Problems {
 		if p.ID == "stale-webhooks" {
 			found = true
-			if p.Severity != "warning" {
-				t.Errorf("expected severity 'warning', got %q", p.Severity)
+			// failurePolicy defaults to Fail, so the webhook blocks requests.
+			if p.Severity != "critical" {
+				t.Errorf("expected severity 'critical', got %q", p.Severity)
 			}
 			if !p.AutoFixable {
 				t.Error("expected autoFixable=true for stale webhooks")
@@ -571,18 +580,23 @@ func TestDiagnostics_ApplyFix_DeleteStaleWebhooks(t *testing.T) {
 		t.Errorf("expected success, got failure: %s", result.Message)
 	}
 
-	var mu sync.Mutex
 	var deletedPaths []string
-	mu.Lock()
 	for _, rec := range *records {
 		if rec.Method == "DELETE" {
 			deletedPaths = append(deletedPaths, rec.Path)
 		}
 	}
-	mu.Unlock()
+	sort.Strings(deletedPaths)
+	wantDeleted := []string{
+		"/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations/rhods-mutating-webhook",
+		"/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations/opendatahub-operator-validating-webhook",
+	}
+	if strings.Join(deletedPaths, ",") != strings.Join(wantDeleted, ",") {
+		t.Errorf("deleted %v, want %v", deletedPaths, wantDeleted)
+	}
 
-	if !strings.Contains(strings.ToLower(result.Message), "removed") {
-		t.Errorf("expected message to mention removal, got: %s", result.Message)
+	if !strings.Contains(result.Message, "Deleted 2") {
+		t.Errorf("expected message to report 2 deletions, got: %s", result.Message)
 	}
 }
 

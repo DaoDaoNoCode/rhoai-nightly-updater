@@ -10,7 +10,12 @@ func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
 		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
 			body: `{"items":[{"metadata":{"name":"my-dsc"}}]}`,
 		},
-		"PATCH /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {body: `{}`},
+		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {
+			body: `{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}`,
+		},
+		"PATCH /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {
+			body: `{"spec":{"components":{"llamastackoperator":{"managementState":"Removed"}}}}`,
+		},
 	})
 	defer cleanup()
 	result, err := ApplyFix(client, "disable-component:llamastackoperator")
@@ -38,6 +43,12 @@ func TestDisableComponent_FallsBackToV1API(t *testing.T) {
 		},
 		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters": {
 			body: `{"items":[{"metadata":{"name":"rhods"}}]}`,
+		},
+		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods": {
+			body: `{"spec":{"components":{"ray":{"managementState":"Managed"}}}}`,
+		},
+		"PATCH /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods": {
+			body: `{"spec":{"components":{"ray":{"managementState":"Removed"}}}}`,
 		},
 	})
 	defer cleanup()
