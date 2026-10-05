@@ -579,3 +579,45 @@ export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-c
     body: JSON.stringify({ name, mode, expectedOperatorVersion, expectedExtraComponents }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Secondary pages (Components, Dashboard Dev, Diagnostics): additive helpers
+// for the backend contracts of B2 and B4.
+// ---------------------------------------------------------------------------
+
+export interface DSCPreviewResponse {
+  /** "csv" (alm-examples of the installed CSV) or "github". */
+  source?: string;
+  sourceDescription?: string;
+}
+
+/**
+ * Assist one stuck rollout (B2). With a target, only that Deployment is
+ * patched; "nothing to do" and refusals come back as 422 OperationResponse
+ * bodies with an errorCode.
+ */
+export function assistRolloutFor(target?: { namespace: string; deployment: string }): Promise<OperationResponse> {
+  return request('/api/assist-rollout', {
+    method: 'POST',
+    body: target ? JSON.stringify(target) : undefined,
+    acceptStatuses: [422],
+  });
+}
+
+/** Deploy a dashboard PR build of the given flavor ("rhoai" default, or "odh") (B4). */
+export function deployDashboardPR(pr: number, flavor?: string): Promise<OperationResponse> {
+  return request('/api/dashboard/deploy-pr', {
+    method: 'POST',
+    body: JSON.stringify(flavor ? { pr, flavor } : { pr }),
+    acceptStatuses: [422],
+  });
+}
+
+/** Deploy the latest main dashboard build of the given flavor (B4). */
+export function deployDashboardLatestMain(flavor?: string): Promise<OperationResponse> {
+  return request('/api/dashboard/deploy-main', {
+    method: 'POST',
+    body: flavor ? JSON.stringify({ flavor }) : undefined,
+    acceptStatuses: [422],
+  });
+}
