@@ -27,17 +27,6 @@ var refusedComponents = map[string]string{
 		"leaves them and their projects stuck in Terminating. Delete the pipeline servers first, then change it in the OpenShift console.",
 }
 
-// finalizerOperators maps a component to the Deployment that removes its
-// module CR's finalizer (live names on RHOAI 3.6). Kueue is reconciled in
-// tree by rhods-operator itself.
-var finalizerOperators = map[string]struct{ namespace, name string }{
-	"ray":           {"redhat-ods-applications", "ray-module-operator-controller-manager"},
-	"trainer":       {"redhat-ods-applications", "trainer-operator-controller-manager"},
-	"feastoperator": {"redhat-ods-applications", "opendatahub-feast-operator"},
-	"trustyai":      {"redhat-ods-applications", "trustyai-operator-module-controller-manager"},
-	"kueue":         {SubNS, "rhods-operator"},
-}
-
 func deploymentReady(c *Client, namespace, name string) (bool, string) {
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
 	if IsK8sError(err, http.StatusNotFound) {
@@ -106,7 +95,7 @@ func disableBlockers(c *Client, component string) []string {
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
 	case found && len(finalizers) > 0:
-		op, known := finalizerOperators[component]
+		op, known := moduleOperators[component]
 		if !known {
 			blockers = append(blockers, fmt.Sprintf("the %s module CR has finalizer %s and the tool does not know which operator removes it", component, strings.Join(finalizers, ", ")))
 		} else if ok, why := deploymentReady(c, op.namespace, op.name); !ok {

@@ -71,6 +71,8 @@ var diagnosticChecks = []diagnosticCheck{
 	{"Node capacity", checkNodeCapacity},
 	{"DataScienceCluster", checkDataScienceCluster},
 	{"RHOAI pods", checkRHOAIPods},
+	{"Platform modules", checkPlatformModules},
+	{"Operator-managed config", checkManagedConfig},
 }
 
 var (
@@ -448,9 +450,16 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 			Title:        fmt.Sprintf("OLM reports %s for the operator Subscription", cond.Type),
 			Description:  fmt.Sprintf("Subscription %s (source %s, channel %s) has condition %s=True.", SubName, sub.Source, sub.Channel, cond.Type),
 			Evidence:     []string{fmt.Sprintf("%s (%s): %s", cond.Type, cond.Reason, truncate(cond.Message, 600))},
-			Fix:          "Read the message above; it names the bundle, catalog or constraint that failed. " + recoveryGuidance,
+			Fix:          subscriptionConditionFix(cond.Type),
 			TechnicalCmd: "oc get subscription " + SubName + " -n " + SubNS + " -o jsonpath='{.status.conditions}'",
 		})
+	}
+
+	if p := channelHeadBehind(c, sub); p != nil {
+		if out.check.Status == "pass" {
+			out.check = CheckResult{Name: name, Status: "warn", Detail: p.Title}
+		}
+		out.problems = append(out.problems, *p)
 	}
 
 	age := formatDuration(now.Sub(sub.Changed))
@@ -514,6 +523,16 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 		})
 	}
 	return out
+}
+
+func subscriptionConditionFix(condType string) string {
+	fix := "Read the message above; it names the bundle, catalog or constraint that failed. " + recoveryGuidance
+	if condType == "BundleUnpackFailed" {
+		// OpenShift Operators guide, "Refreshing failing subscriptions".
+		fix += " A failed bundle unpack is retried only after its unpack Job and ConfigMap in openshift-marketplace are deleted " +
+			"(oc get job,configmap -n openshift-marketplace -o name | grep <bundle hash>); the tool does not delete them."
+	}
+	return fix
 }
 
 func checkCSVHealth(c *Client) checkOutput {
