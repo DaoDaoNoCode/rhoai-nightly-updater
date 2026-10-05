@@ -69,7 +69,15 @@ func failingConditions(conds []dscCondition) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, cond := range conds {
-		if cond.Type == "Ready" || cond.Status == "True" || strings.EqualFold(cond.Severity, "Info") {
+		if cond.Type == "Ready" || cond.Type == "Progressing" || strings.EqualFold(cond.Severity, "Info") {
+			continue
+		}
+		failing := cond.Status != "True"
+		if cond.Type == "Degraded" {
+			// The one negative-polarity condition (DSCI): True is bad.
+			failing = cond.Status == "True"
+		}
+		if !failing {
 			continue
 		}
 		msg := truncate(cond.Message, 300)
