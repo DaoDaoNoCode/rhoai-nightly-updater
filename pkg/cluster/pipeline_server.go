@@ -94,6 +94,30 @@ func (d dspaInfo) hasFinalizer() bool {
 	return false
 }
 
+// toolDSPAPath returns the path of a pipeline server only for the names this
+// tool creates (or created in older versions), so teardown can never reach
+// another DSPA, and the RBAC rule stays limited to these names.
+func toolDSPAPath(project, name string) (string, bool) {
+	switch name {
+	case dspaName:
+		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName), true
+	case legacyDSPAName:
+		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, legacyDSPAName), true
+	}
+	return "", false
+}
+
+// toolDSPASecretPath is toolDSPAPath for the pipeline server's S3 secret.
+func toolDSPASecretPath(project, name string) (string, bool) {
+	switch name {
+	case dspaSecretName:
+		return namespacedPath("v1", "secrets", project, dspaSecretName), true
+	case legacyDSPASecretName:
+		return namespacedPath("v1", "secrets", project, legacyDSPASecretName), true
+	}
+	return "", false
+}
+
 func dspaCollectionPath(namespace string) string {
 	if namespace == "" {
 		return clusterPath(dspaAPIGroup, "datasciencepipelinesapplications", "")
@@ -481,7 +505,10 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in '%s'.", project), Logs: logs}, nil
 	}
 
-	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, target.Meta.Name)
+	dspaPath, ok := toolDSPAPath(project, target.Meta.Name)
+	if !ok {
+		return fail(fmt.Sprintf("Pipeline server '%s' does not have a name this tool creates, so it was not deleted.", target.Meta.Name), "not_managed", "unexpected DSPA name")
+	}
 	if target.Meta.terminating() {
 		logs = append(logs, fmt.Sprintf("Pipeline server '%s' is already being deleted", target.Meta.Name))
 	} else {
@@ -550,7 +577,11 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 			return ""
 		}
 	}
-	path := namespacedPath("v1", "secrets", project, name)
+	path, ok := toolDSPASecretPath(project, name)
+	if !ok {
+		*logs = append(*logs, fmt.Sprintf("Kept secret '%s': this tool never creates a secret with that name", name))
+		return ""
+	}
 	body, _, err := c.get(path)
 	if IsK8sError(err, 404) {
 		*logs = append(*logs, "OK: Secret already absent")

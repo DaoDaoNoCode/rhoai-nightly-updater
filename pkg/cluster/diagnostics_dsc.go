@@ -41,11 +41,12 @@ type dscObject struct {
 	} `json:"status"`
 }
 
-// listFirstServed lists group/resource with the newest served version and
-// returns the items. apiFound is false when no version is served (no CRD).
-func listFirstServed(c *Client, group, resource string) (items []dscObject, apiFound bool, err error) {
+// listFirstServed lists a collection with the newest served version and
+// returns the items. pathFmt is the collection path with %s for the
+// version. apiFound is false when no version is served (no CRD).
+func listFirstServed(c *Client, pathFmt, resource string) (items []dscObject, apiFound bool, err error) {
 	for _, version := range []string{"v2", "v1"} {
-		body, _, err := c.get("/apis/" + group + "/" + version + "/" + resource)
+		body, _, err := c.get(fmt.Sprintf(pathFmt, version))
 		if IsK8sError(err, http.StatusNotFound) {
 			continue
 		}
@@ -102,7 +103,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 	const name = "DataScienceCluster"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
 
-	dscs, apiFound, err := listFirstServed(c, "datasciencecluster.opendatahub.io", "datascienceclusters")
+	dscs, apiFound, err := listFirstServed(c, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters", "datascienceclusters")
 	if err != nil {
 		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Could not read the DataScienceCluster: %v", err)}
 		return out
@@ -154,7 +155,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		})
 	}
 
-	dscis, dsciAPI, dsciErr := listFirstServed(c, "dscinitialization.opendatahub.io", "dscinitializations")
+	dscis, dsciAPI, dsciErr := listFirstServed(c, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations")
 	switch {
 	case dsciErr != nil:
 		details = append(details, fmt.Sprintf("could not read the DSCInitialization: %v", dsciErr))

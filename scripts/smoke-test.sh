@@ -104,7 +104,7 @@ echo ""
 echo "4. RBAC"
 if jp clusterrole "$INSTANCE" -o name | grep -q .; then pass "ClusterRole $INSTANCE"; else fail "ClusterRole $INSTANCE missing"; fi
 if jp clusterrolebinding "$INSTANCE" -o name | grep -q .; then pass "ClusterRoleBinding $INSTANCE"; else fail "ClusterRoleBinding $INSTANCE missing"; fi
-for ns in kube-system openshift-marketplace openshift-ingress; do
+for ns in kube-system openshift-marketplace; do
   if jp rolebinding "$INSTANCE" -n "$ns" -o name | grep -q .; then pass "RoleBinding in $ns"; else fail "RoleBinding in $ns missing"; fi
 done
 LEGACY=$(jp clusterrolebinding "$APP" -o jsonpath='{.subjects[0].namespace}')

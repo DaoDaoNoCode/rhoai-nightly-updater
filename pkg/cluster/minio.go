@@ -301,6 +301,29 @@ func getMinIOStatus(c *Client) types.ResourceState {
 }
 
 // minioResources returns the objects SetupMinIO applies, in order.
+// minioApplyPath returns the API path of one object from minioResources.
+// Only the fixed objects the tool creates are accepted; the literal names
+// keep the RBAC rules limited to them (pkg/cluster/rbac_coverage_test.go).
+func minioApplyPath(obj map[string]interface{}) (string, bool) {
+	meta, _ := obj["metadata"].(map[string]interface{})
+	name, _ := meta["name"].(string)
+	switch kind, _ := obj["kind"].(string); {
+	case kind == "PersistentVolumeClaim" && name == "minio-pvc":
+		return namespacedPath("v1", "persistentvolumeclaims", minioNamespace, "minio-pvc"), true
+	case kind == "Secret" && name == "minio-secret":
+		return namespacedPath("v1", "secrets", minioNamespace, "minio-secret"), true
+	case kind == "Deployment" && name == "minio":
+		return namespacedPath("apps/v1", "deployments", minioNamespace, "minio"), true
+	case kind == "Service" && name == minioServiceName:
+		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
+	case kind == "Route" && name == "minio-api":
+		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-api"), true
+	case kind == "Route" && name == "minio-ui":
+		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
+	}
+	return "", false
+}
+
 func minioResources(user, password string) []struct {
 	name string
 	obj  map[string]interface{}
@@ -490,25 +513,10 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	var applied []string
 	for _, r := range minioResources(minioUser, minioPass) {
 		logs = append(logs, fmt.Sprintf("Applying %s...", r.name))
-		meta := r.obj["metadata"].(map[string]interface{})
-		// A switch rather than a map lookup keeps the resource statically
-		// visible to the template RBAC coverage test.
-		var resourceType string
-		switch r.obj["kind"].(string) {
-		case "PersistentVolumeClaim":
-			resourceType = "persistentvolumeclaims"
-		case "Secret":
-			resourceType = "secrets"
-		case "Deployment":
-			resourceType = "deployments"
-		case "Service":
-			resourceType = "services"
-		case "Route":
-			resourceType = "routes"
-		default:
-			return fail(fmt.Sprintf("Internal error: no resource type for kind %v", r.obj["kind"]), "internal", "unknown kind")
+		path, ok := minioApplyPath(r.obj)
+		if !ok {
+			return fail(fmt.Sprintf("Internal error: unexpected MinIO object %s %v", r.obj["kind"], r.obj["metadata"]), "internal", "unknown object")
 		}
-		path := namespacedPath(r.obj["apiVersion"].(string), resourceType, minioNamespace, meta["name"].(string))
 		if _, _, err := c.apply(path, r.obj); err != nil {
 			done := "nothing"
 			if len(applied) > 0 {

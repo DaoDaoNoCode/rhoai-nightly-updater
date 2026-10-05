@@ -65,6 +65,12 @@ objects:
       - apiGroups: [""]
         resources: ["nodes"]
         verbs: ["list"]
+      # Diagnostics: pod events (the FailedMount cause of a stuck pod) in the
+      # RHOAI namespaces and the module namespaces labelled
+      # platform.opendatahub.io/part-of
+      - apiGroups: [""]
+        resources: ["events"]
+        verbs: ["list"]
       # Namespaces: list DS projects; create redhat-ods-operator, minio and
       # pipeline projects; only minio is ever deleted.
       - apiGroups: [""]
@@ -72,7 +78,7 @@ objects:
         verbs: ["get", "list", "create"]
       - apiGroups: [""]
         resources: ["namespaces"]
-        resourceNames: ["redhat-ods-operator"]
+        resourceNames: ["redhat-ods-operator", "minio"]
         verbs: ["patch"]
       - apiGroups: [""]
         resources: ["namespaces"]
@@ -87,30 +93,47 @@ objects:
         resources: ["secrets"]
         resourceNames: ["minio-secret"]
         verbs: ["get", "patch"]
+      # The pipeline-server S3 secret; dashboard-dspa-secret is the name
+      # older versions used, kept so their teardown still works.
       - apiGroups: [""]
         resources: ["secrets"]
-        resourceNames: ["dashboard-dspa-secret"]
-        verbs: ["patch", "delete"]
-      # Webhook backing services (stale-webhook check) and MinIO
+        resourceNames: ["nightly-dspa-s3", "dashboard-dspa-secret"]
+        verbs: ["get", "delete"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["nightly-dspa-s3"]
+        verbs: ["patch"]
+      # Upgrade gates the operator waits on (redhat-ods-operator)
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["odh-upgrade-acks"]
+        verbs: ["get"]
+      # Webhook and CRD-conversion backing Services and their endpoints
+      # (stale-webhook check, MinIO namespace-deletion guard), and MinIO
       - apiGroups: [""]
         resources: ["services"]
         verbs: ["get", "create"]
+      - apiGroups: ["discovery.k8s.io"]
+        resources: ["endpointslices"]
+        verbs: ["list"]
       - apiGroups: [""]
         resources: ["services"]
         resourceNames: ["minio-service"]
         verbs: ["patch"]
+      # PVCs: MinIO's own, and listing the minio and MLflow namespaces to
+      # name the data a teardown deletes
       - apiGroups: [""]
         resources: ["persistentvolumeclaims"]
-        verbs: ["create"]
+        verbs: ["list", "create"]
       - apiGroups: [""]
         resources: ["persistentvolumeclaims"]
         resourceNames: ["minio-pvc"]
         verbs: ["patch"]
-      # Pods in redhat-ods-operator/-applications and openshift-marketplace:
-      # status, debug info and the stuck-rollout assist (deletes a pod)
+      # Pods in the RHOAI and module namespaces and openshift-marketplace:
+      # status, debug info and diagnostics (read-only)
       - apiGroups: [""]
         resources: ["pods"]
-        verbs: ["get", "list", "delete"]
+        verbs: ["list"]
       # Deployments: dashboard image overrides, dashboard-operator pause and
       # restore, operator restart, rollout assist, MinIO
       - apiGroups: ["apps"]
@@ -148,17 +171,23 @@ objects:
       - apiGroups: ["operators.coreos.com"]
         resources: ["clusterserviceversions"]
         verbs: ["get", "list", "delete"]
+      # InstallPlans: follow the install, approve the one the tool caused
+      # under Manual approval, delete Failed ones
       - apiGroups: ["operators.coreos.com"]
         resources: ["installplans"]
-        verbs: ["list", "delete"]
+        verbs: ["get", "list", "patch", "delete"]
       # Stale webhooks are removed during reinstall and by diagnostics
       - apiGroups: ["admissionregistration.k8s.io"]
         resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
         verbs: ["list", "delete"]
-      # DSC schema check, and conversion-webhook removal while the operator is down
+      # DSC schema check, conversion-webhook removal while the operator is
+      # down, and the CRD conversion scans (diagnostics, namespace guard)
       - apiGroups: ["apiextensions.k8s.io"]
         resources: ["customresourcedefinitions"]
-        resourceNames: ["datascienceclusters.datasciencecluster.opendatahub.io"]
+        verbs: ["list"]
+      - apiGroups: ["apiextensions.k8s.io"]
+        resources: ["customresourcedefinitions"]
+        resourceNames: ["datascienceclusters.datasciencecluster.opendatahub.io", "dscinitializations.dscinitialization.opendatahub.io"]
         verbs: ["get"]
       - apiGroups: ["apiextensions.k8s.io"]
         resources: ["customresourcedefinitions"]
@@ -167,17 +196,39 @@ objects:
       - apiGroups: ["datasciencecluster.opendatahub.io"]
         resources: ["datascienceclusters"]
         verbs: ["get", "list", "patch", "create"]
-      # Component CRs: finalizer cleanup of stuck CRs during reinstall
+      - apiGroups: ["dscinitialization.opendatahub.io"]
+        resources: ["dscinitializations"]
+        verbs: ["list"]
+      # Platform CR: upgrade gates (AdminAckRequired) and module readiness
+      - apiGroups: ["config.opendatahub.io"]
+        resources: ["platforms"]
+        verbs: ["list"]
+      - apiGroups: ["config.opendatahub.io"]
+        resources: ["platforms"]
+        resourceNames: ["default"]
+        verbs: ["get"]
+      # Module CRs: stuck-deletion and webhook-owner checks, disable-component
+      # preconditions, and finalizer removal for a CR whose operator is gone.
+      # The group holds only RHOAI module CRs and its kinds change with the
+      # operator version (3.6 added aihubs, aipipelines,
+      # mcplifecycleoperators), so the code discovers them; a fixed list
+      # would silently miss new kinds.
       - apiGroups: ["components.platform.opendatahub.io"]
-        resources: ["codeflares", "dashboards", "datasciencepipelines", "feastoperators", "kserves", "kueues", "llamastackoperators", "mlflowoperators", "modelcontrollers", "modelmeshservings", "modelregistries", "modelsasservices", "ogxs", "rays", "sparkoperators", "trainers", "trainingoperators", "trustyais", "workbenches"]
+        resources: ["*"]
         verbs: ["list", "patch"]
+      # Pipeline servers: only the names the tool creates (dspa is the name
+      # older versions used)
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]
-        resourceNames: ["dspa"]
-        verbs: ["get", "patch", "delete"]
+        verbs: ["list", "create"]
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]
-        verbs: ["create"]
+        resourceNames: ["nightly-dspa", "dspa"]
+        verbs: ["get", "delete"]
+      - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
+        resources: ["datasciencepipelinesapplications"]
+        resourceNames: ["nightly-dspa"]
+        verbs: ["patch"]
       - apiGroups: ["mlflow.opendatahub.io"]
         resources: ["mlflows"]
         resourceNames: ["mlflow"]
@@ -277,7 +328,7 @@ objects:
     rules:
       - apiGroups: ["operators.coreos.com"]
         resources: ["catalogsources"]
-        verbs: ["get", "create", "patch", "delete"]
+        verbs: ["get", "list", "create", "patch", "delete"]
       - apiGroups: ["packages.operators.coreos.com"]
         resources: ["packagemanifests"]
         verbs: ["list"]
@@ -286,35 +337,6 @@ objects:
     metadata:
       name: ${APP_NAME}-${NAMESPACE}
       namespace: openshift-marketplace
-      labels:
-        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: Role
-      name: ${APP_NAME}-${NAMESPACE}
-    subjects:
-      - kind: ServiceAccount
-        name: ${APP_NAME}
-        namespace: ${NAMESPACE}
-
-  # MaaS gateway annotation fix (openshift-ingress)
-  - apiVersion: rbac.authorization.k8s.io/v1
-    kind: Role
-    metadata:
-      name: ${APP_NAME}-${NAMESPACE}
-      namespace: openshift-ingress
-      labels:
-        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
-    rules:
-      - apiGroups: ["gateway.networking.k8s.io"]
-        resources: ["gateways"]
-        resourceNames: ["maas-default-gateway"]
-        verbs: ["patch"]
-  - apiVersion: rbac.authorization.k8s.io/v1
-    kind: RoleBinding
-    metadata:
-      name: ${APP_NAME}-${NAMESPACE}
-      namespace: openshift-ingress
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     roleRef:

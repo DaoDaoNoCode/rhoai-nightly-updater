@@ -53,6 +53,17 @@ var knownResourceGroups = map[string]string{
 	"datascienceclusters":    "datasciencecluster.opendatahub.io",
 }
 
+// API groups whose resources the code discovers at run time instead of
+// naming them. components.platform.opendatahub.io holds only the RHOAI
+// module CRs, and its kinds change with the operator version (3.6 added
+// aihubs, aipipelines and mcplifecycleoperators), so the code lists them
+// from API discovery. A request for a discovered resource needs a rule with
+// resources ["*"] in that group; a rule naming fixed kinds would silently
+// miss new ones.
+var discoveredResourceGroups = map[string]bool{
+	"components.platform.opendatahub.io": true,
+}
+
 // Request verbs per Client method. Server-side apply creates the object when
 // it is missing, and the API server then also checks "create" for that name
 // (k8s.io/apiserver/pkg/endpoints/handlers/patch.go: createAuthorizerAttributes
@@ -66,6 +77,23 @@ var methodVerbs = map[string][]string{
 	"dryRunApply":    {"patch", "create"},
 	"delete":         {"delete"},
 	// "get" becomes "get" or "list" depending on the path.
+}
+
+// rawMethods maps the http.Method constants passed to Client.do to the
+// Client method with the same RBAC verbs.
+var rawMethods = map[string]string{
+	"MethodGet":    "get",
+	"MethodPost":   "post",
+	"MethodPut":    "put",
+	"MethodPatch":  "patch",
+	"MethodDelete": "delete",
+}
+
+func selectorName(e ast.Expr) string {
+	if sel, ok := e.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name
+	}
+	return ""
 }
 
 type rbacRequest struct {
@@ -487,6 +515,12 @@ func toRequests(method, path, site string) ([]rbacRequest, error) {
 		return nil, nil // non-resource URL readable by every authenticated user
 	}
 	segs := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	// API discovery documents (/apis/<group> and /apis/<group>/<version>)
+	// are non-resource URLs that the system:discovery ClusterRole grants to
+	// every authenticated user.
+	if method == "get" && segs[0] == "apis" && (len(segs) == 2 || len(segs) == 3) && !strings.Contains(segs[1], unknownPart) {
+		return nil, nil
+	}
 	var group string
 	switch {
 	case len(segs) >= 2 && segs[0] == "api" && segs[1] == "v1":
@@ -520,6 +554,9 @@ func toRequests(method, path, site string) ([]rbacRequest, error) {
 		}
 	default:
 		return nil, fmt.Errorf("no resource in %q", path)
+	}
+	if strings.Contains(resource, unknownPart) && discoveredResourceGroups[group] {
+		resource = "*"
 	}
 	if resource == "" || strings.Contains(resource, unknownPart) {
 		return nil, fmt.Errorf("resource of %q is only known at run time", path)
@@ -634,6 +671,16 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 					return true
 				}
 				method := sel.Sel.Name
+				pathArg := call.Args[0]
+				if method == "do" {
+					// c.do(http.MethodX, path, ...): the raw request method.
+					m, ok := rawMethods[selectorName(call.Args[0])]
+					if !ok || len(call.Args) < 2 {
+						problems = append(problems, fmt.Sprintf("%s:%d do: request method is not an http.Method constant", file, p.fset.Position(call.Pos()).Line))
+						return true
+					}
+					method, pathArg = m, call.Args[1]
+				}
 				if _, known := methodVerbs[method]; !known && method != "get" {
 					return true
 				}
@@ -644,7 +691,7 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 				}
 				pos := p.fset.Position(call.Pos())
 				manifests := manifestNames(resolver{p: p, fn: fn})
-				for _, path := range (resolver{p: p, fn: fn}).resolve(call.Args[0]) {
+				for _, path := range (resolver{p: p, fn: fn}).resolve(pathArg) {
 					rs, err := toRequests(method, path, fmt.Sprintf("%s:%d", file, pos.Line))
 					if err != nil {
 						problems = append(problems, fmt.Sprintf("%s:%d %s: %v", file, pos.Line, method, err))
@@ -896,6 +943,10 @@ func TestRBACRequestDerivation(t *testing.T) {
 		{"get", "/apis/components.platform.opendatahub.io/v1alpha1/dashboards", []string{"list components.platform.opendatahub.io/dashboards ns= name="}},
 		{"post", "/api/v1/namespaces/" + unknownPart + "/secrets", []string{"create /secrets ns=* name="}},
 		{"get", "/version", nil},
+		{"get", "/apis/components.platform.opendatahub.io", nil},
+		{"get", "/apis/components.platform.opendatahub.io/" + unknownPart, nil},
+		{"get", "/apis/components.platform.opendatahub.io/" + unknownPart + "/" + unknownPart, []string{"list components.platform.opendatahub.io/* ns= name="}},
+		{"patch", "/apis/components.platform.opendatahub.io/" + unknownPart + "/" + unknownPart + "/" + unknownPart, []string{"patch components.platform.opendatahub.io/* ns= name=*"}},
 	}
 	for _, tc := range cases {
 		got, err := toRequests(tc.method, tc.path, "t")
@@ -910,8 +961,15 @@ func TestRBACRequestDerivation(t *testing.T) {
 			t.Errorf("%s %s = %v, want %v", tc.method, tc.path, keys, tc.want)
 		}
 	}
-	if _, err := toRequests("get", "/apis/x/v1/"+unknownPart, "t"); err == nil {
+	if _, err := toRequests("get", "/apis/x/v1/"+unknownPart+"/"+unknownPart, "t"); err == nil {
 		t.Error("an unknown resource must fail the derivation")
+	}
+	if _, err := toRequests("delete", "/apis/x/v1", "t"); err == nil {
+		t.Error("only GET of a discovery document is exempt")
+	}
+	named := grant{rule: rbacRule{APIGroups: []string{"components.platform.opendatahub.io"}, Resources: []string{"kserves"}, Verbs: []string{"list"}}}
+	if named.allows(rbacRequest{Verb: "list", Group: "components.platform.opendatahub.io", Resource: "*"}) {
+		t.Error("a discovered resource needs a wildcard rule, not a list of kinds")
 	}
 }
 
