@@ -51,6 +51,18 @@ var compressible = map[string]bool{
 	".map": true, ".txt": true, ".ttf": true, ".eot": true, ".ico": true,
 }
 
+// staticTypes covers extensions that Go's built-in MIME table lacks; the
+// container image has no /etc/mime.types to fill the gap.
+var staticTypes = map[string]string{
+	".woff2": "font/woff2",
+	".woff":  "font/woff",
+	".ttf":   "font/ttf",
+	".eot":   "application/vnd.ms-fontobject",
+	".ico":   "image/x-icon",
+	".map":   "application/json",
+	".txt":   "text/plain; charset=utf-8",
+}
+
 const maxGzipSource = 16 << 20
 
 type gzipEntry struct {
@@ -112,7 +124,9 @@ func StaticFiles(dir string) http.Handler {
 		}
 		w.Header().Del("Pragma")
 		ext := strings.ToLower(filepath.Ext(name))
-		if ctype := mime.TypeByExtension(ext); ctype != "" {
+		if ctype := staticTypes[ext]; ctype != "" {
+			w.Header().Set("Content-Type", ctype)
+		} else if ctype := mime.TypeByExtension(ext); ctype != "" {
 			w.Header().Set("Content-Type", ctype)
 		}
 
@@ -126,7 +140,13 @@ func StaticFiles(dir string) http.Handler {
 				}
 			}
 		}
-		http.ServeFile(w, r, full)
+		f, err := os.Open(full)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		http.ServeContent(w, r, name, info.ModTime(), f)
 	})
 }
 

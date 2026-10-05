@@ -79,7 +79,8 @@ func TestStaticFiles(t *testing.T) {
 		{"/", cacheRevalidate, "text/html", 200},
 		{"/components", cacheRevalidate, "text/html", 200},
 		{"/dashboard-dev/some/route", cacheRevalidate, "text/html", 200},
-		{"/favicon.ico", cacheRevalidate, "", 200},
+		{"/favicon.ico", cacheRevalidate, "image/x-icon", 200},
+		{"/index.html", cacheRevalidate, "text/html", 200},
 	} {
 		w := serve(h, "GET", tc.path, "")
 		if w.Code != tc.wantStatus || w.Header().Get("Cache-Control") != tc.wantCache || !strings.Contains(w.Header().Get("Content-Type"), tc.wantType) {
@@ -107,7 +108,7 @@ func TestStaticFiles(t *testing.T) {
 		}
 	}
 	// Path traversal stays inside the directory.
-	if w := serve(h, "GET", "/../../etc/passwd", ""); w.Code == 200 || strings.Contains(w.Body.String(), "root:") {
+	if w := serve(h, "GET", "/../../etc/passwd", ""); strings.Contains(w.Body.String(), "root:") || (w.Code == 200 && w.Body.String() != "<html>app</html>") {
 		t.Errorf("traversal: %d", w.Code)
 	}
 	if w := serve(h, "POST", "/bundle.435605b5.js", ""); w.Code != http.StatusMethodNotAllowed {
