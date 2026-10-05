@@ -1279,9 +1279,13 @@ func ReinstallStream(c *Client, targetType, image, channelOverride string, emit 
 	// --- Step 6b: cleanup_stale_component_crs ---
 	// After EA↔GA transitions, component CRs can get stuck with finalizers
 	// during deletion. Remove finalizers to unblock (K8s finalizer docs pattern).
-	unstuckCount := cleanupStuckComponentCRs(c)
+	unstuckCount, componentWarnings := cleanupStuckComponentCRs(c)
 	if unstuckCount > 0 {
 		logs = append(logs, fmt.Sprintf("Unblocked %d stuck component CR(s) by removing finalizers", unstuckCount))
+	}
+	for _, w := range componentWarnings {
+		slog.Warn("stuck component CR cleanup issue", "detail", w)
+		logs = append(logs, "Warning: "+w)
 	}
 
 	// --- Step 7: patch_crds ---
@@ -1548,59 +1552,6 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel string, logs []
 		Message: "Reinstall to stable initiated. OLM is installing the stable operator. This may take several minutes.",
 		Logs:    logs,
 	}, nil
-}
-
-// cleanupStuckComponentCRs finds component CRs that have a deletionTimestamp
-// and finalizers (stuck deleting) and removes the finalizers to unblock deletion.
-// This is the documented K8s pattern for unblocking stuck deletions:
-// https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
-func cleanupStuckComponentCRs(c *Client) int {
-	componentResources := []string{
-		"codeflares", "dashboards", "datasciencepipelines", "feastoperators",
-		"kserves", "kueues", "llamastackoperators", "mlflowoperators",
-		"modelcontrollers", "modelmeshservings", "modelregistries",
-		"modelsasservices", "ogxs", "rays", "sparkoperators",
-		"trainers", "trainingoperators", "trustyais", "workbenches",
-	}
-
-	unstuck := 0
-	for _, resource := range componentResources {
-		listPath := fmt.Sprintf("/apis/components.platform.opendatahub.io/v1alpha1/%s", resource)
-		body, _, err := c.get(listPath)
-		if err != nil {
-			continue
-		}
-
-		var list struct {
-			Items []struct {
-				Metadata struct {
-					Name              string   `json:"name"`
-					Finalizers        []string `json:"finalizers"`
-					DeletionTimestamp *string  `json:"deletionTimestamp"`
-				} `json:"metadata"`
-			} `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			continue
-		}
-
-		for _, item := range list.Items {
-			if item.Metadata.DeletionTimestamp != nil && len(item.Metadata.Finalizers) > 0 {
-				crPath := fmt.Sprintf("%s/%s", listPath, item.Metadata.Name)
-				_, _, patchErr := c.patch(crPath, []byte(`{"metadata":{"finalizers":[]}}`))
-				if patchErr == nil {
-					slog.Info("removed stuck finalizer from component CR",
-						"resource", resource, "name", item.Metadata.Name,
-						"finalizers", item.Metadata.Finalizers)
-					unstuck++
-				} else {
-					slog.Warn("failed to remove finalizer from component CR",
-						"resource", resource, "name", item.Metadata.Name, "error", patchErr)
-				}
-			}
-		}
-	}
-	return unstuck
 }
 
 // patchCRDConversionWebhooks patches RHOAI CRDs to remove conversion webhook configs.
