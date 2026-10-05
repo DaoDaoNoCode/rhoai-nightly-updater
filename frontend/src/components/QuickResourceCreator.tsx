@@ -29,12 +29,12 @@ import {
   StackItem,
   TextInput,
   Title,
-  Tooltip,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
+import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import TimesIcon from "@patternfly/react-icons/dist/esm/icons/times-icon";
-import type { OperationResponse, ResourcesStatus } from "../types";
+import type { OperationResponse, ResourceState, ResourcesStatus } from "../types";
 import {
   getResourcesStatus,
   getDSProjects,
@@ -47,11 +47,52 @@ import {
   teardownMLflow,
   deployMLflowPR,
   revertMLflow,
+  toApiError,
 } from "../services/api";
+import { exponentialBackoff, usePolling } from "../hooks/usePolling";
+import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
+import { TooltipButton, NO_PERMISSION_REASON } from "./TooltipButton";
+
+/**
+ * Container waiting reasons that do not resolve on their own (Kubernetes
+ * docs, "Debug Pods": ImagePullBackOff/ErrImagePull, CrashLoopBackOff, and
+ * configuration errors). Polling stops for these instead of spinning forever.
+ */
+const TERMINAL_REASONS = [
+  "ImagePullBackOff",
+  "ErrImagePull",
+  "InvalidImageName",
+  "CrashLoopBackOff",
+  "CreateContainerConfigError",
+  "CreateContainerError",
+  "FailingToDeploy",
+];
+
+/** Why a deployed resource can't become ready without a change, or null. */
+export function terminalReason(state: ResourceState | undefined): string | null {
+  if (!state || !state.deployed || state.ready) return null;
+  const candidates = [state.waitingReason, state.message].filter((v): v is string => !!v);
+  for (const text of candidates) {
+    const reason = TERMINAL_REASONS.find((r) => text.includes(r));
+    if (reason) return state.message && state.message !== reason ? state.message : reason;
+  }
+  if (state.terminal) return state.waitingReason || state.message || "Failed";
+  return null;
+}
+
+const BUSY_REASON = "Another operation is in progress";
 
 interface QuickResourceCreatorProps {
   canMutate: boolean;
 }
+
+const ResourceStateLabel: React.FC<{ state: ResourceState }> = ({ state }) => {
+  const reason = terminalReason(state);
+  if (reason) {
+    return <Label isCompact color="red" icon={<ExclamationCircleIcon />}>Failed: {reason}</Label>;
+  }
+  return <Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Starting" />}>{state.message || "Starting"}</Label>;
+};
 
 export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canMutate }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
@@ -64,12 +105,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
   const [mlflowPR, setMlflowPR] = useState("");
   const [setupConfirm, setSetupConfirm] = useState<string | null>(null);
 
+  const [resError, setResError] = useState<string | null>(null);
   const fetchResources = useCallback(async () => {
     try {
       const s = await getResourcesStatus();
       setResStatus(s);
-    } catch {
-      // non-critical
+      setResError(null);
+    } catch (e) {
+      // Keep the last known state; show why it may be stale.
+      setResError(toApiError(e, "Could not load resource status").message);
     }
   }, []);
 
@@ -81,23 +125,40 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
 
   useEffect(() => { refreshProjects(); }, [refreshProjects]);
 
+  const allResources = resStatus ? [resStatus.minio, resStatus.mlflow, ...(resStatus.pipelineServers || [])] : [];
+  // Settling: something is starting or terminating and may still change on its own.
   const resourcesSettling = resStatus != null && (
-    (resStatus.minio.deployed && !resStatus.minio.ready) ||
     resStatus.minio.message === "Terminating" ||
-    (resStatus.mlflow.deployed && !resStatus.mlflow.ready) ||
-    (resStatus.pipelineServers || []).some((ps) => ps.deployed && !ps.ready)
+    allResources.some((r) => r.deployed && !r.ready && !terminalReason(r))
   );
 
-  useEffect(() => {
-    if (!resAction && !resourcesSettling) return;
-    const id = setInterval(fetchResources, 5000);
-    return () => clearInterval(id);
-  }, [resAction, resourcesSettling, fetchResources]);
+  // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
+  // once nothing is settling; hidden tabs don't poll (A06-5).
+  const [pollRound, setPollRound] = useState(0);
+  const [pollGaveUp, setPollGaveUp] = useState(false);
+  usePolling(fetchResources, {
+    enabled: !!resAction || resourcesSettling,
+    restartKey: pollRound,
+    delay: ({ attempt, elapsedMs }) => {
+      if (elapsedMs >= RESOURCE_SETTLE_MAX_MS) {
+        setPollGaveUp(true);
+        return null;
+      }
+      return exponentialBackoff(attempt, RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS);
+    },
+  });
+  const checkAgain = () => {
+    setPollGaveUp(false);
+    setPollRound((n) => n + 1);
+    fetchResources();
+  };
 
   const handleResourceAction = async (action: string, fn: () => Promise<OperationResponse>) => {
     trackFeature(action);
     setResAction(action);
     setResResult(null);
+    setPollGaveUp(false);
+    setPollRound((n) => n + 1);
     try {
       const res = await fn();
       setResResult(res);
@@ -105,7 +166,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
       fetchResources();
       refreshProjects();
     } catch (e) {
-      setResResult({ success: false, message: e instanceof Error ? e.message : "Operation failed", logs: [] });
+      setResResult({ success: false, message: toApiError(e, "Operation failed").message, logs: [] });
       setTeardownConfirm(null);
     } finally {
       setResAction(null);
@@ -202,11 +263,23 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
             Deploy test infrastructure with sensible defaults.
           </Content>
 
+          {resError && (
+            <Alert variant="warning" title="Resource status may be out of date" isInline isPlain component="p" className="pf-v6-u-mb-md">
+              {resError}
+            </Alert>
+          )}
+          {pollGaveUp && resourcesSettling && (
+            <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline isPlain component="p" className="pf-v6-u-mb-md"
+              actionLinks={<Button variant="link" isInline onClick={checkAgain}>Check again</Button>}
+            />
+          )}
           {resResult && (
             <Alert
               variant={resResult.success ? "success" : "danger"}
               title={resResult.message}
               isInline
+              isLiveRegion
+              component="p"
               className="pf-v6-u-mb-md"
               actionClose={<Button variant="plain" aria-label="Close" onClick={() => setResResult(null)}><TimesIcon /></Button>}
             />
@@ -238,25 +311,19 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                                   </FlexItem>
                                 )}
                                 <FlexItem>
-                                  <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                    <Button variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("minio")} isDisabled={!canMutate || !!resAction}>Tear down</Button>
-                                  </Tooltip>
+                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("minio")} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
                                 </FlexItem>
                               </>
                             ) : resStatus?.minio.deployed ? (
                               <>
-                                <FlexItem><Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Starting" />}>{resStatus.minio.message}</Label></FlexItem>
+                                <FlexItem><ResourceStateLabel state={resStatus.minio} /></FlexItem>
                                 <FlexItem>
-                                  <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                    <Button variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("minio")} isDisabled={!canMutate || !!resAction}>Tear down</Button>
-                                  </Tooltip>
+                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("minio")} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
                                 </FlexItem>
                               </>
                             ) : (
                               <FlexItem>
-                                <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                  <Button variant="primary" size="sm" onClick={() => setSetupConfirm("setup-minio")} isDisabled={!canMutate || !!resAction || resStatus?.minio.message === "Terminating"} isLoading={resAction === "setup-minio"}>Set up</Button>
-                                </Tooltip>
+                                <TooltipButton variant="primary" size="sm" onClick={() => setSetupConfirm("setup-minio")} isLoading={resAction === "setup-minio"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : (resStatus?.minio.message === "Terminating") ? "MinIO is still being removed. Wait for it to finish." : null}>Set up</TooltipButton>
                               </FlexItem>
                             )}
                           </Flex>
@@ -291,15 +358,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                                 <TextInput type="number" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val)} placeholder="e.g. 42" aria-label="MLflow PR number" className="pf-v6-u-w-initial" />
                               </FlexItem>
                               <FlexItem>
-                                <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                  <Button variant="primary" size="sm" onClick={() => setSetupConfirm("deploy-mlflow-pr")} isDisabled={!canMutate || !mlflowPR || !Number.isInteger(Number(mlflowPR)) || Number(mlflowPR) <= 0 || !!resAction} isLoading={resAction === "deploy-mlflow-pr"}>Deploy PR</Button>
-                                </Tooltip>
+                                <TooltipButton variant="primary" size="sm" onClick={() => setSetupConfirm("deploy-mlflow-pr")} isLoading={resAction === "deploy-mlflow-pr"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : (!mlflowPR || !Number.isInteger(Number(mlflowPR)) || Number(mlflowPR) <= 0) ? "Enter a PR number first." : null}>Deploy PR</TooltipButton>
                               </FlexItem>
                               {resStatus.mlflow.currentImage?.includes("odh-pr-") && (
                                 <FlexItem>
-                                  <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                    <Button variant="secondary" size="sm" onClick={() => setSetupConfirm("revert-mlflow")} isDisabled={!canMutate || !!resAction} isLoading={resAction === "revert-mlflow"}>Revert</Button>
-                                  </Tooltip>
+                                  <TooltipButton variant="secondary" size="sm" onClick={() => setSetupConfirm("revert-mlflow")} isLoading={resAction === "revert-mlflow"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Revert</TooltipButton>
                                 </FlexItem>
                               )}
                             </Flex>
@@ -316,18 +379,14 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                                   </FlexItem>
                                 )}
                                 <FlexItem>
-                                  <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                    <Button variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("mlflow")} isDisabled={!canMutate || !!resAction}>Tear down</Button>
-                                  </Tooltip>
+                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm("mlflow")} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
                                 </FlexItem>
                               </>
                             ) : resStatus?.mlflow.deployed ? (
-                              <FlexItem><Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Starting" />}>{resStatus.mlflow.message}</Label></FlexItem>
+                              <FlexItem><ResourceStateLabel state={resStatus.mlflow} /></FlexItem>
                             ) : (
                               <FlexItem>
-                                <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                  <Button variant="primary" size="sm" onClick={() => setSetupConfirm("setup-mlflow")} isDisabled={!canMutate || !!resAction} isLoading={resAction === "setup-mlflow"}>Set up</Button>
-                                </Tooltip>
+                                <TooltipButton variant="primary" size="sm" onClick={() => setSetupConfirm("setup-mlflow")} isLoading={resAction === "setup-mlflow"} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Set up</TooltipButton>
                               </FlexItem>
                             )}
                           </Flex>
@@ -343,7 +402,14 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
             <StackItem>
               <Content component="h4">Pipelines</Content>
               {!resStatus?.minio.ready && (
-                <Alert variant="warning" title="Requires MinIO — set up Storage first" isInline isPlain className="pf-v6-u-mb-sm" />
+                <Alert
+                  variant="warning"
+                  title={resStatus?.minio.deployed ? `Requires MinIO, which is not ready${terminalReason(resStatus.minio) ? ` (${terminalReason(resStatus.minio)})` : ""}` : "Requires MinIO — set up Storage first"}
+                  isInline
+                  isPlain
+                  component="p"
+                  className="pf-v6-u-mb-sm"
+                />
               )}
               {(resStatus?.pipelineServers || []).length === 0 && resStatus?.minio.ready && (
                 <Content component="small" className="pf-v6-u-mb-sm">No pipeline servers configured. Use the button below to add one to a project.</Content>
@@ -368,13 +434,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                                     </FlexItem>
                                   )}
                                   <FlexItem>
-                                    <Tooltip content="Another operation is in progress" trigger={resAction ? "mouseenter focus" : "manual"}>
-                                      <Button variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm(ps.namespace!)} isDisabled={!canMutate || !!resAction}>Tear down</Button>
-                                    </Tooltip>
+                                    <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setTeardownConfirm(ps.namespace!)} disabledReason={!canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null}>Tear down</TooltipButton>
                                   </FlexItem>
                                 </>
                               ) : (
-                                <FlexItem><Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Starting" />}>{ps.message}</Label></FlexItem>
+                                <FlexItem><ResourceStateLabel state={ps} /></FlexItem>
                               )}
                             </Flex>
                           </DataListCell>,
