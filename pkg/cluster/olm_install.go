@@ -518,34 +518,94 @@ func errorCodeOr(err error, fallback string) string {
 	return fallback
 }
 
-// downgradeCheck compares what the target would install with the installed
-// CSV. targetCSV is the bundle the target catalog installs (its channel
-// head); when it is unknown the release tag is used, and a tag without a
-// patch number ("rhoai-3.5") is treated as matching the installed patch,
-// because a minor-stream build can ship any 3.5.z. It returns a blocking
-// message for a real downgrade, plus a note to log.
-func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (blocked string, note string) {
-	if installed.Name == "" {
-		return "", ""
+// versionVerdict is the outcome of comparing a target operator version with
+// the installed CSV.
+type versionVerdict int
+
+const (
+	// verdictNotInstalled: no RHOAI CSV exists, so nothing can be downgraded.
+	verdictNotInstalled versionVerdict = iota
+	// verdictNotOlder: the target is the same version or newer.
+	verdictNotOlder
+	// verdictOlder: the target is older than the installed CSV.
+	verdictOlder
+	// verdictUnknown: a CSV is installed, but its version or the target's
+	// cannot be determined. Callers must treat this like a possible
+	// downgrade (fail closed): OLM has no downgrade path, and a silently
+	// allowed downgrade can leave CRDs the older operator cannot serve
+	// (RHOAI_OPERATOR_NOTES §1.4).
+	verdictUnknown
+)
+
+// installedCSVVersion returns the version of the installed CSV. The CSV's
+// spec.version is authoritative (OLM orders bundles by it); the
+// "<package>.<version>" naming convention is the fallback.
+func installedCSVVersion(installed types.CSVInfo) (parsedTag, bool) {
+	if installed.Version != "" {
+		if v, ok := parseCSVVersion(SubName + "." + installed.Version); ok {
+			return v, true
+		}
 	}
-	current, ok := parseCSVVersion(installed.Name)
-	if !ok && installed.Version != "" {
-		current, ok = parseCSVVersion(SubName + "." + installed.Version)
+	return parseCSVVersion(installed.Name)
+}
+
+// csvInstalled reports whether getCSV found an installed RHOAI CSV.
+func csvInstalled(installed types.CSVInfo) bool {
+	return installed.Name != ""
+}
+
+// compareWithInstalled compares the bundle targetCSV with the installed CSV.
+// reason explains a verdictUnknown.
+func compareWithInstalled(installed types.CSVInfo, targetCSV string) (verdict versionVerdict, reason string) {
+	if !csvInstalled(installed) {
+		return verdictNotInstalled, ""
 	}
+	current, ok := installedCSVVersion(installed)
 	if !ok {
-		return "", fmt.Sprintf("Warning: cannot parse the installed version %q; downgrade check skipped", installed.Name)
+		return verdictUnknown, fmt.Sprintf("the version of the installed CSV %s (spec.version %q) cannot be read", installed.Name, installed.Version)
+	}
+	target, ok := parseCSVVersion(targetCSV)
+	if !ok {
+		if targetCSV == "" {
+			return verdictUnknown, "the operator version the target installs is unknown"
+		}
+		return verdictUnknown, fmt.Sprintf("the target bundle version %q cannot be read", targetCSV)
+	}
+	if compareTags(target, current) < 0 {
+		return verdictOlder, ""
+	}
+	return verdictNotOlder, ""
+}
+
+// downgradeCheck is Update's guard (the real run and the dry run). targetCSV
+// is the bundle the target catalog installs (its channel head); when it is
+// unknown the release tag is used, and a tag without a patch number
+// ("rhoai-3.5") is treated as matching the installed patch, because a
+// minor-stream build can ship any 3.5.z. Update has no downgrade
+// confirmation, so a downgrade and an undeterminable version both block
+// (fail closed) and point to Reinstall, which can confirm one. It returns
+// the blocking message, plus a note to log.
+func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (blocked string, note string) {
+	if !csvInstalled(installed) {
+		return "", "No RHOAI operator is installed; no downgrade check needed"
+	}
+	const unknown = "Cannot rule out a downgrade: %s. OLM does not support downgrades, so Update refuses to continue. Nothing was changed. Use Reinstall, which asks you to confirm."
+	current, ok := installedCSVVersion(installed)
+	if !ok {
+		_, reason := compareWithInstalled(installed, targetCSV)
+		return fmt.Sprintf(unknown, reason), ""
 	}
 	if targetCSV != "" {
-		if target, ok := parseCSVVersion(targetCSV); ok {
-			if compareTags(target, current) < 0 {
-				return fmt.Sprintf("Downgrade detected: the selected build installs %s, which is older than the installed %s. OLM does not support downgrades. Use Reinstall instead.", targetCSV, installed.Name), ""
-			}
+		switch verdict, _ := compareWithInstalled(installed, targetCSV); verdict {
+		case verdictOlder:
+			return fmt.Sprintf("Downgrade detected: the selected build installs %s, which is older than the installed %s. OLM does not support downgrades. Use Reinstall instead.", targetCSV, installed.Name), ""
+		case verdictNotOlder:
 			return "", fmt.Sprintf("Target operator version: %s (installed: %s)", targetCSV, installed.Name)
 		}
 	}
 	target, ok := parseTag(targetTag)
 	if !ok {
-		return "", fmt.Sprintf("Warning: cannot tell which operator version %q installs; downgrade check skipped", targetTag)
+		return fmt.Sprintf(unknown, fmt.Sprintf("the operator version that %q installs is unknown", targetTag)), ""
 	}
 	if m := tagParseRegex.FindStringSubmatch(targetTag); m != nil && m[3] == "" {
 		target.patch = current.patch

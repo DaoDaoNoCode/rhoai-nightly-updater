@@ -57,11 +57,11 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 					io.WriteString(w, `{}`)
 				case r.URL.Path == subPath:
 					// Starting on stable must not short-circuit a custom reinstall.
-					io.WriteString(w, `{"spec":{"source":"`+getStableSource()+`","channel":"stable-3.6"},"status":{"currentCSV":"rhods-operator.test","installedCSV":"rhods-operator.test","installPlanRef":{"name":"old-build-install"}}}`)
+					io.WriteString(w, `{"spec":{"source":"`+getStableSource()+`","channel":"stable-3.6"},"status":{"currentCSV":"rhods-operator.3.6.0","installedCSV":"rhods-operator.3.6.0","installPlanRef":{"name":"old-build-install"}}}`)
 				case r.URL.Path == csPath:
 					io.WriteString(w, `{"spec":{"image":"`+image+`"},"status":{"connectionState":{"lastObservedState":"READY"}}}`)
 				case strings.Contains(r.URL.Path, "/clusterserviceversions/"):
-					io.WriteString(w, `{"metadata":{"name":"rhods-operator.test"},"status":{"phase":"Succeeded"}}`)
+					io.WriteString(w, `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0"},"status":{"phase":"Succeeded"}}`)
 				case strings.HasSuffix(r.URL.Path, "/clusterserviceversions"):
 					io.WriteString(w, csvListMock("3.6.0").body)
 				case strings.HasSuffix(r.URL.Path, "/packagemanifests"):

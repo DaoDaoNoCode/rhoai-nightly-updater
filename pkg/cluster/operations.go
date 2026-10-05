@@ -1075,13 +1075,22 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		logs = append(logs, fmt.Sprintf("Reinstalling to stable: %s/%s -> %s/%s", sub.Source, sub.Channel, stableSource, stableChannel))
 	}
 	validated := "Reinstall target validated"
-	if down, ok := isDowngrade(csv, targetCSV); ok && down {
+	switch verdict, reason := compareWithInstalled(csv, targetCSV); verdict {
+	case verdictOlder:
 		if !opts.AllowDowngrade {
 			recordActivity = false
 			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Reinstall would remove the operator and install the older version, while the CRDs keep the newer schema, which the older operator may reject. Nothing was changed. Confirm the downgrade to continue.", targetCSV, csv.Name), errorCodeDowngrade)
 		}
 		logs = append(logs, fmt.Sprintf("Warning: downgrade confirmed: %s -> %s. CRDs keep the newer schema.", csv.Name, targetCSV))
 		validated += fmt.Sprintf(" (downgrade: %s -> %s)", csv.Name, targetCSV)
+	case verdictUnknown:
+		// Fail closed: an unreadable version must not let a downgrade through.
+		if !opts.AllowDowngrade {
+			recordActivity = false
+			return fail(fmt.Sprintf("Cannot tell whether the target %s is older than the installed %s: %s. OLM cannot downgrade an operator, so a downgrade could leave CRDs the older operator rejects. Nothing was changed. Confirm to continue anyway.", displayCSV(targetCSV), csv.Name, reason), errorCodeDowngrade)
+		}
+		logs = append(logs, fmt.Sprintf("Warning: version comparison not possible (%s); continuing as confirmed: %s -> %s", reason, csv.Name, displayCSV(targetCSV)))
+		validated += fmt.Sprintf(" (confirmed: %s -> %s, version unknown)", csv.Name, displayCSV(targetCSV))
 	}
 	if revertDashboard {
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Ending the Dashboard Dev session..."})
@@ -1212,21 +1221,12 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	return reinstallStableSteps(c, stableSource, stableChannel, recovery, logs, emit)
 }
 
-// isDowngrade reports whether targetCSV is older than the installed CSV; ok
-// is false when either version is unknown.
-func isDowngrade(installed types.CSVInfo, targetCSV string) (bool, bool) {
-	if installed.Name == "" || targetCSV == "" {
-		return false, false
+// displayCSV names a target bundle in messages, including an unknown one.
+func displayCSV(name string) string {
+	if name == "" {
+		return "(unknown version)"
 	}
-	current, ok := parseCSVVersion(installed.Name)
-	if !ok && installed.Version != "" {
-		current, ok = parseCSVVersion(SubName + "." + installed.Version)
-	}
-	target, tok := parseCSVVersion(targetCSV)
-	if !ok || !tok {
-		return false, false
-	}
-	return compareTags(target, current) < 0, true
+	return name
 }
 
 // reinstallNightlySteps handles the nightly-specific portion of ReinstallStream:
