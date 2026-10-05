@@ -10,6 +10,7 @@ func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
 		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters": {
 			body: `{"items":[{"metadata":{"name":"my-dsc"}}]}`,
 		},
+		"GET /apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator": {body: `{"status":{"readyReplicas":3}}`},
 		"GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc": {
 			body: `{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}`,
 		},
@@ -44,6 +45,7 @@ func TestDisableComponent_FallsBackToV1API(t *testing.T) {
 		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters": {
 			body: `{"items":[{"metadata":{"name":"rhods"}}]}`,
 		},
+		"GET /apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator": {body: `{"status":{"readyReplicas":3}}`},
 		"GET /apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/rhods": {
 			body: `{"spec":{"components":{"ray":{"managementState":"Managed"}}}}`,
 		},

@@ -1071,6 +1071,9 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	if compName == "" {
 		return &types.OperationResponse{Success: false, Message: "Component name is required", ErrorCode: "validation"}, nil
 	}
+	if reason, refused := refusedComponents[compName]; refused {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("The tool does not remove %s. %s", compName, reason), ErrorCode: "validation"}, nil
+	}
 	if !disableableComponents[compName] {
 		return &types.OperationResponse{
 			Success:   false,
@@ -1099,6 +1102,14 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	}
 	if state == "Removed" {
 		return nothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
+	}
+	if blockers := disableBlockers(c, compName); len(blockers) > 0 {
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Not removing %s now, because it could leave the component stuck in deletion: %s. Nothing was changed.", compName, strings.Join(blockers, "; ")),
+			Logs:      blockers,
+			ErrorCode: "prerequisites",
+		}, nil
 	}
 
 	patch := fmt.Sprintf(`{"spec":{"components":{%q:{"managementState":"Removed"}}}}`, compName)

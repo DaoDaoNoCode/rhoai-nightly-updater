@@ -340,6 +340,7 @@ func TestDisableComponent_PreconditionAndReadBack(t *testing.T) {
 			f, c := newFakeAPI(t)
 			f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 			f.json("GET", dscV2List+"/default-dsc", http.StatusOK, tt.current)
+			f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", http.StatusOK, `{"status":{"readyReplicas":3}}`)
 			if tt.patchResp != "" {
 				f.json("PATCH", dscV2List+"/default-dsc", http.StatusOK, tt.patchResp)
 			}
@@ -349,6 +350,57 @@ func TestDisableComponent_PreconditionAndReadBack(t *testing.T) {
 			}
 			if got := len(f.writes()) == 1; got != tt.wantPatch {
 				t.Fatalf("writes = %v", f.writes())
+			}
+		})
+	}
+}
+
+func TestDisableComponent_Preconditions(t *testing.T) {
+	const rhods = "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator"
+	const rayOp = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/ray-module-operator-controller-manager"
+	const rays = "/apis/components.platform.opendatahub.io/v1alpha1/rays"
+	tests := []struct {
+		name      string
+		component string
+		setup     func(f *fakeAPI)
+		wantPatch bool
+		wantIn    string
+	}{
+		{"dashboard refused (D1)", "dashboard", func(*fakeAPI) {}, false, "dashboard-operator"},
+		{"mlflowoperator refused (D7)", "mlflowoperator", func(*fakeAPI) {}, false, "MLflow CR"},
+		{"aipipelines refused (D8)", "aipipelines", func(*fakeAPI) {}, false, "DSPAs"},
+		{"module operator down", "ray", func(f *fakeAPI) {
+			f.json("GET", rhods, http.StatusOK, `{"status":{"readyReplicas":3}}`)
+			f.json("GET", rays, http.StatusOK, `{"items":[{"metadata":{"name":"default-ray","finalizers":["platform.opendatahub.io/finalizer"]}}]}`)
+			f.json("GET", rayOp, http.StatusOK, `{"status":{"readyReplicas":0}}`)
+		}, false, "ray-module-operator-controller-manager has no ready pod"},
+		{"rhods-operator down", "ray", func(f *fakeAPI) {
+			f.json("GET", rhods, http.StatusOK, `{"status":{"readyReplicas":0}}`)
+		}, false, "rhods-operator must be running"},
+		{"module CR already deleting", "ray", func(f *fakeAPI) {
+			f.json("GET", rhods, http.StatusOK, `{"status":{"readyReplicas":3}}`)
+			f.json("GET", rays, http.StatusOK, `{"items":[{"metadata":{"name":"default-ray","deletionTimestamp":"2026-10-05T00:00:00Z","finalizers":["x"]}}]}`)
+		}, false, "already being deleted"},
+		{"operators up", "ray", func(f *fakeAPI) {
+			f.json("GET", rhods, http.StatusOK, `{"status":{"readyReplicas":3}}`)
+			f.json("GET", rays, http.StatusOK, `{"items":[{"metadata":{"name":"default-ray","finalizers":["platform.opendatahub.io/finalizer"]}}]}`)
+			f.json("GET", rayOp, http.StatusOK, `{"status":{"readyReplicas":1}}`)
+		}, true, "Set ray to Removed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, c := newFakeAPI(t)
+			f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+			f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tt.component+`":{"managementState":"Managed"}}}}`)
+			f.json("PATCH", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"`+tt.component+`":{"managementState":"Removed"}}}}`)
+			f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[{"name":"rays","kind":"Ray"}]}`)
+			tt.setup(f)
+			res, err := ApplyFix(c, "disable-component:"+tt.component)
+			if err != nil || !strings.Contains(res.Message, tt.wantIn) {
+				t.Fatalf("ApplyFix = %+v, %v", res, err)
+			}
+			if got := len(f.writes()) == 1; got != tt.wantPatch || res.Success != tt.wantPatch {
+				t.Fatalf("writes = %v, result = %+v", f.writes(), res)
 			}
 		})
 	}
