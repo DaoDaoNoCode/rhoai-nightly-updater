@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Alert,
+  AlertActionCloseButton,
   Button,
   Card,
   CardBody,
@@ -10,79 +11,86 @@ import {
   Content,
   Flex,
   FlexItem,
+  FormGroup,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
   Label,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalVariant,
   PageSection,
-  Spinner,
+  Radio,
+  Skeleton,
   Stack,
   StackItem,
   Tab,
   Tabs,
   TabTitleText,
   TextInput,
-  Title,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { DashboardState, OperationResponse } from "../types";
+import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
+import type { DashboardOverride, DashboardState, OperationResponse } from "../types";
 import {
+  assistRolloutFor,
+  deployDashboardLatestMain,
+  deployDashboardPR,
   getDashboardState,
-  deployPR,
-  deployDashboardMain,
   revertDashboard,
-  assistRollout,
-  trackFeature,
   toApiError,
+  trackFeature,
   type ApiError,
 } from "../services/api";
 import { usePolling } from "../hooks/usePolling";
-import { CopyableText } from "../components/CopyableText";
-import { truncateImage } from "../utils";
-import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
+import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { DashboardImages } from "../components/DashboardImages";
+import { DashboardSessionPanel, flavorName, sessionTitle } from "../components/DashboardSessionPanel";
+import { ConfirmActionModal } from "../components/ConfirmActionModal";
+import { TooltipButton, NO_PERMISSION_REASON } from "../components/TooltipButton";
 import { COMPONENTS_POLL_MS } from "../constants";
+import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { formatRelativeTime } from "../utils";
 
 interface DashboardDevPageProps {
   canMutate: boolean;
 }
 
-export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
-  canMutate,
-}) => {
-  const [activeTab, setActiveTab] = useState(0);
+type Action = "pr" | "main" | "revert" | "assist";
+
+const DASHBOARD_NS = "redhat-ods-applications";
+
+/** The override for a 404 dashboard_not_deployed body (B4 sends it while the operator is paused). */
+function overrideFromError(err: ApiError): DashboardOverride | undefined {
+  const details = err.details as { override?: DashboardOverride } | undefined;
+  return details?.override?.active ? details.override : undefined;
+}
+
+export function isNotDeployed(err: ApiError | null): boolean {
+  return !!err && (err.errorCode === "dashboard_not_deployed" || (err.status === 404 && err.errorCode === "not_found"));
+}
+
+export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") === "resources" ? 1 : 0;
   const [dashState, setDashState] = useState<DashboardState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const [prNumber, setPrNumber] = useState("");
-  const [deploying, setDeploying] = useState(false);
-  const [deployMode, setDeployMode] = useState<"main" | "pr">("pr");
-  const [reverting, setReverting] = useState(false);
+  const [flavor, setFlavor] = useState<string | null>(null);
+  const [running, setRunning] = useState<Action | null>(null);
+  const [confirm, setConfirm] = useState<Action | null>(null);
   const [waitingFor, setWaitingFor] = useState<"main" | "pr" | "revert" | null>(null);
-  const [waitStartTime, setWaitStartTime] = useState(0);
   const [result, setResult] = useState<OperationResponse | null>(null);
-  const [assisting, setAssisting] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const stateRequestRef = useRef(0);
-  const stateFetchInFlightRef = useRef(0);
-
-  // Abort in-flight requests on unmount
-  const abortRef = useRef<AbortController | null>(null);
+  const inFlight = useRef(0);
+  const mounted = useRef(true);
   useEffect(() => {
-    const abort = abortRef;
-    const stateRequests = stateRequestRef;
-    return () => {
-      abort.current?.abort();
-      stateRequests.current++;
-    };
+    mounted.current = true;
+    return () => { mounted.current = false; };
   }, []);
 
   const parsedPR = Number(prNumber);
@@ -90,429 +98,372 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({
 
   const fetchState = useCallback(async (background = false) => {
     const requestId = ++stateRequestRef.current;
-    stateFetchInFlightRef.current++;
+    inFlight.current++;
     if (!background) setLoading(true);
-    setError(null);
     try {
       const s = await getDashboardState();
-      if (requestId !== stateRequestRef.current) return;
+      if (!mounted.current || requestId !== stateRequestRef.current) return;
       setDashState(s);
+      setError(null);
       setLastRefreshed(new Date());
     } catch (e) {
-      if (requestId !== stateRequestRef.current) return;
-      setError(toApiError(e, "Failed to load state"));
+      if (!mounted.current || requestId !== stateRequestRef.current) return;
+      const err = toApiError(e, "Could not load the dashboard state");
+      setError(err);
+      // "Not deployed" is a state: drop the old data. Other errors keep it (shown as stale).
+      if (isNotDeployed(err)) setDashState(null);
     } finally {
-      stateFetchInFlightRef.current--;
-      if (requestId === stateRequestRef.current) setLoading(false);
+      inFlight.current--;
+      if (mounted.current && requestId === stateRequestRef.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchState(); }, [fetchState]);
+  useEffect(() => { void fetchState(); }, [fetchState]);
 
-  const handleManualRefresh = useCallback(() => {
-    setResult(null);
-    fetchState();
-  }, [fetchState]);
-
-  // Poll faster while a deploy or revert is rolling out; hidden tabs don't poll.
-  const busyPolling = deploying || reverting || !!waitingFor;
-  usePolling(() => (stateFetchInFlightRef.current > 0 ? undefined : fetchState(true)), {
-    delay: busyPolling ? 5000 : COMPONENTS_POLL_MS,
-    restartKey: busyPolling,
+  const busy = !!running || !!waitingFor;
+  usePolling(() => (inFlight.current > 0 ? undefined : fetchState(true)), {
+    delay: busy ? 5000 : COMPONENTS_POLL_MS,
+    restartKey: busy,
   });
 
+  // Finish waiting when the server shows the requested state. A stuck
+  // rollout is reported by the server (ProgressDeadlineExceeded), so there
+  // is no client-side timer that a reload would reset (A04-7).
   useEffect(() => {
-    if (!waitingFor || !dashState || deploying || reverting) return;
-    const ready = dashState.operatorAvailable ? dashState.allDevImagesReady : dashState.podReady && !dashState.rolloutPending;
-    if (ready) {
-      if (!dashState.operatorError && (!dashState.operatorAvailable || dashState.devImagesMatchTarget !== false) && ((waitingFor === "pr" && dashState.isCustomPR && dashState.prNumber === parsedPR) || (waitingFor === "main" && dashState.devMode === "main" && dashState.operatorPaused))) {
-        setWaitingFor(null);
-        setWaitStartTime(0);
-        setResult((prev) => ({ success: true, message: `${waitingFor === "main" ? "Latest main" : `PR #${dashState.prNumber}`} is running. All dashboard components are ready. Revert after testing.`, logs: prev?.logs ?? [] }));
-        return;
-      } else if (waitingFor === "revert" && (dashState.operatorAvailable ? !dashState.operatorPaused && dashState.defaultImagesRestored : !dashState.isCustomPR)) {
-        setWaitingFor(null);
-        setWaitStartTime(0);
-        setPrNumber("");
-        setResult((prev) => ({ success: true, message: "Dashboard components restored to the installed release. Operator reconciliation is active.", logs: prev?.logs ?? [] }));
-        return;
-      }
-    }
-    if (waitStartTime > 0 && Date.now() - waitStartTime > 10 * 60 * 1000) {
+    if (!waitingFor || !dashState || running) return;
+    if (dashState.rolloutStuck) {
       setWaitingFor(null);
-      setWaitStartTime(0);
-      const timeoutMessage = dashState?.schedulingFailureReason
-        ? `Pod cannot be scheduled: ${dashState.schedulingFailureReason}. Click 'Assist Rollout' to free resources.`
-        : "Rollout is taking too long. Check cluster resources or pod status in the OpenShift Console.";
-      setResult({ success: false, message: timeoutMessage, logs: [] });
+      return;
     }
-  }, [waitingFor, dashState, waitStartTime, deploying, reverting, parsedPR]);
+    const ready = dashState.operatorAvailable ? dashState.allDevImagesReady : dashState.podReady && !dashState.rolloutPending;
+    if (!ready) return;
+    const matches = !dashState.operatorAvailable || dashState.devImagesMatchTarget !== false;
+    if (waitingFor === "pr" && matches && dashState.isCustomPR && dashState.prNumber === parsedPR) {
+      setWaitingFor(null);
+      setResult((prev) => ({ success: true, message: `PR #${dashState.prNumber} is running and every dashboard container is ready. Revert after testing.`, logs: prev?.logs ?? [] }));
+    } else if (waitingFor === "main" && matches && dashState.devMode === "main" && dashState.operatorPaused) {
+      setWaitingFor(null);
+      setResult((prev) => ({ success: true, message: "Latest main is running and every dashboard container is ready. Revert after testing.", logs: prev?.logs ?? [] }));
+    } else if (waitingFor === "revert" && (dashState.operatorAvailable ? !dashState.operatorPaused && dashState.defaultImagesRestored : !dashState.isCustomPR)) {
+      setWaitingFor(null);
+      setPrNumber("");
+      setResult((prev) => ({ success: true, message: "The dashboard runs the installed release again, and dashboard-operator manages it.", logs: prev?.logs ?? [] }));
+    }
+  }, [waitingFor, dashState, running, parsedPR]);
 
   useEffect(() => {
     document.title = "Dashboard Dev — RHOAI Nightly Updater";
   }, []);
 
-  const handleDeployConfirm = async () => {
-    trackFeature("deploy_pr");
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setDeploying(true);
-    setDeployMode("pr");
+  const notDeployed = isNotDeployed(error);
+  const override = dashState?.override ?? (error ? overrideFromError(error) : undefined);
+  const sessionActive = !!override?.active || !!dashState?.isDevMode || !!dashState?.isCustomPR || !!dashState?.operatorPaused || (!!dashState && !dashState.managed);
+  const flavors = dashState?.availableFlavors ?? [];
+  const chosenFlavor = flavor ?? dashState?.defaultFlavor ?? "rhoai";
+  const containers = dashState?.devImages?.length ?? 0;
+  const legacy = !!dashState && !dashState.operatorAvailable;
+
+  const run = async (action: Action) => {
+    setConfirm(null);
+    setRunning(action);
     setResult(null);
     setWaitingFor(null);
-    setConfirmOpen(false);
+    let res: OperationResponse;
     try {
-      const res = await deployPR(parsedPR);
-      if (ac.signal.aborted) return;
-      if (res.success) {
-        setResult(res);
-        setWaitingFor("pr");
-        setWaitStartTime(Date.now());
-        fetchState();
+      if (action === "pr") {
+        trackFeature("deploy_pr");
+        res = await deployDashboardPR(parsedPR, flavors.length > 1 ? chosenFlavor : undefined);
+      } else if (action === "main") {
+        trackFeature("deploy_dashboard_main");
+        res = await deployDashboardLatestMain(flavors.length > 1 ? chosenFlavor : undefined);
+      } else if (action === "revert") {
+        trackFeature("revert_dashboard");
+        res = await revertDashboard();
       } else {
-        setResult(res);
-        fetchState();
+        trackFeature("assist_rollout");
+        res = await assistRolloutFor({ namespace: DASHBOARD_NS, deployment: "rhods-dashboard" });
       }
     } catch (e) {
-      if (ac.signal.aborted) return;
-      setResult({ success: false, message: toApiError(e, "Deploy failed").message, logs: [] });
-    } finally {
-      if (!ac.signal.aborted) {
-        setDeploying(false);
-      }
+      res = errorResult(e, "The request failed");
     }
+    if (!mounted.current) return;
+    setResult(res);
+    if (res.success && action !== "assist") setWaitingFor(action);
+    setRunning(null);
+    void fetchState(true);
   };
 
-  const handleDeployMain = async () => {
-    trackFeature("deploy_dashboard_main");
-    setDeploying(true);
-    setDeployMode("main");
-    setResult(null);
-    setWaitingFor(null);
-    try {
-      const res = await deployDashboardMain();
-      setResult(res);
-      if (res.success) { setWaitingFor("main"); setWaitStartTime(Date.now()); }
-      fetchState();
-    } catch (e) {
-      setResult({ success: false, message: toApiError(e, "Deploy failed").message, logs: [] });
-      fetchState();
-    } finally { setDeploying(false); }
+  const mutateReason = (needsOperator: boolean): string | null => {
+    if (!canMutate) return NO_PERMISSION_REASON;
+    if (running) return "Another Dashboard Dev action is running.";
+    if (waitingFor) return "Waiting for the last change to roll out.";
+    if (needsOperator && dashState?.operatorError) return "The state of dashboard-operator cannot be read.";
+    if (needsOperator && override?.dashboardDeleting) return "A Dashboard CR is being deleted. Revert first.";
+    if (needsOperator && !dashState) return "The dashboard state is not loaded.";
+    return null;
   };
 
-  const handleRevert = async () => {
-    trackFeature("revert_dashboard");
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setReverting(true);
-    setResult(null);
-    setWaitingFor(null);
-    try {
-      const res = await revertDashboard();
-      if (ac.signal.aborted) return;
-      if (res.success) {
-        setResult(res);
-        setWaitingFor("revert");
-        setWaitStartTime(Date.now());
-        fetchState();
-      } else {
-        setResult(res);
-        fetchState();
-      }
-    } catch (e) {
-      if (ac.signal.aborted) return;
-      setResult({ success: false, message: toApiError(e, "Revert failed").message, logs: [] });
-    } finally {
-      if (!ac.signal.aborted) {
-        setReverting(false);
-      }
-    }
+  const sessionOwner = override?.startedBy ? `${override.startedBy}'s session (${override.startedAt ? formatRelativeTime(override.startedAt) : "start unknown"})` : "the active session";
+  const tagsFor = (kind: "pr" | "main") => {
+    const n = kind === "pr" ? `${parsedPR}` : "";
+    if (legacy) return kind === "pr" ? `pr-${n}` : "main";
+    if (chosenFlavor === "odh") return kind === "pr" ? `pr-${n}` : "main";
+    return kind === "pr" ? `odh-pr-${n} (or pr-${n} where no Konflux build exists)` : "odh-stable (or main where no Konflux build exists)";
   };
 
-  const handleAssistRollout = async () => {
-    trackFeature("assist_rollout");
-    setAssisting(true);
-    setResult(null);
-    try {
-      const res = await assistRollout();
-      setResult(res);
-      if (res.success) {
-        setWaitStartTime(Date.now());
-      }
-    } catch (e) {
-      setResult({ success: false, message: toApiError(e, "Assist rollout failed").message, logs: [] });
-    } finally {
-      setAssisting(false);
-    }
-  };
+  const deployChanges = (kind: "pr" | "main"): React.ReactNode[] => legacy ? [
+    <>Deployment <code>{DASHBOARD_NS}/rhods-dashboard</code> runs the <code>{tagsFor(kind)}</code> image and is marked <code>opendatahub.io/managed: &quot;false&quot;</code> so the operator leaves it alone until you revert.</>,
+  ] : [
+    <>Deployment <code>{DASHBOARD_NS}/dashboard-operator</code> is scaled to 0 so it stops resetting the dashboard images. The original replica count is saved for Revert.</>,
+    <>All {containers || "the"} dashboard containers are updated: those with a <code>{tagsFor(kind)}</code> build run it (pinned by digest); the others run their release image.</>,
+    ...(sessionActive ? [<>This replaces {sessionOwner}.</>] : []),
+  ];
 
-  const isCustom = !!dashState && (dashState.isDevMode || dashState.isCustomPR || dashState.operatorPaused || !dashState.managed);
-  const readyCount = dashState?.containersReady ?? 0;
-  const totalCount = dashState?.containersTotal ?? 0;
-  const allReady = dashState?.operatorAvailable ? !!dashState.allDevImagesReady : !!dashState?.podReady;
-  const partial = isCustom && dashState?.operatorAvailable && !dashState.operatorError && dashState.devImagesMatchTarget === false;
-
-  // The backend answers 500 "failed to get dashboard state" without a
-  // specific errorCode yet; match that exact response, not a substring.
-  const dashboardUnavailable = !!error && error.status === 500 && error.message === "failed to get dashboard state";
+  const status = (() => {
+    if (!dashState) return null;
+    if (running && running !== "assist") return <Label color="blue" icon={<InProgressIcon />}>Applying</Label>;
+    if (dashState.operatorError) return <Label color="orange" icon={<ExclamationTriangleIcon />}>Status unavailable</Label>;
+    if (dashState.rolloutStuck) return <Label color="red" icon={<ExclamationTriangleIcon />}>Rollout stuck</Label>;
+    if (dashState.rolloutPending || (dashState.operatorAvailable && !dashState.allDevImagesReady)) return <Label color="blue" icon={<InProgressIcon />}>Rolling out</Label>;
+    if (sessionActive && override) return <Label color="orange">{sessionTitle(override)}</Label>;
+    if (sessionActive) return <Label color="orange">{dashState.devMode === "main" ? "Latest main" : dashState.prNumber ? `PR #${dashState.prNumber}` : "Custom images"}</Label>;
+    return <Label color="green" icon={<CheckCircleIcon />}>Installed release</Label>;
+  })();
 
   return (
     <>
-      <PageHeader
-        title="Dashboard Dev"
-        lastRefreshed={lastRefreshed}
-        loading={loading}
-        onRefresh={handleManualRefresh}
-      />
+      <PageHeader title="Dashboard Dev" lastRefreshed={lastRefreshed} loading={loading} onRefresh={() => { setResult(null); void fetchState(); }} />
 
-      {error && !dashboardUnavailable && <ErrorAlert error={error} genericTitle="Failed to load" />}
-
-      {dashboardUnavailable && (
-        <PageSection>
-          <Alert variant="info" title="RHOAI Dashboard is not deployed yet" isInline component="p">
-            <p>The Dashboard Dev page lets you deploy PR builds of the RHOAI Dashboard for testing.</p>
-            <p style={{ marginTop: "0.5rem" }}>
-              First install RHOAI from the <Link to="/">Dashboard</Link>, then come back here to deploy PR builds.
-            </p>
-          </Alert>
-        </PageSection>
+      {error && !notDeployed && (
+        <LoadErrorAlert error={error} genericTitle="Could not load the dashboard state" onRetry={() => void fetchState()} stale={!!dashState} />
       )}
 
       {!canMutate && (
         <PageSection>
           <Alert variant="info" title="Read-only access" isInline isPlain component="p">
-            Deploy and revert operations are disabled. Contact a cluster admin for write access.
+            Deploy and revert are disabled. Ask a cluster admin for write access.
           </Alert>
         </PageSection>
       )}
 
       <PageSection>
-        <Tabs activeKey={activeTab} onSelect={(_e, key) => setActiveTab(key as number)}>
-          <Tab eventKey={0} title={<TabTitleText>Image Deploy</TabTitleText>}>
-              <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
-                <Card>
-                  <CardHeader>
-                  <CardTitle>
-                    <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
-                      <FlexItem><Title headingLevel="h3">Dashboard builds</Title></FlexItem>
-                      <FlexItem>
+        <Tabs activeKey={activeTab} onSelect={(_e, key) => setSearchParams(key === 1 ? { tab: "resources" } : {}, { replace: true })} aria-label="Dashboard Dev sections">
+          <Tab eventKey={0} title={<TabTitleText>Dashboard builds</TabTitleText>}>
+            <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
+              <Stack hasGutter>
+                {notDeployed && (
+                  <StackItem>
+                    <Alert variant="info" title="The RHOAI Dashboard is not deployed" isInline component="p">
+                      <p>
+                        The dashboard appears once RHOAI is installed and the DataScienceCluster has the dashboard set
+                        to <code>Managed</code>. See the <Link to="/components">Components</Link> page, or install RHOAI from the <Link to="/">Dashboard</Link>.
+                      </p>
+                      {error?.message && <p><small>Server: {error.message}</small></p>}
+                    </Alert>
+                  </StackItem>
+                )}
+
+                {override?.active && (
+                  <StackItem>
+                    <DashboardSessionPanel
+                      override={override}
+                      dashboardURL={dashState?.dashboardURL}
+                      revertDisabledReason={!canMutate ? NO_PERMISSION_REASON : running ? "Another Dashboard Dev action is running." : null}
+                      reverting={running === "revert"}
+                      onRevert={() => setConfirm("revert")}
+                    />
+                  </StackItem>
+                )}
+
+                {result && (
+                  <StackItem>
+                    <Alert variant={outcomeVariant(result)} title={outcomeTitle(result, "The action failed")} isInline isLiveRegion component="p"
+                      actionClose={<AlertActionCloseButton onClose={() => setResult(null)} />}>
+                      {result.success ? undefined : result.message}
+                      {(result.logs?.length ?? 0) > 0 && (
+                        <details><summary>Details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.logs!.join("\n")}</pre></details>
+                      )}
+                    </Alert>
+                  </StackItem>
+                )}
+
+                {dashState?.rolloutStuck && (
+                  <StackItem>
+                    <Alert variant="danger" title="The dashboard rollout is stuck" isInline isLiveRegion component="p">
+                      <p style={{ overflowWrap: "anywhere" }}>{dashState.stuckReason || "A dashboard Deployment reports ProgressDeadlineExceeded."}</p>
+                      <p>Its progress deadline passed, so Kubernetes stopped waiting for it. Revert to restore the release images, or deploy another build.</p>
+                    </Alert>
+                  </StackItem>
+                )}
+
+                {!notDeployed && (
+                  <StackItem>
+                    <Card>
+                      <CardHeader actions={{ actions: status, hasNoOffset: true }}>
+                        <CardTitle component="h2">Deploy a dashboard build</CardTitle>
+                        <Content component="small">
+                          Replace the dashboard on this cluster with the latest main build or with the images a pull request
+                          published. Every user of the cluster sees it until someone reverts.
+                        </Content>
+                      </CardHeader>
+                      <CardBody>
+                        {!dashState && loading && <Skeleton height="6rem" screenreaderText="Loading the dashboard state" />}
                         {dashState && (
-                          deploying || reverting ? (
-                            <Label color="orange" icon={<Spinner size="sm" aria-label="Applying images" />}>Applying</Label>
-                          ) : dashState.operatorError ? (
-                            <Label color="orange" icon={<ExclamationTriangleIcon />}>Status unavailable</Label>
-                          ) : partial ? (
-                            <Label color="orange" icon={<ExclamationTriangleIcon />}>Partial deployment</Label>
-                          ) : dashState.rolloutPending || dashState.operatorAvailable && !allReady ? (
-                            <Label color="orange" icon={<Spinner size="sm" aria-label="Rolling out" />}>Rolling out</Label>
-                          ) : waitingFor ? (
-                            <Label color="orange" icon={<Spinner size="sm" aria-label="Applying" />}>
-                              {allReady ? "Applying" : `${readyCount}/${totalCount} ready`}
-                            </Label>
-                          ) : isCustom ? (
-                            <Label color="blue" icon={<CheckCircleIcon />}>
-                              {dashState.operatorPaused && dashState.defaultImagesRestored ? "Operator paused" : dashState.devMode === "main" ? "Latest main" : dashState.prNumber ? `PR #${dashState.prNumber}` : "Custom images"}
-                            </Label>
-                          ) : (
-                            <Label color="green" icon={<CheckCircleIcon />}>Default</Label>
-                          )
-                        )}
-                      </FlexItem>
-                    </Flex>
-                  </CardTitle>
-                  </CardHeader>
-                  <CardBody>
-                    {!dashState && loading && (
-                      <Flex justifyContent={{ default: "justifyContentCenter" }} className="pf-v6-u-py-lg">
-                        <Spinner aria-label="Loading dashboard state" />
-                      </Flex>
-                    )}
-                    <Stack hasGutter>
-                      {dashState?.operatorError && <StackItem><Alert variant="warning" title="Cannot verify dashboard-operator" isInline component="p">{dashState.operatorError}</Alert></StackItem>}
-                      {result && <StackItem><Alert variant={result.success ? "success" : "danger"} title={result.message} isInline isLiveRegion component="p" /></StackItem>}
-                      {partial && !result && <StackItem><Alert variant="warning" title="Selected build is not fully applied" isInline component="p">Retry the deployment to finish updating the dashboard, or revert to restore the installed release.</Alert></StackItem>}
-                      <StackItem>
-                        <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
-                          <FlexItem><Button variant="primary" onClick={handleDeployMain} isDisabled={!canMutate || !dashState?.operatorAvailable || !!dashState?.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "main"}>Deploy latest main</Button></FlexItem>
-                          <FlexItem><Button variant="secondary" onClick={handleRevert} isDisabled={!canMutate || !isCustom || deploying || reverting} isLoading={reverting}>Revert to default</Button></FlexItem>
-                        </Flex>
-                        <Content component="p" className="pf-v6-u-mt-md">Test the latest main builds across dashboard components, or deploy only the images published for a PR.</Content>
-                      </StackItem>
-                      {dashState?.operatorAvailable && <StackItem><Flex gap={{ default: "gapSm" }}><FlexItem><Label isCompact color={dashState.operatorPaused ? "orange" : "green"}>Operator {dashState.operatorPaused ? "paused" : "running"}</Label></FlexItem>{dashState.deploymentMode && <FlexItem><Label isCompact>{dashState.deploymentMode}</Label></FlexItem>}</Flex></StackItem>}
-                      {dashState && !dashState.operatorAvailable && (
-                        <StackItem>
-                          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                            <FlexItem>
-                              <Content component="small">
-                                <CopyableText text={truncateImage(dashState.currentImage)} value={dashState.currentImage} what="image reference" code />
-                              </Content>
-                            </FlexItem>
-                            {dashState.deploymentMode && (
-                              <FlexItem>
-                                <Label isCompact color={dashState.deploymentMode === "Standalone" ? "blue" : "grey"}>
-                                  {dashState.deploymentMode}
-                                </Label>
-                              </FlexItem>
-                            )}
-                          </Flex>
-                        </StackItem>
-                      )}
-
-                      {dashState?.rolloutPending && (
-                        <StackItem>
-                          <Alert variant="warning" title="Rollout in progress" isInline isPlain component="p">
-                            Old pod is still serving while the new pod starts up.
-                          </Alert>
-                        </StackItem>
-                      )}
-
-                      {dashState?.rolloutPending && dashState?.pods && dashState.pods.length > 1 && (
-                        <StackItem>
                           <Stack hasGutter>
-                            {dashState.pods.map((pod) => (
-                              <StackItem key={pod.name}>
-                                <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
-                                  <FlexItem>
-                                    <Label isCompact color={pod.ready ? "green" : "orange"}>
-                                      {pod.ready ? "Serving" : pod.phase === "Pending" ? "Pending" : `${pod.containers?.filter((c) => c.ready).length ?? 0}/${pod.containers?.length ?? 0} ready`}
-                                    </Label>
-                                  </FlexItem>
-                                  <FlexItem><Content component="small">{pod.name}</Content></FlexItem>
-                                  {pod.image && (
-                                    <FlexItem>
-                                      <Content component="small">
-                                        <CopyableText text={truncateImage(pod.image, 40)} value={pod.image} what="image reference" code />
-                                      </Content>
-                                    </FlexItem>
-                                  )}
-                                </Flex>
-                              </StackItem>
-                            ))}
-                          </Stack>
-                        </StackItem>
-                      )}
-
-                      {dashState?.rolloutPending && dashState?.schedulingFailureReason && (
-                        <StackItem>
-                          <Alert variant="warning" title="Pod cannot be scheduled" isInline component="p">
-                            <Stack hasGutter>
-                              <StackItem>{dashState.schedulingFailureReason}</StackItem>
-                              {dashState.canAssistRollout && (
-                                <StackItem>
-                                  <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                                    <FlexItem>
-                                      <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={handleAssistRollout}
-                                        isDisabled={!canMutate || assisting}
-                                        isLoading={assisting}
-                                      >
-                                        Assist Rollout
-                                      </Button>
-                                    </FlexItem>
-                                    <FlexItem>
-                                      <Content component="small">Scales down old pod to free cluster resources for the new one</Content>
-                                    </FlexItem>
-                                  </Flex>
-                                </StackItem>
-                              )}
-                            </Stack>
-                          </Alert>
-                        </StackItem>
-                      )}
-
-                      {waitingFor && !dashState?.rolloutPending && !allReady && (
-                        <StackItem>
-                          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                            <FlexItem><Spinner size="md" aria-label="Waiting" /></FlexItem>
-                            <FlexItem><Content component="small">Waiting for pod rollout...</Content></FlexItem>
-                          </Flex>
-                        </StackItem>
-                      )}
-
-                      {isCustom && allReady && !waitingFor && !partial && !deploying && !reverting && (
-                        <StackItem>
-                          <Alert variant="warning" title={`${dashState?.devMode === "main" ? "Latest main" : dashState?.prNumber ? `PR #${dashState.prNumber}` : "Custom dashboard images"} deployed on this shared cluster`} isInline isPlain component="p">
-                            Remember to revert after testing.
-                            {dashState?.dashboardURL && (
-                              <>{" "}<Button variant="link" isInline component="a" href={dashState.dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Open dashboard</Button></>
+                            {dashState.operatorError && (
+                              <StackItem><Alert variant="warning" title="Cannot read dashboard-operator" isInline component="p">{dashState.operatorError}</Alert></StackItem>
                             )}
-                          </Alert>
-                        </StackItem>
-                      )}
+                            {flavors.length > 1 && (
+                              <StackItem>
+                                <FormGroup role="radiogroup" isInline fieldId="dashboard-flavor" label="Build" isStack>
+                                  <Radio id="flavor-rhoai" name="dashboard-flavor" label="RHOAI build (Konflux)" isChecked={chosenFlavor === "rhoai"} onChange={() => setFlavor("rhoai")}
+                                    description={<>RHOAI branding and docs links. Tags <code>odh-pr-N</code> and <code>odh-stable</code>; components without one fall back to the ODH build.</>} />
+                                  <Radio id="flavor-odh" name="dashboard-flavor" label="ODH build (OpenShift CI)" isChecked={chosenFlavor === "odh"} onChange={() => setFlavor("odh")}
+                                    description={<>Open Data Hub branding. Tags <code>pr-N</code> and <code>main</code>; usually fewer components have a PR build.</>} />
+                                </FormGroup>
+                              </StackItem>
+                            )}
+                            <StackItem>
+                              <Flex alignItems={{ default: "alignItemsFlexEnd" }} gap={{ default: "gapMd" }}>
+                                <FlexItem>
+                                  <FormGroup label="Pull request number" fieldId="dashboard-pr">
+                                    <TextInput id="dashboard-pr" type="text" inputMode="numeric" value={prNumber} onChange={(_e, val) => setPrNumber(val.trim())} placeholder="e.g. 10085"
+                                      validated={prNumber && !validPR ? "error" : "default"} aria-describedby="dashboard-pr-help" style={{ maxWidth: "12rem" }} />
+                                    <FormHelperText>
+                                      <HelperText id="dashboard-pr-help">
+                                        <HelperTextItem variant={prNumber && !validPR ? "error" : "default"}>
+                                          {prNumber && !validPR ? "Enter a positive whole number." : "An opendatahub-io/odh-dashboard pull request."}
+                                        </HelperTextItem>
+                                      </HelperText>
+                                    </FormHelperText>
+                                  </FormGroup>
+                                </FlexItem>
+                                <FlexItem>
+                                  <TooltipButton variant="primary" onClick={() => setConfirm("pr")} isLoading={running === "pr"}
+                                    disabledReason={mutateReason(true) ?? (!validPR ? "Enter a PR number first." : null)}>
+                                    Deploy PR
+                                  </TooltipButton>
+                                </FlexItem>
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" onClick={() => setConfirm("main")} isLoading={running === "main"}
+                                    disabledReason={mutateReason(true) ?? (!dashState.operatorAvailable ? "Latest main needs dashboard-operator (RHOAI 3.5 or later)." : null)}>
+                                    Deploy latest main
+                                  </TooltipButton>
+                                </FlexItem>
+                                {sessionActive && !override?.active && (
+                                  <FlexItem>
+                                    <TooltipButton variant="secondary" onClick={() => setConfirm("revert")} isLoading={running === "revert"} disabledReason={!canMutate ? NO_PERMISSION_REASON : running ? "Another Dashboard Dev action is running." : null}>
+                                      Revert to default
+                                    </TooltipButton>
+                                  </FlexItem>
+                                )}
+                              </Flex>
+                              {validPR && (
+                                <Content component="small">
+                                  <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${parsedPR}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+                                    PR #{parsedPR} on GitHub
+                                  </Button>
+                                </Content>
+                              )}
+                            </StackItem>
 
-                      {isCustom && dashState?.prNumber && (
-                        <StackItem>
-                          <Flex gap={{ default: "gapMd" }}>
-                            <FlexItem>
-                              <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${dashState.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">PR #{dashState.prNumber}</Button>
-                            </FlexItem>
-                            <FlexItem>
-                              <Button variant="link" isInline component="a" href={`https://quay.io/repository/opendatahub/odh-dashboard?tab=tags&tag=pr-${dashState.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Quay</Button>
-                            </FlexItem>
-                          </Flex>
-                        </StackItem>
-                      )}
+                            {waitingFor && !dashState.rolloutStuck && (
+                              <StackItem>
+                                <Content component="p" aria-live="polite"><InProgressIcon /> Waiting for the dashboard pods to roll out. This page checks every 5 seconds.</Content>
+                              </StackItem>
+                            )}
 
-                      <StackItem>
-                        <Flex alignItems={{ default: "alignItemsFlexEnd" }} gap={{ default: "gapSm" }}>
-                          <FlexItem>
-                            <Content component="small" className="pf-v6-u-mb-xs">PR number</Content>
-                            <TextInput type="number" value={prNumber} onChange={(_e, val) => setPrNumber(val)} placeholder="e.g. 7892" aria-label="PR number" className="pf-v6-u-w-initial" isDisabled={deploying || reverting || !!waitingFor} />
-                          </FlexItem>
-                          <FlexItem>
-                            <Button variant="secondary" onClick={() => setConfirmOpen(true)} isDisabled={!canMutate || !validPR || !dashState || !!dashState.operatorError || deploying || reverting || !!waitingFor} isLoading={deploying && deployMode === "pr"}>Deploy PR</Button>
-                          </FlexItem>
-                        </Flex>
-                      </StackItem>
-                      {validPR && (
-                        <StackItem>
-                          <Content component="small">
-                            <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${parsedPR}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">PR #{parsedPR}</Button>
-                            {" · "}
-                            <code>pr-{parsedPR}</code> images for installed dashboard components
-                          </Content>
-                        </StackItem>
-                      )}
+                            {dashState.rolloutPending && dashState.schedulingFailureReason && (
+                              <StackItem>
+                                <Alert variant="warning" title="A new dashboard pod cannot be scheduled" isInline component="p">
+                                  <Stack hasGutter>
+                                    <StackItem>{dashState.schedulingFailureReason}</StackItem>
+                                    {dashState.canAssistRollout && (
+                                      <StackItem>
+                                        <TooltipButton variant="secondary" size="sm" onClick={() => setConfirm("assist")} isLoading={running === "assist"} disabledReason={mutateReason(false)}>
+                                          Assist rollout
+                                        </TooltipButton>
+                                      </StackItem>
+                                    )}
+                                  </Stack>
+                                </Alert>
+                              </StackItem>
+                            )}
 
-                      {dashState?.devImages && <StackItem><DashboardImages images={dashState.devImages} /></StackItem>}
-                      {result?.logs?.length ? <StackItem><details><summary>Deployment details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.logs.join("\n")}</pre></details></StackItem> : null}
-                    </Stack>
-                  </CardBody>
-                </Card>
-              </div>
+                            {legacy && (
+                              <StackItem>
+                                <Content component="small">This cluster has no dashboard-operator (RHOAI 3.4 or earlier): only <code>rhods-dashboard</code> is changed.</Content>
+                              </StackItem>
+                            )}
+
+                            {(dashState.devImages?.length ?? 0) > 0 && (
+                              <StackItem><DashboardImages images={dashState.devImages!} defaultExpanded={sessionActive} /></StackItem>
+                            )}
+                          </Stack>
+                        )}
+                      </CardBody>
+                    </Card>
+                  </StackItem>
+                )}
+              </Stack>
+            </div>
           </Tab>
 
-          <Tab eventKey={1} title={<TabTitleText>Resources</TabTitleText>}>
-              <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
-                <QuickResourceCreator canMutate={canMutate} />
-              </div>
+          <Tab eventKey={1} title={<TabTitleText>Test resources</TabTitleText>}>
+            <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
+              <QuickResourceCreator canMutate={canMutate} />
+            </div>
           </Tab>
         </Tabs>
       </PageSection>
 
-      {/* Deploy PR Confirmation Modal */}
-      <Modal aria-labelledby="confirm-deploy-title" variant={ModalVariant.small} isOpen={confirmOpen} onClose={() => setConfirmOpen(false)}>
-        <ModalHeader title={`Deploy PR #${parsedPR}`} labelId="confirm-deploy-title" />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem><Content component="small">Deploy published <code>pr-{parsedPR}</code> images for installed dashboard components. Components without a PR build keep their current images.</Content></StackItem>
-            <StackItem>
-              <Alert component="p" variant="warning" title="Shared cluster impact" isInline>
-                This replaces the dashboard for ALL users on this cluster. The operator will stop managing the deployment until you revert. Please revert after testing.
-              </Alert>
-            </StackItem>
-            <StackItem><Alert component="p" variant="info" title="The dashboard may be briefly unavailable (1-2 min) during the rollout." isInline isPlain /></StackItem>
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="primary" onClick={handleDeployConfirm} isLoading={deploying} isDisabled={deploying}>Deploy</Button>
-          <Button variant="link" onClick={() => setConfirmOpen(false)} isDisabled={deploying}>Cancel</Button>
-        </ModalFooter>
-      </Modal>
+      <ConfirmActionModal
+        isOpen={confirm === "pr" || confirm === "main"}
+        title={confirm === "pr" ? `Deploy PR #${parsedPR}?` : "Deploy the latest main build?"}
+        changes={confirm === "pr" || confirm === "main" ? deployChanges(confirm) : []}
+        confirmLabel={confirm === "pr" ? `Deploy PR #${parsedPR}` : "Deploy latest main"}
+        isLoading={running === "pr" || running === "main"}
+        onConfirm={() => confirm && run(confirm)}
+        onCancel={() => setConfirm(null)}
+      >
+        {flavors.length > 1 && !legacy && <Content component="p">Build: <strong>{flavorName(chosenFlavor)}</strong>.</Content>}
+        <Content component="p">The dashboard restarts and may be unavailable briefly. RHOAI updates do not reach the dashboard until you revert.</Content>
+      </ConfirmActionModal>
+
+      <ConfirmActionModal
+        isOpen={confirm === "revert"}
+        title="Revert the dashboard to the installed release?"
+        changes={legacy ? [
+          <>Deployment <code>{DASHBOARD_NS}/rhods-dashboard</code>: the operator takes it back and restores the release image.</>,
+        ] : [
+          <>Deployment <code>{DASHBOARD_NS}/dashboard-operator</code> is scaled back to its saved replica count (1 when it is unknown).</>,
+          <>dashboard-operator then puts the release images back on all {containers || "the"} dashboard containers.</>,
+          <>The saved session on dashboard-operator is removed{override?.startedBy ? `, ending ${sessionOwner}` : ""}.</>,
+        ]}
+        confirmLabel="Revert to default"
+        isLoading={running === "revert"}
+        onConfirm={() => run("revert")}
+        onCancel={() => setConfirm(null)}
+      >
+        <Content component="p">The dashboard restarts and may be unavailable briefly. Reverting twice is safe.</Content>
+      </ConfirmActionModal>
+
+      <ConfirmActionModal
+        isOpen={confirm === "assist"}
+        title="Assist the dashboard rollout?"
+        changes={[
+          <>Deployment <code>{DASHBOARD_NS}/rhods-dashboard</code>: <code>spec.strategy.rollingUpdate.maxUnavailable</code> is set to 1, so one old pod stops and frees room for the new one.</>,
+        ]}
+        confirmLabel="Assist rollout"
+        isLoading={running === "assist"}
+        onConfirm={() => run("assist")}
+        onCancel={() => setConfirm(null)}
+      >
+        <Content component="p">
+          The dashboard may be unavailable briefly. The original value is saved in an annotation, and Diagnostics offers to restore it.
+          The server re-checks first and changes nothing if the pod is no longer Unschedulable or an operator manages this field.
+        </Content>
+      </ConfirmActionModal>
     </>
   );
 };
