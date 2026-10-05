@@ -171,7 +171,7 @@ const AppLayout: React.FC = () => {
           </PageToggleButton>
         </MastheadToggle>
         <MastheadBrand>
-          <MastheadLogo component={(props: React.HTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" />}>
+          <MastheadLogo component={(props: React.HTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" aria-label="RHOAI Nightly Updater home" style={{ color: "inherit", textDecoration: "none" }} />}>
             <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==" alt="" height="38" />
             <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.2, marginLeft: "8px" }}>
               <strong style={{ fontSize: "var(--pf-t--global--font--size--body--default)" }}>RHOAI</strong>

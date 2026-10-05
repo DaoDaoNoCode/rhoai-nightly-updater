@@ -34,7 +34,7 @@ export const CopyableText: React.FC<CopyableTextProps> = ({ text, value, what = 
         isInline
         onClick={copy}
         aria-label={`${typeof text === "string" ? text : value}: copy full ${what}`}
-        style={{ color: "inherit", textAlign: "start" }}
+        style={{ color: "inherit", textAlign: "start", whiteSpace: "normal", overflowWrap: "anywhere" }}
       >
         {code ? <code>{text}</code> : text}
       </Button>
