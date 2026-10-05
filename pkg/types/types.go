@@ -7,6 +7,26 @@ type ActivityEntry struct {
 	Action    string `json:"action"` // "update", "rollback", "create-pull-secret"
 	Detail    string `json:"detail"` // e.g., the FBC image for updates
 	Success   bool   `json:"success"`
+
+	// Filled in when the log is read (not stored):
+	// Label is a human-readable name for Action, Category groups actions
+	// ("operator", "dashboard", "resources", "setup", "diagnostics",
+	// "other"), and Build is the catalog build an operator action targeted,
+	// as "<tag> · <first 12 digest hex>" (either part may be missing).
+	Label    string `json:"label,omitempty"`
+	Category string `json:"category,omitempty"`
+	Build    string `json:"build,omitempty"`
+}
+
+// OperationMarker records a running cluster operation in a ConfigMap so a
+// restarted updater can tell that its predecessor died mid-operation.
+type OperationMarker struct {
+	Type      string `json:"type"`
+	Label     string `json:"label"`
+	User      string `json:"user"`
+	Target    string `json:"target,omitempty"`
+	StartedAt string `json:"startedAt"` // RFC 3339
+	Pod       string `json:"pod,omitempty"`
 }
 
 // StatusResponse is the aggregated cluster and operator status returned by /api/status.
