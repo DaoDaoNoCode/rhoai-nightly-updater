@@ -35,9 +35,9 @@ const (
 	commitDateCacheMax = 2000
 	// A missing commit (404/422) is retried after this long.
 	commitDateNegativeTTL = 10 * time.Minute
-	// Parallel registry reads per batch. quayHTTPClient keeps 10 idle
-	// connections per host; the rest are short-lived.
-	labelFetchConcurrency = 12
+	// Parallel registry reads per batch. quayHTTPClient keeps 16 idle
+	// connections per host and negotiates HTTP/2 with quay.io.
+	labelFetchConcurrency = 16
 	// labelFetchTimeout bounds each image of a batch.
 	labelFetchTimeout = 8 * time.Second
 )

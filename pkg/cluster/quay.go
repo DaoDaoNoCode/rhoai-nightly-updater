@@ -34,8 +34,8 @@ var quayHTTPClient = &http.Client{
 		// Honor HTTP(S)_PROXY/NO_PROXY like http.DefaultTransport does, so
 		// registry calls work on clusters that require an egress proxy.
 		Proxy:               http.ProxyFromEnvironment,
-		MaxIdleConns:        20,
-		MaxIdleConnsPerHost: 10,
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 16,
 		IdleConnTimeout:     90 * time.Second,
 	},
 }
@@ -372,17 +372,26 @@ func prefetchQuayTokens(ctx context.Context, basicAuth string, repos []string) {
 			missing = append(missing, repo)
 		}
 	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
 	for start := 0; start < len(missing); start += quayTokenBatch {
-		end := min(start+quayTokenBatch, len(missing))
-		token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, missing[start:end])
-		if err != nil {
-			slog.Debug("quay token prefetch failed", "repos", end-start, "error", err)
-			continue
-		}
-		for _, repo := range missing[start:end] {
-			storeQuayToken(basicAuth, repo, token)
-		}
+		batch := missing[start:min(start+quayTokenBatch, len(missing))]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			token, err := fetchQuayToken(ctx, quayHTTPClient, basicAuth, batch)
+			if err != nil {
+				slog.Debug("quay token prefetch failed", "repos", len(batch), "error", err)
+				return
+			}
+			for _, repo := range batch {
+				storeQuayToken(basicAuth, repo, token)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // forgetQuayToken drops a cached token that a registry rejected.
