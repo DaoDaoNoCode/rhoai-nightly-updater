@@ -156,13 +156,24 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 	if err := json.Unmarshal(body, &disc); err != nil {
 		return nil, err
 	}
+	type listResult struct {
+		body []byte
+		err  error
+	}
+	results := make([]listResult, len(disc.Resources))
+	parallelFor(len(disc.Resources), 6, func(i int) {
+		if strings.Contains(disc.Resources[i].Name, "/") {
+			return
+		}
+		results[i].body, _, results[i].err = c.get("/apis/components.platform.opendatahub.io/v1alpha1/" + disc.Resources[i].Name)
+	})
 	var out []stuckModule
 	var errs []string
-	for _, r := range disc.Resources {
+	for i, r := range disc.Resources {
 		if strings.Contains(r.Name, "/") {
 			continue
 		}
-		listBody, _, err := c.get("/apis/components.platform.opendatahub.io/v1alpha1/" + r.Name)
+		listBody, err := results[i].body, results[i].err
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", r.Name, err))
 			continue
@@ -271,7 +282,9 @@ func checkManagedConfig(c *Client) checkOutput {
 					Fix:             "If nobody needs the manual change any more, remove the annotation; the operator then re-applies the current version on its next reconcile. The tool does not do this automatically.",
 					TechnicalCmd:    fmt.Sprintf("oc annotate deployment %s -n %s opendatahub.io/managed-", d.Metadata.Name, ns),
 				})
-			} else if v := ann["platform.opendatahub.io/version"]; v != "" && release != "" && v != release {
+			} else if v := ann["platform.opendatahub.io/version"]; v != "" && release != "" && v != release && ann["platform.opendatahub.io/instance.name"] == "default" {
+				// Only Deployments the Platform applies carry the platform
+				// version; module operators stamp their own versions.
 				out.problems = append(out.problems, Problem{
 					ID:              "deployment-version-drift-" + d.Metadata.Name,
 					Severity:        "info",

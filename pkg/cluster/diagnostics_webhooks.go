@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -291,6 +293,24 @@ var webhookKinds = []struct{ kind, resource string }{
 func findStaleWebhooks(c *Client) ([]webhookVerdict, []string) {
 	configs, errs := listAdmissionConfigs(c)
 	env := newWebhookEnv(c)
+	// Look up all referenced Services concurrently; evaluate() then reads
+	// the cache.
+	var refs []string
+	for _, cfg := range configs {
+		for _, ref := range cfg.services() {
+			if !containsString(refs, ref) {
+				refs = append(refs, ref)
+			}
+		}
+	}
+	results := make([]error, len(refs))
+	parallelFor(len(refs), 8, func(i int) {
+		ns, name, _ := strings.Cut(refs[i], "/")
+		_, _, results[i] = c.get(namespacedPath("v1", "services", ns, name))
+	})
+	for i, ref := range refs {
+		env.services[ref] = results[i]
+	}
 	var out []webhookVerdict
 	for _, cfg := range configs {
 		if v := env.evaluate(cfg); v != nil {
@@ -308,43 +328,62 @@ type staleConversion struct {
 	ModuleState    string
 }
 
+// rhoaiCRDSelectors select the CRDs RHOAI installs: the operator's own
+// (OLM package label, e.g. DSC and DSCI) and those the platform applies for
+// modules. Listing all CRDs would download every schema (13 MB live).
+var rhoaiCRDSelectors = []string{
+	"operators.coreos.com/" + SubName + "." + SubNS,
+	"platform.opendatahub.io/part-of",
+}
+
 func findStaleConversions(c *Client) ([]staleConversion, error) {
-	body, _, err := c.get("/apis/apiextensions.k8s.io/v1/customresourcedefinitions")
-	if IsK8sError(err, http.StatusNotFound) {
-		return nil, nil
+	type crdItem struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Conversion *struct {
+				Strategy string `json:"strategy"`
+				Webhook  *struct {
+					ClientConfig struct {
+						Service *struct {
+							Namespace string `json:"namespace"`
+							Name      string `json:"name"`
+						} `json:"service"`
+					} `json:"clientConfig"`
+				} `json:"webhook"`
+			} `json:"conversion"`
+		} `json:"spec"`
+		Status struct {
+			StoredVersions []string `json:"storedVersions"`
+		} `json:"status"`
 	}
-	if err != nil {
-		return nil, err
-	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Conversion *struct {
-					Strategy string `json:"strategy"`
-					Webhook  *struct {
-						ClientConfig struct {
-							Service *struct {
-								Namespace string `json:"namespace"`
-								Name      string `json:"name"`
-							} `json:"service"`
-						} `json:"clientConfig"`
-					} `json:"webhook"`
-				} `json:"conversion"`
-			} `json:"spec"`
-			Status struct {
-				StoredVersions []string `json:"storedVersions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse CRDs: %w", err)
+	var items []crdItem
+	seen := map[string]bool{}
+	for _, sel := range rhoaiCRDSelectors {
+		body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {sel}})
+		if IsK8sError(err, http.StatusNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var list struct {
+			Items []crdItem `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return nil, fmt.Errorf("parse CRDs: %w", err)
+		}
+		for _, it := range list.Items {
+			if !seen[it.Metadata.Name] {
+				seen[it.Metadata.Name] = true
+				items = append(items, it)
+			}
+		}
 	}
 	components := readDSCComponents(c)
 	var out []staleConversion
-	for _, crd := range list.Items {
+	for _, crd := range items {
 		conv := crd.Spec.Conversion
 		if conv == nil || conv.Strategy != "Webhook" || conv.Webhook == nil || conv.Webhook.ClientConfig.Service == nil {
 			continue
@@ -401,8 +440,15 @@ func readDSCComponents(c *Client) map[string]string {
 func checkStaleWebhooks(c *Client) checkOutput {
 	const name = "Stale webhooks"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	var conversions []staleConversion
+	var convErr error
+	convDone := make(chan struct{})
+	go func() {
+		defer close(convDone)
+		conversions, convErr = findStaleConversions(c)
+	}()
 	stale, errs := findStaleWebhooks(c)
-	conversions, convErr := findStaleConversions(c)
+	<-convDone
 
 	var deletable, guidance []webhookVerdict
 	for _, v := range stale {
@@ -652,4 +698,20 @@ func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
 		out = append(out, operatorCSV{Name: it.Metadata.Name, Version: it.Spec.Version, Phase: it.Status.Phase, Reason: it.Status.Reason, Message: it.Status.Message})
 	}
 	return out, nil
+}
+
+// parallelFor runs fn(0..n-1) with at most limit calls at a time.
+func parallelFor(n, limit int, fn func(i int)) {
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			fn(i)
+		}(i)
+	}
+	wg.Wait()
 }

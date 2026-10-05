@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -120,7 +121,7 @@ func TestStaleWebhooks_PartlyServingConfigIsNotStale(t *testing.T) {
 
 func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.obj("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]interface{}{"items": []interface{}{
+	crds := map[string]interface{}{"items": []interface{}{
 		map[string]interface{}{
 			"metadata": map[string]interface{}{"name": "mcpservers.mcp.x-k8s.io"},
 			"spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "Webhook", "webhook": map[string]interface{}{
@@ -135,7 +136,15 @@ func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 			}}},
 		},
 		map[string]interface{}{"metadata": map[string]interface{}{"name": "plain.example.com"}, "spec": map[string]interface{}{"conversion": map[string]interface{}{"strategy": "None"}}},
-	}})
+	}}
+	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
+		if r.URL.Query().Get("labelSelector") == "" {
+			t.Errorf("CRDs listed without a label selector")
+		}
+		// Both selectors return the same objects; duplicates must be merged.
+		b, _ := json.Marshal(crds)
+		return http.StatusOK, string(b)
+	})
 	f.json("GET", svcPath("redhat-ods-applications", "model-registry-operator-webhook-service"), http.StatusOK, `{}`)
 	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"mcplifecycleoperator":{"managementState":"Removed"},"kserve":{"managementState":"Managed"}}}}`)

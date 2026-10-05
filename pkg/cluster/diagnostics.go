@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -138,9 +139,11 @@ func runCheck(c *Client, chk diagnosticCheck) checkOutput {
 		}()
 		done <- chk.fn(c.WithContext(ctx))
 	}()
+	start := time.Now()
 	select {
 	case out := <-done:
 		out.check.Name = chk.name
+		slog.Debug("diagnostics check finished", "check", chk.name, "duration", time.Since(start))
 		return out
 	case <-ctx.Done():
 		detail := fmt.Sprintf("Check did not finish within %s", diagnosticsCheckTimeout)

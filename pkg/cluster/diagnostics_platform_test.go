@@ -69,7 +69,8 @@ func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments", http.StatusOK, `{"items":[
 		{"metadata":{"name":"mlflow-operator-controller-manager","annotations":{"opendatahub.io/managed":"false","platform.opendatahub.io/version":"3.6.0-ea.1"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
 		{"metadata":{"name":"odh-model-controller","annotations":{"platform.opendatahub.io/version":"3.6.0"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
-		{"metadata":{"name":"kserve-old","annotations":{"platform.opendatahub.io/version":"3.5.1"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
+		{"metadata":{"name":"kuberay-operator","annotations":{"platform.opendatahub.io/version":"3.6.0-ea.1","platform.opendatahub.io/instance.name":"default-ray"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
+		{"metadata":{"name":"kserve-old","annotations":{"platform.opendatahub.io/version":"3.5.1","platform.opendatahub.io/instance.name":"default"}},"spec":{"replicas":1},"status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1}},
 		{"metadata":{"name":"odh-observability","generation":2,"annotations":{"`+assistRolloutAnnotation+`":"{\"maxUnavailable\":\"25%\"}"}},
 		 "spec":{"replicas":1,"strategy":{"rollingUpdate":{"maxUnavailable":1}}},"status":{"observedGeneration":2,"replicas":1,"updatedReplicas":1,"readyReplicas":1}}]}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments", http.StatusOK, `{"items":[]}`)
@@ -85,6 +86,9 @@ func TestManagedConfig_ReportsUnmanagedAndLeftovers(t *testing.T) {
 	}
 	if _, ok := ids["deployment-version-drift-kserve-old"]; !ok {
 		t.Fatalf("missing drift: %+v", resp.problems)
+	}
+	if _, ok := ids["deployment-version-drift-kuberay-operator"]; ok {
+		t.Fatal("module-operator version reported as platform drift")
 	}
 	if _, ok := ids["deployment-version-drift-odh-model-controller"]; ok {
 		t.Fatal("current version reported as drift")
