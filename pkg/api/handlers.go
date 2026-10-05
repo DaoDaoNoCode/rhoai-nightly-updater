@@ -501,7 +501,8 @@ var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *ht
 	status, err := cluster.GetStatus(c)
 	if err != nil {
 		slog.Error("status error", "error", err)
-		writeError(w, "failed to get status", http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "failed to get status", code, errorCode)
 		return
 	}
 	writeJSON(w, status, "status")
@@ -686,7 +687,8 @@ var HandleLatestNightly = withAuth(func(c *cluster.Client, w http.ResponseWriter
 	result, err := cluster.FetchLatestNightly(r.Context(), c)
 	if err != nil {
 		slog.Error("latest-nightly failed", "error", err)
-		writeError(w, fmt.Sprintf("failed to fetch latest nightly: %v", err), http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, fmt.Sprintf("failed to fetch latest nightly: %v", err), code, errorCode)
 		return
 	}
 	writeJSON(w, result, "latest-nightly")
@@ -699,7 +701,8 @@ var HandleNightlyTags = withAuth(func(c *cluster.Client, w http.ResponseWriter, 
 	result, err := cluster.FetchNightlyTags(r.Context(), c, 5)
 	if err != nil {
 		slog.Error("nightly-tags failed", "error", err)
-		writeError(w, "failed to fetch nightly tags", http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "failed to fetch nightly tags", code, errorCode)
 		return
 	}
 	writeJSON(w, result, "nightly-tags")
@@ -709,15 +712,16 @@ var HandleNightlyTags = withAuth(func(c *cluster.Client, w http.ResponseWriter, 
 var HandleBuildExplorerTags = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	slog.Info("request", "op", "build-explorer-tags")
 
-	result, err := cluster.FetchNightlyTags(r.Context(), c, 0)
+	fetch := cluster.FetchNightlyTagsWithBuildDates
+	if r.URL.Query().Get("includeDates") == "false" {
+		fetch = cluster.FetchNightlyTags
+	}
+	result, err := fetch(r.Context(), c, 0)
 	if err != nil {
 		slog.Error("build-explorer-tags failed", "error", err)
-		writeError(w, "failed to fetch nightly tags", http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "failed to fetch nightly tags", code, errorCode)
 		return
-	}
-
-	if r.URL.Query().Get("includeDates") != "false" {
-		cluster.EnrichTagsWithBuildDates(r.Context(), c, result.Tags)
 	}
 
 	writeJSON(w, result, "build-explorer-tags")
@@ -750,7 +754,8 @@ var HandleBuildExplorerContent = withAuth(func(c *cluster.Client, w http.Respons
 	result, err := cluster.ExtractFBCContent(r.Context(), c, image)
 	if err != nil {
 		slog.Error("build-explorer-content failed", "error", err)
-		writeError(w, "failed to extract FBC content", http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "failed to extract FBC content", code, errorCode)
 		return
 	}
 
@@ -784,7 +789,8 @@ var HandleComponents = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 	components, err := cluster.GetComponents(c, includeLabels)
 	if err != nil {
 		slog.Error("components error", "error", err)
-		writeError(w, "failed to get components", http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, fmt.Sprintf("Could not read components: %v", err), code, errorCode)
 		return
 	}
 	writeJSON(w, components, "components")
@@ -837,7 +843,8 @@ var HandleDebug = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *htt
 	debug, err := cluster.GetDebugInfo(c)
 	if err != nil {
 		slog.Error("debug error", "error", err)
-		writeError(w, "failed to get debug info", http.StatusInternalServerError)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "failed to get debug info", code, errorCode)
 		return
 	}
 	writeJSON(w, debug, "debug")
@@ -1309,15 +1316,22 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 	}
 })
 
-// HandleDSCPreview returns the default DSC YAML for preview (fetched from upstream, cached).
+// HandleDSCPreview returns the default DSC YAML for preview: the installed
+// CSV's alm-examples, or the matching upstream sample when the CSV has none.
 var HandleDSCPreview = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	defaults, err := cluster.GetDefaultDSCYAML(c)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusBadGateway, "prerequisites")
 		return
 	}
-	yamlContent := defaults.YAML
-	writeJSON(w, map[string]string{"yaml": yamlContent, "operatorVersion": defaults.Version, "branch": defaults.Branch, "sourceURL": defaults.SourceURL}, "dsc-preview")
+	writeJSON(w, map[string]string{
+		"yaml":              defaults.YAML,
+		"operatorVersion":   defaults.Version,
+		"branch":            defaults.Branch,
+		"sourceURL":         defaults.SourceURL,
+		"source":            defaults.Source,
+		"sourceDescription": defaults.SourceDescription,
+	}, "dsc-preview")
 })
 
 // HandleCreateDSC creates a default DataScienceCluster if one doesn't exist.

@@ -360,7 +360,13 @@ func (c *Client) GetVersion() (string, error) {
 // throttling and outages apart instead of seeing a generic 500.
 func HTTPStatusForError(err error) (int, string) {
 	var k8sErr *K8sError
+	var quayErr *quayAuthError
 	switch {
+	case errors.As(err, &quayErr):
+		if isQuayCredentialRejection(err) {
+			return http.StatusBadGateway, "registry_auth"
+		}
+		return http.StatusBadGateway, "registry_unavailable"
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "timeout"
 	case errors.Is(err, context.Canceled):

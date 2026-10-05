@@ -83,6 +83,13 @@ func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, pat
 }
 
 func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCCompatibility {
+	op, err := getInstalledOperator(c)
+	return checkDSCCompatibilityFor(c, dsc, op, err)
+}
+
+// checkDSCCompatibilityFor compares a DSC with the installed schema and the
+// defaults of the already-read installed operator.
+func checkDSCCompatibilityFor(c *Client, dsc map[string]interface{}, op *installedOperator, opErr error) *types.DSCCompatibility {
 	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}, ExtraComponents: []string{}}
 	apiVersion, _ := dsc["apiVersion"].(string)
 	schema, err := dscSpecSchema(c, apiVersion)
@@ -92,7 +99,11 @@ func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCComp
 		pruneUnknownDSCFields(dsc["spec"], schema, "spec", &result.InvalidFields)
 		sort.Strings(result.InvalidFields)
 	}
-	defaults, err := fetchDefaultDSCSpec(c)
+	if opErr != nil {
+		result.DefaultsError = "Unable to load version-matched defaults: " + opErr.Error()
+		return result
+	}
+	defaults, err := defaultDSCSpecFor(c.ctx, op)
 	if err != nil {
 		result.DefaultsError = "Unable to load version-matched defaults: " + err.Error()
 		return result
@@ -100,6 +111,7 @@ func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCComp
 	result.OperatorVersion = defaults.Version
 	result.Branch = defaults.Branch
 	result.SourceURL = defaults.SourceURL
+	result.DefaultsSource = defaults.Source
 	defaultSpec, _ := defaults.Spec["spec"].(map[string]interface{})
 	defaultComponents, _ := defaultSpec["components"].(map[string]interface{})
 	currentSpec, _ := dsc["spec"].(map[string]interface{})
@@ -211,7 +223,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string, expectedEx
 				nextSpec[key] = value
 			}
 			nextSpec["components"] = nextComponents
-			detail = "Removed DSC components absent from " + defaults.Branch + " defaults: " + strings.Join(removed, ", ")
+			detail = "Removed DSC components absent from the defaults (" + defaults.SourceDescription + "): " + strings.Join(removed, ", ")
 		} else {
 			nextSpec = defaultSpec
 			// A matching branch may be ahead of the installed build. Never apply unknown sample keys.
@@ -220,7 +232,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string, expectedEx
 			if len(unknownDefaults) != 0 {
 				return nil, fmt.Errorf("version defaults contain fields unsupported by the installed CRD: %s", strings.Join(unknownDefaults, ", "))
 			}
-			detail = "Reset DSC spec to defaults from " + defaults.SourceURL
+			detail = "Reset DSC spec to defaults from " + defaults.SourceDescription
 		}
 	} else if len(invalid) == 0 {
 		return &types.OperationResponse{Success: true, Message: "No invalid DSC fields to remove", Logs: []string{}}, nil

@@ -25,6 +25,8 @@ func TestHTTPStatusForError(t *testing.T) {
 		{"network", wrapNetworkError(errors.New("connection refused")), 502, "network"},
 		{"timeout inside network error", wrapNetworkError(&url.Error{Op: "Get", URL: "x", Err: context.DeadlineExceeded}), 504, "timeout"},
 		{"canceled", fmt.Errorf("x: %w", context.Canceled), 503, "canceled"},
+		{"quay rejects credentials", fmt.Errorf("x: %w", &quayAuthError{StatusCode: 401}), 502, "registry_auth"},
+		{"quay outage", &quayAuthError{StatusCode: 503}, 502, "registry_unavailable"},
 		{"other", errors.New("parse failure"), 500, "internal"},
 	}
 	for _, tc := range cases {
