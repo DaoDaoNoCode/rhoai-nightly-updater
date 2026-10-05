@@ -8,17 +8,27 @@ export const RECONCILE_POLL_SLOW_MS = 15_000;
 export const RECONCILE_POLL_FAST_UNTIL_MS = 2 * 60_000;
 export const RECONCILE_POLL_MEDIUM_UNTIL_MS = 5 * 60_000;
 
-/** Legacy alias kept for backward compat (used in active-time delta guard). */
-export const RECONCILE_POLL_MS = RECONCILE_POLL_SLOW_MS;
-
 /** Maximum time to wait for reconciliation before giving up (ms). */
 export const RECONCILE_TIMEOUT_MS = 10 * 60_000;
 
 /** Background polling interval for general status freshness (ms). */
 export const BACKGROUND_POLL_MS = 60_000;
 
+/**
+ * Longest time a progress stream is trusted (ms). The backend caps operations
+ * at 15 minutes (withMutationAuth in pkg/api/handlers.go), so a stream still open after this
+ * is abandoned and status polling takes over.
+ */
+export const STREAM_MAX_MS = 20 * 60_000;
+
 /** Polling interval for the Components page (ms). */
 export const COMPONENTS_POLL_MS = 30_000;
+
+/** Test-resource status polling while something is starting: 5 s, doubling to 30 s. */
+export const RESOURCE_POLL_BASE_MS = 5_000;
+export const RESOURCE_POLL_MAX_MS = 30_000;
+/** Stop polling a resource that is still not ready after this long (ms). */
+export const RESOURCE_SETTLE_MAX_MS = 10 * 60_000;
 
 /** Navigation items for the sidebar. */
 export const NAV_ITEMS = [

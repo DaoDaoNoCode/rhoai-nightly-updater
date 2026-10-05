@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   AlertActionCloseButton,
@@ -8,8 +7,6 @@ import {
   CodeBlockCode,
   Content,
   Divider,
-  List,
-  ListItem,
   Modal,
   ModalVariant,
   ModalHeader,
@@ -29,110 +26,40 @@ import {
   Stack,
   StackItem,
   Title,
-  Tooltip,
 } from "@patternfly/react-core";
 import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import CloneIcon from "@patternfly/react-icons/dist/esm/icons/clone-icon";
-import type { NightlyTag, OperationResponse, StatusResponse, UpdateStep } from "../types";
-import { fetchNightlyTags, streamRefresh, trackFeature, createDSC, getDSCPreview } from "../services/api";
+import type { NightlyTag, OperationResponse } from "../types";
+import { fetchNightlyTags, streamRefresh, trackFeature, createDSC, getDSCPreview, toApiError } from "../services/api";
 import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
 import { StatusCards } from "../components/StatusCards";
 import { PullSecretCard } from "../components/PullSecretCard";
 import { UpdatePanel } from "../components/UpdatePanel";
-import { type OperationType as PipelineOperationType } from "../components/UpdatePipeline";
 import { ReinstallPanel } from "../components/ReinstallPanel";
 import { SetupModal } from "../components/PrerequisitesPanel";
 import { ActivityLog } from "../components/ActivityLog";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { PageHeader } from "../components/PageHeader";
-import { OperationProgress } from "../components/OperationProgress";
-import type { OperationType } from "../components/ReconciliationProgress";
-import type { OperationPhase } from "../App";
+import { OperationProgress, useHasOperationProgress } from "../components/OperationProgress";
+import { TooltipButton, NO_PERMISSION_REASON, OPERATION_RUNNING_REASON } from "../components/TooltipButton";
+import { describeError } from "../errors";
+import { useClusterStatus, useOperation } from "../state/AppState";
 
 interface StatusPageProps {
-  status: StatusResponse | null;
-  loading: boolean;
-  error: string | null;
-  reconciling: boolean;
-  reconcileStartTime: number;
-  reconcileTimedOut?: boolean;
-  lastRefreshed: Date | null;
   setupOpen: boolean;
   setSetupOpen: (open: boolean) => void;
-  refresh: () => void;
-  handleMutationComplete: () => void;
   canMutate: boolean;
-  operationPhase: OperationPhase;
-  onStreamStart: () => void;
-  onStreamEnd: (success: boolean) => void;
-  onReconcileComplete: () => void;
 }
 
-const ONBOARDING_DISMISSED_KEY = "rhoai-onboarding-dismissed";
-
 export const StatusPage: React.FC<StatusPageProps> = ({
-  status,
-  loading,
-  error,
-  reconciling,
-  reconcileStartTime,
-  reconcileTimedOut = false,
-  lastRefreshed,
   setupOpen,
   setSetupOpen,
-  refresh,
-  handleMutationComplete,
   canMutate,
-  operationPhase,
-  onStreamStart,
-  onStreamEnd,
-  onReconcileComplete,
 }) => {
-  // Pipeline step state for UpdatePipeline visualization
-  const [pipelineSteps, setPipelineSteps] = useState<UpdateStep[]>([]);
-  const [pipelineActive, setPipelineActive] = useState(false);
-  const [pipelineOpType, setPipelineOpType] = useState<PipelineOperationType>("update");
-
-  const handlePipelineStreamStart = useCallback((opType?: PipelineOperationType) => {
-    setPipelineActive(true);
-    setPipelineSteps([]);
-    if (opType) setPipelineOpType(opType);
-    onStreamStart();
-  }, [onStreamStart]);
-
-  const handlePipelineStreamStep = useCallback((step: UpdateStep) => {
-    // flushSync forces React to render each step immediately instead of
-    // batching, so the user sees real-time progress during SSE streaming.
-    flushSync(() => {
-      setPipelineSteps((prev) => {
-        const idx = prev.findIndex((s) => s.step === step.step);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = step;
-          return next;
-        }
-        return [...prev, step];
-      });
-    });
-  }, []);
-
-  const handlePipelineStreamEnd = useCallback(
-    (success: boolean) => {
-      setPipelineActive(false);
-      onStreamEnd(success);
-    },
-    [onStreamEnd],
-  );
-
-  const [onboardingDismissed, setOnboardingDismissed] = useState(() => {
-    try {
-      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
+  const { status, loading, error, lastRefreshed, refresh } = useClusterStatus();
+  const operation = useOperation();
+  const operationRunning = operation.running;
+  const showProgress = useHasOperationProgress();
 
   const isOnNightly = !!(status?.subscription.source && status.subscription.source !== status.stableSource);
   const prerequisitesMet = checkPrereqs(status);
@@ -167,34 +94,14 @@ export const StatusPage: React.FC<StatusPageProps> = ({
     }
   }, [status]);
 
-  // Refresh operator state
-  const [lastOperationType, setLastOperationType] = useState<OperationType>("update");
+  // Refresh operator: confirmation only. The run and its result live in the
+  // app-level operation store.
   const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
-  const [refreshLoading, setRefreshLoading] = useState(false);
-  const [refreshResult, setRefreshResult] = useState<OperationResponse | null>(null);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
-
-  // Abort controller for streaming operations
-  const abortRef = useRef<AbortController | null>(null);
-
-  // Abort in-flight requests on unmount
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
-
-  // Track when reconciliation ends for the 30s grace period
-  const prevReconcilingRef = useRef(reconciling);
-  const [showRecentComplete, setShowRecentComplete] = useState(false);
-
-  useEffect(() => {
-    // Detect transition from reconciling=true to reconciling=false — keep visible until dismissed
-    if (prevReconcilingRef.current && !reconciling) {
-      setShowRecentComplete(true);
-    }
-    prevReconcilingRef.current = reconciling;
-  }, [reconciling]);
+  const refreshRun = operation.run?.kind === "refresh" ? operation.run : null;
+  const refreshOutcome = refreshRun?.outcome;
+  const refreshFailure = refreshOutcome?.status === "failed"
+    ? describeError({ name: "ApiError", status: refreshOutcome.httpStatus ?? 0, errorCode: refreshOutcome.errorCode ?? "operation_failed", message: refreshOutcome.message }, "Refresh failed")
+    : null;
 
   // DSC creation state
   const [dscLoading, setDscLoading] = useState(false);
@@ -206,41 +113,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
 
   const handleRefreshOperator = () => {
     trackFeature("refresh_operator");
-    setRefreshError(null);
-    setRefreshResult(null);
     setRefreshConfirmOpen(false);
-
-    // Start streaming
-    setRefreshLoading(true);
-    handlePipelineStreamStart("refresh");
-
-    abortRef.current?.abort();
-    abortRef.current = streamRefresh(
-      (step) => {
-        handlePipelineStreamStep(step);
-      },
-      (success, errorMsg) => {
-        setRefreshLoading(false);
-        handlePipelineStreamEnd(success);
-        if (success) {
-          setRefreshResult({
-            success: true,
-            message: "Operator refresh initiated. OLM will reinstall with updated images.",
-            logs: [],
-          });
-          setLastOperationType("refresh");
-          handleMutationComplete();
-        } else if (errorMsg) {
-          setRefreshError(errorMsg);
-        }
-      },
-      () => {
-        // SSE connection dropped -- the backend is still running.
-        setRefreshLoading(false);
-        handlePipelineStreamEnd(false);
-        handleMutationComplete();
-      },
-    );
+    operation.start("refresh", (h) => streamRefresh(h.onStep, h.onDone, h.onDetach), status?.csv.name);
   };
 
   const handleCreateDSC = async () => {
@@ -259,24 +133,11 @@ export const StatusPage: React.FC<StatusPageProps> = ({
     } catch (e) {
       setDscResult({
         success: false,
-        message: e instanceof Error ? e.message : "Failed to create DSC",
+        message: toApiError(e, "Failed to create DSC").message,
         logs: [],
       });
     } finally {
       setDscLoading(false);
-    }
-  };
-
-  const bothMissing =
-    status && !status.pullSecret.exists && !status.imageMirror.exists;
-  const showOnboarding = bothMissing && !onboardingDismissed;
-
-  const handleDismissOnboarding = () => {
-    setOnboardingDismissed(true);
-    try {
-      localStorage.setItem(ONBOARDING_DISMISSED_KEY, "true");
-    } catch {
-      // localStorage may be disabled
     }
   };
 
@@ -286,17 +147,17 @@ export const StatusPage: React.FC<StatusPageProps> = ({
       <PageHeader
         title="Cluster Status"
         lastRefreshed={lastRefreshed}
-        loading={loading || pipelineActive}
+        loading={loading || operationRunning}
         onRefresh={refresh}
       />
 
       {/* --- HTTP error alerts --- */}
-      {error && <ErrorAlert error={error} />}
+      {error && <ErrorAlert error={error} genericTitle="Failed to load status" />}
 
       {/* --- Read-only access banner --- */}
       {!canMutate && (
         <PageSection>
-          <Alert variant="info" title="Read-only access" isInline isPlain>
+          <Alert variant="info" title="Read-only access" isInline isPlain component="p">
             You have read-only access. Mutation operations (update, refresh, reinstall) are disabled. Contact a cluster admin for write access.
           </Alert>
         </PageSection>
@@ -362,8 +223,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
         <StatusCards
           status={status}
           loading={loading}
-          error={error}
-          reconciling={reconciling}
+          error={error?.message ?? null}
+          reconciling={operation.state.reconcile.active}
           onStatusRefresh={refresh}
           canMutate={canMutate}
         />
@@ -394,11 +255,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                   </Content>
                 </StackItem>
                 <StackItem>
-                  <Tooltip
-                    content="You don't have permission to create a DSC. Contact a cluster admin."
-                    trigger={canMutate ? "manual" : "mouseenter focus"}
-                  >
-                    <Button
+                  <TooltipButton
                       variant="primary"
                       onClick={async () => {
                         setDscModalOpen(true);
@@ -409,17 +266,17 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                           const res = await getDSCPreview();
                           setDscPreviewYAML(res.yaml);
                         } catch (err) {
-                          setDscPreviewError(String(err));
+                          setDscPreviewError(toApiError(err).message);
                         } finally {
                           setDscPreviewLoading(false);
                         }
                       }}
                       isLoading={dscLoading}
-                      isDisabled={dscLoading || !canMutate}
+                      isDisabled={dscLoading}
+                      disabledReason={!canMutate ? "You don't have permission to create a DSC. Contact a cluster admin." : null}
                     >
                       Create DataScienceCluster
-                    </Button>
-                  </Tooltip>
+                    </TooltipButton>
                 </StackItem>
                 {dscResult && (
                   <StackItem>
@@ -427,6 +284,8 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                       variant={dscResult.success ? "success" : "danger"}
                       title={dscResult.message}
                       isInline
+                      isLiveRegion
+                      component="p"
                       actionClose={dscResult.success ? <AlertActionCloseButton onClose={() => setDscResult(null)} /> : undefined}
                     />
                   </StackItem>
@@ -455,7 +314,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                   {dscPreviewLoading ? (
                     <Content component="p">Loading preview from upstream...</Content>
                   ) : dscPreviewError ? (
-                    <Alert variant="danger" title="Could not fetch version-matched DSC defaults" isInline>{dscPreviewError}</Alert>
+                    <Alert variant="danger" title="Could not fetch version-matched DSC defaults" isInline component="p">{dscPreviewError}</Alert>
                   ) : (
                     <CodeBlock>
                       <CodeBlockCode>{dscPreviewYAML}</CodeBlockCode>
@@ -482,26 +341,9 @@ export const StatusPage: React.FC<StatusPageProps> = ({
       )}
 
       {/* --- Unified Operation Progress (pipeline + reconciliation in one card) --- */}
-      {(pipelineActive || pipelineSteps.length > 0 || reconciling || showRecentComplete) && (
-        <PageSection>
-          <OperationProgress
-            pipelineSteps={pipelineSteps}
-            pipelineActive={pipelineActive}
-            pipelineOpType={pipelineOpType}
-            onPipelineComplete={() => {
-              handlePipelineStreamEnd(true);
-              handleMutationComplete();
-            }}
-            onPipelineFailed={() => {
-              handlePipelineStreamEnd(false);
-            }}
-            status={status}
-            reconciling={reconciling}
-            reconcileStartTime={reconcileStartTime}
-            reconcileTimedOut={reconcileTimedOut}
-            reconcileOpType={lastOperationType}
-            showRecentComplete={showRecentComplete}
-          />
+      {showProgress && (
+        <PageSection aria-label="Operation progress">
+          <OperationProgress />
         </PageSection>
       )}
 
@@ -512,14 +354,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
             <Title headingLevel="h3">{status?.csv.phase && status.csv.phase !== "Not Found" ? "Upgrade to Nightly Build" : "Install Nightly Build"}</Title>
           </CardTitle>
           <CardBody>
-            <UpdatePanel
-              status={status}
-              onComplete={() => { setLastOperationType("update"); handleMutationComplete(); }}
-              canMutate={canMutate}
-              onStreamStart={() => handlePipelineStreamStart("update")}
-              onStreamStep={handlePipelineStreamStep}
-              onStreamEnd={handlePipelineStreamEnd}
-            />
+            <UpdatePanel status={status} canMutate={canMutate} />
 
             {/* --- Refresh Operator (same version, updated images) --- */}
             {isOnNightly && (
@@ -532,53 +367,39 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                     </Content>
                   </StackItem>
                   <StackItem>
-                    <Tooltip
-                      content="You don't have permission to modify the operator. Contact a cluster admin."
-                      trigger={canMutate ? "manual" : "mouseenter focus"}
+                    <TooltipButton
+                      variant="secondary"
+                      icon={<SyncAltIcon />}
+                      onClick={() => setRefreshConfirmOpen(true)}
+                      isLoading={operationRunning && !!refreshRun && !refreshRun.outcome}
+                      isDisabled={operationRunning}
+                      disabledReason={
+                        !canMutate ? NO_PERMISSION_REASON
+                        : operationRunning ? OPERATION_RUNNING_REASON
+                        : !prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)."
+                        : !operatorInstalled(status) ? "The operator is not installed."
+                        : null
+                      }
+                      size="sm"
                     >
-                      <Button
-                        variant="secondary"
-                        icon={<SyncAltIcon />}
-                        onClick={() => setRefreshConfirmOpen(true)}
-                        isLoading={refreshLoading}
-                        isDisabled={refreshLoading || !canMutate || !prerequisitesMet || !operatorInstalled(status)}
-                        size="sm"
-                      >
-                        Refresh operator
-                      </Button>
-                    </Tooltip>
+                      Refresh operator
+                    </TooltipButton>
                   </StackItem>
-                  {refreshError && (
+                  {refreshFailure && (
                     <StackItem>
-                      <Alert variant="danger" title="Refresh failed" isInline>
-                        {refreshError}
+                      <Alert variant={refreshFailure.variant} title={refreshFailure.title} isInline component="p">
+                        {refreshFailure.body}
                       </Alert>
                     </StackItem>
                   )}
-                  {refreshResult && (
+                  {refreshOutcome?.status === "succeeded" && (
                     <StackItem>
-                      <Stack hasGutter>
-                        <StackItem>
-                          <Alert
-                            variant={
-                              !refreshResult.success ? "danger"
-                              : refreshResult.message.includes("Nothing to refresh") || refreshResult.message.includes("No RHOAI operator CSV") ? "info"
-                              : "success"
-                            }
-                            title={refreshResult.message}
-                            isInline
-                          />
-                        </StackItem>
-                        {refreshResult.logs.length > 0 && (
-                          <StackItem>
-                            <CodeBlock>
-                              <CodeBlockCode>
-                                {refreshResult.logs.join("\n")}
-                              </CodeBlockCode>
-                            </CodeBlock>
-                          </StackItem>
-                        )}
-                      </Stack>
+                      <Alert
+                        variant="success"
+                        title="Operator refresh initiated. OLM will reinstall with updated images."
+                        isInline
+                        component="p"
+                      />
                     </StackItem>
                   )}
                 </Stack>
@@ -598,10 +419,6 @@ export const StatusPage: React.FC<StatusPageProps> = ({
           <CardBody>
             <ReinstallPanel
               status={status}
-              onComplete={() => { setLastOperationType("reinstall"); handleMutationComplete(); }}
-              onStreamStart={(reinstallType) => handlePipelineStreamStart((reinstallType as PipelineOperationType) || "reinstall_stable")}
-              onStreamStep={handlePipelineStreamStep}
-              onStreamEnd={handlePipelineStreamEnd}
               nightlyTags={nightlyTags}
               tagsLoading={tagsLoading}
               canMutate={canMutate}
@@ -643,6 +460,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({
                 variant="warning"
                 title="The operator will be briefly unavailable (1-3 minutes) while OLM reinstalls it."
                 isInline
+                component="p"
               />
             </StackItem>
           </Stack>
@@ -651,15 +469,13 @@ export const StatusPage: React.FC<StatusPageProps> = ({
           <Button
             variant="primary"
             onClick={handleRefreshOperator}
-            isLoading={refreshLoading}
-            isDisabled={refreshLoading}
+            isDisabled={operationRunning}
           >
-            {refreshLoading ? "Refreshing..." : "Confirm Refresh"}
+            Confirm Refresh
           </Button>
           <Button
             variant="link"
             onClick={() => setRefreshConfirmOpen(false)}
-            isDisabled={refreshLoading}
           >
             Cancel
           </Button>

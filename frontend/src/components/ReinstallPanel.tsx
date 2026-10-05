@@ -1,9 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   Alert,
   Button,
-  CodeBlock,
-  CodeBlockCode,
   Content,
   Flex,
   FlexItem,
@@ -27,17 +25,15 @@ import {
   StackItem,
   TextInput,
   Form,
-  Tooltip,
 } from "@patternfly/react-core";
-import type { NightlyTag, OperationResponse, StatusResponse, UpdateStep } from "../types";
+import type { NightlyTag, StatusResponse } from "../types";
 import { streamReinstall, trackFeature } from "../services/api";
+import { describeError } from "../errors";
+import { useOperation } from "../state/AppState";
+import { TooltipButton, NO_PERMISSION_REASON, OPERATION_RUNNING_REASON } from "./TooltipButton";
 
 interface ReinstallPanelProps {
   status: StatusResponse | null;
-  onComplete: () => void;
-  onStreamStart: (reinstallType?: string) => void;
-  onStreamStep: (step: UpdateStep) => void;
-  onStreamEnd: (success: boolean) => void;
   nightlyTags: NightlyTag[];
   tagsLoading: boolean;
   canMutate: boolean;
@@ -46,10 +42,6 @@ interface ReinstallPanelProps {
 
 export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   status,
-  onComplete,
-  onStreamStart,
-  onStreamStep,
-  onStreamEnd,
   nightlyTags,
   tagsLoading,
   canMutate,
@@ -68,23 +60,20 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
 
-  // Operation state
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<OperationResponse | null>(null);
+  // The operation itself lives in the app-level store, so navigating away
+  // neither aborts it nor loses its result.
+  const operation = useOperation();
+  const loading = operation.running;
+  const reinstallRun = operation.run && (operation.run.kind === "reinstall_stable" || operation.run.kind === "reinstall_nightly") ? operation.run : null;
+  const outcome = reinstallRun?.outcome;
+  const failure = outcome?.status === "failed"
+    ? describeError({ name: "ApiError", status: outcome.httpStatus ?? 0, errorCode: outcome.errorCode ?? "operation_failed", message: outcome.message }, "Reinstall failed")
+    : null;
+  const succeededMessage = outcome?.status === "succeeded" ? outcome.message : null;
+  const succeededStable = reinstallRun?.kind === "reinstall_stable";
 
   // Tags come from props (shared with StatusPage)
   const tags = nightlyTags;
-
-  // SSE abort controller
-  const abortRef = useRef<AbortController | null>(null);
-
-  // Abort in-flight requests on unmount
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
 
   const channelValid = !channelOverride.trim() || /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(channelOverride.trim());
   const targetImage = targetType === "custom" ? customImage.trim() : selectedImage.trim();
@@ -96,48 +85,19 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
     );
 
   const handleReinstall = () => {
-    let completion: UpdateStep | undefined;
     trackFeature(targetType === "stable" ? "reinstall_stable" : targetType === "custom" ? "reinstall_custom" : "reinstall_nightly");
-    setError(null);
-    setResult(null);
 
     // Close modal immediately
     setConfirmOpen(false);
     setConfirmText("");
 
-    // Start streaming
-    setLoading(true);
-    onStreamStart(targetType !== "stable" ? "reinstall_nightly" : "reinstall_stable");
-
-    abortRef.current?.abort();
-    abortRef.current = streamReinstall(
-      targetType,
-      targetType !== "stable" ? targetImage : undefined,
-      targetType !== "stable" && channelOverride.trim() ? channelOverride.trim() : undefined,
-      (step) => {
-        if (step.step === "operation_complete") completion = step;
-        onStreamStep(step);
-      },
-      (success, errorMsg) => {
-        setLoading(false);
-        onStreamEnd(success);
-        if (success) {
-          setResult({
-            success: true,
-            message: completion?.message || `Reinstall to ${targetType} initiated successfully`,
-            logs: [],
-          });
-          onComplete();
-        } else if (errorMsg) {
-          setError(errorMsg);
-        }
-      },
-      () => {
-        // SSE connection dropped -- the backend is still running.
-        setLoading(false);
-        onStreamEnd(false);
-        onComplete();
-      },
+    const type = targetType;
+    const image = type !== "stable" ? targetImage : undefined;
+    const channel = type !== "stable" && channelOverride.trim() ? channelOverride.trim() : undefined;
+    operation.start(
+      type !== "stable" ? "reinstall_nightly" : "reinstall_stable",
+      (h) => streamReinstall(type, image, channel, h.onStep, h.onDone, h.onDetach),
+      type === "stable" ? `${status?.stableSource ?? "stable"} / ${status?.stableChannel ?? ""}` : image,
     );
   };
 
@@ -164,7 +124,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
     >
       {tagsLoading ? (
         <>
-          <Spinner size="sm" /> Loading tags...
+          <Spinner size="sm" aria-label="Loading tags" /> Loading tags...
         </>
       ) : selectedImage ? (
         tags.find((t) => t.image === selectedImage)?.tag || "Selected"
@@ -371,62 +331,62 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
       </StackItem>
 
       <StackItem>
-        <Tooltip
-          content="You don't have permission to modify the operator. Contact a cluster admin."
-          trigger={canMutate ? "manual" : "mouseenter focus"}
+        <TooltipButton
+          variant="danger"
+          onClick={() => setConfirmOpen(true)}
+          isDisabled={loading}
+          disabledReason={
+            !canMutate ? NO_PERMISSION_REASON
+            : loading ? OPERATION_RUNNING_REASON
+            : !canConfirm ? (targetType === "stable"
+              ? "The stable release could not be discovered from the cluster catalog."
+              : !prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)."
+              : !channelValid ? "The channel override is not a valid channel name."
+              : "Select or enter a valid FBC image first.")
+            : null
+          }
+          isLoading={loading && !!reinstallRun && !reinstallRun.outcome}
         >
-          <Button
-            variant="danger"
-            onClick={() => setConfirmOpen(true)}
-            isDisabled={!canConfirm || loading || !canMutate}
-            isLoading={loading}
-          >
-            Reinstall Operator
-          </Button>
-        </Tooltip>
+          Reinstall Operator
+        </TooltipButton>
       </StackItem>
 
-      {error && (
+      {failure && (
         <StackItem>
-          <Alert variant="danger" title="Reinstall failed" isInline>
-            {error}
+          <Alert variant={failure.variant} title={failure.title} isInline component="p">
+            {failure.body}
           </Alert>
         </StackItem>
       )}
 
-      {result && (
+      {succeededMessage && (
         <StackItem>
           <Stack hasGutter>
             <StackItem>
               <Alert
                 variant={
-                  result.success && result.message.includes("Already on stable") && status?.csv.phase !== "Succeeded"
+                  succeededMessage.includes("Already on stable") && status?.csv.phase !== "Succeeded"
                     ? "warning"
-                    : result.success ? "success" : "danger"
+                    : "success"
                 }
-                title={result.message}
+                title={succeededMessage}
                 isInline
+                component="p"
               >
-                {result.success && result.message.includes("Already on stable") && status?.csv.phase !== "Succeeded" && (
+                {succeededMessage.includes("Already on stable") && status?.csv.phase !== "Succeeded" && (
                   "The operator is on the stable channel but is not in a healthy state. Consider using Refresh Operator to re-deploy it."
                 )}
               </Alert>
             </StackItem>
-            {result.success && targetType === "stable" && (
+            {succeededStable && (
               <StackItem>
                 <Alert
                   variant="info"
                   title="The nightly CatalogSource has been cleaned up"
                   isInline
                   isPlain
+                  component="p"
                 />
-              </StackItem>
-            )}
-            {result.logs.length > 0 && (
-              <StackItem>
-                <CodeBlock>
-                  <CodeBlockCode>{result.logs.join("\n")}</CodeBlockCode>
-                </CodeBlock>
               </StackItem>
             )}
           </Stack>
@@ -508,12 +468,17 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
               </Content>
             </StackItem>
             <StackItem>
-              <TextInput
-                id="reinstall-confirm-input"
-                value={confirmText}
-                onChange={(_e, val) => setConfirmText(val)}
-                placeholder='Type "reinstall" to confirm'
-              />
+              <Form onSubmit={(e) => e.preventDefault()}>
+                <FormGroup label='Type "reinstall" to confirm' fieldId="reinstall-confirm-input" isRequired>
+                  <TextInput
+                    id="reinstall-confirm-input"
+                    value={confirmText}
+                    onChange={(_e, val) => setConfirmText(val)}
+                    isRequired
+                    autoComplete="off"
+                  />
+                </FormGroup>
+              </Form>
             </StackItem>
           </Stack>
         </ModalBody>

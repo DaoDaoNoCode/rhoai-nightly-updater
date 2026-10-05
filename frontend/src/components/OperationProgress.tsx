@@ -1,9 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   Card,
   CardBody,
-  CardTitle,
   Content,
   Flex,
   FlexItem,
@@ -11,167 +10,131 @@ import {
   Spinner,
   Stack,
   StackItem,
-  Title,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
+import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import { Link } from "react-router-dom";
 import { UpdatePipeline } from "./UpdatePipeline";
 import { ReconciliationProgress } from "./ReconciliationProgress";
-import type { OperationType as PipelineOperationType } from "./UpdatePipeline";
-import type { OperationType as ReconcileOperationType } from "./ReconciliationProgress";
-import type { StatusResponse, UpdateStep } from "../types";
+import { OPERATION_NAMES } from "../operationSteps";
+import { isRunning } from "../state/operation";
+import { useClusterStatus, useOperation } from "../state/AppState";
 
-interface OperationProgressProps {
-  pipelineSteps: UpdateStep[];
-  pipelineActive: boolean;
-  pipelineOpType: PipelineOperationType;
-  onPipelineComplete: () => void;
-  onPipelineFailed: (error: string) => void;
+const COMPLETE_TITLES = {
+  update: "Update complete",
+  refresh: "Refresh complete",
+  reinstall: "Reinstall complete",
+} as const;
 
-  status: StatusResponse | null;
-  reconciling: boolean;
-  reconcileStartTime: number;
-  reconcileTimedOut: boolean;
-  reconcileOpType: ReconcileOperationType;
-  showRecentComplete: boolean;
+/** True when the progress card has something to show. */
+export function useHasOperationProgress(): boolean {
+  const { state } = useOperation();
+  return !!state.run || state.reconcile.active || state.reconcile.finished;
 }
 
-type Phase = "connecting" | "streaming" | "reconciling" | "complete";
+/**
+ * Unified progress for the current operation: connecting, streamed steps,
+ * then OLM reconciliation and the final result. Reads the app-level
+ * operation store, so it shows the same state after navigating away and back.
+ */
+export const OperationProgress: React.FC = () => {
+  const { state } = useOperation();
+  const { status } = useClusterStatus();
+  const { run, reconcile } = state;
+  const running = isRunning(run);
 
-export const OperationProgress: React.FC<OperationProgressProps> = ({
-  pipelineSteps,
-  pipelineActive,
-  pipelineOpType,
-  onPipelineComplete,
-  onPipelineFailed,
-  status,
-  reconciling,
-  reconcileStartTime,
-  reconcileTimedOut,
-  reconcileOpType,
-  showRecentComplete,
-}) => {
-  const [pipelineCompleted, setPipelineCompleted] = useState(false);
-  const [pipelineSuccessCount, setPipelineSuccessCount] = useState(0);
-  const prevPipelineActiveRef = useRef(pipelineActive);
   const [connectingElapsed, setConnectingElapsed] = useState(0);
-  const connectingStartRef = useRef(Date.now());
-
-  // Elapsed timer for connecting phase
+  const connecting = running && run.steps.length === 0;
+  const runStartedAt = run?.startedAt;
   useEffect(() => {
-    if (pipelineActive && pipelineSteps.length === 0) {
-      connectingStartRef.current = Date.now();
-      const id = setInterval(() => {
-        setConnectingElapsed(Math.floor((Date.now() - connectingStartRef.current) / 1000));
-      }, 1000);
-      return () => clearInterval(id);
+    if (!connecting || !runStartedAt) {
+      setConnectingElapsed(0);
+      return;
     }
-    setConnectingElapsed(0);
-  }, [pipelineActive, pipelineSteps.length]);
+    const tick = () => setConnectingElapsed(Math.floor((Date.now() - runStartedAt) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [connecting, runStartedAt]);
 
-  // Track pipeline completion for collapsed summary
-  useEffect(() => {
-    if (prevPipelineActiveRef.current && !pipelineActive && pipelineSteps.length > 0) {
-      const successCount = pipelineSteps.filter(s => s.status === "success").length;
-      if (successCount > 0) {
-        setPipelineCompleted(true);
-        setPipelineSuccessCount(successCount);
-      }
-    }
-    prevPipelineActiveRef.current = pipelineActive;
-  }, [pipelineActive, pipelineSteps]);
+  if (running && connecting) {
+    return (
+      <Card isCompact>
+        <CardBody>
+          <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
+            <FlexItem>
+              <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
+                <FlexItem><Spinner size="md" aria-label={`${OPERATION_NAMES[run.kind]} starting`} /></FlexItem>
+                <FlexItem>
+                  <Content component="p" style={{ fontWeight: 600, margin: 0 }}>
+                    {run.kind === "update" ? "Applying update to cluster..." : `${OPERATION_NAMES[run.kind]}: starting...`}
+                  </Content>
+                  <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
+                    Steps will appear as they complete.
+                  </Content>
+                </FlexItem>
+              </Flex>
+            </FlexItem>
+            <FlexItem>
+              <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
+                {connectingElapsed > 0 && <FlexItem><Content component="small">Elapsed: {connectingElapsed}s</Content></FlexItem>}
+                <FlexItem><Link to="/components">View pods</Link></FlexItem>
+              </Flex>
+            </FlexItem>
+          </Flex>
+        </CardBody>
+      </Card>
+    );
+  }
 
-  // Reset when a new operation starts
-  useEffect(() => {
-    if (pipelineActive && pipelineSteps.length === 0) {
-      setPipelineCompleted(false);
-      setPipelineSuccessCount(0);
-    }
-  }, [pipelineActive, pipelineSteps.length]);
+  if (running) {
+    return <UpdatePipeline steps={run.steps} active startedAt={run.startedAt} operationType={run.kind} />;
+  }
 
-  // Determine current phase
-  const phase: Phase = (() => {
-    if (pipelineActive && pipelineSteps.length === 0) return "connecting";
-    if (pipelineActive) return "streaming";
-    if (reconciling || (showRecentComplete && !pipelineActive && pipelineSteps.length === 0)) return "reconciling";
-    if (showRecentComplete) return "complete";
-    if (pipelineSteps.length > 0) return "streaming";
-    return "reconciling";
-  })();
+  const outcome = run?.outcome;
+  const completedSteps = run ? run.steps.filter((s) => s.status === "success").length : 0;
 
   return (
     <Stack hasGutter>
-      {/* Phase 1: Connecting — SSE not delivering events yet */}
-      {phase === "connecting" && (
+      {/* A failed run keeps its step list, with the failed step's details. */}
+      {run && outcome?.status === "failed" && run.steps.length > 0 && (
+        <StackItem>
+          <UpdatePipeline steps={run.steps} active={false} operationType={run.kind} />
+        </StackItem>
+      )}
+
+      {reconcile.active && run && outcome && outcome.status !== "failed" && run.steps.length > 0 && (
         <StackItem>
           <Card isCompact>
             <CardBody>
-              <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
-                <FlexItem>
-                  <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                    <FlexItem><Spinner size="md" /></FlexItem>
-                    <FlexItem>
-                      <Content component="p" style={{ fontWeight: 600, margin: 0 }}>Applying update to cluster...</Content>
-                      <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
-                        Steps will appear as they complete.
-                      </Content>
-                    </FlexItem>
-                  </Flex>
-                </FlexItem>
-                <FlexItem>
-                  <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-                    {connectingElapsed > 0 && <FlexItem><Content component="small">Elapsed: {connectingElapsed}s</Content></FlexItem>}
-                    <FlexItem><Link to="/components">View pods</Link></FlexItem>
-                  </Flex>
-                </FlexItem>
-              </Flex>
+              {outcome.status === "detached" ? (
+                <Label color="orange" icon={<ExclamationTriangleIcon />} isCompact>
+                  Live progress interrupted after {completedSteps} steps; following the operator status instead
+                </Label>
+              ) : (
+                <Label color="green" icon={<CheckCircleIcon />} isCompact>
+                  Applied {OPERATION_NAMES[run.kind].toLowerCase()} ({completedSteps} steps completed)
+                </Label>
+              )}
             </CardBody>
           </Card>
         </StackItem>
       )}
 
-      {/* Phase 2: Streaming — SSE steps are arriving (UpdatePipeline has its own Card) */}
-      {phase === "streaming" && (
+      {reconcile.active && (
         <StackItem>
-          <UpdatePipeline
-            steps={pipelineSteps}
-            active={pipelineActive}
-            operationType={pipelineOpType}
-            onComplete={onPipelineComplete}
-            onFailed={onPipelineFailed}
+          <ReconciliationProgress
+            status={status}
+            active
+            startTime={reconcile.startTime}
+            timedOut={reconcile.timedOut}
+            operationType={reconcile.kind}
           />
         </StackItem>
       )}
 
-      {/* Phase 3: Reconciling — show collapsed pipeline summary + reconciliation */}
-      {phase === "reconciling" && (
-        <>
-          {pipelineCompleted && (
-            <StackItem>
-              <Card isCompact>
-                <CardBody>
-                  <Label color="green" icon={<CheckCircleIcon />} isCompact>
-                    Applied update ({pipelineSuccessCount} steps completed)
-                  </Label>
-                </CardBody>
-              </Card>
-            </StackItem>
-          )}
-          <StackItem>
-            <ReconciliationProgress
-              status={status}
-              active={reconciling}
-              startTime={reconcileStartTime}
-              timedOut={reconcileTimedOut}
-              operationType={reconcileOpType}
-            />
-          </StackItem>
-        </>
-      )}
-
-      {/* Phase 4: Complete — persistent success/failure card with guidance */}
-      {phase === "complete" && (
+      {!reconcile.active && reconcile.finished && (
         <StackItem>
           {(() => {
             const csvPhase = status?.csv?.phase || "";
@@ -187,9 +150,9 @@ export const OperationProgress: React.FC<OperationProgressProps> = ({
                       <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
                         <FlexItem>
                           {succeeded ? (
-                            <Label color="green" icon={<CheckCircleIcon />}>Update complete</Label>
+                            <Label color="green" icon={<CheckCircleIcon />}>{COMPLETE_TITLES[reconcile.kind]}</Label>
                           ) : failed ? (
-                            <Label color="red" icon={<ExclamationCircleIcon />}>Update failed</Label>
+                            <Label color="red" icon={<ExclamationCircleIcon />}>Operator install failed</Label>
                           ) : (
                             <Label color="green" icon={<CheckCircleIcon />}>Operator installed</Label>
                           )}
@@ -212,6 +175,7 @@ export const OperationProgress: React.FC<OperationProgressProps> = ({
                         }
                         isInline
                         isPlain
+                        component="p"
                       >
                         <Content component="small" style={{ marginTop: "0.25rem" }}>
                           Some components may still be rolling out new pods. Check the{" "}
