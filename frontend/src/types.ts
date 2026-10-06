@@ -308,6 +308,8 @@ export interface ResourceState {
   currentImage?: string;
   /** Planned backend field: a container waiting reason such as ImagePullBackOff. */
   waitingReason?: string;
+  /** A notice that needs action but does not stop the resource (FXB: old MinIO image, exposed S3 Route). */
+  warning?: string;
 }
 
 export interface UpdateStep {

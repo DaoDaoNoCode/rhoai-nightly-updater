@@ -39,6 +39,7 @@ export function outcomeTitle(res: Pick<OperationResponse, "success" | "errorCode
     case "partial_failure": return "Partly done";
     case "cluster_busy": return "Cluster busy";
     case "terminating": return "Still being deleted";
+    case "delete_failed": return "Nothing could be deleted";
     default: return failedTitle;
   }
 }

@@ -125,7 +125,7 @@ interface QuickResourceCreatorProps {
 const StatusLabel: React.FC<{ state: ResourceState }> = ({ state }) => {
   if (isTerminating(state)) return <Label isCompact color="orange" icon={<InProgressIcon />}>Terminating</Label>;
   if (state.ready) return <Label isCompact color="green" icon={<CheckCircleIcon />}>Running</Label>;
-  if (!state.deployed) return <Label isCompact color="grey">Not set up</Label>;
+  if (!state.deployed) return <Label isCompact color="grey">Not deployed</Label>;
   const reason = terminalReason(state);
   if (reason) {
     const short = state.waitingReason || (reason !== "Failed" && reason.length <= 40 ? reason : "");
@@ -144,6 +144,9 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
         <Content component="small"><Label isCompact variant="outline">Not managed by this tool</Label> {state.teardownBlockedReason}</Content>
       )}
       {showMessage && <Content component="small" style={{ overflowWrap: "anywhere" }}>{state.message}</Content>}
+      {state.warning && (
+        <Alert variant="warning" isInline isPlain component="p" title={state.warning} style={{ overflowWrap: "anywhere" }} />
+      )}
       {step && <Content component="small"><strong>Next step:</strong> {step}</Content>}
     </>
   );
@@ -158,6 +161,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
   const [resAction, setResAction] = useState<string | null>(null);
   const [resResult, setResResult] = useState<OperationResponse | null>(null);
+  // errorCode of this tab's last MinIO teardown that did not succeed.
+  const [lastMinIOTeardown, setLastMinIOTeardown] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [projectList, setProjectList] = useState<string[]>([]);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -227,6 +232,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     }
     setResResult(res);
     setResAction(null);
+    if (action === "teardown-minio") setLastMinIOTeardown(res.success ? null : res.errorCode || "failed");
+    else if (action === "setup-minio" && res.success) setLastMinIOTeardown(null);
     onResult?.(res);
     void fetchResources();
     refreshProjects();
@@ -251,6 +258,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const availableProjects = projectList.filter((p) => !pipelineServers.some((ps) => ps.namespace === p) && !unmanagedProjects.has(p));
   const mlflowPRValid = /^\d+$/.test(mlflowPR) && Number(mlflowPR) > 0;
   const minioReady = !!minio?.ready;
+  // After a teardown the namespace stays (deployed:false, managedByTool:true).
+  // Offer Tear down again while tool objects are still reported (the data
+  // PVC, a Route) or the last teardown from this tab did not finish.
+  const minioLeftovers = !!minio && !minio.deployed && minio.managedByTool === true && (
+    (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute ||
+    (lastMinIOTeardown !== null && ["partial_failure", "delete_failed", "in_progress", "forbidden", "unauthorized", "network"].includes(lastMinIOTeardown))
+  );
   // N10: every cause is a tooltip on the toggle, which stays focusable (aria-disabled).
   const addPipelineReason = baseReason ?? (!minioReady ? "Available once MinIO is running." : null);
   const pvcList = (state: ResourceState | undefined) => (state?.dataPVCs ?? []);
@@ -267,17 +281,21 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           title: pending.kind === "repair-minio" ? "Repair MinIO?" : "Set up MinIO?",
           confirm: pending.kind === "repair-minio" ? "Repair MinIO" : "Set up MinIO",
           changes: [
-            <>Namespace <code>minio</code> {pending.kind === "repair-minio" ? "(kept)" : "is created"}, labelled as managed by this tool.</>,
-            <>Deployment, Service, PersistentVolumeClaim <code>minio-pvc</code>, Routes <code>minio-api</code> and <code>minio-ui</code>, and the bucket <code>pipelines</code> are applied with the image the server is configured to use.</>,
+            <>Namespace <code>minio</code> {pending.kind === "repair-minio" || minio?.managedByTool ? "is kept and reused" : "is created"}, labelled as managed by this tool.</>,
+            <>Deployment <code>minio</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code>, PersistentVolumeClaim <code>minio-pvc</code>, the console Route <code>minio-ui</code> and the bucket <code>pipelines</code> are applied with the image the server is configured to use.</>,
+            <>Route <code>minio-api</code> (MinIO&apos;s S3 API outside the cluster) is removed if it exists; pipeline servers use the in-cluster service.</>,
           ],
           extra: <Content component="p">The server waits up to 90 seconds for MinIO to become ready and reports the pod&apos;s reason if it cannot start.{pending.kind === "repair-minio" ? " Stored data is kept." : ""}</Content>,
         };
       case "teardown-minio":
         return {
           title: "Tear down MinIO?", confirm: "Tear down MinIO", danger: true,
-          changes: [<>Namespace <code>{minio?.namespace || "minio"}</code> is deleted with everything in it.</>],
+          changes: [
+            <>The MinIO objects this tool created in <code>{minio?.namespace || "minio"}</code> are deleted: Deployment <code>minio</code>, Routes <code>minio-ui</code> and <code>minio-api</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code> and PersistentVolumeClaim <code>minio-pvc</code>. Objects with these names that the tool did not create are kept.</>,
+            <>Namespace <code>{minio?.namespace || "minio"}</code> is kept. Delete it yourself with <code>oc delete project minio</code> once it is empty.</>,
+          ],
           dataLoss: pvcs(minio, "every object stored in MinIO (pipeline artifacts, uploaded files)") ?? <>Every object stored in MinIO (pipeline artifacts, uploaded files).</>,
-          extra: <Content component="p">The server refuses while a pipeline server still uses MinIO, or while a CRD conversion webhook is broken (the namespace deletion would hang); the message names the cause.</Content>,
+          extra: <Content component="p">The server refuses while a pipeline server still uses MinIO; the message names it. If some objects cannot be deleted, run Tear down again.</Content>,
         };
       case "setup-mlflow":
         return {
@@ -365,6 +383,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                 >
                   {resResult.success ? undefined : resResult.message}
                   {resResult.errorCode === "in_progress" ? " This page keeps checking." : ""}
+                  {/oc delete project minio/.test(resResult.message ?? "") && (
+                    <> Namespace <code>minio</code> was kept: run <code>oc delete project minio</code> once you have checked it is empty.</>
+                  )}
                 </Alert>
               </StackItem>
             )}
@@ -404,7 +425,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                                   disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
                               </FlexItem>
                             )}
-                            {minio?.deployed && minio.managedByTool !== false && !isTerminating(minio) && (
+                            {minio && minio.managedByTool !== false && !isTerminating(minio) && (minio.deployed || minioLeftovers) && (
                               <FlexItem>
                                 <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
                                   disabledReason={baseReason ?? minio.teardownBlockedReason ?? null}>Tear down</TooltipButton>
