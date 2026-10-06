@@ -254,6 +254,37 @@ describe("reconcile tracking restored after a reload (R4b a)", () => {
     expect(screen.getByTestId("result")).toHaveTextContent("unknown");
     expect(screen.getByTestId("live-region-polite")).toHaveTextContent(/outcome is unknown/);
   });
+
+  it("shows the failure when the server's lastCompleted says the tracked operation failed (R7 M1)", async () => {
+    sessionStorage.setItem("rhoai-reconciling", "true");
+    sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 1_000));
+    sessionStorage.setItem("rhoai-reconcile-kind", "update");
+    sessionStorage.setItem("rhoai-reconcile-meta", JSON.stringify({ result: "unknown", serverId: "op-7" }));
+    const MessageProbe: React.FC = () => {
+      const outcome = useOperation().run?.outcome;
+      return <span data-testid="message">{outcome?.status === "failed" ? outcome.message : ""}</span>;
+    };
+    render(
+      <LiveAnnouncerProvider>
+        <MemoryRouter>
+          <AppStateProvider
+            fetchStatus={async () => statusWith("Succeeded")}
+            fetchOperation={async () => ({
+              inProgress: false, operation: null,
+              lastCompleted: { id: "op-7", type: "update", label: "Update to nightly", user: "alice", target: "", startedAt: "2026-10-05T10:00:00Z", finishedAt: "2026-10-05T10:06:12Z", success: false, message: "The CSV did not become ready" },
+            })}
+          >
+            <Probe />
+            <MessageProbe />
+          </AppStateProvider>
+        </MemoryRouter>
+      </LiveAnnouncerProvider>,
+    );
+    await tick();
+    await tick(5_000);
+    expect(probe()).toMatchObject({ outcome: "failed", rejected: false });
+    expect(screen.getByTestId("message")).toHaveTextContent("The CSV did not become ready. See the activity log for details.");
+  });
 });
 
 describe("background status polls (N9)", () => {

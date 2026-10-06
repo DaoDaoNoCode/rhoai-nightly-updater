@@ -281,7 +281,12 @@ export function trackedResult(state: OperationState, last: CompletedOperation | 
   if (!last || typeof last.success !== "boolean" || typeof last.id !== "string") return undefined;
   const id = state.reconcile.serverId ?? state.run?.serverId;
   const same = id ? last.id === id : matchesRun(state.run, last);
-  return same ? { success: last.success, message: typeof last.message === "string" ? last.message : undefined } : undefined;
+  return same ? {
+    success: last.success,
+    message: typeof last.message === "string" ? last.message : undefined,
+    type: typeof last.type === "string" ? last.type : undefined,
+    target: typeof last.target === "string" ? last.target : undefined,
+  } : undefined;
 }
 
 /**
