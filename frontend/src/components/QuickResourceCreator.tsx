@@ -491,7 +491,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
               <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Storage</Title></CardTitle></CardHeader>
               <CardBody>
                 <CardList aria-label="Storage">
-                  <CardListItem labelledBy="minio-item" actions={rowActions(
+                  <CardListItem labelledBy="minio-item" actionsBesideFrom="xl" actions={rowActions(
                             <>
                               {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>{minio.migrationPending ? "Open MinIO console" : "Open admin UI"}</ExternalLink></FlexItem>}
                               {minio && !minio.deployed && !isTerminating(minio) && (

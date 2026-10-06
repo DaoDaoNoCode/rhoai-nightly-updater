@@ -15,19 +15,25 @@ interface CardListItemProps {
   labelledBy?: string;
   /** Row actions: on the right from md, under the content on phones. */
   actions?: React.ReactNode;
+  /**
+   * From which breakpoint the actions sit beside the content (default md).
+   * A row with several wide actions uses a later one, so its text keeps a
+   * readable width on mid-size windows instead of being squeezed.
+   */
+  actionsBesideFrom?: "md" | "lg" | "xl";
   /** Shown under the row (for example an expanded form). */
   expanded?: React.ReactNode;
   children: React.ReactNode;
 }
 
-export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions, expanded, children }) => (
+export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions, actionsBesideFrom = "md", children, expanded }) => (
   <ListItem aria-labelledby={labelledBy} className="pf-v6-u-pb-sm">
     <div className="pf-v6-u-w-100">
       <Flex
-        direction={{ default: "column", md: "row" }}
-        justifyContent={{ md: "justifyContentSpaceBetween" }}
-        alignItems={{ md: "alignItemsFlexStart" }}
-        gap={{ default: "gapSm", md: "gapLg" }}
+        direction={{ default: "column", [actionsBesideFrom]: "row" }}
+        justifyContent={{ [actionsBesideFrom]: "justifyContentSpaceBetween" }}
+        alignItems={{ [actionsBesideFrom]: "alignItemsFlexStart" }}
+        gap={{ default: "gapSm", [actionsBesideFrom]: "gapLg" }}
         flexWrap={{ default: "nowrap" }}
       >
         <FlexItem flex={{ default: "flex_1" }}>{children}</FlexItem>
