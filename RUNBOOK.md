@@ -36,16 +36,26 @@ Logs: `oc logs -n $NS deploy/$APP -c app` (JSON, one line per request and action
 
 ## 2. Upgrade, roll back or remove the updater
 
-| Goal | Command |
-|---|---|
-| Upgrade to `:latest` | `git pull && make upgrade` (`DRY_RUN=1` only validates) |
-| Pin a build | `make upgrade TAG=<8-char tag>`, only if that commit's template equals your checkout |
-| Roll back | `git fetch origin && make rollback TAG=<commit or tag>` |
-| See what would be deployed | `make resolve-image [TAG=...]` |
-| Remove | `make undeploy` |
+Install and upgrade **releases** (`vX.Y.Z`). Each release attaches an `install.sh` with its own template; a new MAJOR version changes the template and needs this full redeploy, never just a new image. Installs from before releases (a Deployment on `:latest`): [docs/UPGRADING.md](docs/UPGRADING.md).
+
+| Goal | Without a clone (the release's `install.sh`) | From a clone |
+|---|---|---|
+| Upgrade to a release | `bash install.sh` (`--dry-run` only validates) | `git checkout vX.Y.Z && make upgrade` (`DRY_RUN=1`) |
+| Test a non-release build | n/a | `make upgrade TAG=main` or `TAG=<8-char commit>`; the build's template must equal your checkout |
+| Roll back | the older release's `install.sh` (v2.0.0 and later) | `git fetch --tags && make rollback TAG=v1.0.0` (or any commit build) |
+| See what would be deployed | `bash install.sh resolve-image` | `make resolve-image [TAG=...]` |
+| Remove | `bash install.sh uninstall` | `make undeploy` |
+
+Download `install.sh` from the release page ([GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases), [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases)), check its SHA-256 against the release notes and read it; do not pipe it into a shell. `make deploy`/`upgrade`/`rollback`/`undeploy` run the same script (`scripts/install.sh`).
+
+Image tags: `:vX.Y.Z` (immutable release), `:vN` (newest release of major N), `:latest` (newest release of the major line it is on; it moves to a new major only through a manual CI job), `:main` (newest `main` build, for testing) and `:<8-char commit>`.
+
+What the app's notices mean:
+- **"vX.Y.Z is available"**: a newer release exists. "Requires a full redeploy" means a new major version: run its `install.sh` (or check it out and `make upgrade`). Dismissing hides it until an even newer release.
+- **"This updater's deployment is out of date"**: the Deployment was created from an older template than the running image expects, typically an install on `:latest` that pulled a newer image. Re-apply the template of the release you run (its `install.sh`, or `make upgrade` from its checkout).
 
 What the image checks do:
-- `deploy` and `upgrade` apply `IMAGE@sha256:<digest of TAG>`.
+- `deploy` and `upgrade` apply `IMAGE@sha256:<digest of TAG>`. A release's `install.sh` resolves its own `:vX.Y.Z` and refuses an image built from another commit.
 - They refuse when:
   - the digest lookup fails (override `ALLOW_MUTABLE_TAG=1`);
   - the image's `org.opencontainers.image.revision` label is unknown or contradicts the tag;
@@ -57,9 +67,9 @@ What `make rollback` does:
 1. Applies `git show <commit>:deploy/template.yaml` with that commit's image. It tries the given tag, then the 8-character tag (GitLab `CI_COMMIT_SHORT_SHA`), then the 7-character tag of older manual builds.
 2. Refuses if the image's revision label names a different commit of this repo (override `ALLOW_TEMPLATE_MISMATCH=1`).
 3. Keeps sessions: a template with a `COOKIE_SECRET` parameter gets the current Secret value.
-4. Skips `cleanup-legacy`, because the old build may need its legacy objects. Rolling back to a template from before namespaced names recreates a ConsoleLink with a placeholder URL until the next `make upgrade`.
+4. Skips the legacy cleanup, because the old build may need its legacy objects. Rolling back to a template from before namespaced names recreates a ConsoleLink with a placeholder URL until the next `make upgrade`.
 
-**`oc rollout undo` does not work.** `make deploy`/`upgrade` delete old ReplicaSets after a successful rollout, because their pod templates may hold the old plaintext cookie secret. Use `make rollback`.
+**`oc rollout undo` does not work.** `install.sh` (and `make deploy`/`upgrade`) delete old ReplicaSets after a successful rollout, because their pod templates may hold the old plaintext cookie secret. Use `make rollback`.
 
 **Restarts wait for operations.** If an Update/Reinstall is running, the old pod finishes it first (drain up to 980 s, `terminationGracePeriodSeconds: 1020`, `Recreate`). oauth-proxy exits at once, so the UI is unreachable for up to ~17 minutes. `make upgrade`/`rollback` wait up to `ROLLOUT_TIMEOUT=20m`. A direct `oc delete pod` or an eviction is different: the ReplicaSet starts a replacement at once, which shows the old pod's operation as running "on updater pod …" and refuses changes until it ends (§5). Check whether something is running before you restart (`operation` is the marker, `lock` the lease):
 
@@ -78,7 +88,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 | Cause | Fix |
 |---|---|
 | `ImagePullBackOff` on oauth-proxy | The tag must match the OCP minor version, and v4.14 doesn't exist. Re-run `make upgrade`, which detects it, or pass `OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.<minor>` |
-| `ImagePullBackOff` on app | The digest or tag is gone from quay.io. Run `make resolve-image`, then `make upgrade` |
+| `ImagePullBackOff` on app | The digest or tag is gone from quay.io. Run `make resolve-image` (or `bash install.sh resolve-image`), then upgrade |
 | App never Ready, probes fail on 9090 | The image is older than the template (no metrics listener). Use `make rollback TAG=<its commit>` or `make upgrade` |
 | `Pending` | Node capacity (`oc describe pod`). Requests are 60m CPU / 96Mi |
 | `Terminating` for minutes | Expected while an operation drains (§2) |

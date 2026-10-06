@@ -18,7 +18,25 @@
 
 ---
 
-**New here? Start with the [Quick Start](docs/QUICKSTART.md).**
+**New here? Start with the [Quick Start](docs/QUICKSTART.md).** No clone needed: download the release's `install.sh`, check and read it, then run it:
+
+```bash
+curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh
+echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c
+less install.sh
+bash install.sh --dry-run && bash install.sh     # needs oc (cluster-admin) and curl
+```
+
+Installed before releases existed (your Deployment uses `:latest`)? See [UPGRADING.md](docs/UPGRADING.md).
+
+## Versions
+
+Releases are `vMAJOR.MINOR.PATCH` ([CHANGELOG.md](CHANGELOG.md), [GitHub releases](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases), [GitLab releases](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases)):
+
+- **MAJOR**: the deployment template changed (`TEMPLATE_REVISION`, RBAC). Upgrade with that release's `install.sh` (or `git checkout vX.Y.Z && make upgrade`), which re-applies the template; a new image alone would not work.
+- **MINOR**: features. **PATCH**: fixes. Same template.
+
+Each release attaches `install.sh` (its template embedded; it installs exactly that release, pinned by digest) and `deploy/template.yaml`. Image tags: `:vX.Y.Z` (immutable), `:vN` (newest release of major N), `:latest` (newest release of the major line it is on; it never moves to a new major by itself), `:main` and `:<8-char commit>` (test builds of `main`). The app shows the running release in the masthead and a notice when a newer one exists.
 
 ## Pages
 
@@ -92,7 +110,8 @@ Environment variables of the `app` container. The template sets the first group;
 |---|---|---|
 | `BIND_ADDRESS`, `PORT` | `127.0.0.1`, `8080` | API listener, reachable only by oauth-proxy |
 | `METRICS_PORT` | `9090` | probes, `/api/version` and `/metrics` |
-| `TEMPLATE_REVISION` | `3` | lets the UI warn admins when the Deployment is older than the image expects |
+| `TEMPLATE_REVISION` | `4` | lets the UI warn admins when the Deployment is older than the image expects |
+| `IMAGE_REPOSITORY`, `RELEASES_URL` | the Quay repository, the GitLab releases page | the update check: the highest `vX.Y.Z` tag of the repository, and where its release notes are; an empty `IMAGE_REPOSITORY` turns it off |
 | `GITHUB_TOKEN` | unset | GitHub API token for commit dates and PR search. A read-only fine-grained token with public-repository read access is enough |
 | `SEAWEEDFS_IMAGE` | pinned `ghcr.io/chrislusf/seaweedfs@sha256:...` (4.48) | the S3 storage image, for example a mirror; must be a SeaweedFS 4.x whose `weed mini` reads `WEED_ADMIN_*`. `MINIO_IMAGE` is no longer read |
 | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | random per install, kept in `minio/minio-secret` | S3 access key and secret key (the secret key is also the admin UI password); the names are kept from MinIO |
@@ -108,7 +127,7 @@ oc create secret generic github-token -n rhoai-nightly-updater --from-literal=GI
 oc set env deployment/rhoai-nightly-updater -n rhoai-nightly-updater -c app --from=secret/github-token
 ```
 
-`make upgrade` keeps it: `oc apply` removes only fields that the previous apply set ([Kubernetes: declarative management](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/)).
+Upgrades (`install.sh`, `make upgrade`) keep it: `oc apply` removes only fields that the previous apply set ([Kubernetes: declarative management](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/)).
 
 Local development variables (`DEV_MODE`, `DEV_TOKEN`, `KUBE_CA_FILE`, `DEV_INSECURE_TLS`, `DEV_ALLOW_REMOTE`, ...) are in [CONTRIBUTING.md](CONTRIBUTING.md#environment-variables).
 
@@ -129,6 +148,8 @@ Browser ──> Route (TLS reencrypt) ──> oauth-proxy :8443 ──> app 127.
 | Doc | For |
 |---|---|
 | [QUICKSTART.md](docs/QUICKSTART.md) | Deploying, first update, upgrading/rolling back the updater |
+| [UPGRADING.md](docs/UPGRADING.md) | Installs from before releases, and moving between releases |
+| [CHANGELOG.md](CHANGELOG.md) | What each release changed, and its upgrade notes |
 | [CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md) | Every object the tool creates, patches or deletes, and when |
 | [RUNBOOK.md](RUNBOOK.md) | Troubleshooting and manual recovery |
 | [SECURITY.md](SECURITY.md) | Auth, RBAC, network exposure, residual risks |

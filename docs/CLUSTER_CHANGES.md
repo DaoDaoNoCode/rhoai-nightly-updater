@@ -7,16 +7,16 @@ Conventions:
 - **SSA:** server-side apply with field manager `rhoai-nightly-updater`.
 - Every action below needs cluster-admin, a confirmation in the UI, and the cluster lock (one operation at a time).
 
-## 1. Installing the updater (`make` targets, run by you)
+## 1. Installing the updater (`install.sh` and the `make` targets that run it, run by you)
 
 | Target | Objects |
 |---|---|
-| `make deploy` | Project `<NAMESPACE>` (if missing); Secret `<APP>-proxy` (cookie secret, created once, never replaced); everything in `deploy/template.yaml`: ServiceAccount, ClusterRole + ClusterRoleBinding `<APP>-<NS>`, Roles/RoleBindings in `<NS>`, `kube-system`, `openshift-marketplace`, Deployment, Service, NetworkPolicy, Route, ServiceMonitor, PrometheusRule; ConsoleLink `<APP>-<NS>`. Then `cleanup-legacy` and `prune-replicasets` (below) |
-| `make upgrade` | Same as deploy, minus the project. The image is applied by digest |
+| `make deploy`, `install.sh deploy` (or `install.sh` on a cluster without it) | Project `<NAMESPACE>` (if missing); Secret `<APP>-proxy` (cookie secret, created once, never replaced); everything in `deploy/template.yaml`: ServiceAccount, ClusterRole + ClusterRoleBinding `<APP>-<NS>`, Roles/RoleBindings in `<NS>`, `kube-system`, `openshift-marketplace`, Deployment, Service, NetworkPolicy, Route, ServiceMonitor, PrometheusRule; ConsoleLink `<APP>-<NS>`. Then `cleanup-legacy` and `prune-replicasets` (below) |
+| `make upgrade`, `install.sh upgrade` (or `install.sh` on an installed cluster) | Same as deploy, minus the project. The image is applied by digest |
 | `make rollback TAG=` | The template objects of that commit. Old templates may recreate legacy objects; nothing is cleaned up |
-| `cleanup-legacy` | Deletes ClusterRoleBinding/ClusterRole `<APP>` only if bound to this namespace's SA, and ConsoleLink `<APP>` only if it points at this Route (or the old placeholder) |
-| `prune-replicasets` | Deletes the app's ReplicaSets that are owned by the Deployment (UID), scaled to 0 and not the current revision |
-| `make undeploy` | Deletes the ConsoleLink, ClusterRole and ClusterRoleBinding labelled `app.kubernetes.io/instance=<APP>-<NS>`, the labelled Roles/RoleBindings in `kube-system`, `openshift-marketplace` (and `openshift-ingress`, from old installs), the legacy objects, and project `<NAMESPACE>` |
+| Legacy cleanup (after deploy and upgrade) | Deletes ClusterRoleBinding/ClusterRole `<APP>` only if bound to this namespace's SA, and ConsoleLink `<APP>` only if it points at this Route (or the old placeholder) |
+| ReplicaSet pruning (after deploy and upgrade) | Deletes the app's ReplicaSets that are owned by the Deployment (UID), scaled to 0 and not the current revision |
+| `make undeploy`, `install.sh uninstall` | Deletes the ConsoleLink, ClusterRole and ClusterRoleBinding labelled `app.kubernetes.io/instance=<APP>-<NS>`, the labelled Roles/RoleBindings in `kube-system`, `openshift-marketplace` (and `openshift-ingress`, from old installs), the legacy objects, and project `<NAMESPACE>` |
 
 ## 2. The updater's own state (namespace `<NAMESPACE>`)
 

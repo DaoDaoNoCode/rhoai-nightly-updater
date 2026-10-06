@@ -42,7 +42,7 @@ All cluster operations MUST use the ServiceAccount token.
 
 **What:** A mutable tag such as `:latest` can move between a check and the kubelet's pull, and a node may run a cached image.
 
-**Fix:** `make deploy`/`make upgrade` resolve the tag to a digest (`scripts/resolve-image.sh`) and apply `IMAGE@sha256:...`. A new digest or template rolls the pods out by itself, so no `oc rollout restart` is needed. CI publishes the immutable 8-character commit tag on every `main` pipeline, and moves `:latest` only from the tip of `main`.
+**Fix:** `make deploy`/`make upgrade` (both `scripts/install.sh`, also attached to every release) resolve the tag to a digest and apply `IMAGE@sha256:...`. A new digest or template rolls the pods out by itself, so no `oc rollout restart` is needed. CI publishes the immutable 8-character commit tag and `:main` on every `main` pipeline; `:latest` only follows releases within its major version.
 
 **Test:** `oc get deploy rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='{.spec.template.spec.containers[0].image}'` shows `@sha256:`.
 

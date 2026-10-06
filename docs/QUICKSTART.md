@@ -12,39 +12,53 @@ Before your first change, read **[How the tool keeps your cluster safe](../READM
   rosa grant user cluster-admin --user=<username> --cluster=<cluster-name>
   ```
   For a quick break-glass login, `rosa create admin --cluster=<cluster-name>` creates a `cluster-admin` user and prints an `oc login` command. Syntax checked with `rosa` 1.2.57 (`rosa grant user --help`, `rosa create admin --help`).
-- `oc` (logged in: `oc whoami` shows your cluster-admin user), `git`, `make`, `curl`.
+- `oc` (logged in: `oc whoami` shows your cluster-admin user) and `curl`. `git` and `make` only for the clone path.
 - A Quay.io pull token for `quay.io/rhoai`. Get it from [Bitwarden](https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1) (Openshift AI devel collection). No access? Ask in [#rhoai-devtestops-requests](https://redhat.enterprise.slack.com/archives/C07TF3MBMMW).
 
-## 1. Get the template
+## 1. Get the installer of a release
+
+Pick the newest release on [GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases) or [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases) and download its `install.sh` (it contains that release's `deploy/template.yaml`). Check it against the SHA-256 in the release notes, and read it before you run it:
 
 ```bash
-git clone https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater.git
-cd rhoai-nightly-updater
+curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh
+echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c
+less install.sh
 ```
-
-The template (`deploy/template.yaml`) and the `make` targets come from this checkout. Keep it up to date (`git pull`) before you upgrade.
 
 ## 2. Deploy
 
 ```bash
-make deploy                 # namespace rhoai-nightly-updater; DRY_RUN=1 only validates
+bash install.sh --dry-run   # optional: resolve, check and validate with the API server only
+bash install.sh             # namespace rhoai-nightly-updater; --namespace / --app-name to change
 ```
 
-`make deploy` does the following:
-- resolves `quay.io/juntao_wang/rhoai-nightly-updater:latest` to its digest;
-- checks that the image was built from a commit with the same `deploy/template.yaml` as your checkout;
+`install.sh` does the following:
+- checks that you are logged in as cluster-admin;
+- resolves `quay.io/juntao_wang/rhoai-nightly-updater:vX.Y.Z` to its digest and checks that the image was built from the release's commit;
 - creates the namespace and the oauth-proxy cookie Secret;
 - applies the template, picking the oauth-proxy tag that matches your cluster's OCP version;
 - waits for the rollout, then adds the app to the console's application menu.
 
-It ends by printing `App URL: https://...`.
+It ends by printing `App URL: https://...`. `bash install.sh --help` lists the options.
+
+**From a clone** (contributors; also needed for `make rollback` and the smoke test):
+
+```bash
+git clone https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater.git
+cd rhoai-nightly-updater
+git checkout vX.Y.Z         # make deploy installs the release HEAD is on
+make deploy                 # DRY_RUN=1 only validates
+```
+
+`make deploy` runs the same `scripts/install.sh`, with the template of your checkout.
 
 If it stops with an `ERROR:` line:
-- *"cannot tell which commit ... was built from"*: the published image predates the revision label. Run `git pull`, then `make deploy ALLOW_TEMPLATE_MISMATCH=1` once.
-- *"deploy/template.yaml in this checkout differs"*: your checkout is newer or older than `:latest`. Run `git pull`, or wait for CI to publish. *"uncommitted changes"* means you edited the template locally.
+- *"HEAD is not on a release tag"*: check out a release (`git checkout vX.Y.Z`), or pass `TAG=main` / `TAG=<commit>` to test a build.
+- *"deploy/template.yaml in this checkout differs"*: your checkout is not the release you install. *"uncommitted changes"* means you edited the template locally.
 - *"cannot resolve ... to a digest"*: the tag doesn't exist, or quay.io is unreachable.
+- More in [UPGRADING.md](UPGRADING.md#6-faq).
 
-Optional: `./scripts/smoke-test.sh rhoai-nightly-updater rhoai-nightly-updater` runs read-only checks of the live install.
+Optional, from a checkout of the same release: `./scripts/smoke-test.sh rhoai-nightly-updater rhoai-nightly-updater` runs read-only checks of the live install.
 
 ## 3. Open the app
 
@@ -117,30 +131,36 @@ Then check the **Components** page (deployments in `redhat-ods-applications`) an
 
 ## Upgrading the updater itself
 
+When the app says "vX.Y.Z is available", download that release's `install.sh` (section 1) and run it; it sees the existing install and upgrades it, keeping everyone signed in:
+
 ```bash
-git pull
-make upgrade DRY_RUN=1      # optional: resolve, check and server-side dry run only
-make upgrade                # deploys :latest by digest, keeps everyone signed in
+bash install.sh --dry-run   # optional
+bash install.sh
 ```
 
-- **First time only:** images that CI published before the revision label existed make `make upgrade` stop with "cannot tell which commit ... was built from". Run `make upgrade ALLOW_TEMPLATE_MISMATCH=1` once. Later images carry the label and pass the check.
-- To pin a build, use `make upgrade TAG=<tag>`. Tags are 8 characters (GitLab `CI_COMMIT_SHORT_SHA`, for example `4503bb7d`); older manual builds used 7. The commit's template must match your checkout; otherwise use rollback.
+From a clone: `git fetch --tags && git checkout vX.Y.Z && make upgrade`.
+
+- A new MAJOR version changes the deployment template ("requires a full redeploy"); upgrading this way re-applies it. Never only change the image.
 - If a cluster operation is running, the restart waits for it to finish. The updater (UI included) is then offline for up to ~17 minutes.
+- Installed before releases (your Deployment references `:latest`)? Read [UPGRADING.md](UPGRADING.md) first.
+- To test a build that is not a release: `make upgrade TAG=main` or `TAG=<8-character commit>` from a checkout of that commit.
 
 ## Rolling back the updater
 
+From a clone:
+
 ```bash
-git fetch origin
-make rollback TAG=<commit-or-tag> DRY_RUN=1   # optional check
-make rollback TAG=<commit-or-tag>
+git fetch --tags
+make rollback TAG=v1.0.0 DRY_RUN=1   # optional check; any release or commit build
+make rollback TAG=v1.0.0
 ```
 
-This applies that commit's own `deploy/template.yaml` with its image, keeps sessions, and waits for the rollout. Roll forward again with `make upgrade`. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. Details: [RUNBOOK §2](../RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater).
+This applies that release's own `deploy/template.yaml` with its image, keeps sessions, and waits for the rollout. Roll forward again with the newer `install.sh` or `make upgrade`. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. Details: [RUNBOOK §2](../RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater).
 
 ## Uninstall
 
 ```bash
-make undeploy
+bash install.sh uninstall   # or, from a clone: make undeploy
 ```
 
 This removes the updater, its cluster-wide RBAC and its ConsoleLink. It does **not** remove RHOAI, the nightly catalog, the pull secret, the IDMS, or anything created from Test resources. Tear those down in the UI first.
