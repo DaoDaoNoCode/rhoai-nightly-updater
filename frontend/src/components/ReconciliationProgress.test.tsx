@@ -155,6 +155,11 @@ describe("helpers", () => {
     expect(shortTarget("nightly quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "a".repeat(64))).toBe("nightly rhoai-3.6 · aaaaaaaaaaaa");
     expect(shortTarget("stable")).toBe("stable");
     expect(sentence("dial tcp: i/o timeout")).toBe("dial tcp: i/o timeout.");
+    // A message that ends with a parenthesis still needs its full stop.
+    expect(sentence("CSV rhods-operator.3.6.0: Installing (InstallWaiting)")).toBe("CSV rhods-operator.3.6.0: Installing (InstallWaiting).");
+    expect(sentence("Restarted (see the log.)")).toBe("Restarted (see the log.)");
+    expect(sentence('It said "done."')).toBe('It said "done."');
+    expect(sentence("Ready:")).toBe("Ready:");
     const d = describeError({ name: "ApiError", status: 502, errorCode: "network", message: "dial tcp 1.2.3.4:443: i/o timeout" });
     expect(d.title).toBe("Cannot reach the OpenShift API");
     expect(d.body).toBe("dial tcp 1.2.3.4:443: i/o timeout.");

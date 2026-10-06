@@ -4,7 +4,10 @@ import type { NightlyBuild, StatusResponse } from "./types";
 export function sentence(text: string): string {
   const t = text.trim();
   if (!t) return t;
-  return /[.!?:)]$/.test(t) ? t : `${t}.`;
+  // Ends a sentence unless it already ends with punctuation, also inside a
+  // closing bracket or quote: "Installing (InstallWaiting)" gets a full stop,
+  // "(see the log.)" does not.
+  return /[.!?:]["')\]]*$/.test(t) ? t : `${t}.`;
 }
 
 /** Digest prefix length, the same as the backend's activity "build" field (pkg/cluster/activity.go). */
