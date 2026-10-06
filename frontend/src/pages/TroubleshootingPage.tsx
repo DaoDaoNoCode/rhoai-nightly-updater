@@ -37,8 +37,8 @@ import type { CheckResult, OperationResponse, Problem, DiagnosticResult } from "
 import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
-import { TooltipButton, NO_PERMISSION_REASON } from "../components/TooltipButton";
-import { usePermissions, CHECKING_PERMISSIONS_REASON } from "../hooks/usePermissions";
+import { TooltipButton } from "../components/TooltipButton";
+import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
 type ScanState = "idle" | "loading" | "done" | "error";
 
@@ -81,6 +81,27 @@ const severityLabel = (severity: Problem["severity"]) => {
       return <Label color="blue" isCompact>Info</Label>;
   }
 };
+
+/**
+ * The Diagnostics summary, counted from the same problem list the page shows:
+ * "4 problems need attention · 2 informational". Critical and warning
+ * problems need attention; info problems do not.
+ */
+export function problemSummary(problems: Problem[]): { title: string; variant: "danger" | "warning" | "info" } {
+  const attention = problems.filter((p) => p.severity !== "info");
+  const info = problems.length - attention.length;
+  const infoText = info > 0 ? ` · ${info} informational` : "";
+  if (attention.length > 0) {
+    const plural = attention.length !== 1;
+    return {
+      title: `${attention.length} problem${plural ? "s" : ""} need${plural ? "" : "s"} attention${infoText}`,
+      variant: attention.some((p) => p.severity === "critical") ? "danger" : "warning",
+    };
+  }
+  if (info > 0) return { title: `No problems need attention${infoText}`, variant: "info" };
+  // Failed or warning checks without a problem entry: the checks list shows them.
+  return { title: "Some health checks did not pass", variant: "warning" };
+}
 
 /** Guidance-only problems carry no autoFixAction: they get instructions, never a Fix button. */
 export function hasAutoFix(problem: Problem): boolean {
@@ -139,7 +160,10 @@ export const TroubleshootingPage: React.FC = () => {
   const [fixResult, setFixResult] = useState<OperationResponse | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmFix, setConfirmFix] = useState<Problem | null>(null);
-  const { canMutate, loaded: permissionsLoaded } = usePermissions();
+  // Permissions, session and the operation lock. An operator install in
+  // progress alone does not block a fix: that may be what is stuck.
+  const fixReason = useMutationBlocker({ ignoreReconcile: true });
+  const onResult = useClusterBusyHandler();
   const mountedRef = useRef(true);
 
   const runScan = useCallback(async () => {
@@ -179,6 +203,7 @@ export const TroubleshootingPage: React.FC = () => {
     if (!mountedRef.current) return;
     setFixResult(result);
     setFixingId(null);
+    onResult(result);
     // Re-scan to show the state after the fix (or after someone else's change).
     await runScan();
   };
@@ -197,7 +222,12 @@ export const TroubleshootingPage: React.FC = () => {
   const warnCount = checks.filter((c) => c.status === "warn").length;
   const passCount = checks.filter((c) => c.status === "pass").length;
   const totalChecks = checks.length;
-  const fixReason = !permissionsLoaded ? CHECKING_PERMISSIONS_REASON : !canMutate ? NO_PERMISSION_REASON : null;
+  // The summary counts the same problems the list shows, split by severity.
+  const summary = problemSummary(problems);
+  const groups = [
+    { id: "attention", title: "Need attention", items: problems.filter((p) => p.severity !== "info") },
+    { id: "info", title: "Informational", items: problems.filter((p) => p.severity === "info") },
+  ].filter((g) => g.items.length > 0);
 
   return (
     <>
@@ -249,15 +279,16 @@ export const TroubleshootingPage: React.FC = () => {
       {data && (
         <>
           <PageSection aria-live="polite">
-            {failCount === 0 && warnCount === 0 && (
+            {problems.length === 0 && failCount === 0 && warnCount === 0 && (
               <Alert component="p" variant="success" title={`All ${totalChecks} checks passed, no issues detected`} isInline />
             )}
-            {failCount === 0 && warnCount > 0 && (
-              <Alert component="p" variant="warning" title={`${warnCount} warning${warnCount !== 1 ? "s" : ""} found`} isInline />
-            )}
-            {failCount > 0 && (
-              <Alert component="p" variant="danger" title={`${failCount + warnCount} issue${failCount + warnCount !== 1 ? "s" : ""} found that need attention`} isInline>
-                {passCount > 0 && <Content component="p">{passCount} of {totalChecks} checks passed.</Content>}
+            {(problems.length > 0 || failCount > 0 || warnCount > 0) && (
+              <Alert component="p" variant={summary.variant} title={summary.title} isInline>
+                {totalChecks > 0 && (
+                  <Content component="p">
+                    {passCount} of {totalChecks} health checks passed{failCount + warnCount > 0 ? ` (${failCount} failed, ${warnCount} with warnings)` : ""}.
+                  </Content>
+                )}
                 {problems.length > 0 && <Content component="p">The problems below say what was observed and how to fix it.</Content>}
               </Alert>
             )}
@@ -276,13 +307,13 @@ export const TroubleshootingPage: React.FC = () => {
             </PageSection>
           )}
 
-          {problems.length > 0 && (
-            <PageSection>
+          {groups.map((group) => (
+            <PageSection key={group.id}>
               <Title headingLevel="h2" size="lg" style={{ marginBottom: "1rem" }}>
-                Problems ({problems.length})
+                {group.title} ({group.items.length})
               </Title>
               <Stack hasGutter>
-                {problems.map((problem) => {
+                {group.items.map((problem) => {
                   const auto = hasAutoFix(problem);
                   const objects = problem.affectedObjects ?? [];
                   return (
@@ -380,7 +411,7 @@ export const TroubleshootingPage: React.FC = () => {
                 })}
               </Stack>
             </PageSection>
-          )}
+          ))}
 
           <PageSection>
             <Title headingLevel="h2" size="lg" style={{ marginBottom: "1rem" }}>

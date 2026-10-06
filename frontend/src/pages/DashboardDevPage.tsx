@@ -30,7 +30,7 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
-import type { DashboardOverride, DashboardState, OperationResponse } from "../types";
+import type { DashboardDevImage, DashboardOverride, DashboardState, OperationResponse } from "../types";
 import {
   assistRolloutFor,
   deployDashboardLatestMain,
@@ -48,13 +48,24 @@ import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { DashboardImages } from "../components/DashboardImages";
 import { DashboardSessionPanel, flavorName, sessionTitle } from "../components/DashboardSessionPanel";
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
-import { TooltipButton, NO_PERMISSION_REASON } from "../components/TooltipButton";
+import { TooltipButton } from "../components/TooltipButton";
 import { COMPONENTS_POLL_MS } from "../constants";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { formatRelativeTime } from "../utils";
+import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker, usePermissions } from "../state/AppInfo";
 
-interface DashboardDevPageProps {
-  canMutate: boolean;
+/**
+ * Container states that do not clear without a change (image, config or
+ * crash fix). Mirrors terminalWaitingReasons in pkg/cluster/resources.go.
+ */
+const TERMINAL_WAITING_REASONS = new Set([
+  "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull", "CrashLoopBackOff",
+  "CreateContainerConfigError", "CreateContainerError", "RunContainerError",
+]);
+
+/** Dashboard containers the server reports as stuck (ProgressDeadlineExceeded) or unable to start. */
+export function blockedDashboardImages(state: DashboardState | null): DashboardDevImage[] {
+  return (state?.devImages ?? []).filter((i) => !i.ready && (!!i.rolloutStuck || TERMINAL_WAITING_REASONS.has(i.waitingReason ?? "")));
 }
 
 type Action = "pr" | "main" | "revert" | "assist";
@@ -71,7 +82,13 @@ export function isNotDeployed(err: ApiError | null): boolean {
   return !!err && (err.errorCode === "dashboard_not_deployed" || (err.status === 404 && err.errorCode === "not_found"));
 }
 
-export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate }) => {
+export const DashboardDevPage: React.FC = () => {
+  // One source for every cluster change: permissions, session and the global
+  // operation lock (R4b c, N1).
+  const blocker = useMutationBlocker();
+  const permissions = usePermissions();
+  const onBusy = useClusterBusyHandler();
+  const { refresh: refreshOverride } = useDashboardOverride();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get("tab") === "resources" ? 1 : 0;
   const [dashState, setDashState] = useState<DashboardState | null>(null);
@@ -131,7 +148,10 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
   // is no client-side timer that a reload would reset (A04-7).
   useEffect(() => {
     if (!waitingFor || !dashState || running) return;
-    if (dashState.rolloutStuck) {
+    // Stop waiting as soon as the server reports a rollout that cannot
+    // finish on its own: ProgressDeadlineExceeded, or a container in a
+    // terminal waiting state (ImagePullBackOff...), not only after 10 minutes.
+    if (dashState.rolloutStuck || blockedDashboardImages(dashState).length > 0) {
       setWaitingFor(null);
       return;
     }
@@ -150,6 +170,14 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
       setResult((prev) => ({ success: true, message: "The dashboard runs the installed release again, and dashboard-operator manages it.", logs: prev?.logs ?? [] }));
     }
   }, [waitingFor, dashState, running, parsedPR]);
+
+  // The app-wide override (global banner, the Update dialog's "Revert
+  // Dashboard Dev and update") follows each change here at once (N2).
+  const wasWaiting = useRef(false);
+  useEffect(() => {
+    if (wasWaiting.current && !waitingFor) refreshOverride();
+    wasWaiting.current = !!waitingFor;
+  }, [waitingFor, refreshOverride]);
 
   useEffect(() => {
     document.title = "Dashboard Dev — RHOAI Nightly Updater";
@@ -186,6 +214,9 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
     } catch (e) {
       res = errorResult(e, "The request failed");
     }
+    // A cluster_busy refusal names the running operation: show it and lock at once.
+    onBusy(res);
+    if (res.success) refreshOverride();
     if (!mounted.current) return;
     setResult(res);
     if (res.success && action !== "assist") setWaitingFor(action);
@@ -194,7 +225,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
   };
 
   const mutateReason = (needsOperator: boolean): string | null => {
-    if (!canMutate) return NO_PERMISSION_REASON;
+    if (blocker) return blocker;
     if (running) return "Another Dashboard Dev action is running.";
     if (waitingFor) return "Waiting for the last change to roll out.";
     if (needsOperator && dashState?.operatorError) return "The state of dashboard-operator cannot be read.";
@@ -238,7 +269,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
         <LoadErrorAlert error={error} genericTitle="Could not load the dashboard state" onRetry={() => void fetchState()} stale={!!dashState} />
       )}
 
-      {!canMutate && (
+      {permissions.status === "denied" && (
         <PageSection>
           <Alert variant="info" title="Read-only access" isInline isPlain component="p">
             Deploy and revert are disabled. Ask a cluster admin for write access.
@@ -268,7 +299,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
                     <DashboardSessionPanel
                       override={override}
                       dashboardURL={dashState?.dashboardURL}
-                      revertDisabledReason={!canMutate ? NO_PERMISSION_REASON : running ? "Another Dashboard Dev action is running." : null}
+                      revertDisabledReason={blocker ?? (running ? "Another Dashboard Dev action is running." : null)}
                       reverting={running === "revert"}
                       onRevert={() => setConfirm("revert")}
                     />
@@ -292,6 +323,21 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
                     <Alert variant="danger" title="The dashboard rollout is stuck" isInline isLiveRegion component="p">
                       <p style={{ overflowWrap: "anywhere" }}>{dashState.stuckReason || "A dashboard Deployment reports ProgressDeadlineExceeded."}</p>
                       <p>Its progress deadline passed, so Kubernetes stopped waiting for it. Revert to restore the release images, or deploy another build.</p>
+                    </Alert>
+                  </StackItem>
+                )}
+
+                {!dashState?.rolloutStuck && blockedDashboardImages(dashState).length > 0 && (
+                  <StackItem>
+                    <Alert variant="danger" title="A dashboard container cannot start" isInline isLiveRegion component="p">
+                      <ul>
+                        {blockedDashboardImages(dashState).map((i) => (
+                          <li key={`${i.deployment}/${i.container}`} style={{ overflowWrap: "anywhere" }}>
+                            <code>{i.deployment}/{i.container}</code>: {i.waitingReason}{i.waitingMessage ? ` (${i.waitingMessage})` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                      <p>This does not clear on its own. Revert to restore the release images, or deploy another build.</p>
                     </Alert>
                   </StackItem>
                 )}
@@ -352,7 +398,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
                                 </FlexItem>
                                 {sessionActive && !override?.active && (
                                   <FlexItem>
-                                    <TooltipButton variant="secondary" onClick={() => setConfirm("revert")} isLoading={running === "revert"} disabledReason={!canMutate ? NO_PERMISSION_REASON : running ? "Another Dashboard Dev action is running." : null}>
+                                    <TooltipButton variant="secondary" onClick={() => setConfirm("revert")} isLoading={running === "revert"} disabledReason={blocker ?? (running ? "Another Dashboard Dev action is running." : null)}>
                                       Revert to default
                                     </TooltipButton>
                                   </FlexItem>
@@ -373,14 +419,17 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
                               </StackItem>
                             )}
 
-                            {dashState.rolloutPending && dashState.schedulingFailureReason && (
+                            {(dashState.rolloutPending || dashState.rolloutStuck) && (dashState.schedulingFailureReason || dashState.canAssistRollout) && (
                               <StackItem>
                                 <Alert variant="warning" title="A new dashboard pod cannot be scheduled" isInline component="p">
                                   <Stack hasGutter>
-                                    <StackItem>{dashState.schedulingFailureReason}</StackItem>
+                                    {dashState.schedulingFailureReason && <StackItem>{dashState.schedulingFailureReason}</StackItem>}
                                     {dashState.canAssistRollout && (
                                       <StackItem>
-                                        <TooltipButton variant="secondary" size="sm" onClick={() => setConfirm("assist")} isLoading={running === "assist"} disabledReason={mutateReason(false)}>
+                                        {/* (e) Available as soon as the server offers it: the rollout
+                                            it rescues is the one this page is waiting for. */}
+                                        <TooltipButton variant="secondary" size="sm" onClick={() => setConfirm("assist")} isLoading={running === "assist"}
+                                          disabledReason={blocker ?? (running ? "Another Dashboard Dev action is running." : null)}>
                                           Assist rollout
                                         </TooltipButton>
                                       </StackItem>
@@ -411,7 +460,7 @@ export const DashboardDevPage: React.FC<DashboardDevPageProps> = ({ canMutate })
 
           <Tab eventKey={1} title={<TabTitleText>Test resources</TabTitleText>}>
             <div style={{ paddingTop: "var(--pf-t--global--spacer--md)" }}>
-              <QuickResourceCreator canMutate={canMutate} />
+              <QuickResourceCreator mutateBlocker={blocker} onResult={onBusy} />
             </div>
           </Tab>
         </Tabs>

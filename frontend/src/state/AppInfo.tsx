@@ -246,16 +246,31 @@ export function serverOperationStep(op: ServerOperation): string | null {
 }
 
 /**
- * Why a cluster-changing button must stay disabled now, or null. Covers the
- * user's permissions, this tab's own operation, any operation the backend
- * reports (another tab or a teammate), and OLM still installing after the
- * last operation (the backend lock is already free then).
+ * After a request the backend refused with 409 cluster_busy, ask it at once
+ * which operation holds the lock, so the banner and the disabled buttons
+ * appear without waiting for the next poll.
  */
-export function useMutationBlocker(): string | null {
+export function useClusterBusyHandler(): (res: { errorCode?: string }) => void {
+  const { refreshServerOperation } = useOperation();
+  return useCallback((res: { errorCode?: string }) => {
+    if (res.errorCode === "cluster_busy") refreshServerOperation();
+  }, [refreshServerOperation]);
+}
+
+/**
+ * Why a cluster-changing button must stay disabled now, or null: the one
+ * source every page uses. Covers the user's permissions and session, this
+ * tab's own operation, any operation the backend reports (another tab or a
+ * teammate), and OLM still installing after the last operation (the backend
+ * lock is already free then). `ignoreReconcile` is for repairs of what may
+ * be stuck in that install (Diagnostics fixes, rollout assists).
+ */
+export function useMutationBlocker(options: { ignoreReconcile?: boolean } = {}): string | null {
   const { reason } = usePermissions();
   const { run, server, state } = useOperation();
   const { status } = useClusterStatus();
   if (reason) return reason;
+  if (options.ignoreReconcile && !isRunning(run) && !server.inProgress) return null;
   if (isRunning(run) && run.source === "stream") {
     return `Your ${OPERATION_NAMES[run.kind].toLowerCase()} is still running. Wait for it to finish.`;
   }

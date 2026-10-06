@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { TroubleshootingPage, buildDiagnosticReport } from "./TroubleshootingPage";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { TroubleshootingPage, buildDiagnosticReport, problemSummary } from "./TroubleshootingPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
-import { resetPermissionsCache } from "../hooks/usePermissions";
-import type { DiagnosticResult, Problem } from "../types";
+import { renderPage } from "../test/providers";
+import type { DiagnosticResult, OperationStatusResponse, Problem } from "../types";
 
 // Shapes from the live GET /api/diagnostics (B2) on 2026-10-05.
 const guidance: Problem = {
@@ -42,12 +42,11 @@ function result(problems: Problem[]): DiagnosticResult {
   };
 }
 
-beforeEach(() => resetPermissionsCache());
 
 describe("Diagnostics (B2 contract)", () => {
   it("guidance-only problems show the objects and a copyable command, and no Fix button", async () => {
     stubApi({ "/api/diagnostics": result([guidance, pods]) });
-    render(<TroubleshootingPage />);
+    renderPage(<TroubleshootingPage />);
     const card = (await screen.findByText(guidance.title)).closest(".pf-v6-c-card") as HTMLElement;
     expect(within(card).getByText("Manual fix")).toBeInTheDocument();
     expect(within(card).getByText("CustomResourceDefinition mcpservers.mcp.x-k8s.io")).toBeInTheDocument();
@@ -65,7 +64,7 @@ describe("Diagnostics (B2 contract)", () => {
       "/api/diagnostics": result([fixable]),
       "POST /api/diagnostics/fix": () => jsonResponse({ success: false, errorCode: "nothing_to_do", message: "Nothing to do: every Service exists.", logs: [] }, 200),
     });
-    render(<TroubleshootingPage />);
+    renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
     // Wait for permissions, then open the dialog.
     await new Promise((r) => setTimeout(r, 20));
@@ -85,7 +84,7 @@ describe("Diagnostics (B2 contract)", () => {
       "/api/diagnostics": result([fixable]),
       "POST /api/diagnostics/fix": () => jsonResponse({ success: false, errorCode: "prerequisites", message: "rhods-operator has no ready pod.", logs: [] }, 422),
     });
-    render(<TroubleshootingPage />);
+    renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
     await new Promise((r) => setTimeout(r, 20));
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
@@ -96,7 +95,7 @@ describe("Diagnostics (B2 contract)", () => {
 
   it("read-only users get a disabled Fix with the reason", async () => {
     stubApi({ "/api/diagnostics": result([fixable]), "/api/user/permissions": { canMutate: false, user: "v" } });
-    render(<TroubleshootingPage />);
+    renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
     await new Promise((r) => setTimeout(r, 20));
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
@@ -104,9 +103,71 @@ describe("Diagnostics (B2 contract)", () => {
     expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("a teammate's running operation disables Fix with the reason (R4b c, N1)", async () => {
+    stubApi({ "/api/diagnostics": result([fixable]) });
+    renderPage(<TroubleshootingPage />, "/", {
+      operation: async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
+    });
+    await screen.findByText(fixable.title);
+    const fix = screen.getByRole("button", { name: "Fix" });
+    await waitFor(() => expect(fix).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.mouseEnter(fix);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
+  });
+
+  it("an expired session disables Fix at once (R4b c)", async () => {
+    stubApi({
+      "/api/diagnostics": result([fixable]),
+      "/api/user/permissions": () => new Response("<html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } }),
+    });
+    renderPage(<TroubleshootingPage />);
+    await screen.findByText(fixable.title);
+    const fix = screen.getByRole("button", { name: "Fix" });
+    fireEvent.mouseEnter(fix);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/session has expired/);
+  });
+
+  it("a cluster_busy refusal asks the server which operation holds the lock", async () => {
+    stubApi({
+      "/api/diagnostics": result([fixable]),
+      "POST /api/diagnostics/fix": () => jsonResponse({ error: "alice is running \"Update to nightly\". Wait for it to finish.", errorCode: "cluster_busy" }, 409),
+    });
+    let answer: OperationStatusResponse = { inProgress: false, operation: null };
+    const fetchOperation = vi.fn(async () => answer);
+    renderPage(<TroubleshootingPage />, "/", { operation: fetchOperation });
+    await screen.findByText(fixable.title);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).not.toHaveAttribute("aria-disabled"));
+    const before = fetchOperation.mock.calls.length;
+    answer = { inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } };
+    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Fix" }));
+    expect(await screen.findByText("Cluster busy")).toBeInTheDocument();
+    await waitFor(() => expect(fetchOperation.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true"));
+  });
+
+  it("the summary counts the listed problems by severity (live: '4 issues' vs 'Problems (6)')", async () => {
+    const info: Problem = { ...guidance, id: "webhook-service-missing", severity: "info", title: "A webhook Service is missing" };
+    const info2: Problem = { ...guidance, id: "mlflow-unmanaged", severity: "info", title: "mlflow-operator is unmanaged" };
+    stubApi({ "/api/diagnostics": result([guidance, pods, fixable, { ...pods, id: "p2", title: "trustyai restarting" }, info, info2]) });
+    renderPage(<TroubleshootingPage />);
+    expect(await screen.findByText("4 problems need attention · 2 informational")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Need attention (4)" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Informational (2)" })).toBeInTheDocument();
+    expect(screen.queryByText(/Problems \(/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [[], "Some health checks did not pass"],
+    [[{ severity: "info" }], "No problems need attention · 1 informational"],
+    [[{ severity: "warning" }], "1 problem needs attention"],
+  ])("problemSummary(%j)", (problems, title) => {
+    expect(problemSummary(problems as Problem[]).title).toBe(title);
+  });
+
   it("a failed scan is classified and offers Retry", async () => {
     stubApi({ "/api/diagnostics": () => jsonResponse({ error: "context deadline exceeded", errorCode: "timeout" }, 504) });
-    render(<TroubleshootingPage />);
+    renderPage(<TroubleshootingPage />);
     expect(await screen.findByText("The request timed out")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });

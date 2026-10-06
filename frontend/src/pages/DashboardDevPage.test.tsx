@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { DashboardDevPage } from "./DashboardDevPage";
 import { overrideAlerts } from "../components/DashboardSessionPanel";
 import { stubApi, jsonResponse } from "../test/apiStub";
+import { renderWithApp } from "../test/providers";
 import type { DashboardDevImage, DashboardOverride, DashboardState } from "../types";
 
 function image(container: string, over: Partial<DashboardDevImage> = {}): DashboardDevImage {
@@ -46,7 +46,7 @@ function active(over: Partial<DashboardState> = {}): DashboardState {
 }
 
 function renderPage(canMutate = true) {
-  return render(<MemoryRouter initialEntries={["/dashboard-dev"]}><DashboardDevPage canMutate={canMutate} /></MemoryRouter>);
+  return renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate, user: "me" }) }, "/dashboard-dev");
 }
 
 describe("Dashboard Dev session panel (A04-1)", () => {
@@ -174,6 +174,66 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     fireEvent.click(within(dialog).getByRole("button", { name: "Assist rollout" }));
     expect(await screen.findByText("Nothing to do")).toBeInTheDocument();
     expect(api.bodies["POST /api/assist-rollout"]).toEqual([{ namespace: "redhat-ods-applications", deployment: "rhods-dashboard" }]);
+  });
+
+  it("Assist rollout is available while the page waits for the rollout it rescues (R4b e)", async () => {
+    let state = clean();
+    stubApi({ "/api/dashboard/state": () => jsonResponse(state), "POST /api/dashboard/deploy-main": () => {
+      state = active({ devMode: "main", rolloutPending: true, allDevImagesReady: false, schedulingFailureReason: "0/3 nodes are available: 3 Insufficient cpu.", canAssistRollout: true });
+      return jsonResponse({ success: true, message: "Deploying main", logs: [] });
+    } });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
+    expect(await screen.findByText(/Waiting for the dashboard pods to roll out/)).toBeInTheDocument();
+    const assist = await screen.findByRole("button", { name: "Assist rollout" });
+    expect(assist).not.toHaveAttribute("aria-disabled");
+    // Deploying again still waits for this rollout.
+    expect(screen.getByRole("button", { name: "Deploy latest main" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("stops waiting as soon as a container reports a terminal waiting reason (R4b e)", async () => {
+    let state = clean();
+    stubApi({ "/api/dashboard/state": () => jsonResponse(state), "POST /api/dashboard/deploy-main": () => {
+      state = active({ devMode: "main", allDevImagesReady: false, rolloutStuck: false,
+        devImages: [image("rhods-dashboard"), image("notebooks-ui", { ready: false, waitingReason: "ImagePullBackOff", waitingMessage: "Back-off pulling image" })] });
+      return jsonResponse({ success: true, message: "Deploying main", logs: [] });
+    } });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
+    expect(await screen.findByText("A dashboard container cannot start")).toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for the dashboard pods to roll out/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deploy latest main" })).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("a teammate's running operation disables deploys and test resources with the reason (N1)", async () => {
+    stubApi({
+      "/api/dashboard/state": clean(),
+      "/api/resources/status": { minio: { deployed: false, ready: false }, mlflow: { deployed: false, ready: false }, pipelineServers: [] },
+      "/api/resources/projects": { projects: [] },
+    });
+    renderWithApp(<DashboardDevPage />, {
+      permissions: async () => ({ canMutate: true, user: "me" }),
+      operation: async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
+    }, "/dashboard-dev");
+    const main = await screen.findByRole("button", { name: "Deploy latest main" });
+    await waitFor(() => expect(main).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.mouseEnter(main);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
+    fireEvent.click(screen.getByRole("tab", { name: "Test resources" }));
+    const setUp = (await screen.findAllByRole("button", { name: "Set up" }))[0];
+    expect(setUp).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("refreshes the app-wide Dashboard Dev override after a change (N2)", async () => {
+    stubApi({ "/api/dashboard/state": clean(), "POST /api/dashboard/deploy-main": { success: true, message: "Deploying main", logs: [] } });
+    const dashboard = vi.fn(async () => clean());
+    renderWithApp(<DashboardDevPage />, { permissions: async () => ({ canMutate: true, user: "me" }), dashboard }, "/dashboard-dev");
+    fireEvent.click(await screen.findByRole("button", { name: "Deploy latest main" }));
+    await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
+    await waitFor(() => expect(dashboard).toHaveBeenCalledTimes(2));
   });
 
   it("read-only users cannot open the deploy dialogs", async () => {

@@ -306,8 +306,6 @@ export interface ResourceState {
   apiRoute?: string;
   uiRoute?: string;
   currentImage?: string;
-  /** Planned backend fields: the resource can't become ready without a change. */
-  terminal?: boolean;
   /** Planned backend field: a container waiting reason such as ImagePullBackOff. */
   waitingReason?: string;
 }

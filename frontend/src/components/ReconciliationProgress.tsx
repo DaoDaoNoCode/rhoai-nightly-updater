@@ -28,10 +28,10 @@ import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclam
 import WrenchIcon from "@patternfly/react-icons/dist/esm/icons/wrench-icon";
 import { Link } from "react-router-dom";
 import type { StatusResponse, Problem, OperationResponse } from "../types";
-import { getDiagnostics, fixProblem, toApiError } from "../services/api";
+import { getDiagnostics, fixProblem } from "../services/api";
 import { formatElapsed } from "../utils";
-import { describeServerOperation, usePermissions } from "../state/AppInfo";
-import { useOperation } from "../state/AppState";
+import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { TooltipButton } from "./TooltipButton";
 
 export type { ReconcileKind as OperationType } from "../operationSteps";
@@ -105,7 +105,6 @@ interface StuckGuidanceCardProps {
   diagLoading: boolean;
   fixLoading: boolean;
   fixResult: OperationResponse | null;
-  fixError: string | null;
   /** Why a fix can't run now (permissions, another operation), or null. */
   fixDisabledReason: string | null;
   onFix: (problem: Problem) => void;
@@ -122,55 +121,47 @@ function severityToAlertVariant(severity: string): "danger" | "warning" | "info"
   }
 }
 
-/** A fix result: nothing_to_do is information, not a failure (B2 contract). */
-export function fixResultVariant(result: OperationResponse): "success" | "info" | "danger" {
-  if (result.success) return "success";
-  return result.errorCode === "nothing_to_do" ? "info" : "danger";
-}
-
 const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
   timedOut,
   problems,
   diagLoading,
   fixLoading,
   fixResult,
-  fixError,
   fixDisabledReason,
   onFix,
 }) => {
   const topProblem = problems.length > 0 ? problems[0] : null;
 
+  // The fix result stays above the re-scanned guidance (N8), so a problem
+  // that is gone no longer offers its Fix button.
+  const resultAlert = fixResult && (
+    <Alert component="p" variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "The fix could not run")} isInline isLiveRegion>
+      {!fixResult.success && fixResult.message}
+      {fixResult.errorCode === "conflict" && " The object changed since the diagnosis. Open Diagnostics to scan again."}
+      {fixResult.logs && fixResult.logs.length > 0 && (
+        <Content component="small" style={{ whiteSpace: "pre-wrap", marginTop: "0.25rem" }}>
+          {fixResult.logs.join("\n")}
+        </Content>
+      )}
+    </Alert>
+  );
+  const withResult = (body: React.ReactNode) => (resultAlert ? (
+    <Stack hasGutter>
+      <StackItem>{resultAlert}</StackItem>
+      <StackItem>{body}</StackItem>
+    </Stack>
+  ) : body);
+
   if (diagLoading) {
-    return (
+    return withResult(
       <Alert component="p" variant="info" title="Checking for problems..." isInline isPlain customIcon={<Spinner size="sm" aria-label="Diagnosing" />}>
         Running read-only diagnostics on the cluster.
-      </Alert>
-    );
-  }
-
-  if (fixResult) {
-    return (
-      <Alert component="p" variant={fixResultVariant(fixResult)} title={fixResult.message} isInline isLiveRegion>
-        {fixResult.errorCode === "conflict" && "The object changed since the diagnosis. Open Diagnostics to scan again. "}
-        {fixResult.logs && fixResult.logs.length > 0 && (
-          <Content component="small" style={{ whiteSpace: "pre-wrap", marginTop: "0.25rem" }}>
-            {fixResult.logs.join("\n")}
-          </Content>
-        )}
-      </Alert>
-    );
-  }
-
-  if (fixError) {
-    return (
-      <Alert component="p" variant="danger" title="The fix could not run" isInline isLiveRegion>
-        {fixError}
-      </Alert>
+      </Alert>,
     );
   }
 
   if (!topProblem) {
-    return (
+    return withResult(
       <Alert component="p"
         variant={timedOut ? "warning" : "info"}
         title={timedOut ? "The operator install looks stuck" : "Taking longer than usual"}
@@ -178,13 +169,13 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
         isPlain
       >
         Diagnostics found no specific problem; OLM may still be working. <Link to="/diagnostics">Open Diagnostics</Link>
-      </Alert>
+      </Alert>,
     );
   }
 
   const fixable = !!(topProblem.autoFixable && topProblem.autoFixAction);
   const evidence = (topProblem.evidence ?? []).slice(0, 3);
-  return (
+  return withResult(
     <Alert component="p" variant={severityToAlertVariant(topProblem.severity)} title={topProblem.title} isInline>
       <Stack hasGutter>
         <StackItem>{topProblem.description}</StackItem>
@@ -225,7 +216,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
           </Content>
         </StackItem>
       </Stack>
-    </Alert>
+    </Alert>,
   );
 };
 
@@ -249,15 +240,12 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
   const [diagFetched, setDiagFetched] = useState(false);
   const [fixLoading, setFixLoading] = useState(false);
   const [fixResult, setFixResult] = useState<OperationResponse | null>(null);
-  const [fixError, setFixError] = useState<string | null>(null);
   const [fixConfirmProblem, setFixConfirmProblem] = useState<Problem | null>(null);
 
   // A fix is a cluster change: it needs the permission and a free lock. The
   // reconcile in progress itself is not a reason (that is what is stuck).
-  const permissions = usePermissions();
-  const { server } = useOperation();
-  const fixDisabledReason = permissions.reason
-    ?? (server.inProgress ? (server.operation ? `${describeServerOperation(server.operation, status?.cluster.user)}. Wait for it to finish.` : "Another operation is running.") : null);
+  const fixDisabledReason = useMutationBlocker({ ignoreReconcile: true });
+  const onResult = useClusterBusyHandler();
 
   // Reset when a new reconciliation starts (keyed on startTime changing)
   useEffect(() => {
@@ -268,7 +256,6 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
       setDiagnosticProblems([]);
       setDiagFetched(false);
       setFixResult(null);
-      setFixError(null);
     }
     prevStartTimeRef.current = startTime;
   }, [active, startTime]);
@@ -334,22 +321,27 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
   // Fix action with confirmation modal
   const handleFixConfirm = useCallback(async () => {
     if (!fixConfirmProblem) return;
+    const action = fixConfirmProblem.autoFixAction;
+    setFixConfirmProblem(null);
+    if (!action) return;
     setFixLoading(true);
-    setFixError(null);
     setFixResult(null);
+    let res: OperationResponse;
     try {
       // Every action, including assist-rollout:<ns>/<deployment> and
       // restore-rollout-strategy:<ns>/<deployment>, goes to the diagnostics
       // fix endpoint as-is (B2 contract); it re-checks before acting.
-      if (!fixConfirmProblem.autoFixAction) return;
-      setFixResult(await fixProblem(fixConfirmProblem.autoFixAction));
+      res = await fixProblem(action);
     } catch (e) {
-      setFixError(toApiError(e, "Fix action failed").message);
-    } finally {
-      setFixLoading(false);
-      setFixConfirmProblem(null);
+      // Keeps errorCode (cluster_busy, conflict...) and the 422 logs (N8).
+      res = errorResult(e, "Fix action failed");
     }
-  }, [fixConfirmProblem]);
+    setFixResult(res);
+    setFixLoading(false);
+    onResult(res);
+    // Scan again, so a fixed problem no longer offers its Fix button.
+    setDiagFetched(false);
+  }, [fixConfirmProblem, onResult]);
 
   useEffect(() => {
     if (!active || startTime <= 0) {
@@ -470,7 +462,6 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
                 diagLoading={diagLoading}
                 fixLoading={fixLoading}
                 fixResult={fixResult}
-                fixError={fixError}
                 fixDisabledReason={fixDisabledReason}
                 onFix={(problem) => setFixConfirmProblem(problem)}
               />

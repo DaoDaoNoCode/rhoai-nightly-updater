@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { AppStateProvider } from "../state/AppState";
 import { AppInfoProvider } from "../state/AppInfo";
 import { LiveAnnouncerProvider } from "../state/LiveAnnouncer";
+import { getUserPermissions } from "../services/api";
 import type { DashboardState, OperationStatusResponse, StatusResponse, UserPermissions, VersionInfo } from "../types";
 
 /** A healthy nightly install: rhoai-3.6, newer build available. */
@@ -50,6 +51,15 @@ export interface AppFetchers {
   permissions?: () => Promise<UserPermissions>;
   version?: () => Promise<VersionInfo>;
   dashboard?: () => Promise<DashboardState>;
+}
+
+/**
+ * Renders a page inside the app's providers. The permission check goes
+ * through the global fetch, so stubApi's `/api/user/permissions` (canMutate
+ * true by default) decides it; the other app-wide reads are injected.
+ */
+export function renderPage(ui: React.ReactNode, route = "/", fetchers: AppFetchers = {}) {
+  return renderWithApp(ui, { permissions: getUserPermissions, ...fetchers }, route);
 }
 
 /** Renders `ui` inside the app's providers with injected backend reads. */

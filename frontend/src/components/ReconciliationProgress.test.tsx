@@ -47,6 +47,29 @@ describe("ReconciliationProgress stuck guidance (B2 contract)", () => {
     expect(result.closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
   });
 
+  it("a cluster_busy refusal is a 'Cluster busy' warning, and the problems are scanned again (N8)", async () => {
+    let scans = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "/api/diagnostics") {
+        scans++;
+        return jsonResponse({ problems: [{
+          id: "webhook-stale", severity: "warning", title: "1 webhook configuration points to a missing Service", description: "Leftover webhook.",
+          fix: "Delete it.", autoFixable: true, autoFixAction: "delete-stale-webhooks",
+        }], checks: [] });
+      }
+      if (url === "/api/diagnostics/fix") return jsonResponse({ error: "alice is running \"Update to nightly\". Wait for it to finish.", errorCode: "cluster_busy" }, 409);
+      return jsonResponse({});
+    }));
+    renderStuck();
+    const apply = await screen.findByRole("button", { name: /Apply fix/ });
+    await waitFor(() => expect(apply).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(apply);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Apply fix" }));
+    const title = await screen.findByText("Cluster busy");
+    expect(title.closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
+    await waitFor(() => expect(scans).toBe(2));
+  });
+
   it("shows guidance-only problems with instructions and no fix button", async () => {
     stubDiagnostics([{
       id: "pod-stuck-creating-redhat-ods-applications-odh-observability", severity: "warning", title: "odh-observability: 2 pods stuck in ContainerCreating",
