@@ -359,7 +359,10 @@ objects:
         app.kubernetes.io/part-of: ${APP_NAME}
     spec:
       replicas: 1
-      revisionHistoryLimit: 3
+      # Old ReplicaSets keep their pod template, including the COOKIE_SECRET
+      # env of installs from before the cookie Secret, readable with
+      # namespace view. Keep few; `make rollback` does not need them.
+      revisionHistoryLimit: 2
       # Recreate keeps a single updater pod: operation locks are in-process,
       # so an old and a new pod must never run cluster changes concurrently.
       strategy:

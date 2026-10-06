@@ -9,6 +9,17 @@ import (
 	"testing"
 )
 
+func TestIsLoopbackHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"127.0.0.1": true, "127.0.0.2": true, "localhost": true, "LOCALHOST": true, "::1": true, "[::1]": true,
+		"": false, "0.0.0.0": false, "::": false, "192.168.1.10": false, "example.com": false,
+	} {
+		if got := isLoopbackHost(host); got != want {
+			t.Errorf("isLoopbackHost(%q) = %v", host, got)
+		}
+	}
+}
+
 // TestMainRegistersNoUngatedRoutes: API endpoints are registered with
 // api.Register, whose table the api package tests against the mutation
 // gate. main.go itself may only add GET routes and the read-only catch-alls,

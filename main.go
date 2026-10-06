@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -71,6 +72,18 @@ func main() {
 	bindAddress := os.Getenv("BIND_ADDRESS")
 	if bindAddress == "" && devMode {
 		bindAddress = "127.0.0.1"
+	}
+	if devMode && !isLoopbackHost(bindAddress) {
+		// Every DEV_MODE request runs with the developer's token and no
+		// mutation gate, and the Host check does not stop a client that
+		// sends Host: 127.0.0.1 itself.
+		if os.Getenv("DEV_ALLOW_REMOTE") != "true" {
+			slog.Error("refusing to serve DEV_MODE on a non-loopback address: anyone who can reach it acts with your cluster token; "+
+				"unset BIND_ADDRESS, or set DEV_ALLOW_REMOTE=true to accept that", "bindAddress", bindAddress)
+			os.Exit(1)
+		}
+		slog.Warn("DEV_ALLOW_REMOTE=true: DEV_MODE serves a non-loopback address; anyone who can reach it acts with your cluster token and no permission check",
+			"bindAddress", bindAddress)
 	}
 
 	srv := &http.Server{
@@ -150,6 +163,17 @@ func main() {
 	}
 	slog.Info("server stopped")
 	os.Exit(exitCode)
+}
+
+// isLoopbackHost reports whether a BIND_ADDRESS host only accepts
+// connections from this machine. An empty host listens on all interfaces.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func registerProbes(mux *http.ServeMux) {

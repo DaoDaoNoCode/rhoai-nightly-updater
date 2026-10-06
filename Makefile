@@ -138,7 +138,9 @@ ensure-proxy-secret:
 		if [ -z "$$SECRET" ]; then SECRET=$$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32); fi; \
 		[ $${#SECRET} -eq 32 ] || { echo "Could not produce a 32-character cookie secret"; exit 1; }; \
 		oc create secret generic $(PROXY_SECRET) -n $(NAMESPACE) --from-literal=session_secret="$$SECRET" >/dev/null && \
-		echo "Created Secret $(PROXY_SECRET)."; \
+		echo "Created Secret $(PROXY_SECRET)." && \
+		echo "Note: old ReplicaSets still hold the cookie secret in their pod template. After the rollout, delete them with" && \
+		printf '%s\n' "  oc get rs -n $(NAMESPACE) -l app=$(APP_NAME) -o jsonpath='{range .items[?(@.spec.replicas==0)]}{.metadata.name}{\"\\n\"}{end}' | xargs oc delete rs -n $(NAMESPACE)"; \
 	fi
 
 apply-template:
