@@ -50,17 +50,23 @@ const DIGEST_REF = /([a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\/[A-Za-z0-9._/-]+(?::[A-Za-
 export function withImageRefs(text: string): React.ReactNode {
   const parts = text.split(DIGEST_REF);
   if (parts.length === 1) return text;
-  // "healthy (ref)" reads better as "healthy: ref" once the ref is a chip.
   for (let i = 1; i < parts.length; i += 2) {
+    // "healthy (ref)" reads better as "healthy: ref" once the ref is a chip.
     if (parts[i - 1].endsWith(" (") && parts[i + 1]?.startsWith(")")) {
       parts[i - 1] = `${parts[i - 1].slice(0, -2)}: `;
+      parts[i + 1] = parts[i + 1].slice(1);
+    }
+    // The chip replaces the quotes around a quoted reference.
+    if (parts[i - 1].endsWith('"') && parts[i + 1]?.startsWith('"')) {
+      parts[i - 1] = parts[i - 1].slice(0, -1);
       parts[i + 1] = parts[i + 1].slice(1);
     }
   }
   return parts.map((part, i) => {
     if (i % 2 === 0) return part;
-    const tag = imageTag(part);
+    // The tag, else the repository name (an untagged image), plus a short digest.
+    const name = imageTag(part) || part.split("@")[0].split("/").pop() || "";
     const digest = imageDigest(part).replace("sha256:", "").slice(0, 12);
-    return <ImageRef key={i} image={part} display={tag ? `${tag}@${digest}` : digest} />;
+    return <ImageRef key={i} image={part} display={`${name}@${digest}`} />;
   });
 }

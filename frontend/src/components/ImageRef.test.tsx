@@ -14,6 +14,13 @@ describe("withImageRefs (UX round 2, Diagnostics details)", () => {
     expect(screen.getByText(/Nightly catalog is healthy:/)).toBeInTheDocument();
   });
 
+  it("names an untagged image by its repository and drops the quotes around it", () => {
+    const minio = "quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45";
+    const { container } = render(<p>{withImageRefs(`Back-off pulling image "${minio}": ErrImagePull`)}</p>);
+    expect(screen.getByText("minio@25268b5a6539")).toBeInTheDocument();
+    expect(container.textContent).not.toContain('"');
+  });
+
   it("leaves text without an image reference unchanged", () => {
     expect(withImageRefs("All 2 nodes are ready")).toBe("All 2 nodes are ready");
   });
