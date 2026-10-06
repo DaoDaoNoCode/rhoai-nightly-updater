@@ -523,10 +523,28 @@ export interface InterruptedOperation {
   pod?: string;
 }
 
+/**
+ * The most recently finished operation (GET /api/operation `lastCompleted`).
+ * Older backends do not send it; treat its absence as "outcome unknown".
+ */
+export interface CompletedOperation {
+  id: string;
+  type: string;
+  label: string;
+  user: string;
+  target?: string;
+  /** RFC 3339. */
+  startedAt: string;
+  finishedAt?: string;
+  success: boolean;
+  message?: string;
+}
+
 export interface OperationStatusResponse {
   inProgress: boolean;
   operation: ServerOperation | null;
   interrupted?: InterruptedOperation;
+  lastCompleted?: CompletedOperation | null;
 }
 
 /** GET /api/version */

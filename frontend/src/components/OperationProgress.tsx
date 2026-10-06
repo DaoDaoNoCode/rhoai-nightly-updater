@@ -33,6 +33,12 @@ const COMPLETE_TITLES: Record<ReconcileKind, string> = {
   reinstall: "Reinstall complete",
 };
 
+const UNKNOWN_TITLES: Record<ReconcileKind, string> = {
+  update: "Update finished (outcome unknown, see the activity log)",
+  refresh: "Re-deploy finished (outcome unknown, see the activity log)",
+  reinstall: "Reinstall finished (outcome unknown, see the activity log)",
+};
+
 const FAILED_TITLES: Record<ReconcileKind, string> = {
   update: "The operator did not come up after the update",
   refresh: "The operator did not come up after the re-deploy",
@@ -140,13 +146,24 @@ export const OperationProgress: React.FC = () => {
         </StackItem>
       )}
 
+      {/* The server reported the failure (lastCompleted) without a failed step event. */}
+      {run && outcome?.status === "failed" && !notStarted && !run.steps.some((s) => s.status === "failed") && (
+        <StackItem>
+          <Alert variant={nothingChanged ? "warning" : "danger"} isInline component="p" title={`${OPERATION_NAMES[run.kind]} failed`}>
+            {outcome.message}
+          </Alert>
+        </StackItem>
+      )}
+
       {reconcile.active && run && outcome && outcome.status !== "failed" && run.steps.length > 0 && (
         <StackItem>
           <Card isCompact>
             <CardBody>
               {outcome.status === "detached" ? (
                 <Label color="orange" icon={<ExclamationTriangleIcon />} isCompact>
-                  Live progress stopped after {completedSteps} steps; following the operator status instead
+                  {reconcile.awaitingServer
+                    ? <>Live progress stopped after {completedSteps} steps; waiting for the server to report the end of the operation</>
+                    : <>Live progress stopped after {completedSteps} steps; following the operator status instead</>}
                 </Label>
               ) : (
                 <Label color="green" icon={<CheckCircleIcon />} isCompact>
@@ -170,7 +187,29 @@ export const OperationProgress: React.FC = () => {
         </StackItem>
       )}
 
-      {!reconcile.active && reconcile.finished && (
+      {!reconcile.active && reconcile.finished && reconcile.result === "unknown" && !failed && (
+        <StackItem>
+          <Alert
+            variant="info"
+            isInline
+            component="p"
+            title={UNKNOWN_TITLES[reconcile.kind]}
+            actionClose={<AlertActionCloseButton onClose={dismissFinished} />}
+            actionLinks={<AlertActionLink onClick={() => navigate("/components")}>Check components</AlertActionLink>}
+          >
+            <Stack>
+              <StackItem>
+                This tab did not receive the result of the operation, so it cannot say whether it succeeded.
+                {" "}{status?.csv.name ? <>Operator {status.csv.name} is {csvPhase || "installed"}.</> : null}
+                {reconcile.baseline && !reconcile.sawChange && " No change to the installed operator was detected."}
+              </StackItem>
+              <StackItem>The activity log on the Status page records whether it succeeded.</StackItem>
+            </Stack>
+          </Alert>
+        </StackItem>
+      )}
+
+      {!reconcile.active && reconcile.finished && (reconcile.result !== "unknown" || failed) && (
         <StackItem>
           <Alert
             variant={failed ? "danger" : succeeded ? "success" : "info"}

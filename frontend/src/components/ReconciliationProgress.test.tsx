@@ -68,11 +68,29 @@ describe("Reconcile completion after a reload (A07-8)", () => {
   afterEach(() => sessionStorage.clear());
 
   it("names the operation that finished, shows the build, and can be dismissed", async () => {
+    // The run succeeded before the reload (the stream said so).
+    sessionStorage.setItem("rhoai-reconcile-meta", JSON.stringify({ result: "succeeded", serverId: "op-1" }));
     renderWithApp(<OperationProgress />);
     expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
     expect(screen.getByText(/Operator rhods-operator.3.6.0 is Succeeded/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Close/ }));
     await waitFor(() => expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument());
+  });
+
+  it("does not claim success when the result was never seen (N4), unless the server reports it", async () => {
+    const view = renderWithApp(<OperationProgress />);
+    expect(await screen.findByText("Re-deploy finished (outcome unknown, see the activity log)")).toBeInTheDocument();
+    expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument();
+    view.unmount();
+
+    sessionStorage.setItem("rhoai-reconciling", "true");
+    sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 60_000));
+    sessionStorage.setItem("rhoai-reconcile-kind", "refresh");
+    sessionStorage.setItem("rhoai-reconcile-meta", JSON.stringify({ serverId: "op-7" }));
+    renderWithApp(<OperationProgress />, {
+      operation: async () => ({ inProgress: false, operation: null, lastCompleted: { id: "op-7", type: "refresh", label: "Re-deploy", user: "me", startedAt: "2026-10-05T10:00:00Z", success: true } }),
+    });
+    expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
   });
 });
 
