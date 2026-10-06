@@ -69,6 +69,24 @@ func TestDSCCheck_OperandMessage_InstalledOperatorMissingOperand(t *testing.T) {
 	}
 }
 
+// Live: "ModulesReady=False (NotReady): Some modules are not ready: trainer"
+// was left unclassified; it now carries the trainer's own cause.
+func TestDSCCheck_ModulesReadyRollupLinksModuleCauses(t *testing.T) {
+	conds := append(liveOperandConds(), dcond{"type": "ModulesReady", "status": "False", "reason": "NotReady", "message": "Some modules are not ready: trainer"})
+	w := newDSCWorld(t, conds)
+	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
+	dsc := problemsByID(checkDataScienceCluster(w.c))["dsc-not-ready"]
+	ev := strings.Join(dsc.Evidence, "\n")
+	if !strings.Contains(ev, "ModulesReady=False (NotReady): Some modules are not ready: trainer → cause: module trainer: Job Set Operator is installed, but JobSetOperator/cluster does not exist") ||
+		strings.Contains(ev, "cause not classified") || !containsString(dsc.RelatedProblems, "prerequisite-operand-job-set") {
+		t.Fatalf("dsc-not-ready = %s / %v", ev, dsc.RelatedProblems)
+	}
+
+	if got := parseNotReadyModules("Some components are not ready: kserve, Ray and trainer"); strings.Join(got, ",") != "kserve,ray,trainer" {
+		t.Fatalf("parseNotReadyModules = %v", got)
+	}
+}
+
 func TestDSCCheck_OperandMessage_OperandBackOffersRestart(t *testing.T) {
 	w := newDSCWorld(t, liveOperandConds())
 	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")

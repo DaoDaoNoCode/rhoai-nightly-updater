@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -518,7 +519,54 @@ func (a *dscAnalysis) conditionCauses(cc *classifiedCondition, titles map[string
 			add(fmt.Sprintf("the %s module operator has not retried", cc.Module), b.problemID())
 		}
 	}
+	if len(causes) == 0 && cc.Module == "" {
+		// A roll-up ("Some modules are not ready: trainer"): the causes of
+		// the modules it names.
+		for _, m := range parseNotReadyModules(cc.Cond.Message) {
+			var mc []string
+			for _, x := range append(append([]*classifiedCondition{}, a.DSCConds...), a.ModConds...) {
+				if x == cc || x.Module != m {
+					continue
+				}
+				c2, r2 := a.conditionCauses(x, titles)
+				for _, c := range c2 {
+					if !containsString(mc, c) {
+						mc = append(mc, c)
+					}
+				}
+				for _, id := range r2 {
+					if !containsString(related, id) {
+						related = append(related, id)
+					}
+				}
+			}
+			if len(mc) == 0 {
+				causes = append(causes, fmt.Sprintf("module %s is not ready; its own condition has no classified cause", m))
+				continue
+			}
+			causes = append(causes, fmt.Sprintf("module %s: %s", m, strings.Join(mc, "; ")))
+		}
+	}
 	return causes, related
+}
+
+// notReadyList matches the operator's roll-up messages, "Some modules are
+// not ready: trainer" and "Some components are not ready: kserve, ray".
+var notReadyList = regexp.MustCompile(`(?i)\b(?:modules?|components?)\s+(?:are|is)\s+not\s+ready:\s*([a-z0-9][a-z0-9 ,_-]*)`)
+
+// parseNotReadyModules returns the lower-case module names of a roll-up.
+func parseNotReadyModules(msg string) []string {
+	m := notReadyList.FindStringSubmatch(msg)
+	if m == nil {
+		return nil
+	}
+	var out []string
+	for _, f := range strings.FieldsFunc(m[1], func(r rune) bool { return r == ',' || r == ' ' }) {
+		if f = strings.ToLower(strings.TrimSpace(f)); f != "" && f != "and" && !containsString(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 const dscGateProblemID = "dsc-upgrade-gate"
