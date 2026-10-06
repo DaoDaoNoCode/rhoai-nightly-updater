@@ -219,7 +219,8 @@ export function prContains(pr, images) {
     builds: images.map((image) => {
       const b = tagBuilds.find((t) => image === fbc(t.tag, t.seed)) ?? installedBuild;
       const commit = hex(`dashboard-${b.seed}`, 40);
-      const contains = Date.parse(b.buildDate) > Date.parse(mergedAt) && !b.tag.startsWith("rhoai-3.3");
+      // Only the build from main after the merge; release branches get a cherry-pick (another SHA).
+      const contains = Date.parse(b.buildDate) > Date.parse(mergedAt) && b.tag === "rhoai-3.7-ea.1";
       return {
         image, tag: b.tag, installed: image === INSTALLED_IMAGE, commit, commitRepo: "red-hat-data-services/odh-dashboard",
         result: contains ? "contains" : "not_contained",

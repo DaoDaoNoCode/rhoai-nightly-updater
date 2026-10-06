@@ -110,7 +110,8 @@ for (const name of ["healthy", "prerequisite-missing", "operand-missing", "modul
 let scenario = args.scenario || process.env.DOCS_SCENARIO || "healthy";
 let world;
 let job = { name: "", out: "" };
-const held = { steps: [], mutation: null };
+// steps: resolvers of update steps waiting for /__docs/advance; credits: advances not yet used.
+const held = { steps: [], credits: 0, mutation: null };
 
 function reset(name) {
   if (!scenarios[name]) throw new Error(`unknown scenario ${name}`);
@@ -119,6 +120,7 @@ function reset(name) {
   scenarios[name](world);
   held.steps.forEach((r) => r());
   held.steps = [];
+  held.credits = 0;
   if (held.mutation) held.mutation();
   held.mutation = null;
 }
@@ -133,7 +135,11 @@ const json = (res, code, body) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Waits for /__docs/advance in gated mode, else a short pause. */
-const nextStep = () => (world.gated ? new Promise((r) => held.steps.push(r)) : sleep(700));
+function nextStep() {
+  if (!world.gated) return sleep(700);
+  if (held.credits > 0) { held.credits -= 1; return Promise.resolve(); }
+  return new Promise((r) => held.steps.push(r));
+}
 /** Waits for /__docs/release in gated mode, else a short pause. */
 const mutationDone = () => (world.gated ? new Promise((r) => { held.mutation = r; }) : sleep(1500));
 
@@ -165,10 +171,13 @@ async function updateStream(req, res) {
   beginOperation("update", "Update to nightly", image);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const start = Date.now();
+  let n = 0;
   for (const step of F.updateSteps(image)) {
+    n += 1;
     await nextStep();
     if (res.destroyed) return;
-    const ev = { ...step, elapsedMs: world.gated ? 0 : Date.now() - start };
+    // Gated (GIFs): a plausible 12 s per event instead of the real time.
+    const ev = { ...step, elapsedMs: world.gated ? n * 12000 : Date.now() - start };
     Object.assign(world.operation.operation ?? {}, { step: ev.step, stepStatus: ev.status, message: ev.message });
     if (step.step === "operation_complete") {
       world.status = world.afterUpdate ? world.afterUpdate() : F.healthyStatus(0);
@@ -243,7 +252,7 @@ async function api(req, res, u) {
     const { problemId = "" } = await body(req);
     return mutation(res, "diagnostics-fix", "Apply diagnostics fix", () => ({
       success: true,
-      message: problemId.startsWith("module-operator-backoff-")
+      message: problemId.includes("restart-module-operator")
         ? "Restarted redhat-ods-applications/trainer-operator-controller-manager. The trainer operator reconciles when its new pod starts; re-scan in a minute or two."
         : "Done.",
       logs: [],
@@ -264,7 +273,10 @@ function control(req, res, u) {
       return json(res, 200, { scenario });
     case "/__docs/advance": {
       const n = Number(u.searchParams.get("n") || 1);
-      for (let i = 0; i < n && held.steps.length; i++) held.steps.shift()();
+      for (let i = 0; i < n; i++) {
+        if (held.steps.length) held.steps.shift()();
+        else held.credits += 1;
+      }
       return json(res, 200, { released: n });
     }
     case "/__docs/release":
