@@ -198,7 +198,8 @@ export const TroubleshootingPage: React.FC = () => {
     setExpanded((prev) => ({ ...prev, [id]: true }));
     window.requestAnimationFrame(() => {
       const toggle = document.getElementById(`problem-${id}-toggle`);
-      toggle?.scrollIntoView({ block: "start" });
+      // Optional call: not every environment implements scrollIntoView (jsdom does not).
+      toggle?.scrollIntoView?.({ block: "start" });
       toggle?.focus();
     });
   };

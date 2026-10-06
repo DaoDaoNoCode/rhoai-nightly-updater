@@ -217,6 +217,8 @@ describe("Diagnostics related problems", () => {
     fireEvent.click(within(card).getByRole("button", { name: prereq.title }));
     const target = screen.getAllByText(prereq.title).map((el) => el.closest(".pf-v6-c-card")).find((c) => c !== card) as HTMLElement;
     await waitFor(() => expect(within(target).getByText(/Install it with the commands below/)).toBeInTheDocument());
+    // The card is opened, then focused in an animation frame; wait for that frame so it runs inside this test.
+    await waitFor(() => expect(target.contains(document.activeElement)).toBe(true));
   });
 
   it("the report names related problems", () => {
