@@ -326,7 +326,9 @@ ensure_proxy_secret() {
 	err "Created Secret $PROXY_SECRET. Old ReplicaSets, which still hold the cookie secret in their pod template, are removed after the rollout."
 }
 
-# apply_template TEMPLATE IMAGE_REF: oc process | oc apply. Parameters go
+# apply_template TEMPLATE IMAGE_REF: oc process | oc apply. The template is
+# processed locally (--local), so it does not depend on the current project,
+# which may not exist. Parameters go
 # through a private file. A template that still takes a COOKIE_SECRET
 # parameter (older releases) gets the value of the current Secret.
 apply_template() {
@@ -334,13 +336,13 @@ apply_template() {
 	printf '%s\n' "IMAGE=$image_ref" "NAMESPACE=$NAMESPACE" "APP_NAME=$APP_NAME" \
 		"OAUTH_PROXY_IMAGE=$OAUTH_PROXY_IMAGE" "IMAGE_REPOSITORY=$IMAGE" >"$TMP/params"
 	[ -z "${RELEASES_URL:-}" ] || printf 'RELEASES_URL=%s\n' "$RELEASES_URL" >>"$TMP/params"
-	if oc process -f "$template" --parameters | awk 'NR > 1 {print $1}' | grep -qx COOKIE_SECRET; then
+	if oc process -f "$template" --parameters --local | awk 'NR > 1 {print $1}' | grep -qx COOKIE_SECRET; then
 		secret=$(oc get secret "$PROXY_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.session_secret}' 2>/dev/null | base64 -d 2>/dev/null || true)
 		[ -n "$secret" ] || secret=$(oc get deployment "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="oauth-proxy")].env[?(@.name=="COOKIE_SECRET")].value}' 2>/dev/null || true)
 		[ ${#secret} -eq 32 ] || die "Could not read the current 32-character cookie secret (Secret $PROXY_SECRET)."
 		printf 'COOKIE_SECRET=%s\n' "$secret" >>"$TMP/params"
 	fi
-	oc process -f "$template" --param-file="$TMP/params" --ignore-unknown-parameters >"$TMP/objects.json"
+	oc process -f "$template" --param-file="$TMP/params" --ignore-unknown-parameters --local >"$TMP/objects.json"
 	rm -f "$TMP/params"
 	if [ -z "$DRY" ]; then
 		oc apply -f "$TMP/objects.json"
