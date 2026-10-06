@@ -68,7 +68,7 @@ func lockCluster(w http.ResponseWriter) bool {
 	if sw.client == nil {
 		return true
 	}
-	holder, err := leases.acquire(sw.client, op)
+	holder, err := leases.acquire(sw.client, op, sw.cancelOp)
 	if holder == nil && err == nil {
 		return true
 	}
@@ -162,6 +162,9 @@ type Operation struct {
 	client *cluster.Client
 	sw     *statusWriter // the response, for the outcome of non-streaming operations
 	begun  bool          // set by beginOperation
+	// lockLost: the lease heartbeat stopped the operation because its lease
+	// was lost; its outcome is cluster.LockLostMessage.
+	lockLost bool
 }
 
 // operationTypes maps mutation endpoints to a stable type and a label.
@@ -335,6 +338,9 @@ func (t *operationTracker) snapshot() *Operation {
 // the final operation_complete event of a stream, otherwise the response
 // status and the "success", "message" or "error" fields of its JSON body.
 func operationOutcome(op *Operation) (bool, string) {
+	if op.lockLost {
+		return false, cluster.LockLostMessage
+	}
 	if op.Step == "operation_complete" {
 		return op.StepStatus == "success", op.Message
 	}

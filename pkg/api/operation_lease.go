@@ -113,8 +113,9 @@ var leases = &leaseKeeper{}
 // acquire takes the lease for op. It returns the lease of another process
 // that holds the lock, or errLeaseContended; the caller then refuses the
 // operation. Any other failure only logs a warning (see the error policy).
-// On success the heartbeat runs until stop.
-func (k *leaseKeeper) acquire(c *cluster.Client, op *Operation) (*types.OperationLease, error) {
+// On success the heartbeat runs until stop; when the lease is lost it
+// stops the operation through cancelOp (see startHeartbeat).
+func (k *leaseKeeper) acquire(c *cluster.Client, op *Operation, cancelOp context.CancelCauseFunc) (*types.OperationLease, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), leaseWriteTimeout)
 	defer cancel()
 	holder, err := writeOperationLease(c.WithContext(ctx), leaseFor(op, time.Now()), leaseHeldElsewhere)
@@ -126,25 +127,47 @@ func (k *leaseKeeper) acquire(c *cluster.Client, op *Operation) (*types.Operatio
 	case err != nil:
 		slog.Warn("could not take the cross-pod operation lock; the operation continues without it", "operation", op.ID, "error", err)
 	}
-	k.startHeartbeat(c, op.ID)
+	k.startHeartbeat(c, op.ID, cancelOp)
 	return nil, nil
+}
+
+// leaseLossAfter is how long renewals may fail in a row before the lease
+// counts as lost: one interval before the TTL, since another pod may take
+// an expired lease over.
+func leaseLossAfter() time.Duration {
+	return leaseTTL - leaseHeartbeatInterval
 }
 
 // startHeartbeat renews the lease of the operation with this ID, with its
 // latest step, until stop. It does not depend on the request: it keeps
 // running while the server drains operations at shutdown.
-func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string) {
+//
+// The lease is lost when a renewal finds another process's live lease, or
+// when renewals have failed for leaseLossAfter since the last success
+// (another pod may then take it over). The heartbeat then stops the
+// operation with cluster.ErrOperationLockLost: its context ends, and no
+// cleanup or restore runs (cluster.postOperationContext), because the other
+// pod may be changing the same objects. A single failed renewal does not.
+func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string, cancelOp context.CancelCauseFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	k.mu.Lock()
 	k.owner = &cluster.LeaseOwner{BootID: bootID, ID: opID}
 	k.cancel, k.done = cancel, done
-	interval := leaseHeartbeatInterval
+	interval, lossAfter := leaseHeartbeatInterval, leaseLossAfter()
 	k.mu.Unlock()
+	lose := func(why string, attrs ...any) {
+		slog.Error("operation stopped: "+why, append([]any{"operation", opID}, attrs...)...)
+		inflight.update(opID, func(op *Operation) { op.lockLost = true })
+		if cancelOp != nil {
+			cancelOp(cluster.ErrOperationLockLost)
+		}
+	}
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		lastRenewed := time.Now()
 		for {
 			select {
 			case <-ctx.Done():
@@ -162,10 +185,15 @@ func (k *leaseKeeper) startHeartbeat(c *cluster.Client, opID string) {
 			case ctx.Err() != nil:
 				return
 			case holder != nil:
-				slog.Error("another updater process holds the cross-pod operation lock while this operation runs", "operation", opID,
-					"holder", holder.ID, "holderPod", holder.Pod)
+				lose("another updater pod took over the cross-pod operation lock", "holder", holder.ID, "holderPod", holder.Pod)
+				return
+			case err != nil && time.Since(lastRenewed) >= lossAfter:
+				lose("the cross-pod operation lock could not be renewed and may have expired", "since", lastRenewed, "error", err)
+				return
 			case err != nil:
 				slog.Warn("could not renew the cross-pod operation lock", "operation", opID, "error", err)
+			default:
+				lastRenewed = time.Now()
 			}
 		}
 	}()

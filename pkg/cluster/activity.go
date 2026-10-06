@@ -184,7 +184,7 @@ func RecordActivity(c *Client, entry types.ActivityEntry) {
 	// included, and never past the operation's shared post-deadline end
 	// (see postOperationContext), so a stalled API server cannot hold a
 	// shutting-down pod past its drain.
-	ctx, cancel := postOperationContext(c, activityWriteTimeout)
+	ctx, cancel := bookkeepingContext(c, activityWriteTimeout)
 	defer cancel()
 	recordActivityWithClient(c.WithContext(ctx), entry)
 }

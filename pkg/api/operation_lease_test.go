@@ -26,6 +26,7 @@ type fakeRecord struct {
 	releases  []cluster.LeaseOwner
 	completed []*cluster.LeaseOwner
 	writeErr  error
+	failNext  int // the next lease writes that fail
 }
 
 func installFakeRecord(t *testing.T) *fakeRecord {
@@ -41,6 +42,10 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 		defer f.mu.Unlock()
 		if f.writeErr != nil {
 			return nil, f.writeErr
+		}
+		if f.failNext > 0 {
+			f.failNext--
+			return nil, errors.New("etcdserver: request timed out")
 		}
 		if f.lease != nil && heldElsewhere(f.lease) {
 			cp := *f.lease

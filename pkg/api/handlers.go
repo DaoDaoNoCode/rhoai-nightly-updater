@@ -207,10 +207,14 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 
 		opContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 		defer cancel()
+		// The lease heartbeat stops the operation with
+		// cluster.ErrOperationLockLost when another pod takes the lock over.
+		opContext, cancelOp := context.WithCancelCause(opContext)
+		defer cancelOp(nil)
 		client := cluster.NewClientWithContext(opContext, clusterToken)
 		client.SetUsername(username)
 
-		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, client: client}
+		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, client: client, cancelOp: cancelOp}
 		completed := false
 		defer func() {
 			// Rejected requests (4xx/5xx status, including 409 busy),
@@ -234,7 +238,9 @@ type statusWriter struct {
 	path   string
 	user   string
 	client *cluster.Client
-	opID   string // set by lockCluster
+	// cancelOp ends the operation's context with a cause.
+	cancelOp context.CancelCauseFunc
+	opID     string // set by lockCluster
 
 	// The start of a JSON response body, from which the operation's
 	// outcome is read; streams report it in their final event instead.

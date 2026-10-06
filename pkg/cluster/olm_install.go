@@ -670,6 +670,12 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 		}
 		*opErr = nil
 	}
+	if operationLockLost(c) {
+		r.Success, r.ErrorCode = false, "lock_lost"
+		if !strings.Contains(r.Message, LockLostMessage) {
+			r.Message = LockLostMessage
+		}
+	}
 	if !r.Success && t.status == "running" {
 		t.send(UpdateStepEvent{Step: t.step, Status: "failed", Message: r.Message, ErrorCode: r.ErrorCode})
 	}

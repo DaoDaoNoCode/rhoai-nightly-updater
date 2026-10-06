@@ -97,7 +97,40 @@ func ShutdownDrainTimeout() time.Duration {
 // postDeadlineWork, whichever comes first. That shared end keeps all of
 // this work inside ShutdownDrainTimeout however many writes follow the
 // deadline. A context without a deadline gets only timeout.
+//
+// After the operation lost its cross-pod lock (ErrOperationLockLost) the
+// context is already cancelled: another updater pod may be changing the
+// same objects, so no cleanup or restore may run.
 func postOperationContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := bookkeepingContext(c, timeout)
+	if operationLockLost(c) {
+		cancel()
+		ctx, cancelCause := context.WithCancelCause(context.Background())
+		cancelCause(ErrOperationLockLost)
+		return ctx, func() {}
+	}
+	return ctx, cancel
+}
+
+// ErrOperationLockLost is the cancellation cause of an operation whose
+// cross-pod lock another updater pod took over, or that could not be
+// renewed for so long that it may have expired (pkg/api operation_lease.go).
+var ErrOperationLockLost = errors.New("the cross-pod operation lock was lost")
+
+// LockLostMessage is the result of an operation stopped by
+// ErrOperationLockLost.
+const LockLostMessage = "Another updater pod took over the lock, so this operation stopped and made no further changes (no automatic restore). " +
+	"Check the cluster state and re-run the operation after the other one finishes."
+
+// operationLockLost reports whether c's operation was stopped because its
+// cross-pod lock was lost.
+func operationLockLost(c *Client) bool {
+	return c != nil && c.ctx != nil && errors.Is(context.Cause(c.ctx), ErrOperationLockLost)
+}
+
+// bookkeepingContext is postOperationContext for the updater's own records
+// (the activity log), which are written even after the lock was lost.
+func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
 	parent := context.Background()
 	end := time.Now().Add(timeout)
 	if c != nil && c.ctx != nil {
@@ -261,6 +294,17 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	}
 	operatorTouched := r.subscriptionChanged || r.csvRemoved
 	if !operatorTouched && !r.catalogChanged {
+		return
+	}
+	if operationLockLost(c) {
+		// Another updater pod holds the lock and may be changing the same
+		// Subscription and catalog: a restore would undo its work.
+		msg := "Automatic operator recovery skipped: " + LockLostMessage
+		slog.Warn("operator restore skipped: the cross-pod operation lock was lost")
+		if result != nil {
+			result.Logs = append(result.Logs, msg)
+		}
+		emit(UpdateStepEvent{Step: restoreStepName, Status: "skipped", Message: msg, ErrorCode: "lock_lost"})
 		return
 	}
 

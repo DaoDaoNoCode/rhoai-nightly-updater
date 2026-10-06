@@ -536,6 +536,59 @@ func TestAdminAckReported(t *testing.T) {
 	}
 }
 
+// Review fix 2: an operation whose cross-pod lock was lost stops, and the
+// automatic restore does not run (another pod may be changing the same
+// Subscription and catalog).
+func TestLostLockSkipsTheRestore(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	writesAtLoss := -1
+	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
+		// The heartbeat saw another holder right after the Subscription
+		// was created; OLM never installs.
+		for _, r := range f.requests {
+			if r.Method != http.MethodGet && !strings.Contains(r.Path, "/configmaps") {
+				writesAtLoss++
+			}
+		}
+		writesAtLoss++ // this Subscription write
+		cancel(ErrOperationLockLost)
+	}
+	var events []UpdateStepEvent
+	result, err := UpdateStream(f.client(ctx), testNightlyImage, func(e UpdateStepEvent) { events = append(events, e) })
+	if err != nil || result.Success || result.ErrorCode != "lock_lost" || result.Message != LockLostMessage {
+		t.Fatalf("result %+v err %v", result, err)
+	}
+	if writesAtLoss < 0 {
+		t.Fatal("the Subscription was never created")
+	}
+	if after := f.writes()[writesAtLoss:]; len(after) != 0 {
+		t.Fatalf("cluster writes after the lock was lost: %v", after)
+	}
+	skipped := false
+	for _, e := range events {
+		skipped = skipped || (e.Step == restoreStepName && e.Status == "skipped" && e.ErrorCode == "lock_lost")
+	}
+	if !skipped || !strings.Contains(strings.Join(result.Logs, "\n"), "Automatic operator recovery skipped") {
+		t.Fatalf("restore not reported as skipped: events %+v", events)
+	}
+	// Bookkeeping of the updater itself still happens; cluster cleanup does not.
+	if c := f.client(ctx); !operationLockLost(c) {
+		t.Fatal("cause not seen")
+	}
+	pctx, pcancel := postOperationContext(f.client(ctx), time.Minute)
+	defer pcancel()
+	if pctx.Err() == nil {
+		t.Fatal("postOperationContext is usable after the lock was lost")
+	}
+	bctx, bcancel := bookkeepingContext(f.client(ctx), time.Minute)
+	defer bcancel()
+	if bctx.Err() != nil {
+		t.Fatal("bookkeeping context cancelled")
+	}
+}
+
 // E3: an operator that stops at upgrade gates reports them on the DSC (a
 // 3.5 operator does not update the Platform). The note reads any DSC
 // condition, waits a bounded time for the new operator to report, and stays
