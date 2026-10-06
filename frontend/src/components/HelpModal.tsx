@@ -17,7 +17,7 @@ import {
   Title,
 } from "@patternfly/react-core";
 import QuestionCircleIcon from "@patternfly/react-icons/dist/esm/icons/question-circle-icon";
-import { useVersion } from "../state/AppInfo";
+import { useUpdateCheck, useVersion } from "../state/AppInfo";
 import { useClusterStatus } from "../state/AppState";
 
 const GLOSSARY: [string, React.ReactNode][] = [
@@ -32,6 +32,7 @@ const GLOSSARY: [string, React.ReactNode][] = [
 export const HelpButton: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const version = useVersion();
+  const update = useUpdateCheck();
   const { status } = useClusterStatus();
 
   return (
@@ -122,6 +123,23 @@ export const HelpButton: React.FC = () => {
                   {version.version}
                   {version.commit && version.commit !== "unknown" ? <> (commit <code>{version.commit.slice(0, 12)}</code>)</> : null}
                   {version.buildDate && version.buildDate !== "unknown" ? `, built ${version.buildDate}` : ""}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+            )}
+            {update?.updateAvailable && update.latest && (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Newer release</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {update.latest}
+                  {update.majorUpgrade ? " (a new major version: a full redeploy)" : ""}
+                  {update.releaseNotesURL && (
+                    <>
+                      {" "}
+                      <Button variant="link" isInline component="a" href={update.releaseNotesURL} target="_blank" rel="noopener noreferrer">
+                        Release notes
+                      </Button>
+                    </>
+                  )}
                 </DescriptionListDescription>
               </DescriptionListGroup>
             )}

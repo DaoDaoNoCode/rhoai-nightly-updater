@@ -22,6 +22,7 @@ var routes = []Route{
 	{"POST /api/refresh/stream", HandleRefreshStream},
 	{"POST /api/assist-rollout", HandleAssistRollout},
 	{"GET /api/activity", HandleActivity},
+	{"GET /api/update-check", HandleUpdateCheck},
 	{"GET /api/latest-nightly", HandleLatestNightly},
 	{"GET /api/nightly-tags", HandleNightlyTags},
 	{"GET /api/test-pull-secret", HandleTestPullSecret},

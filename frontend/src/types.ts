@@ -598,6 +598,17 @@ export interface VersionInfo {
   templateOutdated: boolean;
 }
 
+/** GET /api/update-check: the newest release in the updater's image repository. */
+export interface UpdateCheck {
+  /** The running release; absent for main and commit builds (no check). */
+  current?: string;
+  latest?: string;
+  updateAvailable: boolean;
+  /** latest has another MAJOR version: it needs its own deploy template (a full redeploy). */
+  majorUpgrade: boolean;
+  releaseNotesURL?: string;
+}
+
 /** One build's answer in GET /api/build-explorer/contains. */
 export interface PRContainsBuild {
   image: string;

@@ -1,5 +1,10 @@
 import type { StatusResponse } from "./types";
 
+/** A release version (vMAJOR.MINOR.PATCH); main and commit builds are not. */
+export function isReleaseVersion(version: string | undefined): version is string {
+  return !!version && /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version);
+}
+
 export function prerequisitesMet(status: StatusResponse | null): boolean {
   return !!(status?.pullSecret.exists && status?.pullSecret.valid && status?.imageMirror.exists);
 }

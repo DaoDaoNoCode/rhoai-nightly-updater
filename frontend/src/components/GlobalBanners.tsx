@@ -16,6 +16,7 @@ import {
   useDashboardOverride,
   usePermissions,
   useSessionExpired,
+  useUpdateCheck,
   useVersion,
 } from "../state/AppInfo";
 import { isRunning } from "../state/operation";
@@ -25,6 +26,9 @@ import { sentence, shortTarget } from "../build";
 
 const INTERRUPTED_DISMISS_KEY = "rhoai-interrupted-dismissed";
 const TEMPLATE_DISMISS_KEY = "rhoai-template-hint-dismissed";
+
+/** The release whose "is available" notice was dismissed (localStorage: it stays dismissed). */
+const UPDATE_DISMISS_KEY = "rhoai-update-dismissed";
 
 /** Notices shown at once; the rest collapse behind "View N more notices" (PF: at most 3 alerts). */
 export const MAX_VISIBLE_NOTICES = 2;
@@ -243,7 +247,45 @@ function useTemplateNotice(): Notice | null {
       >
         Build {version.version} expects deployment template revision {version.expectedTemplateRevision || "?"}, but this
         Deployment was created from {version.templateRevision ? `revision ${version.templateRevision}` : "an older template"}.
-        Re-apply it from the repository with <code>make upgrade</code>.
+        Re-apply it from a checkout of the running release with <code>make upgrade</code>, or with that release&apos;s{" "}
+        <code>install.sh</code>. See <code>docs/UPGRADING.md</code>.
+      </Alert>
+    ),
+  };
+}
+
+function readLocal(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function writeLocal(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* localStorage may be disabled */ }
+}
+
+/** A newer updater release; dismissing hides it until an even newer one appears. */
+function useUpdateNotice(): Notice | null {
+  const update = useUpdateCheck();
+  const [dismissed, setDismissed] = useState(() => readLocal(UPDATE_DISMISS_KEY));
+  if (!update?.updateAvailable || !update.latest || dismissed === update.latest) return null;
+  const latest = update.latest;
+  const command = <code>git checkout {latest} &amp;&amp; make upgrade</code>;
+  return {
+    key: "update",
+    priority: 10,
+    element: (
+      <Alert
+        variant="info"
+        isInline
+        component="p"
+        title={`${latest} is available`}
+        actionClose={<AlertActionCloseButton onClose={() => { writeLocal(UPDATE_DISMISS_KEY, latest); setDismissed(latest); }} />}
+        actionLinks={update.releaseNotesURL
+          ? <AlertActionLink component="a" href={update.releaseNotesURL} target="_blank" rel="noopener noreferrer">Release notes</AlertActionLink>
+          : undefined}
+      >
+        This updater runs {update.current}.{" "}
+        {update.majorUpgrade
+          ? <>{latest} is a new major version and requires a full redeploy: {command}, or that release&apos;s <code>install.sh</code>.</>
+          : <>An admin upgrades with {command}, or that release&apos;s <code>install.sh</code>.</>}
       </Alert>
     ),
   };
@@ -323,6 +365,7 @@ export const GlobalBanners: React.FC = () => {
     useReconcileTimeoutNotice(),
     useDashboardOverrideNotice(pathname === "/dashboard-dev"),
     useTemplateNotice(),
+    useUpdateNotice(),
   ].filter((n): n is Notice => n !== null).sort((a, b) => a.priority - b.priority);
   if (notices.length === 0) return null;
   const hidden = showAll ? 0 : Math.max(0, notices.length - MAX_VISIBLE_NOTICES);

@@ -29,6 +29,14 @@ parameters:
     # Match the tag to your cluster's OCP minor version (e.g., v4.17 for OCP 4.17.x).
     # Find available tags: oc image info registry.redhat.io/openshift4/ose-oauth-proxy-rhel9 --filter-by-os=linux/amd64
     value: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.17
+  # The image repository (no tag) the app reads release tags from to show
+  # "vX.Y.Z is available"; empty turns the check off. install.sh passes the
+  # repository it installs from.
+  - name: IMAGE_REPOSITORY
+    value: quay.io/juntao_wang/rhoai-nightly-updater
+  # Release notes are linked as <RELEASES_URL>/<tag>.
+  - name: RELEASES_URL
+    value: https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases
 objects:
 
   - apiVersion: v1
@@ -451,6 +459,11 @@ objects:
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
                   value: "4"
+                # The update check (GET /api/update-check).
+                - name: IMAGE_REPOSITORY
+                  value: ${IMAGE_REPOSITORY}
+                - name: RELEASES_URL
+                  value: ${RELEASES_URL}
               ports:
                 - containerPort: 9090
                   name: metrics

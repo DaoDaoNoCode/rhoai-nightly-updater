@@ -5,7 +5,7 @@ import { AppStateProvider } from "../state/AppState";
 import { AppInfoProvider } from "../state/AppInfo";
 import { LiveAnnouncerProvider } from "../state/LiveAnnouncer";
 import { getUserPermissions } from "../services/api";
-import type { DashboardState, OperationStatusResponse, StatusResponse, UserPermissions, VersionInfo } from "../types";
+import type { DashboardState, OperationStatusResponse, StatusResponse, UpdateCheck, UserPermissions, VersionInfo } from "../types";
 
 /** A healthy nightly install: rhoai-3.6, newer build available. */
 export function nightlyStatus(overrides: Partial<StatusResponse> = {}): StatusResponse {
@@ -50,6 +50,7 @@ export interface AppFetchers {
   operation?: () => Promise<OperationStatusResponse>;
   permissions?: () => Promise<UserPermissions>;
   version?: () => Promise<VersionInfo>;
+  update?: () => Promise<UpdateCheck>;
   dashboard?: () => Promise<DashboardState>;
 }
 
@@ -68,12 +69,13 @@ export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, r
   const operation = fetchers.operation ?? (async () => IDLE_OPERATION);
   const permissions = fetchers.permissions ?? (async () => ({ canMutate: true, user: "me" }));
   const version = fetchers.version ?? (async () => ({ version: "dev", commit: "unknown", buildDate: "unknown", templateOutdated: false }));
+  const update = fetchers.update ?? (async () => ({ updateAvailable: false, majorUpgrade: false }));
   const dashboard = fetchers.dashboard ?? (async () => ({ currentImage: "", isCustomPR: false, managed: true, podStatus: "", podReady: true, containersReady: 1, containersTotal: 1, rolloutPending: false, canAssistRollout: false, override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false } } as DashboardState));
   return render(
     <LiveAnnouncerProvider>
       <MemoryRouter initialEntries={[route]}>
         <AppStateProvider fetchStatus={status} fetchOperation={operation}>
-          <AppInfoProvider fetchPermissions={permissions} fetchVersion={version} fetchDashboardState={dashboard}>
+          <AppInfoProvider fetchPermissions={permissions} fetchVersion={version} fetchUpdateCheck={update} fetchDashboardState={dashboard}>
             {ui}
           </AppInfoProvider>
         </AppStateProvider>

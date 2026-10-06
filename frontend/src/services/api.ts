@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo, PRContainsResponse } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -211,6 +211,11 @@ export function getOperation(signal?: AbortSignal): Promise<OperationStatusRespo
 /** Build and deployment-template information of the running updater. */
 export function getVersion(signal?: AbortSignal): Promise<VersionInfo> {
   return request('/api/version', { signal });
+}
+
+/** Whether a newer updater release exists (cached by the backend for hours). */
+export function getUpdateCheck(signal?: AbortSignal): Promise<UpdateCheck> {
+  return request('/api/update-check', { signal });
 }
 
 export function updateOperator(image: string, dryRun: boolean): Promise<OperationResponse> {

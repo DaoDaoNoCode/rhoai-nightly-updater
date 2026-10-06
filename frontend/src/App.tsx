@@ -57,7 +57,8 @@ import { StatusLabel } from "./components/StatusLabel";
 import { NAV_ITEMS } from "./constants";
 import { LOGO_SRC } from "./logo";
 import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
-import { AppInfoProvider, useSessionExpired } from "./state/AppInfo";
+import { AppInfoProvider, useSessionExpired, useVersion } from "./state/AppInfo";
+import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 
 // Route-level code splitting: each page is its own chunk.
@@ -136,6 +137,7 @@ const AppLayout: React.FC = () => {
   const { status, error: statusError } = useClusterStatus();
   const { state: operationState } = useOperation();
   const sessionExpired = useSessionExpired();
+  const runningVersion = useVersion()?.version;
   const reconciling = operationState.reconcile.active;
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
@@ -185,6 +187,13 @@ const AppLayout: React.FC = () => {
               {reconciling && (
                 <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
                   <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>Reconciling</StatusLabel>
+                </ToolbarItem>
+              )}
+              {isReleaseVersion(runningVersion) && (
+                <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
+                  <span className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle pf-v6-u-text-nowrap" title={`Updater release ${runningVersion}`}>
+                    {runningVersion}
+                  </span>
                 </ToolbarItem>
               )}
               <ToolbarItem>

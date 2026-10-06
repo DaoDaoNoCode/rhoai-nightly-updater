@@ -1,8 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { DashboardOverride, DashboardState, ServerOperation, UserPermissions, VersionInfo } from "../types";
+import type { DashboardOverride, DashboardState, ServerOperation, UpdateCheck, UserPermissions, VersionInfo } from "../types";
 import {
   getDashboardState,
   getUserPermissions,
+  getUpdateCheck,
   getVersion,
   isApiError,
   isSessionExpired,
@@ -15,7 +16,7 @@ import { usePolling } from "../hooks/usePolling";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
 import { useClusterStatus, useOperation } from "./AppState";
-import { formatElapsed } from "../utils";
+import { formatElapsed, isReleaseVersion } from "../utils";
 
 // ---------------------------------------------------------------------------
 // Permissions
@@ -80,6 +81,8 @@ export function overrideFromDashboardResponse(result: DashboardState | ApiError)
 interface AppInfoValue {
   permissions: PermissionsValue;
   version: VersionInfo | null;
+  /** Only for a running release; null until known. */
+  update: UpdateCheck | null;
   dashboard: DashboardOverrideValue;
   sessionExpired: boolean;
 }
@@ -100,6 +103,10 @@ export function useVersion(): VersionInfo | null {
   return useAppInfo().version;
 }
 
+export function useUpdateCheck(): UpdateCheck | null {
+  return useAppInfo().update;
+}
+
 export function useDashboardOverride(): DashboardOverrideValue {
   return useAppInfo().dashboard;
 }
@@ -112,6 +119,7 @@ interface AppInfoProviderProps {
   /** Injected for tests. */
   fetchPermissions?: () => Promise<UserPermissions>;
   fetchVersion?: (signal?: AbortSignal) => Promise<VersionInfo>;
+  fetchUpdateCheck?: (signal?: AbortSignal) => Promise<UpdateCheck>;
   fetchDashboardState?: (signal?: AbortSignal) => Promise<DashboardState>;
 }
 
@@ -124,11 +132,12 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
   children,
   fetchPermissions = getUserPermissions,
   fetchVersion = getVersion,
+  fetchUpdateCheck = getUpdateCheck,
   fetchDashboardState = getDashboardState,
 }) => {
-  const fetchers = useRef({ fetchPermissions, fetchVersion, fetchDashboardState });
+  const fetchers = useRef({ fetchPermissions, fetchVersion, fetchUpdateCheck, fetchDashboardState });
   useEffect(() => {
-    fetchers.current = { fetchPermissions, fetchVersion, fetchDashboardState };
+    fetchers.current = { fetchPermissions, fetchVersion, fetchUpdateCheck, fetchDashboardState };
   });
 
   // --- Session ---------------------------------------------------------------
@@ -177,6 +186,18 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     return () => controller.abort();
   }, []);
 
+  // --- Update check (once, for releases only) ----------------------------------
+  const [update, setUpdate] = useState<UpdateCheck | null>(null);
+  const runningRelease = isReleaseVersion(version?.version) ? version?.version : undefined;
+  useEffect(() => {
+    if (!runningRelease) return;
+    const controller = new AbortController();
+    fetchers.current.fetchUpdateCheck(controller.signal)
+      .then((u) => { if (!controller.signal.aborted) setUpdate(u); })
+      .catch(() => { /* best effort: no banner when the check fails */ });
+    return () => controller.abort();
+  }, [runningRelease]);
+
   // --- Dashboard Dev override -------------------------------------------------
   const [override, setOverride] = useState<DashboardOverride | null>(null);
   const [overrideLoaded, setOverrideLoaded] = useState(false);
@@ -219,9 +240,10 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       retry: retryPermissions,
     },
     version,
+    update,
     dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride },
     sessionExpired,
-  }), [permStatus, sessionExpired, permError, retryPermissions, version, override, overrideLoaded, refreshOverride]);
+  }), [permStatus, sessionExpired, permError, retryPermissions, version, update, override, overrideLoaded, refreshOverride]);
 
   return <AppInfoContext.Provider value={value}>{children}</AppInfoContext.Provider>;
 };
