@@ -98,7 +98,7 @@ export const PRSearchResults: React.FC<{
       )}
       {search.results.length > 0 && (
         <Table aria-label={`Builds and PR #${pr}`} variant="compact">
-          <Thead><Tr><Th>Build</Th><Th>PR #{pr}</Th><Th>Dashboard commit</Th><Th screenReaderText="Links and actions" /></Tr></Thead>
+          <Thead><Tr><Th modifier="wrap">Build</Th><Th modifier="wrap">PR #{pr}</Th><Th modifier="wrap">Dashboard commit</Th><Th screenReaderText="Links and actions" /></Tr></Thead>
           <Tbody>
             {search.results.map(({ build, answer }) => (
               <Tr key={build.image}>

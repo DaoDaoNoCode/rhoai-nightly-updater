@@ -6,7 +6,6 @@ import {
   Button,
   Card,
   CardBody,
-  CardTitle,
   Content,
   DataList,
   DataListCell,
@@ -145,7 +144,9 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
       )}
       {showMessage && <Content component="small" style={{ overflowWrap: "anywhere" }}>{state.message}</Content>}
       {state.warning && (
-        <Alert variant="warning" isInline isPlain component="p" title={state.warning} style={{ overflowWrap: "anywhere" }} />
+        <Alert variant="warning" isInline isPlain title="Needs attention" style={{ overflowWrap: "anywhere" }}>
+          <Content component="small">{state.warning}</Content>
+        </Alert>
       )}
       {step && <Content component="small"><strong>Next step:</strong> {step}</Content>}
     </>
@@ -354,10 +355,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   return (
     <>
       <Card>
-        <CardTitle>
-          <Title headingLevel="h2" size="lg">Test resources</Title>
-          <Content component="small">Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster.</Content>
-        </CardTitle>
         <CardBody>
           <Stack hasGutter>
             {resError && (

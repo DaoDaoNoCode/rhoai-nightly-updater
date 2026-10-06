@@ -17,7 +17,7 @@ export const TestResourcesPage: React.FC = () => {
     <>
       <PageSection>
         <Title headingLevel="h1" size="xl">Test resources</Title>
-        <Content component="p">Storage, MLflow and pipeline servers to test the dashboard against.</Content>
+        <Content component="p">Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster.</Content>
       </PageSection>
       <PageSection>
         <QuickResourceCreator mutateBlocker={blocker} onResult={onResult} />
