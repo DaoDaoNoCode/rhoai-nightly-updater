@@ -1,6 +1,15 @@
-# Checks run on merge requests and on main before anything is published.
-# Every teammate's updater pod pulls :latest on restart, so build-main only
-# runs after all checks pass.
+# Checks run on merge requests, on main and on release tags before anything
+# is published.
+#   main push            → :main and the immutable 8-character commit tag
+#   tag vX.Y.Z           → release guard, then :vX.Y.Z (immutable), the commit
+#                          tag (when new), :vMAJOR, :latest within its major
+#                          line, install.sh (the no-clone installer) and a
+#                          GitLab Release
+#   promote-latest       → manual job of a tag pipeline: :latest moves to that
+#                          release across majors
+# :latest never moves to a new major automatically: deployments that still
+# pull :latest stay on their major line until someone upgrades on purpose.
+# Release logic lives in scripts/release.sh (tested by scripts/test-release.sh).
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -8,12 +17,19 @@ workflow:
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
       when: never
     - if: $CI_COMMIT_BRANCH
+    # Release tags only; other tags run no pipeline.
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 stages:
   - test
   - build
+  - publish
+  - release
 
 variables:
+  # The image repository, without a tag. A project CI/CD variable named
+  # IMAGE overrides this default (with QUAY_USER / QUAY_TOKEN for its
+  # registry).
   IMAGE: quay.io/juntao_wang/rhoai-nightly-updater
   # Images pinned by digest; keep in step with the Containerfile.
   GO_IMAGE: docker.io/library/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190
@@ -22,6 +38,10 @@ variables:
   # Kaniko is archived upstream; it is kept pinned until a replacement
   # (for example buildah) is validated on these runners.
   KANIKO_IMAGE: gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
+  # crane (go-containerregistry) moves and reads tags in release jobs; it is
+  # installed with `go install`, which checks the module against go.sum's
+  # checksum database.
+  CRANE_VERSION: v0.22.1
 
 .test:
   stage: test
@@ -60,6 +80,28 @@ frontend:
     - npm audit --omit=dev --audit-level=high
     - npm run build
 
+release-scripts:
+  extends: .test
+  image: $GO_IMAGE
+  script:
+    - sh scripts/test-release.sh
+    - bash scripts/test-install.sh
+
+# Fails a tag pipeline before anything is built or published: the tag must
+# match the top dated section of CHANGELOG.md, and a TEMPLATE_REVISION change
+# since the previous release tag needs a higher MAJOR version.
+release-guard:
+  extends: .test
+  image: $GO_IMAGE
+  variables:
+    # The guard compares with the previous release tag: full history, all tags.
+    GIT_DEPTH: "0"
+    GIT_FETCH_EXTRA_FLAGS: --prune --quiet --tags
+  script:
+    - sh scripts/release.sh check "$CI_COMMIT_TAG" HEAD
+  rules:
+    - if: $CI_COMMIT_TAG
+
 .kaniko-build:
   stage: build
   image:
@@ -67,22 +109,24 @@ frontend:
     entrypoint: [""]
   before_script:
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"quay.io\":{\"auth\":\"$(printf '%s:%s' "${QUAY_USER}" "${QUAY_TOKEN}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
+    - echo "{\"auths\":{\"${IMAGE%%/*}\":{\"auth\":\"$(printf '%s:%s' "${QUAY_USER}" "${QUAY_TOKEN}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
 
-# Push to main → :latest and the immutable 8-character commit tag
-# (CI_COMMIT_SHORT_SHA is the first eight characters of the commit).
+# Push to main → :main and the immutable 8-character commit tag
+# (CI_COMMIT_SHORT_SHA is the first eight characters of the commit). Never
+# :latest: that only moves with releases.
 build-main:
   extends: .kaniko-build
-  needs: [go, golangci-lint, frontend]
+  needs: [go, golangci-lint, frontend, release-scripts]
   # One publish at a time (https://docs.gitlab.com/ci/resource_groups/).
-  # The default process mode, unordered, does not order waiting jobs; set
-  # it to newest_first with the API (it cannot be set in this file):
+  # The group keeps its earlier name, publish-latest, so it keeps its process
+  # mode. The default, unordered, does not order waiting jobs; set it to
+  # newest_first with the API (it cannot be set in this file):
   #   PUT /projects/:id/resource_groups/publish-latest  process_mode=newest_first
   resource_group: publish-latest
   script:
-    # Push :latest only while this commit is still the tip of the default
+    # Push :main only while this commit is still the tip of the default
     # branch, so a retried or delayed job of an older pipeline cannot
-    # replace a newer :latest. The tip comes from the Git smart HTTP ref
+    # replace a newer :main. The tip comes from the Git smart HTTP ref
     # advertisement (the kaniko debug image has busybox wget, not git); the
     # job token authenticates as gitlab-ci-token. If the tip cannot be read
     # the job fails, and a retry checks again.
@@ -91,9 +135,9 @@ build-main:
         "$CI_SERVER_URL/$CI_PROJECT_PATH.git/info/refs?service=git-upload-pack" \
         | sed -n "s|^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) refs/heads/$CI_DEFAULT_BRANCH\$|\1|p")
       [ -n "$TIP" ] || { echo "Cannot read the tip of $CI_DEFAULT_BRANCH; not publishing."; exit 1; }
-      LATEST=""
+      MAIN=""
       if [ "$TIP" = "$CI_COMMIT_SHA" ]; then
-        LATEST="--destination=$IMAGE:latest"
+        MAIN="--destination=$IMAGE:main"
       else
         echo "$CI_COMMIT_SHA is no longer the tip of $CI_DEFAULT_BRANCH ($TIP); publishing only :$CI_COMMIT_SHORT_SHA."
       fi
@@ -104,7 +148,7 @@ build-main:
         --build-arg VERSION=$CI_COMMIT_SHORT_SHA \
         --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP \
         --destination=$IMAGE:$CI_COMMIT_SHORT_SHA \
-        $LATEST \
+        $MAIN \
         --cache=true
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
@@ -125,5 +169,98 @@ build-branch:
       --cache=true
   rules:
     - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+
+# Tag vX.Y.Z → an image tarball; nothing is pushed here. release-publish
+# pushes it under the publish lock, so the "tag already exists" check and
+# the push cannot interleave with another release job.
+release-build:
+  extends: .kaniko-build
+  needs: [go, golangci-lint, frontend, release-scripts, release-guard]
+  before_script: []
+  script:
+    - >-
+      /kaniko/executor
+      --context=$CI_PROJECT_DIR
+      --dockerfile=Containerfile
+      --build-arg GIT_SHA=$CI_COMMIT_SHA
+      --build-arg VERSION=$CI_COMMIT_TAG
+      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
+      --destination=$IMAGE:$CI_COMMIT_TAG
+      --no-push
+      --tar-path=image.tar
+  artifacts:
+    paths: [image.tar]
+    expire_in: 1 day
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# Tag vX.Y.Z → install.sh, the no-clone installer: scripts/install.sh with
+# this tag's deploy/template.yaml, commit and version embedded. Kept
+# forever; the GitLab Release links it.
+release-installer:
+  stage: build
+  image: $GO_IMAGE
+  needs: [release-scripts, release-guard]
+  script:
+    - sh scripts/release.sh installer "$CI_COMMIT_TAG" HEAD > install.sh
+    - bash -n install.sh
+    - test "$(bash install.sh --print-version)" = "$CI_COMMIT_TAG"
+    - bash install.sh --print-template | cmp - deploy/template.yaml
+    - sha256sum install.sh
+  artifacts:
+    paths: [install.sh]
+    expire_in: never
+  rules:
+    - if: $CI_COMMIT_TAG
+
+.crane:
+  image: $GO_IMAGE
+  # Shared with promote-latest: one tag change at a time.
+  resource_group: publish-release
+  before_script:
+    - go install github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION
+    - printf '%s' "$QUAY_TOKEN" | crane auth login "${IMAGE%%/*}" -u "$QUAY_USER" --password-stdin
+
+# Pushes :vX.Y.Z (refused when it exists from another commit: release tags
+# are immutable), the commit tag when main has not published it, :vMAJOR
+# when this is the newest release of its major, and :latest when this is
+# newer than :latest within the same major (a :latest without a version
+# label counts as v1).
+release-publish:
+  extends: .crane
+  stage: publish
+  needs: [release-build]
+  script:
+    - IMAGE_TARBALL=image.tar sh scripts/release.sh publish "$CI_COMMIT_TAG"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# A GitLab Release with the CHANGELOG section, install.sh (and its SHA-256)
+# and a link to this tag's deploy/template.yaml. Uses the job token; an
+# existing Release is kept. After release-publish, so a Release never
+# points at an image that was not published.
+release-notes:
+  stage: release
+  image: $GO_IMAGE
+  needs: [release-publish, release-installer]
+  script:
+    - INSTALLER=install.sh sh scripts/release.sh gitlab-release "$CI_COMMIT_TAG"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# MANUAL, deliberate: move :latest to this release even when it is a new
+# major version. Every deployment that still pulls :latest gets this
+# version on its next restart and needs this release's template
+# (git checkout <tag> && make upgrade), so announce it first.
+promote-latest:
+  extends: .crane
+  stage: release
+  needs: [release-publish]
+  script:
+    - sh scripts/release.sh promote-latest "$CI_COMMIT_TAG"
+  rules:
+    - if: $CI_COMMIT_TAG
       when: manual
       allow_failure: true

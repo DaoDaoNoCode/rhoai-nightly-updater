@@ -1,0 +1,55 @@
+# Release tags (vX.Y.Z) on the GitHub mirror: the same checks as CI, the
+# release guard, then a GitHub Release with the CHANGELOG notes, install.sh
+# (the no-clone installer) and deploy/template.yaml. No images are published
+# here: GitLab CI owns the image registry.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # The image repository named in the notes and embedded in install.sh;
+      # a repository variable IMAGE overrides the default.
+      IMAGE: ${{ vars.IMAGE || 'quay.io/juntao_wang/rhoai-nightly-updater' }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The guard compares with the previous release tag.
+          fetch-depth: 0
+      - name: Release guard
+        run: sh scripts/release.sh check "$TAG" HEAD
+      - name: Installer
+        run: |
+          sh scripts/release.sh installer "$TAG" HEAD > "$RUNNER_TEMP/install.sh"
+          bash -n "$RUNNER_TEMP/install.sh"
+          test "$(bash "$RUNNER_TEMP/install.sh" --print-version)" = "$TAG"
+          bash "$RUNNER_TEMP/install.sh" --print-template | cmp - deploy/template.yaml
+          cp deploy/template.yaml "$RUNNER_TEMP/template.yaml"
+      - name: Notes
+        run: |
+          INSTALLER="$RUNNER_TEMP/install.sh" \
+          INSTALLER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/install.sh" \
+            sh scripts/release.sh notes "$TAG" HEAD > "$RUNNER_TEMP/notes.md"
+      - name: GitHub Release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "The GitHub Release $TAG exists already; leaving it."
+            exit 0
+          fi
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$RUNNER_TEMP/install.sh" "$RUNNER_TEMP/template.yaml"
