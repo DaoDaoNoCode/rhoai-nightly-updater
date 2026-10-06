@@ -82,47 +82,98 @@ func certManagerRunning(c *Client) (bool, string, error) {
 	return false, strings.Join(seen, ", "), nil
 }
 
-// podsMountingSecret returns "Pod <ns>/<name>" of the pods in namespace that
-// are not running and mount the Secret.
-func podsMountingSecret(c *Client, namespace, secret string) ([]string, error) {
-	body, _, err := c.get(namespacedPath("v1", "pods", namespace, ""))
+// certPod is the part of a pod the Certificates check reads.
+type certPod struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		Volumes []struct {
+			Secret *struct {
+				SecretName string `json:"secretName"`
+			} `json:"secret"`
+		} `json:"volumes"`
+	} `json:"spec"`
+	Status struct {
+		Phase                 string                `json:"phase"`
+		InitContainerStatuses []diagContainerStatus `json:"initContainerStatuses"`
+		ContainerStatuses     []diagContainerStatus `json:"containerStatuses"`
+	} `json:"status"`
+}
+
+func (p certPod) mounts(secret string) bool {
+	for _, v := range p.Spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == secret {
+			return true
+		}
+	}
+	return false
+}
+
+// podLister lists the pods of each namespace once per check.
+type podLister struct {
+	c    *Client
+	pods map[string][]certPod
+	errs map[string]error
+}
+
+func (l *podLister) list(namespace string) ([]certPod, error) {
+	if pods, ok := l.pods[namespace]; ok || l.errs[namespace] != nil {
+		return pods, l.errs[namespace]
+	}
+	body, _, err := l.c.get(namespacedPath("v1", "pods", namespace, ""))
+	var list struct {
+		Items []certPod `json:"items"`
+	}
+	if err == nil {
+		if perr := json.Unmarshal(body, &list); perr != nil {
+			err = fmt.Errorf("parse pods in %s: %w", namespace, perr)
+		}
+	}
 	if err != nil {
+		l.errs[namespace] = err
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Volumes []struct {
-					Secret *struct {
-						SecretName string `json:"secretName"`
-					} `json:"secret"`
-				} `json:"volumes"`
-			} `json:"spec"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
+	l.pods[namespace] = list.Items
+	return list.Items, nil
+}
+
+// podsBlockedOnSecret returns "Pod <ns>/<name>" of the Pending pods that
+// show they cannot start because THIS Secret is missing: a container
+// waiting with a message that names it (CreateContainerConfigError for an
+// env reference), or a FailedMount Warning event that names it. Pods that
+// mount the Secret but fail for another reason are returned in other, so
+// their own problems stay.
+func podsBlockedOnSecret(c *Client, l *podLister, namespace, secret string) (blocked, other []string, err error) {
+	pods, err := l.list(namespace)
+	if err != nil {
+		return nil, nil, err
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse pods in %s: %w", namespace, err)
-	}
-	var out []string
-	for _, p := range list.Items {
-		if p.Status.Phase != "Pending" {
+	needle := fmt.Sprintf("secret %q not found", secret)
+	for _, p := range pods {
+		if p.Status.Phase != "Pending" || !p.mounts(secret) {
 			continue
 		}
-		for _, v := range p.Spec.Volumes {
-			if v.Secret != nil && v.Secret.SecretName == secret {
-				out = append(out, fmt.Sprintf("Pod %s/%s", namespace, p.Metadata.Name))
-				break
+		ref := fmt.Sprintf("Pod %s/%s", namespace, p.Metadata.Name)
+		named := false
+		for _, cs := range append(append([]diagContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+			if w := cs.State.Waiting; w != nil && strings.Contains(w.Message, needle) {
+				named = true
 			}
 		}
+		if !named {
+			ev, evErr := latestWarningEvent(c, namespace, p.Metadata.Name)
+			named = evErr == nil && strings.HasPrefix(ev, "FailedMount:") && strings.Contains(ev, needle)
+		}
+		if named {
+			blocked = append(blocked, ref)
+		} else {
+			other = append(other, ref)
+		}
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Strings(blocked)
+	sort.Strings(other)
+	return blocked, other, nil
 }
 
 func checkCertificates(c *Client) checkOutput {
@@ -181,13 +232,14 @@ func checkCertificates(c *Client) checkOutput {
 		var configs []admissionConfig
 		var cfgErrs []string
 		configs, cfgErrs = listAdmissionConfigs(c)
+		pods := &podLister{c: c, pods: map[string][]certPod{}, errs: map[string]error{}}
 		var dep *dependency
 		if runErr == nil && !running {
 			dep = &dependency{Mention: "cert-manager", Key: normalizeOperatorName("cert-manager")}
 			resolveDependencies(c, []*dependency{dep})
 		}
 		for _, ci := range pending {
-			p := certificateProblem(c, ci, certificateCause{running: running, controller: controller, runErr: runErr, dep: dep}, configs)
+			p := certificateProblem(c, ci, certificateCause{running: running, controller: controller, runErr: runErr, dep: dep}, configs, pods)
 			out.problems = append(out.problems, p)
 		}
 		if dep != nil && dep.problemID() != "" {
@@ -223,7 +275,7 @@ type certificateCause struct {
 	dep        *dependency
 }
 
-func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []admissionConfig) Problem {
+func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []admissionConfig, pods *podLister) Problem {
 	rc := ci.readyCondition()
 	evidence := []string{}
 	if rc == nil {
@@ -273,13 +325,16 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 	}
 
 	if ci.Spec.SecretName != "" {
-		pods, err := podsMountingSecret(c, ci.Metadata.Namespace, ci.Spec.SecretName)
+		blocked, other, err := podsBlockedOnSecret(c, pods, ci.Metadata.Namespace, ci.Spec.SecretName)
 		if err != nil {
 			evidence = append(evidence, fmt.Sprintf("Could not list pods in %s: %v", ci.Metadata.Namespace, err))
 		}
-		if len(pods) > 0 {
-			evidence = append(evidence, fmt.Sprintf("Waiting for Secret %s: %s", ci.Spec.SecretName, strings.Join(pods, ", ")))
-			p.covers = append(p.covers, pods...)
+		if len(blocked) > 0 {
+			evidence = append(evidence, fmt.Sprintf("Cannot start without Secret %s: %s", ci.Spec.SecretName, strings.Join(blocked, ", ")))
+			p.covers = append(p.covers, blocked...)
+		}
+		if len(other) > 0 {
+			evidence = append(evidence, fmt.Sprintf("Also mount Secret %s but show no error about it (their own problems are kept): %s", ci.Spec.SecretName, strings.Join(other, ", ")))
 		}
 	}
 	var hooks []string
@@ -344,7 +399,10 @@ func linkProblems(problems []Problem) []Problem {
 				continue
 			}
 			pj := &problems[j]
-			if !strings.HasPrefix(pj.ID, "pod-") && pj.ID != "webhook-service-missing" {
+			// Only the pod problems a missing Secret causes are folded: pods
+			// stuck creating or unable to create a container.
+			podSymptom := strings.HasPrefix(pj.ID, "pod-"+string(issueStuckCreating)+"-") || strings.HasPrefix(pj.ID, "pod-"+string(issueContainerConfig)+"-")
+			if !podSymptom && pj.ID != "webhook-service-missing" {
 				continue
 			}
 			var rest []string

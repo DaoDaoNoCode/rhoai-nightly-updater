@@ -33,6 +33,13 @@ func certWorld(t *testing.T) (*fakeAPI, *Client) {
 	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[
 		{"metadata":{"name":"odh-observability-abc"},"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Pending"}},
 		{"metadata":{"name":"other"},"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Running"}}]}`)
+	// Only the stuck odh-observability pod has the FailedMount event.
+	f.handle("GET", "/api/v1/namespaces/redhat-ods-applications/events", func(r *http.Request, _ []byte) (int, string) {
+		if strings.Contains(r.URL.Query().Get("fieldSelector"), "involvedObject.name=odh-observability-abc") {
+			return 200, `{"items":[{"type":"Warning","reason":"FailedMount","message":"MountVolume.SetUp failed for volume \"cert\" : secret \"odh-observability-webhook-cert\" not found","lastTimestamp":"` + ago(time.Minute) + `"}]}`
+		}
+		return 200, `{"items":[{"type":"Warning","reason":"FailedScheduling","message":"0/3 nodes are available: 3 Insufficient cpu.","lastTimestamp":"` + ago(time.Minute) + `"}]}`
+	})
 	f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", 200, `{"items":[{"metadata":{"name":"odh-observability-webhook","creationTimestamp":"2026-01-01T00:00:00Z",
 		"labels":{"platform.opendatahub.io/part-of":"platform"},"annotations":{"cert-manager.io/inject-ca-from":"redhat-ods-applications/odh-observability-webhook-cert"}},
 		"webhooks":[{"name":"v.observability","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"odh-observability-webhook"}}}]}]}`)
@@ -61,6 +68,36 @@ func TestCertificatesCheck_CertManagerMissing(t *testing.T) {
 		t.Fatalf("prerequisite = %+v", pre)
 	}
 	assertWrites(t, f)
+}
+
+// A pod that mounts the Secret but fails for another reason is not folded
+// into the Certificate; one whose container names the missing Secret is.
+func TestCertificatesCheck_OnlyPodsBlockedOnThisSecret(t *testing.T) {
+	f, c := certWorld(t)
+	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[
+		{"metadata":{"name":"odh-observability-abc"},"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Pending"}},
+		{"metadata":{"name":"unschedulable"},"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Pending"}},
+		{"metadata":{"name":"env-ref"},"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Pending",
+			"containerStatuses":[{"name":"c","state":{"waiting":{"reason":"CreateContainerConfigError","message":"secret \"odh-observability-webhook-cert\" not found"}}}]}},
+		{"metadata":{"name":"other-secret"},"spec":{"volumes":[{"secret":{"secretName":"something-else"}}]},"status":{"phase":"Pending"}}]}`)
+	out := checkCertificates(c)
+	p := problemsByID(out)["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
+	if got := strings.Join(p.covers, ","); got != "Pod redhat-ods-applications/env-ref,Pod redhat-ods-applications/odh-observability-abc,ValidatingWebhookConfiguration odh-observability-webhook" {
+		t.Fatalf("covers = %s", got)
+	}
+	if !strings.Contains(strings.Join(p.Evidence, "\n"), "show no error about it (their own problems are kept): Pod redhat-ods-applications/unschedulable") {
+		t.Fatalf("evidence = %q", p.Evidence)
+	}
+	// One pod list per namespace, also with two Certificates in it.
+	f.obj("GET", appCertsPath, map[string]interface{}{"items": []interface{}{
+		map[string]interface{}{"metadata": map[string]string{"name": "a", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s1"}},
+		map[string]interface{}{"metadata": map[string]string{"name": "b", "namespace": "redhat-ods-applications", "creationTimestamp": ago(time.Hour)}, "spec": map[string]string{"secretName": "s2"}},
+	}})
+	before := len(f.requests("GET", "/api/v1/namespaces/redhat-ods-applications/pods"))
+	checkCertificates(c)
+	if n := len(f.requests("GET", "/api/v1/namespaces/redhat-ods-applications/pods")) - before; n != 1 {
+		t.Fatalf("pods listed %d times for one namespace", n)
+	}
 }
 
 func TestCertificatesCheck_OwnFailingCondition(t *testing.T) {
@@ -107,6 +144,7 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 		{ID: "prerequisite-missing-a"},
 		{ID: "pod-stuck-creating-ns-p", Title: "p: 2 pods stuck", AffectedObjects: []string{"Pod ns/p1", "Pod ns/p2"}},
 		{ID: "pod-crashloop-ns-q", Title: "q crash-looping", AffectedObjects: []string{"Pod ns/p1", "Pod ns/q1"}},
+		{ID: "pod-crashloop-ns-p", Title: "p1 crash-looping", AffectedObjects: []string{"Pod ns/p1"}},
 		{ID: "webhook-service-missing", Title: "2 webhooks", AffectedObjects: []string{"ValidatingWebhookConfiguration hook-a", "MutatingWebhookConfiguration hook-b"}},
 	}
 	out := linkProblems(problems)
@@ -114,7 +152,8 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 	for _, p := range out {
 		got = append(got, p.ID)
 	}
-	if strings.Join(got, ",") != "dsc-not-ready,certificate-not-ready-x,prerequisite-missing-a,pod-crashloop-ns-q,webhook-service-missing" {
+	// A crash loop is not a missing-Secret symptom: kept even when its pod is covered.
+	if strings.Join(got, ",") != "dsc-not-ready,certificate-not-ready-x,prerequisite-missing-a,pod-crashloop-ns-q,pod-crashloop-ns-p,webhook-service-missing" {
 		t.Fatalf("ids = %v", got)
 	}
 	if !containsString(out[1].Evidence, "Also explains: p: 2 pods stuck") || strings.Join(out[1].RelatedProblems, ",") != "prerequisite-missing-a" {
@@ -123,7 +162,7 @@ func TestLinkProblems_FoldsSymptomsIntoRootCause(t *testing.T) {
 	if strings.Join(out[0].RelatedProblems, ",") != "prerequisite-missing-a" {
 		t.Fatalf("related = %v", out[0].RelatedProblems)
 	}
-	wh := out[4]
+	wh := out[5]
 	if !strings.Contains(strings.Join(wh.Evidence, "\n"), `Explained by "Certificate x is not issued": ValidatingWebhookConfiguration hook-a`) || !containsString(wh.RelatedProblems, root.ID) {
 		t.Fatalf("webhook problem = %+v", wh)
 	}
