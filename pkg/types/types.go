@@ -242,6 +242,19 @@ type DSCCompatibility struct {
 	DefaultsError     string   `json:"defaultsError,omitempty"`
 	// DefaultsSource is "csv" (alm-examples of the installed CSV) or "github" (branch sample).
 	DefaultsSource string `json:"defaultsSource,omitempty"`
+	// ResetRemovals are the enabled components "reset-defaults" would set to
+	// Removed or drop.
+	ResetRemovals []string `json:"resetRemovals,omitempty"`
+	// RemovalBlocks are the components a repair would remove that must not
+	// be removed now. "reset-defaults" refuses while any of ResetRemovals is
+	// listed, "remove-extra-components" while any enabled extra component is.
+	RemovalBlocks []DSCRemovalBlock `json:"removalBlocks,omitempty"`
+}
+
+// DSCRemovalBlock explains why a DSC component must not be set to Removed now.
+type DSCRemovalBlock struct {
+	Component string   `json:"component"`
+	Reasons   []string `json:"reasons"`
 }
 
 // ComponentsResponse groups DSC component statuses with deployment details.

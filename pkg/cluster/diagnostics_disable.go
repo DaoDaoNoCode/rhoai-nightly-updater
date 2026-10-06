@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -64,26 +65,152 @@ func moduleCR(c *Client, component string) (finalizers []string, deleting bool, 
 	return m.Finalizers, m.DeletionTimestamp != "", true, nil
 }
 
+// removalChecker evaluates the preconditions for setting components to
+// Removed. It caches the RHOAI conversion CRDs and the Services behind them,
+// so a DSC repair that removes several components lists them once.
+type removalChecker struct {
+	c           *Client
+	convLoaded  bool
+	convCRDs    []conversionCRD
+	convErr     error
+	svcOwner    map[string]string
+	svcOwnerErr map[string]error
+}
+
+func newRemovalChecker(c *Client) *removalChecker {
+	return &removalChecker{c: c, svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
+}
+
 // disableBlockers returns the reasons the component must not be removed now.
 func disableBlockers(c *Client, component string) []string {
+	return newRemovalChecker(c).blockers(component)
+}
+
+// blockers returns the reasons the component must not be set to Removed
+// now. Removing a component deletes its module CR; once the CR is gone the
+// platform deletes the module operator and the Services it serves (RHOAI
+// operator notes §2.3), but never the CRDs (CRDs get no owner references).
+func (rc *removalChecker) blockers(component string) []string {
+	c := rc.c
+	if reason, refused := refusedComponents[component]; refused {
+		return []string{reason}
+	}
 	var blockers []string
 	if ok, why := deploymentReady(c, SubNS, "rhods-operator"); !ok {
 		blockers = append(blockers, "rhods-operator must be running to clean up a removed component: "+why)
 	}
 	finalizers, deleting, found, err := moduleCR(c, component)
+	op, knownOp := moduleOperators[component]
 	switch {
 	case err != nil:
 		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
-	case found && len(finalizers) > 0:
-		op, known := moduleOperators[component]
-		if !known {
-			blockers = append(blockers, fmt.Sprintf("the %s module CR has finalizer %s and the tool does not know which operator removes it", component, strings.Join(finalizers, ", ")))
-		} else if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
-			blockers = append(blockers, fmt.Sprintf("the %s module CR has finalizer %s, which %s/%s removes, but %s; fix that operator first or the removal hangs",
-				component, strings.Join(finalizers, ", "), op.namespace, op.name, why))
+	case found && len(finalizers) > 0 && !knownOp:
+		blockers = append(blockers, fmt.Sprintf("the %s module CR has finalizer %s and the tool does not know which operator removes it", component, strings.Join(finalizers, ", ")))
+	}
+	// The module operator removes the finalizers of the module CR and of
+	// its operands (TrustyAIService, RayCluster, FeatureStore, TrainJob,
+	// ...). If it is not running, they wait forever (D1, D7, D8). The
+	// ServiceAccount cannot list those operands, so the operator must be
+	// running whether or not the module CR itself has finalizers.
+	if knownOp && op.name != "rhods-operator" && err == nil && found && !deleting {
+		if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
+			what := "operands"
+			if len(finalizers) > 0 {
+				what = fmt.Sprintf("module CR (finalizer %s) and its operands", strings.Join(finalizers, ", "))
+			}
+			blockers = append(blockers, fmt.Sprintf("its operator %s/%s removes the finalizers of the %s, but %s; fix that operator first or the removal hangs", op.namespace, op.name, what, why))
 		}
 	}
+	crds, convErr := rc.conversionCRDsOf(component)
+	switch {
+	case convErr != nil:
+		blockers = append(blockers, fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, convErr))
+	case len(crds) > 0:
+		blockers = append(blockers, fmt.Sprintf("CRD(s) %s convert their objects through a webhook Service of %s. Removing the component deletes that Service but not the CRDs, so reading their objects at another version, garbage collection and namespace deletion would fail (the dead mcpservers conversion on this cluster is the same case). "+
+			"Delete those objects first (the tool cannot list them), then change the component in the OpenShift console", strings.Join(crds, ", "), component))
+	}
 	return blockers
+}
+
+// conversionCRDsOf returns the RHOAI CRDs whose conversion webhook Service
+// belongs to the component: the Service's ownerReference to a
+// components.platform.opendatahub.io CR or its platform.opendatahub.io/part-of
+// label names the component (live: trustyai-service-operator-webhook-service
+// is owned by TrustyAI/default-trustyai), or, for a Service that is already
+// gone, its name contains the component name (mcp-lifecycle-operator-webhook-service
+// for mcplifecycleoperator), the same match the stale-conversion check uses.
+func (rc *removalChecker) conversionCRDsOf(component string) ([]string, error) {
+	if !rc.convLoaded {
+		rc.convLoaded = true
+		crds, err := listRHOAIConversionCRDs(rc.c)
+		if err != nil && !IsK8sError(err, http.StatusNotFound) {
+			rc.convErr = err
+		}
+		rc.convCRDs = crds
+	}
+	if rc.convErr != nil {
+		return nil, rc.convErr
+	}
+	var out []string
+	for _, crd := range rc.convCRDs {
+		ref := crd.conversionService()
+		if ref == "" {
+			continue
+		}
+		owner, err := rc.serviceComponent(ref)
+		if err != nil {
+			return nil, err
+		}
+		_, name, _ := strings.Cut(ref, "/")
+		if owner == component || strings.Contains(strings.ReplaceAll(name, "-", ""), component) {
+			out = append(out, crd.Metadata.Name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// serviceComponent returns the component that owns a Service ("" when it
+// does not exist or names none).
+func (rc *removalChecker) serviceComponent(ref string) (string, error) {
+	if owner, ok := rc.svcOwner[ref]; ok {
+		return owner, rc.svcOwnerErr[ref]
+	}
+	ns, name, _ := strings.Cut(ref, "/")
+	owner := ""
+	body, _, err := rc.c.get(namespacedPath("v1", "services", ns, name))
+	switch {
+	case IsK8sError(err, http.StatusNotFound):
+		err = nil
+	case err != nil:
+		err = fmt.Errorf("read Service %s: %w", ref, err)
+	default:
+		var svc struct {
+			Metadata struct {
+				Labels          map[string]string `json:"labels"`
+				OwnerReferences []struct {
+					APIVersion string `json:"apiVersion"`
+					Kind       string `json:"kind"`
+				} `json:"ownerReferences"`
+			} `json:"metadata"`
+		}
+		if jerr := json.Unmarshal(body, &svc); jerr != nil {
+			err = fmt.Errorf("parse Service %s: %w", ref, jerr)
+			break
+		}
+		for _, o := range svc.Metadata.OwnerReferences {
+			if strings.HasPrefix(o.APIVersion, componentAPIGroup+"/") {
+				owner = strings.ToLower(o.Kind)
+			}
+		}
+		if owner == "" {
+			if p := svc.Metadata.Labels["platform.opendatahub.io/part-of"]; p != "platform" {
+				owner = p
+			}
+		}
+	}
+	rc.svcOwner[ref], rc.svcOwnerErr[ref] = owner, err
+	return owner, err
 }
