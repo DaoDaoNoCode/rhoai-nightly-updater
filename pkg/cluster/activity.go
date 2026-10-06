@@ -330,27 +330,84 @@ func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
 
 // GetOperationMarker returns the recorded running operation, or nil.
 func GetOperationMarker(c *Client) (*types.OperationMarker, error) {
+	marker, _, err := GetOperationState(c)
+	return marker, err
+}
+
+// lastCompletedKey holds the most recent finished operation in the
+// operation ConfigMap, next to the running-operation marker.
+const lastCompletedKey = "lastCompleted"
+
+// GetOperationState returns the running-operation marker and the last
+// completed operation; either is nil when none is recorded. An unreadable
+// lastCompleted value is ignored rather than hiding the marker.
+func GetOperationState(c *Client) (*types.OperationMarker, *types.CompletedOperation, error) {
 	ns := getActivityNamespace()
 	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, operationConfigMapName))
 	if IsK8sError(err, 404) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get operation marker: %w", err)
+		return nil, nil, fmt.Errorf("get operation marker: %w", err)
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &cm); err != nil {
-		return nil, fmt.Errorf("parse operation marker: %w", err)
+		return nil, nil, fmt.Errorf("parse operation marker: %w", err)
+	}
+	var last *types.CompletedOperation
+	if raw := cm.Data[lastCompletedKey]; raw != "" {
+		var done types.CompletedOperation
+		if err := json.Unmarshal([]byte(raw), &done); err != nil {
+			slog.Warn("ignoring an unreadable last completed operation", "error", err)
+		} else {
+			last = &done
+		}
 	}
 	raw := cm.Data["operation"]
 	if raw == "" {
-		return nil, nil
+		return nil, last, nil
 	}
 	var marker types.OperationMarker
 	if err := json.Unmarshal([]byte(raw), &marker); err != nil {
-		return nil, fmt.Errorf("parse operation marker: %w", err)
+		return nil, last, fmt.Errorf("parse operation marker: %w", err)
 	}
-	return &marker, nil
+	return &marker, last, nil
+}
+
+// SaveCompletedOperation clears the running-operation marker and records
+// done as the last completed operation in a single write, so the two never
+// disagree. It is a JSON merge patch of these two keys only. The marker is
+// written by server-side apply, whose field manager never owns
+// lastCompleted, so the next marker write keeps it (an applier only removes
+// fields it owned: https://kubernetes.io/docs/reference/using-api/server-side-apply/#field-management).
+func SaveCompletedOperation(c *Client, done *types.CompletedOperation) error {
+	value, err := json.Marshal(done)
+	if err != nil {
+		return err
+	}
+	ns := getActivityNamespace()
+	data := map[string]string{"operation": "", lastCompletedKey: string(value)}
+	patch, err := json.Marshal(map[string]interface{}{"data": data})
+	if err != nil {
+		return err
+	}
+	_, _, err = c.patch(namespacedPath("v1", "configmaps", ns, operationConfigMapName), patch)
+	if IsK8sError(err, 404) {
+		cm, mErr := json.Marshal(map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": operationConfigMapName, "namespace": ns},
+			"data":       data,
+		})
+		if mErr != nil {
+			return mErr
+		}
+		_, _, err = c.post(namespacedPath("v1", "configmaps", ns, ""), cm)
+	}
+	if err != nil {
+		return fmt.Errorf("save completed operation: %w", err)
+	}
+	return nil
 }

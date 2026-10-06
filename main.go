@@ -169,6 +169,11 @@ func main() {
 		slog.Warn("shutting down with cluster operations still running", "count", running)
 	}
 	cancelDrain()
+	// A finished operation whose marker could not be cleared would be
+	// reported as interrupted by the next process: try once more.
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 10*time.Second)
+	api.FlushOperationMarker(flushCtx)
+	cancelFlush()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -27,6 +27,26 @@ type OperationMarker struct {
 	Target    string `json:"target,omitempty"`
 	StartedAt string `json:"startedAt"` // RFC 3339
 	Pod       string `json:"pod,omitempty"`
+	// ID is the operation's ID. BootID identifies the server process that
+	// wrote the marker: a container restarted in the same pod keeps the pod
+	// name (Pod) but gets a new BootID.
+	ID     string `json:"id,omitempty"`
+	BootID string `json:"bootId,omitempty"`
+}
+
+// CompletedOperation is the most recent finished cluster operation, as
+// reported by GET /api/operation (lastCompleted) and kept next to the
+// operation marker so it survives a restart. Times are RFC 3339.
+type CompletedOperation struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Label      string `json:"label"`
+	User       string `json:"user"`
+	Target     string `json:"target"`
+	StartedAt  string `json:"startedAt"`
+	FinishedAt string `json:"finishedAt"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
 }
 
 // StatusResponse is the aggregated cluster and operator status returned by /api/status.

@@ -18,6 +18,23 @@ func (a *apiReachability) reset() {
 	a.lastCheck, a.lastSuccess, a.lastErr = time.Time{}, time.Time{}, nil
 }
 
+func (t *operationTracker) reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.current, t.last = nil, nil
+}
+
+// reset drops a pending completion, so a running retry loop stops at its
+// next attempt without calling the (soon restored) seams again.
+func (m *markerWriter) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pending, m.client = nil, nil
+	m.delays = defaultMarkerRetryDelays
+	m.retrying = false
+	m.epoch++
+}
+
 func (c *identityCache) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -52,25 +52,30 @@ func setupDevMode(t *testing.T) {
 func resetPackageState(t *testing.T) {
 	t.Helper()
 	origLimiter, origLookup, origPermission := mutationLimiter, lookupUser, mutationPermission
-	origSave, origClear, origRead := saveOperationMarker, clearOperationMarker, readOperationMarker
+	origSave, origComplete, origRead := saveOperationMarker, saveCompletedOperation, readOperationState
 	origCheck, origPerm := checkAPIVersion, checkPermission
 	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
 	mutationLimiter = newRateLimiter(30 * time.Second)
 	identities.reset()
 	apiReady.reset()
-	inflight.clear()
+	inflight.reset()
+	markers.reset()
 	clusterMutationInProgress.Store(false)
-	saveOperationMarker = func(*Operation) {}
-	clearOperationMarker = func(*cluster.Client) {}
-	readOperationMarker = func(*cluster.Client) (*types.OperationMarker, error) { return nil, nil }
+	saveOperationMarker = func(*cluster.Client, *types.OperationMarker) error { return nil }
+	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation) error { return nil }
+	readOperationState = func(*cluster.Client) (*types.OperationMarker, *types.CompletedOperation, error) {
+		return nil, nil, nil
+	}
 	t.Cleanup(func() {
+		// Stop marker retries before the seams they call are restored.
+		markers.reset()
 		mutationLimiter, lookupUser, mutationPermission = origLimiter, origLookup, origPermission
-		saveOperationMarker, clearOperationMarker, readOperationMarker = origSave, origClear, origRead
+		saveOperationMarker, saveCompletedOperation, readOperationState = origSave, origComplete, origRead
 		checkAPIVersion, checkPermission = origCheck, origPerm
 		runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream = origU, origD, origR, origF
 		identities.reset()
 		apiReady.reset()
-		inflight.clear()
+		inflight.reset()
 		clusterMutationInProgress.Store(false)
 	})
 }
