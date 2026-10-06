@@ -133,8 +133,9 @@ func (f applyFailure) ocCommand(verb string, extra ...string) string {
 	return shellCommand(append(words, extra...)...)
 }
 
+// key identifies the object (not the failure): one problem per object.
 func (f applyFailure) key() string {
-	return strings.Join([]string{string(f.Class), f.GroupVersion, f.Kind, f.Namespace, f.Name}, "|")
+	return strings.Join([]string{f.group(), f.Kind, f.Namespace, f.Name}, "|")
 }
 
 // parseApplyFailures finds the classified apply failures in a condition
@@ -195,10 +196,41 @@ type applyReporter struct {
 
 func (r applyReporter) String() string { return r.Kind + " " + r.Name }
 
-// reportedApplyFailure is an apply failure with every CR that reports it.
+// reportedApplyFailure is one object with every failure reported for it
+// and every CR that reports one.
 type reportedApplyFailure struct {
-	applyFailure
-	reporters []applyReporter
+	applyFailure // the object (the first failure parsed)
+	classes      []applyFailureClass
+	fields       map[applyFailureClass][]string
+	owners       string
+	details      []string
+	reporters    []applyReporter
+}
+
+func (rf *reportedApplyFailure) add(f applyFailure) {
+	if !rf.has(f.Class) {
+		rf.classes = append(rf.classes, f.Class)
+	}
+	for _, field := range f.Fields {
+		if !containsString(rf.fields[f.Class], field) {
+			rf.fields[f.Class] = append(rf.fields[f.Class], field)
+		}
+	}
+	if rf.owners == "" {
+		rf.owners = f.Owners
+	}
+	if !containsString(rf.details, f.Detail) {
+		rf.details = append(rf.details, f.Detail)
+	}
+}
+
+func (rf *reportedApplyFailure) has(class applyFailureClass) bool {
+	for _, c := range rf.classes {
+		if c == class {
+			return true
+		}
+	}
+	return false
 }
 
 // collectApplyFailures scans the conditions of one CR.
@@ -212,9 +244,10 @@ func collectApplyFailures(found map[string]*reportedApplyFailure, r applyReporte
 		for _, f := range parseApplyFailures(cond.Message) {
 			k := f.key()
 			if found[k] == nil {
-				found[k] = &reportedApplyFailure{applyFailure: f}
+				found[k] = &reportedApplyFailure{applyFailure: f, fields: map[applyFailureClass][]string{}}
 			}
 			rf := found[k]
+			rf.add(f)
 			dup := false
 			for _, existing := range rf.reporters {
 				dup = dup || existing.String() == r.String()
@@ -349,47 +382,28 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 		}
 	}
 	f := rf.applyFailure
-	evidence := []string{
-		fmt.Sprintf("Reported by %s: failure deploying %s (%s): %s", strings.Join(names, ", "), f.object(), f.GroupVersion, truncate(f.Detail, 500)),
+	evidence := []string{fmt.Sprintf("Reported by %s", strings.Join(names, ", "))}
+	for _, d := range rf.details {
+		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, truncate(d, 500)))
 	}
-	id := "operator-apply-failed-" + string(f.Class) + "-" + strings.ToLower(strings.Join([]string{f.Kind, f.Namespace, f.Name}, "-"))
 	p := Problem{
-		ID:              id,
+		ID:              "operator-apply-failed-" + strings.ToLower(strings.Join([]string{f.Kind, f.Namespace, f.Name}, "-")),
 		Severity:        severity,
 		AffectedObjects: []string{f.object()},
 		AutoFixable:     false,
 	}
 	who, restart := restartGuidance(reporter)
-	deleteCmd := f.ocCommand("delete")
-	impact := "The operator recreates it on its next reconcile."
-	if f.Kind == "Deployment" || f.Kind == "StatefulSet" || f.Kind == "DaemonSet" {
-		impact = fmt.Sprintf("Its pods stop until the operator recreates it; for a controller %s that is safe, because the operator recreates it with the current spec.", f.Kind)
-	}
-	restartStep := fmt.Sprintf("then restart %s so it reconciles at once instead of after its back-off", who)
-	if restart == "" {
-		restartStep = fmt.Sprintf("then restart %s so it reconciles at once instead of after its back-off (the tool does not know which Deployment that is)", who)
-	}
-	switch f.Class {
-	case applyImmutable:
-		fields := nonEmpty(strings.Join(f.Fields, ", "), "a field")
-		p.Title = fmt.Sprintf("%s must be recreated: %s cannot be changed", f.object(), fields)
-		p.Description = fmt.Sprintf("The operator cannot apply its version of %s because %s is immutable; an older version created the object with a different value. "+
-			"The operator keeps failing until the object is deleted.", f.object(), fields)
-		p.Fix = fmt.Sprintf("Delete %s, %s. %s", f.object(), restartStep, impact)
-	case applyControllerOwner:
-		p.Title = fmt.Sprintf("%s has two controller owners", f.object())
-		p.Description = fmt.Sprintf("Ownership of %s moved between operator versions, and the object still carries the old controller reference, so the operator that owns it now cannot update it.", f.object())
-		if f.Owners != "" {
-			evidence = append(evidence, "Controller references: "+f.Owners)
-		}
-		p.Fix = fmt.Sprintf("Delete %s, %s; the operator recreates it with the right owner. %s", f.object(), restartStep, impact)
-	case applySchemaMismatch:
+	var titles, descriptions, fixes, cmds []string
+
+	// A schema mismatch first: re-applying the CRD comes before anything
+	// that makes the operator write the object again.
+	if rf.has(applySchemaMismatch) {
 		crd := crdNameFor(api, f)
-		p.Title = fmt.Sprintf("%s does not match its CRD's schema", f.object())
-		p.Description = "The live CRD and the object disagree on the type of a field, so the operator cannot update the object. " +
-			"This usually follows a downgrade or a round trip to an older version: OLM applies every CRD of the bundle it installs, so an older bundle replaces a same-named CRD, " +
-			"and a CRD the newer version no longer ships keeps the older schema after going back."
-		for _, field := range f.Fields {
+		titles = append(titles, "does not match its CRD's schema")
+		descriptions = append(descriptions, "The live CRD and the object disagree on the type of a field, so the operator cannot update the object. "+
+			"This usually follows a downgrade or a round trip to an older version: OLM applies every CRD of the bundle it installs, so an older bundle replaces a same-named CRD, "+
+			"and a CRD the newer version no longer ships keeps the older schema after going back.")
+		for _, field := range rf.fields[applySchemaMismatch] {
 			evidence = append(evidence, "Field "+field)
 		}
 		if crd != "" {
@@ -397,23 +411,50 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 			p.AffectedObjects = append(p.AffectedObjects, "CustomResourceDefinition "+crd)
 		}
 		crdRef := nonEmpty(crd, fmt.Sprintf("the CRD of %s in group %s", f.Kind, f.group()))
-		p.Fix = fmt.Sprintf("Re-apply %s from the installed operator version's bundle, then correct the listed fields of %s to the type that CRD expects. "+
-			"The right value needs judgement, so there is no automatic fix. Afterwards restart %s.", crdRef, f.object(), who)
-		cmds := []string{f.ocCommand("get", "-o", "yaml")}
+		fixes = append(fixes, fmt.Sprintf("Re-apply %s from the installed operator version's bundle, then correct the listed fields of %s to the type that CRD expects. "+
+			"The right value needs judgement, so there is no automatic fix.", crdRef, f.object()))
+		cmds = append(cmds, f.ocCommand("get", "-o", "yaml"))
 		if crd != "" {
 			cmds = append(cmds, shellCommand("oc", "get", "crd", crd, "-o", "jsonpath={.metadata.managedFields}"))
 		} else if g := f.group(); g != "" {
 			cmds = append(cmds, shellCommand("oc", "api-resources", "--api-group="+g))
 		}
-		p.Evidence = evidence
-		p.TechnicalCmd = strings.Join(cmds, "; ")
-		return p
 	}
-	p.Evidence = evidence
-	cmds := []string{deleteCmd}
+	recreate := rf.has(applyImmutable) || rf.has(applyControllerOwner)
+	if rf.has(applyImmutable) {
+		fields := nonEmpty(strings.Join(rf.fields[applyImmutable], ", "), "a field")
+		titles = append(titles, fmt.Sprintf("must be recreated: %s cannot be changed", fields))
+		descriptions = append(descriptions, fmt.Sprintf("The operator cannot apply its version of %s because %s is immutable; an older version created the object with a different value. "+
+			"The operator keeps failing until the object is deleted.", f.object(), fields))
+	}
+	if rf.has(applyControllerOwner) {
+		titles = append(titles, "has two controller owners")
+		descriptions = append(descriptions, fmt.Sprintf("Ownership of %s moved between operator versions, and the object still carries the old controller reference, so the operator that owns it now cannot update it.", f.object()))
+		if rf.owners != "" {
+			evidence = append(evidence, "Controller references: "+rf.owners)
+		}
+	}
+	restartStep := fmt.Sprintf("restart %s so it reconciles at once instead of after its back-off", who)
+	if restart == "" {
+		restartStep += " (the tool does not know which Deployment that is)"
+	}
+	if recreate {
+		impact := "The operator recreates it on its next reconcile."
+		if f.Kind == "Deployment" || f.Kind == "StatefulSet" || f.Kind == "DaemonSet" {
+			impact = fmt.Sprintf("Its pods stop until the operator recreates it; for a controller %s that is safe, because the operator recreates it with the current spec.", f.Kind)
+		}
+		fixes = append(fixes, fmt.Sprintf("Delete %s, then %s; the operator recreates it with the current spec and owner. %s", f.object(), restartStep, impact))
+		cmds = append(cmds, f.ocCommand("delete"))
+	} else {
+		fixes = append(fixes, "Afterwards "+restartStep+".")
+	}
 	if restart != "" {
 		cmds = append(cmds, restart)
 	}
+	p.Title = fmt.Sprintf("%s %s", f.object(), strings.Join(titles, "; it also "))
+	p.Description = strings.Join(descriptions, " ")
+	p.Fix = strings.Join(fixes, " ")
+	p.Evidence = evidence
 	p.TechnicalCmd = strings.Join(cmds, "; ")
 	return p
 }

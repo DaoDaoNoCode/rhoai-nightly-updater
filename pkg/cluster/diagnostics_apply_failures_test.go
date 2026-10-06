@@ -171,7 +171,7 @@ func TestCheckApplyFailures(t *testing.T) {
 		}
 	}
 
-	imm, ok := byID["operator-apply-failed-immutable-deployment-redhat-ods-applications-kuberay-operator"]
+	imm, ok := byID["operator-apply-failed-deployment-redhat-ods-applications-kuberay-operator"]
 	if !ok {
 		t.Fatalf("ids %v", keysOf(byID))
 	}
@@ -184,13 +184,13 @@ func TestCheckApplyFailures(t *testing.T) {
 		t.Errorf("immutable: %+v", imm)
 	}
 
-	owner := byID["operator-apply-failed-controller-owner-servicemonitor-redhat-ods-applications-aihub-controller-manager-metrics-monitor"]
+	owner := byID["operator-apply-failed-servicemonitor-redhat-ods-applications-aihub-controller-manager-metrics-monitor"]
 	if owner.Severity != "warning" || !strings.Contains(owner.TechnicalCmd, "oc delete servicemonitor.monitoring.coreos.com aihub-controller-manager-metrics-monitor -n redhat-ods-applications") ||
 		!strings.Contains(owner.TechnicalCmd, "oc delete pod -n "+SubNS+" -l name="+SubName) || !strings.Contains(strings.Join(owner.Evidence, "\n"), "Platform/default and AIHub/default-aihub") {
 		t.Errorf("controller owner: %+v", owner)
 	}
 
-	schema := byID["operator-apply-failed-schema-mismatch-trustyai--default-trustyai"]
+	schema := byID["operator-apply-failed-trustyai--default-trustyai"]
 	ev := strings.Join(schema.Evidence, "\n")
 	if schema.Severity != "critical" || !strings.Contains(ev, "permitCodeExecution: expected boolean, got &{deny}") ||
 		!strings.Contains(ev, "spec.versions last written by catalog (Update) at 2026-10-05T12:00:00Z") || !strings.Contains(ev, "OLM's catalog operator") ||
@@ -203,9 +203,38 @@ func TestCheckApplyFailures(t *testing.T) {
 	}
 
 	// A module the tool does not know: generic restart guidance.
-	unknown := byID["operator-apply-failed-immutable-deployment-redhat-ods-applications-new-operator"]
+	unknown := byID["operator-apply-failed-deployment-redhat-ods-applications-new-operator"]
 	if !strings.Contains(unknown.Fix, "the operator that reconciles NewModule default-newmodule") || strings.Contains(unknown.TechnicalCmd, "rollout restart") {
 		t.Errorf("unknown module: %+v", unknown)
+	}
+}
+
+// Review fix 7: one problem per object. Two failure classes reported for
+// the same object (by different CRs) merge into one problem with both
+// classes, all fields, every reporter and a per-object ID.
+func TestApplyFailuresOneProblemPerObject(t *testing.T) {
+	f, c := newFakeAPI(t)
+	immutable := strings.ReplaceAll(strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "shared"), "spec.selector", "spec.template.metadata.labels")
+	immutable2 := strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "shared")
+	owner := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(msgTwoControllers, "aihub-controller-manager-metrics-monitor", "shared"),
+		"monitoring.coreos.com/v1, Kind=ServiceMonitor", "apps/v1, Kind=Deployment"), "ServiceMonitor.monitoring.coreos.com", "Deployment.apps")
+	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
+		"items": []interface{}{applyFailureCR("default-dsc", "True", immutable, owner)},
+	})
+	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
+		"items": []interface{}{applyFailureCR("default", "False", immutable2)},
+	})
+	out := checkApplyFailures(c.WithContext(context.Background()))
+	if len(out.problems) != 1 {
+		t.Fatalf("%d problems: %+v", len(out.problems), out.problems)
+	}
+	p := out.problems[0]
+	ev := strings.Join(p.Evidence, "\n")
+	if p.ID != "operator-apply-failed-deployment-redhat-ods-applications-shared" || p.Severity != "critical" ||
+		!strings.Contains(p.Title, "must be recreated: spec.template.metadata.labels, spec.selector cannot be changed") || !strings.Contains(p.Title, "two controller owners") ||
+		!strings.Contains(ev, "Reported by Platform default, DataScienceCluster default-dsc") || !strings.Contains(ev, "Controller references: Platform/default and AIHub/default-aihub") ||
+		strings.Count(ev, "Failure deploying") != 3 || strings.Count(p.TechnicalCmd, "oc delete deployment.apps shared") != 1 {
+		t.Fatalf("problem %+v", p)
 	}
 }
 
