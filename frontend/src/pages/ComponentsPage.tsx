@@ -41,6 +41,7 @@ import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageErrorState, PageLoading } from "../components/PageStates";
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
 import { RelativeTime } from "../components/RelativeTime";
+import { InlineItems } from "../components/InlineItems";
 import { StatusLabel, type StatusKind } from "../components/StatusLabel";
 import { TechnicalDetails, TruncatedText, firstClause } from "../components/LongText";
 import { DeploymentsTable } from "../components/DeploymentsTable";
@@ -367,7 +368,7 @@ export const ComponentsPage: React.FC = () => {
                   <StackItem>
                     <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
                       <FlexItem>
-                        <Content component="p" className="pf-v6-u-text-color-subtle">{counts}</Content>
+                        <InlineItems className="pf-v6-u-text-color-subtle">{counts}</InlineItems>
                       </FlexItem>
                       {data.consoleURL && data.dscName && (
                         <FlexItem>

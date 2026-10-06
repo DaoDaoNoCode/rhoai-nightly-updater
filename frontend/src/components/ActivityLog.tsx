@@ -24,6 +24,7 @@ import TimesCircleIcon from "@patternfly/react-icons/dist/esm/icons/times-circle
 import type { ActivityEntry } from "../types";
 import { RelativeTime } from "./RelativeTime";
 import { TruncatedText } from "./LongText";
+import { InlineItems } from "./InlineItems";
 
 /** Fallback category for entries from a backend that predates read-time labels. */
 const LEGACY_CATEGORIES: Record<string, string> = {
@@ -157,14 +158,9 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
                           {!entry.success && !/failed$/i.test(activityLabel(entry)) && <span className="pf-v6-u-text-color-subtle"> (failed)</span>}
                         </div>
                         {detail && entry.build && (
-                          <div className="pf-v6-u-font-family-monospace pf-v6-u-font-size-xs">
-                            {entry.build.split(" · ").map((part, j) => (
-                              <React.Fragment key={j}>
-                                {j > 0 && " · "}
-                                <span className="pf-v6-u-text-nowrap">{part}</span>
-                              </React.Fragment>
-                            ))}
-                          </div>
+                          <InlineItems className="pf-v6-u-font-family-monospace pf-v6-u-font-size-xs">
+                            {entry.build.split(" · ")}
+                          </InlineItems>
                         )}
                         {detail && !entry.build && <div className="pf-v6-u-font-size-sm pf-v6-u-text-break-word">{detail}</div>}
                         {!entry.success && entry.reason && (
@@ -183,7 +179,7 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
               })}
             </List>
             {entries.length > PAGE_SIZE && (
-              <Button variant="link" className="pf-v6-u-mt-sm" onClick={() => setExpanded(!expanded)}>
+              <Button variant="link" isInline className="pf-v6-u-mt-sm" onClick={() => setExpanded(!expanded)}>
                 {expanded ? "Show fewer" : `Show all ${entries.length}`}
               </Button>
             )}

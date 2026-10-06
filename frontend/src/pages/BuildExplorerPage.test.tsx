@@ -98,8 +98,8 @@ describe("Build Explorer installed build and compare (A08-5)", () => {
     setup();
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Compare with the latest rhoai-3.6" }));
-    expect(await screen.findByText(/1 repository with new commits/)).toBeInTheDocument();
-    expect(screen.getByText(/· 1 unchanged$/)).toBeInTheDocument();
+    expect(await screen.findByText("1 repository with new commits")).toBeInTheDocument();
+    expect(screen.getByText("1 unchanged")).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Repositories that differ" });
     expect(within(table).getByText("red-hat-data-services/odh-dashboard")).toBeInTheDocument();
     expect(within(table).getByRole("link", { name: /Compare red-hat-data-services\/odh-dashboard/ }))

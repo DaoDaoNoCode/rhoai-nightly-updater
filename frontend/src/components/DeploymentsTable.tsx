@@ -38,6 +38,7 @@ import { assistRolloutFor, trackFeature } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { ImageRef } from "./ImageRef";
+import { InlineItems } from "./InlineItems";
 import { RowActions } from "./RowActions";
 import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { StatusLabel, TagLabel, type StatusKind } from "./StatusLabel";
@@ -380,7 +381,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
                             <DescriptionListGroup>
                               <DescriptionListTerm>Commit</DescriptionListTerm>
                               <DescriptionListDescription>
-                                <code>{dep.gitCommit}</code>{dep.version ? <> · version {dep.version}</> : null}
+                                <InlineItems><code>{dep.gitCommit}</code>{dep.version ? `version ${dep.version}` : null}</InlineItems>
                               </DescriptionListDescription>
                             </DescriptionListGroup>
                           )}

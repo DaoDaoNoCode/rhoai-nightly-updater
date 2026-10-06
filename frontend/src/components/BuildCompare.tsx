@@ -28,6 +28,7 @@ import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external
 import TimesIcon from "@patternfly/react-icons/dist/esm/icons/times-icon";
 import { useFbcContent } from "../hooks/useFbcContent";
 import { NotRecorded, RelativeTime } from "./RelativeTime";
+import { InlineItems } from "./InlineItems";
 import { TagLabel } from "./StatusLabel";
 import { compareBuilds, compareURL, imageDigest, shortBuildRef, type RepoChange } from "./buildDiff";
 
@@ -123,7 +124,7 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
         ) : (
           <Stack hasGutter>
             <StackItem>
-              <Content component="p" aria-live="polite">
+              <div aria-live="polite"><InlineItems>
                 {[
                   `${withCommits} ${withCommits === 1 ? "repository" : "repositories"} with new commits`,
                   `${result.changedImages} ${result.changedImages === 1 ? "image" : "images"} changed`,
@@ -131,8 +132,8 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
                   result.added.length > 0 ? `${result.added.length} added` : "",
                   result.removed.length > 0 ? `${result.removed.length} removed` : "",
                   `${result.unchangedImages} unchanged`,
-                ].filter(Boolean).join(" · ")}
-              </Content>
+                ].filter(Boolean)}
+              </InlineItems></div>
               {(a.data?.bundleName || b.data?.bundleName) && (
                 <Content component="p" className="pf-v6-u-text-color-subtle">Operator bundle: {a.data?.bundleName || "unknown"} &rarr; {b.data?.bundleName || "unknown"}</Content>
               )}

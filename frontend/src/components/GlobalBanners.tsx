@@ -79,7 +79,7 @@ interface Notice {
 }
 
 const BuildId: React.FC<{ target: string }> = ({ target }) => (
-  <code className="pf-v6-u-text-break-word" title={target}>{shortTarget(target)}</code>
+  <code className="pf-v6-u-text-nowrap" title={target}>{shortTarget(target)}</code>
 );
 
 function useOperationNotice(onStatusPage: boolean): Notice | null {

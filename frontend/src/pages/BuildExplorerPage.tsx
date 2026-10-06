@@ -392,7 +392,7 @@ export const BuildExplorerPage: React.FC = () => {
                     />
                   </StackItem>
                   <StackItem>
-                    <Button variant="link" onClick={clearSearch}>Clear the search and show all builds</Button>
+                    <Button variant="link" isInline onClick={clearSearch}>Clear the search and show all builds</Button>
                   </StackItem>
                 </Stack>
               ) : (

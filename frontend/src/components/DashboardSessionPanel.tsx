@@ -181,14 +181,14 @@ export const DashboardSessionPanel: React.FC<DashboardSessionPanelProps> = ({ ov
           </FlexItem>
           {o.mode === "pr" && o.prNumber ? (
             <FlexItem>
-              <Button variant="link" component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${o.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+              <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${o.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
                 PR #{o.prNumber} on GitHub
               </Button>
             </FlexItem>
           ) : null}
           {dashboardURL && (
             <FlexItem>
-              <Button variant="link" component="a" href={dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+              <Button variant="link" isInline component="a" href={dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
                 Open the dashboard
               </Button>
             </FlexItem>

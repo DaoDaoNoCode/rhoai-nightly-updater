@@ -35,6 +35,9 @@ describe("InstalledBuildCard (A07-1)", () => {
     expect(within(installedRow()).getByRole("link", { name: /dashboard commit 32a2131/ })).toHaveAttribute("href", "https://github.com/red-hat-data-services/odh-dashboard/commit/32a213123fbc434a602ba5b05e4a2022dd0d85d6");
     expect(within(latestRow()).getByText("0b3f9b4d1111")).toBeInTheDocument();
     expect(within(latestRow()).getByText(/built/)).toBeInTheDocument();
+    // Wrap-safe build lines: items separated by space, never by a "·" that could start or end a line.
+    expect(installedRow().textContent).not.toContain("·");
+    expect(latestRow().textContent).not.toContain("·");
     fireEvent.click(screen.getByRole("button", { name: "Update to latest" }));
     expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ digest: "sha256:" + "0b3f9b4d".padEnd(64, "1") }));
   });

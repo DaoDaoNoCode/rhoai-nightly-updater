@@ -193,7 +193,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
                 </Button>
               </ActionListItem>
               <ActionListItem>
-                <Button variant="link" onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
+                <Button variant="link" isInline onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
                   {replaceOpen ? "Cancel replacing" : "Replace token"}
                 </Button>
               </ActionListItem>

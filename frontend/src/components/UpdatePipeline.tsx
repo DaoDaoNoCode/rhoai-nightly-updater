@@ -5,7 +5,6 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
-  Content,
   Flex,
   FlexItem,
   ProgressStepper,
@@ -22,6 +21,7 @@ import type { UpdateStep } from "../types";
 import { PIPELINE_TITLES, RESTORE_STEP, STEP_SETS, type OperationKind, type PipelineStepDef } from "../operationSteps";
 import { formatElapsed } from "../utils";
 import { TagLabel } from "./StatusLabel";
+import { InlineItems } from "./InlineItems";
 
 export type { OperationKind as OperationType } from "../operationSteps";
 
@@ -159,9 +159,9 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
         <Stack hasGutter>
           {(startedBy || (active && elapsed)) && (
             <StackItem>
-              <Content component="p" className="pf-v6-u-text-color-subtle">
-                {[startedBy ? `Started by ${startedBy}` : "", active && elapsed ? `${elapsed} elapsed` : ""].filter(Boolean).join(" · ")}
-              </Content>
+              <InlineItems className="pf-v6-u-text-color-subtle">
+                {[startedBy ? `Started by ${startedBy}` : "", active && elapsed ? `${elapsed} elapsed` : ""].filter(Boolean)}
+              </InlineItems>
             </StackItem>
           )}
           {error && (

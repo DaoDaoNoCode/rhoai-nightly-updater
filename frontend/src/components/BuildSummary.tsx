@@ -1,8 +1,8 @@
 import React from "react";
-import { Flex, FlexItem } from "@patternfly/react-core";
 import type { NightlyBuild } from "../types";
 import { commitURL, shortCommit, shortDigest } from "../build";
 import { ImageRef } from "./ImageRef";
+import { InlineItems } from "./InlineItems";
 import { RelativeTime } from "./RelativeTime";
 
 interface BuildSummaryProps {
@@ -14,9 +14,10 @@ interface BuildSummaryProps {
 }
 
 /**
- * One nightly build on one line: tag · short digest · build date ·
- * dashboard commit. The digest copies the full image reference; the commit
- * links to GitHub when the backend gave a GitHub URL.
+ * One nightly build on one line: tag, short digest, build date and
+ * dashboard commit, separated by space (InlineItems), not by dots. The
+ * digest copies the full image reference; the commit links to GitHub when
+ * the backend gave a GitHub URL.
  */
 export const BuildSummary: React.FC<BuildSummaryProps> = ({ build, hideDashboard, inline }) => {
   const digest = shortDigest(build.digest);
@@ -42,21 +43,5 @@ export const BuildSummary: React.FC<BuildSummaryProps> = ({ build, hideDashboard
       </span>,
     );
   }
-  return (
-    <Flex
-      gap={{ default: "gapSm" }}
-      alignItems={{ default: "alignItemsCenter" }}
-      flexWrap={{ default: "wrap" }}
-      component="span"
-      display={inline ? { default: "inlineFlex" } : undefined}
-    >
-      {parts.map((part, i) => (
-        // The separator starts the next part, so a wrapped line never ends with a dangling dot.
-        <FlexItem component="span" key={i}>
-          {i > 0 && <span aria-hidden="true" className="pf-v6-u-text-color-subtle pf-v6-u-mr-sm">·</span>}
-          {part}
-        </FlexItem>
-      ))}
-    </Flex>
-  );
+  return <InlineItems inline={inline}>{parts}</InlineItems>;
 };

@@ -32,7 +32,7 @@ export const ImageRef: React.FC<ImageRefProps> = ({ image, what = "image referen
     hoverTip={`Copy ${what}`}
     clickTip="Copied"
     copyAriaLabel={`Copy ${what} ${image}`}
-    truncation={truncate && !display ? { position: "middle", trailingNumChars: 14 } : false}
+    truncation={truncate ? { position: "middle", trailingNumChars: display ? 10 : 14 } : false}
     onCopy={display ? () => { void navigator.clipboard?.writeText(image).catch(() => {}); } : undefined}
   >
     {display ?? image}

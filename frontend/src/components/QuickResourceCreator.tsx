@@ -173,7 +173,7 @@ const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; extr
 );
 
 const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
-  <Button variant="link" component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
+  <Button variant="link" isInline component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
 );
 
 type Pending =

@@ -127,8 +127,9 @@ describe("ActivityLog (A07-13)", () => {
   it("shows operator changes with their build first and filters by category", () => {
     renderWithApp(<ActivityLog activity={entries} />);
     expect(screen.getByText("Updated to nightly")).toBeInTheDocument();
-    // Tag and digest wrap only at the separator, so they are separate nowrap spans.
-    expect(screen.getByText((_, el) => el?.tagName === "DIV" && el.textContent === "rhoai-3.6 · 4eff06d60bd1")).toBeInTheDocument();
+    // Tag and digest are separate nowrap items (no separator glyph that could start or end a line).
+    const build = screen.getByText("4eff06d60bd1").closest(".pf-v6-l-flex") as HTMLElement;
+    expect(build).toHaveTextContent(/^rhoai-3\.64eff06d60bd1$/);
     expect(screen.queryByText("Dashboard PR deployed")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Activity type: Operator" }));
     fireEvent.click(screen.getByRole("option", { name: /Dashboard Dev\s*2/ }));

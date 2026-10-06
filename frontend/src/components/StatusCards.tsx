@@ -281,16 +281,16 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
         </Stack>
       </CardBody>
       <CardFooter>
-        <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+        <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapMd" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
           {primary && <FlexItem>{primary}</FlexItem>}
           {prerequisitesMet && (
             <FlexItem>
-              <Button variant="link" onClick={onChooseBuild}>Choose another build</Button>
+              <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
             </FlexItem>
           )}
           {target && (
             <FlexItem>
-              <Button variant="link" icon={<SearchIcon />} onClick={() => onPreview(target.image)}>
+              <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(target.image)}>
                 View build contents
               </Button>
             </FlexItem>
