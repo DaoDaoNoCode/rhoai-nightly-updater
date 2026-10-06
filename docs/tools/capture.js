@@ -10,6 +10,13 @@ async (page) => {
   const H = 900;
   const RED = "#EE0000";
   await page.clock.setFixedTime(new Date("2026-10-06T14:30:00Z"));
+  // Every target is found by role, label or text, never by coordinates. When
+  // a UI change removes or renames one, the job stops here with the image
+  // name and the locator instead of capturing the wrong thing.
+  page.setDefaultTimeout(10000);
+  const notFound = (name, what, loc) => (e) => {
+    throw new Error(`${name}: ${what} not found (did the UI change?): ${loc}\n${String(e.message).split("\n")[0]}`);
+  };
 
   const post = (p) => page.request.post(origin + p);
   const scenario = (name) => post(`/__docs/scenario?name=${name}`);
@@ -31,6 +38,9 @@ async (page) => {
     await page.goto(origin + "/__docs/state");
     await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("pf-theme", t); }, dark ? "dark" : "light");
     await page.goto(origin + path);
+    // Same pixels on every run: no animation, no blinking caret, no hover.
+    await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
+    await page.mouse.move(0, 0);
     await settle();
   }
 
@@ -61,11 +71,11 @@ async (page) => {
    * [{ at: locator, n?: number, box?: false, pos?: "tl"|"tr"|"l"|"r" }].
    * Returns the rectangles drawn, so a crop can include them.
    */
-  async function annotate(notes) {
+  async function annotate(notes, name = "") {
     const items = [];
     for (const nt of notes) {
-      const b = await nt.at.boundingBox();
-      if (!b) throw new Error(`annotation target not visible: ${nt.at}`);
+      const b = await nt.at.boundingBox().catch(notFound(name, `callout ${nt.n}`, nt.at));
+      if (!b) throw new Error(`${name}: callout ${nt.n} target not visible: ${nt.at}`);
       items.push({ b, n: nt.n, box: nt.box !== false, pos: nt.pos || "tl" });
     }
     return page.evaluate(({ items, RED }) => {
@@ -116,11 +126,11 @@ async (page) => {
     if (!noFit) await fit();
     const rects = [];
     for (const t of [].concat(targets)) {
-      const b = await t.boundingBox();
+      const b = await t.boundingBox().catch(notFound(name, "crop target", t));
       if (!b) throw new Error(`${name}: crop target not visible: ${t}`);
       rects.push(b);
     }
-    rects.push(...(await annotate(notes)));
+    rects.push(...(await annotate(notes, name)));
     const clip = union(rects, pad);
     await page.screenshot({ path: `${out}/crop/${name}.png`, clip }).catch((e) => { throw new Error(`${name}: ${JSON.stringify(clip)}: ${e.message}`); });
     await clearNotes();
@@ -255,16 +265,6 @@ async (page) => {
         pad: 24,
       });
 
-      await open("/", "ready-to-install");
-      const fresh = card("RHOAI on this cluster");
-      await crop("status-install", fresh, {
-        notes: [{ at: fresh.getByRole("button", { name: /^Install latest nightly/ }), n: 1, pos: "tl" }],
-        pad: 24,
-      });
-      await fresh.getByRole("button", { name: /^Install latest nightly/ }).click();
-      await wait(800);
-      await crop("status-install-confirm", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
-
       await open("/", "no-dsc");
       await crop("status-create-dsc", card("Create the DataScienceCluster"), {
         notes: [{ at: page.getByRole("button", { name: /^Create DataScienceCluster/ }), n: 1, pos: "r" }],
@@ -272,7 +272,6 @@ async (page) => {
 
       await open("/", "healthy");
       await crop("status-recovery", card("Recovery"));
-      await crop("status-up-to-date", card("RHOAI on this cluster"));
     },
 
     async banners() {
@@ -288,7 +287,6 @@ async (page) => {
       await open("/components", "major-update");
       await crop("banner-major-update", alert("is available"));
       const head = page.locator(".pf-v6-c-masthead .pf-v6-c-toolbar__group.pf-m-align-end");
-      await crop("masthead-version-v1", head, { notes: [{ at: page.getByText("v1.0.0", { exact: true }), n: 1, pos: "l" }] });
 
       await open("/components", "patch-update");
       await crop("banner-patch-update", alert("is available"));
@@ -301,7 +299,7 @@ async (page) => {
       await wait(800);
       const about = page.getByRole("dialog").locator('[aria-label="About this installation"]');
       await crop("help-about", [page.getByRole("dialog").getByRole("heading", { name: "About this installation" }), page.locator(".pf-v6-c-modal-box__footer")], {
-        notes: [{ at: about.locator(".pf-v6-c-description-list__group").filter({ hasText: "Updater build" }), n: 1, pos: "l" }],
+        notes: [{ at: about.locator(".pf-v6-c-description-list__group").filter({ hasText: "Updater build" }), n: 1, pos: "tl" }],
         noFit: true, pad: 0,
       });
       await page.keyboard.press("Escape");
@@ -326,11 +324,6 @@ async (page) => {
 
     async builds() {
       await open("/builds", "update-available");
-      await page.getByRole("button", { name: /^Compare with the latest/ }).click();
-      await wait(1500);
-      await settle();
-      await crop("builds-compare", page.getByRole("region", { name: "Build comparison" }));
-      await open("/builds", "update-available");
       const search = page.getByPlaceholder("Image, commit SHA or PR #");
       await search.fill("#5123");
       await search.press("Enter");
@@ -349,8 +342,6 @@ async (page) => {
         ],
         pad: 24,
       });
-      await open("/dashboard-dev", "healthy");
-      await crop("dashboard-dev-deploy", card("Deploy a dashboard build"));
     },
 
     async resources() {
@@ -390,9 +381,6 @@ async (page) => {
         ],
         pad: 24,
       });
-
-      await open("/test-resources", "mlflow");
-      await crop("mlflow", card("MLflow"));
 
       await open("/test-resources", "s3-none");
       await crop("s3-setup", card("Storage"), { notes: [{ at: card("Storage").getByRole("button", { name: /^Set up/ }).first(), n: 1, pos: "l" }] });

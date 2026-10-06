@@ -29,7 +29,7 @@ ROLLOUT_TIMEOUT ?= 20m
 RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
-	test test-go test-frontend test-scripts vuln clean help env docs-fixtures docs-mock docs-screenshots
+	test test-go test-frontend test-scripts vuln clean help env docs-fixtures docs-mock docs-screenshots docs-check
 
 .DEFAULT_GOAL := help
 
@@ -129,6 +129,9 @@ docs-mock:  ## Serve the built frontend with the docs mock backend (SCENARIO=hea
 
 docs-screenshots:  ## Regenerate every docs image and GIF from the mock (JOBS="..." for a subset; needs playwright-cli, ffmpeg, ImageMagick)
 	./docs/tools/screenshots.sh $(JOBS)
+
+docs-check:  ## Check the Markdown links, anchors and image paths, and that every docs image is used
+	node docs/tools/check-docs.mjs
 
 clean:  ## Remove build artifacts
 	rm -f server

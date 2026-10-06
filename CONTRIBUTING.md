@@ -146,6 +146,20 @@ make test-frontend     # Runs: cd frontend && npm test
 
 Runs the Node test runner over `frontend/tests/*.test.cjs`, then Vitest (`npm run test:unit` runs Vitest only). No browser needed.
 
+## Documentation images
+
+Screenshots and GIFs in `docs/images` come from a mock backend with made-up
+data, never from a cluster (the GitHub mirror is public). After a UI change,
+regenerate them and check the docs:
+
+```bash
+make docs-screenshots   # every image and GIF (playwright-cli, ffmpeg, ImageMagick)
+make docs-check         # links, anchors, image paths; every image used
+make docs-fixtures      # after a Diagnostics change: the mock's answers, from the test fakes
+```
+
+How it works and the image conventions: [docs/tools/README.md](docs/tools/README.md).
+
 ## Linting
 
 ### All Linters

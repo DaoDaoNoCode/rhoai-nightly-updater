@@ -108,5 +108,24 @@ for dir in "$RAW"/frames/*/; do
     -loop 0 "$IMAGES/$name.gif"
 done
 
+# A contact sheet of the images that changed (GIFs: every frame), to look at
+# before committing: a UI change can move content without breaking a locator.
+REVIEW="$ROOT/tmp/docs-review"
+rm -rf "$REVIEW" && mkdir -p "$REVIEW"
+changed=()
+while IFS= read -r f; do changed+=("$ROOT/$f"); done < <(git -C "$ROOT" status --porcelain -- docs/images | awk '$1 != "D" {print $2}')
+if [ ${#changed[@]} -gt 0 ]; then
+  for f in "${changed[@]}"; do
+    case $f in
+      *.gif) magick "$f" -coalesce -resize 600x "$REVIEW/$(basename "$f" .gif)-%02d.png" ;;
+      *) magick "$f" -resize 600x\> "$REVIEW/$(basename "$f")" ;;
+    esac
+  done
+  # No text labels (ImageMagick may have no font); index.txt lists the tiles in order.
+  (cd "$REVIEW" && printf '%s\n' ./*.png) >"$REVIEW/index.txt"
+  magick montage "$REVIEW"/*.png +set label -tile 4x -geometry +6+6 -background '#777' "$REVIEW/contact-sheet.png"
+  echo "Changed images: ${#changed[@]}; review $REVIEW/contact-sheet.png before committing."
+fi
+
 echo "Images in $IMAGES:"
 for f in "$IMAGES"/*; do printf '  %-44s %5d KB\n' "$(basename "$f")" $(( $(wc -c <"$f") / 1024 )); done
