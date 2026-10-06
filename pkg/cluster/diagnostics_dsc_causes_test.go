@@ -244,9 +244,18 @@ func TestDSCCheck_OperandForbiddenSaysMakeUpgrade(t *testing.T) {
 	w.installedCSV("jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set")
 	w.f.status("GET", jobSetOperandPath, http.StatusForbidden, "Forbidden")
 	out := checkDataScienceCluster(w.c)
-	b, ok := problemsByID(out)["module-operator-backoff-trainer"]
-	if !ok || !strings.Contains(strings.Join(b.Evidence, "\n"), "make upgrade") {
-		t.Fatalf("problems = %v, backoff = %+v", ids(out), b)
+	byID := problemsByID(out)
+	// An operand the tool cannot read does not authorize a restart.
+	if _, ok := byID["module-operator-backoff-trainer"]; ok {
+		t.Fatalf("restart offered for an unverified operand: %v", ids(out))
+	}
+	p, ok := byID["prerequisite-operand-job-set"]
+	if !ok || p.AutoFixable || !strings.Contains(strings.Join(p.Evidence, "\n"), "make upgrade") ||
+		!strings.Contains(p.Fix, "offers no restart") || !strings.HasPrefix(p.TechnicalCmd, "oc get jobsetoperator.operator.openshift.io/cluster") {
+		t.Fatalf("problems = %v, operand = %+v", ids(out), p)
+	}
+	if ev := strings.Join(byID["dsc-not-ready"].Evidence, "\n"); !strings.Contains(ev, "whether JobSetOperator/cluster exists could not be checked") {
+		t.Fatalf("dsc evidence = %s", ev)
 	}
 }
 

@@ -367,11 +367,6 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 			switch d.OperandSt {
 			case operandPresent:
 				line += fmt.Sprintf("; %s/cluster exists", d.Operand.Kind)
-			case operandUnverified:
-				line += fmt.Sprintf("; %s/cluster could not be checked: %v", d.Operand.Kind, d.OperandErr)
-				if hint := templateHint(d.OperandErr); hint != "" {
-					line += "." + hint
-				}
 			}
 			installed = append(installed, line+")")
 		}
@@ -463,6 +458,8 @@ func (a *dscAnalysis) conditionCauses(cc *classifiedCondition, titles map[string
 				switch {
 				case d.installed() && d.OperandSt == operandMissing:
 					state = fmt.Sprintf("installed, but %s/cluster does not exist", d.Operand.Kind)
+				case d.operandProblem():
+					state = fmt.Sprintf("installed, but whether %s/cluster exists could not be checked", d.Operand.Kind)
 				case d.CSV != nil:
 					state = "installed but not ready (CSV " + nonEmpty(d.CSV.Phase, "phase unknown") + ")"
 				}

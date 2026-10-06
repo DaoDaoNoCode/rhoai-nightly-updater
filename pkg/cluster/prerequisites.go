@@ -538,8 +538,18 @@ type dependency struct {
 // installed: a Succeeded CSV.
 func (d *dependency) installed() bool { return d.CSV != nil && d.CSV.Phase == "Succeeded" }
 
-// satisfied: installed, and its singleton operand (if any) is not missing.
-func (d *dependency) satisfied() bool { return d.installed() && d.OperandSt != operandMissing }
+// satisfied: installed, and its singleton operand (if any) was seen. An
+// operand that could not be read (RBAC, discovery, another API group) is
+// not satisfied: nothing proves the module waits on a retry rather than on
+// the operand, so no restart is offered on that basis.
+func (d *dependency) satisfied() bool {
+	return d.installed() && (d.OperandSt == operandNone || d.OperandSt == operandPresent)
+}
+
+// operandProblem: installed, but the operand is missing or unverified.
+func (d *dependency) operandProblem() bool {
+	return d.installed() && (d.OperandSt == operandMissing || d.OperandSt == operandUnverified)
+}
 
 func (d *dependency) displayName() string {
 	switch {
@@ -575,7 +585,7 @@ func (d *dependency) problemID() string {
 	switch {
 	case d.satisfied():
 		return ""
-	case d.installed() && d.OperandSt == operandMissing:
+	case d.operandProblem():
 		return "prerequisite-operand-" + d.slug()
 	case d.CSV != nil:
 		return "prerequisite-not-ready-" + d.slug()
@@ -665,18 +675,24 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 	name := d.displayName()
 
 	switch {
-	case d.installed() && d.OperandSt == operandMissing:
+	case d.operandProblem():
 		csv := d.CSV
 		evidence = append(evidence, fmt.Sprintf("Installed: CSV %s/%s is Succeeded", csv.Namespace, csv.Name))
-		evidence = append(evidence, fmt.Sprintf("%s/cluster (%s) does not exist", d.Operand.Kind, d.Operand.APIVersion))
-		p.Title = fmt.Sprintf("%s is installed, but its %s/cluster does not exist", name, d.Operand.Kind)
+		if d.OperandSt == operandMissing {
+			evidence = append(evidence, fmt.Sprintf("%s/cluster (%s) does not exist", d.Operand.Kind, d.Operand.APIVersion))
+			p.Title = fmt.Sprintf("%s is installed, but its %s/cluster does not exist", name, d.Operand.Kind)
+		} else {
+			evidence = append(evidence, fmt.Sprintf("Whether %s/cluster (%s) exists could not be checked: %v%s", d.Operand.Kind, d.Operand.APIVersion, d.OperandErr, templateHint(d.OperandErr)))
+			p.Title = fmt.Sprintf("%s is installed; check that its %s/cluster exists", name, d.Operand.Kind)
+			fixes = append(fixes, fmt.Sprintf("The tool could not read %s/cluster, so it cannot tell a missing operand from a module operator that has not retried, and offers no restart.", d.Operand.Kind))
+		}
 		p.Description = fmt.Sprintf("Modules check for the operator and for its operand: %s does nothing until %s/cluster exists, and the module keeps reporting it as not installed. %s", name, d.Operand.Kind, impact)
 		p.AffectedObjects = []string{d.Operand.Kind + " cluster"}
 		cmd, err := operandCommand(*d.Operand)
 		if err != nil {
 			fixes = append(fixes, fmt.Sprintf("Create %s/cluster as the operator's documentation describes (%v).", d.Operand.Kind, err))
 		} else {
-			fixes = append(fixes, fmt.Sprintf("Create %s/cluster from the example the operator ships in its CSV (command below; it creates the object only if it is still missing). Then, if the module still reports it after a few minutes, restart the module's operator (Diagnostics offers it once the operand exists).", d.Operand.Kind))
+			fixes = append(fixes, fmt.Sprintf("Create %s/cluster from the example the operator ships in its CSV (command below; it creates the object only if it is still missing). Then, if the module still reports it after a few minutes, restart the module's operator (Diagnostics offers it once it can see the operand).", d.Operand.Kind))
 			p.TechnicalCmd = cmd
 		}
 	case d.CSV != nil && !d.installed():
