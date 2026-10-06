@@ -395,14 +395,17 @@ consolelink() {
 cleanup_legacy() {
 	local subject host href
 	subject=$(oc get clusterrolebinding "$APP_NAME" -o jsonpath='{.subjects[0].namespace}/{.subjects[0].name}' 2>/dev/null || true)
+	# A dry run only validates the deletes with the server.
+	# shellcheck disable=SC2086 # DRY_FLAG is one word or nothing
 	if [ "$subject" = "$NAMESPACE/$APP_NAME" ]; then
-		oc delete clusterrolebinding "$APP_NAME"
-		oc delete clusterrole "$APP_NAME" --ignore-not-found
+		oc delete clusterrolebinding "$APP_NAME" $DRY_FLAG
+		oc delete clusterrole "$APP_NAME" --ignore-not-found $DRY_FLAG
 	fi
 	host=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || true)
 	href=$(oc get consolelink "$APP_NAME" -o jsonpath='{.spec.href}' 2>/dev/null || true)
+	# shellcheck disable=SC2086
 	if [ -n "$href" ] && { [ "$href" = "https://$host" ] || [ "$href" = "https://placeholder.apps.example.com" ]; }; then
-		oc delete consolelink "$APP_NAME"
+		oc delete consolelink "$APP_NAME" $DRY_FLAG
 	fi
 }
 
@@ -534,7 +537,7 @@ uninstall() {
 		# shellcheck disable=SC2086
 		oc delete rolebinding,role -n "$ns" -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
 	done
-	[ -n "$DRY" ] || cleanup_legacy
+	cleanup_legacy
 	# shellcheck disable=SC2086
 	oc delete project "$NAMESPACE" --ignore-not-found $DRY_FLAG
 	if [ -n "$DRY" ]; then err "Dry run only; nothing was changed."; else err "Removed $APP_NAME from $NAMESPACE."; fi

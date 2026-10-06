@@ -79,6 +79,9 @@ case "$1 $2" in
 	[ -n "${FAKE_REVISION:-}" ] || exit 1
 	printf '{\n  "digest": "sha256:%s",\n  "config": {"config": {"Labels": {\n    "org.opencontainers.image.revision": "%s"\n  }}}\n}\n' \
 		"$(printf 'b%.0s' $(seq 64))" "$FAKE_REVISION" ;;
+"get clusterrolebinding") [ -z "${FAKE_LEGACY:-}" ] || echo "$FAKE_LEGACY" ;;
+"get route") echo app.example.com ;;
+"get consolelink") [ -z "${FAKE_LEGACY:-}" ] || echo https://app.example.com ;;
 "get deployment") [ -n "${FAKE_INSTALLED:-}" ] ;;
 "get namespace" | "get project") [ -n "${FAKE_NS:-}" ] ;;
 "get secret") [ -n "${FAKE_NS:-}" ] ;;
@@ -172,6 +175,16 @@ expect_ok "asset: uninstall dry run" run bash "$ASSET" uninstall --dry-run --nam
 deletes=$(grep -c '^oc delete' "$LOG" || true)
 expect_eq "uninstall: every delete is a dry run" "$deletes" "$(grep '^oc delete' "$LOG" | grep -c -- '--dry-run=server' || true)"
 grep -q '^oc delete project scratch-ns' "$LOG" && pass || fail "uninstall: namespace not removed"
+# Legacy objects of this install: a dry run must not delete them.
+FAKE_LEGACY=scratch-ns/rhoai-nightly-updater expect_ok "cleanup-legacy dry run" run bash "$ASSET" cleanup-legacy --dry-run --namespace scratch-ns
+expect_eq "cleanup-legacy dry run: three deletes, all server dry runs" "3 3" \
+	"$(grep -c '^oc delete' "$LOG") $(grep '^oc delete' "$LOG" | grep -c -- '--dry-run=server')"
+FAKE_LEGACY=scratch-ns/rhoai-nightly-updater expect_ok "uninstall dry run with legacy objects" run bash "$ASSET" uninstall --dry-run --namespace scratch-ns
+expect_eq "uninstall dry run: no real delete" "" "$(grep '^oc delete' "$LOG" | grep -v -- '--dry-run=server' || true)"
+FAKE_LEGACY=scratch-ns/rhoai-nightly-updater expect_ok "cleanup-legacy" run bash "$ASSET" cleanup-legacy --namespace scratch-ns
+expect_eq "cleanup-legacy deletes for real" "0" "$(grep '^oc delete' "$LOG" | grep -c -- '--dry-run' || true)"
+FAKE_LEGACY=other-ns/rhoai-nightly-updater expect_ok "cleanup-legacy of another install" run bash "$ASSET" cleanup-legacy --namespace scratch-ns
+expect_eq "another install's binding is kept" "" "$(grep '^oc delete clusterrolebinding' "$LOG" || true)"
 expect_fail "asset: no rollback" "Rollback needs a clone" run bash "$ASSET" rollback --version v9.8.7
 
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
