@@ -407,7 +407,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const rowActions = (children: React.ReactNode) => (
     <>
-      <Flex gap={{ default: "gapSm" }} justifyContent={{ md: "justifyContentFlexEnd" }} flexWrap={{ default: "wrap" }}>{children}</Flex>
+      <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapSm" }} alignItems={{ default: "alignItemsCenter" }} justifyContent={{ md: "justifyContentFlexEnd" }} flexWrap={{ default: "wrap" }}>{children}</Flex>
     </>
   );
 
