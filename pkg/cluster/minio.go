@@ -39,19 +39,18 @@ const (
 	// published after this release are fixed only in the commercial AIStor
 	// (for example GHSA-hv4r-mvr4-25vw), which is why the S3 API is not
 	// exposed outside the cluster and the root user is random.
+	//
+	// Released versions deployed quay.io/minio/minio:latest with the same
+	// container contract (MINIO_ROOT_*, console on :9090), so this release
+	// reads their volumes ("xl-single" backend). The 2019 release
+	// (quay.io/opendatahub/minio, the DSPO README sample) is not an option:
+	// it is affected by CVE-2023-28434, and its "fs" backend is unreadable
+	// by newer releases (checked: RELEASE.2025-10-15 exits with "Unable to
+	// use the drive ... drive not found" on a volume the 2019 release
+	// initialised).
 	minioDefaultImage = "quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45"
-	// minioLegacyImage is the image earlier versions deployed: Open Data
-	// Hub's RELEASE.2019-08-14T20-37-41Z-license-compliance build (the DSPO
-	// README sample). That release stores data in the "fs" backend, which
-	// MinIO releases from RELEASE.2022-10-29T06-21-33Z on refuse to start
-	// on, so an existing data volume keeps this image; see minioLegacyData.
-	minioLegacyImage = "quay.io/opendatahub/minio@sha256:587abc14be9bbeed794473cf7290c40e377062f2f77f5e4e27742a77680f08e0"
-	// minioBackendAnnotation marks a MinIO PVC created for the current
-	// image's on-disk format. PVCs without it were created by earlier
-	// versions for the 2019 release.
-	minioBackendAnnotation = "rhoai-nightly-updater.opendatahub.io/minio-backend"
-	minioBackendXL         = "xl-single"
-	minioConsolePort       = 9001
+	// minioConsolePort is the console port released versions used.
+	minioConsolePort = 9090
 )
 
 var (
@@ -71,15 +70,13 @@ var (
 	minioBucketRetryDelay = 3 * time.Second
 )
 
-// minioImage returns the MinIO image for a data volume, overridable with
-// MINIO_IMAGE (for example a mirror on a disconnected cluster). legacyData
-// selects the 2019 release for a volume it created.
-func minioImage(legacyData bool) string {
+// minioImage returns the MinIO image, overridable with MINIO_IMAGE (for
+// example a mirror on a disconnected cluster). An override must be a MinIO
+// release that reads MINIO_ROOT_USER/MINIO_ROOT_PASSWORD and supports
+// --console-address (RELEASE.2021-07-08 or later).
+func minioImage() string {
 	if img := strings.TrimSpace(os.Getenv("MINIO_IMAGE")); img != "" {
 		return img
-	}
-	if legacyData {
-		return minioLegacyImage
 	}
 	return minioDefaultImage
 }
@@ -239,14 +236,6 @@ func readMinIOPVC(c *Client) (objectMeta, bool, error) {
 	return objectMeta{}, false, nil
 }
 
-// minioLegacyData reports whether an existing minio-pvc holds data written
-// by the 2019 release: earlier versions created it without
-// minioBackendAnnotation. Such a volume keeps the 2019 image, because newer
-// releases do not start on its "fs" backend.
-func minioLegacyData(pvc objectMeta, found bool) bool {
-	return found && pvc.Annotations[minioBackendAnnotation] == ""
-}
-
 type minioDeployment struct {
 	Metadata struct {
 		Generation int64 `json:"generation"`
@@ -378,8 +367,8 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 		return state, endpoints
 	}
 	state.CurrentImage = deploy.image()
-	if ns.Managed && state.CurrentImage == minioLegacyImage {
-		state.Warning = strings.TrimSpace("MinIO runs the 2019 release (RELEASE.2019-08-14), which has known vulnerabilities such as CVE-2023-28434. Its data cannot be moved to a newer release in place: tear MinIO down and set it up again to switch to the patched image (the stored pipeline artifacts are deleted). " + state.Warning)
+	if ns.Managed && state.CurrentImage != "" && state.CurrentImage != minioImage() {
+		state.Warning = strings.TrimSpace(fmt.Sprintf("MinIO runs %s, not the image this version deploys (%s). Re-run MinIO setup to update it; the data PVC is kept. %s", state.CurrentImage, minioImage(), state.Warning))
 	}
 	if deploy.Status.ReadyReplicas >= 1 {
 		state.Ready = true
@@ -497,54 +486,22 @@ type minioResource struct {
 }
 
 // minioResources returns the objects SetupMinIO creates or updates, in
-// order. legacyData keeps the contract of the 2019 release for a volume it
-// created: "server /data" with MINIO_ACCESS_KEY/MINIO_SECRET_KEY (the
-// DSPO-managed MinIO's contract, config/internal/minio/default/
-// deployment.yaml.tmpl), whose web browser shares port 9000 with the S3 API,
-// so no Route is created for it. Otherwise MinIO serves its console on a
-// separate port (--console-address), and only the console gets a Route; the
-// S3 API stays inside the cluster, where pipeline servers reach it through
-// the service.
-func minioResources(user, password string, legacyData bool) []minioResource {
+// order. The container contract is the one released versions used
+// ("server /data --console-address :9090", MINIO_ROOT_USER and
+// MINIO_ROOT_PASSWORD), so re-running setup on their installs only changes
+// the image. Only the console gets a Route: the S3 API stays inside the
+// cluster, where pipeline servers reach it through the service.
+func minioResources(user, password string) []minioResource {
 	meta := func(name string) map[string]interface{} {
 		return map[string]interface{}{"name": name, "namespace": minioNamespace, "labels": toolLabels()}
 	}
 	secretEnv := func(name, key string) map[string]interface{} {
 		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": "minio-secret", "key": key}}}
 	}
-	pvcMeta := meta("minio-pvc")
-	args := []string{"server", "/data", "--console-address", fmt.Sprintf(":%d", minioConsolePort)}
-	env := []map[string]interface{}{
-		secretEnv("MINIO_ROOT_USER", "minio_root_user"),
-		secretEnv("MINIO_ROOT_PASSWORD", "minio_root_password"),
-	}
-	containerPorts := []map[string]interface{}{
-		{"name": "api", "containerPort": 9000, "protocol": "TCP"},
-		{"name": "console", "containerPort": minioConsolePort, "protocol": "TCP"},
-	}
-	servicePorts := []map[string]interface{}{
-		{"name": "api", "port": 9000, "targetPort": 9000},
-		{"name": "console", "port": minioConsolePort, "targetPort": minioConsolePort},
-	}
-	if legacyData {
-		// Exactly the container earlier versions applied, so re-running
-		// setup does not restart a running 2019 MinIO.
-		args = []string{"server", "/data"}
-		env = []map[string]interface{}{
-			secretEnv("MINIO_ACCESS_KEY", "minio_root_user"),
-			secretEnv("MINIO_SECRET_KEY", "minio_root_password"),
-			secretEnv("MINIO_ROOT_USER", "minio_root_user"),
-			secretEnv("MINIO_ROOT_PASSWORD", "minio_root_password"),
-		}
-		containerPorts = []map[string]interface{}{{"containerPort": 9000, "protocol": "TCP"}}
-		servicePorts = servicePorts[:1]
-	} else {
-		pvcMeta["annotations"] = map[string]interface{}{minioBackendAnnotation: minioBackendXL}
-	}
-	resources := []minioResource{
+	return []minioResource{
 		{"PVC", "PersistentVolumeClaim", map[string]interface{}{
 			"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-			"metadata": pvcMeta,
+			"metadata": meta("minio-pvc"),
 			"spec": map[string]interface{}{
 				"accessModes": []string{"ReadWriteOnce"},
 				"resources":   map[string]interface{}{"requests": map[string]interface{}{"storage": minioStorage}},
@@ -574,10 +531,16 @@ func minioResources(user, password string, legacyData bool) []minioResource {
 						},
 						"containers": []map[string]interface{}{{
 							"name":  "minio",
-							"image": minioImage(legacyData),
-							"args":  args,
-							"env":   env,
-							"ports": containerPorts,
+							"image": minioImage(),
+							"args":  []string{"server", "/data", "--console-address", fmt.Sprintf(":%d", minioConsolePort)},
+							"env": []map[string]interface{}{
+								secretEnv("MINIO_ROOT_USER", "minio_root_user"),
+								secretEnv("MINIO_ROOT_PASSWORD", "minio_root_password"),
+							},
+							"ports": []map[string]interface{}{
+								{"containerPort": 9000, "protocol": "TCP"},
+								{"containerPort": minioConsolePort, "protocol": "TCP"},
+							},
 							"volumeMounts": []map[string]interface{}{
 								{"name": "data", "mountPath": "/data", "subPath": "minio"},
 							},
@@ -607,22 +570,22 @@ func minioResources(user, password string, legacyData bool) []minioResource {
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{"app": "minio"},
 				"type":     "ClusterIP",
-				"ports":    servicePorts,
+				"ports": []map[string]interface{}{
+					{"name": "api", "port": 9000, "targetPort": 9000},
+					{"name": "ui", "port": minioConsolePort, "targetPort": minioConsolePort},
+				},
 			},
 		}},
-	}
-	if !legacyData {
-		resources = append(resources, minioResource{"Console Route", "Route", map[string]interface{}{
+		{"Console Route", "Route", map[string]interface{}{
 			"apiVersion": "route.openshift.io/v1", "kind": "Route",
 			"metadata": meta("minio-ui"),
 			"spec": map[string]interface{}{
 				"to":   map[string]interface{}{"kind": "Service", "name": minioServiceName, "weight": 100},
-				"port": map[string]interface{}{"targetPort": "console"},
+				"port": map[string]interface{}{"targetPort": "ui"},
 				"tls":  map[string]interface{}{"termination": "edge", "insecureEdgeTerminationPolicy": "Redirect"},
 			},
-		}})
+		}},
 	}
-	return resources
 }
 
 func recordMinIOActivity(c *Client, action, detail string, success bool) {
@@ -731,19 +694,13 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 		logs = append(logs, "Namespace already exists (created by this tool) — reusing")
 	}
 
-	pvc := existing["PersistentVolumeClaim/minio-pvc"]
-	legacyData := minioLegacyData(pvc.meta, pvc.found)
-	if legacyData {
-		logs = append(logs, "PVC minio-pvc holds data of the 2019 MinIO release, which newer releases cannot read; keeping that release. Tear down and set up again to switch to the patched image.")
-	}
-
 	// Step 3: Create or update the objects.
 	minioUser, minioPass, credErr := minioCredentials(c)
 	if credErr != nil {
 		return fail(fmt.Sprintf("Cannot determine MinIO credentials: %v", credErr), errorCodeFromK8sErr(credErr), "credentials")
 	}
 	var applied []string
-	for _, r := range minioResources(minioUser, minioPass, legacyData) {
+	for _, r := range minioResources(minioUser, minioPass) {
 		logs = append(logs, fmt.Sprintf("Applying %s...", r.name))
 		path, ok := minioApplyPath(r.obj)
 		createPath, createOK := minioCreatePath(r.kind)
@@ -776,7 +733,7 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 
 	// Step 4: Wait for the pod. Stop early when it cannot start.
 	logs = append(logs, fmt.Sprintf("Waiting up to %s for MinIO to become ready...", MinIOReadyTimeout))
-	issue, err := waitMinIOReady(c, minioImage(legacyData))
+	issue, err := waitMinIOReady(c, minioImage())
 	if err != nil {
 		if errors.Is(err, errMinIONotReady) {
 			reason := "the pod is still starting"
@@ -817,38 +774,23 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, fmt.Sprintf("OK: Bucket '%s' created", minioBucket))
 
-	// Step 6: Remove Routes earlier versions created that would expose the
-	// S3 API outside the cluster: minio-api always, and minio-ui while the
-	// 2019 release serves its browser on the API port.
-	stale := []string{"minio-api"}
-	if legacyData {
-		stale = append(stale, "minio-ui")
-	}
-	var routeErrs []string
-	for _, name := range stale {
-		cur := existing["Route/"+name]
-		if !cur.found {
-			continue
-		}
-		path, _ := minioDeletePath("Route", name)
+	// Step 6: Remove the minio-api Route earlier versions created: it
+	// exposed the S3 API outside the cluster.
+	if cur := existing["Route/minio-api"]; cur.found {
+		path, _ := minioDeletePath("Route", "minio-api")
 		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
-			routeErrs = append(routeErrs, fmt.Sprintf("%s: %v", name, err))
-			continue
+			return fail(fmt.Sprintf("MinIO is running with bucket '%s', but Route minio-api, which exposes its S3 API outside the cluster, could not be removed: %v. Delete it with `oc delete route -n minio minio-api`, or re-run setup.", minioBucket, err), "partial_failure", "route cleanup failed")
 		}
-		logs = append(logs, fmt.Sprintf("OK: Route %s removed (it exposed the S3 API outside the cluster)", name))
-	}
-	if len(routeErrs) > 0 {
-		return fail(fmt.Sprintf("MinIO is running with bucket '%s', but these Routes, which expose its S3 API outside the cluster, could not be removed: %s. Delete them with `oc delete route -n minio <name>`, or re-run setup.", minioBucket, strings.Join(routeErrs, "; ")), "partial_failure", "route cleanup failed")
+		logs = append(logs, "OK: Route minio-api removed (it exposed the S3 API outside the cluster)")
 	}
 
 	slog.Info("minio setup complete", "user", getUser(c))
 	recordMinIOActivity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", minioNamespace, minioBucket), true)
 
-	msg := fmt.Sprintf("MinIO deployed with bucket '%s'. Console credentials are stored in secret 'minio-secret' in namespace '%s'.", minioBucket, minioNamespace)
-	if legacyData {
-		msg = fmt.Sprintf("MinIO is running with bucket '%s'. It still runs the 2019 release because its volume holds that release's data; tear down and set up again to switch to the patched image. Its browser shares the S3 API port, so it has no Route; use `oc port-forward -n minio svc/%s 9000` to reach it.", minioBucket, minioServiceName)
-	}
-	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
+	return &types.OperationResponse{
+		Success: true, Message: fmt.Sprintf("MinIO deployed with bucket '%s'. Console credentials are stored in secret 'minio-secret' in namespace '%s'.", minioBucket, minioNamespace),
+		Logs: logs,
+	}, nil
 }
 
 var (

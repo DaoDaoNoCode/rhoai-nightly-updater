@@ -121,51 +121,45 @@ func TestSetupMinIO_ObjectReplacedBetweenCheckAndUpdate(t *testing.T) {
 	assertForeignUntouched(t, f, minioSecretPath, "data", "dXNlcg==")
 }
 
-// A volume created by an earlier version holds the 2019 release's "fs"
-// backend, which newer releases refuse to start on: it keeps the 2019 image
-// and container, and its Routes (the 2019 browser shares the API port) are
-// removed.
-func TestSetupMinIO_LegacyVolumeKeepsLegacyImageAndDropsRoutes(t *testing.T) {
+// Re-running setup on an install from a released version (unlabelled
+// objects created by server-side apply, image quay.io/minio/minio:latest,
+// which no longer pulls anonymously) switches only the image, labels the
+// objects, keeps the PVC and the console Route, and removes the minio-api
+// Route that exposed the S3 API.
+func TestSetupMinIO_ReleasedInstallSwitchesImageAndDropsAPIRoute(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
-	managedMinIONamespace(f)
-	f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-	f.putJSON(minioAPIRoute, `{"metadata":{"uid":"api-uid","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`}}`)
-	f.putJSON(minioUIRoute, `{"metadata":{"uid":"ui-uid","labels":`+toolLabelJSON+`}}`)
+	putNamespace(f, `{}`, legacyPostManager)
+	applied := func(uid string) string {
+		return `{"metadata":{"uid":"` + uid + `","creationTimestamp":"` + created + `","managedFields":` + managedFieldsJSON(toolFieldManager, "Apply") + `}}`
+	}
+	f.putJSON(minioDeployPath, `{"metadata":{"uid":"dep","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},
+		"spec":{"template":{"spec":{"containers":[{"name":"minio","image":"quay.io/minio/minio:latest"}]}}}}`)
+	f.putJSON(minioPVCPath, applied("pvc"))
+	f.putJSON(minioAPIRoute, `{"metadata":{"uid":"api","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"spec":{"host":"minio-api-minio.apps.example.com"}}`)
+	f.putJSON(minioUIRoute, applied("ui"))
+	if st := getMinIOStatus(c); !strings.Contains(st.Warning, "quay.io/minio/minio:latest") || !strings.Contains(st.Warning, "minio-api") {
+		t.Errorf("status warning = %q", st.Warning)
+	}
 
 	resp, _ := SetupMinIO(c)
-	if !resp.Success || !strings.Contains(resp.Message, "2019 release") {
+	if !resp.Success {
 		t.Fatalf("setup = %+v", resp)
 	}
 	raw, _ := json.Marshal(f.get(minioDeployPath))
-	if !strings.Contains(string(raw), minioLegacyImage) || strings.Contains(string(raw), "console-address") || !strings.Contains(string(raw), "MINIO_ACCESS_KEY") {
-		t.Errorf("legacy volume must keep the 2019 container: %s", raw)
-	}
-	if f.has(minioAPIRoute) || f.has(minioUIRoute) {
-		t.Error("Routes exposing the 2019 MinIO's S3 API must be removed")
-	}
-	if ann, _ := f.get(minioPVCPath)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{}); ann[minioBackendAnnotation] != nil {
-		t.Errorf("a legacy volume must not be marked with the new backend: %v", ann)
-	}
-}
-
-// Re-running setup on an install from this version removes a leftover
-// minio-api Route (it exposed the S3 API) and keeps the console Route.
-func TestSetupMinIO_RemovesAPIRouteKeepsConsole(t *testing.T) {
-	fastMinIOTimings(t)
-	f, c := newResourceFake(t)
-	readyAfterApply(f)
-	managedMinIONamespace(f)
-	f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`,"annotations":{"`+minioBackendAnnotation+`":"`+minioBackendXL+`"}}}`)
-	f.putJSON(minioAPIRoute, `{"metadata":{"uid":"api-uid","labels":`+toolLabelJSON+`}}`)
-	resp, _ := SetupMinIO(c)
-	if !resp.Success || f.has(minioAPIRoute) || !f.has(minioUIRoute) {
-		t.Fatalf("setup = %+v, api route present = %v", resp, f.has(minioAPIRoute))
-	}
-	raw, _ := json.Marshal(f.get(minioDeployPath))
 	if !strings.Contains(string(raw), minioDefaultImage) {
-		t.Errorf("new-format volume must run the patched image: %s", raw)
+		t.Errorf("image not switched: %s", raw)
+	}
+	if f.has(minioAPIRoute) || !f.has(minioUIRoute) {
+		t.Errorf("api route present=%v, console route present=%v", f.has(minioAPIRoute), f.has(minioUIRoute))
+	}
+	pvc := f.get(minioPVCPath)["metadata"].(map[string]interface{})
+	if pvc["uid"] != "pvc" || pvc["labels"].(map[string]interface{})[managedByLabelKey] != managedByLabelValue {
+		t.Errorf("the data PVC must be kept and labelled: %v", pvc)
+	}
+	if hasMutation(f, "DELETE "+minioPVCPath) || hasMutation(f, "POST /api/v1/namespaces/minio/persistentvolumeclaims") {
+		t.Error("the data PVC must not be recreated")
 	}
 }
 

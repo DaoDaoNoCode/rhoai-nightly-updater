@@ -144,19 +144,15 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	if ctr.Image != minioDefaultImage || !strings.Contains(ctr.Image, "@sha256:") || strings.Contains(ctr.Image, "RELEASE.2019") {
 		t.Errorf("image = %q, want the digest-pinned patched MinIO", ctr.Image)
 	}
-	if strings.Join(ctr.Args, " ") != "server /data --console-address :9001" {
+	if strings.Join(ctr.Args, " ") != "server /data --console-address :9090" {
 		t.Errorf("args = %v; the console must have its own port", ctr.Args)
 	}
 	if f.has("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api") {
 		t.Error("the S3 API must not be exposed through a Route")
 	}
 	ui, _ := json.Marshal(f.get("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui"))
-	if !strings.Contains(string(ui), `"targetPort":"console"`) {
+	if !strings.Contains(string(ui), `"targetPort":"ui"`) {
 		t.Errorf("console Route must target the console port only: %s", ui)
-	}
-	pvcAnn, _ := f.get(minioPVCPath)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
-	if pvcAnn[minioBackendAnnotation] != minioBackendXL {
-		t.Errorf("new PVC lacks the backend annotation: %v", pvcAnn)
 	}
 	if _, fixed := ctr.SecurityContext["runAsUser"]; fixed || deploy.Spec.Template.Spec.SecurityContext != nil {
 		t.Errorf("a fixed UID would conflict with restricted-v2: %v", ctr.SecurityContext)
