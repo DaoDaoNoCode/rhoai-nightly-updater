@@ -976,6 +976,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	targetCSV := ""
 	// approveCSV is the exact CSV a Manual-approval InstallPlan may install.
 	approveCSV := ""
+	var targetCRDs map[string][]string
 	if isNightly {
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Verifying the selected catalog image..."})
 		target, err := preflightReinstallCatalog(c, image, channelOverride)
@@ -992,6 +993,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		channelOverride = target.Channel
 		targetCSV = target.HeadCSV
 		approveCSV = target.HeadCSV
+		targetCRDs = target.OwnedCRDs
 		logs = append(logs, fmt.Sprintf("Replacement catalog verified before cleanup (channel: %s, head: %s)", target.Channel, target.HeadCSV))
 	}
 
@@ -1016,6 +1018,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		activityTarget = stableSource + "/" + stableChannel
 		targetCSV = SubName + "." + target.Version
 		approveCSV = nonEmpty(target.HeadCSV, targetCSV)
+		targetCRDs = target.OwnedCRDs
 		logs = append(logs, fmt.Sprintf("Catalog target: %s / %s (GA %s)", stableSource, stableChannel, target.Version))
 	}
 
@@ -1051,7 +1054,26 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		logs = append(logs, fmt.Sprintf("Reinstalling to stable: %s/%s -> %s/%s", sub.Source, sub.Channel, stableSource, stableChannel))
 	}
 	validated := "Reinstall target validated"
-	switch verdict, reason := compareWithInstalled(csv, targetCSV); verdict {
+	verdict, reason := compareWithInstalled(csv, targetCSV)
+	if verdict == verdictOlder || verdict == verdictUnknown {
+		// A possible downgrade: OLM fails it in the CRD step when the older
+		// bundle drops a version the live CRDs still store, after the
+		// current operator is already gone. Checked before anything changes,
+		// even when the downgrade is confirmed.
+		if targetCRDs == nil {
+			logs = append(logs, "Warning: the catalog does not list the CRD versions of "+displayCSV(targetCSV)+", so the stored versions of the live CRDs were not checked. If the older bundle drops a stored version, OLM fails the install and the previous operator is restored.")
+			validated += " (CRD stored versions not checked)"
+		} else if conflicts, err := storedVersionConflicts(c, targetCRDs); err != nil {
+			recordActivity = false
+			return fail(fmt.Sprintf("Cannot check whether %s can serve the stored versions of the live CRDs: %v. Nothing was changed.", displayCSV(targetCSV), err), "prerequisites")
+		} else if len(conflicts) > 0 {
+			recordActivity = false
+			return fail(fmt.Sprintf("%s cannot be installed over the live CRDs: %s. OLM would fail its InstallPlan (risk of data loss), so nothing was changed. Moving to this version needs a manual storage-version migration first.", displayCSV(targetCSV), strings.Join(conflicts, "; ")), "validation")
+		} else {
+			logs = append(logs, "OK: the target bundle lists every stored version of the live CRDs")
+		}
+	}
+	switch verdict {
 	case verdictOlder:
 		if !opts.AllowDowngrade {
 			recordActivity = false

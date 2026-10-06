@@ -818,3 +818,44 @@ func TestOperationsRefuseAForeignSubscription(t *testing.T) {
 		})
 	}
 }
+
+// R5-F10: a confirmed downgrade is refused before anything changes when the
+// target bundle does not list a version the live CRDs store (OLM would fail
+// its CRD step after the current operator is gone).
+func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	const dsc = "datascienceclusters.datasciencecluster.opendatahub.io"
+	liveCRDs := `{"items":[{"metadata":{"name":"` + dsc + `"},"status":{"storedVersions":["v2"]}}]}`
+	for _, tc := range []struct {
+		name, owned string
+		wantSuccess bool
+		wantCode    string
+		wantMsg     string
+	}{
+		{"target lacks the stored version", `[{"name":"` + dsc + `","version":"v1"}]`, false, "validation", "stores objects as v2"},
+		{"target serves it", `[{"name":"` + dsc + `","version":"v1"},{"name":"` + dsc + `","version":"v2"}]`, true, "", "is installed"},
+		{"catalog does not say", ``, true, "", "is installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"source": CatalogName})
+			desc := `"version":"3.5.1"`
+			if tc.owned != "" {
+				desc += `,"customresourcedefinitions":{"owned":` + tc.owned + `}`
+			}
+			f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.5.1","currentCSVDesc":{` + desc + `}}]`
+			f.crds = liveCRDs
+			f.onSubscribe = olmInstalls("rhods-operator.3.5.1")
+			r, err := ReinstallWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{AllowDowngrade: true})
+			if err != nil || r.Success != tc.wantSuccess || r.ErrorCode != tc.wantCode || !strings.Contains(r.Message, tc.wantMsg) {
+				t.Fatalf("result = %+v, %v", r, err)
+			}
+			if !tc.wantSuccess && len(f.writes()) != 0 {
+				t.Fatalf("changed the cluster: %v", f.writes())
+			}
+			if tc.owned == "" && !strings.Contains(strings.Join(r.Logs, "\n"), "stored versions of the live CRDs were not checked") {
+				t.Fatalf("missing warning: %v", r.Logs)
+			}
+		})
+	}
+}

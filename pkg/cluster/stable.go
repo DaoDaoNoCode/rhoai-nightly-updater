@@ -14,15 +14,37 @@ type stableTarget struct {
 	Version string
 	// HeadCSV is the channel head's CSV name (what OLM installs).
 	HeadCSV string
-	Pinned  bool
+	// OwnedCRDs: see catalogTarget.OwnedCRDs.
+	OwnedCRDs map[string][]string
+	Pinned    bool
 }
 
 type stablePackageChannel struct {
 	Name           string `json:"name"`
 	CurrentCSV     string `json:"currentCSV"`
 	CurrentCSVDesc struct {
-		Version string `json:"version"`
+		Version                   string `json:"version"`
+		CustomResourceDefinitions struct {
+			Owned []struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"owned"`
+		} `json:"customresourcedefinitions"`
 	} `json:"currentCSVDesc"`
+}
+
+// ownedCRDs returns the CRD versions the channel head lists, or nil.
+func (ch stablePackageChannel) ownedCRDs() map[string][]string {
+	if len(ch.CurrentCSVDesc.CustomResourceDefinitions.Owned) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, o := range ch.CurrentCSVDesc.CustomResourceDefinitions.Owned {
+		if o.Name != "" && o.Version != "" && !containsString(out[o.Name], o.Version) {
+			out[o.Name] = append(out[o.Name], o.Version)
+		}
+	}
+	return out
 }
 
 func productionChannel(name string) bool {
@@ -90,6 +112,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			if override != "" {
 				if channel.Name == override {
 					target.Channel, target.Version, target.HeadCSV, target.Pinned = channel.Name, displayVersion, channel.CurrentCSV, true
+					target.OwnedCRDs = channel.ownedCRDs()
 					return target, nil
 				}
 				continue
@@ -109,6 +132,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			if target.Channel == "" || comparison > 0 || (comparison == 0 &&
 				(preference > bestPreference || (preference == bestPreference && channel.Name < target.Channel))) {
 				target.Channel, target.Version, target.HeadCSV = channel.Name, displayVersion, channel.CurrentCSV
+				target.OwnedCRDs = channel.ownedCRDs()
 				best, bestPreference = version, preference
 			}
 		}

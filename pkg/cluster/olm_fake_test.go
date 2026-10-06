@@ -34,6 +34,7 @@ type fakeOLM struct {
 	failDelete   map[string]int
 	stuckCSVs    map[string]bool // CSVs whose DELETE only sets deletionTimestamp (a finalizer that never finishes)
 	recordedSub  string          // data.operator-subscription of the snapshot ConfigMap
+	crds         string          // CRD list JSON, "" = 404
 	csvSeq       int
 	verifyState  string // state of verification catalogs, "" = READY
 	mainChannels *string
@@ -223,6 +224,12 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{"data": map[string]interface{}{subscriptionSnapshotKey: f.recordedSub}})
 	case strings.Contains(p, "/configmaps/") && r.Method != http.MethodGet:
 		_, _ = io.WriteString(w, `{}`)
+	case p == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":
+		if f.crds == "" {
+			notFound(w)
+			return
+		}
+		_, _ = io.WriteString(w, f.crds)
 	case strings.HasSuffix(p, "/installplans"):
 		var items []interface{}
 		for name, ip := range f.installPlans {
