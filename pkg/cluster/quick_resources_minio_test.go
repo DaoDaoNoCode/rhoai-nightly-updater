@@ -23,6 +23,8 @@ const (
 func fastMinIOTimings(t *testing.T) *int {
 	t.Helper()
 	oldReady, oldPoll, oldDel, oldDelPoll, oldBucket, oldRetry := MinIOReadyTimeout, MinIOReadyPoll, MinIODeleteTimeout, MinIODeletePoll, minioBucketCreator, minioBucketRetryDelay
+	oldPodsGone := MinIOPodsGoneTimeout
+	MinIOPodsGoneTimeout = 100 * time.Millisecond
 	minioBucketRetryDelay = time.Millisecond
 	MinIOReadyTimeout, MinIOReadyPoll = 300*time.Millisecond, 10*time.Millisecond
 	MinIODeleteTimeout, MinIODeletePoll = 100*time.Millisecond, 10*time.Millisecond
@@ -30,6 +32,7 @@ func fastMinIOTimings(t *testing.T) *int {
 	minioBucketCreator = func(*Client, string) error { calls++; return nil }
 	t.Cleanup(func() {
 		MinIOReadyTimeout, MinIOReadyPoll, MinIODeleteTimeout, MinIODeletePoll, minioBucketCreator, minioBucketRetryDelay = oldReady, oldPoll, oldDel, oldDelPoll, oldBucket, oldRetry
+		MinIOPodsGoneTimeout = oldPodsGone
 	})
 	t.Setenv("MINIO_IMAGE", "")
 	t.Setenv("SEAWEEDFS_IMAGE", "")

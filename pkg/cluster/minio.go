@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -81,6 +82,10 @@ var (
 	// deletion is still in progress.
 	MinIODeleteTimeout = 60 * time.Second
 	MinIODeletePoll    = 2 * time.Second
+	// MinIOPodsGoneTimeout bounds how long a migration waits for the pods of
+	// the replaced MinIO to exit before it removes their NetworkPolicy. It
+	// fits in the frontend's 120s request timeout next to MinIOReadyTimeout.
+	MinIOPodsGoneTimeout = 20 * time.Second
 
 	// minioBucketCreator creates the pipelines bucket; tests replace it
 	// because the in-cluster S3 endpoint is unreachable from unit tests.
@@ -1001,8 +1006,8 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: Bucket '%s' created", minioBucket))
 
 	// Step 7: Remove the MinIO of an earlier version, now that SeaweedFS
-	// serves minio-service: its Deployment first, then the NetworkPolicy
-	// that fences in its pod. Its PVC is kept.
+	// serves minio-service: its Deployment first, then, once its pods are
+	// gone, the NetworkPolicy that fences them in. Its PVC is kept.
 	migratedNote := ""
 	if legacy.found {
 		depPath, _ := minioDeletePath("Deployment", legacyMinIODeployment)
@@ -1010,15 +1015,6 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 			return fail(fmt.Sprintf("SeaweedFS is running with bucket '%s' and serves minio-service, but the MinIO Deployment of the earlier version could not be removed: %v. Re-run setup to retry.%s", minioBucket, err, templateHint(err)), "partial_failure", "legacy deployment cleanup failed")
 		}
 		logs = append(logs, "OK: Deployment minio (MinIO from an earlier version) removed")
-	}
-	if cur := existing["NetworkPolicy/"+legacyMinIONetworkPolicy]; cur.found {
-		npPath, _ := minioDeletePath("NetworkPolicy", legacyMinIONetworkPolicy)
-		if _, err := deleteWithUID(c, npPath, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
-			return fail(fmt.Sprintf("SeaweedFS is running with bucket '%s', but NetworkPolicy minio-ingress of the earlier MinIO could not be removed: %v. Re-run setup to retry.%s", minioBucket, err, templateHint(err)), "partial_failure", "legacy policy cleanup failed")
-		}
-		logs = append(logs, "OK: NetworkPolicy minio-ingress (MinIO from an earlier version) removed")
-	}
-	if legacy.found {
 		migratedNote = " MinIO from the earlier version was replaced. SeaweedFS started fresh: objects stored in MinIO were not copied, so artifacts of earlier pipeline runs return 404; pipeline servers keep working with no edits."
 		kept, found, err := readMinIOPVC(c, legacyMinIOPVC)
 		switch {
@@ -1032,6 +1028,25 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 			migratedNote += fmt.Sprintf(" Its data volume, PVC minio-pvc%s, is kept for a rollback or a manual copy; teardown deletes it.", size)
 			logs = append(logs, "Kept PVC minio-pvc"+size+" (MinIO data) for a rollback or a manual copy")
 		}
+	}
+	if cur := existing["NetworkPolicy/"+legacyMinIONetworkPolicy]; cur.found {
+		// A MinIO pod that is still shutting down would be reachable on every
+		// port without its policy, so the policy goes only once no pod with
+		// its selector is left. A re-run (Repair) finishes it otherwise.
+		logs = append(logs, fmt.Sprintf("Waiting up to %s for the MinIO pods to stop...", MinIOPodsGoneTimeout))
+		gone, err := waitLegacyMinIOPodsGone(c)
+		if err != nil {
+			return fail(fmt.Sprintf("SeaweedFS is running with bucket '%s' and serves minio-service, but whether the old MinIO pods are gone cannot be checked: %v. NetworkPolicy minio-ingress was kept; re-run setup (Repair) to finish the cleanup.%s%s", minioBucket, err, templateHint(err), migratedNote), "partial_failure", "legacy pod check failed")
+		}
+		if !gone {
+			logs = append(logs, "MinIO pods still running: kept NetworkPolicy minio-ingress")
+			return fail(fmt.Sprintf("SeaweedFS is running with bucket '%s' and serves minio-service, but a MinIO pod of the earlier version is still shutting down after %s, so NetworkPolicy minio-ingress was kept to fence it in. Re-run setup (Repair) to finish the cleanup.%s", minioBucket, MinIOPodsGoneTimeout, migratedNote), "partial_failure", "legacy pods still running")
+		}
+		npPath, _ := minioDeletePath("NetworkPolicy", legacyMinIONetworkPolicy)
+		if _, err := deleteWithUID(c, npPath, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
+			return fail(fmt.Sprintf("SeaweedFS is running with bucket '%s', but NetworkPolicy minio-ingress of the earlier MinIO could not be removed: %v. Re-run setup (Repair) to retry.%s%s", minioBucket, err, templateHint(err), migratedNote), "partial_failure", "legacy policy cleanup failed")
+		}
+		logs = append(logs, "OK: NetworkPolicy minio-ingress (MinIO from an earlier version) removed")
 	}
 
 	// Step 8: Remove the minio-api Route earlier versions created: it
@@ -1100,6 +1115,25 @@ func minioAPIRouteUsers(c *Client) ([]string, error) {
 	}
 	sort.Strings(users)
 	return users, nil
+}
+
+// waitLegacyMinIOPodsGone waits, bounded by MinIOPodsGoneTimeout, until no
+// pod with the replaced MinIO's selector (app=minio) is left, terminating or
+// not. It returns false on timeout.
+func waitLegacyMinIOPodsGone(c *Client) (bool, error) {
+	return waitForGone(c, MinIOPodsGoneTimeout, MinIODeletePoll, func(cc *Client) (bool, error) {
+		body, _, err := cc.get(namespacedPath("v1", "pods", minioNamespace, "") + "?labelSelector=" + url.QueryEscape(minioAppSelector))
+		if err != nil {
+			return false, err
+		}
+		var list struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return false, fmt.Errorf("parse pod list: %w", err)
+		}
+		return len(list.Items) == 0, nil
+	})
 }
 
 var (

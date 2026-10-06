@@ -237,6 +237,36 @@ func TestSetupMinIO_ForbiddenByOldTemplateNamesTheFix(t *testing.T) {
 	}
 }
 
+// The policy that fences in MinIO goes only once its pods are gone: a pod
+// still shutting down keeps it, setup says the cleanup is incomplete, and a
+// re-run (Repair) finishes it once the pod has exited.
+func TestSetupMinIO_KeepsMinIOPolicyWhileItsPodsRun(t *testing.T) {
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	readyAfterApply(f)
+	managedMinIONamespace(f)
+	putMinIODeployment(f, toolFieldManager, 1)
+	f.putJSON(minioNPPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	putMinIOPod(f, "minio-1", "quay.io/minio/minio:latest", "", "")
+	f.putJSON("/api/v1/namespaces/minio/pods/minio-1", `{"metadata":{"labels":{"app":"minio"},"deletionTimestamp":"`+created+`"}}`)
+
+	resp, _ := SetupMinIO(c)
+	if resp.Success || resp.ErrorCode != "partial_failure" || !strings.Contains(resp.Message, "NetworkPolicy minio-ingress was kept") || !strings.Contains(resp.Message, "Repair") || !strings.Contains(resp.Message, "was replaced") {
+		t.Fatalf("setup = %+v", resp)
+	}
+	if !f.has(minioNPPath) || f.has(minioDeployPath) || hasMutation(f, "DELETE "+minioNPPath) {
+		t.Fatalf("policy kept = %v, MinIO deployment kept = %v", f.has(minioNPPath), f.has(minioDeployPath))
+	}
+
+	// The pod exits; Repair finishes the cleanup.
+	f.mu.Lock()
+	delete(f.objects, fakeKey{gv: "v1", ns: "minio", plural: "pods", name: "minio-1"})
+	f.mu.Unlock()
+	if resp, _ := SetupMinIO(c); !resp.Success || f.has(minioNPPath) {
+		t.Fatalf("repair = %+v, policy kept = %v", resp, f.has(minioNPPath))
+	}
+}
+
 // An interrupted migration (SeaweedFS serves, MinIO removed, its policy
 // left) is finished by a re-run.
 func TestSetupMinIO_RemovesLeftoverMinIOPolicy(t *testing.T) {
