@@ -556,3 +556,31 @@ export interface VersionInfo {
   /** The Deployment predates the template this build expects (run make upgrade). */
   templateOutdated: boolean;
 }
+
+/** One build's answer in GET /api/build-explorer/contains. */
+export interface PRContainsBuild {
+  image: string;
+  tag?: string;
+  installed?: boolean;
+  /** The component image's vcs-ref, and "owner/name" from its git.url label. */
+  commit?: string;
+  commitRepo?: string;
+  result: "contains" | "not_contained" | "unknown";
+  /** Why the result is unknown: rate_limited, commit_not_found, no_component_image, no_commit_label, unexpected_repo, build_unreadable, github_error. */
+  reason?: string;
+  message?: string;
+  compareURL?: string;
+}
+
+/** GET /api/build-explorer/contains?pr=N[&image=...] */
+export interface PRContainsResponse {
+  repo: string;
+  pr: number;
+  title?: string;
+  url?: string;
+  mergeCommit?: string;
+  mergedAt?: string;
+  builds: PRContainsBuild[];
+  rateLimited?: boolean;
+  retryAfterSeconds?: number;
+}

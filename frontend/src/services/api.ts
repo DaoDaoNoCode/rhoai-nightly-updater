@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo, PRContainsResponse } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -679,6 +679,17 @@ export function deployDashboardPR(pr: number, flavor?: string): Promise<Operatio
     body: JSON.stringify(flavor ? { pr, flavor } : { pr }),
     acceptStatuses: [422],
   });
+}
+
+/**
+ * Whether the given builds contain merged PR `pr` of opendatahub-io/odh-dashboard.
+ * Errors: 422 pr_not_merged, 404 pr_not_found, 400 validation. A GitHub rate
+ * limit is not an error: the response has rateLimited and unknown builds.
+ */
+export function getPRContains(pr: number, images: string[], signal?: AbortSignal): Promise<PRContainsResponse> {
+  const params = new URLSearchParams({ pr: String(pr) });
+  for (const image of images) params.append('image', image);
+  return request(`/api/build-explorer/contains?${params}`, { signal });
 }
 
 /** Deploy the latest main dashboard build of the given flavor (B4). */
