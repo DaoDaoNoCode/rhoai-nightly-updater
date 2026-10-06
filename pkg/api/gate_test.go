@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -495,7 +496,7 @@ func TestFiveFormerlyUnlockedMutationsTakeTheClusterLock(t *testing.T) {
 		"/api/resources/pipeline-server/teardown": HandlePipelineServerTeardown,
 	} {
 		w := httptest.NewRecorder()
-		h(w, postJSON(path, "tok", `{"auth":"dXNlcjpwYXNz","project":"my-project"}`))
+		h(w, postJSON(path, "tok", `{"auth":"`+base64.StdEncoding.EncodeToString([]byte("user:pass"))+`","project":"my-project"}`))
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "cluster_busy") {
 			t.Errorf("%s while another operation runs: %d %s", path, w.Code, w.Body.String())
 		}

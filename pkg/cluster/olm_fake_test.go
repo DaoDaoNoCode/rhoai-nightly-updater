@@ -160,7 +160,7 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	last := p[strings.LastIndex(p, "/")+1:]
 	switch {
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
-		_, _ = io.WriteString(w, pullSecretBody(f.t, map[string]interface{}{"quay.io/rhoai": map[string]interface{}{"auth": "dXNlcjpwYXNz"}}))
+		_, _ = io.WriteString(w, pullSecretBody(f.t, map[string]interface{}{"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("user:pass")}}))
 	case strings.HasSuffix(p, "/imagedigestmirrorsets"):
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-mirror"},"spec":{"imageDigestMirrors":[{"source":%q}]}}]}`, IDMSSource)
 	case p == "/api/v1/namespaces/"+SubNS:

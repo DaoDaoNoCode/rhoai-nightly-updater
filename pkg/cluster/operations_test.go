@@ -58,7 +58,7 @@ func TestTestPullSecret_Valid(t *testing.T) {
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			"quay.io/rhoai": map[string]interface{}{
-				"auth": "dGVzdDp0ZXN0", // test:test
+				"auth": exampleAuth("test:test"), // test:test
 			},
 		},
 	}
@@ -102,7 +102,7 @@ func TestTestPullSecret_RejectedByQuay(t *testing.T) {
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			"quay.io/rhoai": map[string]interface{}{
-				"auth": "dGVzdDp0ZXN0",
+				"auth": exampleAuth("test:test"),
 			},
 		},
 	}
@@ -562,7 +562,7 @@ func TestCreatePullSecret_RejectsControlCharacters(t *testing.T) {
 	client, cleanup := newMockClient(map[string]mockResponse{})
 	defer cleanup()
 
-	result, err := CreatePullSecret(client, "dGVzdDp0ZXN0\n")
+	result, err := CreatePullSecret(client, exampleAuth("test:test")+"\n")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -600,8 +600,8 @@ func TestCreatePullSecret_RejectsEmptyUsernameAndPassword(t *testing.T) {
 	client, cleanup := newMockClient(map[string]mockResponse{})
 	defer cleanup()
 
-	// "Og==" is base64 of ":" (empty username and empty password)
-	result, err := CreatePullSecret(client, "Og==")
+	// Empty username and empty password.
+	result, err := CreatePullSecret(client, exampleAuth(":"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -614,8 +614,8 @@ func TestCreatePullSecret_RejectsEmptyPassword(t *testing.T) {
 	client, cleanup := newMockClient(map[string]mockResponse{})
 	defer cleanup()
 
-	// "dXNlcjo=" is base64 of "user:" (empty password)
-	result, err := CreatePullSecret(client, "dXNlcjo=")
+	// Empty password.
+	result, err := CreatePullSecret(client, exampleAuth("user:"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestCreatePullSecret_AcceptsValidAuth(t *testing.T) {
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			"quay.io/rhoai": map[string]interface{}{
-				"auth": "dXNlcjpwYXNzd29yZA==", // user:password
+				"auth": exampleAuth("user:password"), // user:password
 			},
 		},
 	}
@@ -654,8 +654,7 @@ func TestCreatePullSecret_AcceptsValidAuth(t *testing.T) {
 	})
 	defer cleanup()
 
-	// "dXNlcjpwYXNzd29yZA==" is base64 of "user:password"
-	result, err := CreatePullSecret(client, "dXNlcjpwYXNzd29yZA==")
+	result, err := CreatePullSecret(client, exampleAuth("user:password"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -674,7 +673,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	// Build mock pull secret response
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": "dGVzdDp0ZXN0"},
+			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
 		},
 	}
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
@@ -1447,7 +1446,7 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	// Pull secret
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": "dGVzdDp0ZXN0"},
+			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
 		},
 	}
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)
@@ -1697,7 +1696,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	// Build pull secret
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
-			"quay.io/rhoai": map[string]interface{}{"auth": "dGVzdDp0ZXN0"},
+			"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("test:test")},
 		},
 	}
 	dockerConfigJSON, _ := json.Marshal(dockerConfig)

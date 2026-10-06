@@ -18,7 +18,7 @@ import (
 // pullSecretCountingClient serves the pull secret and counts how often it is read.
 func pullSecretCountingClient(t *testing.T) (*Client, *atomic.Int32) {
 	t.Helper()
-	cfg := `{"auths":{"quay.io/rhoai":{"auth":"dXNlcjpwYXNz"}}}`
+	cfg := `{"auths":{"quay.io/rhoai":{"auth":"` + exampleAuth("user:pass") + `"}}}`
 	secret := fmt.Sprintf(`{"data":{".dockerconfigjson":%q}}`, base64.StdEncoding.EncodeToString([]byte(cfg)))
 	var reads atomic.Int32
 	c, cleanup := newMockClient(map[string]mockResponse{

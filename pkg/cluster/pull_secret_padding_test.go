@@ -2,16 +2,20 @@ package cluster
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
 // CRI-O (containers/image) decodes "auth" with base64.StdEncoding only, so an
 // unpadded value must be stored in its padded form or node pulls fail.
 func TestCreatePullSecret_StoresPaddedAuth(t *testing.T) {
+	padded := exampleAuth("user:pas") // ends in one "="
+	unpadded := strings.TrimRight(padded, "=")
+	exact := exampleAuth("user:pass") // a multiple of 3 bytes: no padding
 	for _, tc := range []struct{ name, input, want string }{
-		{"padded input kept", "dXNlcjpwYXM=", "dXNlcjpwYXM="},
-		{"unpadded input padded", "dXNlcjpwYXM", "dXNlcjpwYXM="},
-		{"no padding needed", "dXNlcjpwYXNz", "dXNlcjpwYXNz"},
+		{"padded input kept", padded, padded},
+		{"unpadded input padded", unpadded, padded},
+		{"no padding needed", exact, exact},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, writes := pullSecretServer(t, "")

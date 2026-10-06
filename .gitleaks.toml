@@ -1,0 +1,21 @@
+# Allowlist for Red Hat's leak scanners (PwnedAlert, rh-pre-commit,
+# rh-gitleaks). Only this top-level [allowlist] is read; it must stay in the
+# repository root on the default branch.
+#
+# Past commits of the Go tests held base64 docker-config "auth" values for
+# fake credentials. Tests now build them at run time (exampleAuth in
+# pkg/cluster/example_auth_test.go). The values are allowed by exact value,
+# not by file path, so a real credential in the same files is still reported.
+# Each one decodes to an obvious placeholder:
+#   b2xkOnBhc3M= old:pass          cmhvYWk6eQ== rhoai:y
+#   cmVwbzp6     repo:z            dGVzdDp0ZXN0 test:test
+#   dXNlcjpwYXNz user:pass         dXNlcjpwYXNzd29yZA== user:password
+#   dXNlcjpwYXM= user:pas          Z2VuZXJpYzp4 generic:x
+#   ZG9ja2VyOno= docker:z          ZGV2Onc=     dev:w
+#   ZXhhbXBsZTp4 example:x
+
+[allowlist]
+  description = "Placeholder registry credentials in Go tests"
+  regexes = [
+    '''(^|[^A-Za-z0-9+/])(b2xkOnBhc3M=|cmhvYWk6eQ==|cmVwbzp6|dGVzdDp0ZXN0|dXNlcjpwYXNzd29yZA==|dXNlcjpwYXNz|dXNlcjpwYXM=?|Z2VuZXJpYzp4|ZG9ja2VyOno=|ZGV2Onc=|ZXhhbXBsZTp4)([^A-Za-z0-9+/=]|$)''',
+  ]

@@ -79,7 +79,7 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 	case p == "/apis/config.openshift.io/v1/consoles/cluster":
 		_, _ = fmt.Fprint(w, `{"status":{"consoleURL":"https://console.example"}}`)
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
-		cfg := base64.StdEncoding.EncodeToString([]byte(`{"auths":{"quay.io/rhoai":{"auth":"dXNlcjpwYXNz"}}}`))
+		cfg := base64.StdEncoding.EncodeToString([]byte(`{"auths":{"quay.io/rhoai":{"auth":"` + exampleAuth("user:pass") + `"}}}`))
 		_, _ = fmt.Fprintf(w, `{"data":{".dockerconfigjson":%q}}`, cfg)
 	case strings.HasSuffix(p, "/datascienceclusters"):
 		_, _ = fmt.Fprint(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)

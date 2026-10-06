@@ -53,7 +53,7 @@ func buildValidPullSecret() string {
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			"quay.io/rhoai": map[string]interface{}{
-				"auth": "dGVzdDp0ZXN0",
+				"auth": exampleAuth("test:test"),
 			},
 		},
 	}
