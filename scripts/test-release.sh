@@ -184,7 +184,7 @@ push)
 	d="sha256:$(cksum <"$2" | cut -d' ' -f1)"
 	cp "$2" "$reg/blobs/$d"; touch "$reg/exists"
 	printf '%s\n' "$d" >"$reg/tags/${3##*:}" ;;
-digest) resolve "$2" ;;
+digest) if [ "$2" = --tarball ]; then echo "sha256:$(cksum <"$3" | cut -d' ' -f1)"; else resolve "$2"; fi ;;
 config) cat "$reg/blobs/$(resolve "$2")" ;;
 tag) resolve "$2" >"$reg/tags/$3" ;;
 *) echo "fake crane: unsupported $*" >&2; exit 1 ;;
@@ -260,6 +260,37 @@ reset_registry
 config v1.0.0 "$SHA2" >"$WORK/image.tar"
 expect_ok "publish to an empty repository" publish v1.0.0
 expect_eq "latest created" "$(tag_digest v1.0.0)" "$(tag_digest latest)"
+
+# --- publish-main: write-once commit tag, :main only from the tip ---------------
+SHA3=3333333333333333333333333333333333333333
+mainpub() { # SHA SHORT TIP
+	env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app IMAGE_TARBALL="$WORK/image.tar" \
+		CI_COMMIT_SHA="$1" CI_COMMIT_SHORT_SHA="$2" CI_DEFAULT_BRANCH=main MAIN_TIP="$3" $SH "$RELEASE" publish-main
+}
+reset_registry
+config 22222222 "$SHA2" >"$WORK/image.tar"
+expect_ok "publish-main" mainpub "$SHA2" 22222222 "$SHA2"
+expect_eq ":main is the commit" "$(tag_digest 22222222)" "$(tag_digest main)"
+first=$(tag_digest 22222222)
+expect_ok "publish-main retried with the same image" mainpub "$SHA2" 22222222 "$SHA2"
+expect_eq "one push" 1 "$(grep -c '^push' "$REG/calls")"
+printf 'rebuilt\n' >>"$WORK/image.tar"
+expect_ok "publish-main with a rebuild of the same commit" mainpub "$SHA2" 22222222 "$SHA2"
+expect_eq "the commit tag is written once" "$first" "$(tag_digest 22222222)"
+expect_eq "still one push" 1 "$(grep -c '^push' "$REG/calls")"
+config 33333333 "$SHA3" >"$WORK/image.tar"
+expect_ok "publish-main of a commit that is no longer the tip" mainpub "$SHA3" 33333333 "$SHA2"
+expect_eq ":main not moved back" "$first" "$(tag_digest main)"
+[ -f "$REG/tags/33333333" ] && pass || fail "the commit tag of a non-tip commit was not published"
+seed 44444444 "$(config 44444444 "$SHA3")"
+expect_fail "a commit tag from another commit" "commit tags are written once" mainpub "$SHA2" 44444444 "$SHA2"
+expect_fail "unreadable tip" "Cannot read the tip" env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app \
+	IMAGE_TARBALL="$WORK/image.tar" CI_COMMIT_SHA="$SHA3" CI_COMMIT_SHORT_SHA=33333333 CI_DEFAULT_BRANCH=main \
+	CI_SERVER_URL=http://127.0.0.1:9 CI_PROJECT_PATH=x CI_JOB_TOKEN=x $SH "$RELEASE" publish-main
+# A release after main: the commit tag stays main's build.
+config v5.0.0 "$SHA2" >"$WORK/image.tar"
+expect_ok "release after main" publish v5.0.0
+expect_eq "release keeps main's commit tag" "$first" "$(tag_digest 22222222)"
 
 # Registry errors stop the release.
 expect_fail "registry unreachable" "Cannot list the tags" env FAKE_LS_ERROR="dial tcp: i/o timeout" FAKE_REGISTRY="$REG" CRANE="$CRANE" \

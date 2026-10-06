@@ -233,9 +233,9 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build;
   - `release-scripts`: `scripts/test-release.sh` and `scripts/test-install.sh`;
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases).
-- **main**: `build-main` publishes the immutable `:$CI_COMMIT_SHORT_SHA` (8 characters) and `:main`. `:main` moves only while the commit is still the tip of `main`. It never touches `:latest`.
+- **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters; an existing tag is kept when it is a build of the same commit, and refused from another commit) and moves `:main` only while the commit is still the tip of `main`. It never touches `:latest`.
 - **Other branches**: a manual job publishes `:$CI_COMMIT_REF_SLUG`.
-- **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (one job at a time, resource group `publish-release`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
+- **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
 - The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests; `release.yml` runs them on release tags and creates the GitHub Release. Nothing is published to a registry from GitHub.
@@ -256,8 +256,8 @@ Image tags:
 | `:vX.Y.Z` | never (refused if it exists from another commit) | the tag pipeline |
 | `:vN` | to the newest release of major N | the tag pipeline |
 | `:latest` | to a newer release of the **same** major only; an unlabelled `:latest` (from before releases) counts as v1 | the tag pipeline; across majors only the manual `promote-latest` job |
-| `:main` | to every new tip of `main` | `build-main` |
-| `:<8-char commit>` | never | `build-main` (or the tag pipeline when main never built that commit) |
+| `:main` | to every new tip of `main` | `publish-main` |
+| `:<8-char commit>` | never: written once, by whichever pipeline publishes the commit first | `publish-main` or the tag pipeline |
 
 How to cut a release:
 

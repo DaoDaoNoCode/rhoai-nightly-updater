@@ -1,6 +1,6 @@
 # Checks run on merge requests, on main and on release tags before anything
 # is published.
-#   main push            → :main and the immutable 8-character commit tag
+#   main push            → :main and the write-once 8-character commit tag
 #   tag vX.Y.Z           → release guard, then :vX.Y.Z (immutable), the commit
 #                          tag (when new), :vMAJOR, :latest within its major
 #                          line, install.sh (the no-clone installer) and a
@@ -111,47 +111,30 @@ release-guard:
     - mkdir -p /kaniko/.docker
     - echo "{\"auths\":{\"${IMAGE%%/*}\":{\"auth\":\"$(printf '%s:%s' "${QUAY_USER}" "${QUAY_TOKEN}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
 
-# Push to main → :main and the immutable 8-character commit tag
-# (CI_COMMIT_SHORT_SHA is the first eight characters of the commit). Never
+# Push to main → an image tarball; publish-main pushes it as the write-once
+# 8-character commit tag (CI_COMMIT_SHORT_SHA) and moves :main. Never
 # :latest: that only moves with releases.
 build-main:
   extends: .kaniko-build
   needs: [go, golangci-lint, frontend, release-scripts]
-  # One publish at a time (https://docs.gitlab.com/ci/resource_groups/).
-  # The group keeps its earlier name, publish-latest, so it keeps its process
-  # mode. The default, unordered, does not order waiting jobs; set it to
-  # newest_first with the API (it cannot be set in this file):
-  #   PUT /projects/:id/resource_groups/publish-latest  process_mode=newest_first
-  resource_group: publish-latest
   script:
-    # Push :main only while this commit is still the tip of the default
-    # branch, so a retried or delayed job of an older pipeline cannot
-    # replace a newer :main. The tip comes from the Git smart HTTP ref
-    # advertisement (the kaniko debug image has busybox wget, not git); the
-    # job token authenticates as gitlab-ci-token. If the tip cannot be read
-    # the job fails, and a retry checks again.
-    - |
-      TIP=$(wget -qO- --header "Authorization: Basic $(printf 'gitlab-ci-token:%s' "$CI_JOB_TOKEN" | base64 -w0)" \
-        "$CI_SERVER_URL/$CI_PROJECT_PATH.git/info/refs?service=git-upload-pack" \
-        | sed -n "s|^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) refs/heads/$CI_DEFAULT_BRANCH\$|\1|p")
-      [ -n "$TIP" ] || { echo "Cannot read the tip of $CI_DEFAULT_BRANCH; not publishing."; exit 1; }
-      MAIN=""
-      if [ "$TIP" = "$CI_COMMIT_SHA" ]; then
-        MAIN="--destination=$IMAGE:main"
-      else
-        echo "$CI_COMMIT_SHA is no longer the tip of $CI_DEFAULT_BRANCH ($TIP); publishing only :$CI_COMMIT_SHORT_SHA."
-      fi
-      /kaniko/executor \
-        --context=$CI_PROJECT_DIR \
-        --dockerfile=Containerfile \
-        --build-arg GIT_SHA=$CI_COMMIT_SHA \
-        --build-arg VERSION=$CI_COMMIT_SHORT_SHA \
-        --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP \
-        --destination=$IMAGE:$CI_COMMIT_SHORT_SHA \
-        $MAIN \
-        --cache=true
+    - >-
+      /kaniko/executor
+      --context=$CI_PROJECT_DIR
+      --dockerfile=Containerfile
+      --build-arg GIT_SHA=$CI_COMMIT_SHA
+      --build-arg VERSION=$CI_COMMIT_SHORT_SHA
+      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
+      --destination=$IMAGE:$CI_COMMIT_SHORT_SHA
+      --no-push
+      --tar-path=image.tar
+      --cache=true
+  artifacts:
+    paths: [image.tar]
+    expire_in: 1 day
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+
 
 # Manual trigger for any other branch → :<branch-slug>
 build-branch:
@@ -217,11 +200,31 @@ release-installer:
 
 .crane:
   image: $GO_IMAGE
-  # Shared with promote-latest: one tag change at a time.
-  resource_group: publish-release
+  # Every job that writes image tags (publish-main, release-publish,
+  # promote-latest) holds this one lock, so their "does the tag exist"
+  # checks and writes never interleave
+  # (https://docs.gitlab.com/ci/resource_groups/). The group keeps its
+  # earlier name and process mode; set newest_first with the API (it cannot
+  # be set in this file):
+  #   PUT /projects/:id/resource_groups/publish-latest  process_mode=newest_first
+  resource_group: publish-latest
   before_script:
     - go install github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION
     - printf '%s' "$QUAY_TOKEN" | crane auth login "${IMAGE%%/*}" -u "$QUAY_USER" --password-stdin
+
+# Main: the write-once commit tag (kept when it exists from this commit,
+# refused from another) and :main while the commit is still the tip of the
+# default branch, read from the Git smart HTTP ref advertisement with the
+# job token. If the tip cannot be read the job fails, and a retry checks
+# again.
+publish-main:
+  extends: .crane
+  stage: publish
+  needs: [build-main]
+  script:
+    - IMAGE_TARBALL=image.tar sh scripts/release.sh publish-main
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
 
 # Pushes :vX.Y.Z (refused when it exists from another commit: release tags
 # are immutable), the commit tag when main has not published it, :vMAJOR

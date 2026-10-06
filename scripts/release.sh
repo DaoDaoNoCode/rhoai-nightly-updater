@@ -20,6 +20,8 @@
 #   release.sh publish VERSION         CI: push the image tarball as :VERSION,
 #                                      then move :vMAJOR and :latest
 #   release.sh promote-latest VERSION  CI, manual: move :latest to VERSION
+#   release.sh publish-main            CI, main: push the image tarball as the
+#                                      commit tag (written once) and move :main
 #   release.sh gitlab-release VERSION  CI: create the GitLab Release
 #   release.sh should-move NAME NEW CURRENT
 #                                      whether tag NAME (latest or vN) moves
@@ -369,18 +371,72 @@ cmd_publish() {
 	fi
 	digest=$(crane_cmd digest "$IMAGE:$version") || die "Cannot read the digest of $IMAGE:$version."
 	ref="$IMAGE@$digest"
-	# The commit tag of main builds is immutable: keep it when it exists.
-	if [ -n "${CI_COMMIT_SHORT_SHA:-}" ]; then
-		if has_tag "$CI_COMMIT_SHORT_SHA"; then
-			info ":$CI_COMMIT_SHORT_SHA unchanged (already published for this commit)"
-		else
-			crane_cmd tag "$ref" "$CI_COMMIT_SHORT_SHA" >/dev/null
-			info ":$CI_COMMIT_SHORT_SHA -> $version"
-		fi
-	fi
+	[ -z "${CI_COMMIT_SHORT_SHA:-}" ] || commit_tag "$ref" "$digest"
 	move_tag "v$(major "$version")" "$version" "$ref"
 	move_tag latest "$version" "$ref"
 	info "Published $ref as :$version."
+}
+
+# commit_tag REF DIGEST: the 8-character commit tag is written once, by
+# whichever pipeline (main or release) publishes first. An existing tag is
+# kept when it is the same image or another build of the same commit; one
+# from another commit stops the job.
+commit_tag() {
+	ref=$1 digest=$2 short=$CI_COMMIT_SHORT_SHA
+	if ! has_tag "$short"; then
+		crane_cmd tag "$ref" "$short" >/dev/null
+		info ":$short -> $digest"
+		return 0
+	fi
+	existing=$(crane_cmd digest "$IMAGE:$short") || die "Cannot read the digest of $IMAGE:$short."
+	if [ "$existing" = "$digest" ]; then
+		info ":$short unchanged (already this image)"
+		return 0
+	fi
+	built_from=$(image_label "$IMAGE:$short" 'org\.opencontainers\.image\.revision')
+	[ "$built_from" = "$CI_COMMIT_SHA" ] ||
+		die "$IMAGE:$short exists from ${built_from:-an unknown commit}, not $CI_COMMIT_SHA; commit tags are written once."
+	info ":$short unchanged (an earlier build of this commit; commit tags are written once)"
+}
+
+# The tip of the default branch, from the Git smart HTTP ref advertisement
+# (MAIN_TIP overrides it in tests).
+default_branch_tip() {
+	if [ -n "${MAIN_TIP:-}" ]; then
+		printf '%s\n' "$MAIN_TIP"
+		return 0
+	fi
+	curl -sSf --max-time 30 -u "gitlab-ci-token:$CI_JOB_TOKEN" \
+		"$CI_SERVER_URL/$CI_PROJECT_PATH.git/info/refs?service=git-upload-pack" |
+		sed -n "s|^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) refs/heads/$CI_DEFAULT_BRANCH\$|\1|p"
+}
+
+# cmd_publish_main: a main pipeline publishes its image tarball as the
+# write-once commit tag, and moves :main only while the commit is still the
+# tip of the default branch, so a late or retried pipeline of an older
+# commit cannot move :main back. Never :latest.
+cmd_publish_main() {
+	require_publish_env
+	: "${CI_COMMIT_SHA:?}" "${CI_COMMIT_SHORT_SHA:?}" "${IMAGE_TARBALL:?IMAGE_TARBALL is not set}"
+	[ -f "$IMAGE_TARBALL" ] || die "No image tarball at $IMAGE_TARBALL."
+	TAGS=$(list_tags)
+	short=$CI_COMMIT_SHORT_SHA
+	if has_tag "$short"; then
+		new=$(crane_cmd digest --tarball "$IMAGE_TARBALL") || die "Cannot read the digest of $IMAGE_TARBALL."
+		commit_tag "$IMAGE@$new" "$new"
+	else
+		crane_cmd push "$IMAGE_TARBALL" "$IMAGE:$short" >/dev/null
+		info "Pushed $IMAGE:$short."
+	fi
+	digest=$(crane_cmd digest "$IMAGE:$short") || die "Cannot read the digest of $IMAGE:$short."
+	tip=$(default_branch_tip) || true
+	[ -n "$tip" ] || die "Cannot read the tip of ${CI_DEFAULT_BRANCH:-the default branch}; :main was not moved (a retry checks again)."
+	if [ "$tip" = "$CI_COMMIT_SHA" ]; then
+		crane_cmd tag "$IMAGE@$digest" main >/dev/null
+		info ":main -> $short ($digest)"
+	else
+		info "$CI_COMMIT_SHA is no longer the tip ($tip); :main unchanged."
+	fi
 }
 
 cmd_promote_latest() {
@@ -456,6 +512,7 @@ installer) [ $# -ge 1 ] || usage; cmd_installer "$@" ;;
 tag) [ $# -eq 1 ] || usage; cmd_tag "$1" ;;
 publish) [ $# -eq 1 ] || usage; cmd_publish "$1" ;;
 promote-latest) [ $# -eq 1 ] || usage; cmd_promote_latest "$1" ;;
+publish-main) [ $# -eq 0 ] || usage; cmd_publish_main ;;
 gitlab-release) [ $# -eq 1 ] || usage; cmd_gitlab_release "$1" ;;
 should-move) [ $# -eq 3 ] || usage; cmd_should_move "$@" ;;
 *) usage ;;
