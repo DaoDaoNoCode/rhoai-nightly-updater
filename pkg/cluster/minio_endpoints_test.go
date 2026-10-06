@@ -5,6 +5,7 @@ package cluster
 // may depend on is deleted.
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,64 @@ func TestResourcesStatus_TeardownBlockedWhenEndpointsUnreadable(t *testing.T) {
 	}
 	if !strings.Contains(st.MinIO.TeardownBlockedReason, "Cannot verify which pipeline servers use MinIO") {
 		t.Fatalf("teardownBlockedReason = %q", st.MinIO.TeardownBlockedReason)
+	}
+}
+
+const minioNPPath = "/apis/networking.k8s.io/v1/namespaces/minio/networkpolicies/minio-ingress"
+
+// R6-1: setup fences in MinIO's ports with a tool-owned NetworkPolicy:
+// S3 from pods in any namespace, the console only from the router.
+func TestSetupMinIO_CreatesIngressPolicy(t *testing.T) {
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	readyAfterApply(f)
+	resp, _ := SetupMinIO(c)
+	if !resp.Success {
+		t.Fatalf("setup = %+v", resp)
+	}
+	np := f.get(minioNPPath)
+	if np == nil {
+		t.Fatal("NetworkPolicy minio-ingress was not created")
+	}
+	labels, _ := np["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+	if labels[managedByLabelKey] != managedByLabelValue {
+		t.Errorf("NetworkPolicy is not labelled as the tool's: %v", labels)
+	}
+	raw, _ := json.Marshal(np["spec"])
+	for _, want := range []string{
+		`"podSelector":{"matchLabels":{"app":"minio"}}`,
+		`"policyTypes":["Ingress"]`,
+		`{"from":[{"namespaceSelector":{}}],"ports":[{"port":9000,"protocol":"TCP"}]}`,
+		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/ingress":""}}}`,
+		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/host-network":""}}}],"ports":[{"port":9090,"protocol":"TCP"}]`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("spec lacks %s: %s", want, raw)
+		}
+	}
+}
+
+func TestSetupMinIO_RefusesForeignIngressPolicy(t *testing.T) {
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	readyAfterApply(f)
+	managedMinIONamespace(f)
+	f.putJSON(minioNPPath, foreignJSON(`,"spec":{"podSelector":{}}`))
+	resp, _ := SetupMinIO(c)
+	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, "NetworkPolicy minio-ingress") {
+		t.Fatalf("setup = %+v", resp)
+	}
+	assertForeignUntouched(t, f, minioNPPath, "spec", `"podSelector":{}`)
+}
+
+func TestTeardownMinIO_RemovesIngressPolicy(t *testing.T) {
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	deployedToolMinIO(f)
+	f.putJSON(minioNPPath, `{"metadata":{"uid":"np-uid","labels":`+toolLabelJSON+`}}`)
+	resp, _ := TeardownMinIO(c)
+	if !resp.Success || f.has(minioNPPath) {
+		t.Fatalf("teardown = %+v, policy kept = %v", resp, f.has(minioNPPath))
 	}
 }
 

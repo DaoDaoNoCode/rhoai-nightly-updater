@@ -22,7 +22,9 @@ const (
 	minioStorage     = "20Gi"
 	minioBucket      = "pipelines"
 	minioServiceName = "minio-service"
-	minioAppSelector = "app=minio"
+	// minioNetworkPolicyName fences in the ports of MinIO (see minioResources).
+	minioNetworkPolicyName = "minio-ingress"
+	minioAppSelector       = "app=minio"
 	// minioDefaultImage is Red Hat's Project Hummingbird build of the final
 	// open-source MinIO release, RELEASE.2025-10-15T17-29-55Z
 	// (quay.io/hummingbird-community/minio:release.2025-10-15t17-29-55z,
@@ -411,6 +413,8 @@ func minioApplyPath(obj map[string]interface{}) (string, bool) {
 		return namespacedPath("apps/v1", "deployments", minioNamespace, "minio"), true
 	case kind == "Service" && name == minioServiceName:
 		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
+	case kind == "NetworkPolicy" && name == minioNetworkPolicyName:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, minioNetworkPolicyName), true
 	case kind == "Route" && name == "minio-ui":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
 	}
@@ -429,6 +433,8 @@ func minioCreatePath(kind string) (string, bool) {
 		return withToolFieldManager(namespacedPath("apps/v1", "deployments", minioNamespace, "")), true
 	case "Service":
 		return withToolFieldManager(namespacedPath("v1", "services", minioNamespace, "")), true
+	case "NetworkPolicy":
+		return withToolFieldManager(namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, "")), true
 	case "Route":
 		return withToolFieldManager(namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "")), true
 	}
@@ -447,6 +453,8 @@ func minioGetPath(kind, name string) (string, bool) {
 		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
 	case kind == "Route" && name == "minio-api":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-api"), true
+	case kind == "NetworkPolicy" && name == minioNetworkPolicyName:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, minioNetworkPolicyName), true
 	case kind == "Route" && name == "minio-ui":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
 	}
@@ -467,6 +475,8 @@ func minioDeletePath(kind, name string) (string, bool) {
 		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
 	case kind == "Route" && name == "minio-api":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-api"), true
+	case kind == "NetworkPolicy" && name == minioNetworkPolicyName:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, minioNetworkPolicyName), true
 	case kind == "Route" && name == "minio-ui":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
 	}
@@ -590,6 +600,45 @@ func minioResources(user, password string) []minioResource {
 				},
 			},
 		}},
+		// The released MinIO has advisories without an open-source fix
+		// (GHSA-hv4r-mvr4-25vw needs a valid access key; see
+		// minioDefaultImage), so its ports are fenced in:
+		//   - S3 (9000) only from pods: the pipeline servers in their
+		//     projects, the data-science-pipelines operator's object-storage
+		//     health check (redhat-ods-applications), the router for a kept
+		//     legacy minio-api Route, and this tool's bucket creation. Any
+		//     namespace is allowed, because a pipeline server may live in any
+		//     project; there is no S3 Route.
+		//   - The console (9090) only from the OpenShift router, through the
+		//     minio-ui Route: namespaces labelled
+		//     policy-group.network.openshift.io/ingress (router pods) or
+		//     .../host-network (a HostNetwork router), as in the OpenShift
+		//     docs "Allowing ingress from the Ingress Controller"
+		//     (checked live: openshift-ingress carries the ingress label).
+		// The kubelet's probes always pass (traffic from the pod's node is
+		// allowed by NetworkPolicy semantics), and `oc port-forward` does
+		// not go through the pod network.
+		{"NetworkPolicy", "NetworkPolicy", map[string]interface{}{
+			"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+			"metadata": meta(minioNetworkPolicyName),
+			"spec": map[string]interface{}{
+				"podSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "minio"}},
+				"policyTypes": []string{"Ingress"},
+				"ingress": []map[string]interface{}{
+					{
+						"from":  []map[string]interface{}{{"namespaceSelector": map[string]interface{}{}}},
+						"ports": []map[string]interface{}{{"protocol": "TCP", "port": 9000}},
+					},
+					{
+						"from": []map[string]interface{}{
+							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/ingress": ""}}},
+							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/host-network": ""}}},
+						},
+						"ports": []map[string]interface{}{{"protocol": "TCP", "port": minioConsolePort}},
+					},
+				},
+			},
+		}},
 		{"Console Route", "Route", map[string]interface{}{
 			"apiVersion": "route.openshift.io/v1", "kind": "Route",
 			"metadata": meta("minio-ui"),
@@ -676,6 +725,7 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 		{"Secret", "minio-secret"},
 		{"Deployment", "minio"},
 		{"Service", minioServiceName},
+		{"NetworkPolicy", minioNetworkPolicyName},
 		{"Route", "minio-ui"},
 		{"Route", "minio-api"},
 	} {
@@ -942,6 +992,7 @@ const minioKeptNamespaceHint = " Namespace 'minio' was kept: it may hold objects
 // kubernetes.io/pvc-protection finalizer waits for that).
 var minioTeardownObjects = []struct{ kind, name string }{
 	{"Deployment", "minio"},
+	{"NetworkPolicy", minioNetworkPolicyName},
 	{"Route", "minio-ui"},
 	{"Route", "minio-api"},
 	{"Service", minioServiceName},
