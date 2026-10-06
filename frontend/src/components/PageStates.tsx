@@ -46,7 +46,7 @@ export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, on
         variant={EmptyStateVariant.lg}
       >
         <EmptyStateBody>
-          {cause !== title ? `${cause}. ` : ""}Retry in a moment; Diagnostics checks the cluster and the operator.
+          {cause !== title && <><strong>{cause}.</strong>{" "}</>}Retry in a moment; Diagnostics checks the cluster and the operator.
           {body && <TechnicalDetails text={body} toggleText="Show the error" />}
         </EmptyStateBody>
         <EmptyStateFooter>

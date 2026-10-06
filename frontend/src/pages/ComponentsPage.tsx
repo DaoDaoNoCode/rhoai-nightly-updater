@@ -1,13 +1,25 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  Button,
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
   CodeBlock,
   CodeBlockCode,
   Content,
-  Label,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  ExpandableSection,
+  Flex,
+  FlexItem,
+  HelperText,
+  HelperTextItem,
+  List,
+  ListItem,
   Modal,
   ModalBody,
   ModalFooter,
@@ -18,23 +30,19 @@ import {
   Stack,
   StackItem,
   Title,
-  Flex,
-  FlexItem,
-  Button,
-  Bullseye,
-  ExpandableSection,
-  List,
-  ListItem,
 } from "@patternfly/react-core";
+import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import type { OperationResponse } from "../types";
 import { fixProblem, repairDSC, getDSCPreview, toApiError } from "../services/api";
 import { repairPreview, type DSCRepairMode } from "../components/dscRepair";
-import { formatRelativeTime } from "../utils";
 import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
+import { PageErrorState, PageLoading } from "../components/PageStates";
+import { ConfirmActionModal } from "../components/ConfirmActionModal";
+import { RelativeTime } from "../components/RelativeTime";
+import { StatusLabel, type StatusKind } from "../components/StatusLabel";
+import { TechnicalDetails, TruncatedText, firstClause } from "../components/LongText";
 import { DeploymentsTable } from "../components/DeploymentsTable";
 import { DSCEmptyState } from "../components/DSCEmptyState";
 import { TooltipButton } from "../components/TooltipButton";
@@ -42,26 +50,42 @@ import { useComponentsData } from "../hooks/useComponentsData";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
-function statusColor(
-  status: string,
-): "green" | "red" | "blue" | "grey" | "orange" {
+/** The status of a DSC component as a status label kind. */
+function componentStatus(status: string): StatusKind {
   switch (status) {
     case "Available":
-      return "green";
+      return "success";
     case "Degraded":
     case "Error":
     case "DeployFailed":
-      return "red";
-    case "Deleting":
-      return "orange";
+      return "danger";
     case "Progressing":
-      return "blue";
+      return "progress";
     case "Removed":
-      return "grey";
+      return "neutral";
     default:
-      return "orange";
+      return "warning";
   }
 }
+
+/** The DSC phase: Ready is success, a failure is danger, anything else needs attention. */
+function dscPhaseStatus(phase?: string): StatusKind {
+  if (phase === "Ready") return "success";
+  if (!phase) return "neutral";
+  return /fail|error/i.test(phase) ? "danger" : "warning";
+}
+
+/** Machine names as code, comma separated. */
+const CodeList: React.FC<{ items: string[] }> = ({ items }) => (
+  <div>
+    {items.map((item, i) => (
+      <React.Fragment key={item}>
+        {i > 0 && ", "}
+        <code className="pf-v6-u-text-break-word">{item}</code>
+      </React.Fragment>
+    ))}
+  </div>
+);
 
 export const ComponentsPage: React.FC = () => {
   // Polled data with git labels merged in by deployment and image.
@@ -77,7 +101,7 @@ export const ComponentsPage: React.FC = () => {
   const [fixConfirm, setFixConfirm] = useState<{ action: string; title: string; message: string } | null>(null);
   const [fixLoading, setFixLoading] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<Record<string, OperationResponse>>({});
-  const [attentionExpanded, setAttentionExpanded] = useState(true);
+  const [othersExpanded, setOthersExpanded] = useState(false);
   const [repairMode, setRepairMode] = useState<DSCRepairMode | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
   const [repairResult, setRepairResult] = useState<OperationResponse | null>(null);
@@ -144,6 +168,8 @@ export const ComponentsPage: React.FC = () => {
   // No DSC is a state the backend reports with 200 (dscState), never an error (A05-8, A08-6).
   const dscState = data?.dscState ?? (data?.dscName ? "present" : undefined);
   const noDSC = !!data && (dscState === "no-dsc" || dscState === "no-crd");
+  const compat = data?.dscCompatibility;
+  const drift = !!compat && (compat.invalidFields.length > 0 || compat.missingComponents.length > 0 || (compat.extraComponents?.length ?? 0) > 0);
 
   return (
     <>
@@ -155,20 +181,11 @@ export const ComponentsPage: React.FC = () => {
         onRefresh={handleRefresh}
       />
 
-      {error && (
-        <LoadErrorAlert error={error} genericTitle="Could not load components" onRetry={handleRefresh} stale={!!data} />
+      {error && data && (
+        <LoadErrorAlert error={error} genericTitle="Could not load components" onRetry={handleRefresh} stale />
       )}
-
-      {loading && !data && !error && (
-        <PageSection>
-          <Bullseye>
-            <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-              <FlexItem><Spinner size="xl" aria-label="Loading components" /></FlexItem>
-              <FlexItem><Content component="p">Loading component status...</Content></FlexItem>
-            </Flex>
-          </Bullseye>
-        </PageSection>
-      )}
+      {error && !data && <PageErrorState error={error} title="Can't load the components" onRetry={handleRefresh} />}
+      {loading && !data && !error && <PageLoading title="Loading the components" />}
 
       {data && noDSC && dscState && (
         <DSCEmptyState
@@ -181,239 +198,315 @@ export const ComponentsPage: React.FC = () => {
         />
       )}
 
-      {data && (
-        <>
-          {!noDSC && data.dscCompatibility && (
-            data.dscCompatibility.validationError ||
-            data.dscCompatibility.defaultsError ||
-            data.dscCompatibility.invalidFields.length > 0 ||
-            data.dscCompatibility.missingComponents.length > 0 ||
-            (data.dscCompatibility.extraComponents?.length ?? 0) > 0 ||
-            repairResult
-          ) && (
-            <PageSection>
-              <Stack hasGutter>
-                {data.dscCompatibility.validationError && (
-                  <StackItem><Alert component="p" variant="warning" title="DSC field validation unavailable" isInline>{data.dscCompatibility.validationError}</Alert></StackItem>
-                )}
-                {data.dscCompatibility.defaultsError && (
-                  <StackItem><Alert component="p" variant="warning" title="DSC defaults unavailable" isInline>{data.dscCompatibility.defaultsError}</Alert></StackItem>
-                )}
-                {(data.dscCompatibility.invalidFields.length > 0 || data.dscCompatibility.missingComponents.length > 0 || (data.dscCompatibility.extraComponents?.length ?? 0) > 0) && (
-                  <StackItem>
-                    <Alert component="p" variant="warning" title="DSC field names differ from the installed operator" isInline>
-                      <Stack hasGutter>
-                        {data.dscCompatibility.invalidFields.length > 0 && <StackItem>
-                          <Content component="p">Invalid or deprecated fields in the installed CRD:</Content>
-                          <List>{data.dscCompatibility.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List>
-                        </StackItem>}
-                        {data.dscCompatibility.missingComponents.length > 0 && <StackItem>
-                          <Content component="p">Components present in the version defaults but missing from this DSC: {data.dscCompatibility.missingComponents.join(", ")}. Missing components may be intentional.</Content>
-                        </StackItem>}
-                        {(data.dscCompatibility.extraComponents?.length ?? 0) > 0 && <StackItem>
-                          <Content component="p">Components present in this DSC but absent from the {data.dscCompatibility.branch} version defaults:</Content>
-                          <List>{data.dscCompatibility.extraComponents?.map(name => <ListItem key={name}><code>{name}</code></ListItem>)}</List>
-                          <Content component="p">The installed CRD may still accept these names. Review them before removing their configuration.</Content>
-                        </StackItem>}
-                        <StackItem><Content component="p">Removing extra components preserves the remaining component settings and management states. Removing invalid fields preserves valid settings. Resetting replaces the entire DSC spec, including management states and custom settings.</Content></StackItem>
-                        {data.dscCompatibility.sourceURL && <StackItem>
-                          <Button variant="link" isInline component="a" href={data.dscCompatibility.sourceURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
-                            Defaults for {data.dscCompatibility.operatorVersion} ({data.dscCompatibility.branch})
-                          </Button>
-                        </StackItem>}
-                        {data.dscCompatibility.defaultsSource === "csv" && <StackItem>
-                          <Content component="small">Defaults come from the alm-examples of the installed operator {data.dscCompatibility.operatorVersion}.</Content>
-                        </StackItem>}
-                        <StackItem><Flex gap={{ default: "gapSm" }}>
-                          {data.dscCompatibility.invalidFields.length > 0 && <FlexItem><TooltipButton variant="secondary" onClick={() => setRepairMode("remove-invalid")} isDisabled={repairLoading || !!data.dscCompatibility.validationError} disabledReason={mutateReason}>Remove invalid fields</TooltipButton></FlexItem>}
-                          {(data.dscCompatibility.extraComponents?.length ?? 0) > 0 && <FlexItem><TooltipButton variant="secondary" onClick={() => setRepairMode("remove-extra-components")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError} disabledReason={mutateReason}>Remove extra components</TooltipButton></FlexItem>}
-                          <FlexItem><TooltipButton variant="secondary" onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError} disabledReason={mutateReason}>Reset to version defaults</TooltipButton></FlexItem>
-                        </Flex></StackItem>
-                        {(resetBlocked.length > 0 || extraBlocked.length > 0) && <StackItem>
-                          <Content component="p">
-                            {resetBlocked.length > 0 && <>Reset to version defaults is not possible now: it would remove {resetBlocked.map((b) => b.component).join(", ")}, which must not be removed yet. </>}
-                            {extraBlocked.length > 0 && <>Remove extra components is not possible now: {extraBlocked.map((b) => b.component).join(", ")} must not be removed yet. </>}
-                            Open the action to see why.
-                          </Content>
-                        </StackItem>}
-                      </Stack>
-                    </Alert>
-                  </StackItem>
-                )}
-                {repairResult && (
-                  <StackItem>
-                    <Alert component="p" variant={outcomeVariant(repairResult)} title={outcomeTitle(repairResult, "Could not repair the DataScienceCluster")} isInline isLiveRegion>
-                      {repairResult.success ? undefined : repairResult.message}
-                      {(repairResult.logs?.length ?? 0) > 0 && (
-                        <details><summary>Details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{repairResult.logs!.join("\n")}</pre></details>
-                      )}
-                    </Alert>
-                  </StackItem>
-                )}
-              </Stack>
-            </PageSection>
-          )}
-
-          {/* DSC Status Card: what the operator reports */}
-          {!noDSC && (
-          <PageSection>
-            <Card isCompact>
-              <CardBody>
-                {(() => {
-                  const components = data.components;
-                  const sortByName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
-                  const ready = components.filter(c => c.status === "Available").sort(sortByName);
-                  const notReady = components.filter(c => c.status !== "Available" && c.status !== "Removed").sort(sortByName);
-                  const removed = components.filter(c => c.status === "Removed").sort(sortByName);
-
-                  return (
+      {data && !noDSC && compat && (compat.validationError || compat.defaultsError || drift || repairResult) && (
+        <PageSection>
+          <Stack hasGutter>
+            {compat.validationError && (
+              <StackItem>
+                <Alert component="p" variant="warning" title="DSC field validation is unavailable" isInline>
+                  <TruncatedText>{compat.validationError}</TruncatedText>
+                </Alert>
+              </StackItem>
+            )}
+            {compat.defaultsError && (
+              <StackItem>
+                <Alert component="p" variant="warning" title="The DSC defaults are unavailable" isInline>
+                  <TruncatedText>{compat.defaultsError}</TruncatedText>
+                </Alert>
+              </StackItem>
+            )}
+            {drift && (
+              <StackItem>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>
+                      <Title headingLevel="h2" size="lg">
+                        The DataScienceCluster differs from operator {compat.operatorVersion || "defaults"}
+                      </Title>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardBody>
                     <Stack hasGutter>
                       <StackItem>
-                        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
+                        <Alert
+                          component="p"
+                          variant="warning"
+                          isInline
+                          isPlain
+                          title="Some field or component names don't match what the installed operator expects"
+                        />
+                      </StackItem>
+                      <StackItem>
+                        <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "16ch" }} aria-label="Differences">
+                          {compat.invalidFields.length > 0 && (
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Invalid fields</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <CodeList items={compat.invalidFields} />
+                                <span className="pf-v6-u-text-color-subtle">Invalid or deprecated in the installed CRD.</span>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                          )}
+                          {compat.missingComponents.length > 0 && (
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Missing</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <CodeList items={compat.missingComponents} />
+                                <span className="pf-v6-u-text-color-subtle">In the version defaults but not in this DSC; this may be intentional.</span>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                          )}
+                          {(compat.extraComponents?.length ?? 0) > 0 && (
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Extra</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <CodeList items={compat.extraComponents ?? []} />
+                                <span className="pf-v6-u-text-color-subtle">
+                                  In this DSC but not in the {compat.branch} defaults. The installed CRD may still accept them; review them before removing their configuration.
+                                </span>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                          )}
+                          <DescriptionListGroup>
+                            <DescriptionListTerm>Defaults</DescriptionListTerm>
+                            <DescriptionListDescription>
+                              {compat.defaultsSource === "csv"
+                                ? <>From the alm-examples of the installed operator {compat.operatorVersion}.</>
+                                : compat.sourceURL
+                                  ? (
+                                    <a href={compat.sourceURL} target="_blank" rel="noopener noreferrer">
+                                      Defaults for {compat.operatorVersion} ({compat.branch}) <ExternalLinkAltIcon />
+                                    </a>
+                                  )
+                                  : <>{compat.branch || "unknown"}</>}
+                            </DescriptionListDescription>
+                          </DescriptionListGroup>
+                        </DescriptionList>
+                      </StackItem>
+                      <StackItem>
+                        <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
+                          {compat.invalidFields.length > 0 && (
+                            <FlexItem>
+                              <TooltipButton variant="secondary" onClick={() => setRepairMode("remove-invalid")} isDisabled={repairLoading || !!compat.validationError} disabledReason={mutateReason}>
+                                Remove invalid fields
+                              </TooltipButton>
+                            </FlexItem>
+                          )}
+                          {(compat.extraComponents?.length ?? 0) > 0 && (
+                            <FlexItem>
+                              <TooltipButton variant="secondary" onClick={() => setRepairMode("remove-extra-components")} isDisabled={repairLoading || !!compat.defaultsError || !!compat.validationError} disabledReason={mutateReason}>
+                                Remove extra components
+                              </TooltipButton>
+                            </FlexItem>
+                          )}
                           <FlexItem>
-                            <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                              <FlexItem>
-                                <Title headingLevel="h2" size="md">{data.dscName || "DataScienceCluster"}</Title>
-                              </FlexItem>
-                              {data.consoleURL && data.dscName && (
-                                <FlexItem>
-                                  <Button variant="link" isInline size="sm" component="a"
-                                    href={`${data.consoleURL}/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/${data.dscName}/yaml`}
-                                    target="_blank" rel="noopener noreferrer"
-                                    icon={<ExternalLinkAltIcon />} iconPosition="end"
-                                    aria-label={`Edit ${data.dscName} in the OpenShift console`}
-                                  >Edit</Button>
-                                </FlexItem>
-                              )}
-                              <FlexItem>
-                                <Label isCompact
-                                  color={data.dscPhase === "Ready" ? "green" : "orange"}
-                                  icon={data.dscPhase === "Ready" ? <CheckCircleIcon /> : <ExclamationTriangleIcon />}
-                                >{data.dscPhase || "Unknown"}</Label>
-                              </FlexItem>
-                            </Flex>
-                          </FlexItem>
-                          <FlexItem>
-                            <Flex gap={{ default: "gapSm" }}>
-                              <FlexItem><Label color="green" isCompact>{ready.length} ready</Label></FlexItem>
-                              {notReady.length > 0 && <FlexItem><Label color="orange" isCompact>{notReady.length} need attention</Label></FlexItem>}
-                              {removed.length > 0 && <FlexItem><Label color="grey" isCompact>{removed.length} removed</Label></FlexItem>}
-                            </Flex>
+                            <TooltipButton variant="secondary" isDanger onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!compat.defaultsError || !!compat.validationError} disabledReason={mutateReason}>
+                              Reset to version defaults
+                            </TooltipButton>
                           </FlexItem>
                         </Flex>
-                        {data.dscPhase !== "Ready" && data.dscReason && (
-                          <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)", marginTop: "0.25rem", overflowWrap: "anywhere", whiteSpace: "pre-line" }}>
-                            {data.dscReason}
-                          </Content>
-                        )}
                       </StackItem>
-
-                      {notReady.length > 0 && (
+                      {(resetBlocked.length > 0 || extraBlocked.length > 0) && (
                         <StackItem>
-                          <ExpandableSection toggleText={`Need attention (${notReady.length})`} isIndented isExpanded={attentionExpanded} onToggle={(_e, v) => setAttentionExpanded(v)}>
-                            <Stack hasGutter>
-                              {notReady.map(c => {
-                                const res = c.fixAction ? fixResult[c.fixAction] : undefined;
-                                return (
-                                  <StackItem key={c.name}>
-                                    <Flex alignItems={{ default: "alignItemsFlexStart" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
-                                      <FlexItem><ExclamationTriangleIcon color="var(--pf-t--global--color--status--warning--default)" /></FlexItem>
-                                      <FlexItem flex={{ default: "flex_1" }} style={{ minWidth: 0 }}>
-                                        <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                                          <FlexItem><strong>{c.name}</strong></FlexItem>
-                                          <FlexItem><Label isCompact color={statusColor(c.status)}>{c.status}</Label></FlexItem>
-                                          {c.fixAction && c.fixTitle && !res?.success && (
-                                            <FlexItem>
-                                              <TooltipButton variant="link" isInline size="sm"
-                                                isLoading={fixLoading === c.fixAction}
-                                                isDisabled={fixLoading !== null}
-                                                disabledReason={fixReason}
-                                                onClick={() => setFixConfirm({
-                                                  action: c.fixAction!,
-                                                  title: c.fixTitle!,
-                                                  message: c.fixConfirm || c.fixDescription || "This changes the DataScienceCluster on the shared cluster.",
-                                                })}
-                                              >{c.fixTitle}</TooltipButton>
-                                            </FlexItem>
-                                          )}
-                                        </Flex>
-                                        {c.message && (
-                                          <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)", overflowWrap: "anywhere" }}>
-                                            {c.message}
-                                          </Content>
-                                        )}
-                                        {res && (
-                                          <Alert component="p" isInline isPlain isLiveRegion variant={outcomeVariant(res)} title={outcomeTitle(res, "Fix failed")}>
-                                            {res.success ? undefined : res.message}
-                                          </Alert>
-                                        )}
-                                      </FlexItem>
-                                    </Flex>
-                                  </StackItem>
-                                );
-                              })}
-                            </Stack>
-                          </ExpandableSection>
-                        </StackItem>
-                      )}
-
-                      <StackItem>
-                        <ExpandableSection toggleText={`Ready (${ready.length})`} isIndented>
-                          <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
-                            {ready.map(c => (
-                              <FlexItem key={c.name}>
-                                <Label isCompact color="green" icon={<CheckCircleIcon />}>{c.name}</Label>
-                              </FlexItem>
-                            ))}
-                          </Flex>
-                        </ExpandableSection>
-                      </StackItem>
-
-                      {removed.length > 0 && (
-                        <StackItem>
-                          <ExpandableSection toggleText={`Removed (${removed.length})`} isIndented>
-                            <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
-                              {removed.map(c => (
-                                <FlexItem key={c.name}>
-                                  <Label isCompact color="grey">{c.name}</Label>
-                                </FlexItem>
-                              ))}
-                            </Flex>
-                          </ExpandableSection>
+                          <HelperText>
+                            {resetBlocked.length > 0 && (
+                              <HelperTextItem variant="warning">
+                                Reset to version defaults is not possible now: it would remove {resetBlocked.map((b) => b.component).join(", ")}, which must not be removed yet. Open the action to see why.
+                              </HelperTextItem>
+                            )}
+                            {extraBlocked.length > 0 && (
+                              <HelperTextItem variant="warning">
+                                Remove extra components is not possible now: {extraBlocked.map((b) => b.component).join(", ")} must not be removed yet. Open the action to see why.
+                              </HelperTextItem>
+                            )}
+                          </HelperText>
                         </StackItem>
                       )}
                     </Stack>
-                  );
-                })()}
-              </CardBody>
-            </Card>
-          </PageSection>
-          )}
+                  </CardBody>
+                </Card>
+              </StackItem>
+            )}
+            {repairResult && (
+              <StackItem>
+                <Alert component="p" variant={outcomeVariant(repairResult)} title={outcomeTitle(repairResult, "Could not repair the DataScienceCluster")} isInline isLiveRegion>
+                  {repairResult.success ? undefined : repairResult.message}
+                  {(repairResult.logs?.length ?? 0) > 0 && <TechnicalDetails text={repairResult.logs!} />}
+                </Alert>
+              </StackItem>
+            )}
+          </Stack>
+        </PageSection>
+      )}
 
+      {/* DSC status card: what the operator reports */}
+      {data && !noDSC && (() => {
+        const components = data.components;
+        const sortByName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+        const ready = components.filter(c => c.status === "Available").sort(sortByName);
+        const notReady = components.filter(c => c.status !== "Available" && c.status !== "Removed").sort(sortByName);
+        const removed = components.filter(c => c.status === "Removed").sort(sortByName);
+        const reason = data.dscPhase !== "Ready" ? data.dscReason?.trim() : "";
+        const reasonSummary = reason ? firstClause(reason) : "";
+        const counts = [`${ready.length} ready`, notReady.length > 0 ? `${notReady.length} need attention` : "", removed.length > 0 ? `${removed.length} removed` : ""].filter(Boolean).join(" · ");
+        return (
           <PageSection>
             <Card>
-              <CardTitle>
-                <Title headingLevel="h2" size="lg">Deployments</Title>
-                {(data.changedCount ?? 0) > 0 && data.snapshotTime && (
-                  <Content component="small">
-                    <Label isCompact color="blue">{data.changedCount} updated</Label>{" "}
-                    since the snapshot taken at the last install or update ({formatRelativeTime(data.snapshotTime)})
-                  </Content>
-                )}
-              </CardTitle>
+              <CardHeader>
+                <CardTitle>
+                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                    <FlexItem>
+                      <Title headingLevel="h2" size="lg">DataScienceCluster {data.dscName && <code>{data.dscName}</code>}</Title>
+                    </FlexItem>
+                    <FlexItem><StatusLabel status={dscPhaseStatus(data.dscPhase)}>{data.dscPhase || "Unknown"}</StatusLabel></FlexItem>
+                  </Flex>
+                </CardTitle>
+              </CardHeader>
               <CardBody>
-                <DeploymentsTable
-                  deployments={data.deployments}
-                  labelsLoading={labelsLoading}
-                  consoleURL={data.consoleURL}
-                  mutateBlocker={fixReason}
-                  onResult={onResult}
-                  onRefresh={handleRefresh}
-                />
+                <Stack hasGutter>
+                  <StackItem>
+                    <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
+                      <FlexItem>
+                        <Content component="p" className="pf-v6-u-text-color-subtle">{counts}</Content>
+                      </FlexItem>
+                      {data.consoleURL && data.dscName && (
+                        <FlexItem>
+                          <Button
+                            variant="link"
+                            isInline
+                            component="a"
+                            href={`${data.consoleURL}/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/${data.dscName}/yaml`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            icon={<ExternalLinkAltIcon />}
+                            iconPosition="end"
+                            aria-label={`Edit ${data.dscName} in the OpenShift console`}
+                          >
+                            Edit in console
+                          </Button>
+                        </FlexItem>
+                      )}
+                    </Flex>
+                  </StackItem>
+                  {reason && (
+                    <StackItem>
+                      <Alert component="p" variant="danger" isInline isPlain title={reasonSummary}>
+                        {reason !== reasonSummary && <TechnicalDetails text={reason} toggleText="Show the full message" />}
+                      </Alert>
+                    </StackItem>
+                  )}
+                  <StackItem>
+                    {notReady.length > 0 ? (
+                      <Table aria-label="Components that need attention" variant="compact">
+                        <Thead>
+                          <Tr>
+                            <Th width={20}>Component</Th>
+                            <Th width={15}>Status</Th>
+                            <Th>Message</Th>
+                            <Th screenReaderText="Fix" />
+                          </Tr>
+                        </Thead>
+                        <Tbody>
+                          {notReady.map((c) => {
+                            const res = c.fixAction ? fixResult[c.fixAction] : undefined;
+                            return (
+                              <Tr key={c.name}>
+                                <Td dataLabel="Component"><strong>{c.name}</strong></Td>
+                                <Td dataLabel="Status"><StatusLabel status={componentStatus(c.status)}>{c.status}</StatusLabel></Td>
+                                <Td dataLabel="Message">
+                                  {c.message ? <TruncatedText>{c.message}</TruncatedText> : <span className="pf-v6-u-text-color-subtle">No message</span>}
+                                  {res && (
+                                    <Alert component="p" isInline isPlain isLiveRegion variant={outcomeVariant(res)} title={outcomeTitle(res, "Fix failed")}>
+                                      {res.success ? undefined : res.message}
+                                    </Alert>
+                                  )}
+                                </Td>
+                                <Td dataLabel={c.fixAction && c.fixTitle && !res?.success ? "Fix" : undefined} modifier="fitContent">
+                                  {c.fixAction && c.fixTitle && !res?.success && (
+                                    <TooltipButton
+                                      variant="secondary"
+                                      isLoading={fixLoading === c.fixAction}
+                                      isDisabled={fixLoading !== null}
+                                      disabledReason={fixReason}
+                                      onClick={() => setFixConfirm({
+                                        action: c.fixAction!,
+                                        title: c.fixTitle!,
+                                        message: c.fixConfirm || c.fixDescription || "This changes the DataScienceCluster on the shared cluster.",
+                                      })}
+                                    >
+                                      {c.fixTitle}
+                                    </TooltipButton>
+                                  )}
+                                </Td>
+                              </Tr>
+                            );
+                          })}
+                        </Tbody>
+                      </Table>
+                    ) : (
+                      <Alert component="p" variant="success" isInline isPlain title="Every enabled component is ready" />
+                    )}
+                  </StackItem>
+                  {(ready.length > 0 || removed.length > 0) && (
+                    <StackItem>
+                      <ExpandableSection
+                        toggleText={`Ready (${ready.length})${removed.length > 0 ? ` and removed (${removed.length})` : ""} components`}
+                        isExpanded={othersExpanded}
+                        onToggle={(_e, v) => setOthersExpanded(v)}
+                      >
+                        <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "10ch" }}>
+                          {ready.length > 0 && (
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Ready</DescriptionListTerm>
+                              <DescriptionListDescription>{ready.map((c) => c.name).join(", ")}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                          )}
+                          {removed.length > 0 && (
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Removed</DescriptionListTerm>
+                              <DescriptionListDescription>{removed.map((c) => c.name).join(", ")}</DescriptionListDescription>
+                            </DescriptionListGroup>
+                          )}
+                        </DescriptionList>
+                      </ExpandableSection>
+                    </StackItem>
+                  )}
+                </Stack>
               </CardBody>
             </Card>
           </PageSection>
-        </>
+        );
+      })()}
+
+      {data && dscState !== "no-crd" && (
+        <PageSection isFilled>
+          <Card>
+            <CardHeader>
+              <CardTitle><Title headingLevel="h2" size="lg">Deployments</Title></CardTitle>
+            </CardHeader>
+            <CardBody>
+              <Stack hasGutter>
+                {(data.changedCount ?? 0) > 0 && data.snapshotTime && (
+                  <StackItem>
+                    <Content component="p" className="pf-v6-u-text-color-subtle">
+                      {data.changedCount} changed since the snapshot taken at the last install or update (<RelativeTime date={data.snapshotTime} size="inherit" />).
+                    </Content>
+                  </StackItem>
+                )}
+                <StackItem>
+                  <DeploymentsTable
+                    deployments={data.deployments}
+                    labelsLoading={labelsLoading}
+                    consoleURL={data.consoleURL}
+                    mutateBlocker={fixReason}
+                    onResult={onResult}
+                    onRefresh={handleRefresh}
+                  />
+                </StackItem>
+              </Stack>
+            </CardBody>
+          </Card>
+        </PageSection>
       )}
 
       <Modal variant={ModalVariant.medium} isOpen={repairMode !== null} onClose={() => !repairLoading && setRepairMode(null)} aria-labelledby="dsc-repair-title">
@@ -461,38 +554,20 @@ export const ComponentsPage: React.FC = () => {
         </ModalFooter>
       </Modal>
 
-      <Modal
-        aria-labelledby="confirm-fix-title"
-        variant={ModalVariant.small}
+      <ConfirmActionModal
         isOpen={fixConfirm !== null}
-        onClose={() => setFixConfirm(null)}
+        title={`${fixConfirm?.title || "Fix"}?`}
+        changes={[<>DataScienceCluster <code>{data?.dscName || "default-dsc"}</code>: {fixConfirm?.message}</>]}
+        confirmLabel={fixConfirm?.title || "Confirm"}
+        isLoading={fixLoading !== null}
+        confirmDisabled={!!fixReason}
+        onConfirm={() => fixConfirm && handleComponentFix(fixConfirm.action)}
+        onCancel={() => setFixConfirm(null)}
       >
-        <ModalHeader title={`${fixConfirm?.title || "Fix"}?`} labelId="confirm-fix-title" />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p">{fixConfirm?.message}</Content>
-            </StackItem>
-            <StackItem>
-              <Content component="small">The server re-checks the component first and changes nothing when it is no longer needed or a prerequisite is missing.</Content>
-            </StackItem>
-            <StackItem>
-              <Alert component="p" variant="warning" title="This changes a shared cluster." isInline isPlain />
-            </StackItem>
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="primary"
-            onClick={() => fixConfirm && handleComponentFix(fixConfirm.action)}
-            isLoading={fixLoading !== null}
-            isDisabled={fixLoading !== null}
-          >
-            {fixConfirm?.title || "Confirm"}
-          </Button>
-          <Button variant="link" onClick={() => setFixConfirm(null)}>Cancel</Button>
-        </ModalFooter>
-      </Modal>
+        <Content component="p" className="pf-v6-u-text-color-subtle">
+          The server re-checks the component first and changes nothing when it is no longer needed or a prerequisite is missing.
+        </Content>
+      </ConfirmActionModal>
     </>
   );
 };
