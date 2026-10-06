@@ -123,18 +123,18 @@ func TestOperationMarkerRoundTrip(t *testing.T) {
 	if err := SaveOperationMarker(c, marker); err != nil {
 		t.Fatal(err)
 	}
-	got, err := GetOperationMarker(c)
+	got, _, err := GetOperationState(c)
 	if err != nil || got == nil || *got != *marker {
 		t.Fatalf("got %+v err=%v", got, err)
 	}
 	if err := SaveOperationMarker(c, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := GetOperationMarker(c); err != nil || got != nil {
+	if got, _, err := GetOperationState(c); err != nil || got != nil {
 		t.Fatalf("cleared marker: %+v %v", got, err)
 	}
 	stored = "missing"
-	if got, err := GetOperationMarker(c); err != nil || got != nil {
+	if got, _, err := GetOperationState(c); err != nil || got != nil {
 		t.Fatalf("missing ConfigMap: %+v %v", got, err)
 	}
 }

@@ -500,11 +500,3 @@ func GetDSProjects(c *Client) ([]string, error) {
 	}
 	return projects, nil
 }
-
-// continueParam returns the list-pagination query suffix for a continue token.
-func continueParam(cont string) string {
-	if cont == "" {
-		return ""
-	}
-	return "&continue=" + url.QueryEscape(cont)
-}

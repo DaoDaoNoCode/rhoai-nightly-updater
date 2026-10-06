@@ -330,18 +330,6 @@ func TestReinstallWebhookCleanup_SkippedDuringAnInstall(t *testing.T) {
 	assertWrites(t, f)
 }
 
-// The namespace guard fails closed when a conversion Service cannot be
-// checked.
-func TestBrokenConversionWebhooks_UnknownServiceFailsClosed(t *testing.T) {
-	f, c := newFakeAPI(t)
-	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, `{"items":[
-		{"metadata":{"name":"a.example.com"},"spec":{"scope":"Namespaced","conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"ns","name":"svc"}}}}}}]}`)
-	f.status("GET", svcPath("ns", "svc"), http.StatusForbidden, "Forbidden")
-	if broken, err := brokenConversionWebhooks(c); err == nil || !IsK8sError(err, http.StatusForbidden) {
-		t.Fatalf("broken=%v err=%v", broken, err)
-	}
-}
-
 func TestIsRHOAIWebhook(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

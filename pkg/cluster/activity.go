@@ -328,12 +328,6 @@ func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
 	return nil
 }
 
-// GetOperationMarker returns the recorded running operation, or nil.
-func GetOperationMarker(c *Client) (*types.OperationMarker, error) {
-	marker, _, err := GetOperationState(c)
-	return marker, err
-}
-
 // lastCompletedKey holds the most recent finished operation in the
 // operation ConfigMap, next to the running-operation marker.
 const lastCompletedKey = "lastCompleted"

@@ -702,10 +702,6 @@ type deadConversion struct {
 	StoredVersions []string
 }
 
-func (d deadConversion) describe() string {
-	return fmt.Sprintf("%s (Service %s)", d.CRD, d.Health.describe(d.Service))
-}
-
 // deadConversions returns the CRDs whose conversion Service is down. A
 // Service that cannot be checked is returned in unknown (with its error).
 func deadConversions(crds []conversionCRD, health *serviceHealthCache) (dead []deadConversion, unknown []deadConversion) {
@@ -765,59 +761,4 @@ func listRHOAIConversionCRDs(c *Client) ([]conversionCRD, error) {
 		}
 	}
 	return items, nil
-}
-
-// listNamespacedConversionCRDs lists every namespaced CRD (all of them, page
-// by page): a namespace delete has to list every namespaced type, whoever
-// installed it.
-func listNamespacedConversionCRDs(c *Client) ([]conversionCRD, error) {
-	var items []conversionCRD
-	cont := ""
-	for {
-		body, _, err := c.get("/apis/apiextensions.k8s.io/v1/customresourcedefinitions?limit=100" + continueParam(cont))
-		if err != nil {
-			return nil, fmt.Errorf("list CRDs: %w", err)
-		}
-		var list struct {
-			Metadata struct {
-				Continue string `json:"continue"`
-			} `json:"metadata"`
-			Items []conversionCRD `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			return nil, fmt.Errorf("parse CRD list: %w", err)
-		}
-		for _, crd := range list.Items {
-			if crd.Spec.Scope == "Namespaced" {
-				items = append(items, crd)
-			}
-		}
-		if list.Metadata.Continue == "" {
-			return items, nil
-		}
-		cont = list.Metadata.Continue
-	}
-}
-
-// brokenConversionWebhooks is the namespace-deletion guard: it returns the
-// namespaced CRDs whose conversion webhook cannot serve right now (Service
-// missing or without a ready endpoint, no grace period). The namespace
-// controller has to list every namespaced type, and requests that need
-// conversion fail while the webhook is down, so a namespace deleted then
-// can hang in Terminating (notes D3). Any read error is returned so callers
-// fail closed.
-func brokenConversionWebhooks(c *Client) ([]string, error) {
-	crds, err := listNamespacedConversionCRDs(c)
-	if err != nil {
-		return nil, err
-	}
-	dead, unknown := deadConversions(crds, newServiceHealthCache(c, 0))
-	if len(unknown) > 0 {
-		return nil, fmt.Errorf("check conversion Service of CRD %s: %w", unknown[0].CRD, unknown[0].Health.err)
-	}
-	var out []string
-	for _, d := range dead {
-		out = append(out, d.describe())
-	}
-	return out, nil
 }
