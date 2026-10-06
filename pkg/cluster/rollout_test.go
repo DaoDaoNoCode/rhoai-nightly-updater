@@ -128,16 +128,17 @@ func TestAssistRollout_NotApplicable(t *testing.T) {
 		{"strategy already allows one unavailable", func(fx *rolloutFixture) {
 			fx.replicas = 4
 		}, "already allows 1"},
-		// R1-4 / R5-F2: only a pure resource shortage is unblocked.
-		{"untolerated taint", func(fx *rolloutFixture) {
-			fx.newPodSchedule["message"] = "0/6 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }. preemption: 0/6 nodes are available: 3 No preemption victims found for incoming pod, 3 Preemption is not helpful for scheduling."
+		// R1-4 / R5-F2 / R7-M2: refused unless at least one node rejected
+		// the pod only for lack of resources.
+		{"only tainted nodes", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/6 nodes are available: 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }, 3 node(s) had untolerated taint {node-role.kubernetes.io/infra: }. preemption: 0/6 nodes are available: 6 Preemption is not helpful for scheduling."
 		}, "untolerated taint"},
 		{"node selector or affinity", func(fx *rolloutFixture) {
 			fx.newPodSchedule["message"] = "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling."
 		}, "node affinity/selector"},
-		{"pod anti-affinity", func(fx *rolloutFixture) {
-			fx.newPodSchedule["message"] = "0/3 nodes are available: 1 Insufficient memory, 2 node(s) didn't match pod anti-affinity rules."
-		}, "anti-affinity"},
+		{"ephemeral storage is not given back", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/6 nodes are available: 3 Insufficient ephemeral-storage, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }."
+		}, "Insufficient ephemeral-storage"},
 		{"volume zone", func(fx *rolloutFixture) {
 			fx.newPodSchedule["message"] = "0/3 nodes are available: 3 node(s) had volume node affinity conflict."
 		}, "volume node affinity conflict"},
@@ -183,6 +184,26 @@ func TestAssistRollout_NotApplicable(t *testing.T) {
 			}
 			assertWrites(t, f)
 		})
+	}
+}
+
+// R7-M2: tainted control-plane and infra nodes in the histogram do not block
+// the assist when other nodes rejected the pod only for resources.
+func TestAssistRollout_TaintedNodesElsewhereStillAllowAssist(t *testing.T) {
+	for _, msg := range []string{
+		"0/9 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint {node-role.kubernetes.io/infra: }, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }. preemption: 0/9 nodes are available: 3 No preemption victims found for incoming pod, 6 Preemption is not helpful for scheduling.",
+		"0/6 nodes are available: 3 Insufficient memory, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }.",
+	} {
+		f, c := newFakeAPI(t)
+		fx := defaultRollout()
+		fx.newPodSchedule["message"] = msg
+		fx.install(f)
+		f.json("PATCH", depPath, http.StatusOK, `{"spec":{"strategy":{"rollingUpdate":{"maxUnavailable":1}}}}`)
+		res, err := AssistRolloutFor(c, rolloutNS, "rhods-operator")
+		if err != nil || !res.Success {
+			t.Fatalf("%q: result = %+v, %v", msg, res, err)
+		}
+		assertWrites(t, f, "PATCH "+depPath)
 	}
 }
 
@@ -284,15 +305,33 @@ func TestRestoreRolloutStrategy(t *testing.T) {
 	}
 }
 
-func TestNonResourceSchedulingReasons(t *testing.T) {
-	for msg, want := range map[string]string{
-		"0/3 nodes are available: 3 Insufficient cpu.": "[]",
-		"0/6 nodes are available: 2 Insufficient memory, 3 Insufficient cpu, 6 Too many pods. preemption: 0/6 nodes are available: 6 No preemption victims found for incoming pod.": "[]",
-		"0/6 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }.":                                                          "[3 node(s) had untolerated taint {node-role.kubernetes.io/master: }]",
-		"0/3 nodes are available: 3 Insufficient ephemeral-storage.":                                                                                                                "[3 Insufficient ephemeral-storage]",
-	} {
-		if got := fmt.Sprint(nonResourceSchedulingReasons(msg)); got != want {
-			t.Errorf("%q: got %s, want %s", msg, got, want)
+// R7-M2: messages in the FitError format of kube-scheduler v1.35
+// (histogram entries sorted by string, then the preemption part).
+func TestResourceOnlyNodes(t *testing.T) {
+	tests := []struct {
+		msg       string
+		wantNodes int
+		wantOther string
+	}{
+		{"0/3 nodes are available: 3 Insufficient cpu.", 3, "[]"},
+		{"0/6 nodes are available: 2 Insufficient memory, 3 Insufficient cpu, 6 Too many pods. preemption: 0/6 nodes are available: 6 No preemption victims found for incoming pod.", 6, "[]"},
+		// Self-managed OCP / ROSA classic: tainted masters and infra nodes
+		// are always in the histogram.
+		{"0/9 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint {node-role.kubernetes.io/infra: }, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }. preemption: 0/9 nodes are available: 3 No preemption victims found for incoming pod, 6 Preemption is not helpful for scheduling.",
+			3, "[3 node(s) had untolerated taint {node-role.kubernetes.io/infra: } 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }]"},
+		{"0/6 nodes are available: 3 Insufficient memory, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }.", 3, "[3 node(s) had untolerated taint {node-role.kubernetes.io/master: }]"},
+		{"0/4 nodes are available: 1 Insufficient memory, 3 node(s) didn't match pod anti-affinity rules.", 1, "[3 node(s) didn't match pod anti-affinity rules]"},
+		{"0/6 nodes are available: 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }, 3 node(s) had untolerated taint {node-role.kubernetes.io/infra: }.", 0,
+			"[3 node(s) had untolerated taint {node-role.kubernetes.io/master: } 3 node(s) had untolerated taint {node-role.kubernetes.io/infra: }]"},
+		{"0/3 nodes are available: 3 Insufficient ephemeral-storage.", 0, "[3 Insufficient ephemeral-storage]"},
+		{"0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.", 0, "[pod has unbound immediate PersistentVolumeClaims]"},
+		{"no nodes available to schedule pods", 0, "[no nodes available to schedule pods]"},
+		{"", 0, "[the scheduler gave no reason]"},
+	}
+	for _, tt := range tests {
+		nodes, other := resourceOnlyNodes(tt.msg)
+		if nodes != tt.wantNodes || fmt.Sprint(other) != tt.wantOther {
+			t.Errorf("%q: got %d %s, want %d %s", tt.msg, nodes, other, tt.wantNodes, tt.wantOther)
 		}
 	}
 }
