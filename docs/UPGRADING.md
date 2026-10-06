@@ -165,17 +165,32 @@ and V2: the smoke test passes.
 
 ## 4. Upgrade to v2.0.0
 
-> **To be verified** on a live cluster before v2.0.0 is announced.
-
 From v1.0.0, or directly from V0, V1, V2 or a June build. Without a clone:
 
 ```bash
 curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.0/install.sh
-echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c
 less install.sh                                     # read it first
 bash install.sh --dry-run --namespace $NS --app-name $APP
 bash install.sh --namespace $NS --app-name $APP
 ```
+
+Check the download first: `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) must match the SHA-256 in the release notes.
+
+**Verified live on 2026-10-06**, with a v2.0.0 `install.sh` generated from the release branch:
+
+| Path | Result |
+|---|---|
+| Fresh install | Installed and running |
+| V0 → v2.0.0 (directly) | 2 replicas → 1; `Recreate`; template revision 4; no literal `COOKIE_SECRET` (it moved to Secret `<APP_NAME>-proxy`); the legacy ClusterRole, ClusterRoleBinding and ConsoleLink replaced by the namespaced ones; smoke test passed |
+| V1 → v2.0.0, V2 → v2.0.0 (directly) | The same as V0, without the replica change; smoke test passed |
+| v1.0.0 → v2.0.0 | Upgraded; smoke test passed |
+| `make rollback TAG=v1.0.0` from v2.0.0 | Rolled back with the image pinned by digest; the v2 smoke test passed against the running image's expected template revision 2 |
+| v1.0.0 → v2.0.0 again, with the installer | Upgraded |
+| `bash install.sh uninstall` | Removed everything; no cluster-scoped objects left |
+
+v2.0.0 was not published yet, so the installer in these tests pointed at an
+image in the cluster's own registry instead of `quay.io`. The final check
+with the published `install.sh` happens at release.
 
 From a clone: `git fetch --tags && git checkout v2.0.0 && make upgrade NAMESPACE=$NS APP_NAME=$APP`.
 Then check with `./scripts/smoke-test.sh $NS $APP` from a v2.0.0 checkout.
