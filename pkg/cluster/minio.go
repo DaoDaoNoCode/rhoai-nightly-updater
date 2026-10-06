@@ -274,30 +274,31 @@ func (d minioDeployment) image() string {
 }
 
 func getMinIOStatus(c *Client) types.ResourceState {
-	state, _ := minioStatusAndEndpoints(c)
+	state, _, _ := minioStatusAndEndpoints(c)
 	return state
 }
 
 // minioStatusAndEndpoints returns MinIO's status and the addresses a
 // pipeline server may use to reach it (for the teardown dependency check).
-func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
+// The error is non-nil when those addresses could not be read.
+func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, error) {
 	state := types.ResourceState{Namespace: minioNamespace}
 
 	ns, err := lookupMinIONamespace(c)
 	if err != nil {
 		state.Message = "Cannot read MinIO status: " + err.Error()
-		return state, minioEndpoints{}
+		return state, minioEndpoints{}, nil
 	}
 	if !ns.Exists {
 		state.Message = "Not deployed"
-		return state, minioEndpoints{}
+		return state, minioEndpoints{}, nil
 	}
 	state.ManagedByTool = ns.Managed
 	if ns.terminating() {
 		state.Terminating = true
 		state.Message = "Terminating"
 		state.SetupBlockedReason = "Namespace 'minio' is still being deleted."
-		return state, minioEndpoints{}
+		return state, minioEndpoints{}, nil
 	}
 	if !ns.Managed {
 		state.SetupBlockedReason = "Namespace 'minio' exists but was not created by this tool, so setup will not modify it."
@@ -305,14 +306,15 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 	}
 
 	var (
-		wg         sync.WaitGroup
-		deployBody []byte
-		deployErr  error
-		apiHost    string
-		uiHost     string
-		endpoints  minioEndpoints
-		pvcs       []objectMeta
-		pvcErr     error
+		wg           sync.WaitGroup
+		deployBody   []byte
+		deployErr    error
+		apiHost      string
+		uiHost       string
+		endpoints    minioEndpoints
+		endpointsErr error
+		pvcs         []objectMeta
+		pvcErr       error
 	)
 	wg.Add(3)
 	go func() {
@@ -321,7 +323,7 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 	}()
 	go func() {
 		defer wg.Done()
-		endpoints = readMinIOEndpoints(c)
+		endpoints, endpointsErr = readMinIOEndpoints(c)
 		apiHost, uiHost = endpoints.apiHost, endpoints.uiHost
 	}()
 	go func() {
@@ -356,14 +358,14 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 		if !ns.Managed {
 			state.Message = state.SetupBlockedReason
 		}
-		return state, endpoints
+		return state, endpoints, endpointsErr
 	}
 	state.Deployed = true
 
 	var deploy minioDeployment
 	if err := json.Unmarshal(deployBody, &deploy); err != nil {
 		state.Message = "Cannot parse MinIO deployment"
-		return state, endpoints
+		return state, endpoints, endpointsErr
 	}
 	state.CurrentImage = deploy.image()
 	if ns.Managed && state.CurrentImage != "" && state.CurrentImage != minioImage() {
@@ -372,13 +374,13 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 	if deploy.Status.ReadyReplicas >= 1 {
 		state.Ready = true
 		state.Message = "Running"
-		return state, endpoints
+		return state, endpoints, endpointsErr
 	}
 	state.Message = fmt.Sprintf("%d/%d ready", deploy.Status.ReadyReplicas, deploy.Status.Replicas)
 	if issue, err := inspectPods(c, minioNamespace, minioAppSelector, ""); err == nil {
 		applyPodIssue(&state, issue)
 	}
-	return state, endpoints
+	return state, endpoints, endpointsErr
 }
 
 // minioApplyPath returns the API path of one object from minioResources.
@@ -928,7 +930,15 @@ func TeardownMinIO(c *Client) (*types.OperationResponse, error) {
 	if err != nil && !errors.Is(err, errDSPACRDMissing) {
 		return fail(fmt.Sprintf("Cannot verify pipeline dependencies; MinIO was not deleted: %v", err), errorCodeFromK8sErr(err), "dependency check failed")
 	}
-	if reason := minioTeardownBlocker(dspas, readMinIOEndpoints(c)); reason != "" {
+	// Pipeline servers may reach MinIO through a Route host or the
+	// ClusterIP. When those cannot be read and any pipeline server exists, a
+	// dependency cannot be ruled out: refuse rather than delete the PVC a
+	// pipeline server may still store its artifacts in.
+	endpoints, err := readMinIOEndpoints(c)
+	if err != nil && len(dspas) > 0 {
+		return fail(fmt.Sprintf("Cannot verify which pipeline servers use MinIO (its Route hosts or service address could not be read); nothing was deleted: %v", err), errorCodeFromK8sErr(err), "dependency check failed")
+	}
+	if reason := minioTeardownBlocker(dspas, endpoints); reason != "" {
 		return fail("Cannot tear down MinIO yet. "+reason, "prerequisites", "pipeline servers depend on it")
 	}
 
