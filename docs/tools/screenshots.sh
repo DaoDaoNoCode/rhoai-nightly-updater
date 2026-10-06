@@ -108,6 +108,26 @@ for dir in "$RAW"/frames/*/; do
     -loop 0 "$IMAGES/$name.gif"
 done
 
+# Chromium's text rendering and the colour reduction move a few pixels from
+# run to run. An image that differs from the committed one by less than
+# 0.05% of its pixels (each by more than 3%) keeps its committed bytes, so a
+# run without a UI change leaves git clean.
+while IFS= read -r f; do
+  git -C "$ROOT" show "HEAD:$f" >"$WORK/old" 2>/dev/null || continue
+  new="$ROOT/$f"
+  if [[ $f == *.gif ]]; then
+    [ "$(magick identify "$WORK/old" | wc -l)" = "$(magick identify "$new" | wc -l)" ] || continue
+    magick "$WORK/old" -coalesce -append "$WORK/old.png"
+    magick "$new" -coalesce -append "$WORK/new.png"
+  else
+    cp "$WORK/old" "$WORK/old.png"; cp "$new" "$WORK/new.png"
+  fi
+  [ "$(magick identify -format '%wx%h' "$WORK/old.png")" = "$(magick identify -format '%wx%h' "$WORK/new.png")" ] || continue
+  diff=$(magick compare -fuzz 3% -metric AE "$WORK/old.png" "$WORK/new.png" null: 2>&1 | cut -d' ' -f1 || true)
+  pixels=$(magick identify -format '%[fx:w*h]' "$WORK/old.png")
+  if awk "BEGIN{exit !(${diff:-1e9} < $pixels * 0.0005)}"; then cp "$WORK/old" "$new"; fi
+done < <(git -C "$ROOT" status --porcelain -- docs/images | awk '$1 == "M" {print $2}')
+
 # A contact sheet of the images that changed (GIFs: every frame), to look at
 # before committing: a UI change can move content without breaking a locator.
 REVIEW="$ROOT/tmp/docs-review"
@@ -121,9 +141,13 @@ if [ ${#changed[@]} -gt 0 ]; then
       *) magick "$f" -resize 600x\> "$REVIEW/$(basename "$f")" ;;
     esac
   done
-  # No text labels (ImageMagick may have no font); index.txt lists the tiles in order.
+  # montage needs a font even without labels; index.txt lists the tiles in order.
+  font=
+  for candidate in /System/Library/Fonts/Supplemental/Arial.ttf /usr/share/fonts/dejavu/DejaVuSans.ttf /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; do
+    [ -f "$candidate" ] && font=$candidate && break
+  done
   (cd "$REVIEW" && printf '%s\n' ./*.png) >"$REVIEW/index.txt"
-  magick montage "$REVIEW"/*.png +set label -tile 4x -geometry +6+6 -background '#777' "$REVIEW/contact-sheet.png"
+  [ -n "$font" ] && magick montage -font "$font" "$REVIEW"/*.png -tile 4x -geometry +6+6 -background '#777' "$REVIEW/contact-sheet.png"
   echo "Changed images: ${#changed[@]}; review $REVIEW/contact-sheet.png before committing."
 fi
 
