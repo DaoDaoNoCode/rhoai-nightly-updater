@@ -409,7 +409,10 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 			installed = append(installed, line+")")
 		}
 		if ready {
-			addReason(cc.Module, fmt.Sprintf("%s still reports %s, but it is installed: %s", cc.label(), joinMentions(cc.Deps), strings.Join(installed, "; ")))
+			// The condition line ends with the operator's own message, usually a
+			// full sentence: the tool's note starts a new one.
+			addReason(cc.Module, fmt.Sprintf("%s. It still reports %s, but it is installed: %s",
+				strings.TrimRight(cc.label(), ". "), joinMentions(cc.Deps), strings.Join(installed, "; ")))
 		}
 	}
 	for module, why := range staleModules {

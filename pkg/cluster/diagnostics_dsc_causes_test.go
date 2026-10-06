@@ -230,6 +230,12 @@ func TestDSCCheck_SatisfiedDependencyOffersRestart(t *testing.T) {
 	if ev := strings.Join(b.Evidence, "\n"); !strings.Contains(ev, "Trainer default-trainer: Ready=False") || !strings.Contains(ev, "JobSetOperator/cluster exists") {
 		t.Fatalf("evidence = %s", ev)
 	}
+	// The operator's message is a sentence of its own; the tool's note
+	// starts a new one, capitalised, and nothing ends in "..".
+	if ev := strings.Join(b.Evidence, "\n"); !strings.Contains(ev, "before deploying Trainer. It still reports JobSet Operator") ||
+		strings.Contains(ev, ". still reports") || strings.Contains(ev, "..") {
+		t.Fatalf("evidence = %s", ev)
+	}
 	if _, ok := byID["prerequisite-missing-job-set"]; ok {
 		t.Fatal("an installed prerequisite is reported missing")
 	}
