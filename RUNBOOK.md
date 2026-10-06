@@ -64,7 +64,7 @@ What the image checks do:
 - **Images published before the revision label** existed need `ALLOW_TEMPLATE_MISMATCH=1` once.
 
 What `make rollback` does:
-1. Applies `git show <commit>:deploy/template.yaml` with that commit's image. It tries the given tag, then the 8-character tag (GitLab `CI_COMMIT_SHORT_SHA`), then the 7-character tag of older manual builds.
+1. Applies `git show <commit>:deploy/template.yaml` with that commit's image, pinned by digest like `upgrade` (it stops when no digest can be read, unless `ALLOW_MUTABLE_TAG=1`). It looks for the image under the given tag, then the 8-character tag (GitLab `CI_COMMIT_SHORT_SHA`), then the 7-character tag of older manual builds.
 2. Refuses if the image's revision label names a different commit of this repo (override `ALLOW_TEMPLATE_MISMATCH=1`).
 3. Keeps sessions: a template with a `COOKIE_SECRET` parameter gets the current Secret value.
 4. Skips the legacy cleanup, because the old build may need its legacy objects. Rolling back to a template from before namespaced names recreates a ConsoleLink with a placeholder URL until the next `make upgrade`.

@@ -224,6 +224,30 @@ image_revision() {
 
 # resolve_image: sets REF to IMAGE@sha256:... for IMAGE:TAG and checks that
 # the image was built from the commit of the template that will be applied.
+# pin_image TAG: sets REF to IMAGE@sha256:... for IMAGE:TAG, from the
+# registry's v2 API, else oc with the local pull credentials. Without a
+# digest it stops, unless ALLOW_MUTABLE_TAG=1 (REF is then the tag).
+pin_image() {
+	local tag=$1 digest info
+	digest=$(registry_digest "$IMAGE" "$tag")
+	if [ -z "$digest" ]; then
+		info=$(oc image info "$IMAGE:$tag" --filter-by-os="$PLATFORM" -o json 2>/dev/null || true)
+		digest=$(printf '%s\n' "$info" | sed -n 's/^  "listDigest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -1)
+		[ -n "$digest" ] || digest=$(printf '%s\n' "$info" | sed -n 's/^  "digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -1)
+	fi
+	if [ -n "$digest" ]; then
+		REF="$IMAGE@$digest"
+		err "Resolved $IMAGE:$tag to $REF"
+	elif [ "${ALLOW_MUTABLE_TAG:-}" = 1 ]; then
+		REF="$IMAGE:$tag"
+		err "WARNING: ALLOW_MUTABLE_TAG=1: cannot resolve $IMAGE:$tag to a digest; deploying the tag, which may move before the pod pulls it."
+	else
+		err "ERROR: cannot resolve $IMAGE:$tag to a digest (no such tag, or the registry is unreachable). Nothing was changed."
+		err "  Image tags are releases (vX.Y.Z, vN), main, latest or an 8-character commit. Set ALLOW_MUTABLE_TAG=1 to deploy the tag itself."
+		exit 1
+	fi
+}
+
 require_tag() {
 	[ -z "$TAG" ] || return 0
 	if [ "$MODE" = checkout ]; then
@@ -238,25 +262,8 @@ resolve_image() {
 		err "WARNING: :latest is the newest release of one major version only and moves without notice; prefer a release (git checkout vX.Y.Z)."
 	fi
 
-	# 1. The digest: the registry's v2 API, else oc with the local pull credentials.
-	local digest info
-	digest=$(registry_digest "$IMAGE" "$TAG")
-	if [ -z "$digest" ]; then
-		info=$(oc image info "$IMAGE:$TAG" --filter-by-os="$PLATFORM" -o json 2>/dev/null || true)
-		digest=$(printf '%s\n' "$info" | sed -n 's/^  "listDigest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -1)
-		[ -n "$digest" ] || digest=$(printf '%s\n' "$info" | sed -n 's/^  "digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -1)
-	fi
-	if [ -n "$digest" ]; then
-		REF="$IMAGE@$digest"
-		err "Resolved $IMAGE:$TAG to $REF"
-	elif [ "${ALLOW_MUTABLE_TAG:-}" = 1 ]; then
-		REF="$IMAGE:$TAG"
-		err "WARNING: ALLOW_MUTABLE_TAG=1: cannot resolve $IMAGE:$TAG to a digest; deploying the tag, which may move before the pod pulls it."
-	else
-		err "ERROR: cannot resolve $IMAGE:$TAG to a digest (no such tag, or the registry is unreachable)."
-		err "  Image tags are releases (vX.Y.Z, vN), main, latest or an 8-character commit. Set ALLOW_MUTABLE_TAG=1 to deploy the tag itself."
-		exit 1
-	fi
+	# 1. The digest.
+	pin_image "$TAG"
 
 	if [ "${ALLOW_TEMPLATE_MISMATCH:-}" = 1 ]; then
 		err "WARNING: ALLOW_TEMPLATE_MISMATCH=1: not checking that $REF matches the template."
@@ -514,7 +521,9 @@ rollback() {
 		fi
 	done
 	[ -n "$img_tag" ] || die "No image $IMAGE for commit $rev (tried the tags $TAG, $short8 and $short7)."
-	label=$(image_revision "$IMAGE:$img_tag")
+	# By digest, like deploy and upgrade: the checked image is the one applied.
+	pin_image "$img_tag"
+	label=$(image_revision "$REF")
 	if [ -n "$label" ] && [ "$label" != "$rev" ] && git cat-file -e "$label^{commit}" 2>/dev/null; then
 		if [ "${ALLOW_TEMPLATE_MISMATCH:-}" = 1 ]; then
 			err "WARNING: ALLOW_TEMPLATE_MISMATCH=1: $IMAGE:$img_tag reports revision $label, not $rev; applying the template of $rev anyway."
@@ -524,8 +533,8 @@ rollback() {
 		fi
 	fi
 	git show "$rev:deploy/template.yaml" >"$TMP/rollback-template.yaml"
-	err "$([ -n "$DRY" ] && echo Validating || echo Applying) $IMAGE:$img_tag with the template of commit $rev..."
-	apply_template "$TMP/rollback-template.yaml" "$IMAGE:$img_tag"
+	err "$([ -n "$DRY" ] && echo Validating || echo Applying) $REF with the template of commit $rev..."
+	apply_template "$TMP/rollback-template.yaml" "$REF"
 	if [ -n "$DRY" ]; then
 		err "Dry run only; nothing was changed."
 		return 0

@@ -77,8 +77,11 @@ case "$1 $2" in
 "version -o") echo '{"openshiftVersion": "4.19.3"}' ;;
 "image info")
 	[ -n "${FAKE_REVISION:-}" ] || exit 1
+	# FAKE_NO_OC_DIGEST: oc reads the labels but no digest.
+	d="$(printf 'b%.0s' $(seq 64))"
+	[ -z "${FAKE_NO_OC_DIGEST:-}" ] || d=none
 	printf '{\n  "digest": "sha256:%s",\n  "config": {"config": {"Labels": {\n    "org.opencontainers.image.revision": "%s"\n  }}}\n}\n' \
-		"$(printf 'b%.0s' $(seq 64))" "$FAKE_REVISION" ;;
+		"$d" "$FAKE_REVISION" ;;
 "get clusterrolebinding") [ -z "${FAKE_LEGACY:-}" ] || echo "$FAKE_LEGACY" ;;
 "get route") echo app.example.com ;;
 "get consolelink") [ -z "${FAKE_LEGACY:-}" ] || echo https://app.example.com ;;
@@ -175,6 +178,13 @@ FAKE_INSTALLED=1 FAKE_REVISION="" FAKE_NS=1 TAG=main \
 	expect_fail "clone: no revision label on a moving tag" "cannot tell which commit" run bash "$CLONE" upgrade --dry-run
 FAKE_INSTALLED=1 expect_fail "clone: rollback needs a TAG" "Usage: make rollback TAG=" run bash "$CLONE" rollback --dry-run
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 expect_ok "clone: rollback dry run" run bash "$CLONE" rollback --dry-run
+grep -qx "IMAGE=quay.io/juntao_wang/rhoai-nightly-updater@$DIGEST" "$LOG.params" && pass || fail "rollback: not applied by digest: $(grep '^IMAGE=' "$LOG.params")"
+FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 FAKE_DIGEST="" FAKE_NO_OC_DIGEST=1 \
+	expect_fail "rollback: no digest, fail closed" "cannot resolve quay.io/juntao_wang/rhoai-nightly-updater:v9.8.7" run bash "$CLONE" rollback --dry-run
+[ ! -s "$LOG.params" ] && pass || fail "rollback without a digest applied something"
+FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 FAKE_DIGEST="" FAKE_NO_OC_DIGEST=1 ALLOW_MUTABLE_TAG=1 \
+	expect_ok "rollback: ALLOW_MUTABLE_TAG applies the tag" run bash "$CLONE" rollback --dry-run
+grep -qx "IMAGE=quay.io/juntao_wang/rhoai-nightly-updater:v9.8.7" "$LOG.params" && pass || fail "rollback: ALLOW_MUTABLE_TAG"
 expect_eq "rollback dry run changes nothing" "" "$(mutations)"
 expect_ok "asset: uninstall dry run" run bash "$ASSET" uninstall --dry-run --namespace scratch-ns
 deletes=$(grep -c '^oc delete' "$LOG" || true)
