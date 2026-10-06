@@ -90,7 +90,9 @@ Downgrades need the confirmation checkbox. The DSC, DSCI and operands are not de
 | `restore-rollout-strategy` | puts the saved maxUnavailable back and removes the annotation | the assist annotation is present |
 | `disable-component:<name>` | DSC `spec.components.<name>.managementState: Removed` | only `llamastackoperator`, `feastoperator`, `trustyai`, `ray`, `kueue`, `sparkoperator`, `trainer`, `trainingoperator`; present and not already Removed; no blockers that would leave it stuck in deletion |
 
-Removed fixes (refused if an old page sends them): `recreate-subscription`, `fix-maas-gateway-annotation`, `restart-operator`. Every other finding is guidance only.
+| `restart-module-operator:<module>` | merge-patch (uid + resourceVersion) of the module operator Deployment's pod-template annotation `kubectl.kubernetes.io/restartedAt` (what `oc rollout restart` does); Kubernetes rolls the pods | the module still reports a prerequisite that is now installed (and whose singleton operand exists), or its status lags its generation for over 5 minutes; the Deployment is the known operator of that module or the only Platform-owned one for it; ≥1 available pod; not the RHOAI operator (OLM owns it); no `failurePolicy: Fail` webhook served by its pods would go unserved (Recreate, or maxUnavailable ≥ available pods) |
+
+Removed fixes (refused if an old page sends them): `recreate-subscription`, `fix-maas-gateway-annotation`, `restart-operator`. Every other finding is guidance only. Prerequisite operators (JobSet, cert-manager, LeaderWorkerSet, …) are never installed by the tool: Diagnostics prints the commands.
 
 ## 7. Dashboard Dev
 

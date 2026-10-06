@@ -62,10 +62,12 @@ Token rules (pkg/api/identity.go, handlers.go):
 | DSPAs | `list create`; `get delete` | `get delete` only `nightly-dspa` and legacy `dspa`; `patch` only `nightly-dspa` |
 | MLflows | `create`; `get patch delete` | the second set only on `mlflow` |
 | ClusterVersion, Console, IDMS, ConfigMap `odh-upgrade-acks` | read | — |
+| `operator.openshift.io/*` (prerequisite operands such as `JobSetOperator/cluster`) | `get` | only objects named `cluster`; the kind comes from the prerequisite's CSV. This group also holds OpenShift's own operator configs (`console/cluster`, …), which become readable; they hold no secrets (template revision 4) |
+| cert-manager `Certificates` | `list` | read-only; Certificates name Secrets but hold no key material (template revision 4) |
 
 There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read arbitrary Secrets.
 
-**Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment. Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
+**Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
 
 ## Network exposure
 

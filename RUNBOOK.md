@@ -404,6 +404,30 @@ MANUAL ADMIN STEPs, by error:
    3. restart the operator as in step 1.
    There is no automatic fix: the right value needs judgement.
 
+### 11.7 DataScienceCluster not ready
+
+Diagnostics ("DataScienceCluster is not ready") lists each failing DSC condition, followed by its classified cause and a **Related** link to the problem that fixes it. Conditions with severity `Info` do not block `Ready`. A prerequisite named only by Info conditions (for example `KserveLLMInferenceServiceWideEPDependencies: LeaderWorkerSet not installed`) is reported as informational: it gates an optional feature. The Components page shows the same cause in a short line. Read the conditions by hand with:
+
+```bash
+oc get datasciencecluster -o jsonpath='{range .items[0].status.conditions[*]}{.type}={.status} [{.severity}] {.reason}: {.message}{"\n"}{end}'
+```
+
+| Cause (condition message) | What Diagnostics shows | Fix (MANUAL ADMIN STEP unless noted) |
+|---|---|---|
+| **Missing prerequisite operator** (`dependency not met: JobSet Operator is not installed`, `cert-manager operator not installed`, `LeaderWorkerSet not installed`) | `Prerequisite operator <name> is not installed`, one problem per operator, with the catalog package it resolved to (Red Hat catalog first; a community-only match is flagged). It also says whether the operator blocks Ready or is optional | Run the Command: a quoted here-document with the Namespace (the CSV's suggested namespace), the OperatorGroup (OwnNamespace when supported, else openshift-operators, which already has `global-operators`; an existing OperatorGroup is reused), and the Subscription (default channel, Automatic), then `oc wait` lines. When the CSV ships a singleton operand (`JobSetOperator/cluster`), a last command creates it if it is missing. The tool never installs operators |
+| **Installed, but its operand is missing** (still "not installed" after the install; Trainer also needs `JobSetOperator/cluster`) | `<operator> is installed, but its <Kind>/cluster does not exist` | Run the Command (`oc get <kind>/cluster \|\| oc create -f - <<'EOF' …`). Some operators create their own operand (cert-manager creates `CertManager/cluster`) |
+| **Installed but not ready** (CSV not Succeeded) | `<operator> is installed but not ready (CSV phase …)` | Read the CSV status (`oc get csv <name> -n <ns> -o jsonpath='{.status.message}'`) |
+| **Module operator in back-off**: the module still reports a prerequisite that is now installed (with its operand), or `Module status is stale (observedGeneration < generation)` for over 5 minutes. Module operators back off up to about 16m40s and do not watch their dependencies | `The <module> module operator has not retried yet` | Confirm-gated **Fix**: a rolling restart of the module operator Deployment (the `kubectl.kubernetes.io/restartedAt` pod-template annotation, as `oc rollout restart` does), with UID/resourceVersion preconditions, after re-checking the condition. It is offered only when a pod is available. If the pods serve a `failurePolicy: Fail` webhook and the strategy would stop the old pod first (Recreate), it becomes guidance: run `oc rollout restart deployment/<name> -n <ns>` at a quiet moment |
+| **Certificates never issued** (pods stuck on `secret "<x>-cert" not found`, a cert-manager `Certificate` without `Ready`) | `Certificate <ns>/<name> is not issued: cert-manager is not installed or not running` (or the Certificate's own failing condition). The stuck pods and the webhook whose CA it injects (`cert-manager.io/inject-ca-from`) are folded into it | Install cert-manager (Related: the prerequisite problem). The pods start once the Secret exists |
+| **Upgrade gate** (`ModulesReady=False (AdminAckRequired)`, `failed to resolve upgrade gate version`) | `The DataScienceCluster waits on an upgrade gate`, plus `platform-admin-ack-required` for the Platform | Read what each gate is about, then run the per-key `oc patch configmap odh-upgrade-acks -n redhat-ods-operator --type merge -p '{"data":{"<key>":"true"}}'` commands. "Unable to determine target release" means the operator is older than what it found: install that version or newer (§6) |
+| **Upgrade leftovers** (`failure deploying resource …: field is immutable`, two controller owners, schema mismatch) | "Objects the operator cannot update" (§11.6) | §11.6 |
+| **Dead CRD conversion webhook** (`conversion webhook …`) | `stale-crd-conversion` in "Stale webhooks" | §11.2 |
+| **`opendatahub.io/managed: "false"`** on an operator-applied object (the object never updates) | `<name> is excluded from operator management` | §11.3 |
+| **DSCInitialization in Error** | `DSCInitialization <name> is in phase Error`; linked from the DSC problem when other causes are not classified | Fix the cause its conditions name; the operator retries |
+| Anything else | The condition with "cause not classified" and the operator's message as evidence | Fix what the message names, or set an unused component to Removed |
+
+Reproduce the cases safely on a test cluster: delete `JobSetOperator/cluster` (Trainer reports JobSet missing; the operand problem appears; re-create it from the Command), then restart nothing and watch the back-off problem appear once the operand is back.
+
 ## 12. Activity log
 
 ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, JSON). If it is corrupted, the app logs a parse warning and starts a fresh list on the next write. To reset it (MANUAL ADMIN STEP): `oc delete cm rhoai-nightly-updater-activity -n $NS`.
