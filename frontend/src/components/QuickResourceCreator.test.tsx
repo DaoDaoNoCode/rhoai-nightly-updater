@@ -119,7 +119,7 @@ describe("disabled buttons explain themselves (A06-7)", () => {
     expect(toggle).not.toBeDisabled();
     fireEvent.mouseEnter(toggle);
     await tick(1000);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Available once MinIO is running.");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Available once the S3 storage is running.");
     fireEvent.click(toggle);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });

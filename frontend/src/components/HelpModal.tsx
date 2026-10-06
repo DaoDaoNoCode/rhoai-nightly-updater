@@ -82,9 +82,11 @@ export const HelpButton: React.FC = () => {
 
             <Content component={ContentVariants.h3}>Test resources</Content>
             <Content component={ContentVariants.p}>
-              Sets up MinIO storage, MLflow and pipeline servers with defaults that work on a fresh cluster, and tears down
-              only what this tool created. MinIO teardown keeps the <code>minio</code> namespace; delete it with{" "}
-              <code>oc delete project minio</code> once it is empty.
+              Sets up S3 storage (SeaweedFS), MLflow and pipeline servers with defaults that work on a fresh cluster, and
+              tears down only what this tool created. The storage keeps MinIO&apos;s Service name, <code>minio-service</code>, so
+              pipeline servers set up against MinIO keep working; set up the storage again to replace a MinIO from an earlier
+              version (it starts fresh and keeps the old volume). Teardown keeps the <code>minio</code> namespace; delete it
+              with <code>oc delete project minio</code> once it is empty.
             </Content>
 
             <Content component={ContentVariants.h3}>One-time cluster setup</Content>

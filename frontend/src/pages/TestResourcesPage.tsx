@@ -4,7 +4,7 @@ import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
 /**
- * Test resources (MinIO, MLflow, pipeline servers), at /test-resources
+ * Test resources (S3 storage, MLflow, pipeline servers), at /test-resources
  * (A08-15). The old /dashboard-dev?tab=resources link redirects here.
  */
 export const TestResourcesPage: React.FC = () => {

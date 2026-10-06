@@ -33,7 +33,7 @@ import {
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
 import PlusCircleIcon from "@patternfly/react-icons/dist/esm/icons/plus-circle-icon";
-import type { OperationResponse, ResourceState, ResourcesStatus } from "../types";
+import type { KeptPVC, OperationResponse, ResourceState, ResourcesStatus } from "../types";
 import {
   getResourcesStatus,
   getDSProjects,
@@ -93,11 +93,14 @@ type ResourceKind = "minio" | "mlflow" | "pipeline";
 
 /** What to do about a resource that cannot start (A08-3, A06-5). */
 export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = true): string | null {
+  const managed = state.managedByTool !== false;
+  if (kind === "minio" && managed && state.migrationPending) {
+    return "Migrate to SeaweedFS replaces this MinIO from an earlier version. It starts with an empty bucket; the MinIO data volume is kept.";
+  }
   if (!terminalReason(state)) return null;
   const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;
-  const managed = state.managedByTool !== false;
   if (/ImagePullBackOff|ErrImagePull|InvalidImageName/.test(text)) {
-    if (kind === "minio" && managed) return "The image cannot be pulled. Repair applies the MinIO Deployment again with the image this updater is configured to use; the stored data is kept.";
+    if (kind === "minio" && managed) return "The image cannot be pulled. Repair applies the SeaweedFS Deployment again with the image this updater is configured to use; the stored data is kept.";
     if (kind === "mlflow" && state.prOverride) return "The PR image cannot be pulled. Revert to the image used before the PR, or deploy another PR.";
     return "The image cannot be pulled. Check that the image exists and that the cluster pull secret can read it.";
   }
@@ -111,7 +114,7 @@ export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = 
   if (kind === "pipeline") {
     return minioReady
       ? "The pipeline server did not become ready within 5 minutes. Check its conditions in the project's Pipelines page."
-      : "The pipeline server cannot reach MinIO. Fix MinIO first; the pipeline server recovers once MinIO serves requests.";
+      : "The pipeline server cannot reach the S3 storage. Fix the storage first; the pipeline server recovers once it serves requests.";
   }
   return null;
 }
@@ -143,7 +146,7 @@ const ResourceStatus: React.FC<{ state: ResourceState }> = ({ state }) => {
 };
 
 /** The resource's message, warnings and next step as helper text under its description. */
-const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean; teardownBlocked?: string | null }> = ({ kind, state, minioReady, teardownBlocked }) => {
+const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean; teardownBlocked?: string | null; notes?: React.ReactNode[] }> = ({ kind, state, minioReady, teardownBlocked, notes }) => {
   const step = nextStep(kind, state, minioReady);
   // The label already says "Starting" / "Terminating": don't repeat it as the message.
   const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
@@ -154,6 +157,7 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
   if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
   if (step) items.push(<HelperTextItem key="step">Next step: {step}</HelperTextItem>);
   if (teardownBlocked) items.push(<HelperTextItem key="blocked" variant="warning">Tear down is blocked: {teardownBlocked}</HelperTextItem>);
+  notes?.forEach((note, i) => items.push(<HelperTextItem key={`note-${i}`}>{note}</HelperTextItem>));
   return items.length > 0 ? <HelperText className="pf-v6-u-mt-sm">{items}</HelperText> : null;
 };
 
@@ -177,7 +181,7 @@ const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ h
 );
 
 type Pending =
-  | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
+  | { kind: "setup-minio" | "repair-minio" | "migrate-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
 
@@ -273,6 +277,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     switch (p.kind) {
       case "setup-minio": return handleResourceAction("setup-minio", setupMinIO);
       case "repair-minio": return handleResourceAction("setup-minio", setupMinIO);
+      case "migrate-minio": return handleResourceAction("setup-minio", setupMinIO);
       case "teardown-minio": return handleResourceAction("teardown-minio", teardownMinIO);
       case "setup-mlflow": return handleResourceAction("setup-mlflow", setupMLflow);
       case "teardown-mlflow": return handleResourceAction("teardown-mlflow", teardownMLflow);
@@ -296,7 +301,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     (lastMinIOTeardown !== null && ["partial_failure", "delete_failed", "in_progress", "forbidden", "unauthorized", "network"].includes(lastMinIOTeardown))
   );
   // N10: every cause is a tooltip on the toggle, which stays focusable (aria-disabled).
-  const addPipelineReason = baseReason ?? (!minioReady ? "Available once MinIO is running." : null);
+  const addPipelineReason = baseReason ?? (!minioReady ? "Available once the S3 storage is running." : null);
+  const keptPVCs = minio?.keptPVCs ?? [];
+  const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size})` : ""}</>;
   const pvcList = (state: ResourceState | undefined) => (state?.dataPVCs ?? []);
 
   const modal = (() => {
@@ -308,24 +315,46 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "setup-minio":
       case "repair-minio":
         return {
-          title: pending.kind === "repair-minio" ? "Repair MinIO?" : "Set up MinIO?",
-          confirm: pending.kind === "repair-minio" ? "Repair MinIO" : "Set up MinIO",
+          title: pending.kind === "repair-minio" ? "Repair S3 storage?" : "Set up S3 storage?",
+          confirm: pending.kind === "repair-minio" ? "Repair S3 storage" : "Set up S3 storage",
           changes: [
             <>Namespace <code>minio</code> {pending.kind === "repair-minio" || minio?.managedByTool ? "is kept and reused" : "is created"}, labelled as managed by this tool.</>,
-            <>Deployment <code>minio</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code>, PersistentVolumeClaim <code>minio-pvc</code>, the console Route <code>minio-ui</code> and the bucket <code>pipelines</code> are applied with the image the server is configured to use.</>,
-            <>Route <code>minio-api</code> (MinIO&apos;s S3 API outside the cluster) is removed if it exists; pipeline servers use the in-cluster service.</>,
+            <>SeaweedFS: Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-pvc</code>, Secret <code>minio-secret</code> and NetworkPolicy <code>seaweedfs-ingress</code> are applied with the image the server is configured to use.</>,
+            <>Once SeaweedFS is ready: Service <code>minio-service</code> (the name is kept from MinIO, so pipeline servers need no changes), the admin UI Route <code>minio-ui</code> and the bucket <code>pipelines</code>.</>,
+            <>Route <code>minio-api</code> (the S3 API outside the cluster) is removed if it exists; pipeline servers use the in-cluster service.</>,
           ],
-          extra: <Content component="p">The server waits up to 90 seconds for MinIO to become ready and reports the pod&apos;s reason if it cannot start.{pending.kind === "repair-minio" ? " Stored data is kept." : ""}</Content>,
+          extra: <Content component="p">The server waits up to 90 seconds for SeaweedFS to become ready and reports the pod&apos;s reason if it cannot start.{pending.kind === "repair-minio" ? " Stored data is kept." : ""}</Content>,
+        };
+      case "migrate-minio":
+        return {
+          title: "Replace MinIO with SeaweedFS?",
+          confirm: "Migrate and start fresh",
+          changes: [
+            <>SeaweedFS is deployed next to MinIO: Deployment <code>seaweedfs</code>, a new PersistentVolumeClaim <code>seaweedfs-pvc</code> and NetworkPolicy <code>seaweedfs-ingress</code>. It uses the credentials already in Secret <code>minio-secret</code> and creates the bucket <code>pipelines</code>.</>,
+            <>Once SeaweedFS is ready, Service <code>minio-service</code> and the admin UI Route <code>minio-ui</code> switch to it. Pipeline servers keep their settings and need no edits.</>,
+            <>Deployment <code>minio</code> and NetworkPolicy <code>minio-ingress</code> are removed. PersistentVolumeClaim {pvcList(minio).includes("minio-pvc") ? <code>minio-pvc</code> : <>minio-pvc</>} is kept, unused, for a rollback or a manual copy; Tear down deletes it later.</>,
+            <>Route <code>minio-api</code> is removed if it exists and no pipeline server uses it.</>,
+          ],
+          extra: (
+            <Stack hasGutter>
+              <StackItem>
+                <Alert component="p" variant="warning" isInline title="Start fresh: stored objects are not copied">
+                  SeaweedFS starts with an empty bucket. Artifacts, logs and cached outputs of earlier pipeline runs return 404; their files stay on <code>minio-pvc</code>. New runs work. If a cached step fails because its outputs are gone, run it again with caching disabled.
+                </Alert>
+              </StackItem>
+              <StackItem><Content component="p">Until SeaweedFS is ready (up to 90 seconds), MinIO keeps serving; if SeaweedFS cannot start, nothing is switched and MinIO stays.</Content></StackItem>
+            </Stack>
+          ),
         };
       case "teardown-minio":
         return {
-          title: "Tear down MinIO?", confirm: "Tear down MinIO", danger: true,
+          title: "Tear down S3 storage?", confirm: "Tear down S3 storage", danger: true,
           changes: [
-            <>The MinIO objects this tool created in <code>{minio?.namespace || "minio"}</code> are deleted: Deployment <code>minio</code>, Routes <code>minio-ui</code> and <code>minio-api</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code> and PersistentVolumeClaim <code>minio-pvc</code>. Objects with these names that the tool did not create are kept.</>,
+            <>The S3 storage objects this tool created in <code>{minio?.namespace || "minio"}</code> are deleted: Deployment <code>seaweedfs</code>, NetworkPolicy <code>seaweedfs-ingress</code>, Routes <code>minio-ui</code> and <code>minio-api</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code> and PersistentVolumeClaim <code>seaweedfs-pvc</code>, and what is left of MinIO from an earlier version (Deployment <code>minio</code>, NetworkPolicy <code>minio-ingress</code>, PersistentVolumeClaim <code>minio-pvc</code>). Objects with these names that the tool did not create are kept.</>,
             <>Namespace <code>{minio?.namespace || "minio"}</code> is kept. Delete it yourself with <code>oc delete project minio</code> once it is empty.</>,
           ],
-          dataLoss: pvcs(minio, "every object stored in MinIO (pipeline artifacts, uploaded files)") ?? <>Every object stored in MinIO (pipeline artifacts, uploaded files).</>,
-          extra: <Content component="p">The server refuses while a pipeline server still uses MinIO; the message names it. If some objects cannot be deleted, run Tear down again.</Content>,
+          dataLoss: pvcs(minio, "every object stored in them (pipeline artifacts, uploaded files, and the kept MinIO data)") ?? <>Every object stored in the S3 storage (pipeline artifacts, uploaded files).</>,
+          extra: <Content component="p">The server refuses while a pipeline server still uses the storage; the message names it. If some objects cannot be deleted, run Tear down again.</Content>,
         };
       case "setup-mlflow":
         return {
@@ -366,7 +395,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
         return {
           title: `Set up a pipeline server in ${pending.project}?`, confirm: "Set up",
           changes: [
-            <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, using MinIO for storage.</>,
+            <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, storing artifacts in the S3 storage (Service <code>minio-service</code>).</>,
           ],
           extra: <Content component="p">The pipeline server takes 1 to 3 minutes to become ready.</Content>,
         };
@@ -456,14 +485,20 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                 <CardList aria-label="Storage">
                   <CardListItem labelledBy="minio-item" actions={rowActions(
                             <>
-                              {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>Open console</ExternalLink></FlexItem>}
+                              {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>{minio.migrationPending ? "Open MinIO console" : "Open admin UI"}</ExternalLink></FlexItem>}
                               {minio && !minio.deployed && !isTerminating(minio) && (
                                 <FlexItem>
                                   <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
                                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
                                 </FlexItem>
                               )}
-                              {minio?.deployed && minio.managedByTool !== false && !!terminalReason(minio) && !isTerminating(minio) && (
+                              {minio?.migrationPending && minio.managedByTool !== false && !isTerminating(minio) && (
+                                <FlexItem>
+                                  <TooltipButton variant="primary" onClick={() => setPending({ kind: "migrate-minio" })} isLoading={resAction === "setup-minio"}
+                                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Migrate to SeaweedFS</TooltipButton>
+                                </FlexItem>
+                              )}
+                              {minio?.deployed && !minio.migrationPending && minio.managedByTool !== false && !!terminalReason(minio) && !isTerminating(minio) && (
                                 <FlexItem>
                                   <TooltipButton variant="secondary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
                                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
@@ -477,13 +512,20 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                               )}
                             </>,
                   )}>
-                            <RowTitle id="minio-item" name="MinIO object storage" state={minio} />
-                            <Content component="p" className="pf-v6-u-text-color-subtle">Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files.{unmanagedNote(minio)}</Content>
+                            <RowTitle id="minio-item" name="S3 storage (SeaweedFS)" state={minio}
+                              extra={minio?.migrationPending ? <FlexItem><TagLabel>Still MinIO: migration pending</TagLabel></FlexItem> : undefined} />
+                            <Content component="p" className="pf-v6-u-text-color-subtle">
+                              Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files. Pipeline servers reach it through Service <code>minio-service</code>, a name kept from MinIO for compatibility.{unmanagedNote(minio)}
+                            </Content>
                             {minio && (
                               <StatusDetails
                                 kind="minio"
                                 state={minio}
-                                teardownBlocked={minio.deployed && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
+                                teardownBlocked={(minio.deployed || pvcList(minio).length > 0) && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
+                                notes={[
+                                  ...(minio.deployed && minio.uiUser ? [<React.Fragment key="login">Admin UI login: user <code>{minio.uiUser}</code>, password in Secret <code>minio-secret</code> (key <code>minio_root_password</code>): <code>oc extract -n minio secret/minio-secret --keys=minio_root_password --to=-</code></React.Fragment>] : []),
+                                  ...keptPVCs.map((p) => <React.Fragment key={p.name}>Old MinIO data volume kept: PersistentVolumeClaim {pvcWithSize(p)}. SeaweedFS does not use it; it is kept for a rollback or a manual copy of old objects (see RUNBOOK §10). Tear down deletes it.</React.Fragment>),
+                                ]}
                               />
                             )}
                   </CardListItem>
@@ -563,7 +605,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     <StackItem>
                       <Alert
                         variant="warning"
-                        title={minio?.deployed ? `Pipeline servers need MinIO, which is not ready${minio.waitingReason ? ` (${minio.waitingReason})` : ""}` : "Pipeline servers need MinIO: set up storage first"}
+                        title={minio?.deployed ? `Pipeline servers need the S3 storage, which is not ready${minio.waitingReason ? ` (${minio.waitingReason})` : ""}` : "Pipeline servers need the S3 storage: set up storage first"}
                         isInline
                         component="p"
                       />

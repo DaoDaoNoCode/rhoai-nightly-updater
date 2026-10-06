@@ -310,7 +310,7 @@ export interface ResourceState {
   currentImage?: string;
   /** Planned backend field: a container waiting reason such as ImagePullBackOff. */
   waitingReason?: string;
-  /** A notice that needs action but does not stop the resource (FXB: old MinIO image, exposed S3 Route). */
+  /** A notice that needs action but does not stop the resource (another S3 storage image, MinIO not yet migrated, exposed S3 Route). */
   warning?: string;
 }
 
@@ -502,6 +502,17 @@ export interface ResourceState {
   prNumber?: number;
   /** Image restored by Revert; "" means the operator default. */
   revertImage?: string;
+  /** Login name of the resource's web UI (the SeaweedFS admin UI: "admin"). */
+  uiUser?: string;
+  /** The S3 storage still runs the MinIO of an earlier version; setup replaces it and starts fresh. */
+  migrationPending?: boolean;
+  /** Data volumes kept on purpose after the migration (the old MinIO PVC); teardown deletes them. */
+  keptPVCs?: KeptPVC[] | null;
+}
+
+export interface KeptPVC {
+  name: string;
+  size?: string;
 }
 
 // --- GET /api/operation (pkg/api OperationStatus) ---

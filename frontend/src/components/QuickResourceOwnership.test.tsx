@@ -4,12 +4,13 @@ import { QuickResourceCreator, nextStep } from "./QuickResourceCreator";
 import { stubApi, jsonResponse } from "../test/apiStub";
 import type { ResourceState, ResourcesStatus } from "../types";
 
-// The live cluster's state on 2026-10-05 (GET /api/resources/status, B3).
+// A SeaweedFS whose image cannot be pulled, used by a pipeline server
+// (GET /api/resources/status).
 const brokenMinio: ResourceState = {
   deployed: true, ready: false, namespace: "minio", managedByTool: true,
-  message: "ImagePullBackOff: Back-off pulling image \"quay.io/minio/minio:latest\": unauthorized",
-  waitingReason: "ImagePullBackOff", terminalError: true, dataPVCs: ["minio-pvc"],
-  teardownBlockedReason: "1 pipeline server(s) use this MinIO: juntao-test/dspa. Tear them down first.",
+  message: "ImagePullBackOff: Back-off pulling image \"mirror.example.com/seaweedfs:4.48\": unauthorized",
+  waitingReason: "ImagePullBackOff", terminalError: true, dataPVCs: ["seaweedfs-pvc"], uiUser: "admin",
+  teardownBlockedReason: "1 pipeline server uses this S3 storage: juntao-test/dspa. Tear it down first.",
 };
 const browserMlflow: ResourceState = {
   deployed: true, ready: true, message: "Running", namespace: "redhat-ods-applications", managedByTool: false,
@@ -34,18 +35,19 @@ function setup(status: ResourcesStatus, extra: Record<string, unknown> = {}) {
 }
 
 describe("terminal states (A08-3, A06-5)", () => {
-  it("MinIO in ImagePullBackOff shows the reason and the next step, offers Repair, and explains why teardown is blocked", async () => {
+  it("S3 storage in ImagePullBackOff shows the reason and the next step, offers Repair, and explains why teardown is blocked", async () => {
     setup(live());
     render(<QuickResourceCreator mutateBlocker={null} />);
     expect(await screen.findByText("Failed: ImagePullBackOff")).toBeInTheDocument();
-    expect(screen.getByText(/Repair applies the MinIO Deployment again/)).toBeInTheDocument();
+    expect(screen.getByText(/Repair applies the SeaweedFS Deployment again/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair" })).toBeInTheDocument();
-    expect(screen.getByText(/Tear down is blocked: 1 pipeline server\(s\) use this MinIO/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Migrate to SeaweedFS" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Tear down is blocked: 1 pipeline server uses this S3 storage/)).toBeInTheDocument();
     const minioTeardown = within(screen.getByRole("list", { name: "Storage" })).getByRole("button", { name: "Tear down" });
     expect(minioTeardown).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("Pipeline servers need MinIO, which is not ready (ImagePullBackOff)")).toBeInTheDocument();
-    // The pipeline server cannot reach MinIO: say so instead of spinning.
-    expect(screen.getByText(/cannot reach MinIO. Fix MinIO first/)).toBeInTheDocument();
+    expect(screen.getByText("Pipeline servers need the S3 storage, which is not ready (ImagePullBackOff)")).toBeInTheDocument();
+    // The pipeline server cannot reach the storage: say so instead of spinning.
+    expect(screen.getByText(/cannot reach the S3 storage. Fix the storage first/)).toBeInTheDocument();
     expect(screen.queryByText("Starting")).not.toBeInTheDocument();
   });
 
@@ -129,24 +131,28 @@ describe("teardown confirmations state the data loss", () => {
     await waitFor(() => expect(within(storage).getByRole("button", { name: "Tear down" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getAllByText("minio-pvc").length).toBeGreaterThan(0);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down MinIO" }));
+    expect(within(dialog).getAllByText("seaweedfs-pvc").length).toBeGreaterThan(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
     expect(await screen.findByText("Blocked: prerequisites not met")).toBeInTheDocument();
     expect(screen.getByText(/mcpservers.mcp.x-k8s.io has a conversion webhook/)).toBeInTheDocument();
   });
 });
 
-describe("MinIO after FXB (kept namespace, warning, teardown codes)", () => {
-  const kept = "MinIO removed. PVC minio-pvc and all stored objects (pipeline artifacts, models, test files) are deleted with it. Namespace 'minio' was kept: it may hold objects this tool did not create. Delete it with `oc delete project minio` once you've checked it's empty.";
-  const afterTeardown: ResourceState = { deployed: false, ready: false, namespace: "minio", managedByTool: true, message: "Namespace exists but MinIO not deployed" };
-  const running: ResourceState = { deployed: true, ready: true, namespace: "minio", managedByTool: true, message: "Running", dataPVCs: ["minio-pvc"] };
+describe("S3 storage after FXB (kept namespace, warning, teardown codes)", () => {
+  const kept = "S3 storage removed. PVC seaweedfs-pvc and all stored objects (pipeline artifacts, models, test files) are deleted with it. Namespace 'minio' was kept: it may hold objects this tool did not create. Delete it with `oc delete project minio` once you've checked it's empty.";
+  const afterTeardown: ResourceState = { deployed: false, ready: false, namespace: "minio", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed" };
+  const running: ResourceState = { deployed: true, ready: true, namespace: "minio", managedByTool: true, message: "Running", dataPVCs: ["seaweedfs-pvc"], uiUser: "admin", uiRoute: "https://minio-ui-minio.apps.example.com" };
 
-  it("shows the warning of a running MinIO", async () => {
-    const warning = "MinIO runs quay.io/minio/minio:latest, not the image this version deploys. Re-run MinIO setup to update it; the data PVC is kept.";
+  it("shows the warning of a running S3 storage, the admin UI link and its login", async () => {
+    const warning = "SeaweedFS runs ghcr.io/chrislusf/seaweedfs:4.47, not the image this version deploys. Re-run setup to update it; the data PVC is kept.";
     setup(live({ minio: { ...running, warning }, pipelineServers: [] }));
     render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
     expect(await within(storage).findByText(warning)).toBeInTheDocument();
+    expect(within(storage).getByText("S3 storage (SeaweedFS)")).toBeInTheDocument();
+    expect(within(storage).getByText(/a name kept from MinIO for compatibility/)).toBeInTheDocument();
+    expect(within(storage).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", "https://minio-ui-minio.apps.example.com");
+    expect(within(storage).getByText(/Admin UI login: user/)).toHaveTextContent("Admin UI login: user admin, password in Secret minio-secret (key minio_root_password)");
   });
 
   it("after a teardown the kept namespace is 'Not deployed' with Setup only, and the result names oc delete project", async () => {
@@ -163,8 +169,8 @@ describe("MinIO after FXB (kept namespace, warning, teardown codes)", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/Namespace minio is kept/);
     expect(within(dialog).queryByText(/deleted with everything in it/)).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down MinIO" }));
-    expect((await screen.findByText(/^MinIO removed/)).closest(".pf-v6-c-alert")).toHaveTextContent(/was kept: run oc delete project minio once you have checked it is empty/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
+    expect((await screen.findByText(/^S3 storage removed/)).closest(".pf-v6-c-alert")).toHaveTextContent(/was kept: run oc delete project minio once you have checked it is empty/);
     expect(await within(storage).findByText("Not deployed")).toBeInTheDocument();
     expect(within(storage).queryByText("Running")).not.toBeInTheDocument();
     expect(within(storage).queryByText(/^Failed/)).not.toBeInTheDocument();
@@ -174,9 +180,9 @@ describe("MinIO after FXB (kept namespace, warning, teardown codes)", () => {
   });
 
   it.each([
-    ["partial_failure", "Partly done", "Some MinIO objects could not be removed: Secret minio-secret: forbidden. Re-run teardown to retry."],
-    ["delete_failed", "Nothing could be deleted", "No MinIO object could be removed: Deployment minio: forbidden."],
-    ["in_progress", "Still in progress", "MinIO's objects were deleted, but PVC minio-pvc is still terminating after 1m0s; re-run teardown to check again."],
+    ["partial_failure", "Partly done", "Some S3 storage objects could not be removed: Secret minio-secret: forbidden. Re-run teardown to retry."],
+    ["delete_failed", "Nothing could be deleted", "Some S3 storage objects could not be removed: Deployment seaweedfs: forbidden."],
+    ["in_progress", "Still in progress", "The S3 storage objects were deleted, but PVC seaweedfs-pvc is still terminating after 1m0s; re-run teardown to check again."],
   ])("a %s teardown keeps Tear down available next to Setup", async (code, title, message) => {
     let status: ResourceState = running;
     const api = stubApi({
@@ -187,13 +193,13 @@ describe("MinIO after FXB (kept namespace, warning, teardown codes)", () => {
     render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
     fireEvent.click(await within(storage).findByRole("button", { name: "Tear down" }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down MinIO" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down S3 storage" }));
     expect(await screen.findByText(title)).toBeInTheDocument();
     expect(screen.getByText(new RegExp(message.slice(0, 30).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
     expect(await within(storage).findByText("Not deployed")).toBeInTheDocument();
     expect(within(storage).getByRole("button", { name: "Set up" })).toBeInTheDocument();
     fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down MinIO" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down S3 storage" }));
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(2));
   });
 
@@ -203,5 +209,67 @@ describe("MinIO after FXB (kept namespace, warning, teardown codes)", () => {
     const storage = await screen.findByRole("list", { name: "Storage" });
     expect(await within(storage).findByRole("button", { name: "Tear down" })).toBeInTheDocument();
     expect(within(storage).getByText("Not deployed")).toBeInTheDocument();
+  });
+});
+
+describe("migration from MinIO (start fresh)", () => {
+  // An earlier version's MinIO that still serves a pipeline server.
+  const pendingMinio: ResourceState = {
+    deployed: true, ready: true, namespace: "minio", managedByTool: true, message: "Running", migrationPending: true,
+    dataPVCs: ["minio-pvc"], uiRoute: "https://minio-ui-minio.apps.example.com",
+    currentImage: "quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45",
+    warning: "MinIO from an earlier version of this tool still runs here and serves the pipeline servers. Re-run setup to replace it with SeaweedFS.",
+    teardownBlockedReason: "1 pipeline server uses this S3 storage: juntao-test/dspa. Tear it down first.",
+  };
+
+  it("offers Migrate to SeaweedFS with a confirmation that explains starting fresh, then runs setup", async () => {
+    const api = setup(live({ minio: pendingMinio, pipelineServers: [] }), {
+      "POST /api/resources/minio/setup": () => jsonResponse({ success: true, message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'. MinIO from the earlier version was replaced.", logs: [] }),
+    });
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByText("Still MinIO: migration pending")).toBeInTheDocument();
+    expect(within(storage).getByText(/Migrate to SeaweedFS replaces this MinIO/)).toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
+    expect(within(storage).getByRole("link", { name: /Open MinIO console/ })).toBeInTheDocument();
+    // Pipeline servers can still be added: MinIO serves them until the migration.
+    expect(screen.getByRole("button", { name: "Add to a project" })).not.toHaveAttribute("aria-disabled");
+
+    fireEvent.click(within(storage).getByRole("button", { name: "Migrate to SeaweedFS" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Replace MinIO with SeaweedFS?")).toBeInTheDocument();
+    expect(within(dialog).getByText("Start fresh: stored objects are not copied")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/Artifacts, logs and cached outputs of earlier pipeline runs return 404/);
+    expect(dialog).toHaveTextContent(/PersistentVolumeClaim minio-pvc is kept, unused, for a rollback or a manual copy/);
+    expect(dialog).toHaveTextContent(/Pipeline servers keep their settings and need no edits/);
+    expect(within(dialog).queryByText("Data is deleted and cannot be recovered")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Migrate and start fresh" }));
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/setup"))).toHaveLength(1));
+  });
+
+  it("Cancel leaves MinIO alone", async () => {
+    const api = setup(live({ minio: pendingMinio, pipelineServers: [] }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    fireEvent.click(await within(storage).findByRole("button", { name: "Migrate to SeaweedFS" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.calls.filter((c) => c.startsWith("POST"))).toHaveLength(0);
+  });
+
+  it("after the migration, the kept MinIO volume is reported with its size and Tear down names it", async () => {
+    const migrated: ResourceState = {
+      deployed: true, ready: true, namespace: "minio", managedByTool: true, message: "Running", uiUser: "admin",
+      dataPVCs: ["seaweedfs-pvc", "minio-pvc"], keptPVCs: [{ name: "minio-pvc", size: "20Gi" }],
+    };
+    setup(live({ minio: migrated, pipelineServers: [] }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    const notice = await within(storage).findByText(/Old MinIO data volume kept/);
+    expect(notice).toHaveTextContent("Old MinIO data volume kept: PersistentVolumeClaim minio-pvc (20Gi). SeaweedFS does not use it; it is kept for a rollback or a manual copy of old objects (see RUNBOOK §10). Tear down deletes it.");
+    expect(within(storage).queryByText("Still MinIO: migration pending")).not.toBeInTheDocument();
+    fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Data is deleted and cannot be recovered").closest(".pf-v6-c-alert")).toHaveTextContent(/seaweedfs-pvc, minio-pvc/);
   });
 });
