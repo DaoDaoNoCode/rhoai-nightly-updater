@@ -61,7 +61,7 @@ What `make rollback` does:
 
 **`oc rollout undo` does not work.** `make deploy`/`upgrade` delete old ReplicaSets after a successful rollout, because their pod templates may hold the old plaintext cookie secret. Use `make rollback`.
 
-**Restarts wait for operations.** If an Update/Reinstall is running, the old pod finishes it first (drain up to 980 s, `terminationGracePeriodSeconds: 1020`, `Recreate`). oauth-proxy exits at once, so the UI is unreachable for up to ~17 minutes. `make upgrade`/`rollback` wait up to `ROLLOUT_TIMEOUT=20m`. Check whether something is running before you restart:
+**Restarts wait for operations.** If an Update/Reinstall is running, the old pod finishes it first (drain up to 980 s, `terminationGracePeriodSeconds: 1020`, `Recreate`). oauth-proxy exits at once, so the UI is unreachable for up to ~17 minutes. `make upgrade`/`rollback` wait up to `ROLLOUT_TIMEOUT=20m`. A direct `oc delete pod` or an eviction is different: the ReplicaSet starts a replacement at once, which shows the old pod's operation as running "on updater pod …" and refuses changes until it ends (§5). Check whether something is running before you restart (`operation` is the marker, `lock` the lease):
 
 ```bash
 oc get cm rhoai-nightly-updater-operation -n $NS -o jsonpath='{.data}'; echo
@@ -99,7 +99,9 @@ oc logs -n $NS deploy/$APP -c app --previous
 
 - **409 `cluster_busy` / "Another operation is changing this cluster":** one operation at a time. The banner names who started it and the current step. Wait, or follow it on the Status page.
 - **Lost the progress view:** reload. The page reattaches to a running operation. If the connection was lost, the final card may say "outcome unknown, see the activity log".
-- **"*X* was interrupted":** the pod stopped mid-operation (SIGKILL, node loss, OOM). Check the operator status, then run the same operation again. Every step is safe to repeat. For Dashboard Dev, run **Revert**.
+- **"… on updater pod *P*" (a remote operation):** another updater pod runs it. This happens when the pod is deleted or evicted (node drain, cluster upgrade, autoscaler): the ReplicaSet starts a replacement at once while the old pod still drains its operation (up to 980 s). The replacement reads the old pod's lease, shows the operation with its latest step, refuses new changes with 409 `cluster_busy`, and shows the result (`lastCompleted`) when it ends. There is no live step stream for it; the page polls.
+- **The lease:** every operation records a lease (key `lock` in ConfigMap `rhoai-nightly-updater-operation`) and renews its heartbeat every 10 s, also while the pod drains at shutdown. A lease whose heartbeat is older than **45 s** is free: that is how long a crashed pod's operation blocks a new one. A lease of an earlier container of the same pod (kubelet restart) is free at once. If the lease cannot be read or written (API errors), the operation runs anyway and the pod logs a warning; a lease of another pod that was read always refuses, and so do write conflicts that persist through every retry (409, "try again in a few seconds").
+- **"*X* was interrupted":** the operation's marker is still recorded and the process that wrote it holds no live lease: the pod or its container stopped mid-operation (SIGKILL, node loss, OOM), or an updater version without leases left it. An operation that still runs in another pod is not reported as interrupted. Check the operator status, then run the same operation again. Every step is safe to repeat; Update and Reinstall recreate a missing Subscription with the settings recorded before the last operation. For Dashboard Dev, run **Revert**.
 - **Operation deadline:** 15 minutes. OLM gets 8 minutes to reach `Succeeded`. A failure restores the previous catalog and Subscription within about 1 minute.
 
 ## 6. Update / Reinstall failed
@@ -116,13 +118,20 @@ oc get installplan,csv -n redhat-ods-operator
 | Message / state | Fix |
 |---|---|
 | "Replacement catalog validation failed", `catalog_image_pull` | Pull secret or IDMS problem, or a bad image. Nothing was changed. Test the pull secret on the Status page |
-| "older than the installed" | Update never downgrades. Use Reinstall and tick the confirmation |
+| "older than the installed" | Update never downgrades. Use Reinstall and tick the confirmation (see "Downgrades" below) |
+| Succeeded, but "an upgrade gate holds it" | The operator waits for an admin acknowledgement (set its key to "true" in ConfigMap `odh-upgrade-acks` in `redhat-ods-operator`) or cannot resolve a gate because it is older than the resources it found. The note reads the Platform and every DataScienceCluster condition |
+| Diagnostics: "Objects the operator cannot update" | Upgrade leftovers; see §11.6 |
 | "cannot read the installed CSV version" | Use Reinstall and confirm |
 | A second rhods-operator Subscription exists | Delete the extra one yourself; the tool refuses to guess which one is right |
 | Namespace has 2+ OperatorGroups / a non-global one | Keep one global OperatorGroup in `redhat-ods-operator` |
 | Re-deploy refuses: "channel head moved" (Automatic approval) | Use Update (it changes the version) |
 | `BundleUnpackFailed` keeps recurring | See §11.5 |
 | Webhook "connection refused / no endpoints" errors | Diagnostics → stale webhooks. For a CRD conversion webhook see §11.2 |
+
+**Downgrades.** OLM cannot downgrade, so a confirmed Reinstall to an older version removes the operator and installs the older bundle. OLM applies every CRD in that bundle, so the CRDs it ships are **replaced by their older versions**:
+- fields only the newer version knows can be pruned from stored objects such as the DataScienceCluster, and are not restored by going back;
+- a same-named CRD that the newer version no longer ships stays at the older schema after you go back with Update, and the newer operator then fails on it (§11.6, schema mismatch);
+- the older operator may refuse to manage, or stop at upgrade gates for, resources the newer version created (DSC `Ready: Error … upgrade gate`, `ModulesReady: AdminAckRequired`). The result of the Reinstall says so; check Components and Diagnostics. Go back to the newer version with **Update**.
 
 ## 7. Metrics and alerts
 
@@ -245,6 +254,31 @@ OLM's documented recovery ("Refreshing failing subscriptions"), as a MANUAL ADMI
 2. Delete the failing bundle-unpack **Job and ConfigMap** in `openshift-marketplace`: `oc get job,cm -n openshift-marketplace | grep <bundle-hash>`. The tool never deletes these.
 3. Reinstall.
 
+### 11.6 Upgrade leftovers the operator cannot fix itself
+
+The DataScienceCluster, the Platform and the module CRs report objects the operator failed to apply as `failure deploying resource <ns>/<name>: apply failed <group/version>, Kind=<Kind>: …`. Diagnostics ("Objects the operator cannot update") lists each object once, with the CRs that report it and exact commands. It changes nothing. Find them by hand with:
+
+```bash
+oc get datasciencecluster -o jsonpath='{range .items[*].status.conditions[*]}{.message}{"\n"}{end}' | grep 'failure deploying'
+oc get platforms.config.opendatahub.io -o jsonpath='{range .items[*].status.conditions[*]}{.message}{"\n"}{end}' | grep 'failure deploying'
+```
+
+MANUAL ADMIN STEPs, by error:
+
+1. **`field is immutable`** (for example `spec.selector` of a Deployment an older version created). The object must be recreated: delete it, then restart the operator that reconciles the reporting CR so it reconciles at once. Module operators back off a failing object exponentially (up to about 16m40s) and may wait that long otherwise.
+   ```bash
+   oc delete deployment.apps <name> -n <ns>
+   oc rollout restart deployment/<module-operator> -n <ns>        # a module operator (Diagnostics names it when known)
+   oc delete pod -n redhat-ods-operator -l name=rhods-operator     # the DSC or Platform reported it (OLM owns that Deployment)
+   ```
+   Deleting a controller Deployment stops its pods until the operator recreates it with the current spec; that is safe when its operator recreates it.
+2. **`Only one reference can have Controller set to true`** (ownership moved between versions, for example from the Platform to a module CR). Same steps: delete the object; its new owner recreates it.
+3. **`failed to create typed live|patch object … expected <type>, got …`**: the live CRD and the object disagree on a field's type. It usually follows a downgrade or a round trip, when an older bundle replaced a same-named CRD (see "Downgrades" in §6). Diagnostics shows the fields, the CRD, and who last wrote its `spec.versions` (managedFields; `catalog` is OLM installing a bundle). Fix it by hand:
+   1. re-apply that CRD from the **installed** operator version's bundle (`oc get crd <crd> -o yaml` shows the current schema);
+   2. correct the listed fields of the object to the type the CRD expects (`oc edit <kind>.<group> <name>`), keeping the intended meaning;
+   3. restart the operator as in step 1.
+   There is no automatic fix: the right value needs judgement.
+
 ## 12. Activity log
 
 ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, JSON). If it is corrupted, the app logs a parse warning and starts a fresh list on the next write. To reset it (MANUAL ADMIN STEP): `oc delete cm rhoai-nightly-updater-activity -n $NS`.
@@ -258,4 +292,4 @@ ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, 
 | Serving cert | Secret `$APP-tls` (service-ca) |
 | ClusterRole / ClusterRoleBinding / ConsoleLink | `$APP-$NS` |
 | Roles | `$APP` in `$NS`; `$APP-$NS` in `kube-system`, `openshift-marketplace` |
-| State ConfigMaps | `rhoai-nightly-updater-{activity,snapshot,operation}` |
+| State ConfigMaps | `rhoai-nightly-updater-{activity,snapshot,operation}` (`operation` holds the running-operation marker, `lastCompleted` and the cross-pod lease `lock`) |

@@ -829,7 +829,7 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 func upgradeGateMessage(gates []string, hedge string) string {
 	return "The operator is installed, but it does not provision components while an upgrade gate holds it: " + strings.Join(gates, "; ") + "." + hedge +
 		" Read what the gate is about: an admin acknowledgement is given by setting its key to \"true\" in ConfigMap odh-upgrade-acks in " + SubNS +
-		" (Diagnostics lists the keys); a gate the operator cannot resolve usually means it is older than the resources it found. Check the Components page."
+		" (oc get configmap odh-upgrade-acks -n " + SubNS + " shows them); a gate the operator cannot resolve usually means it is older than the resources it found. Check the Components page."
 }
 
 // foreignSubscriptionRefusal reports another Subscription for the
