@@ -174,7 +174,7 @@ func registryRepository(repository string) (base, path string, err error) {
 		return "", "", fmt.Errorf("invalid image repository %q", repository)
 	}
 	host, rest, found := strings.Cut(repository, "/")
-	if !found || !(strings.ContainsAny(host, ".:") || host == "localhost") {
+	if !found || (!strings.ContainsAny(host, ".:") && host != "localhost") {
 		host, rest = "docker.io", repository
 	}
 	if strings.Contains(rest, ":") {
