@@ -157,7 +157,7 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
   const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
   const items: React.ReactNode[] = [];
   if (showMessage) {
-    items.push(<HelperTextItem key="message" variant={terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message!)}</TruncatedText></span></HelperTextItem>);
+    items.push(<HelperTextItem key="message" variant={state.repairNeeded && state.message === state.repairNeeded ? "warning" : terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message!)}</TruncatedText></span></HelperTextItem>);
   }
   if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
   if (state.repairNeeded && !(showMessage && state.message === state.repairNeeded)) {
