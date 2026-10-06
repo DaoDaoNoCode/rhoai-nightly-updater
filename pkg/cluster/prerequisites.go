@@ -195,14 +195,19 @@ func (p catalogPackage) matchKeys() []string {
 	return keys
 }
 
-// singletonFor returns the cluster-scoped singleton operand ("cluster",
-// no namespace) of the package's alm-examples that belongs to the
-// dependency: the only one, or the one whose kind (without "Operator")
-// matches the dependency's or the package's name. nil when there is none
-// or it is ambiguous.
+// singletonFor returns the package's singleton operand for the dependency
+// (see singletonFrom).
 func (p catalogPackage) singletonFor(key string) *almExample {
+	return singletonFrom(p.Examples, append([]string{key}, p.matchKeys()...))
+}
+
+// singletonFrom returns the cluster-scoped singleton operand ("cluster",
+// no namespace) of a CSV's alm-examples: the only one, or the one whose
+// kind (without "Operator") matches one of the operator's normalised
+// names. nil when there is none or it is ambiguous.
+func singletonFrom(examples []almExample, names []string) *almExample {
 	var singletons []almExample
-	for _, e := range p.Examples {
+	for _, e := range examples {
 		if e.Name == "cluster" && e.Namespace == "" && e.Kind != "" {
 			singletons = append(singletons, e)
 		}
@@ -210,7 +215,6 @@ func (p catalogPackage) singletonFor(key string) *almExample {
 	if len(singletons) == 1 {
 		return &singletons[0]
 	}
-	names := append([]string{key}, p.matchKeys()...)
 	for i, e := range singletons {
 		if containsString(names, normalizeOperatorName(e.Kind)) {
 			return &singletons[i]
@@ -365,6 +369,26 @@ type clusterCSV struct {
 	Name, Namespace, DisplayName, Phase string
 	Labels                              map[string]string
 	Changed                             time.Time // status.lastTransitionTime
+	Examples                            []almExample
+	Owned                               []ownedCRD
+}
+
+// ownedCRD is one entry of spec.customresourcedefinitions.owned.
+type ownedCRD struct {
+	Name    string `json:"name"` // <plural>.<group>
+	Kind    string `json:"kind"`
+	Version string `json:"version"`
+}
+
+// matchNames are the normalised names the installed operator is known by.
+func (csv clusterCSV) matchNames() []string {
+	var out []string
+	for _, s := range append([]string{csv.DisplayName, csvBaseName(csv.Name)}, csv.packages()...) {
+		if n := normalizeOperatorName(s); n != "" && !containsString(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func listClusterCSVs(c *Client) ([]clusterCSV, error) {
@@ -378,12 +402,16 @@ func listClusterCSVs(c *Client) ([]clusterCSV, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name      string            `json:"name"`
-				Namespace string            `json:"namespace"`
-				Labels    map[string]string `json:"labels"`
+				Name        string            `json:"name"`
+				Namespace   string            `json:"namespace"`
+				Labels      map[string]string `json:"labels"`
+				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
 			Spec struct {
-				DisplayName string `json:"displayName"`
+				DisplayName               string `json:"displayName"`
+				CustomResourceDefinitions struct {
+					Owned []ownedCRD `json:"owned"`
+				} `json:"customresourcedefinitions"`
 			} `json:"spec"`
 			Status struct {
 				Phase              string `json:"phase"`
@@ -398,6 +426,8 @@ func listClusterCSVs(c *Client) ([]clusterCSV, error) {
 	for _, it := range list.Items {
 		csv := clusterCSV{Name: it.Metadata.Name, Namespace: it.Metadata.Namespace, DisplayName: it.Spec.DisplayName, Phase: it.Status.Phase, Labels: it.Metadata.Labels}
 		csv.Changed, _ = parseK8sTime(it.Status.LastTransitionTime)
+		csv.Examples = parseALMExamples(it.Metadata.Annotations["alm-examples"])
+		csv.Owned = it.Spec.CustomResourceDefinitions.Owned
 		out = append(out, csv)
 	}
 	return out, nil
@@ -429,11 +459,7 @@ func findInstalledCSV(csvs []clusterCSV, pkg *catalogPackage, key string) *clust
 			match = containsString(csv.packages(), pkg.Name) || (pkg.CurrentCSV != "" && csvBaseName(csv.Name) == csvBaseName(pkg.CurrentCSV))
 		}
 		if !match {
-			for _, s := range append([]string{csv.DisplayName, csvBaseName(csv.Name)}, csv.packages()...) {
-				if s != "" && normalizeOperatorName(s) == key {
-					match = true
-				}
-			}
+			match = containsString(csv.matchNames(), key)
 		}
 		if match && (best == nil || (best.Phase != "Succeeded" && csv.Phase == "Succeeded")) {
 			best = &csvs[i]
@@ -563,6 +589,12 @@ func (d *dependency) displayName() string {
 
 // slug identifies the dependency in problem IDs.
 func (d *dependency) slug() string {
+	if d.CSV != nil {
+		if pkgs := d.CSV.packages(); len(pkgs) > 0 {
+			sort.Strings(pkgs)
+			return pkgs[0]
+		}
+	}
 	if d.Package != nil {
 		return d.Package.Name
 	}
@@ -618,7 +650,13 @@ func resolveDependencies(c *Client, deps []*dependency) {
 		if csvErr == nil {
 			d.CSV = findInstalledCSV(csvs, d.Package, d.Key)
 		}
-		if d.Package != nil {
+		// The operand comes from what is installed: an installed CSV
+		// (perhaps of another package than the preferred catalog entry)
+		// ships its own examples.
+		switch {
+		case d.CSV != nil:
+			d.Operand = singletonFrom(d.CSV.Examples, append([]string{d.Key}, d.CSV.matchNames()...))
+		case d.Package != nil:
 			d.Operand = d.Package.singletonFor(d.Key)
 		}
 		if d.Operand != nil && d.installed() {

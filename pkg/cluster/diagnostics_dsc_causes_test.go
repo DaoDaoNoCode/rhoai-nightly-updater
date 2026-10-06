@@ -60,12 +60,27 @@ func operatorDeploymentJSON(name, strategy string, available int) map[string]int
 	}
 }
 
+// installedCSV serves one installed CSV. The JobSet CSV carries its own
+// alm-examples and owned CRD, as on the live cluster.
 func (w *dscWorld) installedCSV(name, ns, display, phase string, since time.Duration, pkg string) {
-	w.f.obj("GET", clusterCSVsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name, "namespace": ns, "labels": map[string]string{"operators.coreos.com/" + pkg + "." + ns: ""}},
-		"spec":     map[string]string{"displayName": display},
-		"status":   map[string]string{"phase": phase, "lastTransitionTime": ago(since)},
-	}}})
+	w.installedCSVs(csvItem(name, ns, display, phase, since, pkg, jobSetExamples, []ownedCRD{{Name: "jobsetoperators.operator.openshift.io", Kind: "JobSetOperator", Version: "v1"}}))
+}
+
+func csvItem(name, ns, display, phase string, since time.Duration, pkg, examples string, owned []ownedCRD) map[string]interface{} {
+	return map[string]interface{}{
+		"metadata": map[string]interface{}{"name": name, "namespace": ns, "labels": map[string]string{"operators.coreos.com/" + pkg + "." + ns: ""},
+			"annotations": map[string]string{"alm-examples": examples}},
+		"spec":   map[string]interface{}{"displayName": display, "customresourcedefinitions": map[string]interface{}{"owned": owned}},
+		"status": map[string]string{"phase": phase, "lastTransitionTime": ago(since)},
+	}
+}
+
+func (w *dscWorld) installedCSVs(items ...map[string]interface{}) {
+	var list []interface{}
+	for _, it := range items {
+		list = append(list, it)
+	}
+	w.f.obj("GET", clusterCSVsPath, map[string]interface{}{"items": list})
 }
 
 func (w *dscWorld) trainerCR(conds []dcond, generation, observed int) {
@@ -224,6 +239,35 @@ func TestDSCCheck_SatisfiedDependencyOffersRestart(t *testing.T) {
 		t.Fatalf("dsc-not-ready = %+v", dsc)
 	}
 	assertWrites(t, w.f)
+}
+
+// The operand comes from the installed CSV, not from the preferred catalog
+// entry: with the community cert-manager installed (no singleton operand),
+// the Red Hat package's CertManager/cluster is not asked for.
+func TestDSCCheck_OperandFromInstalledCSVPackage(t *testing.T) {
+	w := newDSCWorld(t, []dcond{
+		{"type": "Ready", "status": "False", "reason": "Error", "message": "Some modules are not ready: kserve"},
+		{"type": "KserveLLMInferenceServiceDependencies", "status": "False", "reason": "PreConditionFailed", "message": msgCertManager},
+	})
+	w.installedCSVs(csvItem("cert-manager.v1.16.5", "openshift-operators", "cert-manager", "Succeeded", time.Hour, "cert-manager", `[]`, nil))
+	out := checkDataScienceCluster(w.c)
+	for _, id := range ids(out) {
+		if strings.HasPrefix(id, "prerequisite-") {
+			t.Fatalf("installed community cert-manager reported as %s", id)
+		}
+	}
+	if len(w.f.requests("GET", "/apis/operator.openshift.io/v1alpha1")) != 0 {
+		t.Fatal("looked up the Red Hat package's operand")
+	}
+
+	// The installed CSV's own example is used even when the catalog's differs.
+	w2 := newDSCWorld(t, liveMissingPrereqs()[:2])
+	w2.installedCSVs(csvItem("jobset-operator.v0.9.0", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set",
+		`[{"apiVersion":"operator.openshift.io/v1","kind":"JobSetOperator","metadata":{"name":"cluster"},"spec":{"managementState":"Managed","logLevel":"Debug"}}]`, nil))
+	p := problemsByID(checkDataScienceCluster(w2.c))["prerequisite-operand-job-set"]
+	if !strings.Contains(p.TechnicalCmd, `"logLevel": "Debug"`) {
+		t.Fatalf("operand command = %s", p.TechnicalCmd)
+	}
 }
 
 func TestDSCCheck_JustInstalledDependencyIsNotBackoff(t *testing.T) {
