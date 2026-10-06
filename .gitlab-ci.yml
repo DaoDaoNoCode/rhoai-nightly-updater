@@ -192,9 +192,13 @@ release-installer:
     - test "$(bash install.sh --print-version)" = "$CI_COMMIT_TAG"
     - bash install.sh --print-template | cmp - deploy/template.yaml
     - sha256sum install.sh
+    # release-notes links this job's artifact by job ID.
+    - echo "INSTALLER_JOB_ID=$CI_JOB_ID" > installer.env
   artifacts:
     paths: [install.sh]
     expire_in: never
+    reports:
+      dotenv: installer.env
   rules:
     - if: $CI_COMMIT_TAG
 

@@ -333,6 +333,30 @@ printf '%s\n' "$out" | grep -qF 'git push github v2.0.0   # no remote named gith
 [ -z "$(git ls-remote --tags origin refs/tags/v2.0.0)" ] && pass || fail "tag: the tag was pushed"
 expect_fail "tag: exists" "already exists" $SH "$RELEASE" tag v2.0.0
 
+# --- gitlab-release: the payload, with a fake curl ------------------------------
+mkdir -p "$WORK/curlbin"
+cat >"$WORK/curlbin/curl" <<'FAKE'
+#!/bin/sh
+# Fake curl: no Release exists yet (404); a POST body is saved.
+for a in "$@"; do
+	case "$a" in
+	%{http_code}) printf 404; exit 0 ;;
+	@*) cp "${a#@}" "$FAKE_RELEASE_BODY" ;;
+	esac
+done
+FAKE
+chmod +x "$WORK/curlbin/curl"
+printf 'echo installer\n' >"$WORK/install.sh"
+expect_ok "gitlab-release" env PATH="$WORK/curlbin:$PATH" FAKE_RELEASE_BODY="$WORK/release.json" \
+	CI_API_V4_URL=https://gitlab.example.com/api/v4 CI_PROJECT_ID=7 CI_JOB_TOKEN=x CI_PROJECT_URL=https://gitlab.example.com/g/app \
+	INSTALLER="install.sh" INSTALLER_JOB_ID=12345 sh -c "cd '$REPO' && cp '$WORK/install.sh' install.sh && $SH '$RELEASE' gitlab-release v2.0.0; rc=\$?; rm -f install.sh; exit \$rc"
+grep -qF '"url":"https://gitlab.example.com/g/app/-/jobs/12345/artifacts/raw/install.sh"' "$WORK/release.json" && pass || fail "gitlab-release: the installer link is not pinned to the job: $(cat "$WORK/release.json")"
+grep -qF "$sum" "$WORK/release.json" && pass || fail "gitlab-release: the installer checksum is missing"
+grep -qF 'releases/v2.0.0/downloads/install.sh' "$WORK/release.json" && pass || fail "gitlab-release: the permanent download URL is missing from the notes"
+expect_fail "gitlab-release needs the installer job" "INSTALLER_JOB_ID" env PATH="$WORK/curlbin:$PATH" FAKE_RELEASE_BODY="$WORK/release.json" \
+	CI_API_V4_URL=https://gitlab.example.com/api/v4 CI_PROJECT_ID=7 CI_JOB_TOKEN=x CI_PROJECT_URL=https://gitlab.example.com/g/app \
+	INSTALLER="$WORK/install.sh" $SH "$RELEASE" gitlab-release v2.0.0
+
 # --- json_string (GitLab Release body) ---------------------------------------------
 sed -n '/^json_string()/,/^}/p' "$RELEASE" >"$WORK/json-only.sh"
 json=$(sh -c '. "$1"; json_string "$2"' sh "$WORK/json-only.sh" "$(printf 'a "b"\\c\n\td')")

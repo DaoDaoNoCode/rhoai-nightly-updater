@@ -504,9 +504,12 @@ cmd_gitlab_release() {
 	*) die "Cannot check for the GitLab Release $version (HTTP $code)." ;;
 	esac
 	: "${INSTALLER:?INSTALLER (the generated install.sh) is not set}"
-	# The link points at the installer job's artifact (kept forever); the
-	# Release serves it under a permanent URL as well.
-	artifact_url="$CI_PROJECT_URL/-/jobs/artifacts/$version/raw/$INSTALLER?job=${INSTALLER_JOB:-release-installer}"
+	: "${INSTALLER_JOB_ID:?INSTALLER_JOB_ID (the job that built install.sh) is not set}"
+	# The link names the job that built this install.sh (its artifact is kept
+	# forever), not "the latest job of this ref", which a retry would change;
+	# the checksum in the notes is of this same file. The Release also serves
+	# it under a permanent URL: <project>/-/releases/<tag>/downloads/install.sh
+	artifact_url="$CI_PROJECT_URL/-/jobs/$INSTALLER_JOB_ID/artifacts/raw/$INSTALLER"
 	INSTALLER_URL=${INSTALLER_URL:-$CI_PROJECT_URL/-/releases/$version/downloads/install.sh}
 	notes=$(cmd_notes "$version" HEAD)
 	rev=$(template_revision HEAD)
