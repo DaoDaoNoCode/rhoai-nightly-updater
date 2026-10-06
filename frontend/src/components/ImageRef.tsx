@@ -50,6 +50,13 @@ const DIGEST_REF = /([a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\/[A-Za-z0-9._/-]+(?::[A-Za-
 export function withImageRefs(text: string): React.ReactNode {
   const parts = text.split(DIGEST_REF);
   if (parts.length === 1) return text;
+  // "healthy (ref)" reads better as "healthy: ref" once the ref is a chip.
+  for (let i = 1; i < parts.length; i += 2) {
+    if (parts[i - 1].endsWith(" (") && parts[i + 1]?.startsWith(")")) {
+      parts[i - 1] = `${parts[i - 1].slice(0, -2)}: `;
+      parts[i + 1] = parts[i + 1].slice(1);
+    }
+  }
   return parts.map((part, i) => {
     if (i % 2 === 0) return part;
     const tag = imageTag(part);

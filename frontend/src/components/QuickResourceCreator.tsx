@@ -52,6 +52,7 @@ import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
 import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
+import { withImageRefs } from "./ImageRef";
 import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TruncatedText } from "./LongText";
@@ -148,7 +149,7 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
   const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
   const items: React.ReactNode[] = [];
   if (showMessage) {
-    items.push(<HelperTextItem key="message" variant={terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{state.message}</TruncatedText></span></HelperTextItem>);
+    items.push(<HelperTextItem key="message" variant={terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message!)}</TruncatedText></span></HelperTextItem>);
   }
   if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
   if (step) items.push(<HelperTextItem key="step">Next step: {step}</HelperTextItem>);

@@ -11,7 +11,7 @@ describe("withImageRefs (UX round 2, Diagnostics details)", () => {
     expect(screen.getByText("rhoai-3.6@0aa1d3d94c6e")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Copy image reference ${IMAGE}` })).toBeInTheDocument();
     expect(screen.queryByText(IMAGE)).not.toBeInTheDocument();
-    expect(screen.getByText(/Nightly catalog is healthy \(/)).toBeInTheDocument();
+    expect(screen.getByText(/Nightly catalog is healthy:/)).toBeInTheDocument();
   });
 
   it("leaves text without an image reference unchanged", () => {

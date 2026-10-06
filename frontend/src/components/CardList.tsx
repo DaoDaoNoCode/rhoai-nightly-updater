@@ -21,7 +21,7 @@ interface CardListItemProps {
 }
 
 export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions, expanded, children }) => (
-  <ListItem aria-labelledby={labelledBy}>
+  <ListItem aria-labelledby={labelledBy} className="pf-v6-u-pb-sm">
     <div className="pf-v6-u-w-100">
       <Flex
         direction={{ default: "column", md: "row" }}

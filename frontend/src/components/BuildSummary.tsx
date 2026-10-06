@@ -51,10 +51,11 @@ export const BuildSummary: React.FC<BuildSummaryProps> = ({ build, hideDashboard
       display={inline ? { default: "inlineFlex" } : undefined}
     >
       {parts.map((part, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <FlexItem component="span" aria-hidden="true" className="pf-v6-u-text-color-subtle">·</FlexItem>}
-          <FlexItem component="span">{part}</FlexItem>
-        </React.Fragment>
+        // The separator starts the next part, so a wrapped line never ends with a dangling dot.
+        <FlexItem component="span" key={i}>
+          {i > 0 && <span aria-hidden="true" className="pf-v6-u-text-color-subtle pf-v6-u-mr-sm">·</span>}
+          {part}
+        </FlexItem>
       ))}
     </Flex>
   );

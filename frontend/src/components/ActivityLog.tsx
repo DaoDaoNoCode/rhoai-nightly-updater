@@ -144,7 +144,7 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
                 // Operator changes show the build; other details are free text.
                 const detail = entry.build || (category === "operator" ? "" : entry.detail);
                 return (
-                  <ListItem key={`${entry.timestamp}-${i}`} aria-labelledby={`activity-${i}`}>
+                  <ListItem key={`${entry.timestamp}-${i}`} aria-labelledby={`activity-${i}`} className="pf-v6-u-pb-sm">
                     <Flex className="pf-v6-u-w-100" gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }} alignItems={{ default: "alignItemsFlexStart" }}>
                       <FlexItem>
                         <Icon status={entry.success ? "success" : "danger"}>

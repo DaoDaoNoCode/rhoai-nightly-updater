@@ -94,7 +94,7 @@ export const ComponentImagesTable: React.FC<{
   images: RelatedImage[];
   labelsPending: boolean;
 }> = ({ label, images, labelsPending }) => (
-  <Table aria-label={label} variant="compact" borders={false}>
+  <Table aria-label={label} variant="compact" borders={false} isPlain>
     <Thead>
       <Tr>
         <Th width={40}>Component</Th>

@@ -126,7 +126,7 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
               <Content component="p" aria-live="polite">
                 {[
                   `${withCommits} ${withCommits === 1 ? "repository" : "repositories"} with new commits`,
-                  `${result.changedImages} images changed`,
+                  `${result.changedImages} ${result.changedImages === 1 ? "image" : "images"} changed`,
                   rebuilt > 0 ? `${rebuilt} rebuilt from the same commit` : "",
                   result.added.length > 0 ? `${result.added.length} added` : "",
                   result.removed.length > 0 ? `${result.removed.length} removed` : "",

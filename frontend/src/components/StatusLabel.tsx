@@ -37,7 +37,8 @@ interface StatusLabelProps {
 /** A status label: the color and icon come from `status`, so no separate icon goes next to it. */
 export const StatusLabel: React.FC<StatusLabelProps> = ({ status, children, icon, isCompact = true }) => {
   const style = STYLE[status];
-  return <Label isCompact={isCompact} color={style.color} icon={icon ?? style.icon}>{children}</Label>;
+  // The span keeps the label's own width where its parent stretches children (table cells in grid mode).
+  return <span><Label isCompact={isCompact} color={style.color} icon={icon ?? style.icon}>{children}</Label></span>;
 };
 
 /**
@@ -49,5 +50,5 @@ export const TagLabel: React.FC<{
   icon?: React.ReactNode;
   children: React.ReactNode;
 }> = ({ color = "grey", icon, children }) => (
-  <Label isCompact variant="outline" color={color} icon={icon}>{children}</Label>
+  <span><Label isCompact variant="outline" color={color} icon={icon}>{children}</Label></span>
 );
