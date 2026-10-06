@@ -1,6 +1,6 @@
 # OpenShift Integration Knowledge Base
 
-This document captures every OpenShift-specific behavior that affects the RHOAI Nightly Updater. Each entry was learned from a production incident.
+This document captures every OpenShift-specific behavior that affects the RHOAI Nightly Updater. Most entries were learned from incidents. Values below were checked against the code and `deploy/template.yaml`.
 
 ## 1. Route Timeout (Default 30s)
 
@@ -20,7 +20,7 @@ This document captures every OpenShift-specific behavior that affects the RHOAI 
 
 SA-based OAuthClients can ONLY request:
 - `user:info` — read user identity
-- `user:check-access` — perform SelfSubjectAccessReview
+- `user:check-access` — perform access reviews (the app posts an `authorization.openshift.io` SubjectAccessReview with `scopes: []`, which evaluates the user's full RBAC)
 - `role:<role>:<namespace>` — scoped role access
 
 They CANNOT request: `user:full`, `user:list-projects`, `user:list-scoped-projects`.
@@ -32,41 +32,37 @@ They CANNOT request: `user:full`, `user:list-projects`, `user:list-scoped-projec
 
 All cluster operations MUST use the ServiceAccount token.
 
-**Architecture:** oauth-proxy's `--openshift-sar` check is the authorization gate. The SAR check uses the user's token (which has `user:check-access` scope — sufficient for SAR). If a user passes it, the SA does all operations.
+**Architecture:** oauth-proxy's `--openshift-sar` check (`list pods` in `redhat-ods-operator`) gates sign-in. For every change, the app runs a cluster-admin SAR with the user's token. If it passes, the SA does the work. See [SECURITY.md](../SECURITY.md).
 
-**Cookie behavior:** Cookie expiry defaults to 168h. The underlying OAuth token expires in 24h (OpenShift default). Cookie refresh re-validates the token but does not obtain a new one — OpenShift OAuth tokens are non-refreshable.
-
-**Note:** Check oauth-proxy configuration for current timeout values.
+**Cookie behavior:** `--cookie-expire=23h`, below the default OAuth access-token lifetime of 24h, so a session ends before the token it carries stops working. OpenShift OAuth tokens are not refreshable. The cookie secret is read from Secret `<APP_NAME>-proxy`.
 
 **Source:** https://github.com/openshift/oauth-proxy/blob/master/providers/openshift/provider.go (LoadDefaults function)
 
-**Test:** After deploy, verify the SSAR is NOT called: `oc logs -l app=rhoai-nightly-updater -c app --tail=20 | grep -i 'SSAR\|permission check'` should return nothing.
+## 3. Image Tags and Digests
 
-## 3. Image Pull Policy and Caching
+**What:** A mutable tag such as `:latest` can move between a check and the kubelet's pull, and a node may run a cached image.
 
-**What:** When using the `latest` tag, Kubernetes may serve a cached image even after pushing a new one. The `imagePullPolicy: Always` setting forces a pull, but the node's container runtime may still serve a cached layer.
+**Fix:** `make deploy`/`make upgrade` resolve the tag to a digest (`scripts/resolve-image.sh`) and apply `IMAGE@sha256:...`. A new digest or template rolls the pods out by itself, so no `oc rollout restart` is needed. CI publishes the immutable 8-character commit tag on every `main` pipeline, and moves `:latest` only from the tip of `main`.
 
-**Impact:** After `podman push`, a `oc rollout restart` is needed to guarantee the new image runs.
-
-**Fix:** Always do `oc rollout restart` after push. The Makefile's deploy target should include this.
-
-**Test:** After deploy, verify: `oc get pods -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'` matches the pushed digest.
+**Test:** `oc get deploy rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='{.spec.template.spec.containers[0].image}'` shows `@sha256:`.
 
 ## 4. WriteTimeout Budget (SSE Streaming)
 
 **What:** SSE endpoints stream progress events incrementally to the client. The full timeout chain is: frontend EventSource → Route HAProxy → Go http.Server WriteTimeout → SSE pipeline duration. ALL must be >= the longest operation.
 
-**How SSE changes the budget:** Unlike the old request/response model (where the entire operation had to complete within WriteTimeout), SSE streams partial progress as it goes. Each SSE event resets the effective "time since last write," but Go's `WriteTimeout` is measured from the start of the response, not the last write. Therefore WriteTimeout must still cover the total wall-clock time of the longest operation.
+**Current values:**
+- The server `WriteTimeout` is 180 s for ordinary requests.
+- An accepted mutation clears its write deadline (`SetWriteDeadline(time.Time{})`) and runs on its own 15-minute context.
+- The Route timeout and oauth-proxy `--upstream-timeout` are both 960 s; `--upstream-flush=200ms` streams the events.
+- If a stream is cut, the operation continues. The page reattaches through `GET /api/operation`.
 
-**Timeout hierarchy:**
-- Frontend EventSource timeout
-- Route HAProxy timeout (configured via Route annotation)
-- Go WriteTimeout (configured in server)
-- SSE pipeline duration (varies by operation: Update, Reinstall, Refresh)
+**Shutdown budget** (pkg/cluster/operator_recovery.go; `budget_test.go` checks it against the template):
+- drain 980 s (15 min deadline + 60 s restore + 20 s bookkeeping);
+- marker flush 10 s;
+- HTTP shutdown 20 s;
+- 10 s margin.
 
-**Rule:** Each layer must be >= the one below it. The Route timeout must be >= the Go WriteTimeout which must be >= the worst-case SSE stream duration.
-
-**Note:** Check the source code and Route annotations for current timeout values.
+That totals 1020 s, which is `terminationGracePeriodSeconds`.
 
 ## 5. ServiceAccount Token
 
@@ -94,11 +90,17 @@ This typically takes 10-30 seconds depending on image size and pull speed.
 
 ## 7. OLM Version Pinning
 
-**What:** When a CatalogSource image changes but the CSV version string stays the same (e.g., same `v3.5.0-ea.2` in both old and new catalog), OLM does NOT create a new InstallPlan. It considers the operator already at the desired version.
+**What:** When a CatalogSource image changes but the CSV version string stays the same (e.g., the same `v3.5.0-ea.2` in both catalogs), OLM does NOT create a new InstallPlan. It considers the operator already at the desired version.
 
-**Impact:** Simply updating the CatalogSource image is not enough — must delete the CSV and recreate the Subscription to force a fresh InstallPlan.
+**Impact:** Updating only the CatalogSource image is not enough.
 
-**Fix:** The Update() flow always does: apply CatalogSource → wait READY → delete CSV → delete Subscription → wait → recreate Subscription.
+**Fix:** Update runs, in order:
+1. Delete the Subscription (the operator keeps running).
+2. Replace the CatalogSource and wait for READY and the PackageManifest.
+3. Delete the old InstallPlan and CSV.
+4. Create the Subscription once.
+
+The exact sequences are in [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md#4-operator-lifecycle-status-page).
 
 ## 8. NetworkPolicy
 
@@ -106,7 +108,7 @@ This typically takes 10-30 seconds depending on image size and pull speed.
 
 **Current config:**
 - Port 8443 (oauth-proxy): allow from `network.openshift.io/policy-group: ingress`
-- Port 8080 (metrics): allow from `openshift-monitoring` and `openshift-user-workload-monitoring`
+- Port 9090 (probes and `/metrics` only; the API on 8080 is bound to `127.0.0.1`): allow from `openshift-monitoring` and `openshift-user-workload-monitoring`
 
 ## 9. DSPA API Version
 
@@ -128,7 +130,7 @@ This typically takes 10-30 seconds depending on image size and pull speed.
 
 **What:** The rate limiter uses `username:path` as the key. If dry run and real update use the same endpoint path, the dry run consumes the rate limit slot.
 
-**Fix:** Dry run requests set `X-Skip-Rate-Limit` header, and `withMutationAuth` checks this header to skip `recordMutation`.
+**Fix:** The dry-run handler sets the **response** header `X-Skip-Rate-Limit: true`, and `withMutationAuth` then gives the slot back. Rejected requests (4xx/5xx, including 409 busy) also give it back.
 
 ## 12. SSE Streaming Through Route + OAuth Proxy
 

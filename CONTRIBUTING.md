@@ -6,15 +6,15 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 ### Required Versions
 
-- **Go**: See `go.mod` for the required version
-- **Node.js**: 22.x
+- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.1)
+- **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
 - **TypeScript**: 5.x
 
 ### Required Tools
 
 - **Container Runtime**: Podman or Docker (auto-detected by `make build`)
 - **OpenShift CLI**: `oc` (required for deployment and local dev)
-- **golangci-lint**: For running Go linters (`go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`)
+- **golangci-lint v2**: install a release binary (https://golangci-lint.run/docs/welcome/install/local/); CI pins v2.14.0
 
 ### Cluster Access
 
@@ -46,10 +46,10 @@ Open **http://127.0.0.1:9000** in your browser.
    - `KUBERNETES_SERVICE_PORT` — cluster API port
    - `DEV_TOKEN` — your current `oc` token
    - `DEV_USER` — your OpenShift username
-   - `DEV_MODE=true` — enables dev mode (uses insecure TLS, skips OAuth proxy, listens on `127.0.0.1` only)
+   - `DEV_MODE=true` — enables dev mode (no oauth-proxy and no cluster-admin gate: every request uses your token; listens on `127.0.0.1` only; Host/Origin must be this machine). API server TLS is still verified (see [Environment Variables](#environment-variables))
 5. Starts the frontend dev server (`npm run dev`) which runs webpack-dev-server with:
    - Hot reload enabled
-   - Proxy: `/api` → `http://127.0.0.1:8080`
+   - Proxy: `/api` → `http://127.0.0.1:8080` (override with `API_TARGET`)
 
 ### Frontend Development
 
@@ -130,7 +130,7 @@ make test              # Run both Go and frontend tests
 ### Go Tests
 
 ```bash
-make test-go           # Runs: go test ./... -v -count=1
+make test-go           # Runs: go test -race -count=1 ./...
 ```
 
 **Test patterns:**
@@ -144,7 +144,7 @@ make test-go           # Runs: go test ./... -v -count=1
 make test-frontend     # Runs: cd frontend && npm test
 ```
 
-Runs the Node test runner over `frontend/tests/*.test.cjs` (no browser needed). A failing test fails the target.
+Runs the Node test runner over `frontend/tests/*.test.cjs`, then Vitest (`npm run test:unit` runs Vitest only). No browser needed.
 
 ## Linting
 
@@ -157,21 +157,16 @@ make lint              # Run both Go and frontend linters
 ### Go Linter
 
 ```bash
-make lint-go           # Runs: golangci-lint run ./...
+make lint-go           # Runs: gofmt -l (must be empty), go vet ./..., golangci-lint run ./...
 ```
 
-Requires `golangci-lint` to be installed:
-```bash
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-```
+Requires golangci-lint v2 (configuration in `.golangci.yml`), installed from the release binaries: https://golangci-lint.run/docs/welcome/install/local/. `make vuln` runs govulncheck and `npm audit --omit=dev --audit-level=high`.
 
 ### Frontend Linter
 
 ```bash
-make lint-frontend     # Runs: cd frontend && npm run typecheck (tsc --noEmit)
+make lint-frontend     # Runs: cd frontend && npm run typecheck && npm run lint (ESLint)
 ```
-
-There is no ESLint configuration; the TypeScript compiler check is the frontend lint step.
 
 ## Building
 
@@ -187,14 +182,15 @@ make build             # Build using podman or docker (auto-detected)
 2. Builds a multi-stage image from `Containerfile`:
    - **Stage 1 (frontend)**: `node:22-alpine`
      - Installs dependencies: `npm ci`
-     - Type-checks and tests: `npm run typecheck && npm test`
+     - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test`
      - Builds production bundle: `npm run build` → `frontend/dist/`
      - Uses `NODE_OPTIONS="--max-old-space-size=2048"` to handle large bundles
-   - **Stage 2 (backend)**: `golang:1.24-alpine`
+   - **Stage 2 (backend)**: `golang:1.27.1-alpine`
      - Downloads Go modules: `go mod download`
-     - Runs tests: `go test ./...`
-     - Builds static binary: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o server .`
-   - **Stage 3 (runtime)**: `registry.access.redhat.com/ubi9/ubi-minimal:9.6`
+     - Vets and tests: `go vet ./... && go test ./...`
+     - Builds a static binary with the version, commit and build date linked in
+   - **Stage 3 (runtime)**: `registry.access.redhat.com/ubi9/ubi-minimal` 9.8 (all base images pinned by digest)
+     - Sets the `org.opencontainers.image.revision` label to the commit (`make deploy`/`upgrade` check it)
      - Copies compiled Go server from backend stage
      - Copies frontend static files from frontend stage
      - Sets `STATIC_DIR=/app/static`, `PORT=8080`
@@ -205,7 +201,7 @@ make build             # Build using podman or docker (auto-detected)
 
 - `IMAGE` — Registry and image name (default: `quay.io/juntao_wang/rhoai-nightly-updater`)
 - `TAG` — Image tag (default: `latest`)
-- `GIT_SHA` — Git commit SHA (default: auto-detected from `git rev-parse --short HEAD`)
+- `GIT_SHA` — 8-character commit tag (default: the first 8 characters of the HEAD commit, the same as GitLab's `CI_COMMIT_SHORT_SHA`)
 - `RUNTIME` — Container runtime (default: auto-detected `podman` or `docker`)
 - `PLATFORM` — Target platform (default: `linux/amd64`)
 - `NO_CACHE` — Set to `1` to skip cache and force rebuild
@@ -237,9 +233,21 @@ This builds for `linux/amd64` and publishes both `latest` and the current short 
 
 ### Automatic Image Publishing
 
-The repository's `.gitlab-ci.yml` builds and publishes to `quay.io/juntao_wang/rhoai-nightly-updater` when GitLab receives a push to `main`. The image build runs the Go tests, the frontend type check and the frontend tests, so a failure stops anything from being published. It publishes `latest` and `CI_COMMIT_SHORT_SHA` tags and requires GitLab CI variables `QUAY_USER` and `QUAY_TOKEN` with write access to that Quay repository. Other branches have a manual build job.
+GitLab CI (`.gitlab-ci.yml`) runs on merge requests and on branch pushes:
 
-Pushing to GitHub does not execute `.gitlab-ci.yml`. There is currently no GitHub Actions publishing workflow in this repository. Automatic publishing from GitHub requires a GitHub Actions workflow with Quay credentials or a Quay build trigger connected to the GitHub repository. Quay-side triggers are configured separately under the repository's Builds tab and cannot be inferred from these source files.
+- **test** stage, all must pass, no lint exceptions:
+  - `go`: gofmt, `go vet`, `go test -race`, govulncheck;
+  - `golangci-lint`;
+  - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build.
+- **build** stage (kaniko):
+  - On `main`, every pipeline publishes the immutable tag `:$CI_COMMIT_SHORT_SHA` (8 characters).
+  - `:latest` moves only if that commit is still the tip of `main`, so an older pipeline that finishes late never moves `:latest` back.
+  - Other branches have a manual job that publishes `:$CI_COMMIT_REF_SLUG`.
+  - It needs the CI variables `QUAY_USER`/`QUAY_TOKEN`.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests. Nothing is published from GitHub.
+
+Teammates' pods run what `make upgrade` resolves from `:latest` (by digest), so a broken `main` reaches whoever upgrades next.
 
 ## Code Patterns
 
@@ -270,11 +278,10 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 
 **What the wrappers do**:
 
-1. Extract user token from `Authorization` header (set by oauth-proxy)
-2. Extract cluster token from service account or `DEV_TOKEN` env var
-3. Create a `cluster.Client` with the user's token
-4. Call the handler function with the authenticated client
-5. (`withMutationAuth` only) Check full user RBAC (`subscriptions:update` in `redhat-ods-operator`) and apply rate limiting. Operator lifecycle handlers also hold the cluster mutation lock. Accepted mutations use a browser-independent context with a 15-minute deadline.
+1. Take the user token from `X-Forwarded-Access-Token` (set by oauth-proxy). A `Bearer` header is refused outside `DEV_MODE`
+2. Resolve the user from that token (`users/~`); `X-Forwarded-User` is not trusted
+3. Create a `cluster.Client` with the ServiceAccount token (or `DEV_TOKEN` in dev mode) and call the handler
+4. (`withMutationAuth` only) Run a cluster-admin SubjectAccessReview with the user's token, take the per-user/endpoint 30 s rate-limit slot, refuse new work while shutting down, and give the handler a browser-independent context with a 15-minute deadline. Cluster-changing handlers also take the cluster lock (`lockCluster`, 409 `cluster_busy`). `TestEveryNonGetRouteIsGated` fails for a non-GET route without this wrapper. Routes are listed in `pkg/api/routes.go`
 
 #### 2. Kubernetes API Client
 
@@ -309,8 +316,8 @@ path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "
 
 **TLS Configuration**:
 
-- Production: Uses in-cluster CA cert from `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`
-- Dev mode (`DEV_MODE=true`): Uses `InsecureSkipVerify` for local testing
+- `KUBE_CA_FILE` if set, else the in-cluster CA (`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`), else the system trust store
+- Verification is skipped only with `DEV_MODE=true` and `DEV_INSECURE_TLS=true`
 - Shared `http.Transport` across all clients (CA loaded once at init)
 
 #### 3. Test Patterns
@@ -389,52 +396,25 @@ make push              # Pushes IMAGE:TAG and IMAGE:GIT_SHA
 #### 3. Deploy to OpenShift
 
 ```bash
-make deploy            # Requires 'oc login' first
+make deploy            # first install; make upgrade afterwards. Requires cluster-admin and 'oc login'
 ```
 
-**What `make deploy` does**:
+Both resolve `IMAGE:TAG` to a digest, check that the image was built from a commit with this checkout's `deploy/template.yaml`, create the cookie Secret once, apply the template, wait for the rollout, then add the ConsoleLink, remove legacy objects and prune old ReplicaSets. `DRY_RUN=1` only validates. Overrides, rollback and the first-time `ALLOW_TEMPLATE_MISMATCH=1` are described in [RUNBOOK §2](RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater). To deploy an image you pushed yourself, push it first (`make build push`), then run `make upgrade TAG=<GIT_SHA>`. If you changed the template, commit it first.
 
-1. Creates namespace if it doesn't exist: `oc new-project NAMESPACE`
-2. Processes the template with parameters:
-   - `IMAGE=$(IMAGE):$(TAG)`
-   - `NAMESPACE=$(NAMESPACE)`
-   - `APP_NAME=$(APP_NAME)`
-3. Applies the processed template: `oc apply -f -`
-4. Restarts the deployment to pull the latest image: `oc rollout restart deployment/APP_NAME`
-5. Waits for rollout to complete (120s timeout)
-6. Patches the ConsoleLink with the actual route URL
-
-**Deployment variables** (override via environment, command line, or `.env` file):
-
-- `NAMESPACE` — Target namespace (default: `rhoai-nightly-updater`)
-- `APP_NAME` — Application name (default: `rhoai-nightly-updater`)
+If you change `deploy/template.yaml` in a way the running code depends on, bump `TEMPLATE_REVISION` there and `api.ExpectedTemplateRevision` together; the UI then tells admins to upgrade.
 
 #### 4. Verify Deployment
 
 ```bash
-./scripts/smoke-test.sh            # Uses default namespace
-./scripts/smoke-test.sh my-ns      # Test custom namespace
+./scripts/smoke-test.sh [namespace] [app-name]
 ```
 
-**What the smoke test checks**:
-
-1. **Pod Status**: Pods are running and ready with correct image
-2. **Route Configuration**: Route has 960s timeout annotation and valid URL
-3. **ClusterRole Permissions**: Required permissions exist (deployments:patch, namespaces:create, secrets:get, mlflows:create, datasciencepipelinesapplications:create)
-4. **Health Probes**: Startup, liveness, and readiness probes are configured correctly (`/api/health`, `/api/health/ready`)
-5. **Observability**: ServiceMonitor and PrometheusRule exist
-6. **ConsoleLink**: ConsoleLink exists and has valid URL (not placeholder)
-7. **OAuth Proxy**: `pass-access-token=true` and `openshift-sar` are configured
-8. **NetworkPolicy**: NetworkPolicy exists
-
-Exit codes:
-- `0` — All checks passed
-- `1` — One or more checks failed
+Read-only. Expected values (route and proxy timeouts, strategy, grace period, template revision) are read from `deploy/template.yaml`. It checks the deployment, pods and `/api/version`, the Route/oauth-proxy settings, the RBAC objects (and that no legacy ClusterRole remains), the Service/NetworkPolicy ports, monitoring (warns when user workload monitoring is off) and the ConsoleLink. It exits 1 on any failure.
 
 ### Undeploy
 
 ```bash
-make undeploy          # Deletes ConsoleLink and namespace
+make undeploy          # the app namespace, its ClusterRole/Binding, Roles in other namespaces, ConsoleLink
 ```
 
 ### Custom Configuration
@@ -458,42 +438,23 @@ Then `make` commands will use your custom values.
 
 ## Environment Variables
 
-See `.env.example` for all available environment variables:
+Make variables (`IMAGE`, `TAG`, `NAMESPACE`, `APP_NAME`, `RUNTIME`, `PLATFORM`, `OAUTH_PROXY_IMAGE`, `ROLLOUT_TIMEOUT`, `DRY_RUN`, `ALLOW_TEMPLATE_MISMATCH`, `ALLOW_MUTABLE_TAG`) can be set on the command line or in `.env` (`make env` creates one; there is no `.env.example`). Run `make help` to list them.
 
-### Build & Deploy
+Runtime variables of the deployed container (`GITHUB_TOKEN`, `MINIO_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
 
-- `IMAGE` — Registry and image name (default: `quay.io/juntao_wang/rhoai-nightly-updater`)
-- `TAG` — Image tag (default: `latest`)
-- `GIT_SHA` — Git commit SHA (default: auto-detected)
-- `NAMESPACE` — Deployment namespace (default: `rhoai-nightly-updater`)
-- `APP_NAME` — Application name (default: `rhoai-nightly-updater`)
-- `RUNTIME` — Container runtime (default: auto-detected `podman` or `docker`)
-- `PLATFORM` — Target platform (default: `linux/amd64`)
+Local development only (`dev.sh` sets the first five):
 
-### Operator Defaults
-
-- `STABLE_SOURCE` — Catalog source name (default: `redhat-operators`)
-- `STABLE_CHANNEL` — Optional GA channel pin; by default discover the highest GA version available in the configured catalog's `stable`, `fast`, and `eus` channels. The pin must exist and have a GA head. No fixed version fallback is used.
-- `DSC_SAMPLE_REF` — Optional Git branch/tag for DSC samples; otherwise derived from the installed operator version, supporting numbered and unnumbered prereleases
-
-Set these variables in the backend process environment. For a deployed app, use `oc set env deployment/rhoai-nightly-updater -n rhoai-nightly-updater DSC_SAMPLE_REF=<branch-or-tag>` (adjust the deployment and namespace if customized). Remove the override with `DSC_SAMPLE_REF-` to return to automatic version matching.
-
-### Server
-
-- `PORT` — HTTP server port (default: `8080`)
-- `STATIC_DIR` — Frontend static files directory (default: `./frontend/dist`)
-- `LOG_LEVEL` — Logging level: `debug`, `info`, `warn`, `error` (default: `info`)
-
-### MinIO Credentials
-
-- `MINIO_ROOT_USER` — MinIO admin username (default: `minio`)
-- `MINIO_ROOT_PASSWORD` — MinIO admin password (default: random)
-
-### Development Only (never set in production)
-
-- `DEV_MODE` — Enable dev mode (insecure TLS, skip OAuth proxy)
-- `DEV_TOKEN` — Your `oc` token (auto-set by `dev.sh`)
-- `DEV_USER` — Your OpenShift username (auto-set by `dev.sh`)
+| Variable | Purpose |
+|---|---|
+| `DEV_MODE=true` | No oauth-proxy, no cluster-admin gate; binds `127.0.0.1`; checks Host/Origin |
+| `DEV_TOKEN`, `DEV_USER` | Your `oc` token and username |
+| `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT` | The API server from `oc whoami --show-server` |
+| `KUBE_CA_FILE` | CA bundle for an API server with a private CA. Example: `oc config view --raw --minify -o jsonpath='{..certificate-authority-data}' \| base64 -d > /tmp/ca.pem`. Without it the system trust store is used (ROSA API certificates are publicly trusted) |
+| `DEV_INSECURE_TLS=true` | Skips API server certificate verification (only with `DEV_MODE`; logs a warning). Prefer `KUBE_CA_FILE` |
+| `BIND_ADDRESS`, `DEV_ALLOW_REMOTE=true` | A non-loopback bind address is refused unless `DEV_ALLOW_REMOTE=true` (anyone who reaches it acts with your token) |
+| `DEV_FRONTEND_PORT` | The dev-server port accepted by the Host/Origin check (default 9000) |
+| `API_TARGET` | webpack dev-server proxy target (default `http://127.0.0.1:8080`) |
+| `PORT`, `STATIC_DIR`, `METRICS_PORT` | Listener port (8080), static directory (`./frontend/dist`), optional probe/metrics port |
 
 ## Getting Help
 
@@ -506,6 +467,6 @@ make help              # Show all targets and current configuration
 ## Notes
 
 - All `Makefile` variables can be overridden via environment, command line, or `.env` file.
-- The `.env` file is ignored by git (listed in `.gitignore`).
+- The `.env` file is not committed (listed in `.gitignore`).
 - Use `make env` to create a `.env` file from defaults.
-- The Go backend runs tests during the container build (`Containerfile` line 14: `RUN go test ./...`) — the build fails if tests fail.
+- The container build runs `go vet`, the Go tests, the frontend typecheck, ESLint and tests; any failure stops the build.

@@ -1,94 +1,84 @@
-# RHOAI Nightly Updater — Quick Start Guide
+# Quick Start: RHOAI Nightly Updater on a fresh ROSA HCP cluster
 
-Deploy the RHOAI Nightly Updater on your ROSA HCP (or OpenShift) cluster in about 10 minutes. Once running, you can install, update, and manage RHOAI nightly builds from a web UI — no `oc` commands needed for day-to-day use.
+About 15 minutes from an empty cluster to a running RHOAI nightly. Once the updater is deployed, day-to-day work happens in its web UI.
 
-## Prerequisites
+Before your first change, read **[How the tool keeps your cluster safe](../README.md#how-the-tool-keeps-your-cluster-safe)**.
 
-- A ROSA HCP or OpenShift cluster (OCP 4.14+)
-- `oc` CLI logged into the cluster (`oc login ...`)
-- A Quay.io pull token for `quay.io/rhoai` — get it from [Bitwarden](https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1) (Openshift AI devel collection). No access? Request in [#rhoai-devtestops-requests](https://redhat.enterprise.slack.com/archives/C07TF3MBMMW).
+## 0. Prerequisites
 
----
+- A ROSA HCP (or OpenShift) cluster, **OCP 4.15 or newer**. The `ose-oauth-proxy-rhel9` image has no v4.14 tag.
+- **cluster-admin** on that cluster. You need it to apply the template, and the UI allows changes only to cluster-admins (everyone else is read-only). On ROSA, the cluster owner can grant it to a user of the cluster's identity provider:
+  ```bash
+  rosa grant user cluster-admin --user=<username> --cluster=<cluster-name>
+  ```
+  For a quick break-glass login, `rosa create admin --cluster=<cluster-name>` creates a `cluster-admin` user and prints an `oc login` command. Syntax checked with `rosa` 1.2.57 (`rosa grant user --help`, `rosa create admin --help`).
+- `oc` (logged in: `oc whoami` shows your cluster-admin user), `git`, `make`, `curl`.
+- A Quay.io pull token for `quay.io/rhoai`. Get it from [Bitwarden](https://vault.bitwarden.com/#/vault?collectionId=75f54536-fa36-4ef9-8f1a-b09701646cac&itemId=e6e1fdde-6601-4e8b-8154-b211005518a1) (Openshift AI devel collection). No access? Ask in [#rhoai-devtestops-requests](https://redhat.enterprise.slack.com/archives/C07TF3MBMMW).
 
-## Fresh Cluster Setup (First Time Only)
-
-Follow Steps 1–8 below. After that, see [Day-to-Day Usage](#day-to-day-usage).
-
-### Step 1: Deploy the App
-
-```bash
-OCP_VERSION=$(oc version -o json | sed -n 's/.*"openshiftVersion": "\([0-9]*\.[0-9]*\).*/\1/p')
-echo "Detected OCP version: $OCP_VERSION"
-
-oc new-project rhoai-nightly-updater
-
-oc process -f deploy/template.yaml \
-  -p IMAGE=quay.io/juntao_wang/rhoai-nightly-updater:latest \
-  -p OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v${OCP_VERSION} \
-  -p NAMESPACE=rhoai-nightly-updater | oc apply -f -
-
-oc rollout status deployment/rhoai-nightly-updater -n rhoai-nightly-updater --timeout=120s
-```
-
-`:latest` follows the `main` branch: CI publishes it after the Go and frontend tests pass, and a pod using it pulls the newest image whenever it restarts. To stay on a fixed build, use the short commit tag that CI publishes alongside it (for example `:4503bb7`).
-
-### Step 2: Get the App URL
+## 1. Get the template
 
 ```bash
-ROUTE_URL=$(oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}')
-echo "Open: $ROUTE_URL"
-
-oc patch consolelink rhoai-nightly-updater --type merge -p "{\"spec\":{\"href\":\"$ROUTE_URL\"}}"
+git clone https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater.git
+cd rhoai-nightly-updater
 ```
 
-Open the URL in your browser. You'll be prompted to log in via OpenShift SSO. The app also appears in the OpenShift Console app launcher (grid icon).
+The template (`deploy/template.yaml`) and the `make` targets come from this checkout. Keep it up to date (`git pull`) before you upgrade.
 
-### Step 3: Run the Smoke Test (optional)
+## 2. Deploy
 
 ```bash
-./scripts/smoke-test.sh
+make deploy                 # namespace rhoai-nightly-updater; DRY_RUN=1 only validates
 ```
 
-Verifies pods, routes, RBAC, health probes, observability, and oauth-proxy config.
+`make deploy` does the following:
+- resolves `quay.io/juntao_wang/rhoai-nightly-updater:latest` to its digest;
+- checks that the image was built from a commit with the same `deploy/template.yaml` as your checkout;
+- creates the namespace and the oauth-proxy cookie Secret;
+- applies the template, picking the oauth-proxy tag that matches your cluster's OCP version;
+- waits for the rollout, then adds the app to the console's application menu.
 
-### Step 4: Configure Pull Secret
+It ends by printing `App URL: https://...`.
 
-In the app UI:
+If it stops with an `ERROR:` line:
+- *"cannot tell which commit ... was built from"*: the published image predates the revision label. Run `git pull`, then `make deploy ALLOW_TEMPLATE_MISMATCH=1` once.
+- *"deploy/template.yaml in this checkout differs"*: your checkout is newer or older than `:latest`. Run `git pull`, or wait for CI to publish. *"uncommitted changes"* means you edited the template locally.
+- *"cannot resolve ... to a digest"*: the tag doesn't exist, or quay.io is unreachable.
 
-1. You'll see a **One-Time Cluster Setup** section at the top
-2. Find the **Pull Secret** card (shows "Missing")
-3. Paste your `quay.io/rhoai` base64 auth token into the input field
-4. Click **Create Secret**
+Optional: `./scripts/smoke-test.sh rhoai-nightly-updater rhoai-nightly-updater` runs read-only checks of the live install.
 
-The Bitwarden and Slack request links are directly in the card.
+## 3. Open the app
 
-### Step 5: Create the Image Digest Mirror Set (IDMS)
+Open the printed URL, or use the grid icon in the OpenShift console (Red Hat Applications → RHOAI Nightly Updater). Sign in with OpenShift. To find the URL again:
 
-Click **View setup instructions** in the Image Mirror card, or run manually:
+```bash
+oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'
+```
 
-You need to be on the **Red Hat VPN** and have ROSA CLI access (separate from `oc`):
+## 4. Pull secret
+
+On the **Status** page, under **One-Time Cluster Setup**, find the **Pull secret** card. Paste the `quay.io/rhoai` token and click **Create secret**. The card links to Bitwarden and the Slack request channel. The tool stores it in `kube-system/additional-pull-secret` and replaces only the `quay.io/rhoai` entry.
+
+## 5. Image mirror (IDMS)
+
+RHOAI images reference `registry.redhat.io/rhoai`, and nightlies live in `quay.io/rhoai`. On ROSA HCP the mirror is created through OCM. You need the Red Hat VPN and ROSA CLI access (separate from `oc`):
 
 ```bash
 kinit <your-username>@IPA.REDHAT.COM
 rh-aws-saml-login                # select iaps-rhods-odh-dev
 rosa login --use-auth-code
-rosa whoami                       # verify access
-```
+rosa whoami
 
-Then create the image mirror:
-
-```bash
-rosa create image-mirror --cluster=<your-cluster-name> \
+rosa create image-mirror --cluster=<cluster-name> \
   --source=registry.redhat.io/rhoai \
   --mirrors=quay.io/rhoai
 ```
 
-> If you get a 403, you need OCM write access. Find the cluster owner and ask them to assign you access in OCM.
+(Syntax checked with `rosa create image-mirror --help`, rosa 1.2.57. `digest` is the default and only type.) A 403 means you lack OCM write access to the cluster; ask its owner.
 
-**For self-managed OpenShift** (not ROSA), apply the IDMS directly:
+Self-managed OpenShift instead:
 
 ```bash
-cat <<EOF | oc apply -f -
+oc apply -f - <<'EOF'
 apiVersion: config.openshift.io/v1
 kind: ImageDigestMirrorSet
 metadata:
@@ -101,102 +91,62 @@ spec:
 EOF
 ```
 
-> Wait **2–3 minutes** after this step for credentials to propagate to all cluster nodes.
+Allow 2–3 minutes for nodes to pick up the credentials and the mirror.
 
-### Step 6: Install the Nightly Build
+## 6. First update (install RHOAI)
 
-After the setup section disappears (both prerequisites green):
+When both setup cards are green:
+1. On the **Status** page, under **Update to latest**, the newest nightly is filled in. You can also pick a build under **Update to a specific build**, or paste one from [#rhoai-build-notifications](https://redhat.enterprise.slack.com/archives/C07ANR2U56C).
+2. Optional: run a **Dry run**. It changes nothing.
+3. Click **Install** (or **Update**) and confirm. Progress streams step by step. OLM gets up to 8 minutes to finish.
+4. When the operator is `Succeeded`, the Status page shows **No DataScienceCluster yet**. Click **Preview and create DataScienceCluster**. The defaults come from the installed operator's own example.
 
-1. The **Install Nightly Build** card appears with all preflight checks green
-2. The latest nightly image is auto-filled, or paste one from [#rhoai-build-notifications](https://redhat.enterprise.slack.com/archives/C07ANR2U56C)
-3. (Optional) Click **Dry Run** to preview changes without modifying anything
-4. Click **Update** to install
-5. Watch the live pipeline progress — each step streams in real time
+Then check the **Components** page (deployments in `redhat-ods-applications`) and the **Diagnostics** page (it scans on load).
 
-The tool automatically creates the `redhat-ods-operator` namespace, OperatorGroup, CatalogSource, Subscription, and waits for the InstallPlan. This typically takes 2–5 minutes.
+## Day to day
 
-### Step 7: Create the DataScienceCluster
+| Task | Where |
+|---|---|
+| Update to a new nightly | Status → Update to latest / Update to a specific build |
+| Re-deploy the installed version (same version, fresh pods) | Status → Re-deploy the same version |
+| Switch to stable, another nightly, or an exact older build | Status → Reinstall → choose the target (downgrades need a confirmation checkbox) |
+| Test an odh-dashboard PR or main | Dashboard Dev → choose RHOAI (Konflux) or ODH (OpenShift CI) build → Deploy; **Revert** when done |
+| MinIO, pipeline servers, MLflow | Test resources |
+| Which nightly contains PR #N? | Build Explorer → search `#123` (see [README](../README.md#build-explorer-pr-search)) |
+| Something looks wrong | Diagnostics → read the guidance; automatic fixes ask for confirmation |
 
-After the operator installs, a **DataScienceCluster Required** card appears:
+## Upgrading the updater itself
 
-1. Click **Create DataScienceCluster**
-2. The tool creates a `default-dsc` with all standard components enabled
+```bash
+git pull
+make upgrade DRY_RUN=1      # optional: resolve, check and server-side dry run only
+make upgrade                # deploys :latest by digest, keeps everyone signed in
+```
 
-The DSC tells the operator which components to deploy (dashboard, pipelines, model serving, etc.). Components can be toggled later from the **Components** page.
+- **First time only:** images that CI published before the revision label existed make `make upgrade` stop with "cannot tell which commit ... was built from". Run `make upgrade ALLOW_TEMPLATE_MISMATCH=1` once. Later images carry the label and pass the check.
+- To pin a build, use `make upgrade TAG=<tag>`. Tags are 8 characters (GitLab `CI_COMMIT_SHORT_SHA`, for example `4503bb7d`); older manual builds used 7. The commit's template must match your checkout; otherwise use rollback.
+- If a cluster operation is running, the restart waits for it to finish. The updater (UI included) is then offline for up to ~17 minutes.
 
-### Step 8: Verify
+## Rolling back the updater
 
-1. Go to the **Components** page — you should see deployments appearing in `redhat-ods-applications`
-2. Go to the **Diagnostics** page — run a scan, all checks should pass
-3. The operator card on the Status page should show a green "Succeeded" label
+```bash
+git fetch origin
+make rollback TAG=<commit-or-tag> DRY_RUN=1   # optional check
+make rollback TAG=<commit-or-tag>
+```
 
-Your cluster is now ready.
-
----
-
-## Existing Cluster (RHOAI Already Installed)
-
-If your cluster already has RHOAI installed (stable or nightly) and you want to use the Nightly Updater to manage updates:
-
-1. **Deploy the app** — follow Steps 1–3 above (same for all clusters)
-2. **Check prerequisites** — open the app and look at the status cards:
-   - **Pull Secret**: If you already have credentials for `quay.io/rhoai`, it should show "Ready". If not, configure it (Step 4).
-   - **Image Mirror (IDMS)**: If you already have an IDMS for `registry.redhat.io/rhoai`, it should show "Ready". If not, create it (Step 5).
-3. **Start using it** — the app detects your existing operator:
-   - The card says **"Upgrade to Nightly Build"** (not "Install")
-   - Your current operator version, source, and channel are displayed
-   - The **Reinstall Operator** card is available for switching between stable and nightly
-   - **Latest stable** discovers the newest GA version available in your cluster's Red Hat catalog and shows the selected channel and version
-   - The **Refresh operator** button re-pulls images from the current catalog
-4. **Skip DSC creation** — your existing DataScienceCluster is preserved. The DSC prompt only appears if no DSC exists.
-
-Operator lifecycle actions preserve your existing DSC and DSCI. To fix DSC fields after changing operator versions, use the Components page: **Remove invalid fields** preserves valid settings, while **Reset to version defaults** previews and replaces the DSC spec after confirmation.
-
----
-
-## Day-to-Day Usage
-
-Once RHOAI is installed, the Status page changes to show the operator status and daily workflows. The one-time setup section is replaced by a collapsible "Cluster setup" link for checking/updating prerequisites.
-
-| Task | How |
-|------|-----|
-| **Update to a new nightly** | Status page → enter image or click "Fetch latest" → Update |
-| **Refresh current nightly** | Status page → "Refresh operator" (re-pulls same version with latest images) |
-| **Rollback to stable** | Status page → Reinstall → select "Stable" → Reinstall Operator |
-| **Switch to a different nightly** | Status page → Reinstall → select "Nightly" → pick version → Reinstall |
-| **Reinstall an exact older build** | Status page → Reinstall → select "Custom version" → paste a Quay FBC image with `@sha256:` digest → optionally set a channel → Reinstall |
-| **Deploy a Dashboard PR** | Dashboard Dev page → enter PR number → Deploy |
-| **Deploy an MLflow PR** | Dashboard Dev page → Resources tab → enter PR number → Deploy |
-| **Set up MinIO + Pipelines** | Dashboard Dev page → Resources tab → Set up MinIO → Add Pipeline Server |
-| **Set up MLflow** | Dashboard Dev page → Resources tab → Set up MLflow |
-| **Troubleshoot issues** | Diagnostics page → Run Scan → use auto-fix buttons |
-| **Explore available builds** | Build Explorer page → browse tags, inspect FBC contents |
-| **Check/update pull secret** | Status page → expand "Cluster setup" → Test / Update |
-
----
+This applies that commit's own `deploy/template.yaml` with its image, keeps sessions, and waits for the rollout. Roll forward again with `make upgrade`. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. Details: [RUNBOOK §2](../RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater).
 
 ## Uninstall
 
 ```bash
-oc delete consolelink rhoai-nightly-updater
-oc delete project rhoai-nightly-updater
+make undeploy
 ```
 
-This removes only the nightly updater app. It does **not** remove the RHOAI operator or any resources it created.
+This removes the updater, its cluster-wide RBAC and its ConsoleLink. It does **not** remove RHOAI, the nightly catalog, the pull secret, the IDMS, or anything created from Test resources. Tear those down in the UI first.
 
----
+## Notes
 
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| Pod stuck in `ImagePullBackOff` | Check the oauth-proxy image tag matches your OCP version: `oc get deployment rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='{.spec.template.spec.containers[?(@.name=="oauth-proxy")].image}'` |
-| Pod stuck in `Pending` | Check node resources: `oc describe pod -n rhoai-nightly-updater -l app=rhoai-nightly-updater` |
-| 403 after login | Your user needs permission to list pods in `redhat-ods-operator` namespace |
-| "Cluster token not available" | ServiceAccount token not mounted — check `oc get sa rhoai-nightly-updater -n rhoai-nightly-updater` |
-| Update stuck on "Waiting for catalog" | The catalog pod is starting — wait 2 minutes, check Diagnostics page |
-| Images fail to pull after IDMS | Credential propagation takes 2–3 minutes — wait and retry |
-| Title still says "Upgrade" after deploy | Hard-refresh the browser (Cmd+Shift+R) to clear cached frontend |
-| ConsoleLink shows placeholder | Run: `oc patch consolelink rhoai-nightly-updater --type merge -p "{\"spec\":{\"href\":\"$(oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}')\"}}"` |
-
-For more detailed troubleshooting, see [RUNBOOK.md](../RUNBOOK.md).
+- Metrics and alerts work only with user workload monitoring enabled (OpenShift docs: "Enabling monitoring for user-defined projects"). It is off by default; see [RUNBOOK §7](../RUNBOOK.md#7-metrics-and-alerts).
+- Build Explorer PR search works better with a `GITHUB_TOKEN` (see [README: Configuration](../README.md#configuration)).
+- Problems: [RUNBOOK.md](../RUNBOOK.md). Everything the tool changes: [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md).
