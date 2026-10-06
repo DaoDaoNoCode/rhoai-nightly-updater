@@ -133,6 +133,12 @@ notes=$(IMAGE=quay.io/example/app $SH "$RELEASE" notes v1.0.0 v1.0.0)
 expect_eq "notes body" "First release." "$(printf '%s\n' "$notes" | head -1)"
 printf '%s\n' "$notes" | grep -qF 'Image: `quay.io/example/app:v1.0.0`' && pass || fail "notes: image line missing: $notes"
 printf '%s\n' "$notes" | grep -qF '(template revision 2)' && pass || fail "notes: template revision missing: $notes"
+printf 'echo installer\n' >"$WORK/install.sh"
+notes=$(INSTALLER="$WORK/install.sh" INSTALLER_URL=https://example.com/v1.0.0/install.sh $SH "$RELEASE" notes v1.0.0 v1.0.0)
+sum=$( (sha256sum "$WORK/install.sh" 2>/dev/null || shasum -a 256 "$WORK/install.sh") | cut -d' ' -f1)
+printf '%s\n' "$notes" | grep -qF "install.sh SHA-256: \`$sum\`" && pass || fail "notes: installer checksum missing: $notes"
+printf '%s\n' "$notes" | grep -qxF 'curl -fsSLO https://example.com/v1.0.0/install.sh' && pass || fail "notes: download command missing"
+printf '%s\n' "$notes" | grep -q 'curl.*| *bash' && fail "notes: piping curl into bash" || pass
 expect_fail "notes for a missing section" "no section [9.9.9]" $SH "$RELEASE" notes v9.9.9 v1.0.0
 
 # --- should-move -------------------------------------------------------------

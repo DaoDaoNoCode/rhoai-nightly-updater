@@ -9,7 +9,12 @@
 #
 # Usage:
 #   release.sh check VERSION [REF]     the release guard (default REF: HEAD)
-#   release.sh notes VERSION [REF]     release notes from CHANGELOG.md
+#   release.sh notes VERSION [REF]     release notes from CHANGELOG.md (with
+#                                      the installer's SHA-256 when INSTALLER
+#                                      names it)
+#   release.sh installer VERSION [REF] the install.sh release asset on stdout:
+#                                      REF's scripts/install.sh with REF's
+#                                      deploy/template.yaml embedded
 #   release.sh tag VERSION             `make release`: guard, then an annotated
 #                                      tag; prints (never runs) the push commands
 #   release.sh publish VERSION         CI: push the image tarball as :VERSION,
@@ -21,6 +26,8 @@
 #                                      from CURRENT ("-" = no such tag, other
 #                                      non-release text = unlabelled) to NEW
 #
+# Environment for notes: IMAGE, INSTALLER (the generated install.sh) and
+# INSTALLER_URL (where it is downloaded from). For installer: IMAGE.
 # Environment for publish and promote-latest: IMAGE (repository, no tag),
 # IMAGE_TARBALL (publish), CI_COMMIT_SHA, CI_COMMIT_SHORT_SHA, CRANE (the
 # crane binary, default crane; it must be logged in to the registry).
@@ -169,11 +176,63 @@ cmd_notes() {
 	[ -n "$body" ] || die "CHANGELOG.md at $ref has no section [${version#v}]."
 	rev=$(template_revision "$ref")
 	printf '%s\n\n---\n\n' "$body"
-	printf 'Install: `git checkout %s && make deploy`. Upgrade: `git checkout %s && make upgrade`.\n' "$version" "$version"
+	if [ -n "${INSTALLER:-}" ]; then
+		[ -f "$INSTALLER" ] || die "No installer at $INSTALLER."
+		sum=$(sha256 "$INSTALLER")
+		printf '**Install or upgrade without a clone** (needs `oc`, logged in as cluster-admin, and `curl`):\n\n'
+		printf '```sh\ncurl -fsSLO %s\n' "${INSTALLER_URL:-<the install.sh asset of this release>}"
+		printf 'echo "%s  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c\n' "$sum"
+		printf 'less install.sh   # read it first\nbash install.sh --dry-run\nbash install.sh\n```\n\n'
+		printf 'install.sh SHA-256: `%s`\n\n' "$sum"
+	fi
+	printf 'From a clone: `git checkout %s && make deploy` (first install) or `make upgrade`.\n' "$version"
 	printf 'Deployment template: `deploy/template.yaml` of this tag (template revision %s).\n' "$rev"
 	if [ -n "${IMAGE:-}" ]; then
 		printf 'Image: `%s:%s`\n' "$IMAGE" "$version"
 	fi
+}
+
+sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	else
+		shasum -a 256 "$1" | cut -d' ' -f1
+	fi
+}
+
+# --- installer ------------------------------------------------------------------
+
+EMBED_EOF=RHOAI_NIGHTLY_UPDATER_TEMPLATE_EOF
+
+# cmd_installer VERSION [REF]: REF's scripts/install.sh with REF's
+# deploy/template.yaml, commit, VERSION and IMAGE embedded, on stdout.
+cmd_installer() {
+	version=$1
+	ref=${2:-HEAD}
+	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	commit=$(git rev-parse --verify --quiet "$ref^{commit}") || die "$ref is not a commit of this repository."
+	image=${IMAGE:-}
+	printf '%s\n' "$image" | grep -Eq '^[a-z0-9][a-z0-9._:/-]*$' || die "IMAGE must be set to the image repository (got '$image')."
+	git cat-file -e "$commit:scripts/install.sh" 2>/dev/null || die "$ref has no scripts/install.sh."
+	git cat-file -e "$commit:deploy/template.yaml" 2>/dev/null || die "$ref has no deploy/template.yaml."
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	git show "$commit:scripts/install.sh" >"$tmp/install.sh"
+	git show "$commit:deploy/template.yaml" >"$tmp/template.yaml"
+	[ "$(tail -c 1 "$tmp/template.yaml" | od -An -c | tr -d ' ')" = '\n' ] || die "deploy/template.yaml must end with a newline."
+	! grep -qx "$EMBED_EOF" "$tmp/template.yaml" || die "deploy/template.yaml contains the line $EMBED_EOF."
+	begin=$(grep -n '^# @@EMBEDDED-RELEASE-BEGIN@@$' "$tmp/install.sh" | cut -d: -f1)
+	end=$(grep -n '^# @@EMBEDDED-RELEASE-END@@$' "$tmp/install.sh" | cut -d: -f1)
+	[ -n "$begin" ] && [ -n "$end" ] && [ "$begin" -lt "$end" ] || die "scripts/install.sh has no embedded-release block."
+	head -n "$begin" "$tmp/install.sh"
+	printf "EMBEDDED_VERSION='%s'\n" "$version"
+	printf "EMBEDDED_COMMIT='%s'\n" "$commit"
+	printf "EMBEDDED_IMAGE='%s'\n" "$image"
+	printf 'embedded_template() {\n'
+	printf "\tcat <<'%s'\n" "$EMBED_EOF"
+	cat "$tmp/template.yaml"
+	printf '%s\n}\n' "$EMBED_EOF"
+	tail -n "+$end" "$tmp/install.sh"
 }
 
 # --- tag (make release) -------------------------------------------------------
@@ -360,12 +419,18 @@ cmd_gitlab_release() {
 	404) ;;
 	*) die "Cannot check for the GitLab Release $version (HTTP $code)." ;;
 	esac
+	: "${INSTALLER:?INSTALLER (the generated install.sh) is not set}"
+	# The link points at the installer job's artifact (kept forever); the
+	# Release serves it under a permanent URL as well.
+	artifact_url="$CI_PROJECT_URL/-/jobs/artifacts/$version/raw/$INSTALLER?job=${INSTALLER_JOB:-release-installer}"
+	INSTALLER_URL=${INSTALLER_URL:-$CI_PROJECT_URL/-/releases/$version/downloads/install.sh}
 	notes=$(cmd_notes "$version" HEAD)
 	rev=$(template_revision HEAD)
 	tmp=$(mktemp)
 	trap 'rm -f "$tmp"' EXIT
-	printf '{"tag_name":%s,"name":%s,"description":%s,"assets":{"links":[{"name":%s,"url":%s,"link_type":"other"}]}}\n' \
+	printf '{"tag_name":%s,"name":%s,"description":%s,"assets":{"links":[{"name":%s,"url":%s,"direct_asset_path":"/install.sh","link_type":"package"},{"name":%s,"url":%s,"link_type":"other"}]}}\n' \
 		"$(json_string "$version")" "$(json_string "$version")" "$(json_string "$notes")" \
+		"$(json_string "install.sh (SHA-256 $(sha256 "$INSTALLER"))")" "$(json_string "$artifact_url")" \
 		"$(json_string "deploy/template.yaml (template revision $rev)")" \
 		"$(json_string "$CI_PROJECT_URL/-/raw/$version/deploy/template.yaml")" >"$tmp"
 	curl -sS --fail-with-body -o /dev/null --header "JOB-TOKEN: $CI_JOB_TOKEN" \
@@ -387,6 +452,7 @@ shift
 case "$cmd" in
 check) [ $# -ge 1 ] || usage; cmd_check "$@" ;;
 notes) [ $# -ge 1 ] || usage; cmd_notes "$@" ;;
+installer) [ $# -ge 1 ] || usage; cmd_installer "$@" ;;
 tag) [ $# -eq 1 ] || usage; cmd_tag "$1" ;;
 publish) [ $# -eq 1 ] || usage; cmd_publish "$1" ;;
 promote-latest) [ $# -eq 1 ] || usage; cmd_promote_latest "$1" ;;
