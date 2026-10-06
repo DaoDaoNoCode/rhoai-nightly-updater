@@ -583,7 +583,13 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	if recoveryErr != nil {
 		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
 	}
+	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
+		return fail(blocked, "prerequisites")
+	}
 	recovery = captured
+	if note := captured.recordedNote(); note != "" {
+		logs = append(logs, note)
+	}
 
 	// --- Step 3: apply_catalog_source ---
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
@@ -685,7 +691,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 
 	// --- Step 7: apply_subscription ---
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription..."})
-	newSub := buildSubscription(recovery.subscription, CatalogName, nightlyChannel)
+	newSub := buildSubscription(recovery.subscriptionBase(), CatalogName, nightlyChannel)
 	recovery.subscriptionChanged = true
 	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, func(attempt int, err error, willRetry bool, _ time.Duration) {
 		if willRetry {
@@ -995,8 +1001,12 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	}
 
 	if !isNightly {
+		// No Subscription is fine: a fresh cluster, or one where an
+		// interrupted operation removed it. The stable target comes from the
+		// stable catalog, and the Subscription settings recorded before the
+		// last operation (if any) are carried over.
 		if sub.State == "Not Installed" {
-			return fail("No operator Subscription found. Install the operator before using reinstall.", "validation")
+			logs = append(logs, "No operator Subscription exists; Reinstall creates one for the stable channel")
 		}
 		target, discoveryErr := resolveStableTarget(c)
 		if discoveryErr != nil {
@@ -1082,7 +1092,13 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	if recoveryErr != nil {
 		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
 	}
+	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
+		return fail(blocked, "prerequisites")
+	}
 	recovery = captured
+	if note := captured.recordedNote(); note != "" {
+		logs = append(logs, note)
+	}
 
 	// --- Step 3: delete_catalog_source ---
 	emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
@@ -1254,7 +1270,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel, approveCSV str
 // previous spec.config and approval mode) and waits for OLM's verdict.
 // approveCSV is the only CSV a Manual-approval InstallPlan may install.
 func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV string, recovery *operatorRecovery, logs []string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
-	newSub := buildSubscription(recovery.subscription, source, channel)
+	newSub := buildSubscription(recovery.subscriptionBase(), source, channel)
 	recovery.subscriptionChanged = true
 	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, func(attempt int, err error, willRetry bool, backoff time.Duration) {
 		if willRetry {
@@ -1471,15 +1487,41 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to look up CSV: %v", err), errorCodeOr(err, "prerequisites"))
 	}
-	if csv.Name == "" {
-		recordActivity = false
-		msg := "No RHOAI operator CSV found. The operator may still be installing -- check the status and try again once the CSV appears."
-		logs = append(logs, "No CSV with displayName 'Red Hat OpenShift AI' found in the redhat-ods-operator namespace.")
-		emit(UpdateStepEvent{Step: "verify_csv", Status: "success", Message: msg})
-		return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
+	sub, err := getSubscription(c)
+	if err != nil {
+		return fail(fmt.Sprintf("Failed to get Subscription: %v", err), errorCodeFromK8sErr(err))
 	}
-	csvName = csv.Name
-	logs = append(logs, fmt.Sprintf("Current CSV: %s (%s)", csv.Name, csv.Phase))
+	subMissing := sub.State == "Not Installed"
+	// target is the CSV Refresh re-deploys: the installed one or, when an
+	// interrupted operation removed the Subscription and CSV, the one
+	// recorded before that operation.
+	target := csv.Name
+	var recorded *subscriptionSnapshot
+	if subMissing {
+		recorded, err = loadSubscriptionSnapshot(c)
+		if err != nil {
+			return fail(fmt.Sprintf("Failed to read the recorded Subscription: %v", err), errorCodeOr(err, "prerequisites"))
+		}
+	}
+	if csv.Name == "" {
+		switch {
+		case !subMissing:
+			recordActivity = false
+			msg := "No RHOAI operator CSV found. The operator may still be installing -- check the status and try again once the CSV appears."
+			logs = append(logs, "No CSV with displayName 'Red Hat OpenShift AI' found in the redhat-ods-operator namespace.")
+			emit(UpdateStepEvent{Step: "verify_csv", Status: "success", Message: msg})
+			return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
+		case recorded == nil || recorded.InstalledCSV == "":
+			recordActivity = false
+			return fail("No RHOAI operator is installed and no previous Subscription is recorded, so there is nothing to refresh. Nothing was changed. Use Reinstall or Update to install the operator.", "prerequisites")
+		}
+		target = recorded.InstalledCSV
+		logs = append(logs, fmt.Sprintf("No Subscription and no CSV exist (an earlier operation was interrupted). Re-installing %s with the Subscription recorded at %s.", target, recorded.RecordedAt))
+	}
+	csvName = target
+	if csv.Name != "" {
+		logs = append(logs, fmt.Sprintf("Current CSV: %s (%s)", csv.Name, csv.Phase))
+	}
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Refresh")
 	if guardErr != nil {
 		return fail(guardErr.Error(), errorCodeFromK8sErr(guardErr))
@@ -1488,7 +1530,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		recordActivity = false
 		return fail(refusal, errorCodeDashboardDevActive)
 	}
-	emit(UpdateStepEvent{Step: "verify_csv", Status: "success", Message: fmt.Sprintf("CSV found: %s", csv.Name), Detail: csv.Name})
+	emit(UpdateStepEvent{Step: "verify_csv", Status: "success", Message: fmt.Sprintf("CSV to re-deploy: %s", target), Detail: target})
 
 	// --- Step 2: save_snapshot ---
 	emit(UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
@@ -1503,15 +1545,18 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 
 	// --- Step 3: get_subscription ---
 	emit(UpdateStepEvent{Step: "get_subscription", Status: "running", Message: "Reading current Subscription..."})
-
-	sub, err := getSubscription(c)
-	if err != nil {
-		return fail(fmt.Sprintf("Failed to get Subscription: %v", err), errorCodeFromK8sErr(err))
+	if subMissing && recorded != nil {
+		// A crash between deleting and recreating the Subscription leaves
+		// none; the spec recorded before that operation is used instead.
+		spec := recorded.Spec
+		sub.Source, _ = spec["source"].(string)
+		sub.Channel, _ = spec["channel"].(string)
+		logs = append(logs, fmt.Sprintf("No Subscription exists; using the one recorded at %s", recorded.RecordedAt))
 	}
-	if sub.State == "Not Installed" || sub.Source == "" || sub.Channel == "" {
+	if sub.Source == "" || sub.Channel == "" {
 		// Refresh recreates the Subscription from its own source and channel;
 		// without them it would leave the operator uninstalled.
-		return fail("The operator Subscription is missing or has no source/channel, so it cannot be recreated. Nothing was changed; use Reinstall instead.", "prerequisites")
+		return fail("The operator Subscription is missing or has no source/channel, and none was recorded, so it cannot be recreated. Nothing was changed; use Reinstall instead.", "prerequisites")
 	}
 	logs = append(logs, fmt.Sprintf("Subscription: source=%s, channel=%s", sub.Source, sub.Channel))
 
@@ -1530,20 +1575,23 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// OpenShift procedure for installing a specific Operator version). With
 	// Automatic approval OLM would upgrade right after any pin, so Refresh
 	// only runs when the channel head is the installed CSV.
+	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
+		return fail(blocked, "prerequisites")
+	}
 	manual := false
-	if spec, ok := captured.subscription["spec"].(map[string]interface{}); ok {
+	if spec, ok := captured.subscriptionBase()["spec"].(map[string]interface{}); ok {
 		manual = spec["installPlanApproval"] == "Manual"
 	}
 	if !manual {
 		head, headErr := channelHeadCSV(c, sub.Source, sub.Channel)
 		switch {
 		case headErr != nil:
-			return fail(fmt.Sprintf("Cannot check which version channel %s of %s would install, so Refresh cannot confirm it re-deploys %s: %v. Nothing was changed.", sub.Channel, sub.Source, csv.Name, headErr), "prerequisites")
-		case head != csv.Name:
+			return fail(fmt.Sprintf("Cannot check which version channel %s of %s would install, so Refresh cannot confirm it re-deploys %s: %v. Nothing was changed.", sub.Channel, sub.Source, target, headErr), "prerequisites")
+		case head != target:
 			recordActivity = false
-			return fail(fmt.Sprintf("Refresh re-deploys the installed %s, but channel %s of %s now installs %s, so recreating the Subscription would change the version. Nothing was changed. Use Update or Reinstall to move to %s.", csv.Name, sub.Channel, sub.Source, nonEmpty(head, "nothing"), nonEmpty(head, "another version")), "validation")
+			return fail(fmt.Sprintf("Refresh re-deploys %s, but channel %s of %s now installs %s, so recreating the Subscription would change the version. Nothing was changed. Use Update or Reinstall to move to %s.", target, sub.Channel, sub.Source, nonEmpty(head, "nothing"), nonEmpty(head, "another version")), "validation")
 		}
-		logs = append(logs, fmt.Sprintf("OK: channel %s still installs %s", sub.Channel, csv.Name))
+		logs = append(logs, fmt.Sprintf("OK: channel %s still installs %s", sub.Channel, target))
 	}
 	if revertDashboard {
 		if err := RevertDashboardDevForOperation(c); err != nil {
@@ -1567,23 +1615,30 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "success", Message: "Subscription deleted"})
 
 	// --- Step 5: delete_csv ---
-	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
-	logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
-	if _, csvDelErr := c.delete(csvPath(csv.Name)); csvDelErr != nil && !IsK8sError(csvDelErr, 404) {
-		return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
+	if csv.Name == "" {
+		emit(UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: "No current CSV"})
+	} else {
+		emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
+		logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
+		if _, csvDelErr := c.delete(csvPath(csv.Name)); csvDelErr != nil && !IsK8sError(csvDelErr, 404) {
+			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
+		}
+		recovery.csvRemoved = true
+		emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: fmt.Sprintf("CSV %s deleted", csv.Name)})
 	}
-	recovery.csvRemoved = true
-	logs = append(logs, "OK: CSV deleted")
-	emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: fmt.Sprintf("CSV %s deleted", csv.Name)})
 
 	// --- Step 6: wait_cleanup ---
 	emit(UpdateStepEvent{Step: "wait_cleanup", Status: "running", Message: "Waiting for the CSV to be removed..."})
-	gone, err := waitForCSVGone(c, csv.Name)
-	if err != nil {
-		return &types.OperationResponse{Success: false, Message: "Operation cancelled while waiting for the CSV to be removed.", Logs: logs}, err
-	}
-	if !gone {
-		logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
+	if csv.Name != "" {
+		gone, err := waitForCSVGone(c, csv.Name)
+		if err != nil {
+			return &types.OperationResponse{Success: false, Message: "Operation cancelled while waiting for the CSV to be removed.", Logs: logs}, err
+		}
+		if gone {
+			logs = append(logs, "OK: CSV deleted")
+		} else {
+			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
+		}
 	}
 	select {
 	case <-c.ctx.Done():
@@ -1595,10 +1650,10 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// --- Step 7: recreate_subscription ---
 	emit(UpdateStepEvent{Step: "recreate_subscription", Status: "running", Message: "Recreating Subscription..."})
 	logs = append(logs, "Recreating Subscription...")
-	newSub := buildSubscription(recovery.subscription, sub.Source, sub.Channel)
+	newSub := buildSubscription(recovery.subscriptionBase(), sub.Source, sub.Channel)
 	if manual {
-		newSub["spec"].(map[string]interface{})["startingCSV"] = csv.Name
-		logs = append(logs, fmt.Sprintf("The Subscription uses Manual approval: startingCSV is pinned to %s and only its InstallPlan is approved", csv.Name))
+		newSub["spec"].(map[string]interface{})["startingCSV"] = target
+		logs = append(logs, fmt.Sprintf("The Subscription uses Manual approval: startingCSV is pinned to %s and only its InstallPlan is approved", target))
 	}
 	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, func(attempt int, err error, _ bool, _ time.Duration) {
 		slog.Warn("Subscription recreation failed", "attempt", attempt, "error", err)
@@ -1616,16 +1671,16 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to reinstall the operator..."})
 	logs = append(logs, "Waiting for OLM to reinstall the operator...")
-	outcome := waitForOperatorInstall(c, "verify_installplan", emit, &logs, recovery, csv.Name)
+	outcome := waitForOperatorInstall(c, "verify_installplan", emit, &logs, recovery, target)
 	if !outcome.succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
 		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: logs, ErrorCode: outcome.errorCode}, nil
 	}
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "success", Message: fmt.Sprintf("Operator re-deployed: %s", outcome.csv), Detail: outcome.csv})
-	if outcome.csv != csv.Name {
+	if outcome.csv != target {
 		// Checked, not assumed: the catalog changed between the check and
 		// the install.
-		msg := fmt.Sprintf("Operator re-deployed, but OLM installed %s instead of the previous %s (the catalog changed during the refresh).", outcome.csv, csv.Name)
+		msg := fmt.Sprintf("Operator re-deployed, but OLM installed %s instead of the previous %s (the catalog changed during the refresh).", outcome.csv, target)
 		logs = append(logs, "Warning: "+msg)
 		return &types.OperationResponse{Success: true, Message: strings.TrimSpace(msg + " " + outcome.note), Logs: logs}, nil
 	}

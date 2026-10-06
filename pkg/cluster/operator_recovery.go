@@ -45,6 +45,12 @@ type operatorRecovery struct {
 	// operation stopped waiting; the new state is kept instead of undone.
 	keepNewInstall bool
 	attemptCSVs    []string
+	// recorded is the Subscription recorded before an earlier operation,
+	// loaded only when no Subscription exists now (a crash removed it). It
+	// provides the settings for the new Subscription, but the restore never
+	// re-applies it: the restore puts back what existed before this
+	// operation.
+	recorded *subscriptionSnapshot
 	// preCSVs maps each RHOAI CSV that existed before the operation to its
 	// UID. A CSV not in it (or with another UID) was created by the attempt,
 	// even when the operation deleted nothing (a first install).
@@ -102,7 +108,42 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 			*resource.target = obj
 		}
 	}
+	if r.subscription != nil {
+		// Recorded so a later operation can recreate it after a crash left
+		// no Subscription. Failing to record it never blocks the operation.
+		if err := saveSubscriptionSnapshot(c, r.subscription); err != nil {
+			slog.Warn("could not record the operator Subscription", "error", err)
+		}
+	} else if rec, err := loadSubscriptionSnapshot(c); err != nil {
+		slog.Warn("could not read the recorded operator Subscription", "error", err)
+	} else {
+		r.recorded = rec
+	}
 	return r, nil
+}
+
+// subscriptionBase is the Subscription whose settings (spec.config, approval
+// mode) a new Subscription carries over: the live one, else the recorded one.
+func (r *operatorRecovery) subscriptionBase() map[string]interface{} {
+	if r == nil {
+		return nil
+	}
+	if r.subscription != nil {
+		return r.subscription
+	}
+	if r.recorded != nil && r.recorded.Spec != nil {
+		return map[string]interface{}{"spec": r.recorded.Spec}
+	}
+	return nil
+}
+
+// recordedNote is logged when the recorded Subscription replaces a missing
+// live one.
+func (r *operatorRecovery) recordedNote() string {
+	if r == nil || r.subscription != nil || r.recorded == nil {
+		return ""
+	}
+	return fmt.Sprintf("No operator Subscription exists; its settings (config, approval mode) are taken from the Subscription recorded at %s", r.recorded.RecordedAt)
 }
 
 // restore puts back what a failed operation changed:

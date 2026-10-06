@@ -685,6 +685,9 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 	}
 	if recovery != nil {
 		recovery.restore(c, r, t.send)
+		if r.Success {
+			recordLiveSubscription(c)
+		}
 	}
 	if record != nil {
 		record(r.Success)
@@ -720,4 +723,62 @@ func adminAckNote(c *Client) string {
 		}
 	}
 	return ""
+}
+
+// foreignSubscriptionRefusal reports another Subscription for the
+// rhods-operator package in the operator namespace (for example one created
+// by GitOps under a different name). The tool manages only the Subscription
+// named rhods-operator; creating it next to another one for the same
+// package makes OLM fail resolution, and the other one would reinstall the
+// operator behind the tool's back. The ServiceAccount cannot list
+// Subscriptions, so they are found through the InstallPlans OLM creates for
+// them: each carries an ownerReference to its Subscription (live:
+// install-wpkpm is owned by Subscription/rhods-operator). It returns "" when
+// there is none; a failed lookup refuses, since nothing was changed yet.
+func foreignSubscriptionRefusal(c *Client) string {
+	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
+	if IsK8sError(err, 404) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", SubName, SubNS, err)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name            string `json:"name"`
+				OwnerReferences []struct {
+					Kind string `json:"kind"`
+					Name string `json:"name"`
+				} `json:"ownerReferences"`
+			} `json:"metadata"`
+			Spec struct {
+				CSVNames []string `json:"clusterServiceVersionNames"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)
+	}
+	var found []string
+	for _, ip := range list.Items {
+		rhoai := false
+		for _, csv := range ip.Spec.CSVNames {
+			rhoai = rhoai || strings.HasPrefix(csv, SubName+".")
+		}
+		if !rhoai {
+			continue
+		}
+		for _, o := range ip.Metadata.OwnerReferences {
+			if o.Kind == "Subscription" && o.Name != SubName && !containsString(found, o.Name) {
+				found = append(found, o.Name)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Another Subscription (%s) in %s installs the %s package. The tool manages only the Subscription named %s; creating it next to another one makes OLM fail to resolve, and the other one would reinstall the operator. "+
+		"Nothing was changed. If the operator is managed elsewhere (for example by GitOps), make changes there, or delete that Subscription first.",
+		strings.Join(found, ", "), SubNS, SubName, SubName)
 }

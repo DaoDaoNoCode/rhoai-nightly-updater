@@ -875,10 +875,12 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 		}
 	}
 }
+
+// A missing Subscription no longer stops "Reinstall to stable" (R5-F5): a
+// crash may have removed it. The stable target comes from the catalog, so
+// here the failure is the unreadable catalog, not the Subscription.
 func TestReinstall_Subscription404(t *testing.T) {
 	subPath := fmt.Sprintf("/apis/operators.coreos.com/v1alpha1/namespaces/%s/subscriptions/%s", SubNS, SubName)
-
-	// Use the basic mock client — unregistered paths return 404 by default.
 	client, cleanup := newMockClient(map[string]mockResponse{
 		subPath: {
 			body:       `{"kind":"Status","status":"Failure","message":"subscriptions.operators.coreos.com \"rhods-operator\" not found","reason":"NotFound","code":404}`,
@@ -888,17 +890,8 @@ func TestReinstall_Subscription404(t *testing.T) {
 	defer cleanup()
 
 	result, err := Reinstall(client, "stable", "", "")
-	if err != nil {
-		t.Fatalf("Reinstall should not return a Go error, got: %v", err)
-	}
-	if result.Success {
-		t.Error("expected Success=false when Subscription returns 404")
-	}
-	if result.Message == "" {
-		t.Error("expected a non-empty error message")
-	}
-	if !strings.Contains(result.Message, "subscription") && !strings.Contains(result.Message, "Subscription") {
-		t.Errorf("expected error message to mention subscription, got: %s", result.Message)
+	if err != nil || result.Success || !strings.Contains(result.Message, "Cannot determine the stable reinstall target") {
+		t.Fatalf("result = %+v, %v", result, err)
 	}
 }
 
@@ -1212,7 +1205,7 @@ func TestRefreshOperator_Success(t *testing.T) {
 
 	// Verify logs contain the key steps
 	logText := strings.Join(result.Logs, "\n")
-	for _, want := range []string{"CSV deleted", "Subscription deleted", "Subscription recreated"} {
+	for _, want := range []string{"Deleting CSV", "Subscription deleted", "Subscription recreated"} {
 		if !strings.Contains(logText, want) {
 			t.Errorf("logs should contain %q, got:\n%s", want, logText)
 		}

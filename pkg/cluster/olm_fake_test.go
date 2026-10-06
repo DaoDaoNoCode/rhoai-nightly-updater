@@ -33,6 +33,7 @@ type fakeOLM struct {
 	platform     string // Platform "default" JSON, "" = absent
 	failDelete   map[string]int
 	stuckCSVs    map[string]bool // CSVs whose DELETE only sets deletionTimestamp (a finalizer that never finishes)
+	recordedSub  string          // data.operator-subscription of the snapshot ConfigMap
 	csvSeq       int
 	verifyState  string // state of verification catalogs, "" = READY
 	mainChannels *string
@@ -214,8 +215,25 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = io.WriteString(w, f.platform)
+	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == subscriptionSnapshotManager:
+		data, _ := body["data"].(map[string]interface{})
+		f.recordedSub, _ = data[subscriptionSnapshotKey].(string)
+		_, _ = io.WriteString(w, `{}`)
+	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodGet:
+		writeJSON(w, map[string]interface{}{"data": map[string]interface{}{subscriptionSnapshotKey: f.recordedSub}})
 	case strings.Contains(p, "/configmaps/") && r.Method != http.MethodGet:
 		_, _ = io.WriteString(w, `{}`)
+	case strings.HasSuffix(p, "/installplans"):
+		var items []interface{}
+		for name, ip := range f.installPlans {
+			meta, _ := ip["metadata"].(map[string]interface{})
+			if meta == nil {
+				meta = map[string]interface{}{}
+			}
+			meta["name"] = name
+			items = append(items, map[string]interface{}{"metadata": meta, "spec": ip["spec"]})
+		}
+		writeJSON(w, map[string]interface{}{"items": items})
 	default:
 		notFound(w)
 	}

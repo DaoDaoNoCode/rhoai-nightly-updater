@@ -726,3 +726,95 @@ func TestRefresh_RefusesWhenTheChannelHeadMoved(t *testing.T) {
 		t.Fatalf("Refresh changed the cluster: %v", w)
 	}
 }
+
+// R5-F5: the Subscription is recorded before an operation, so after a crash
+// that left no Subscription and no CSV, Refresh re-installs the recorded
+// version with the recorded settings instead of dead-ending.
+func TestRefresh_AfterACrashUsesTheRecordedSubscription(t *testing.T) {
+	config := map[string]interface{}{"nodeSelector": map[string]interface{}{"node-role.kubernetes.io/infra": ""}}
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"config": config})
+	c := f.client(context.Background())
+	if _, err := captureOperatorRecovery(c); err != nil { // an operation starts and records it
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	recorded := f.recordedSub
+	f.sub, f.csvs = nil, map[string]map[string]interface{}{} // the pod died mid-operation
+	f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+	f.mu.Unlock()
+	if !strings.Contains(recorded, `"installedCSV":"rhods-operator.3.6.0"`) {
+		t.Fatalf("recorded = %s", recorded)
+	}
+	r, err := RefreshOperator(c)
+	if err != nil || !r.Success || !strings.Contains(r.Message, "rhods-operator.3.6.0 is installed again") {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	applies := f.subscriptionApplies()
+	if spec := applies[0]; spec["source"] != CatalogName || spec["channel"] != "stable-3.x" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) {
+		t.Fatalf("recreated Subscription = %v", spec)
+	}
+}
+
+// R5-F5: without a recorded Subscription, Refresh explains instead of
+// claiming success.
+func TestRefresh_NothingInstalledNothingRecorded(t *testing.T) {
+	f := newFakeOLM(t)
+	r, _ := RefreshOperator(f.client(context.Background()))
+	if r.Success || r.ErrorCode != "prerequisites" || !strings.Contains(r.Message, "nothing to refresh") {
+		t.Fatalf("result = %+v", r)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
+	}
+}
+
+// R5-F5: "Reinstall to stable" works with no Subscription and no CSV, and
+// carries over the recorded settings.
+func TestReinstallStable_WithoutASubscription(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	f := newFakeOLM(t)
+	f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.5.1","currentCSVDesc":{"version":"3.5.1"}}]`
+	f.recordedSub = `{"recordedAt":"2026-10-01T00:00:00Z","installedCSV":"rhods-operator.3.6.0","spec":{"source":"rhoai-catalog-dev","channel":"stable-3.x","name":"rhods-operator","installPlanApproval":"Automatic","config":{"env":[{"name":"X","value":"1"}]}}}`
+	f.onSubscribe = olmInstalls("rhods-operator.3.5.1")
+	r, err := Reinstall(f.client(context.Background()), "stable", "", "")
+	if err != nil || !r.Success {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	spec := f.subscriptionApplies()[0]
+	if spec["source"] != "redhat-operators" || !strings.Contains(fmt.Sprint(spec["config"]), "X") {
+		t.Fatalf("Subscription = %v", spec)
+	}
+}
+
+// R5-F9: another Subscription for the package (seen as the owner of an
+// InstallPlan) stops every operation before it changes anything.
+func TestOperationsRefuseAForeignSubscription(t *testing.T) {
+	for _, op := range []string{"update", "reinstall", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.installPlans["install-gitops"] = map[string]interface{}{
+				"metadata": map[string]interface{}{"ownerReferences": []interface{}{map[string]interface{}{"kind": "Subscription", "name": "rhoai-gitops"}}},
+				"spec":     map[string]interface{}{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+			}
+			c := f.client(context.Background())
+			var r *types.OperationResponse
+			switch op {
+			case "update":
+				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+			case "reinstall":
+				r, _ = Reinstall(c, "nightly", testNightlyImage, "")
+			case "refresh":
+				r, _ = RefreshOperator(c)
+			}
+			if r.Success || !strings.Contains(r.Message, "Another Subscription (rhoai-gitops)") {
+				t.Fatalf("result = %+v", r)
+			}
+			for _, w := range f.writes() {
+				if !strings.Contains(w, "-verify-") {
+					t.Fatalf("changed the cluster: %v", f.writes())
+				}
+			}
+		})
+	}
+}
