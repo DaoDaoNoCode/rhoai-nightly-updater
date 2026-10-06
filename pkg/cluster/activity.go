@@ -25,12 +25,13 @@ const (
 )
 
 // Retention per category, so frequent Dashboard Dev changes do not evict
-// the operator history. At most 50+30+20+20+20 = 140 entries are kept.
+// the operator history. At most 50+30+20+20+20+20 = 160 entries are kept.
 var activityRetention = map[string]int{
-	"operator":      50,
-	"dashboard-dev": 30,
-	"setup":         20,
-	"diagnostics":   20,
+	"operator":       50,
+	"dashboard-dev":  30,
+	"test-resources": 20,
+	"setup":          20,
+	"diagnostics":    20,
 }
 
 // activityActions maps each recorded action to its category and label.
@@ -43,14 +44,14 @@ var activityActions = map[string][2]string{
 	"deploy-dashboard-pr":           {"dashboard-dev", "Dashboard PR deployed"},
 	"deploy-dashboard-main":         {"dashboard-dev", "Dashboard main deployed"},
 	"revert-dashboard":              {"dashboard-dev", "Dashboard reverted"},
-	"setup-minio":                   {"dashboard-dev", "MinIO set up"},
-	"teardown-minio":                {"dashboard-dev", "MinIO torn down"},
-	"setup-pipeline-server":         {"dashboard-dev", "Pipeline server set up"},
-	"teardown-pipeline-server":      {"dashboard-dev", "Pipeline server torn down"},
-	"setup-mlflow":                  {"dashboard-dev", "MLflow set up"},
-	"teardown-mlflow":               {"dashboard-dev", "MLflow torn down"},
-	"deploy-mlflow-pr":              {"dashboard-dev", "MLflow PR deployed"},
-	"revert-mlflow":                 {"dashboard-dev", "MLflow reverted"},
+	"setup-minio":                   {"test-resources", "MinIO set up"},
+	"teardown-minio":                {"test-resources", "MinIO torn down"},
+	"setup-pipeline-server":         {"test-resources", "Pipeline server set up"},
+	"teardown-pipeline-server":      {"test-resources", "Pipeline server torn down"},
+	"setup-mlflow":                  {"test-resources", "MLflow set up"},
+	"teardown-mlflow":               {"test-resources", "MLflow torn down"},
+	"deploy-mlflow-pr":              {"test-resources", "MLflow PR deployed"},
+	"revert-mlflow":                 {"test-resources", "MLflow reverted"},
 	"create-pull-secret":            {"setup", "Pull secret configured"},
 	"create-dsc":                    {"setup", "DataScienceCluster created"},
 	"repair-dsc":                    {"setup", "DataScienceCluster repaired"},
@@ -61,6 +62,28 @@ var activityActions = map[string][2]string{
 	"fix-maas-gateway":              {"diagnostics", "MaaS gateway fixed"},
 	"disable-component":             {"diagnostics", "Component disabled"},
 	"restart-operator":              {"diagnostics", "Operator restarted"},
+}
+
+// activityFailedLabels names a failed or refused action; actions without an
+// entry get "<label> (failed)" in the UI.
+var activityFailedLabels = map[string]string{
+	"update":                   "Update to nightly failed",
+	"refresh":                  "Operator refresh failed",
+	"reinstall":                "Operator reinstall failed",
+	"deploy-dashboard-pr":      "Dashboard PR deploy failed",
+	"deploy-dashboard-main":    "Dashboard main deploy failed",
+	"revert-dashboard":         "Dashboard revert failed",
+	"setup-minio":              "MinIO setup failed",
+	"teardown-minio":           "MinIO teardown failed",
+	"setup-pipeline-server":    "Pipeline server setup failed",
+	"teardown-pipeline-server": "Pipeline server teardown failed",
+	"setup-mlflow":             "MLflow setup failed",
+	"teardown-mlflow":          "MLflow teardown failed",
+	"deploy-mlflow-pr":         "MLflow PR deploy failed",
+	"revert-mlflow":            "MLflow revert failed",
+	"create-pull-secret":       "Pull secret update failed",
+	"create-dsc":               "DataScienceCluster creation failed",
+	"repair-dsc":               "DataScienceCluster repair failed",
 }
 
 func activityCategory(action string) string {
@@ -96,7 +119,9 @@ func activityBuild(detail string) string {
 // describeActivity fills the read-time fields of an entry.
 func describeActivity(e *types.ActivityEntry) {
 	e.Category = activityCategory(e.Action)
-	if a, ok := activityActions[e.Action]; ok {
+	if l, ok := activityFailedLabels[e.Action]; ok && !e.Success {
+		e.Label = l
+	} else if a, ok := activityActions[e.Action]; ok {
 		e.Label = a[1]
 	} else {
 		e.Label = strings.ReplaceAll(e.Action, "-", " ")

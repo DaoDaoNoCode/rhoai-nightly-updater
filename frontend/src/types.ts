@@ -8,9 +8,11 @@ export interface ActivityEntry {
   action: string;
   detail: string;
   success: boolean;
+  /** Why a failed operation failed or was refused. */
+  reason?: string;
   /** Read-time fields from the backend: a readable name for `action`. */
   label?: string;
-  /** "operator" | "dashboard-dev" | "setup" | "diagnostics" | "other". */
+  /** "operator" | "dashboard-dev" | "test-resources" | "setup" | "diagnostics" | "other". */
   category?: string;
   /** Operator actions only: "<tag> · <12-hex digest>". */
   build?: string;

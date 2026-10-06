@@ -32,7 +32,8 @@ const LEGACY_CATEGORIES: Record<string, string> = {
 export function activityCategory(entry: ActivityEntry): string {
   if (entry.category) return entry.category;
   if (LEGACY_CATEGORIES[entry.action]) return LEGACY_CATEGORIES[entry.action];
-  if (/dashboard|minio|mlflow|pipeline|deploy-pr/.test(entry.action)) return "dashboard-dev";
+  if (/minio|mlflow|pipeline/.test(entry.action)) return "test-resources";
+  if (/dashboard|deploy-pr/.test(entry.action)) return "dashboard-dev";
   return "other";
 }
 
@@ -45,6 +46,7 @@ export function activityLabel(entry: ActivityEntry): string {
 const FILTERS: { id: string; label: string }[] = [
   { id: "operator", label: "Operator" },
   { id: "dashboard-dev", label: "Dashboard Dev" },
+  { id: "test-resources", label: "Test resources" },
   { id: "setup", label: "Setup" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "all", label: "All" },
@@ -112,12 +114,17 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
                             </FlexItem>
                             <FlexItem id={`activity-${i}`}>
                               <strong>{activityLabel(entry)}</strong>
-                              {!entry.success && <span className="rhoai-subtle"> (failed)</span>}
+                              {!entry.success && !/failed$/i.test(activityLabel(entry)) && <span className="rhoai-subtle"> (failed)</span>}
                             </FlexItem>
                           </Flex>
                           {detail && (
                             <div className={entry.build ? "rhoai-build-id" : undefined} style={{ marginInlineStart: "1.5rem", overflowWrap: "anywhere" }}>
                               <Content component="small">{detail}</Content>
+                            </div>
+                          )}
+                          {!entry.success && entry.reason && (
+                            <div style={{ marginInlineStart: "1.5rem", overflowWrap: "anywhere" }}>
+                              <Content component="small" className="rhoai-subtle">{entry.reason}</Content>
                             </div>
                           )}
                         </DataListCell>,

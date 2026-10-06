@@ -7,6 +7,8 @@ type ActivityEntry struct {
 	Action    string `json:"action"` // "update", "rollback", "create-pull-secret"
 	Detail    string `json:"detail"` // e.g., the FBC image for updates
 	Success   bool   `json:"success"`
+	// Reason is why a failed operation failed or was refused (stored).
+	Reason string `json:"reason,omitempty"`
 
 	// Filled in when the log is read (not stored):
 	// Label is a human-readable name for Action, Category groups actions

@@ -65,7 +65,7 @@ func TestDescribeActivity(t *testing.T) {
 		{"deploy-dashboard-main", "x", "Dashboard main deployed", "dashboard-dev", ""},
 		{"brand-new-action", "", "brand new action", "other", ""},
 	} {
-		e := types.ActivityEntry{Action: tc.action, Detail: tc.detail}
+		e := types.ActivityEntry{Action: tc.action, Detail: tc.detail, Success: true}
 		describeActivity(&e)
 		if e.Label != tc.label || e.Category != tc.category || e.Build != tc.build {
 			t.Errorf("%s %q: label=%q category=%q build=%q", tc.action, tc.detail, e.Label, e.Category, e.Build)
@@ -136,5 +136,28 @@ func TestOperationMarkerRoundTrip(t *testing.T) {
 	stored = "missing"
 	if got, _, err := GetOperationState(c); err != nil || got != nil {
 		t.Fatalf("missing ConfigMap: %+v %v", got, err)
+	}
+}
+
+// A failed or refused action is not labelled as if it succeeded, and quick
+// resources have their own category now that they have their own page.
+func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
+	cases := []struct {
+		entry         types.ActivityEntry
+		label, catego string
+	}{
+		{types.ActivityEntry{Action: "update", Success: true}, "Updated to nightly", "operator"},
+		{types.ActivityEntry{Action: "update", Success: false}, "Update to nightly failed", "operator"},
+		{types.ActivityEntry{Action: "teardown-minio", Success: false}, "MinIO teardown failed", "test-resources"},
+		{types.ActivityEntry{Action: "setup-mlflow", Success: true}, "MLflow set up", "test-resources"},
+		{types.ActivityEntry{Action: "deploy-dashboard-main", Success: true}, "Dashboard main deployed", "dashboard-dev"},
+		{types.ActivityEntry{Action: "assist-rollout", Success: false}, "Stuck rollout assisted", "diagnostics"},
+	}
+	for _, tc := range cases {
+		e := tc.entry
+		describeActivity(&e)
+		if e.Label != tc.label || e.Category != tc.catego {
+			t.Errorf("%s success=%v: got %q/%q, want %q/%q", e.Action, e.Success, e.Label, e.Category, tc.label, tc.catego)
+		}
 	}
 }

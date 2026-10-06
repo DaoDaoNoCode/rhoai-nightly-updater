@@ -650,7 +650,7 @@ func (t *stepTracker) send(e UpdateStepEvent) {
 // the message and restore details reach the user), marks the running step
 // failed, restores the previous operator on failure, and records the
 // activity once.
-func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr *error, logs []string, recovery *operatorRecovery, record func(bool)) {
+func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr *error, logs []string, recovery *operatorRecovery, record func(ok bool, reason string)) {
 	if *result == nil {
 		*result = &types.OperationResponse{Success: false, Message: "Operation failed", Logs: logs}
 	}
@@ -679,7 +679,11 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 		}
 	}
 	if record != nil {
-		record(r.Success)
+		reason := ""
+		if !r.Success {
+			reason = r.Message
+		}
+		record(r.Success, reason)
 	}
 }
 

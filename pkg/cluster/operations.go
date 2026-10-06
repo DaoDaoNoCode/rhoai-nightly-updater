@@ -475,7 +475,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	emit = tracker.send
 	var recovery *operatorRecovery
 	defer func() {
-		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool) { recordUpdateActivity(c, image, ok) })
+		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool, reason string) { recordUpdateActivity(c, image, ok, reason) })
 	}()
 	fail := func(msg, code string) (*types.OperationResponse, error) {
 		logs = append(logs, msg)
@@ -914,13 +914,14 @@ var lookupTargetBundle = func(c *Client, image string) (string, error) {
 	return content.BundleName, nil
 }
 
-func recordUpdateActivity(c *Client, image string, success bool) {
+func recordUpdateActivity(c *Client, image string, success bool, reason string) {
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "update",
 		Detail:    image,
 		Success:   success,
+		Reason:    reason,
 	})
 }
 
@@ -937,9 +938,9 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	activityTarget := image
 	isNightly := targetType == "nightly" || targetType == "custom"
 	defer func() {
-		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool) {
+		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool, reason string) {
 			if recordActivity {
-				recordReinstallActivity(c, targetType, activityTarget, ok)
+				recordReinstallActivity(c, targetType, activityTarget, ok, reason)
 			}
 		})
 	}()
@@ -1467,17 +1468,18 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 	return false, nil
 }
 
-func recordRefreshActivity(c *Client, csvName string, success bool) {
+func recordRefreshActivity(c *Client, csvName string, success bool, reason string) {
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		User:      getUser(c),
 		Action:    "refresh",
 		Detail:    csvName,
 		Success:   success,
+		Reason:    reason,
 	})
 }
 
-func recordReinstallActivity(c *Client, targetType, image string, success bool) {
+func recordReinstallActivity(c *Client, targetType, image string, success bool, reason string) {
 	detail := fmt.Sprintf("to latest GA from %s", getStableSource())
 	if targetType == "stable" && image != "" {
 		detail = "to " + image
@@ -1490,6 +1492,7 @@ func recordReinstallActivity(c *Client, targetType, image string, success bool) 
 		Action:    "reinstall",
 		Detail:    detail,
 		Success:   success,
+		Reason:    reason,
 	})
 }
 
@@ -1503,9 +1506,9 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	csvName := ""
 	recordActivity := true
 	defer func() {
-		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool) {
+		tracker.finish(c, &result, &opErr, logs, recovery, func(ok bool, reason string) {
 			if recordActivity {
-				recordRefreshActivity(c, csvName, ok)
+				recordRefreshActivity(c, csvName, ok, reason)
 			}
 		})
 	}()
