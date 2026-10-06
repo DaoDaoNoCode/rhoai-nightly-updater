@@ -42,6 +42,8 @@ type fakeOLM struct {
 
 	onSubscribe func(f *fakeOLM, spec map[string]interface{})
 	onApprove   func(f *fakeOLM, ip string)
+	// intercept runs first (under the lock) and may answer the request itself.
+	intercept func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool
 
 	requests []fakeRequest
 }
@@ -74,7 +76,7 @@ func (f *fakeOLM) installed(csv string, spec map[string]interface{}) *fakeOLM {
 	for k, v := range spec {
 		full[k] = v
 	}
-	f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName}, "spec": full,
+	f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "uid": "uid-sub-installed"}, "spec": full,
 		"status": map[string]interface{}{"state": "AtLatestKnown", "currentCSV": csv, "installedCSV": csv, "installPlanRef": map[string]interface{}{"name": "install-old"}}}
 	f.addCSV(csv, "Succeeded")
 	f.installPlans["install-old"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []string{csv}}, "status": map[string]interface{}{"phase": "Complete"}}
@@ -112,6 +114,24 @@ func notFound(w http.ResponseWriter) {
 	_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
 }
 
+// uidPreconditionMet reports whether a DELETE body's preconditions.uid, if
+// any, matches obj's metadata.uid, as the API server checks it.
+func uidPreconditionMet(body, obj map[string]interface{}) bool {
+	pre, _ := body["preconditions"].(map[string]interface{})
+	want, _ := pre["uid"].(string)
+	if want == "" {
+		return true
+	}
+	meta, _ := obj["metadata"].(map[string]interface{})
+	return meta["uid"] == want
+}
+
+// uidConflict answers like the API server when a UID precondition fails.
+func uidConflict(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusConflict)
+	_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"Conflict","message":"Precondition failed: UID in precondition does not match","code":409}`)
+}
+
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
@@ -126,6 +146,9 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.URL.Path
 	f.requests = append(f.requests, fakeRequest{Method: r.Method, Path: p, Query: r.URL.Query(), Body: body})
+	if f.intercept != nil && f.intercept(f, w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if n := f.failDelete[p]; r.Method == http.MethodDelete && n > 0 {
 		f.failDelete[p] = n - 1
@@ -175,6 +198,8 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !ok:
 			notFound(w)
+		case r.Method == http.MethodDelete && !uidPreconditionMet(body, csv):
+			uidConflict(w)
 		case r.Method == http.MethodDelete && f.stuckCSVs[last]:
 			csv["metadata"].(map[string]interface{})["deletionTimestamp"] = "2026-01-01T00:00:00Z"
 			_, _ = io.WriteString(w, `{}`)
@@ -294,11 +319,25 @@ func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body
 			notFound(w)
 			return
 		}
+		if !uidPreconditionMet(body, f.sub) {
+			uidConflict(w)
+			return
+		}
 		f.sub = nil
 		_, _ = io.WriteString(w, `{}`)
 	case http.MethodPatch:
 		spec, _ := body["spec"].(map[string]interface{})
-		f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName}, "spec": spec, "status": map[string]interface{}{}}
+		// An apply keeps the UID of an existing Subscription; a new one
+		// gets a new UID.
+		uid := ""
+		if f.sub != nil {
+			uid, _ = f.sub["metadata"].(map[string]interface{})["uid"].(string)
+		}
+		if uid == "" {
+			f.csvSeq++
+			uid = fmt.Sprintf("uid-sub-%d", f.csvSeq)
+		}
+		f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "uid": uid}, "spec": spec, "status": map[string]interface{}{}}
 		if f.onSubscribe != nil {
 			f.onSubscribe(f, spec)
 		}

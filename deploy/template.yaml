@@ -154,6 +154,15 @@ objects:
       - apiGroups: ["route.openshift.io"]
         resources: ["routes"]
         verbs: ["create"]
+      # MinIO's ingress policy (S3 port from cluster pods, console from the
+      # router), created with MinIO and removed by its teardown
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["networkpolicies"]
+        verbs: ["create"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["networkpolicies"]
+        resourceNames: ["minio-ingress"]
+        verbs: ["get", "patch", "delete"]
       # The RHOAI operator (redhat-ods-operator namespace)
       - apiGroups: ["operators.coreos.com"]
         resources: ["subscriptions"]

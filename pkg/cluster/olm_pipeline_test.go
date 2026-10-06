@@ -603,10 +603,10 @@ func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
 	// A CSV with the same name but a new UID was created by the attempt.
 	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]interface{})["uid"] = "recreated"
 	f.mu.Unlock()
-	names, err := r.attemptCSVNames(c)
+	csvs, err := r.attemptCSVsToRemove(c)
 	f.mu.Lock()
-	if err != nil || fmt.Sprint(names) != "[rhods-operator.3.6.0]" {
-		t.Fatalf("attempt CSVs = %v, %v", names, err)
+	if err != nil || fmt.Sprint(csvs) != "[{rhods-operator.3.6.0 recreated}]" {
+		t.Fatalf("attempt CSVs = %v, %v", csvs, err)
 	}
 }
 
@@ -787,6 +787,41 @@ func TestReinstallStable_WithoutASubscription(t *testing.T) {
 	}
 }
 
+// R7-L1: with "end the Dashboard Dev session first" confirmed, a refusal
+// (here a foreign Subscription) still comes before the session is ended,
+// so the message "Nothing was changed" is true.
+func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
+	for _, op := range []string{"update", "reinstall", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			f.installPlans["install-gitops"] = map[string]interface{}{
+				"metadata": map[string]interface{}{"ownerReferences": []interface{}{map[string]interface{}{"kind": "Subscription", "name": "rhoai-gitops"}}},
+				"spec":     map[string]interface{}{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+			}
+			c := f.client(context.Background())
+			opts := OperationOptions{RevertDashboardDev: true}
+			var r *types.OperationResponse
+			switch op {
+			case "update":
+				r, _ = UpdateStreamWithOptions(c, testNightlyImage, opts, func(UpdateStepEvent) {})
+			case "reinstall":
+				r, _ = ReinstallStreamWithOptions(c, "nightly", testNightlyImage, "", opts, func(UpdateStepEvent) {})
+			case "refresh":
+				r, _ = RefreshOperatorStreamWithOptions(c, opts, func(UpdateStepEvent) {})
+			}
+			if r == nil || r.Success || !strings.Contains(r.Message, "Another Subscription (rhoai-gitops)") {
+				t.Fatalf("result = %+v", r)
+			}
+			for _, w := range f.writes() {
+				if !strings.Contains(w, "-verify-") {
+					t.Fatalf("changed the cluster (the Dashboard Dev session must stay): %v", f.writes())
+				}
+			}
+		})
+	}
+}
+
 // R5-F9: another Subscription for the package (seen as the owner of an
 // InstallPlan) stops every operation before it changes anything.
 func TestOperationsRefuseAForeignSubscription(t *testing.T) {
@@ -819,23 +854,35 @@ func TestOperationsRefuseAForeignSubscription(t *testing.T) {
 	}
 }
 
-// R5-F10: a confirmed downgrade is refused before anything changes when the
-// target bundle does not list a version the live CRDs store (OLM would fail
-// its CRD step after the current operator is gone).
+// R5-F10 / R6-9: before a downgrade, the live CRDs' storedVersions are
+// compared with the versions the target CSV describes
+// (customresourcedefinitions.owned[].version). That list is not the bundled
+// CRD's full spec.versions (a CRD serving v1 and v2 may be described only as
+// v1), so a mismatch or an unreadable CRD list is a warning in the
+// confirmation and the result, never a refusal.
 func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 	t.Setenv("STABLE_SOURCE", "redhat-operators")
 	t.Setenv("STABLE_CHANNEL", "")
 	const dsc = "datascienceclusters.datasciencecluster.opendatahub.io"
 	liveCRDs := `{"items":[{"metadata":{"name":"` + dsc + `"},"status":{"storedVersions":["v2"]}}]}`
 	for _, tc := range []struct {
-		name, owned string
-		wantSuccess bool
-		wantCode    string
-		wantMsg     string
+		name, owned, crds string
+		confirmed         bool
+		wantSuccess       bool
+		wantCode          string
+		wantInMsg         string
+		wantInLogs        string
 	}{
-		{"target lacks the stored version", `[{"name":"` + dsc + `","version":"v1"}]`, false, "validation", "stores objects as v2"},
-		{"target serves it", `[{"name":"` + dsc + `","version":"v1"},{"name":"` + dsc + `","version":"v2"}]`, true, "", "is installed"},
-		{"catalog does not say", ``, true, "", "is installed"},
+		{name: "CSV describes only v1 of a CRD storing v2: warning, installed", owned: `[{"name":"` + dsc + `","version":"v1"}]`, crds: liveCRDs, confirmed: true,
+			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "may not serve every version the live CRDs store"},
+		{name: "unconfirmed: the confirmation carries the warning", owned: `[{"name":"` + dsc + `","version":"v1"}]`, crds: liveCRDs,
+			wantCode: errorCodeDowngrade, wantInMsg: "stores objects as v2"},
+		{name: "CSV describes the stored version", owned: `[{"name":"` + dsc + `","version":"v1"},{"name":"` + dsc + `","version":"v2"}]`, crds: liveCRDs, confirmed: true,
+			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "describes every stored version"},
+		{name: "CRD list unreadable: warning, installed", owned: `[{"name":"` + dsc + `","version":"v1"}]`, crds: `not json`, confirmed: true,
+			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "could not be compared"},
+		{name: "catalog does not say", crds: liveCRDs, confirmed: true,
+			wantSuccess: true, wantInMsg: "is installed", wantInLogs: "stored versions of the live CRDs were not checked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"source": CatalogName})
@@ -844,17 +891,21 @@ func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 				desc += `,"customresourcedefinitions":{"owned":` + tc.owned + `}`
 			}
 			f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.5.1","currentCSVDesc":{` + desc + `}}]`
-			f.crds = liveCRDs
+			f.crds = tc.crds
 			f.onSubscribe = olmInstalls("rhods-operator.3.5.1")
-			r, err := ReinstallWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{AllowDowngrade: true})
-			if err != nil || r.Success != tc.wantSuccess || r.ErrorCode != tc.wantCode || !strings.Contains(r.Message, tc.wantMsg) {
+			r, err := ReinstallWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{AllowDowngrade: tc.confirmed})
+			if err != nil || r.Success != tc.wantSuccess || r.ErrorCode != tc.wantCode || !strings.Contains(r.Message, tc.wantInMsg) {
 				t.Fatalf("result = %+v, %v", r, err)
 			}
-			if !tc.wantSuccess && len(f.writes()) != 0 {
-				t.Fatalf("changed the cluster: %v", f.writes())
+			if !tc.wantSuccess {
+				for _, w := range f.writes() {
+					if !strings.Contains(w, "-verify-") {
+						t.Fatalf("changed the cluster: %v", f.writes())
+					}
+				}
 			}
-			if tc.owned == "" && !strings.Contains(strings.Join(r.Logs, "\n"), "stored versions of the live CRDs were not checked") {
-				t.Fatalf("missing warning: %v", r.Logs)
+			if tc.wantInLogs != "" && !strings.Contains(strings.Join(r.Logs, "\n"), tc.wantInLogs) {
+				t.Fatalf("logs lack %q: %v", tc.wantInLogs, r.Logs)
 			}
 		})
 	}

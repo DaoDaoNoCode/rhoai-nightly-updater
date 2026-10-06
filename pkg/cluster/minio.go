@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,9 @@ const (
 	minioStorage     = "20Gi"
 	minioBucket      = "pipelines"
 	minioServiceName = "minio-service"
-	minioAppSelector = "app=minio"
+	// minioNetworkPolicyName fences in the ports of MinIO (see minioResources).
+	minioNetworkPolicyName = "minio-ingress"
+	minioAppSelector       = "app=minio"
 	// minioDefaultImage is Red Hat's Project Hummingbird build of the final
 	// open-source MinIO release, RELEASE.2025-10-15T17-29-55Z
 	// (quay.io/hummingbird-community/minio:release.2025-10-15t17-29-55z,
@@ -47,6 +50,18 @@ const (
 	// by newer releases (checked: RELEASE.2025-10-15 exits with "Unable to
 	// use the drive ... drive not found" on a volume the 2019 release
 	// initialised).
+	//
+	// Setup therefore swaps the image over the existing PVC without a
+	// storage-format check. Checked in git history: the 2019 image only
+	// appeared in an unpublished fix-branch commit (b93f83c); every
+	// published main since the initial commit (5051672, 2026-07-02) set
+	// quay.io/minio/minio:latest. :latest was then a 2025 release, and every
+	// release since RELEASE.2022-10-29T06-21-33Z (which removed the
+	// deprecated filesystem backend) formats a new single-drive volume as
+	// "xl-single", the format this release reads. A volume can only hold
+	// the old "fs" format if MINIO_IMAGE pointed at a pre-2022-10-29 release;
+	// setup then reports the CrashLoopBackOff and teardown plus setup
+	// starts over.
 	minioDefaultImage = "quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45"
 	// minioConsolePort is the console port released versions used.
 	minioConsolePort = 9090
@@ -274,30 +289,31 @@ func (d minioDeployment) image() string {
 }
 
 func getMinIOStatus(c *Client) types.ResourceState {
-	state, _ := minioStatusAndEndpoints(c)
+	state, _, _ := minioStatusAndEndpoints(c)
 	return state
 }
 
 // minioStatusAndEndpoints returns MinIO's status and the addresses a
 // pipeline server may use to reach it (for the teardown dependency check).
-func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
+// The error is non-nil when those addresses could not be read.
+func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, error) {
 	state := types.ResourceState{Namespace: minioNamespace}
 
 	ns, err := lookupMinIONamespace(c)
 	if err != nil {
 		state.Message = "Cannot read MinIO status: " + err.Error()
-		return state, minioEndpoints{}
+		return state, minioEndpoints{}, nil
 	}
 	if !ns.Exists {
 		state.Message = "Not deployed"
-		return state, minioEndpoints{}
+		return state, minioEndpoints{}, nil
 	}
 	state.ManagedByTool = ns.Managed
 	if ns.terminating() {
 		state.Terminating = true
 		state.Message = "Terminating"
 		state.SetupBlockedReason = "Namespace 'minio' is still being deleted."
-		return state, minioEndpoints{}
+		return state, minioEndpoints{}, nil
 	}
 	if !ns.Managed {
 		state.SetupBlockedReason = "Namespace 'minio' exists but was not created by this tool, so setup will not modify it."
@@ -305,14 +321,15 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 	}
 
 	var (
-		wg         sync.WaitGroup
-		deployBody []byte
-		deployErr  error
-		apiHost    string
-		uiHost     string
-		endpoints  minioEndpoints
-		pvcs       []objectMeta
-		pvcErr     error
+		wg           sync.WaitGroup
+		deployBody   []byte
+		deployErr    error
+		apiHost      string
+		uiHost       string
+		endpoints    minioEndpoints
+		endpointsErr error
+		pvcs         []objectMeta
+		pvcErr       error
 	)
 	wg.Add(3)
 	go func() {
@@ -321,7 +338,7 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 	}()
 	go func() {
 		defer wg.Done()
-		endpoints = readMinIOEndpoints(c)
+		endpoints, endpointsErr = readMinIOEndpoints(c)
 		apiHost, uiHost = endpoints.apiHost, endpoints.uiHost
 	}()
 	go func() {
@@ -334,7 +351,7 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 
 	if apiHost != "" {
 		state.APIRoute = "https://" + apiHost
-		state.Warning = "Route 'minio-api' exposes MinIO's S3 API outside the cluster. Re-run MinIO setup to remove it; pipeline servers use the in-cluster service."
+		state.Warning = "Route 'minio-api' exposes MinIO's S3 API outside the cluster. Re-run MinIO setup to remove it; setup keeps it while a pipeline server uses its host."
 	}
 	if uiHost != "" {
 		state.UIRoute = "https://" + uiHost
@@ -356,14 +373,14 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 		if !ns.Managed {
 			state.Message = state.SetupBlockedReason
 		}
-		return state, endpoints
+		return state, endpoints, endpointsErr
 	}
 	state.Deployed = true
 
 	var deploy minioDeployment
 	if err := json.Unmarshal(deployBody, &deploy); err != nil {
 		state.Message = "Cannot parse MinIO deployment"
-		return state, endpoints
+		return state, endpoints, endpointsErr
 	}
 	state.CurrentImage = deploy.image()
 	if ns.Managed && state.CurrentImage != "" && state.CurrentImage != minioImage() {
@@ -372,13 +389,13 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints) {
 	if deploy.Status.ReadyReplicas >= 1 {
 		state.Ready = true
 		state.Message = "Running"
-		return state, endpoints
+		return state, endpoints, endpointsErr
 	}
 	state.Message = fmt.Sprintf("%d/%d ready", deploy.Status.ReadyReplicas, deploy.Status.Replicas)
 	if issue, err := inspectPods(c, minioNamespace, minioAppSelector, ""); err == nil {
 		applyPodIssue(&state, issue)
 	}
-	return state, endpoints
+	return state, endpoints, endpointsErr
 }
 
 // minioApplyPath returns the API path of one object from minioResources.
@@ -396,6 +413,8 @@ func minioApplyPath(obj map[string]interface{}) (string, bool) {
 		return namespacedPath("apps/v1", "deployments", minioNamespace, "minio"), true
 	case kind == "Service" && name == minioServiceName:
 		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
+	case kind == "NetworkPolicy" && name == minioNetworkPolicyName:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, minioNetworkPolicyName), true
 	case kind == "Route" && name == "minio-ui":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
 	}
@@ -414,6 +433,8 @@ func minioCreatePath(kind string) (string, bool) {
 		return withToolFieldManager(namespacedPath("apps/v1", "deployments", minioNamespace, "")), true
 	case "Service":
 		return withToolFieldManager(namespacedPath("v1", "services", minioNamespace, "")), true
+	case "NetworkPolicy":
+		return withToolFieldManager(namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, "")), true
 	case "Route":
 		return withToolFieldManager(namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "")), true
 	}
@@ -432,6 +453,8 @@ func minioGetPath(kind, name string) (string, bool) {
 		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
 	case kind == "Route" && name == "minio-api":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-api"), true
+	case kind == "NetworkPolicy" && name == minioNetworkPolicyName:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, minioNetworkPolicyName), true
 	case kind == "Route" && name == "minio-ui":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
 	}
@@ -452,6 +475,8 @@ func minioDeletePath(kind, name string) (string, bool) {
 		return namespacedPath("v1", "services", minioNamespace, minioServiceName), true
 	case kind == "Route" && name == "minio-api":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-api"), true
+	case kind == "NetworkPolicy" && name == minioNetworkPolicyName:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", minioNamespace, minioNetworkPolicyName), true
 	case kind == "Route" && name == "minio-ui":
 		return namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "minio-ui"), true
 	}
@@ -575,6 +600,45 @@ func minioResources(user, password string) []minioResource {
 				},
 			},
 		}},
+		// The released MinIO has advisories without an open-source fix
+		// (GHSA-hv4r-mvr4-25vw needs a valid access key; see
+		// minioDefaultImage), so its ports are fenced in:
+		//   - S3 (9000) only from pods: the pipeline servers in their
+		//     projects, the data-science-pipelines operator's object-storage
+		//     health check (redhat-ods-applications), the router for a kept
+		//     legacy minio-api Route, and this tool's bucket creation. Any
+		//     namespace is allowed, because a pipeline server may live in any
+		//     project; there is no S3 Route.
+		//   - The console (9090) only from the OpenShift router, through the
+		//     minio-ui Route: namespaces labelled
+		//     policy-group.network.openshift.io/ingress (router pods) or
+		//     .../host-network (a HostNetwork router), as in the OpenShift
+		//     docs "Allowing ingress from the Ingress Controller"
+		//     (checked live: openshift-ingress carries the ingress label).
+		// The kubelet's probes always pass (traffic from the pod's node is
+		// allowed by NetworkPolicy semantics), and `oc port-forward` does
+		// not go through the pod network.
+		{"NetworkPolicy", "NetworkPolicy", map[string]interface{}{
+			"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+			"metadata": meta(minioNetworkPolicyName),
+			"spec": map[string]interface{}{
+				"podSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"app": "minio"}},
+				"policyTypes": []string{"Ingress"},
+				"ingress": []map[string]interface{}{
+					{
+						"from":  []map[string]interface{}{{"namespaceSelector": map[string]interface{}{}}},
+						"ports": []map[string]interface{}{{"protocol": "TCP", "port": 9000}},
+					},
+					{
+						"from": []map[string]interface{}{
+							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/ingress": ""}}},
+							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/host-network": ""}}},
+						},
+						"ports": []map[string]interface{}{{"protocol": "TCP", "port": minioConsolePort}},
+					},
+				},
+			},
+		}},
 		{"Console Route", "Route", map[string]interface{}{
 			"apiVersion": "route.openshift.io/v1", "kind": "Route",
 			"metadata": meta("minio-ui"),
@@ -661,6 +725,7 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 		{"Secret", "minio-secret"},
 		{"Deployment", "minio"},
 		{"Service", minioServiceName},
+		{"NetworkPolicy", minioNetworkPolicyName},
 		{"Route", "minio-ui"},
 		{"Route", "minio-api"},
 	} {
@@ -774,8 +839,22 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: Bucket '%s' created", minioBucket))
 
 	// Step 6: Remove the minio-api Route earlier versions created: it
-	// exposed the S3 API outside the cluster.
+	// exposed the S3 API outside the cluster. A pipeline server whose
+	// object storage points at the Route's host would lose its artifacts
+	// store, so the Route is kept while any DSPA uses it, and also when
+	// that cannot be checked (fail closed).
+	keptRouteNote := ""
 	if cur := existing["Route/minio-api"]; cur.found {
+		users, err := minioAPIRouteUsers(c)
+		if err != nil {
+			return fail(fmt.Sprintf("MinIO is running with bucket '%s', but Route minio-api, which exposes its S3 API outside the cluster, was kept: cannot check whether a pipeline server uses it: %v. Re-run setup to retry.", minioBucket, err), "partial_failure", "route consumer check failed")
+		}
+		if len(users) > 0 {
+			keptRouteNote = fmt.Sprintf(" Route minio-api, which exposes MinIO's S3 API outside the cluster, was kept because pipeline server(s) %s use its host. Point their object storage at host %s with scheme http (the in-cluster service), then re-run setup to remove the Route.", strings.Join(users, ", "), minioS3Host())
+			logs = append(logs, "Kept Route minio-api: used by "+strings.Join(users, ", "))
+		}
+	}
+	if cur := existing["Route/minio-api"]; cur.found && keptRouteNote == "" {
 		path, _ := minioDeletePath("Route", "minio-api")
 		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
 			return fail(fmt.Sprintf("MinIO is running with bucket '%s', but Route minio-api, which exposes its S3 API outside the cluster, could not be removed: %v. Delete it with `oc delete route -n minio minio-api`, or re-run setup.", minioBucket, err), "partial_failure", "route cleanup failed")
@@ -787,9 +866,40 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	recordMinIOActivity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", minioNamespace, minioBucket), true)
 
 	return &types.OperationResponse{
-		Success: true, Message: fmt.Sprintf("MinIO deployed with bucket '%s'. Console credentials are stored in secret 'minio-secret' in namespace '%s'.", minioBucket, minioNamespace),
+		Success: true, Message: fmt.Sprintf("MinIO deployed with bucket '%s'. Console credentials are stored in secret 'minio-secret' in namespace '%s'.%s", minioBucket, minioNamespace, keptRouteNote),
 		Logs: logs,
 	}, nil
+}
+
+// minioAPIRouteUsers returns the pipeline servers (namespace/name, sorted)
+// whose object-storage host is the host of Route minio-api. A missing DSPA
+// CRD means there are none; any other read error is returned.
+func minioAPIRouteUsers(c *Client) ([]string, error) {
+	host, err := readRouteHost(c, minioNamespace, "minio-api")
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return nil, nil
+	}
+	dspas, err := listDSPAs(c, "")
+	if errors.Is(err, errDSPACRDMissing) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	routeHostname := strings.TrimSuffix(strings.ToLower(host), ".")
+	var users []string
+	for _, d := range dspas {
+		// Only the Route host counts here: a DSPA on the service DNS name
+		// or ClusterIP does not need the Route.
+		if endpointHostname(d.Host) == routeHostname {
+			users = append(users, d.Meta.Namespace+"/"+d.Meta.Name)
+		}
+	}
+	sort.Strings(users)
+	return users, nil
 }
 
 var (
@@ -882,6 +992,7 @@ const minioKeptNamespaceHint = " Namespace 'minio' was kept: it may hold objects
 // kubernetes.io/pvc-protection finalizer waits for that).
 var minioTeardownObjects = []struct{ kind, name string }{
 	{"Deployment", "minio"},
+	{"NetworkPolicy", minioNetworkPolicyName},
 	{"Route", "minio-ui"},
 	{"Route", "minio-api"},
 	{"Service", minioServiceName},
@@ -928,7 +1039,15 @@ func TeardownMinIO(c *Client) (*types.OperationResponse, error) {
 	if err != nil && !errors.Is(err, errDSPACRDMissing) {
 		return fail(fmt.Sprintf("Cannot verify pipeline dependencies; MinIO was not deleted: %v", err), errorCodeFromK8sErr(err), "dependency check failed")
 	}
-	if reason := minioTeardownBlocker(dspas, readMinIOEndpoints(c)); reason != "" {
+	// Pipeline servers may reach MinIO through a Route host or the
+	// ClusterIP. When those cannot be read and any pipeline server exists, a
+	// dependency cannot be ruled out: refuse rather than delete the PVC a
+	// pipeline server may still store its artifacts in.
+	endpoints, err := readMinIOEndpoints(c)
+	if err != nil && len(dspas) > 0 {
+		return fail(fmt.Sprintf("Cannot verify which pipeline servers use MinIO (its Route hosts or service address could not be read); nothing was deleted: %v", err), errorCodeFromK8sErr(err), "dependency check failed")
+	}
+	if reason := minioTeardownBlocker(dspas, endpoints); reason != "" {
 		return fail("Cannot tear down MinIO yet. "+reason, "prerequisites", "pipeline servers depend on it")
 	}
 

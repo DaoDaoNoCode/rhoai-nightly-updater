@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -204,9 +203,9 @@ func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
 
 // recordLiveSubscription records the current Subscription after a
 // successful operation, on its own short context (the operation's may have
-// ended). Errors are only logged.
+// ended; see postOperationContext). Errors are only logged.
 func recordLiveSubscription(c *Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := postOperationContext(c, subscriptionRecordTimeout)
 	defer cancel()
 	c = c.WithContext(ctx)
 	body, _, err := c.get(subscriptionPath())

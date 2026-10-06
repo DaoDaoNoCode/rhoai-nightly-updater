@@ -188,24 +188,60 @@ type minioEndpoints struct {
 	clusterIP string
 }
 
-// readMinIOEndpoints reads the Route hosts and the service ClusterIP. Missing
-// or unreadable objects are skipped: the DNS names still match.
-func readMinIOEndpoints(c *Client) minioEndpoints {
-	e := minioEndpoints{
-		apiHost: routeHost(c, minioNamespace, "minio-api"),
-		uiHost:  routeHost(c, minioNamespace, "minio-ui"),
+// readMinIOEndpoints reads the Route hosts and the service ClusterIP. A
+// missing object (404) is skipped: the service DNS names still match. Any
+// other read or parse error is returned, because a caller that deletes
+// MinIO's data or its Route must not miss a pipeline server that uses one
+// of these addresses; it refuses instead (fail closed).
+func readMinIOEndpoints(c *Client) (minioEndpoints, error) {
+	var e minioEndpoints
+	var err error
+	if e.apiHost, err = readRouteHost(c, minioNamespace, "minio-api"); err != nil {
+		return minioEndpoints{}, err
 	}
-	if body, _, err := c.get(namespacedPath("v1", "services", minioNamespace, minioServiceName)); err == nil {
-		var svc struct {
-			Spec struct {
-				ClusterIP string `json:"clusterIP"`
-			} `json:"spec"`
-		}
-		if json.Unmarshal(body, &svc) == nil && svc.Spec.ClusterIP != "None" {
-			e.clusterIP = svc.Spec.ClusterIP
-		}
+	if e.uiHost, err = readRouteHost(c, minioNamespace, "minio-ui"); err != nil {
+		return minioEndpoints{}, err
 	}
-	return e
+	body, _, err := c.get(namespacedPath("v1", "services", minioNamespace, minioServiceName))
+	switch {
+	case IsK8sError(err, 404):
+		return e, nil
+	case err != nil:
+		return minioEndpoints{}, fmt.Errorf("read Service %s: %w", minioServiceName, err)
+	}
+	var svc struct {
+		Spec struct {
+			ClusterIP string `json:"clusterIP"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &svc); err != nil {
+		return minioEndpoints{}, fmt.Errorf("parse Service %s: %w", minioServiceName, err)
+	}
+	if svc.Spec.ClusterIP != "None" {
+		e.clusterIP = svc.Spec.ClusterIP
+	}
+	return e, nil
+}
+
+// readRouteHost returns a Route's spec.host, "" when the Route (or the Route
+// API) does not exist, or the read or parse error.
+func readRouteHost(c *Client, namespace, name string) (string, error) {
+	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
+	switch {
+	case IsK8sError(err, 404):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("read Route %s: %w", name, err)
+	}
+	var route struct {
+		Spec struct {
+			Host string `json:"host"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &route); err != nil {
+		return "", fmt.Errorf("parse Route %s: %w", name, err)
+	}
+	return route.Spec.Host, nil
 }
 
 // endpointHostname returns the lower-case host name of an S3 endpoint given

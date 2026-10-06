@@ -20,7 +20,7 @@ import (
 var rolloutNamespaces = []string{"redhat-ods-operator", "redhat-ods-applications"}
 
 // Assist-rollout unblocks exactly one situation: a RollingUpdate Deployment
-// whose new pods are Unschedulable only because the nodes lack the
+// whose new pods are Unschedulable because nodes they may run on lack the
 // resources its old pods still hold, and whose strategy allows zero
 // unavailable pods (the default 25% rounds down to 0 for fewer than 4
 // replicas). Setting maxUnavailable=1 lets the Deployment controller stop
@@ -323,8 +323,11 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 		}
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == "PodScheduled" && cond.Status == "False" && cond.Reason == "Unschedulable" {
-				if other := nonResourceSchedulingReasons(cond.Message); len(other) > 0 {
-					return notApplicable(a, fmt.Sprintf("pod %s is Unschedulable for a reason that stopping an old pod does not fix (%s)", p.Metadata.Name, strings.Join(other, "; "))), nil
+				// Allowed when at least one node rejected the pod only for
+				// lack of cpu, memory or pod slots (see resourceOnlyNodes);
+				// taints or selectors on other nodes do not matter.
+				if nodes, other := resourceOnlyNodes(cond.Message); nodes == 0 {
+					return notApplicable(a, fmt.Sprintf("pod %s is Unschedulable, but no node rejected it only for lack of cpu, memory or pod slots, so stopping an old pod does not help (%s)", p.Metadata.Name, strings.Join(other, "; "))), nil
 				}
 				a.PendingPods = append(a.PendingPods, p.Metadata.Name)
 			}
@@ -342,21 +345,36 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 var schedulerFitPrefix = regexp.MustCompile(`^0/\d+ nodes are available: `)
 
 // resourceFitReason matches one filter-histogram entry caused by node
-// resources that stopping a pod gives back.
-var resourceFitReason = regexp.MustCompile(`^\d+ (Insufficient cpu|Insufficient memory|Too many pods)$`)
+// resources that stopping a pod gives back; the group is the node count.
+var resourceFitReason = regexp.MustCompile(`^(\d+) (Insufficient cpu|Insufficient memory|Too many pods)$`)
 
-// nonResourceSchedulingReasons returns the parts of a PodScheduled message
-// that are not resource shortages a stopped pod resolves; nil means every
-// node was rejected only for cpu, memory or pod count. A message the tool
-// cannot parse is returned whole, so it never counts as resources only.
-func nonResourceSchedulingReasons(msg string) []string {
+// resourceOnlyNodes reads the scheduler's FitError message
+// ("0/X nodes are available: <PreFilterMsg>. <FilterMsg>. <PostFilterMsg>.",
+// FitError.Error in kubernetes pkg/scheduler/framework/types.go). It returns
+// how many nodes rejected the pod only for cpu, memory or pod count, and the
+// other histogram entries.
+//
+// Each node is counted under the reasons of ONE filter plugin: the
+// framework's RunFilterPlugins returns at the first plugin that rejects the
+// node (pkg/scheduler/framework/runtime/framework.go), and the default
+// filter order runs NodeUnschedulable, NodeName, TaintToleration,
+// NodeAffinity and NodePorts before NodeResourcesFit
+// (pkg/scheduler/apis/config/v1/default_plugins.go, checked at v1.35.0).
+// So a node counted under "Insufficient cpu" passed the taint, selector,
+// affinity and port filters: only its free resources were short, and an
+// old pod stopped there gives them back. Tainted control-plane or infra
+// nodes on other nodes do not change that. Resource entries of several
+// kinds can count the same node (NodeResourcesFit reports every short
+// resource), so the count is the largest one, not the sum. A PreFilter
+// message (no histogram) or an unparsable one gives 0.
+func resourceOnlyNodes(msg string) (int, []string) {
 	msg = strings.TrimSpace(msg)
 	loc := schedulerFitPrefix.FindStringIndex(msg)
 	if loc == nil {
 		if msg == "" {
 			msg = "the scheduler gave no reason"
 		}
-		return []string{msg}
+		return 0, []string{msg}
 	}
 	rest := msg[loc[1]:]
 	// The filter histogram ends with ". " before the PostFilter
@@ -366,19 +384,26 @@ func nonResourceSchedulingReasons(msg string) []string {
 	} else {
 		rest = strings.TrimSuffix(rest, ".")
 	}
+	nodes := 0
 	var other []string
 	for _, entry := range strings.Split(rest, ", ") {
-		if !resourceFitReason.MatchString(strings.TrimSpace(entry)) {
-			other = append(other, strings.TrimSpace(entry))
+		entry = strings.TrimSpace(entry)
+		m := resourceFitReason.FindStringSubmatch(entry)
+		if m == nil {
+			other = append(other, entry)
+			continue
+		}
+		if n, err := strconv.Atoi(m[1]); err == nil && n > nodes {
+			nodes = n
 		}
 	}
-	return other
+	return nodes, other
 }
 
 // assistConfirmMessage is the confirmation text for one applicable assessment.
 func assistConfirmMessage(a rolloutAssessment) string {
 	return fmt.Sprintf("This patches Deployment %s: spec.strategy.rollingUpdate.maxUnavailable %s -> 1 (%d replicas). "+
-		"Kubernetes then stops one of the %d old pod(s) so that the pod(s) %s, which are Unschedulable only for lack of cpu, memory or pod slots, can use its resources. "+
+		"Kubernetes then stops one of the %d old pod(s) so that the pod(s) %s, which at least one eligible node rejects only for lack of cpu, memory or pod slots, can use its resources. "+
 		"One replica is unavailable during the switch; at least %d stay available. No pods are deleted by the tool.\n\n"+
 		"The original value is saved in the annotation %s. Nothing resets it automatically; once the rollout has finished, Diagnostics offers to restore it.",
 		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "), a.Replicas-1, assistRolloutAnnotation)

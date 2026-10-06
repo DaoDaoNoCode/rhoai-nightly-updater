@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -155,10 +154,14 @@ func getActivityNamespace() string {
 // read-modify-write cycle is retried up to maxConflictRetries times.
 // It never returns an error to callers — failures are logged as warnings.
 func RecordActivity(c *Client, entry types.ActivityEntry) {
-	// Use a background context so activity recording succeeds even after
-	// the request context is canceled (e.g., SSE connection drop).
-	bgClient := c.WithContext(context.Background())
-	recordActivityWithClient(bgClient, entry)
+	// Not cancelled with the request (for example an SSE connection drop),
+	// but bounded: activityWriteTimeout for the whole call, retries
+	// included, and never past the operation's shared post-deadline end
+	// (see postOperationContext), so a stalled API server cannot hold a
+	// shutting-down pod past its drain.
+	ctx, cancel := postOperationContext(c, activityWriteTimeout)
+	defer cancel()
+	recordActivityWithClient(c.WithContext(ctx), entry)
 }
 
 func recordActivityWithClient(c *Client, entry types.ActivityEntry) {

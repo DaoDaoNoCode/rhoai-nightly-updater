@@ -170,17 +170,6 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 	return logs, "", ""
 }
 
-// deleteCSVAndWait deletes a CSV and waits, up to CSVDeletionTimeout, until it
-// is gone. OLM's csv-cleanup finalizer removes the CSV's webhooks and cluster
-// RBAC first; a new CSV with the same name cannot be created while the old
-// one still exists. A timeout is reported but not fatal.
-func deleteCSVAndWait(c *Client, name string) (gone bool, err error) {
-	if _, err := c.delete(csvPath(name)); err != nil && !IsK8sError(err, 404) {
-		return false, err
-	}
-	return waitForCSVGone(c, name)
-}
-
 // waitForCSVGone waits, up to CSVDeletionTimeout, until a deleted CSV no
 // longer exists. It returns false on timeout and the context error if the
 // operation is canceled.

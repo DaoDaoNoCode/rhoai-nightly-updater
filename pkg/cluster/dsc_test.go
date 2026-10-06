@@ -199,7 +199,7 @@ func TestGetStatus_IncludesDSCExists(t *testing.T) {
 	// Build all required mock responses for GetStatus
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state": "AtLatestKnown",
@@ -325,7 +325,7 @@ func TestGetStatus_DSCNotExists(t *testing.T) {
 	// Build minimal mock responses for GetStatus
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state": "AtLatestKnown",
@@ -418,7 +418,7 @@ func TestGetStatus_DSCCRDNotInstalled(t *testing.T) {
 	// Build minimal mock responses for GetStatus
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state": "AtLatestKnown",
