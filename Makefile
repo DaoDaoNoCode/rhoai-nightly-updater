@@ -217,7 +217,7 @@ test-frontend:  ## Run frontend tests
 	cd frontend && npm test
 
 vuln:  ## Check Go and npm dependencies for known vulnerabilities
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 	cd frontend && npm audit --omit=dev --audit-level=high
 
 clean:  ## Remove build artifacts
