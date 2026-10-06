@@ -482,7 +482,9 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 }
 
 // deleteCSVByUIDAndWait deletes the CSV with the given UID and waits, up to
-// CSVDeletionTimeout, until no CSV with that UID exists. A CSV with the same
+// CSVDeletionTimeout, until no CSV with that UID exists (OLM's csv-cleanup
+// finalizer removes the webhooks and cluster RBAC first; a new CSV with the
+// same name cannot be created until then). A CSV with the same
 // name but another UID is never deleted (errReplacedMeanwhile).
 func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	path := csvPath(csv.Name)
