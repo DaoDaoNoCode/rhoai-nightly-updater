@@ -102,18 +102,26 @@ func failingConditions(conds []dscCondition) []string {
 func checkDataScienceCluster(c *Client) checkOutput {
 	const name = "DataScienceCluster"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
+	details := []string{}
+	// warn lowers a pass to warn; fail is kept.
+	warn := func(detail string) {
+		if out.check.Status == "pass" {
+			out.check.Status = "warn"
+		}
+		details = append(details, detail)
+	}
 
+	// The DSC and the DSCI are evaluated independently: a DSCI in Error
+	// often explains why no DSC components deploy, so it is reported
+	// whatever the DSC state is.
 	dscs, apiFound, err := listFirstServed(c, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters", "datascienceclusters")
-	if err != nil {
-		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("Could not read the DataScienceCluster: %v", err)}
-		return out
-	}
-	if !apiFound {
-		out.check.Detail = "No DataScienceCluster API (operator not installed yet)"
-		return out
-	}
-	if len(dscs) == 0 {
-		out.check = CheckResult{Name: name, Status: "warn", Detail: "No DataScienceCluster exists"}
+	switch {
+	case err != nil:
+		warn(fmt.Sprintf("could not verify the DataScienceCluster: %v", err))
+	case !apiFound:
+		details = append(details, "No DataScienceCluster API (operator not installed yet)")
+	case len(dscs) == 0:
+		warn("No DataScienceCluster exists")
 		out.problems = append(out.problems, Problem{
 			ID:          "dsc-missing",
 			Severity:    "info",
@@ -121,44 +129,43 @@ func checkDataScienceCluster(c *Client) checkOutput {
 			Description: "The operator is installed, but no DataScienceCluster exists, so no RHOAI components are deployed.",
 			Fix:         "Create the DataScienceCluster from the Status page.",
 		})
-		return out
-	}
-
-	dsc := dscs[0]
-	var ready *dscCondition
-	for i := range dsc.Status.Conditions {
-		if dsc.Status.Conditions[i].Type == "Ready" {
-			ready = &dsc.Status.Conditions[i]
-		}
-	}
-	details := []string{}
-	switch {
-	case ready == nil:
-		out.check = CheckResult{Name: name, Status: "warn", Detail: fmt.Sprintf("%s has no Ready condition yet (the operator has not reconciled it)", dsc.Metadata.Name)}
-	case ready.Status == "True":
-		details = append(details, fmt.Sprintf("%s is Ready", dsc.Metadata.Name))
 	default:
-		failing := failingConditions(dsc.Status.Conditions)
-		evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, truncate(ready.Message, 400))}
-		evidence = append(evidence, failing...)
-		out.check = CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("%s is not ready (%d failing condition(s))", dsc.Metadata.Name, len(failing))}
-		out.problems = append(out.problems, Problem{
-			ID:       "dsc-not-ready",
-			Severity: "warning",
-			Title:    fmt.Sprintf("DataScienceCluster %s is not ready", dsc.Metadata.Name),
-			Description: "The operator reports that some components or modules failed to deploy or are unhealthy. " +
-				"The conditions below are the operator's own messages. Conditions with severity Info (for example components set to Removed) are not listed.",
-			Evidence:        evidence,
-			AffectedObjects: []string{"DataScienceCluster " + dsc.Metadata.Name},
-			Fix:             "Fix the cause named in each condition (for example install a missing dependency operator, or set an unused component to Removed). The Components page shows the per-component status.",
-			TechnicalCmd:    fmt.Sprintf("oc get datasciencecluster %s -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'", dsc.Metadata.Name),
-		})
+		dsc := dscs[0]
+		var ready *dscCondition
+		for i := range dsc.Status.Conditions {
+			if dsc.Status.Conditions[i].Type == "Ready" {
+				ready = &dsc.Status.Conditions[i]
+			}
+		}
+		switch {
+		case ready == nil:
+			warn(fmt.Sprintf("%s has no Ready condition yet (the operator has not reconciled it)", dsc.Metadata.Name))
+		case ready.Status == "True":
+			details = append(details, fmt.Sprintf("%s is Ready", dsc.Metadata.Name))
+		default:
+			failing := failingConditions(dsc.Status.Conditions)
+			evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, truncate(ready.Message, 400))}
+			evidence = append(evidence, failing...)
+			out.check.Status = "fail"
+			details = append(details, fmt.Sprintf("%s is not ready (%d failing condition(s))", dsc.Metadata.Name, len(failing)))
+			out.problems = append(out.problems, Problem{
+				ID:       "dsc-not-ready",
+				Severity: "warning",
+				Title:    fmt.Sprintf("DataScienceCluster %s is not ready", dsc.Metadata.Name),
+				Description: "The operator reports that some components or modules failed to deploy or are unhealthy. " +
+					"The conditions below are the operator's own messages. Conditions with severity Info (for example components set to Removed) are not listed.",
+				Evidence:        evidence,
+				AffectedObjects: []string{"DataScienceCluster " + dsc.Metadata.Name},
+				Fix:             "Fix the cause named in each condition (for example install a missing dependency operator, or set an unused component to Removed). The Components page shows the per-component status.",
+				TechnicalCmd:    fmt.Sprintf("oc get datasciencecluster %s -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'", dsc.Metadata.Name),
+			})
+		}
 	}
 
 	dscis, dsciAPI, dsciErr := listFirstServed(c, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations")
 	switch {
 	case dsciErr != nil:
-		details = append(details, fmt.Sprintf("could not read the DSCInitialization: %v", dsciErr))
+		warn(fmt.Sprintf("could not verify the DSCInitialization: %v", dsciErr))
 	case !dsciAPI || len(dscis) == 0:
 		details = append(details, "no DSCInitialization")
 	default:
@@ -180,10 +187,6 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		details = append(details, fmt.Sprintf("DSCInitialization %s phase %s", dsci.Metadata.Name, nonEmpty(dsci.Status.Phase, "unknown")))
 	}
 
-	if out.check.Detail == "" {
-		out.check.Detail = strings.Join(details, "; ")
-	} else if len(details) > 0 {
-		out.check.Detail += "; " + strings.Join(details, "; ")
-	}
+	out.check.Detail = strings.Join(details, "; ")
 	return out
 }

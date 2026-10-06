@@ -178,3 +178,22 @@ func TestStaleCRDConversion_ForbiddenListIsAWarning(t *testing.T) {
 		t.Fatalf("check = %+v", out.check)
 	}
 }
+
+// R1-6: a conversion Service that exists but whose endpoints cannot be read
+// is not proven healthy, so the check warns instead of passing.
+func TestStaleCRDConversion_UnreadableEndpointsWarn(t *testing.T) {
+	f, c := newFakeAPI(t)
+	crds := `{"items":[{"metadata":{"name":"modelregistries.modelregistry.opendatahub.io"},"spec":{"conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"model-registry-operator-webhook-service"}}}}}}]}`
+	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusOK, crds)
+	f.json("GET", svcPath("redhat-ods-applications", "model-registry-operator-webhook-service"), http.StatusOK, `{}`)
+	f.status("GET", "/apis/discovery.k8s.io/v1/namespaces/redhat-ods-applications/endpointslices", http.StatusForbidden, "Forbidden")
+	f.json("GET", vwcPath, http.StatusOK, `{"items":[]}`)
+	f.json("GET", mwcPath, http.StatusOK, `{"items":[]}`)
+	out := checkStaleWebhooks(c)
+	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "conversion Service of CRD modelregistries.modelregistry.opendatahub.io: list endpoints") {
+		t.Fatalf("check = %+v", out.check)
+	}
+	if len(out.problems) != 0 {
+		t.Fatalf("problems = %+v", out.problems)
+	}
+}

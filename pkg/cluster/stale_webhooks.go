@@ -601,11 +601,11 @@ func scanStaleWebhooks(c *Client) webhookScan {
 		refs = append(refs, cfg.services()...)
 	}
 	env.health.prefetch(refs)
-	// A Service that cannot be read is reported. A Service that exists but
-	// whose endpoints cannot be listed (e.g. a template without the
-	// EndpointSlice rule) counts as serving: that never deletes anything.
+	// A Service, or its endpoints, that cannot be read keeps its
+	// configuration (it is never deletable), and is reported so the check
+	// says it could not verify it instead of passing.
 	for _, ref := range refs {
-		if h := env.health.lookup(ref); h.state == serviceUnknown && !h.exists && !containsString(scan.Errors, h.describe(ref)) {
+		if h := env.health.lookup(ref); h.state == serviceUnknown && !containsString(scan.Errors, h.describe(ref)) {
 			scan.Errors = append(scan.Errors, h.describe(ref))
 		}
 	}

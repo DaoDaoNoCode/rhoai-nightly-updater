@@ -271,18 +271,23 @@ func TestServiceHealth(t *testing.T) {
 	}
 }
 
-// A Service whose endpoints cannot be listed (old template without the
-// EndpointSlice rule) counts as serving for webhooks, so nothing is deleted
-// and no error is raised.
+// A Service whose endpoints cannot be listed (e.g. RBAC) keeps its
+// configuration: nothing is deleted. The scan reports it, so the check
+// says it could not verify the webhook instead of passing (R1-6).
 func TestStaleWebhookScan_UnreadableEndpointsKeepTheConfig(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveWebhooks(f, []whFixture{{name: "x.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{SubNS + "/svc"}}}, "Succeeded", nil, nil)
 	f.json("GET", svcPath(SubNS, "svc"), http.StatusOK, `{"spec":{"selector":{"app":"x"}}}`)
 	f.status("GET", fmt.Sprintf(epsPathFmt, SubNS), http.StatusForbidden, "Forbidden")
 	scan := scanStaleWebhooks(c)
-	if len(scan.Verdicts) != 0 || len(scan.Errors) != 0 {
+	if len(scan.Verdicts) != 0 || len(scan.Errors) != 1 || !strings.Contains(scan.Errors[0], "list endpoints of Service "+SubNS+"/svc") {
 		t.Fatalf("scan = %+v", scan)
 	}
+	out := checkStaleWebhooks(c)
+	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "could not verify") {
+		t.Fatalf("check = %+v", out.check)
+	}
+	assertWrites(t, f)
 }
 
 // Reinstall uses the same rules and deletes with preconditions; a kept
