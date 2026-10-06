@@ -1,0 +1,168 @@
+package cluster
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+// Verbatim condition messages from RHOAI 3.6 (E2).
+const (
+	msgImmutableSelector = `failure deploying resource redhat-ods-applications/kuberay-operator: apply failed apps/v1, Kind=Deployment: unable to patch apps/v1, Kind=Deployment redhat-ods-applications/kuberay-operator: Deployment.apps "kuberay-operator" is invalid: spec.selector: Invalid value: {"matchLabels":{"app.kubernetes.io/component":"kuberay-operator","app.kubernetes.io/name":"kuberay"}}: field is immutable`
+	msgTwoControllers    = `failure deploying resource redhat-ods-applications/aihub-controller-manager-metrics-monitor: apply failed monitoring.coreos.com/v1, Kind=ServiceMonitor: unable to patch monitoring.coreos.com/v1, Kind=ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor: ServiceMonitor.monitoring.coreos.com "aihub-controller-manager-metrics-monitor" is invalid: metadata.ownerReferences: Invalid value: [{"apiVersion":"config.opendatahub.io/v1alpha1","kind":"Platform","name":"default","uid":"1","controller":true},{"apiVersion":"components.platform.opendatahub.io/v1alpha1","kind":"AIHub","name":"default-aihub","uid":"2","controller":true}]: Only one reference can have Controller set to true. Found "true" in references for Platform/default and AIHub/default-aihub`
+	msgSchemaMismatch    = `failure deploying resource /default-trustyai: apply failed components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI: unable to patch components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI /default-trustyai: failed to create typed live object (/default-trustyai; components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI): errors: .spec.eval.lmeval.permitCodeExecution: expected boolean, got &{deny}`
+	msgTypedPatch        = `failure deploying resource /default-trustyai: apply failed components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI: failed to create typed patch object (/default-trustyai; components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI): .spec.eval.lmeval.permitOnline: expected string, got &value.valueUnstructured{Value:true}`
+)
+
+func TestParseApplyFailures(t *testing.T) {
+	got := parseApplyFailures(msgImmutableSelector)
+	if len(got) != 1 || got[0].Class != applyImmutable || got[0].Namespace != "redhat-ods-applications" || got[0].Name != "kuberay-operator" ||
+		got[0].GroupVersion != "apps/v1" || got[0].Kind != "Deployment" || strings.Join(got[0].Fields, ",") != "spec.selector" {
+		t.Fatalf("immutable: %+v", got)
+	}
+	got = parseApplyFailures(msgTwoControllers)
+	if len(got) != 1 || got[0].Class != applyControllerOwner || got[0].Kind != "ServiceMonitor" || got[0].group() != "monitoring.coreos.com" ||
+		got[0].Owners != "Platform/default and AIHub/default-aihub" {
+		t.Fatalf("controller owners: %+v", got)
+	}
+	got = parseApplyFailures(msgSchemaMismatch)
+	if len(got) != 1 || got[0].Class != applySchemaMismatch || got[0].Namespace != "" || got[0].Name != "default-trustyai" || got[0].Kind != "TrustyAI" ||
+		strings.Join(got[0].Fields, ",") != ".spec.eval.lmeval.permitCodeExecution: expected boolean, got &{deny}" {
+		t.Fatalf("schema: %+v", got)
+	}
+	got = parseApplyFailures(msgTypedPatch)
+	if len(got) != 1 || got[0].Class != applySchemaMismatch || !strings.HasPrefix(got[0].Fields[0], ".spec.eval.lmeval.permitOnline: expected string, got ") {
+		t.Fatalf("typed patch: %+v", got)
+	}
+	// Two failures in one message are both found, each with its own error.
+	got = parseApplyFailures("Some modules failed: " + msgImmutableSelector + "; " + msgTwoControllers)
+	if len(got) != 2 || got[0].Class != applyImmutable || got[1].Class != applyControllerOwner || strings.Contains(got[0].Detail, "ServiceMonitor") {
+		t.Fatalf("two: %+v", got)
+	}
+
+	for _, msg := range []string{
+		"",
+		"Some modules are not ready: trainer",
+		"dependency not met: JobSet Operator is not installed.",
+		// An apply failure of another kind is not one of these three.
+		`failure deploying resource ns/x: apply failed apps/v1, Kind=Deployment: Internal error occurred: failed calling webhook`,
+		`Deployment "x" is invalid: spec.selector: Invalid value: {}: field is immutable`, // not an apply failure report
+	} {
+		if got := parseApplyFailures(msg); len(got) != 0 {
+			t.Errorf("%q: %+v", msg, got)
+		}
+	}
+}
+
+func applyFailureCR(name string, ready string, msgs ...string) map[string]interface{} {
+	conds := []map[string]string{{"type": "Ready", "status": ready, "reason": "Error", "message": "x"}}
+	for _, m := range msgs {
+		conds = append(conds, map[string]string{"type": "ProvisioningSucceeded", "status": "False", "reason": "Error", "message": m})
+	}
+	return map[string]interface{}{"metadata": map[string]string{"name": name}, "status": map[string]interface{}{"conditions": conds}}
+}
+
+func TestCheckApplyFailures(t *testing.T) {
+	f, c := newFakeAPI(t)
+	serveComponentGroup(f)
+	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200,
+		`{"resources":[{"name":"rays","kind":"Ray"},{"name":"rays/status","kind":"Ray"},{"name":"trustyais","kind":"TrustyAI"},{"name":"aihubs","kind":"AIHub"},{"name":"newmodules","kind":"NewModule"}]}`)
+	// The DSC aggregates the module messages: each object is reported once.
+	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
+		"items": []interface{}{applyFailureCR("default-dsc", "False", msgImmutableSelector, msgSchemaMismatch)},
+	})
+	f.obj("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", map[string]interface{}{
+		"items": []interface{}{applyFailureCR("default", "True", msgTwoControllers)},
+	})
+	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", map[string]interface{}{"items": []interface{}{applyFailureCR("default-ray", "False", msgImmutableSelector)}})
+	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/trustyais", map[string]interface{}{"items": []interface{}{applyFailureCR("default-trustyai", "True", msgSchemaMismatch)}})
+	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]interface{}{"items": []interface{}{applyFailureCR("default-aihub", "True")}})
+	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]interface{}{"items": []interface{}{
+		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "new-operator"))}})
+	var crdLookups []string
+	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
+		crdLookups = append(crdLookups, r.URL.Query().Get("fieldSelector"))
+		b, _ := json.Marshal(map[string]interface{}{"items": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{
+			"name": "trustyais.components.platform.opendatahub.io",
+			"managedFields": []interface{}{
+				map[string]interface{}{"manager": "kubectl-edit", "operation": "Update", "time": "2026-09-01T10:00:00Z", "fieldsV1": map[string]interface{}{"f:metadata": map[string]interface{}{}}},
+				map[string]interface{}{"manager": "catalog", "operation": "Update", "time": "2026-10-05T12:00:00Z", "fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:versions": map[string]interface{}{}}}},
+			},
+		}}}})
+		return 200, string(b)
+	})
+
+	out := checkApplyFailures(c.WithContext(context.Background()))
+	if out.check.Status != "fail" || len(out.problems) != 4 {
+		t.Fatalf("check %+v, %d problems: %+v", out.check, len(out.problems), out.problems)
+	}
+	byID := map[string]Problem{}
+	for _, p := range out.problems {
+		byID[p.ID] = p
+		if p.AutoFixable || p.Fix == "" || p.TechnicalCmd == "" || len(p.AffectedObjects) == 0 || len(p.Evidence) == 0 {
+			t.Errorf("incomplete problem %+v", p)
+		}
+	}
+
+	imm, ok := byID["operator-apply-failed-immutable-deployment-redhat-ods-applications-kuberay-operator"]
+	if !ok {
+		t.Fatalf("ids %v", keysOf(byID))
+	}
+	// Reported by the Ray CR and the DSC (both not Ready): critical, the
+	// module CR first, and its module operator from the mapping.
+	if imm.Severity != "critical" || !strings.Contains(imm.Evidence[0], "Reported by Ray default-ray, DataScienceCluster default-dsc") ||
+		!strings.Contains(imm.TechnicalCmd, "oc delete deployment.apps kuberay-operator -n redhat-ods-applications") ||
+		!strings.Contains(imm.TechnicalCmd, "oc rollout restart deployment/"+moduleOperators["ray"].name+" -n "+moduleOperators["ray"].namespace) ||
+		!strings.Contains(imm.Title, "spec.selector") || !strings.Contains(imm.Fix, "pods stop until the operator recreates it") {
+		t.Errorf("immutable: %+v", imm)
+	}
+
+	owner := byID["operator-apply-failed-controller-owner-servicemonitor-redhat-ods-applications-aihub-controller-manager-metrics-monitor"]
+	if owner.Severity != "warning" || !strings.Contains(owner.TechnicalCmd, "oc delete servicemonitor.monitoring.coreos.com aihub-controller-manager-metrics-monitor -n redhat-ods-applications") ||
+		!strings.Contains(owner.TechnicalCmd, "oc delete pod -n "+SubNS+" -l name="+SubName) || !strings.Contains(strings.Join(owner.Evidence, "\n"), "Platform/default and AIHub/default-aihub") {
+		t.Errorf("controller owner: %+v", owner)
+	}
+
+	schema := byID["operator-apply-failed-schema-mismatch-trustyai--default-trustyai"]
+	ev := strings.Join(schema.Evidence, "\n")
+	if schema.Severity != "critical" || !strings.Contains(ev, "permitCodeExecution: expected boolean, got &{deny}") ||
+		!strings.Contains(ev, "spec.versions last written by catalog (Update) at 2026-10-05T12:00:00Z") || !strings.Contains(ev, "OLM's catalog operator") ||
+		!strings.Contains(schema.Fix, "trustyais.components.platform.opendatahub.io") || strings.Contains(schema.TechnicalCmd, "oc delete") ||
+		!strings.Contains(strings.Join(schema.AffectedObjects, ","), "CustomResourceDefinition trustyais.components.platform.opendatahub.io") {
+		t.Errorf("schema: %+v", schema)
+	}
+	if len(crdLookups) != 1 || crdLookups[0] != "metadata.name=trustyais.components.platform.opendatahub.io" {
+		t.Errorf("CRD lookups %v", crdLookups)
+	}
+
+	// A module the tool does not know: generic restart guidance.
+	unknown := byID["operator-apply-failed-immutable-deployment-redhat-ods-applications-new-operator"]
+	if !strings.Contains(unknown.Fix, "the operator that reconciles NewModule default-newmodule") || strings.Contains(unknown.TechnicalCmd, "rollout restart") {
+		t.Errorf("unknown module: %+v", unknown)
+	}
+}
+
+func TestCheckApplyFailuresHealthyAndUnreadable(t *testing.T) {
+	f, c := newFakeAPI(t)
+	f.obj("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]interface{}{
+		"items": []interface{}{applyFailureCR("default-dsc", "False", "Some modules are not ready: trainer")},
+	})
+	out := checkApplyFailures(c.WithContext(context.Background()))
+	if out.check.Status != "pass" || len(out.problems) != 0 || !strings.Contains(out.check.Detail, "1 CR checked") {
+		t.Fatalf("healthy: %+v %+v", out.check, out.problems)
+	}
+	f.status("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 403, "Forbidden")
+	if out := checkApplyFailures(c.WithContext(context.Background())); out.check.Status != "warn" || !strings.Contains(out.check.Detail, "Platform") {
+		t.Fatalf("unreadable: %+v", out.check)
+	}
+}
+
+func keysOf(m map[string]Problem) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

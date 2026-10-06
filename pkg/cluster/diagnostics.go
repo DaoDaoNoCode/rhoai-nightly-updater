@@ -73,6 +73,7 @@ var diagnosticChecks = []diagnosticCheck{
 	{"DataScienceCluster", checkDataScienceCluster},
 	{"RHOAI pods", checkRHOAIPods},
 	{"Platform modules", checkPlatformModules},
+	{applyFailuresCheckName, checkApplyFailures},
 	{"Operator-managed config", checkManagedConfig},
 }
 
