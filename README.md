@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/status-page-1.png" alt="Status page: operator status" width="800" />
+  <img src="docs/images/status-page-1.png" alt="Status page: installed vs latest build" width="800" />
 </p>
 <p align="center">
-  <img src="docs/images/status-page-2.png" alt="Status page: update panel" width="800" />
+  <img src="docs/images/status-page-2.png" alt="Status page: update panel, activity and recovery" width="800" />
 </p>
 
 ---
@@ -35,7 +35,7 @@
   <img src="docs/images/components-page.png" alt="Components page" width="800" />
 </p>
 <p align="center">
-  <img src="docs/images/build-explorer-page-1.png" alt="Build Explorer: tag browser" width="800" />
+  <img src="docs/images/build-explorer-page-1.png" alt="Build Explorer: nightly builds" width="800" />
 </p>
 
 ## How the tool keeps your cluster safe
