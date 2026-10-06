@@ -43,12 +43,21 @@ function result(problems: Problem[]): DiagnosticResult {
 }
 
 
+/** Problems start collapsed (UX-Diagnostics-3): open one by its card toggle. */
+function expand(title: string): void {
+  const card = screen.getByText(title).closest(".pf-v6-c-card") as HTMLElement;
+  fireEvent.click(within(card).getByRole("button", { name: /Details/ }));
+}
+
 describe("Diagnostics (B2 contract)", () => {
   it("guidance-only problems show the objects and a copyable command, and no Fix button", async () => {
     stubApi({ "/api/diagnostics": result([guidance, pods]) });
     renderPage(<TroubleshootingPage />);
     const card = (await screen.findByText(guidance.title)).closest(".pf-v6-c-card") as HTMLElement;
-    expect(within(card).getByText("Manual fix")).toBeInTheDocument();
+    expect(within(card).queryByText("Auto-fix available")).not.toBeInTheDocument();
+    expect(within(card).queryByRole("textbox")).not.toBeInTheDocument();
+    expand(guidance.title);
+    expect(within(card).getByText(/This page does not change anything for this problem/)).toBeInTheDocument();
     expect(within(card).getByText("CustomResourceDefinition mcpservers.mcp.x-k8s.io")).toBeInTheDocument();
     expect(within(card).getByRole("textbox", { name: `Command for ${guidance.title}` })).toHaveValue(guidance.technicalCmd);
     expect(within(card).getByRole("button", { name: "Copy command" })).toBeInTheDocument();
@@ -66,6 +75,7 @@ describe("Diagnostics (B2 contract)", () => {
     });
     renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
+    expand(fixable.title);
     // Wait for permissions, then open the dialog.
     await new Promise((r) => setTimeout(r, 20));
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
@@ -86,6 +96,7 @@ describe("Diagnostics (B2 contract)", () => {
     });
     renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
+    expand(fixable.title);
     await new Promise((r) => setTimeout(r, 20));
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Fix" }));
@@ -97,6 +108,7 @@ describe("Diagnostics (B2 contract)", () => {
     stubApi({ "/api/diagnostics": result([fixable]), "/api/user/permissions": { canMutate: false, user: "v" } });
     renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
+    expand(fixable.title);
     await new Promise((r) => setTimeout(r, 20));
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -109,6 +121,7 @@ describe("Diagnostics (B2 contract)", () => {
       operation: async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
     });
     await screen.findByText(fixable.title);
+    expand(fixable.title);
     const fix = screen.getByRole("button", { name: "Fix" });
     await waitFor(() => expect(fix).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(fix);
@@ -122,6 +135,7 @@ describe("Diagnostics (B2 contract)", () => {
     });
     renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
+    expand(fixable.title);
     const fix = screen.getByRole("button", { name: "Fix" });
     fireEvent.mouseEnter(fix);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/session has expired/);
@@ -136,6 +150,7 @@ describe("Diagnostics (B2 contract)", () => {
     const fetchOperation = vi.fn(async () => answer);
     renderPage(<TroubleshootingPage />, "/", { operation: fetchOperation });
     await screen.findByText(fixable.title);
+    expand(fixable.title);
     await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).not.toHaveAttribute("aria-disabled"));
     const before = fetchOperation.mock.calls.length;
     answer = { inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } };
@@ -168,7 +183,7 @@ describe("Diagnostics (B2 contract)", () => {
   it("a failed scan is classified and offers Retry", async () => {
     stubApi({ "/api/diagnostics": () => jsonResponse({ error: "context deadline exceeded", errorCode: "timeout" }, 504) });
     renderPage(<TroubleshootingPage />);
-    expect(await screen.findByText("The request timed out")).toBeInTheDocument();
+    expect(await screen.findByText(/^The request timed out/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 

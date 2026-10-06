@@ -3,85 +3,55 @@ import {
   ActionListItem,
   Alert,
   AlertActionCloseButton,
-  Bullseye,
   Button,
   Card,
   CardBody,
+  CardExpandableContent,
+  CardHeader,
   CardTitle,
   ClipboardCopy,
   Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
   ExpandableSection,
   Flex,
   FlexItem,
-  Grid,
-  GridItem,
-  Label,
   List,
   ListItem,
-  Modal,
-  ModalVariant,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
   PageSection,
-  Spinner,
   Stack,
   StackItem,
   Title,
 } from "@patternfly/react-core";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
-import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
-import InfoCircleIcon from "@patternfly/react-icons/dist/esm/icons/info-circle-icon";
+import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import CopyIcon from "@patternfly/react-icons/dist/esm/icons/copy-icon";
-import type { CheckResult, OperationResponse, Problem, DiagnosticResult } from "../types";
+import type { OperationResponse, Problem, DiagnosticResult } from "../types";
 import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageHeader } from "../components/PageHeader";
+import { PageErrorState, PageLoading } from "../components/PageStates";
+import { ConfirmActionModal } from "../components/ConfirmActionModal";
+import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabel";
+import { TechnicalDetails, TruncatedText } from "../components/LongText";
 import { TooltipButton } from "../components/TooltipButton";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
 type ScanState = "idle" | "loading" | "done" | "error";
 
-const statusIcon = (status: CheckResult["status"]) => {
-  switch (status) {
-    case "pass":
-      return <CheckCircleIcon color="var(--pf-t--global--color--status--success--default)" />;
-    case "fail":
-      return <ExclamationCircleIcon color="var(--pf-t--global--color--status--danger--default)" />;
-    case "warn":
-      return <ExclamationTriangleIcon color="var(--pf-t--global--color--status--warning--default)" />;
-    default:
-      return <InfoCircleIcon color="var(--pf-t--global--color--status--info--default)" />;
-  }
+const CHECK_STATUS: Record<string, { kind: StatusKind; text: string; order: number }> = {
+  fail: { kind: "danger", text: "Failed", order: 0 },
+  warn: { kind: "warning", text: "Warning", order: 1 },
+  info: { kind: "info", text: "Info", order: 2 },
+  pass: { kind: "success", text: "Passed", order: 3 },
 };
 
-const statusText = (status: CheckResult["status"]) =>
-  status === "pass" ? "Passed" : status === "fail" ? "Failed" : status === "warn" ? "Warning" : "Info";
-const statusColor = (status: CheckResult["status"]): "green" | "red" | "yellow" | "blue" =>
-  status === "pass" ? "green" : status === "fail" ? "red" : status === "warn" ? "yellow" : "blue";
-
-const severityIcon = (severity: Problem["severity"]) => {
-  switch (severity) {
-    case "critical":
-      return <ExclamationCircleIcon color="var(--pf-t--global--color--status--danger--default)" />;
-    case "warning":
-      return <ExclamationTriangleIcon color="var(--pf-t--global--color--status--warning--default)" />;
-    default:
-      return <InfoCircleIcon color="var(--pf-t--global--color--status--info--default)" />;
-  }
-};
-
-const severityLabel = (severity: Problem["severity"]) => {
-  switch (severity) {
-    case "critical":
-      return <Label color="red" isCompact>Critical</Label>;
-    case "warning":
-      return <Label color="yellow" isCompact>Warning</Label>;
-    default:
-      return <Label color="blue" isCompact>Info</Label>;
-  }
+const SEVERITY: Record<string, { kind: StatusKind; text: string }> = {
+  critical: { kind: "danger", text: "Critical" },
+  warning: { kind: "warning", text: "Warning" },
+  info: { kind: "info", text: "Info" },
 };
 
 /**
@@ -149,8 +119,8 @@ export function buildDiagnosticReport(data: DiagnosticResult): string {
 }
 
 const ObjectList: React.FC<{ objects: string[] }> = ({ objects }) => (
-  <List>
-    {objects.map((o) => <ListItem key={o}><code style={{ overflowWrap: "anywhere" }}>{o}</code></ListItem>)}
+  <List isPlain>
+    {objects.map((o) => <ListItem key={o}><code className="pf-v6-u-text-break-word">{o}</code></ListItem>)}
   </List>
 );
 
@@ -163,6 +133,7 @@ export const TroubleshootingPage: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [confirmFix, setConfirmFix] = useState<Problem | null>(null);
   const [lastScanned, setLastScanned] = useState<Date | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Permissions, session and the operation lock. An operator install in
   // progress alone does not block a fix: that may be what is stuck.
   const fixReason = useMutationBlocker({ ignoreReconcile: true });
@@ -252,236 +223,201 @@ export const TroubleshootingPage: React.FC = () => {
         )}
       />
 
-      {scanState === "loading" && !data && (
-        <PageSection>
-          <Bullseye>
-            <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-              <FlexItem><Spinner size="xl" aria-label="Scanning cluster health" /></FlexItem>
-              <FlexItem><Content component="p">Scanning cluster health...</Content></FlexItem>
-            </Flex>
-          </Bullseye>
-        </PageSection>
-      )}
+      {scanState === "loading" && !data && <PageLoading title="Scanning the cluster health" />}
 
-      {scanState === "error" && error && (
-        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={runScan} stale={!!data} />
+      {scanState === "error" && error && data && (
+        <LoadErrorAlert error={error} genericTitle="The diagnostic scan failed" onRetry={runScan} stale />
+      )}
+      {scanState === "error" && error && !data && (
+        <PageErrorState error={error} title="The diagnostic scan failed" onRetry={runScan} />
       )}
 
       {data && (
-        <>
-          <PageSection aria-live="polite">
-            {problems.length === 0 && failCount === 0 && warnCount === 0 && (
-              <Alert component="p" variant="success" title={`All ${totalChecks} checks passed, no issues detected`} isInline />
-            )}
-            {(problems.length > 0 || failCount > 0 || warnCount > 0) && (
-              <Alert component="p" variant={summary.variant} title={summary.title} isInline>
-                {totalChecks > 0 && (
-                  <Content component="p">
-                    {passCount} of {totalChecks} health checks passed{failCount + warnCount > 0 ? ` (${failCount} failed, ${warnCount} with warnings)` : ""}.
-                  </Content>
-                )}
-                {problems.length > 0 && <Content component="p">The problems below say what was observed and how to fix it.</Content>}
-              </Alert>
-            )}
-          </PageSection>
-
-          {fixResult && (
-            <PageSection>
-              <Alert variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "Fix failed")} isInline isLiveRegion component="p"
-                actionClose={<AlertActionCloseButton onClose={() => setFixResult(null)} />}>
-                {fixResult.success ? undefined : fixResult.message}
-                {fixResult.errorCode === "conflict" ? " The scan was refreshed; check the problem again before retrying." : ""}
-                {(fixResult.logs?.length ?? 0) > 0 && (
-                  <List>{fixResult.logs!.map((l, i) => <ListItem key={i}>{l}</ListItem>)}</List>
-                )}
-              </Alert>
-            </PageSection>
-          )}
-
-          {groups.map((group) => (
-            <PageSection key={group.id}>
-              <Title headingLevel="h2" size="lg" style={{ marginBottom: "1rem" }}>
-                {group.title} ({group.items.length})
-              </Title>
-              <Stack hasGutter>
-                {group.items.map((problem) => {
-                  const auto = hasAutoFix(problem);
-                  const objects = problem.affectedObjects ?? [];
-                  return (
-                    <StackItem key={problem.id}>
-                      <Card>
-                        <CardTitle>
-                          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
-                            <FlexItem>{severityIcon(problem.severity)}</FlexItem>
-                            <FlexItem flex={{ default: "flex_1" }} style={{ minWidth: 0 }}>
-                              <Title headingLevel="h3" size="md" style={{ margin: 0, overflowWrap: "anywhere" }}>
-                                {problem.title}
-                              </Title>
-                            </FlexItem>
-                            <FlexItem>
-                              <Flex gap={{ default: "gapXs" }} flexWrap={{ default: "wrap" }} justifyContent={{ default: "justifyContentFlexEnd" }}>
-                                <FlexItem>{auto ? <Label isCompact color="blue">Automatic fix</Label> : <Label isCompact variant="outline">Manual fix</Label>}</FlexItem>
-                                <FlexItem>{severityLabel(problem.severity)}</FlexItem>
-                              </Flex>
-                            </FlexItem>
-                          </Flex>
-                        </CardTitle>
-                        <CardBody>
-                          <Stack hasGutter>
-                            <StackItem>
-                              <Content component="p">{problem.description}</Content>
-                            </StackItem>
-
-                            {problem.evidence && problem.evidence.length > 0 && (
-                              <StackItem>
-                                <Content component="p" style={{ fontWeight: 600 }}>What was observed:</Content>
-                                <List>
-                                  {problem.evidence.map((e, i) => (
-                                    <ListItem key={i}><span style={{ overflowWrap: "anywhere", whiteSpace: "pre-line" }}>{e}</span></ListItem>
-                                  ))}
-                                </List>
-                              </StackItem>
-                            )}
-
-                            {objects.length > 0 && (
-                              <StackItem>
-                                <Content component="p" style={{ fontWeight: 600 }}>Objects:</Content>
-                                <ObjectList objects={objects} />
-                              </StackItem>
-                            )}
-
-                            <StackItem>
-                              <Content component="p" style={{ fontWeight: 600 }}>How to fix:</Content>
-                              <Content component="p">{problem.fix}</Content>
-                            </StackItem>
-
-                            {!auto && problem.technicalCmd && (
-                              <StackItem>
-                                <Content component="p" style={{ fontWeight: 600 }}>Command:</Content>
-                                <ClipboardCopy isReadOnly isCode hoverTip="Copy command" clickTip="Copied" textAriaLabel={`Command for ${problem.title}`}>
-                                  {problem.technicalCmd}
-                                </ClipboardCopy>
-                                <Content component="small">This page changes nothing for this problem. Read the command before you run it with <code>oc</code>.</Content>
-                              </StackItem>
-                            )}
-
-                            {auto && (
-                              <StackItem>
-                                <TooltipButton
-                                  variant="primary"
-                                  onClick={() => setConfirmFix(problem)}
-                                  isDisabled={fixingId !== null}
-                                  isLoading={fixingId === problem.autoFixAction}
-                                  disabledReason={fixReason}
-                                >
-                                  {fixingId === problem.autoFixAction ? "Fixing..." : "Fix"}
-                                </TooltipButton>
-                              </StackItem>
-                            )}
-
-                            {problem.learnMore && (
-                              <StackItem>
-                                <ExpandableSection toggleText="Learn more">
-                                  <Content component="p" style={{ whiteSpace: "pre-line" }}>{problem.learnMore}</Content>
-                                </ExpandableSection>
-                              </StackItem>
-                            )}
-
-                            {auto && problem.technicalCmd && (
-                              <StackItem>
-                                <ExpandableSection toggleText="Technical details">
-                                  <ClipboardCopy isBlock isReadOnly isCode>{problem.technicalCmd}</ClipboardCopy>
-                                </ExpandableSection>
-                              </StackItem>
-                            )}
-                          </Stack>
-                        </CardBody>
-                      </Card>
-                    </StackItem>
-                  );
-                })}
-              </Stack>
-            </PageSection>
-          ))}
-
-          <PageSection>
-            <Title headingLevel="h2" size="lg" style={{ marginBottom: "1rem" }}>
-              Health checks ({totalChecks})
-            </Title>
-            <Grid hasGutter>
-              {checks.map((check) => (
-                <GridItem key={check.name} span={12} md={6}>
-                  <Card isCompact>
-                    <CardBody>
-                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                        <div style={{ flexShrink: 0, paddingTop: "2px" }}>{statusIcon(check.status)}</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <Content component="p" style={{ fontWeight: 600, margin: 0 }}>{check.name}</Content>
-                          <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)", overflowWrap: "anywhere" }}>
-                            {check.detail}
-                          </Content>
-                        </div>
-                        <div style={{ flexShrink: 0 }}>
-                          <Label color={statusColor(check.status)} isCompact>{statusText(check.status)}</Label>
-                        </div>
-                      </div>
-                    </CardBody>
-                  </Card>
-                </GridItem>
-              ))}
-            </Grid>
-          </PageSection>
-
-          {scanState === "loading" && (
-            <PageSection>
-              <Bullseye>
-                <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                  <FlexItem><Spinner size="md" aria-label="Re-scanning" /></FlexItem>
-                  <FlexItem><Content component="p">Re-scanning...</Content></FlexItem>
-                </Flex>
-              </Bullseye>
-            </PageSection>
-          )}
-        </>
-      )}
-
-      <Modal aria-labelledby="confirm-fix-title" variant={ModalVariant.medium} isOpen={confirmFix !== null} onClose={() => setConfirmFix(null)}>
-        <ModalHeader title={`Fix: ${confirmFix?.title ?? ""}`} labelId="confirm-fix-title" />
-        <ModalBody>
+        <PageSection isFilled aria-live="polite">
           <Stack hasGutter>
             <StackItem>
-              <Content component="p">{confirmFix?.confirmMessage || "This changes resources on the shared cluster."}</Content>
+              {problems.length === 0 && failCount === 0 && warnCount === 0 ? (
+                <Alert component="p" variant="success" title={`All ${totalChecks} checks passed, no issues detected`} isInline />
+              ) : (
+                <Alert component="p" variant={summary.variant} title={summary.title} isInline />
+              )}
             </StackItem>
-            {(confirmFix?.affectedObjects?.length ?? 0) > 0 && (
+            <StackItem>
+              <Content component="p" className="pf-v6-u-text-color-subtle">
+                {totalChecks > 0 && <>{passCount} of {totalChecks} health checks passed{failCount + warnCount > 0 ? ` (${failCount} failed, ${warnCount} with warnings)` : ""}. </>}
+                The scan only reads the cluster: fixes run only after you confirm them, and commands are for you to read and run with <code>oc</code>.
+              </Content>
+            </StackItem>
+
+            {fixResult && (
               <StackItem>
-                <Content component="p">Objects this fix may change:</Content>
-                <ObjectList objects={confirmFix!.affectedObjects!} />
+                <Alert variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "Fix failed")} isInline isLiveRegion component="p"
+                  actionClose={<AlertActionCloseButton onClose={() => setFixResult(null)} />}>
+                  {fixResult.success ? undefined : fixResult.message}
+                  {fixResult.errorCode === "conflict" ? " The scan was refreshed; check the problem again before retrying." : ""}
+                  {(fixResult.logs?.length ?? 0) > 0 && <TechnicalDetails text={fixResult.logs!} />}
+                </Alert>
               </StackItem>
             )}
+
+            {groups.map((group) => (
+              <StackItem key={group.id}>
+                <Stack hasGutter>
+                  <StackItem>
+                    <Title headingLevel="h2" size="lg">{group.title} ({group.items.length})</Title>
+                  </StackItem>
+                  {group.items.map((problem) => {
+                    const auto = hasAutoFix(problem);
+                    const objects = problem.affectedObjects ?? [];
+                    const isOpen = !!expanded[problem.id];
+                    const severity = SEVERITY[problem.severity] ?? SEVERITY.info;
+                    const toggleId = `problem-${problem.id}-toggle`;
+                    const titleId = `problem-${problem.id}-title`;
+                    return (
+                      <StackItem key={problem.id}>
+                        <Card isExpanded={isOpen}>
+                          <CardHeader
+                            onExpand={() => setExpanded((prev) => ({ ...prev, [problem.id]: !prev[problem.id] }))}
+                            toggleButtonProps={{ id: toggleId, "aria-label": "Details", "aria-labelledby": `${toggleId} ${titleId}`, "aria-expanded": isOpen }}
+                            actions={{
+                              actions: (
+                                <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
+                                  {auto && <FlexItem><TagLabel color="blue">Auto-fix available</TagLabel></FlexItem>}
+                                  <FlexItem><StatusLabel status={severity.kind}>{severity.text}</StatusLabel></FlexItem>
+                                </Flex>
+                              ),
+                              hasNoOffset: true,
+                            }}
+                          >
+                            <CardTitle><Title headingLevel="h3" size="md" id={titleId} className="pf-v6-u-text-break-word">{problem.title}</Title></CardTitle>
+                          </CardHeader>
+                          <CardExpandableContent>
+                            <CardBody>
+                              <Stack hasGutter>
+                                <StackItem>
+                                  <Content component="p">{problem.description}</Content>
+                                </StackItem>
+                                <StackItem>
+                                  <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "12ch" }} aria-label={`Details of ${problem.title}`}>
+                                    {problem.evidence && problem.evidence.length > 0 && (
+                                      <DescriptionListGroup>
+                                        <DescriptionListTerm>Observed</DescriptionListTerm>
+                                        <DescriptionListDescription>
+                                          <TruncatedText lines={3}>
+                                            <List isPlain>
+                                              {problem.evidence.map((e, i) => <ListItem key={i} className="pf-v6-u-text-break-word">{e}</ListItem>)}
+                                            </List>
+                                          </TruncatedText>
+                                        </DescriptionListDescription>
+                                      </DescriptionListGroup>
+                                    )}
+                                    {objects.length > 0 && (
+                                      <DescriptionListGroup>
+                                        <DescriptionListTerm>Objects</DescriptionListTerm>
+                                        <DescriptionListDescription><ObjectList objects={objects} /></DescriptionListDescription>
+                                      </DescriptionListGroup>
+                                    )}
+                                    <DescriptionListGroup>
+                                      <DescriptionListTerm>Fix</DescriptionListTerm>
+                                      <DescriptionListDescription>{problem.fix}{!auto && " This page does not change anything for this problem."}</DescriptionListDescription>
+                                    </DescriptionListGroup>
+                                    {problem.technicalCmd && (
+                                      <DescriptionListGroup>
+                                        <DescriptionListTerm>Command</DescriptionListTerm>
+                                        <DescriptionListDescription>
+                                          <ClipboardCopy isReadOnly isCode variant="expansion" hoverTip="Copy command" clickTip="Copied" textAriaLabel={`Command for ${problem.title}`}>
+                                            {problem.technicalCmd}
+                                          </ClipboardCopy>
+                                        </DescriptionListDescription>
+                                      </DescriptionListGroup>
+                                    )}
+                                  </DescriptionList>
+                                </StackItem>
+                                {auto && (
+                                  <StackItem>
+                                    <TooltipButton
+                                      variant="secondary"
+                                      onClick={() => setConfirmFix(problem)}
+                                      isDisabled={fixingId !== null}
+                                      isLoading={fixingId === problem.autoFixAction}
+                                      disabledReason={fixReason}
+                                    >
+                                      {fixingId === problem.autoFixAction ? "Fixing..." : "Fix"}
+                                    </TooltipButton>
+                                  </StackItem>
+                                )}
+                                {problem.learnMore && (
+                                  <StackItem>
+                                    <ExpandableSection toggleText="Learn more">
+                                      <Content component="p" className="pf-v6-u-text-break-word">{problem.learnMore}</Content>
+                                    </ExpandableSection>
+                                  </StackItem>
+                                )}
+                              </Stack>
+                            </CardBody>
+                          </CardExpandableContent>
+                        </Card>
+                      </StackItem>
+                    );
+                  })}
+                </Stack>
+              </StackItem>
+            ))}
+
             <StackItem>
-              <Content component="small">The server checks the problem again first and changes nothing if it is already gone.</Content>
-            </StackItem>
-            <StackItem>
-              <Alert component="p" variant="warning" title="This changes a shared cluster." isInline isPlain />
+              <Card>
+                <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Health checks ({totalChecks})</Title></CardTitle></CardHeader>
+                <CardBody>
+                  <Table aria-label="Health checks" variant="compact">
+                    <Thead>
+                      <Tr>
+                        <Th width={25}>Check</Th>
+                        <Th modifier="fitContent">Result</Th>
+                        <Th>Detail</Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {[...checks]
+                        .sort((a, b) => (CHECK_STATUS[a.status]?.order ?? 2) - (CHECK_STATUS[b.status]?.order ?? 2))
+                        .map((check) => {
+                          const st = CHECK_STATUS[check.status] ?? CHECK_STATUS.info;
+                          return (
+                            <Tr key={check.name}>
+                              <Td dataLabel="Check"><strong>{check.name}</strong></Td>
+                              <Td dataLabel="Result" modifier="fitContent"><StatusLabel status={st.kind}>{st.text}</StatusLabel></Td>
+                              <Td dataLabel="Detail" className="pf-v6-u-text-break-word"><TruncatedText>{check.detail}</TruncatedText></Td>
+                            </Tr>
+                          );
+                        })}
+                    </Tbody>
+                  </Table>
+                </CardBody>
+              </Card>
             </StackItem>
           </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="primary"
-            onClick={() => {
-              if (confirmFix?.autoFixAction) {
-                void handleFix(confirmFix.autoFixAction);
-                setConfirmFix(null);
-              }
-            }}
-            isLoading={fixingId !== null}
-          >
-            Fix
-          </Button>
-          <Button variant="link" onClick={() => setConfirmFix(null)}>Cancel</Button>
-        </ModalFooter>
-      </Modal>
+        </PageSection>
+      )}
+
+      <ConfirmActionModal
+        isOpen={confirmFix !== null}
+        title={`Fix "${confirmFix?.title ?? ""}"?`}
+        changes={(confirmFix?.affectedObjects?.length ?? 0) > 0
+          ? confirmFix!.affectedObjects!.map((obj) => <code key={obj} className="pf-v6-u-text-break-word">{obj}</code>)
+          : [confirmFix?.confirmMessage || "Resources on the shared cluster involved in this problem."]}
+        confirmLabel="Fix"
+        isLoading={fixingId !== null}
+        confirmDisabled={!!fixReason}
+        onConfirm={() => {
+          if (confirmFix?.autoFixAction) {
+            void handleFix(confirmFix.autoFixAction);
+            setConfirmFix(null);
+          }
+        }}
+        onCancel={() => setConfirmFix(null)}
+      >
+        {(confirmFix?.affectedObjects?.length ?? 0) > 0 && confirmFix?.confirmMessage && <Content component="p">{confirmFix.confirmMessage}</Content>}
+        <Content component="p" className="pf-v6-u-text-color-subtle">The server checks the problem again first and changes nothing if it is already gone.</Content>
+      </ConfirmActionModal>
     </>
   );
 };
