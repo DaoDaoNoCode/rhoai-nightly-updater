@@ -11,7 +11,7 @@ import {
   toApiError,
   type ApiError,
 } from "../services/api";
-import { DASHBOARD_OVERRIDE_POLL_MS, PERMISSION_RETRY_MS } from "../constants";
+import { DASHBOARD_OVERRIDE_POLL_MS, PERMISSION_RETRY_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
 import { usePolling } from "../hooks/usePolling";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
@@ -186,16 +186,31 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     return () => controller.abort();
   }, []);
 
-  // --- Update check (once, for releases only) ----------------------------------
+  // --- Update check (releases only; again on window focus, at most every 6 h) --
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
   const runningRelease = isReleaseVersion(version?.version) ? version?.version : undefined;
+  const updateCheckedAt = useRef(0);
   useEffect(() => {
     if (!runningRelease) return;
-    const controller = new AbortController();
-    fetchers.current.fetchUpdateCheck(controller.signal)
-      .then((u) => { if (!controller.signal.aborted) setUpdate(u); })
-      .catch(() => { /* best effort: no banner when the check fails */ });
-    return () => controller.abort();
+    let controller: AbortController | null = null;
+    const check = () => {
+      controller?.abort();
+      const current = new AbortController();
+      controller = current;
+      updateCheckedAt.current = Date.now();
+      fetchers.current.fetchUpdateCheck(current.signal)
+        .then((u) => { if (!current.signal.aborted) setUpdate(u); })
+        .catch(() => { /* best effort: no banner when the check fails */ });
+    };
+    check();
+    const onFocus = () => {
+      if (Date.now() - updateCheckedAt.current >= UPDATE_CHECK_REFRESH_MS) check();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      controller?.abort();
+    };
   }, [runningRelease]);
 
   // --- Dashboard Dev override -------------------------------------------------
