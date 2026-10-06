@@ -1055,29 +1055,37 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	}
 	validated := "Reinstall target validated"
 	verdict, reason := compareWithInstalled(csv, targetCSV)
+	// crdWarning is shown in the downgrade confirmation and the result.
+	crdWarning := ""
 	if verdict == verdictOlder || verdict == verdictUnknown {
 		// A possible downgrade: OLM fails it in the CRD step when the older
 		// bundle drops a version the live CRDs still store, after the
-		// current operator is already gone. Checked before anything changes,
-		// even when the downgrade is confirmed.
+		// current operator is already gone (the restore then brings the
+		// previous operator back). The catalog only gives the CSV's
+		// customresourcedefinitions.owned[].version, which names the
+		// version the CSV describes, not every version of the bundled CRD's
+		// spec.versions (Operator SDK CSV markers), so a missing version is
+		// a warning, never a refusal.
 		if targetCRDs == nil {
 			logs = append(logs, "Warning: the catalog does not list the CRD versions of "+displayCSV(targetCSV)+", so the stored versions of the live CRDs were not checked. If the older bundle drops a stored version, OLM fails the install and the previous operator is restored.")
 			validated += " (CRD stored versions not checked)"
 		} else if conflicts, err := storedVersionConflicts(c, targetCRDs); err != nil {
-			recordActivity = false
-			return fail(fmt.Sprintf("Cannot check whether %s can serve the stored versions of the live CRDs: %v. Nothing was changed.", displayCSV(targetCSV), err), "prerequisites")
+			crdWarning = fmt.Sprintf("The stored versions of the live CRDs could not be compared with %s: %v.", displayCSV(targetCSV), err)
 		} else if len(conflicts) > 0 {
-			recordActivity = false
-			return fail(fmt.Sprintf("%s cannot be installed over the live CRDs: %s. OLM would fail its InstallPlan (risk of data loss), so nothing was changed. Moving to this version needs a manual storage-version migration first.", displayCSV(targetCSV), strings.Join(conflicts, "; ")), "validation")
+			crdWarning = fmt.Sprintf("%s may not serve every version the live CRDs store: %s. Its CSV describes only those versions, and its bundled CRDs may still serve more; if they do not, OLM fails the InstallPlan (risk of data loss) and the previous operator is restored.", displayCSV(targetCSV), strings.Join(conflicts, "; "))
 		} else {
-			logs = append(logs, "OK: the target bundle lists every stored version of the live CRDs")
+			logs = append(logs, "OK: the target CSV describes every stored version of the live CRDs")
+		}
+		if crdWarning != "" {
+			logs = append(logs, "Warning: "+crdWarning)
+			validated += " (CRD stored versions: see warning)"
 		}
 	}
 	switch verdict {
 	case verdictOlder:
 		if !opts.AllowDowngrade {
 			recordActivity = false
-			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Reinstall would remove the operator and install the older version, while the CRDs keep the newer schema, which the older operator may reject. Nothing was changed. Confirm the downgrade to continue.", targetCSV, csv.Name), errorCodeDowngrade)
+			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Reinstall would remove the operator and install the older version, while the CRDs keep the newer schema, which the older operator may reject. Nothing was changed. Confirm the downgrade to continue.%s", targetCSV, csv.Name, spaced(crdWarning)), errorCodeDowngrade)
 		}
 		logs = append(logs, fmt.Sprintf("Warning: downgrade confirmed: %s -> %s. CRDs keep the newer schema.", csv.Name, targetCSV))
 		validated += fmt.Sprintf(" (downgrade: %s -> %s)", csv.Name, targetCSV)
@@ -1085,7 +1093,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		// Fail closed: an unreadable version must not let a downgrade through.
 		if !opts.AllowDowngrade {
 			recordActivity = false
-			return fail(fmt.Sprintf("Cannot tell whether the target %s is older than the installed %s: %s. OLM cannot downgrade an operator, so a downgrade could leave CRDs the older operator rejects. Nothing was changed. Confirm to continue anyway.", displayCSV(targetCSV), csv.Name, reason), errorCodeDowngrade)
+			return fail(fmt.Sprintf("Cannot tell whether the target %s is older than the installed %s: %s. OLM cannot downgrade an operator, so a downgrade could leave CRDs the older operator rejects. Nothing was changed. Confirm to continue anyway.%s", displayCSV(targetCSV), csv.Name, reason, spaced(crdWarning)), errorCodeDowngrade)
 		}
 		logs = append(logs, fmt.Sprintf("Warning: version comparison not possible (%s); continuing as confirmed: %s -> %s", reason, csv.Name, displayCSV(targetCSV)))
 		validated += fmt.Sprintf(" (confirmed: %s -> %s, version unknown)", csv.Name, displayCSV(targetCSV))
@@ -1097,7 +1105,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		}
 		logs = append(logs, "OK: Dashboard Dev session ended; dashboard-operator is running again")
 	}
-	emit(UpdateStepEvent{Step: "validate_target", Status: "success", Message: validated})
+	emit(UpdateStepEvent{Step: "validate_target", Status: "success", Message: validated, Detail: crdWarning})
 
 	// --- Step 2: save_snapshot ---
 	emit(UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})

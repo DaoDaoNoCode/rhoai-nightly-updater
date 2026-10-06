@@ -336,6 +336,14 @@ func channelNames(channels []interface{}) []string {
 	return names
 }
 
+// spaced returns " "+s, or "" for an empty s.
+func spaced(s string) string {
+	if s == "" {
+		return ""
+	}
+	return " " + s
+}
+
 // storedVersionConflicts compares the CRD versions the target bundle lists
 // with the live CRDs' status.storedVersions. OLM fails an InstallPlan whose
 // CRD drops a version still listed in storedVersions ("risk of data loss",
