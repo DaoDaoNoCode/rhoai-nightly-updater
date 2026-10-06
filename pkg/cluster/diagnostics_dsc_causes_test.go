@@ -303,36 +303,73 @@ func TestDSCCheck_OperandForbiddenSaysMakeUpgrade(t *testing.T) {
 	}
 }
 
-func TestDSCCheck_StaleModuleIsBackoff(t *testing.T) {
+// ageStaleObservations moves every remembered stale observation back by d,
+// standing in for the time between two scans.
+func ageStaleObservations(d time.Duration) {
+	staleSeen.Lock()
+	defer staleSeen.Unlock()
+	for k, v := range staleSeen.m {
+		v.first = v.first.Add(-d)
+		staleSeen.m[k] = v
+	}
+}
+
+func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 	w := newDSCWorld(t, []dcond{
 		{"type": "Ready", "status": "False", "reason": "Error", "message": "Some modules are not ready: ray"},
+		// An old condition says nothing about when the spec changed.
 		{"type": "RayReady", "status": "False", "reason": "NotReady", "message": msgRayStale, "lastTransitionTime": ago(time.Hour)},
 	})
-	w.f.obj("GET", componentV1alpha1+"/rays", map[string]interface{}{"items": []interface{}{map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "default-ray", "generation": 4},
-		"status":   map[string]interface{}{"observedGeneration": 3, "conditions": []dcond{{"type": "Ready", "status": "True", "lastTransitionTime": ago(20 * time.Minute)}}},
-	}}})
+	ray := func(generation int) {
+		w.f.obj("GET", componentV1alpha1+"/rays", map[string]interface{}{"items": []interface{}{map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "default-ray", "uid": "ray-uid", "generation": generation},
+			"status":   map[string]interface{}{"observedGeneration": 3, "conditions": []dcond{{"type": "Ready", "status": "True", "lastTransitionTime": ago(time.Hour)}}},
+		}}})
+	}
+	ray(4)
 	w.f.obj("GET", "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/ray-module-operator-controller-manager", operatorDeploymentJSON("ray-module-operator-controller-manager", "RollingUpdate", 1))
-	out := checkDataScienceCluster(w.c)
-	b, ok := problemsByID(out)["module-operator-backoff-ray"]
-	if !ok || !b.AutoFixable || !strings.Contains(strings.Join(b.Evidence, "\n"), "generation 4 but its operator last reported observedGeneration 3") {
-		t.Fatalf("problems = %v, backoff = %+v", ids(out), b)
+	backoff := func() (Problem, bool) {
+		p, ok := problemsByID(checkDataScienceCluster(w.c))["module-operator-backoff-ray"]
+		return p, ok
+	}
+
+	// First scan: the lag is new to the tool, however old the conditions.
+	if _, ok := backoff(); ok {
+		t.Fatal("a restart was offered on the first scan that saw the lag")
+	}
+	// A second scan soon after: still too early.
+	ageStaleObservations(time.Minute)
+	if _, ok := backoff(); ok {
+		t.Fatal("a restart was offered one minute after the lag was first seen")
+	}
+	// The same generation still unobserved more than moduleStaleAfter later.
+	ageStaleObservations(moduleStaleAfter)
+	b, ok := backoff()
+	if !ok || !b.AutoFixable || !strings.Contains(strings.Join(b.Evidence, "\n"), "generation 4 but its operator last reported observedGeneration 3, unchanged across scans") {
+		t.Fatalf("backoff = %+v", b)
 	}
 	if n := len(w.f.requests("GET", packageManifestsPath)); n != 0 {
 		t.Fatalf("listed package manifests without a dependency message")
 	}
 
-	// A recent change is the operator still working, not a back-off.
-	w2 := newDSCWorld(t, []dcond{
-		{"type": "Ready", "status": "False", "reason": "Error", "message": "Some modules are not ready: ray"},
-		{"type": "RayReady", "status": "False", "reason": "NotReady", "message": msgRayStale, "lastTransitionTime": ago(time.Minute)},
-	})
-	w2.f.obj("GET", componentV1alpha1+"/rays", map[string]interface{}{"items": []interface{}{map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "default-ray", "generation": 4},
-		"status":   map[string]interface{}{"observedGeneration": 3, "conditions": []dcond{{"type": "Ready", "status": "True", "lastTransitionTime": ago(time.Minute)}}},
-	}}})
-	if _, ok := problemsByID(checkDataScienceCluster(w2.c))["module-operator-backoff-ray"]; ok {
-		t.Fatal("a fresh generation change was reported as back-off")
+	// A new spec change (generation 5) starts the wait again.
+	ray(5)
+	if _, ok := backoff(); ok {
+		t.Fatal("a restart was offered right after a spec change")
+	}
+	// Caught up: the observation is forgotten.
+	ray(3)
+	backoff()
+	staleSeen.Lock()
+	n := 0
+	for k := range staleSeen.m {
+		if strings.HasPrefix(k, w.c.baseURL+"|") {
+			n++
+		}
+	}
+	staleSeen.Unlock()
+	if n != 0 {
+		t.Fatalf("%d observations kept after the operator caught up", n)
 	}
 }
 

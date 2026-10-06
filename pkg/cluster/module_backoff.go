@@ -26,8 +26,9 @@ import (
 // Deployment is available and no failurePolicy Fail webhook would go
 // unserved during the restart.
 
-// moduleStaleAfter is how long a module CR may lag behind its generation
-// (no condition changed meanwhile) before its operator is said to be stuck.
+// moduleStaleAfter is how long scans must keep seeing a module CR lag
+// behind the same generation before its operator is said to be stuck
+// (staleSeen in diagnostics_dsc.go).
 var moduleStaleAfter = 5 * time.Minute
 
 const restartAnnotation = "kubectl.kubernetes.io/restartedAt"

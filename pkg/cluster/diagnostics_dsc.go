@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,7 @@ type dscObject struct {
 	APIVersion string `json:"apiVersion"`
 	Metadata   struct {
 		Name       string `json:"name"`
+		UID        string `json:"uid"`
 		Generation int64  `json:"generation"`
 	} `json:"metadata"`
 	Spec struct {
@@ -162,23 +164,43 @@ type moduleObject struct {
 	Obj          dscObject
 }
 
-// staleSince reports a module CR whose operator has not observed its
-// current generation, with no condition change for moduleStaleAfter.
-func (m moduleObject) staleFor(now time.Time) (time.Duration, bool) {
-	st := m.Obj.Status
-	if st.ObservedGeneration <= 0 || st.ObservedGeneration >= m.Obj.Metadata.Generation {
+// staleSeen remembers, per module CR, the generation its operator lagged
+// behind and when a scan first saw that. There is no other trustworthy
+// clock: a condition's lastTransitionTime says nothing about when the spec
+// changed, so a restart could be offered right after a spec change. A CR
+// counts as stale only when two scans at least moduleStaleAfter apart saw
+// the same generation unobserved. The memory is the process's own: after a
+// restart of this app, the wait starts again (never a false positive).
+var staleSeen = struct {
+	sync.Mutex
+	m map[string]staleObservation
+}{m: map[string]staleObservation{}}
+
+type staleObservation struct {
+	generation int64
+	first      time.Time
+}
+
+// staleFor reports how long the CR's operator has been seen lagging behind
+// its current generation, once that is at least moduleStaleAfter.
+func (m moduleObject) staleFor(c *Client, now time.Time) (time.Duration, bool) {
+	key := strings.Join([]string{c.baseURL, m.Module, m.Obj.Metadata.Name, m.Obj.Metadata.UID}, "|")
+	st, gen := m.Obj.Status, m.Obj.Metadata.Generation
+	staleSeen.Lock()
+	defer staleSeen.Unlock()
+	if st.ObservedGeneration <= 0 || st.ObservedGeneration >= gen {
+		delete(staleSeen.m, key)
 		return 0, false
 	}
-	var newest time.Time
-	for _, cond := range st.Conditions {
-		if t, ok := parseK8sTime(cond.LastTransitionTime); ok && t.After(newest) {
-			newest = t
-		}
-	}
-	if newest.IsZero() || now.Sub(newest) < moduleStaleAfter {
+	seen, ok := staleSeen.m[key]
+	if !ok || seen.generation != gen {
+		staleSeen.m[key] = staleObservation{generation: gen, first: now}
 		return 0, false
 	}
-	return now.Sub(newest), true
+	if age := now.Sub(seen.first); age >= moduleStaleAfter {
+		return age, true
+	}
+	return 0, false
 }
 
 func listModuleObjects(c *Client, api componentAPI) ([]moduleObject, error) {
@@ -351,8 +373,8 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 				a.ModConds = append(a.ModConds, cc)
 			}
 		}
-		if age, ok := m.staleFor(now); ok {
-			staleModules[m.Module] = fmt.Sprintf("%s has generation %d but its operator last reported observedGeneration %d; no condition changed for %s",
+		if age, ok := m.staleFor(c, now); ok {
+			staleModules[m.Module] = fmt.Sprintf("%s has generation %d but its operator last reported observedGeneration %d, unchanged across scans for %s",
 				src, m.Obj.Metadata.Generation, m.Obj.Status.ObservedGeneration, formatDuration(age))
 		}
 	}
@@ -393,14 +415,8 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 	for module, why := range staleModules {
 		addReason(module, why)
 	}
-	if a.ModulesErr != nil || api.Version == "" {
-		// Without the module CRs, trust the DSC's own stale report.
-		for _, cc := range a.DSCConds {
-			if t, ok := parseK8sTime(cc.Cond.LastTransitionTime); cc.Stale && ok && now.Sub(t) >= moduleStaleAfter {
-				addReason(cc.Module, fmt.Sprintf("%s for %s", cc.label(), formatDuration(now.Sub(t))))
-			}
-		}
-	}
+	// Without the module CRs, a stale DSC condition stays a cause without
+	// a restart: its age does not show when the spec changed.
 	moduleNames := make([]string, 0, len(reasons))
 	for m := range reasons {
 		moduleNames = append(moduleNames, m)
