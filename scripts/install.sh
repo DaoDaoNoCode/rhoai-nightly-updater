@@ -353,16 +353,16 @@ apply_template() {
 	# object still is.
 	local out rc=0 errors missing
 	out=$(oc apply --dry-run=server -f "$TMP/objects.json" 2>&1) || rc=$?
-	printf '%s\n' "$out"
-	[ "$rc" -ne 0 ] || return 0
-	if ! oc get namespace "$NAMESPACE" >/dev/null 2>&1; then
+	if [ "$rc" -ne 0 ] && ! oc get namespace "$NAMESPACE" >/dev/null 2>&1; then
 		errors=$(printf '%s\n' "$out" | grep -c '^Error' || true)
 		missing=$(printf '%s\n' "$out" | grep '^Error' | grep -c "namespaces \"$NAMESPACE\" not found" || true)
 		if [ "$errors" -gt 0 ] && [ "$errors" = "$missing" ]; then
+			printf '%s\n' "$out" | grep -v '^Error' || true
 			err "Note: namespace $NAMESPACE does not exist yet (deploy creates it), so the server could not validate the $missing objects in it; all other objects passed."
 			return 0
 		fi
 	fi
+	printf '%s\n' "$out"
 	return "$rc"
 }
 
