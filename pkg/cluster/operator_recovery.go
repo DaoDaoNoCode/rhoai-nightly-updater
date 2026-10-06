@@ -28,6 +28,29 @@ var (
 	RecoveryTimeout     = restoreCSVBudget + restoreApplyTimeout
 )
 
+// Time budget of one cluster operation, from start to the end of its
+// bookkeeping. The pod's shutdown drain must cover all of it, and
+// terminationGracePeriodSeconds (deploy/template.yaml) must cover the drain
+// plus the HTTP server shutdown; budget_test.go checks the arithmetic.
+//   - OperationDeadline: the context deadline pkg/api gives every mutation
+//     (withMutationAuth in pkg/api/handlers.go). Every step, including the
+//     Dashboard Dev revert, runs inside it; the install wait ends
+//     installDeadlineReserve before it.
+//   - RecoveryTimeout: the automatic restore after a failure, on its own
+//     contexts after the operation stopped.
+//   - postOperationBookkeeping: recording the Subscription (5s), clearing
+//     the operation marker (5s) and the activity entry.
+const (
+	OperationDeadline        = 15 * time.Minute
+	postOperationBookkeeping = 15 * time.Second
+)
+
+// ShutdownDrainTimeout is how long a terminating pod waits for running
+// operations: the longest one can still take after SIGTERM.
+func ShutdownDrainTimeout() time.Duration {
+	return OperationDeadline + RecoveryTimeout + postOperationBookkeeping
+}
+
 // operatorRecovery holds the desired state captured before an operation and
 // what the operation has changed, so a failure restores exactly that.
 type operatorRecovery struct {

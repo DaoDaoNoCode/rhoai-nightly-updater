@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/api"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/middleware"
 )
 
@@ -153,10 +154,11 @@ func main() {
 	<-ctx.Done()
 	slog.Info("shutting down server")
 
-	// Let accepted cluster mutations finish (they have a 15-minute deadline and
-	// a bounded recovery step) instead of cutting them off half-way. The pod's
-	// terminationGracePeriodSeconds must exceed this drain plus the shutdown.
-	drainTimeout := 16 * time.Minute
+	// Let accepted cluster mutations finish (their deadline, the bounded
+	// recovery step and bookkeeping) instead of cutting them off half-way.
+	// The pod's terminationGracePeriodSeconds must exceed this drain plus the
+	// shutdown (pkg/cluster/budget_test.go).
+	drainTimeout := cluster.ShutdownDrainTimeout()
 	if v := os.Getenv("SHUTDOWN_DRAIN_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
 			drainTimeout = d
