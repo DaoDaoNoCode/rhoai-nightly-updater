@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -873,195 +872,30 @@ func createMinioBucket(c *Client, bucket string) error {
 	return s3PutBucket(c.ctx, endpoint, accessKey, secretKey, bucket)
 }
 
-// minioToolObject is an object in the minio namespace that this tool created.
-type minioToolObject struct {
-	kind, name, uid string
+// minioKeptNamespaceHint ends every teardown message: the namespace is never
+// deleted, because the tool cannot see everything in it without reading
+// every Secret in the cluster (a cluster-wide list grant).
+const minioKeptNamespaceHint = " Namespace 'minio' was kept: it may hold objects this tool did not create. Delete it with `oc delete project minio` once you've checked it's empty."
+
+// minioTeardownObjects are the objects teardown removes, in order. The
+// Deployment goes first, so its pod releases the PVC (whose
+// kubernetes.io/pvc-protection finalizer waits for that).
+var minioTeardownObjects = []struct{ kind, name string }{
+	{"Deployment", "minio"},
+	{"Route", "minio-ui"},
+	{"Route", "minio-api"},
+	{"Service", minioServiceName},
+	{"Secret", "minio-secret"},
+	{"PersistentVolumeClaim", "minio-pvc"},
 }
 
-// minioInventory is everything in the minio namespace that matters for
-// teardown: the tool's own objects, and anything else someone put there.
-type minioInventory struct {
-	tool    []minioToolObject
-	foreign []string // "Kind name"
-}
-
-// minioAutoConfigMaps are created in every namespace by the platform and
-// recreated by it: kube-root-ca.crt (kube-controller-manager),
-// openshift-service-ca.crt (service-ca operator), odh-trusted-ca-bundle
-// (RHOAI trusted CA bundle, label app.kubernetes.io/part-of=
-// opendatahub-operator) and odh-kserve-custom-ca-bundle (RHOAI, label
-// opendatahub.io/managed=true). Checked on a live OpenShift 4.22 / RHOAI 3.6
-// cluster: these four are the only ConfigMaps in a namespace nobody added any
-// to.
-var minioAutoConfigMaps = map[string]bool{
-	"kube-root-ca.crt":            true,
-	"openshift-service-ca.crt":    true,
-	"odh-trusted-ca-bundle":       true,
-	"odh-kserve-custom-ca-bundle": true,
-}
-
-// minioListedObject is the part of a listed object the inventory reads.
-type minioListedObject struct {
-	Metadata objectMeta `json:"metadata"`
-	Type     string     `json:"type"` // Secrets only
-}
-
-// listMinIOObjects lists one kind of object in the minio namespace.
-func listMinIOObjects(c *Client, path string) ([]minioListedObject, error) {
-	body, _, err := c.get(path)
-	if err != nil {
-		return nil, err
-	}
-	var list struct {
-		Items []minioListedObject `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse list: %w", err)
-	}
-	return list.Items, nil
-}
-
-// inventoryMinIONamespace lists the minio namespace and splits it into the
-// tool's objects and everything else. Objects the platform creates in every
-// namespace (ServiceAccount pull secrets, CA ConfigMaps), ReplicaSets and
-// pods of a listed Deployment or StatefulSet, and EndpointSlices of listed
-// Services are neither. Any list error fails the whole inventory, so
-// teardown never decides on a partial view.
-func inventoryMinIONamespace(c *Client) (minioInventory, error) {
-	kinds := []struct {
-		kind, path string
-	}{
-		{"PersistentVolumeClaim", namespacedPath("v1", "persistentvolumeclaims", minioNamespace, "")},
-		{"Secret", namespacedPath("v1", "secrets", minioNamespace, "")},
-		{"ConfigMap", namespacedPath("v1", "configmaps", minioNamespace, "")},
-		{"Service", namespacedPath("v1", "services", minioNamespace, "")},
-		{"Route", namespacedPath("route.openshift.io/v1", "routes", minioNamespace, "")},
-		{"Deployment", namespacedPath("apps/v1", "deployments", minioNamespace, "")},
-		{"StatefulSet", namespacedPath("apps/v1", "statefulsets", minioNamespace, "")},
-		{"ReplicaSet", namespacedPath("apps/v1", "replicasets", minioNamespace, "")},
-		{"Pod", namespacedPath("v1", "pods", minioNamespace, "")},
-	}
-	listed := make(map[string][]minioListedObject, len(kinds))
-	errs := make([]error, len(kinds))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	for i, k := range kinds {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			items, err := listMinIOObjects(c, k.path)
-			if err != nil {
-				errs[i] = fmt.Errorf("list %ss in namespace '%s': %w", strings.ToLower(k.kind), minioNamespace, err)
-				return
-			}
-			mu.Lock()
-			listed[k.kind] = items
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return minioInventory{}, err
-		}
-	}
-	return classifyMinIOInventory(listed), nil
-}
-
-// classifyMinIOInventory splits listed objects (by kind) into the tool's
-// objects and foreign ones. It is separate from the listing for testing.
-func classifyMinIOInventory(listed map[string][]minioListedObject) minioInventory {
-	var inv minioInventory
-	toolNames := map[string]bool{
-		"PersistentVolumeClaim/minio-pvc": true,
-		"Secret/minio-secret":             true,
-		"Deployment/minio":                true,
-		"Service/" + minioServiceName:     true,
-		"Route/minio-api":                 true,
-		"Route/minio-ui":                  true,
-	}
-	toolUIDs := map[string]bool{}
-	for _, kind := range []string{"Deployment", "PersistentVolumeClaim", "Secret", "Service", "Route"} {
-		for _, o := range listed[kind] {
-			m := o.Metadata
-			if toolNames[kind+"/"+m.Name] && minioObjectOwned(m) {
-				inv.tool = append(inv.tool, minioToolObject{kind: kind, name: m.Name, uid: m.UID})
-				toolUIDs[m.UID] = true
-				continue
-			}
-			if kind == "Secret" && platformSecret(o) {
-				continue
-			}
-			inv.foreign = append(inv.foreign, kind+" "+m.Name)
-		}
-	}
-	for _, o := range listed["ConfigMap"] {
-		if !minioAutoConfigMaps[o.Metadata.Name] {
-			inv.foreign = append(inv.foreign, "ConfigMap "+o.Metadata.Name)
-		}
-	}
-	controllers := map[string]bool{} // UIDs of listed workload controllers
-	for _, kind := range []string{"Deployment", "StatefulSet"} {
-		for _, o := range listed[kind] {
-			controllers[o.Metadata.UID] = true
-		}
-	}
-	for _, o := range listed["StatefulSet"] {
-		inv.foreign = append(inv.foreign, "StatefulSet "+o.Metadata.Name)
-	}
-	// ReplicaSets of a listed Deployment are part of it; others are foreign.
-	for _, o := range listed["ReplicaSet"] {
-		owned := false
-		for _, ref := range o.Metadata.OwnerReferences {
-			owned = owned || controllers[ref.UID]
-		}
-		if owned {
-			controllers[o.Metadata.UID] = true
-		} else {
-			inv.foreign = append(inv.foreign, "ReplicaSet "+o.Metadata.Name)
-		}
-	}
-	for _, o := range listed["Pod"] {
-		owned := false
-		for _, ref := range o.Metadata.OwnerReferences {
-			owned = owned || controllers[ref.UID]
-		}
-		if !owned {
-			inv.foreign = append(inv.foreign, "Pod "+o.Metadata.Name)
-		}
-	}
-	sort.Strings(inv.foreign)
-	return inv
-}
-
-// platformSecret reports whether OpenShift created a Secret by itself: the
-// image-pull (dockercfg) and token secrets of a namespace's ServiceAccounts
-// (owned by the ServiceAccount or annotated with its name), and serving
-// certificates the service-ca operator injects for an annotated Service.
-func platformSecret(o minioListedObject) bool {
-	m := o.Metadata
-	switch o.Type {
-	case "kubernetes.io/dockercfg", "kubernetes.io/service-account-token":
-		if m.Annotations["kubernetes.io/service-account.name"] != "" || m.Annotations["openshift.io/internal-registry-auth-token.service-account"] != "" {
-			return true
-		}
-		for _, ref := range m.OwnerReferences {
-			if ref.Kind == "ServiceAccount" {
-				return true
-			}
-		}
-	case "kubernetes.io/tls":
-		return m.Annotations["service.beta.openshift.io/originating-service-name"] != ""
-	}
-	return false
-}
-
-// TeardownMinIO removes MinIO, and with it its data PVC, but only what this
-// tool created, and only when no pipeline server uses it. When the minio
-// namespace holds nothing else, the namespace is deleted. When it also holds
-// objects someone else put there, only the tool's objects are deleted, each
-// with a UID precondition, and the namespace is kept with the rest.
-// Re-running it is safe.
+// TeardownMinIO removes the MinIO objects this tool created, and with them
+// the data PVC, when no pipeline server uses MinIO. Each object is read by
+// name, deleted only when it carries the tool's label (or an earlier
+// version's server-side-apply marker), and deleted with a UID precondition,
+// so an object someone else created or recreated is never removed. The minio
+// namespace itself is never deleted (see minioKeptNamespaceHint); it stays
+// labelled, so setup can reuse it. Re-running it is safe.
 func TeardownMinIO(c *Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
@@ -1078,12 +912,12 @@ func TeardownMinIO(c *Client) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: true, Message: "MinIO is not deployed; nothing to remove.", Logs: logs}, nil
 	}
 	if !ns.Managed {
-		return fail("Namespace 'minio' was not created by this tool, so it was not deleted.", "not_managed", "not managed")
+		return fail("Namespace 'minio' was not created by this tool, so nothing in it was deleted.", "not_managed", "not managed")
 	}
 	if ns.terminating() {
-		logs = append(logs, "Namespace is already being deleted")
+		logs = append(logs, "Namespace is being deleted")
 		return &types.OperationResponse{
-			Success: false, Message: "Namespace 'minio' is still being deleted." + namespaceDeletionDetail(c), Logs: logs, ErrorCode: "in_progress",
+			Success: false, Message: "Namespace 'minio' is being deleted." + namespaceDeletionDetail(c), Logs: logs, ErrorCode: "in_progress",
 		}, nil
 	}
 
@@ -1098,113 +932,77 @@ func TeardownMinIO(c *Client) (*types.OperationResponse, error) {
 		return fail("Cannot tear down MinIO yet. "+reason, "prerequisites", "pipeline servers depend on it")
 	}
 
-	inv, err := inventoryMinIONamespace(c)
-	if err != nil {
-		return fail(fmt.Sprintf("Cannot check what namespace 'minio' contains; nothing was deleted: %v", err), errorCodeFromK8sErr(err), "inventory failed")
-	}
-	var dataPVCs []string
-	for _, o := range inv.tool {
-		if o.kind == "PersistentVolumeClaim" {
-			dataPVCs = append(dataPVCs, o.name)
+	// A namespace from an earlier version is recognised by its Deployment;
+	// label it before that Deployment goes, so setup can still reuse it.
+	if ns.Legacy {
+		patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"labels": toolLabels()}})
+		if _, _, err := c.patch("/api/v1/namespaces/"+minioNamespace, patch); err != nil {
+			return fail(fmt.Sprintf("Failed to label namespace 'minio', created by an earlier version, before removing MinIO; nothing was deleted: %v", err), errorCodeFromK8sErr(err), "namespace label failed")
 		}
+		logs = append(logs, "OK: Namespace from an earlier version labelled as managed by this tool")
+	}
+
+	var deleted, kept, failed []string
+	pvcUID := ""
+	for _, o := range minioTeardownObjects {
+		desc := o.kind + " " + o.name
+		meta, found, err := readMinIOObject(c, o.kind, o.name)
+		switch {
+		case err != nil:
+			failed = append(failed, fmt.Sprintf("%s: cannot read it: %v", desc, err))
+			continue
+		case !found:
+			continue
+		case !minioObjectOwned(meta):
+			kept = append(kept, desc)
+			logs = append(logs, fmt.Sprintf("Kept %s: it was not created by this tool", desc))
+			continue
+		case meta.terminating():
+			logs = append(logs, desc+" is already being deleted")
+		default:
+			path, ok := minioDeletePath(o.kind, o.name)
+			if !ok {
+				continue
+			}
+			logs = append(logs, fmt.Sprintf("Deleting %s...", desc))
+			if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+				failed = append(failed, fmt.Sprintf("%s: %v", desc, err))
+				logs = append(logs, fmt.Sprintf("Failed to delete %s: %v", desc, err))
+				continue
+			}
+			deleted = append(deleted, desc)
+			logs = append(logs, fmt.Sprintf("OK: %s deleted", desc))
+		}
+		if o.kind == "PersistentVolumeClaim" {
+			pvcUID = meta.UID
+		}
+	}
+
+	keptNote := ""
+	if len(kept) > 0 {
+		keptNote = fmt.Sprintf(" Left in place because this tool did not create them: %s.", strings.Join(kept, ", "))
 	}
 	dataNote := ""
-	if len(dataPVCs) > 0 {
-		dataNote = fmt.Sprintf(" PVC(s) %s and all stored objects (pipeline artifacts, models, test files) are deleted with it.", strings.Join(dataPVCs, ", "))
+	if pvcUID != "" {
+		dataNote = " PVC minio-pvc and all stored objects (pipeline artifacts, models, test files) are deleted with it."
 	}
-	if len(inv.foreign) > 0 {
-		return teardownMinIOObjects(c, inv, dataNote, logs)
-	}
-
-	// A namespace delete has to list every namespaced type. With a dead CRD
-	// conversion webhook that fails and the namespace hangs in Terminating,
-	// so refuse instead of starting a delete that cannot finish.
-	broken, err := brokenConversionWebhooks(c)
-	if err != nil {
-		return fail(fmt.Sprintf("Cannot check CRD conversion webhooks, which can block namespace deletion; nothing was deleted: %v", err), errorCodeFromK8sErr(err), "conversion webhook check failed")
-	}
-	if len(broken) > 0 {
-		return fail(fmt.Sprintf("Not deleting namespace 'minio': these CRD conversion webhooks cannot serve, so the namespace would hang in Terminating: %s. Re-enable the component that provides the webhook (or remove the stale CRD), then retry.", strings.Join(broken, "; ")), "prerequisites", "broken conversion webhooks")
-	}
-
-	logs = append(logs, "Deleting namespace 'minio'...")
-	nsPath := "/api/v1/namespaces/" + minioNamespace
-	if _, delErr := deleteWithUID(c, nsPath, ns.Meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
-		code := errorCodeFromK8sErr(delErr)
-		if IsK8sError(delErr, 409) {
-			code = "conflict"
-		}
-		return fail(fmt.Sprintf("Failed to delete namespace: %v", delErr), code, "namespace delete failed")
-	}
-	logs = append(logs, "OK: Deletion requested")
-
-	slog.Info("minio teardown", "user", getUser(c))
-	recordMinIOActivity(c, "teardown-minio", minioNamespace, true)
-
-	// PVC deletion does not hang on kubernetes.io/pvc-protection here: the
-	// namespace controller deletes the MinIO pod too, and the finalizer is
-	// released once no pod uses the claim (Kubernetes "Storage Object in Use
-	// Protection").
-	gone, waitErr := waitForDeletion(c, nsPath, MinIODeleteTimeout, MinIODeletePoll)
-	if waitErr != nil {
-		return &types.OperationResponse{
-			Success: false, Message: fmt.Sprintf("Deletion of namespace 'minio' was requested, but whether it is gone cannot be checked: %v.%s", waitErr, dataNote),
-			Logs: logs, ErrorCode: firstNonEmpty(errorCodeFromK8sErr(waitErr), "in_progress"),
-		}, nil
-	}
-	if !gone {
-		logs = append(logs, "Namespace is still terminating")
-		return &types.OperationResponse{
-			Success: false, Message: fmt.Sprintf("Deletion of namespace 'minio' was requested but it is still terminating after %s; the status shows it until it is gone. Re-run teardown to check again.%s%s", MinIODeleteTimeout, namespaceDeletionDetail(c), dataNote),
-			Logs: logs, ErrorCode: "in_progress",
-		}, nil
-	}
-	logs = append(logs, "OK: Namespace deleted")
-	return &types.OperationResponse{
-		Success: true, Message: "MinIO namespace deleted." + dataNote,
-		Logs: logs,
-	}, nil
-}
-
-// teardownMinIOObjects deletes the tool's own objects one by one and keeps
-// the namespace, because it also holds objects someone else created. The
-// Deployment goes first, so the pod releases the PVC (whose
-// kubernetes.io/pvc-protection finalizer waits for that).
-func teardownMinIOObjects(c *Client, inv minioInventory, dataNote string, logs []string) (*types.OperationResponse, error) {
-	kept := strings.Join(inv.foreign, ", ")
-	logs = append(logs, "Namespace 'minio' also contains objects this tool did not create, so it is kept: "+kept)
-	order := map[string]int{"Deployment": 0, "Route": 1, "Service": 2, "Secret": 3, "PersistentVolumeClaim": 4}
-	objs := append([]minioToolObject(nil), inv.tool...)
-	sort.SliceStable(objs, func(i, j int) bool { return order[objs[i].kind] < order[objs[j].kind] })
-
-	var failed []string
-	pvcUID := ""
-	for _, o := range objs {
-		path, ok := minioDeletePath(o.kind, o.name)
-		if !ok {
-			continue
-		}
-		logs = append(logs, fmt.Sprintf("Deleting %s %s...", o.kind, o.name))
-		if _, err := deleteWithUID(c, path, o.uid); err != nil && !IsK8sError(err, 404) {
-			failed = append(failed, fmt.Sprintf("%s %s: %v", o.kind, o.name, err))
-			logs = append(logs, fmt.Sprintf("Failed to delete %s %s: %v", o.kind, o.name, err))
-			continue
-		}
-		if o.kind == "PersistentVolumeClaim" {
-			pvcUID = o.uid
-		}
-		logs = append(logs, fmt.Sprintf("OK: %s %s deleted", o.kind, o.name))
-	}
-	keptMsg := fmt.Sprintf(" Namespace 'minio' was kept because it contains objects this tool did not create: %s.", kept)
 	if len(failed) > 0 {
-		recordMinIOActivity(c, "teardown-minio", fmt.Sprintf("%s (objects: %s)", minioNamespace, strings.Join(failed, "; ")), false)
+		recordMinIOActivity(c, "teardown-minio", fmt.Sprintf("%s (failed: %s)", minioNamespace, strings.Join(failed, "; ")), false)
+		code := "partial_failure"
+		if len(deleted) == 0 {
+			code = "delete_failed"
+		}
 		return &types.OperationResponse{
-			Success: false, Message: fmt.Sprintf("Some MinIO objects could not be deleted: %s. Re-run teardown to retry.%s", strings.Join(failed, "; "), keptMsg),
-			Logs: logs, ErrorCode: "partial_failure",
+			Success: false, Message: fmt.Sprintf("Some MinIO objects could not be removed: %s. Re-run teardown to retry.%s%s", strings.Join(failed, "; "), keptNote, minioKeptNamespaceHint),
+			Logs: logs, ErrorCode: code,
 		}, nil
 	}
-	slog.Info("minio teardown (namespace kept)", "user", getUser(c), "kept", kept)
-	recordMinIOActivity(c, "teardown-minio", minioNamespace+" (namespace kept: "+kept+")", true)
+	if len(deleted) == 0 && pvcUID == "" {
+		recordMinIOActivity(c, "teardown-minio", minioNamespace+" (nothing to remove)", true)
+		return &types.OperationResponse{Success: true, Message: "No MinIO objects created by this tool remain." + keptNote + minioKeptNamespaceHint, Logs: logs}, nil
+	}
+	slog.Info("minio teardown", "user", getUser(c), "deleted", strings.Join(deleted, ", "))
+	recordMinIOActivity(c, "teardown-minio", minioNamespace+" (objects deleted, namespace kept)", true)
 
 	if pvcUID != "" {
 		gone, err := waitForGone(c, MinIODeleteTimeout, MinIODeletePoll, func(cc *Client) (bool, error) {
@@ -1221,25 +1019,26 @@ func teardownMinIOObjects(c *Client, inv minioInventory, dataNote string, logs [
 		})
 		if err != nil {
 			return &types.OperationResponse{
-				Success: false, Message: fmt.Sprintf("MinIO's objects were deleted, but whether its PVC is gone cannot be checked: %v.%s%s", err, dataNote, keptMsg),
+				Success: false, Message: fmt.Sprintf("MinIO's objects were deleted, but whether its PVC is gone cannot be checked: %v.%s%s%s", err, dataNote, keptNote, minioKeptNamespaceHint),
 				Logs: logs, ErrorCode: firstNonEmpty(errorCodeFromK8sErr(err), "in_progress"),
 			}, nil
 		}
 		if !gone {
+			logs = append(logs, "PVC minio-pvc is still terminating")
 			return &types.OperationResponse{
-				Success: false, Message: fmt.Sprintf("MinIO's objects were deleted, but its PVC is still terminating after %s. Re-run teardown to check again.%s%s", MinIODeleteTimeout, dataNote, keptMsg),
+				Success: false, Message: fmt.Sprintf("MinIO's objects were deleted, but PVC minio-pvc is still terminating after %s; re-run teardown to check again.%s%s%s", MinIODeleteTimeout, dataNote, keptNote, minioKeptNamespaceHint),
 				Logs: logs, ErrorCode: "in_progress",
 			}, nil
 		}
 	}
 	logs = append(logs, "OK: MinIO removed")
-	return &types.OperationResponse{Success: true, Message: "MinIO removed." + dataNote + keptMsg, Logs: logs}, nil
+	return &types.OperationResponse{Success: true, Message: "MinIO removed." + dataNote + keptNote + minioKeptNamespaceHint, Logs: logs}, nil
 }
 
 // namespaceDeletionDetail returns the namespace controller's reported
 // reasons (the NamespaceDeletion*Failure, NamespaceContentRemaining and
 // NamespaceFinalizersRemaining conditions) for a minio namespace that is
-// still terminating, or "".
+// terminating (deleted by someone else), or "".
 func namespaceDeletionDetail(c *Client) string {
 	body, _, err := c.get("/api/v1/namespaces/" + minioNamespace)
 	if err != nil {

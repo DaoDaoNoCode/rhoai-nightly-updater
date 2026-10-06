@@ -237,81 +237,55 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 	})
 }
 
-func TestTeardownMinIO_ForeignObjectsKeepNamespace(t *testing.T) {
+func TestTeardownMinIO_DeletesOnlyOwnedObjectsAndKeepsNamespace(t *testing.T) {
+	toolPaths := []string{minioDeployPath, minioPVCPath, minioSecretPath, minioSvcPath, minioUIRoute, minioAPIRoute}
 	toolNS := func(f *resourceFake) {
 		managedMinIONamespace(f)
-		f.putJSON(minioDeployPath, `{"metadata":{"uid":"dep-uid","labels":`+toolLabelJSON+`}}`)
-		f.putJSON("/apis/apps/v1/namespaces/minio/replicasets/minio-abc", `{"metadata":{"uid":"rs-uid","ownerReferences":[{"kind":"Deployment","name":"minio","uid":"dep-uid"}]}}`)
-		f.putJSON("/api/v1/namespaces/minio/pods/minio-abc-1", `{"metadata":{"labels":{"app":"minio"},"ownerReferences":[{"kind":"ReplicaSet","name":"minio-abc","uid":"rs-uid"}]}}`)
-		f.putJSON(minioPVCPath, `{"metadata":{"uid":"pvc-uid","labels":`+toolLabelJSON+`}}`)
-		f.putJSON(minioSecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"type":"Opaque"}`)
-		f.putJSON(minioSvcPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-		f.putJSON(minioUIRoute, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-		// Created by OpenShift and RHOAI in every namespace.
-		f.putJSON("/api/v1/namespaces/minio/secrets/default-dockercfg-x", `{"type":"kubernetes.io/dockercfg","metadata":{"ownerReferences":[{"kind":"ServiceAccount","name":"default","uid":"sa"}]}}`)
-		for _, cm := range []string{"kube-root-ca.crt", "openshift-service-ca.crt", "odh-trusted-ca-bundle", "odh-kserve-custom-ca-bundle"} {
-			f.putJSON("/api/v1/namespaces/minio/configmaps/"+cm, `{}`)
+		for _, p := range toolPaths {
+			f.putJSON(p, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 		}
+		// Someone else's object elsewhere in the namespace.
+		f.putJSON("/api/v1/namespaces/minio/configmaps/notes", foreignJSON(""))
 	}
-	toolPaths := []string{minioDeployPath, minioPVCPath, minioSecretPath, minioSvcPath, minioUIRoute}
-	cases := []struct {
-		name, path, body, kept string
-	}{
-		{"secret", "/api/v1/namespaces/minio/secrets/my-tls", `,"type":"kubernetes.io/tls"`, "Secret my-tls"},
-		{"configmap", "/api/v1/namespaces/minio/configmaps/notes", ``, "ConfigMap notes"},
-		{"deployment", "/apis/apps/v1/namespaces/minio/deployments/mc", ``, "Deployment mc"},
-		{"statefulset", "/apis/apps/v1/namespaces/minio/statefulsets/db", ``, "StatefulSet db"},
-		{"bare pod", "/api/v1/namespaces/minio/pods/debug", ``, "Pod debug"},
-		{"service", "/api/v1/namespaces/minio/services/other", ``, "Service other"},
-		{"route", "/apis/route.openshift.io/v1/namespaces/minio/routes/other", ``, "Route other"},
-		{"unlabelled object with a tool name", minioSecretPath, `,"type":"Opaque"`, "Secret minio-secret"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	t.Run("all owned", func(t *testing.T) {
+		fastMinIOTimings(t)
+		f, c := newResourceFake(t)
+		toolNS(f)
+		resp, _ := TeardownMinIO(c)
+		if !resp.Success || !strings.Contains(resp.Message, "Delete it with `oc delete project minio` once you've checked it's empty.") {
+			t.Fatalf("teardown = %+v", resp)
+		}
+		for _, p := range toolPaths {
+			if f.has(p) {
+				t.Errorf("%s was not deleted", p)
+			}
+		}
+		if !f.has(minioNSPath) || !f.has("/api/v1/namespaces/minio/configmaps/notes") {
+			t.Error("the namespace and everything else in it must be kept")
+		}
+	})
+	for _, path := range toolPaths {
+		t.Run("unlabelled "+path[strings.LastIndex(path, "/")+1:]+" is kept", func(t *testing.T) {
 			fastMinIOTimings(t)
 			f, c := newResourceFake(t)
 			toolNS(f)
-			f.putJSON(tc.path, foreignJSON(tc.body))
+			f.putJSON(path, foreignJSON(""))
 			resp, _ := TeardownMinIO(c)
-			if !resp.Success || !strings.Contains(resp.Message, "was kept") || !strings.Contains(resp.Message, tc.kept) {
+			if !resp.Success || !strings.Contains(resp.Message, "did not create them") {
 				t.Fatalf("teardown = %+v", resp)
 			}
-			if hasExactMutation(f, "DELETE "+minioNSPath) || !f.has(minioNSPath) {
-				t.Fatal("the namespace must be kept")
-			}
-			assertForeignUntouched(t, f, tc.path, "", "")
+			assertForeignUntouched(t, f, path, "", "")
 			for _, p := range toolPaths {
-				if p != tc.path && f.has(p) {
+				if p != path && f.has(p) {
 					t.Errorf("tool object %s was not deleted", p)
 				}
 			}
 		})
 	}
-	t.Run("only tool and platform objects: namespace deleted", func(t *testing.T) {
+	t.Run("object replaced between check and delete", func(t *testing.T) {
 		fastMinIOTimings(t)
 		f, c := newResourceFake(t)
 		toolNS(f)
-		resp, _ := TeardownMinIO(c)
-		if !resp.Success || !hasExactMutation(f, "DELETE "+minioNSPath) {
-			t.Fatalf("teardown = %+v (%v)", resp, f.mutations())
-		}
-	})
-	t.Run("inventory list forbidden deletes nothing", func(t *testing.T) {
-		fastMinIOTimings(t)
-		f, c := newResourceFake(t)
-		toolNS(f)
-		f.fail["GET /api/v1/namespaces/minio/secrets"] = 403
-		resp, _ := TeardownMinIO(c)
-		if resp.Success || resp.ErrorCode != "forbidden" || len(f.mutations()) != 0 {
-			t.Fatalf("teardown = %+v, mutations %v", resp, f.mutations())
-		}
-	})
-	t.Run("individual delete uses UID preconditions", func(t *testing.T) {
-		fastMinIOTimings(t)
-		f, c := newResourceFake(t)
-		toolNS(f)
-		f.putJSON("/api/v1/namespaces/minio/configmaps/notes", foreignJSON(""))
-		// The PVC is replaced between the inventory and the delete.
 		f.beforeServe = func(method, path string) {
 			if method == http.MethodDelete && path == minioPVCPath {
 				f.putJSON(minioPVCPath, foreignJSON(""))
