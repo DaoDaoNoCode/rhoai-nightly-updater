@@ -27,6 +27,17 @@ function renderPage() {
 }
 
 
+describe("ComponentsPage component causes", () => {
+  it("shows the classified cause with a link to Diagnostics", async () => {
+    const resp = present([dep("agent-ops-ui")]);
+    resp.components = [{ name: "trainer", managementState: "Managed", status: "Error", message: "dependency not met: JobSet Operator is not installed.", cause: "Prerequisite operator not installed: JobSet Operator" }];
+    stubApi({ "/api/components": resp });
+    renderPage();
+    expect(await screen.findByText(/Cause: Prerequisite operator not installed: JobSet Operator/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/diagnostics");
+  });
+});
+
 describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
   it("no-dsc shows the create flow with the operator's defaults, not 'not installed'", async () => {
     const api = stubApi({

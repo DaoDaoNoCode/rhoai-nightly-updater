@@ -33,6 +33,7 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
+import { Link } from "react-router-dom";
 import type { OperationResponse } from "../types";
 import { fixProblem, repairDSC, getDSCPreview, toApiError } from "../services/api";
 import { repairPreview, type DSCRepairMode } from "../components/dscRepair";
@@ -423,6 +424,13 @@ export const ComponentsPage: React.FC = () => {
                                 <Td dataLabel="Status"><StatusLabel status={componentStatus(c.status)}>{c.status}</StatusLabel></Td>
                                 <Td dataLabel="Message">
                                   {c.message ? <TruncatedText>{c.message}</TruncatedText> : <span className="pf-v6-u-text-color-subtle">No message</span>}
+                                  {c.cause && (
+                                    <HelperText className="pf-v6-u-mt-xs">
+                                      <HelperTextItem variant="warning">
+                                        Cause: {c.cause}. <Link to="/diagnostics">Diagnostics</Link> shows the fix.
+                                      </HelperTextItem>
+                                    </HelperText>
+                                  )}
                                   {res && (
                                     <Alert component="p" isInline isPlain isLiveRegion variant={outcomeVariant(res)} title={outcomeTitle(res, "Fix failed")}>
                                       {res.success ? undefined : res.message}
