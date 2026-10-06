@@ -36,6 +36,28 @@ type OperationMarker struct {
 	BootID string `json:"bootId,omitempty"`
 }
 
+// OperationLease is the cross-pod operation lock, kept next to the
+// operation marker. The process that holds it renews HeartbeatAt while its
+// operation runs; another updater process (a replacement pod started while
+// this one still drains) treats a lease with a recent heartbeat as a
+// running operation and refuses to start its own. Step, StepStatus and
+// Message are the latest progress event, so the other pod can show it.
+// Times are RFC 3339.
+type OperationLease struct {
+	ID          string `json:"id"`
+	BootID      string `json:"bootId"`
+	Pod         string `json:"pod,omitempty"`
+	User        string `json:"user"`
+	Type        string `json:"type"`
+	Label       string `json:"label"`
+	Target      string `json:"target,omitempty"`
+	StartedAt   string `json:"startedAt"`
+	HeartbeatAt string `json:"heartbeatAt"`
+	Step        string `json:"step,omitempty"`
+	StepStatus  string `json:"stepStatus,omitempty"`
+	Message     string `json:"message,omitempty"`
+}
+
 // CompletedOperation is the most recent finished cluster operation, as
 // reported by GET /api/operation (lastCompleted) and kept next to the
 // operation marker so it survives a restart. Times are RFC 3339.

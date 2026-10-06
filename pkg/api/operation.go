@@ -20,8 +20,9 @@ import (
 // clusterMutationInProgress is a non-blocking mutex that prevents concurrent
 // cluster-level mutation operations. When true, a cluster mutation is in
 // progress and new mutation requests receive HTTP 409 Conflict instead of
-// proceeding. The lock is per process; the Deployment runs one replica with
-// the Recreate strategy so that only one updater pod exists at a time.
+// proceeding. The lock is per process and is the first gate; lockCluster
+// then takes the cross-pod lease (operation_lease.go), because a replaced
+// pod can still drain an operation while its replacement serves requests.
 var clusterMutationInProgress atomic.Bool
 
 // acquireClusterMutationLock tries to acquire the cluster mutation lock.
@@ -34,39 +35,75 @@ func acquireClusterMutationLock() bool {
 
 // releaseClusterMutationLock releases the cluster mutation lock and forgets
 // the in-flight operation. An operation that began (see beginOperation)
-// becomes the last completed operation, and its marker is cleared.
+// becomes the last completed operation, and its marker is cleared in the
+// same write that releases its lease; the lease of an operation that never
+// began is released on its own.
 func releaseClusterMutationLock() {
-	if done, client := inflight.finish(); done != nil {
-		markers.complete(client, done)
+	owner := leases.stop()
+	done, client := inflight.finish()
+	switch {
+	case done != nil:
+		markers.complete(client, done, owner)
+	case owner != nil && client != nil:
+		leases.release(client, *owner)
 	}
 	clusterMutationInProgress.Store(false)
 }
 
-// lockCluster acquires the cluster mutation lock or answers 409 Conflict
-// with errorCode "cluster_busy" and the running operation. When it returns
+// lockCluster acquires the cluster mutation lock, then the cross-pod lease,
+// or answers 409 Conflict with errorCode "cluster_busy" and the running
+// operation (also one that runs in another updater pod). When it returns
 // true the caller must defer releaseClusterMutationLock.
 func lockCluster(w http.ResponseWriter) bool {
-	if acquireClusterMutationLock() {
-		if sw, ok := w.(*statusWriter); ok {
-			op := inflight.start(sw)
-			sw.opID = op.ID
-		}
+	if !acquireClusterMutationLock() {
+		writeClusterBusy(w, inflight.snapshot(), "")
+		return false
+	}
+	sw, ok := w.(*statusWriter)
+	if !ok {
 		return true
 	}
+	op := inflight.start(sw)
+	sw.opID = op.ID
+	if sw.client == nil {
+		return true
+	}
+	holder, err := leases.acquire(sw.client, op)
+	if holder == nil && err == nil {
+		return true
+	}
+	// Refused: forget the operation (it never began) and free the local lock.
+	inflight.finish()
+	clusterMutationInProgress.Store(false)
+	if holder != nil {
+		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type)
+		writeClusterBusy(w, remoteOperation(holder), "")
+		return false
+	}
+	slog.Warn("operation refused: the cross-pod operation lock is contended", "error", err)
+	writeClusterBusy(w, nil, "Another updater pod is writing the operation lock right now. Nothing was changed; try again in a few seconds.")
+	return false
+}
+
+// writeClusterBusy answers 409 cluster_busy, naming op when it is known.
+func writeClusterBusy(w http.ResponseWriter, op *Operation, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusConflict)
-	body := map[string]interface{}{
-		"error":     "Another cluster operation is in progress. Please wait.",
-		"errorCode": "cluster_busy",
+	if message == "" {
+		message = "Another cluster operation is in progress. Please wait."
 	}
-	if op := inflight.snapshot(); op != nil {
+	body := map[string]interface{}{"error": message, "errorCode": "cluster_busy"}
+	if op != nil {
 		body["operation"] = op
-		body["error"] = op.User + " is running \"" + op.Label + "\". Wait for it to finish."
+		where := ""
+		if op.Remote && op.Pod != "" {
+			where = " on updater pod " + op.Pod
+		}
+		body["error"] = op.User + " is running \"" + op.Label + "\"" + where + ". Wait for it to finish."
 	}
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("response encode error", "label", "cluster-busy", "error", err)
 	}
-	return false
 }
 
 // beginOperation marks a validated request as a running cluster operation:
@@ -117,6 +154,10 @@ type Operation struct {
 	StepStatus string    `json:"stepStatus,omitempty"`
 	Message    string    `json:"message,omitempty"`
 	Pod        string    `json:"pod,omitempty"`
+	// Remote: the operation runs in another updater process (Pod), known
+	// from its lease; Step, StepStatus and Message are its latest progress
+	// as of its last heartbeat (UpdatedAt).
+	Remote bool `json:"remote,omitempty"`
 
 	client *cluster.Client
 	sw     *statusWriter // the response, for the outcome of non-streaming operations
@@ -208,16 +249,19 @@ func (t *operationTracker) recordStep(id string, step UpdateStep) {
 	})
 }
 
-// finish forgets the current operation. When it had begun, it becomes the
-// last completed operation, which is returned with the operation's client.
+// finish forgets the current operation and returns its client. When it had
+// begun, it becomes the last completed operation, which is returned too.
 // It runs on the handler's goroutine after the response is written.
 func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	op := t.current
 	t.current = nil
-	if op == nil || !op.begun {
+	if op == nil {
 		return nil, nil
+	}
+	if !op.begun {
+		return nil, op.client
 	}
 	success, message := operationOutcome(op)
 	t.last = &types.CompletedOperation{
@@ -242,18 +286,37 @@ func (t *operationTracker) lastCompleted() *types.CompletedOperation {
 	return &cp
 }
 
-// rememberLast adopts a persisted last completed operation (from before a
-// restart) unless this process has finished one since, and returns the
-// current one.
+// rememberLast adopts a persisted last completed operation unless the one
+// this process remembers finished later, and returns the newer one (nil
+// when there is neither). The persisted one may be from before a restart
+// or from another updater pod; on equal finish times it wins, since it is
+// what every pod reads.
 func (t *operationTracker) rememberLast(persisted *types.CompletedOperation) *types.CompletedOperation {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.last == nil {
+	if persisted != nil && (t.last == nil || !finishedBefore(persisted, t.last)) {
 		cp := *persisted
 		t.last = &cp
 	}
+	if t.last == nil {
+		return nil
+	}
 	cp := *t.last
 	return &cp
+}
+
+// finishedBefore reports whether a finished strictly before b. An
+// unreadable finish time counts as the oldest.
+func finishedBefore(a, b *types.CompletedOperation) bool {
+	ta, errA := time.Parse(time.RFC3339, a.FinishedAt)
+	tb, errB := time.Parse(time.RFC3339, b.FinishedAt)
+	switch {
+	case errA != nil:
+		return errB == nil
+	case errB != nil:
+		return false
+	}
+	return ta.Before(tb)
 }
 
 // snapshot returns a copy of the current operation, or nil.
@@ -324,43 +387,65 @@ const interruptedMarkerMaxAge = 24 * time.Hour
 
 // OperationStatus is the GET /api/operation response.
 type OperationStatus struct {
-	InProgress bool       `json:"inProgress"`
-	Operation  *Operation `json:"operation"`
-	// Interrupted is an operation that a previous updater process started
-	// and never finished (the pod or its container crashed or was killed).
-	// Its cluster changes may be half-done.
+	InProgress bool `json:"inProgress"`
+	// Operation is the running operation: this process's own, or one that
+	// another updater pod runs (Operation.Remote, from its lease).
+	Operation *Operation `json:"operation"`
+	// Interrupted is an operation that an updater process started and
+	// never finished: its marker is still recorded and its process holds
+	// no live lease (the pod or its container crashed or was killed, or a
+	// version without leases left it). Its cluster changes may be
+	// half-done.
 	Interrupted *types.OperationMarker `json:"interrupted,omitempty"`
 	// LastCompleted is the most recent finished operation, also one that
-	// finished before this process started.
+	// finished before this process started or in another updater pod.
 	LastCompleted *types.CompletedOperation `json:"lastCompleted,omitempty"`
 }
 
 // HandleOperation reports the cluster operation in progress, the last
-// completed one, and an interrupted one, if any.
+// completed one, and an interrupted one, if any. While this process runs
+// an operation it answers from memory; otherwise it reads the operation
+// record, which also tells about another pod's operation.
 var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	status := OperationStatus{InProgress: clusterMutationInProgress.Load(), Operation: inflight.snapshot()}
+	local := clusterMutationInProgress.Load()
+	status := OperationStatus{InProgress: local, Operation: inflight.snapshot()}
 	last := inflight.lastCompleted()
-	if !status.InProgress || last == nil {
-		marker, persisted, err := readOperationState(c)
-		if err != nil {
-			slog.Debug("could not read the operation marker", "error", err)
-		} else {
-			if last == nil && persisted != nil {
-				last = inflight.rememberLast(persisted)
-			}
-			if !status.InProgress && marker != nil {
-				if marker.BootID == bootID {
-					// This process's own marker while no operation runs:
-					// the operation finished but clearing its marker
-					// failed. Not an interruption; retry the clear.
-					markers.retryPending()
-				} else if started, err := time.Parse(time.RFC3339, marker.StartedAt); err == nil && time.Since(started) < interruptedMarkerMaxAge {
-					status.Interrupted = marker
-				}
+	if local && last != nil {
+		status.LastCompleted = last
+		writeJSON(w, status, "operation")
+		return
+	}
+	rec, err := readOperationState(c)
+	if err != nil || rec == nil {
+		slog.Debug("could not read the operation record", "error", err)
+		status.LastCompleted = last
+		writeJSON(w, status, "operation")
+		return
+	}
+	status.LastCompleted = inflight.rememberLast(rec.LastCompleted)
+	if local {
+		writeJSON(w, status, "operation")
+		return
+	}
+	remote := leaseHeldElsewhere(rec.Lease)
+	if remote {
+		status.InProgress, status.Operation = true, remoteOperation(rec.Lease)
+	}
+	if marker := rec.Marker; marker != nil {
+		switch {
+		case marker.BootID == bootID:
+			// This process's own marker while no operation runs: the
+			// operation finished but clearing its marker failed. Not an
+			// interruption; retry the clear.
+			markers.retryPending()
+		case remote && marker.BootID != "" && marker.BootID == rec.Lease.BootID:
+			// The operation still runs in the process that wrote it.
+		default:
+			if started, err := time.Parse(time.RFC3339, marker.StartedAt); err == nil && time.Since(started) < interruptedMarkerMaxAge {
+				status.Interrupted = marker
 			}
 		}
 	}
-	status.LastCompleted = last
 	writeJSON(w, status, "operation")
 })
 

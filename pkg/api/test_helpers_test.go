@@ -29,7 +29,7 @@ func (t *operationTracker) reset() {
 func (m *markerWriter) reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pending, m.client = nil, nil
+	m.pending, m.owner, m.client = nil, nil, nil
 	m.delays = defaultMarkerRetryDelays
 	m.retrying = false
 	m.epoch++

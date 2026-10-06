@@ -62,7 +62,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 
 	done := &types.CompletedOperation{ID: "op1", Type: "update", Label: "Update to nightly", User: "alice",
 		Target: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6", StartedAt: "2026-10-05T10:00:00Z", FinishedAt: "2026-10-05T10:05:00Z", Success: true, Message: "done"}
-	if err := SaveCompletedOperation(c, done); err != nil {
+	if err := SaveCompletedOperation(c, done, nil); err != nil {
 		t.Fatal(err)
 	}
 	marker, last, err := GetOperationState(c)
@@ -88,7 +88,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 
 	done2 := *done
 	done2.ID = "op2"
-	if err := SaveCompletedOperation(c, &done2); err != nil {
+	if err := SaveCompletedOperation(c, &done2, nil); err != nil {
 		t.Fatal(err)
 	}
 	if marker, last, err := GetOperationState(c); err != nil || marker != nil || last == nil || last.ID != "op2" {

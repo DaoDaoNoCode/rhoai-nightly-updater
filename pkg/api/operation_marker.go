@@ -12,14 +12,15 @@ import (
 
 // The operation marker survives a crash of the updater: it is written to a
 // ConfigMap when an operation begins and cleared when it ends, in the same
-// write that records the operation as lastCompleted. A marker left by
-// another process (another boot ID) means that process died mid-operation
-// (a graceful restart drains running operations first). Marker errors never
-// block operations.
+// write that records the operation as lastCompleted and releases the
+// operation's cross-pod lease (operation_lease.go). A marker left by
+// another process (another boot ID) whose lease is not live means that
+// process died mid-operation (a graceful restart drains running operations
+// first). Marker errors never block operations.
 var (
 	saveOperationMarker    = cluster.SaveOperationMarker
 	saveCompletedOperation = cluster.SaveCompletedOperation
-	readOperationState     = cluster.GetOperationState
+	readOperationState     = cluster.ReadOperationRecord
 )
 
 // markerWriteTimeout bounds each marker write.
@@ -38,8 +39,10 @@ var defaultMarkerRetryDelays = []time.Duration{
 // until it succeeds, a newer operation replaces the marker, or the retries
 // run out.
 type markerWriter struct {
-	mu       sync.Mutex
-	pending  *types.CompletedOperation
+	mu      sync.Mutex
+	pending *types.CompletedOperation
+	// owner is the pending operation's lease, released by the same write.
+	owner    *cluster.LeaseOwner
 	client   *cluster.Client
 	retrying bool
 	delays   []time.Duration
@@ -54,7 +57,7 @@ var markers = &markerWriter{delays: defaultMarkerRetryDelays}
 func (m *markerWriter) start(c *cluster.Client, marker *types.OperationMarker) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pending = nil
+	m.pending, m.owner = nil, nil
 	ctx, cancel := context.WithTimeout(context.Background(), markerWriteTimeout)
 	defer cancel()
 	if err := saveOperationMarker(c.WithContext(ctx), marker); err != nil {
@@ -62,9 +65,10 @@ func (m *markerWriter) start(c *cluster.Client, marker *types.OperationMarker) {
 	}
 }
 
-// complete clears the marker and records done as the last completed
-// operation, retrying in the background when the write fails.
-func (m *markerWriter) complete(c *cluster.Client, done *types.CompletedOperation) {
+// complete clears the marker, records done as the last completed operation
+// and releases owner's lease (when owner is not nil), retrying in the
+// background when the write fails.
+func (m *markerWriter) complete(c *cluster.Client, done *types.CompletedOperation, owner *cluster.LeaseOwner) {
 	if c == nil {
 		return
 	}
@@ -75,7 +79,7 @@ func (m *markerWriter) complete(c *cluster.Client, done *types.CompletedOperatio
 	defer cancel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pending, m.client = done, c
+	m.pending, m.owner, m.client = done, owner, c
 	if !m.writePendingLocked(ctx) {
 		m.retryLaterLocked()
 	}
@@ -98,11 +102,11 @@ func (m *markerWriter) writePendingLocked(parent context.Context) bool {
 	}
 	ctx, cancel := context.WithTimeout(parent, markerWriteTimeout)
 	defer cancel()
-	if err := saveCompletedOperation(m.client.WithContext(ctx), m.pending); err != nil {
+	if err := saveCompletedOperation(m.client.WithContext(ctx), m.pending, m.owner); err != nil {
 		slog.Warn("could not clear the running-operation marker", "operation", m.pending.ID, "error", err)
 		return false
 	}
-	m.pending, m.client = nil, nil
+	m.pending, m.owner, m.client = nil, nil, nil
 	return true
 }
 

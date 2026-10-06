@@ -253,7 +253,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 		saved = append(saved, m)
 		return nil
 	}
-	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation) error {
+	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation, _ *cluster.LeaseOwner) error {
 		mu.Lock()
 		defer mu.Unlock()
 		completed = append(completed, done)
@@ -367,8 +367,11 @@ func TestInterruptedOperationReportedAfterRestart(t *testing.T) {
 		{"too old", &types.OperationMarker{Pod: "old-pod", BootID: "old-boot", StartedAt: time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)}, nil, false},
 		{"unreadable", nil, errors.New("forbidden"), false},
 	} {
-		readOperationState = func(*cluster.Client) (*types.OperationMarker, *types.CompletedOperation, error) {
-			return tc.marker, nil, tc.err
+		readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+			if tc.err != nil {
+				return nil, tc.err
+			}
+			return &cluster.OperationRecord{Marker: tc.marker}, nil
 		}
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/api/operation", nil)

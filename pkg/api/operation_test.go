@@ -48,7 +48,7 @@ func recordMarkerWrites(t *testing.T) (*sync.Mutex, *[]*types.OperationMarker, *
 		saved = append(saved, m)
 		return nil
 	}
-	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation) error {
+	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation, _ *cluster.LeaseOwner) error {
 		mu.Lock()
 		defer mu.Unlock()
 		completed = append(completed, done)
@@ -132,9 +132,9 @@ func TestLastCompletedSurvivesRestart(t *testing.T) {
 	persisted := &types.CompletedOperation{ID: "before-restart", Type: "update", Label: "Update to nightly", User: "alice",
 		Target: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6", StartedAt: "2026-10-05T10:00:00Z", FinishedAt: "2026-10-05T10:05:00Z", Success: true, Message: "done"}
 	reads := 0
-	readOperationState = func(*cluster.Client) (*types.OperationMarker, *types.CompletedOperation, error) {
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		reads++
-		return nil, persisted, nil
+		return &cluster.OperationRecord{LastCompleted: persisted}, nil
 	}
 	if status, _ := getOperation(t); status.LastCompleted == nil || *status.LastCompleted != *persisted || status.Interrupted != nil {
 		t.Fatalf("after restart: %+v", status)
@@ -224,7 +224,7 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 		marker = m
 		return nil
 	}
-	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation) error {
+	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation, *cluster.LeaseOwner) error {
 		mu.Lock()
 		defer mu.Unlock()
 		attempts++
@@ -234,10 +234,10 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 		marker = nil
 		return nil
 	}
-	readOperationState = func(*cluster.Client) (*types.OperationMarker, *types.CompletedOperation, error) {
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		return marker, nil, nil
+		return &cluster.OperationRecord{Marker: marker}, nil
 	}
 
 	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"}, nil)
@@ -322,7 +322,7 @@ func TestNewOperationSupersedesPendingClear(t *testing.T) {
 	var mu sync.Mutex
 	var completedIDs []string
 	fail := true
-	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation) error {
+	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation, _ *cluster.LeaseOwner) error {
 		mu.Lock()
 		defer mu.Unlock()
 		if fail {

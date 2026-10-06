@@ -53,6 +53,8 @@ func resetPackageState(t *testing.T) {
 	t.Helper()
 	origLimiter, origLookup, origPermission := mutationLimiter, lookupUser, mutationPermission
 	origSave, origComplete, origRead := saveOperationMarker, saveCompletedOperation, readOperationState
+	origWriteLease, origReleaseLease := writeOperationLease, releaseOperationLease
+	origInterval, origTTL := leaseHeartbeatInterval, leaseTTL
 	origCheck, origPerm := checkAPIVersion, checkPermission
 	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
 	mutationLimiter = newRateLimiter(30 * time.Second)
@@ -60,17 +62,24 @@ func resetPackageState(t *testing.T) {
 	apiReady.reset()
 	inflight.reset()
 	markers.reset()
+	leases.stop()
 	clusterMutationInProgress.Store(false)
 	saveOperationMarker = func(*cluster.Client, *types.OperationMarker) error { return nil }
-	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation) error { return nil }
-	readOperationState = func(*cluster.Client) (*types.OperationMarker, *types.CompletedOperation, error) {
-		return nil, nil, nil
+	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation, *cluster.LeaseOwner) error { return nil }
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return &cluster.OperationRecord{}, nil }
+	writeOperationLease = func(*cluster.Client, *types.OperationLease, func(*types.OperationLease) bool) (*types.OperationLease, error) {
+		return nil, nil
 	}
+	releaseOperationLease = func(*cluster.Client, cluster.LeaseOwner) error { return nil }
 	t.Cleanup(func() {
-		// Stop marker retries before the seams they call are restored.
+		// Stop marker retries and the lease heartbeat before the seams they
+		// call are restored.
 		markers.reset()
+		leases.stop()
 		mutationLimiter, lookupUser, mutationPermission = origLimiter, origLookup, origPermission
 		saveOperationMarker, saveCompletedOperation, readOperationState = origSave, origComplete, origRead
+		writeOperationLease, releaseOperationLease = origWriteLease, origReleaseLease
+		leaseHeartbeatInterval, leaseTTL = origInterval, origTTL
 		checkAPIVersion, checkPermission = origCheck, origPerm
 		runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream = origU, origD, origR, origF
 		identities.reset()
