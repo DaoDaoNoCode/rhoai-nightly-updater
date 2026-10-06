@@ -48,6 +48,18 @@ const (
 	// by newer releases (checked: RELEASE.2025-10-15 exits with "Unable to
 	// use the drive ... drive not found" on a volume the 2019 release
 	// initialised).
+	//
+	// Setup therefore swaps the image over the existing PVC without a
+	// storage-format check. Checked in git history: the 2019 image only
+	// appeared in an unpublished fix-branch commit (b93f83c); every
+	// published main since the initial commit (5051672, 2026-07-02) set
+	// quay.io/minio/minio:latest. :latest was then a 2025 release, and every
+	// release since RELEASE.2022-10-29T06-21-33Z (which removed the
+	// deprecated filesystem backend) formats a new single-drive volume as
+	// "xl-single", the format this release reads. A volume can only hold
+	// the old "fs" format if MINIO_IMAGE pointed at a pre-2022-10-29 release;
+	// setup then reports the CrashLoopBackOff and teardown plus setup
+	// starts over.
 	minioDefaultImage = "quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45"
 	// minioConsolePort is the console port released versions used.
 	minioConsolePort = 9090
