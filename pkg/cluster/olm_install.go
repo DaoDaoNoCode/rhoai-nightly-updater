@@ -801,10 +801,26 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 	if d, ok := c.ctx.Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
 		end = d.Add(-installDeadlineReserve)
 	}
+	// Every read, discovery included, ends with the wait: a slow API server
+	// cannot stretch it.
+	ctx, cancel := context.WithDeadline(c.ctx, end)
+	defer cancel()
+	c = c.WithContext(ctx)
 	const staleHedge = " It was reported before this install finished, so it may clear once the new operator reconciles."
+	var stale []string // from the last read that finished
+	ended := func() string {
+		if len(stale) > 0 {
+			return upgradeGateMessage(stale, staleHedge)
+		}
+		return ""
+	}
 	for {
 		gates, reported, dscFound := readUpgradeGates(c, version, since)
-		var fresh, stale []string
+		if ctx.Err() != nil {
+			return ended() // the wait ended during the reads
+		}
+		var fresh []string
+		stale = nil
 		for _, g := range gates {
 			if g.fresh {
 				fresh = append(fresh, g.String())
@@ -820,14 +836,11 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 			return ""
 		case last:
 			// Nothing more to wait for: no DSC, or the wait is over.
-			if len(stale) > 0 {
-				return upgradeGateMessage(stale, staleHedge)
-			}
-			return ""
+			return ended()
 		}
 		select {
-		case <-c.ctx.Done():
-			return ""
+		case <-ctx.Done():
+			return ended()
 		case <-time.After(upgradeGatePoll):
 		}
 	}

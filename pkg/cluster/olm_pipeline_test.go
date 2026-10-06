@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -673,6 +674,29 @@ func TestUpgradeGateNotePlatformFreshness(t *testing.T) {
 				t.Fatalf("note %q", note)
 			}
 		})
+	}
+}
+
+// Review fix 6: the whole gate wait, every read included, ends with
+// upgradeGateWait even when the API server does not answer.
+func TestUpgradeGateWaitIsBoundedBySlowReads(t *testing.T) {
+	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
+	upgradeGateWait, upgradeGatePoll = 150*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select { // answers nothing until the client gives up
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	start := time.Now()
+	if note := adminAckNote(c, "rhods-operator.3.6.0", start); note != "" {
+		t.Fatalf("note %q", note)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("the wait took %s", d)
 	}
 }
 
