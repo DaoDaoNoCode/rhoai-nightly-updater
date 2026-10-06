@@ -250,6 +250,7 @@ type admissionConfig struct {
 		ResourceVersion   string            `json:"resourceVersion"`
 		CreationTimestamp string            `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
+		Annotations       map[string]string `json:"annotations"`
 		OwnerReferences   []struct {
 			APIVersion string `json:"apiVersion"`
 			Kind       string `json:"kind"`

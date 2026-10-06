@@ -266,6 +266,20 @@ objects:
       - apiGroups: ["mlflow.opendatahub.io"]
         resources: ["mlflows"]
         verbs: ["create"]
+      # Diagnostics, prerequisite operators: whether an installed operator's
+      # singleton operand (<Kind>/cluster, e.g. JobSetOperator/cluster) exists.
+      # The kind comes from the operator's CSV, so the resource is "*";
+      # only objects named "cluster" can be read, and only read.
+      - apiGroups: ["operator.openshift.io"]
+        resources: ["*"]
+        resourceNames: ["cluster"]
+        verbs: ["get"]
+      # Diagnostics: RHOAI Certificates cert-manager has not issued
+      # (Certificates hold no key material; the Secrets they produce are not
+      # readable)
+      - apiGroups: ["cert-manager.io"]
+        resources: ["certificates"]
+        verbs: ["list"]
 
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -436,7 +450,7 @@ objects:
                 # Must match api.ExpectedTemplateRevision; bump both when a
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
-                  value: "3"
+                  value: "4"
               ports:
                 - containerPort: 9090
                   name: metrics

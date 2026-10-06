@@ -246,10 +246,13 @@ type ComponentInfo struct {
 	ManagementState string `json:"managementState"` // "Managed", "Removed", "Unmanaged"
 	Status          string `json:"status"`          // "Available", "Degraded", "Progressing", "Unknown", "Deleting"
 	Message         string `json:"message,omitempty"`
-	FixAction       string `json:"fixAction,omitempty"`      // fix action ID for ApplyFix
-	FixTitle        string `json:"fixTitle,omitempty"`       // button text (plain English)
-	FixDescription  string `json:"fixDescription,omitempty"` // one-line explanation
-	FixConfirm      string `json:"fixConfirm,omitempty"`     // confirmation modal body
+	// Cause is a short classified cause of a not-ready component (a missing
+	// prerequisite operator, an upgrade gate, ...); Diagnostics has the fix.
+	Cause          string `json:"cause,omitempty"`
+	FixAction      string `json:"fixAction,omitempty"`      // fix action ID for ApplyFix
+	FixTitle       string `json:"fixTitle,omitempty"`       // button text (plain English)
+	FixDescription string `json:"fixDescription,omitempty"` // one-line explanation
+	FixConfirm     string `json:"fixConfirm,omitempty"`     // confirmation modal body
 }
 
 // DeploymentInfo holds readiness and image metadata for a Kubernetes Deployment.

@@ -28,7 +28,7 @@ func TestDataScienceClusterCheck(t *testing.T) {
 		{"no DSC", `{"items":[]}`, 0, "", "warn", []string{"dsc-missing"}, "", ""},
 		{"ready", `{"items":[{"metadata":{"name":"default-dsc"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, 0,
 			`{"items":[{"metadata":{"name":"default-dsci"},"status":{"phase":"Ready"}}]}`, "pass", nil, "default-dsci phase Ready", ""},
-		{"not ready ignores Info", notReady, 0, "", "fail", []string{"dsc-not-ready"}, "TrainerReady=False", "KueueReady"},
+		{"not ready ignores Info", notReady, 0, "", "fail", []string{"dsc-not-ready", "prerequisite-missing-jobset"}, "TrainerReady=False", "KueueReady"},
 		{"dsci error", `{"items":[{"metadata":{"name":"default-dsc"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, 0,
 			`{"items":[{"metadata":{"name":"default-dsci"},"status":{"phase":"Error","conditions":[{"type":"Degraded","status":"True","reason":"ReconcileFailed","message":"boom"}]}}]}`,
 			"fail", []string{"dsci-error"}, "boom", ""},

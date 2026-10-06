@@ -349,6 +349,7 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 	if comp.Status == "Available" || comp.Status == "Removed" {
 		return
 	}
+	comp.Cause = componentCause(dscCondition{Reason: reason, Message: comp.Message})
 
 	// Operator says "deprecated, please set it to Removed" — offer the button.
 	// (A MaaS gateway "fix" used to be offered here for a "missing required
@@ -360,6 +361,27 @@ func enrichComponentFix(comp *types.ComponentInfo, reason string) {
 		comp.FixTitle = "Disable LlamaStack"
 		comp.FixConfirm = "This will set llamastackoperator to Removed in your DataScienceCluster, as the operator message recommends."
 	}
+}
+
+// componentCause is a short cause for a not-ready component's condition,
+// classified from its message like the DataScienceCluster diagnostics do
+// (without their cluster lookups); "" when it is not classified.
+func componentCause(cond dscCondition) string {
+	lower := strings.ToLower(cond.Message)
+	switch {
+	case isUpgradeGateCondition(cond):
+		return "An upgrade gate holds provisioning"
+	case len(parseMissingDependencies(cond.Message)) > 0:
+		deps := parseMissingDependencies(cond.Message)
+		return fmt.Sprintf("Prerequisite %s not installed: %s", verb(len(deps), "operator", "operators"), strings.Join(deps, ", "))
+	case strings.Contains(lower, "observedgeneration < generation") || strings.Contains(lower, "status is stale"):
+		return "Its module operator has not reconciled the current spec yet"
+	case len(parseApplyFailures(cond.Message)) > 0:
+		return "The operator cannot update one of its objects"
+	case strings.Contains(lower, "conversion webhook"):
+		return "A CRD conversion webhook cannot be called"
+	}
+	return ""
 }
 
 type conditionInfo struct {

@@ -40,6 +40,19 @@ type Problem struct {
 	AffectedObjects []string `json:"affectedObjects,omitempty"`
 	LearnMore       string   `json:"learnMore,omitempty"`
 	TechnicalCmd    string   `json:"technicalCmd,omitempty"`
+	// RelatedProblems are the IDs of other problems in the same report that
+	// fix this problem's cause (only IDs present in the report are kept).
+	RelatedProblems []string `json:"relatedProblems,omitempty"`
+
+	// mergeable: two checks may report the same problem (a prerequisite
+	// named by a module and needed by a Certificate); their evidence is
+	// merged instead of the second being dropped.
+	mergeable bool
+	// covers are objects whose own problems this one explains, as
+	// "<Kind> <namespace>/<name>" or "<Kind> <name>". Pod problems whose
+	// pods are all covered, and webhook entries covered here, are folded
+	// into this problem.
+	covers []string
 }
 
 // DiagnosticsResponse is the response for the diagnostics endpoint.
@@ -72,6 +85,7 @@ var diagnosticChecks = []diagnosticCheck{
 	{"Node capacity", checkNodeCapacity},
 	{"DataScienceCluster", checkDataScienceCluster},
 	{"RHOAI pods", checkRHOAIPods},
+	{"Certificates", checkCertificates},
 	{"Platform modules", checkPlatformModules},
 	{applyFailuresCheckName, checkApplyFailures},
 	{"Operator-managed config", checkManagedConfig},
@@ -109,16 +123,21 @@ func DiagnoseCluster(c *Client) (*DiagnosticsResponse, error) {
 	wg.Wait()
 
 	resp := &DiagnosticsResponse{Problems: []Problem{}, Checks: []CheckResult{}}
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	for _, out := range outputs {
 		resp.Checks = append(resp.Checks, out.check)
 		for _, p := range out.problems {
-			if !seen[p.ID] {
-				seen[p.ID] = true
+			i, dup := seen[p.ID]
+			switch {
+			case !dup:
+				seen[p.ID] = len(resp.Problems)
 				resp.Problems = append(resp.Problems, p)
+			case p.mergeable && resp.Problems[i].mergeable:
+				mergeProblem(&resp.Problems[i], p)
 			}
 		}
 	}
+	resp.Problems = linkProblems(resp.Problems)
 
 	// Critical first, then warning, then info; check order within a severity.
 	severityOrder := map[string]int{"critical": 0, "warning": 1, "info": 2}
@@ -991,6 +1010,9 @@ func ApplyFix(c *Client, problemID string) (*types.OperationResponse, error) {
 		return applyFixDeleteStaleInstallPlans(c)
 	case "assist-rollout":
 		return AssistRollout(c)
+	}
+	if module, ok := strings.CutPrefix(problemID, "restart-module-operator:"); ok {
+		return applyFixRestartModuleOperator(c, module)
 	}
 	if msg, ok := removedFixes[problemID]; ok {
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "validation"}, nil

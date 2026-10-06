@@ -62,6 +62,10 @@ var knownResourceGroups = map[string]string{
 // miss new ones.
 var discoveredResourceGroups = map[string]bool{
 	"components.platform.opendatahub.io": true,
+	// Singleton operands (<Kind>/cluster) of prerequisite operators, whose
+	// kind comes from the operator's CSV (prerequisites.go); the rule is
+	// limited to the name "cluster".
+	"operator.openshift.io": true,
 }
 
 // Request verbs per Client method. Server-side apply creates the object when
