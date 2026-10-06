@@ -10,6 +10,17 @@ Steps marked **MANUAL ADMIN STEP** change the cluster outside the tool. They nee
 
 What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md). How it protects the cluster: [README](README.md#how-the-tool-keeps-your-cluster-safe).
 
+**Find your symptom.** Each section starts with what the app shows, then the fix.
+
+| What you see in the app | Section |
+|---|---|
+| "vX.Y.Z is available", "this updater's deployment is out of date" | [§2](#2-upgrade-roll-back-or-remove-the-updater) |
+| "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy` | [§5](#5-operations-busy-stuck-interrupted) |
+| **Operator failed**, **No Subscription**, a failed Update or Reinstall step | [§6](#6-update--reinstall-failed) |
+| A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
+| "Still MinIO: migration pending", S3 storage **Incomplete**, Tear down disabled | [§10](#10-test-resources) |
+| DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
+
 ---
 
 ## 1. Quick health checks
@@ -51,8 +62,14 @@ Download `install.sh` from the release page ([GitHub](https://github.com/DaoDaoN
 Image tags: `:vX.Y.Z` (immutable release), `:vN` (newest release of major N), `:latest` (newest release of the major line it is on; it moves to a new major only through a manual CI job), `:main` (newest `main` build, for testing) and `:<8-char commit>`.
 
 What the app's notices mean:
+
+<img src="docs/images/banner-major-update.png" alt="Notice: v2.0.0 is available; a new major version requires a full redeploy" width="760">
+
 - **"vX.Y.Z is available"**: a newer release exists. "Requires a full redeploy" means a new major version: run its `install.sh` (or check it out and `make upgrade`). Dismissing hides it until an even newer release.
-- **"This updater's deployment is out of date"**: the Deployment was created from an older template than the running image expects, typically an install on `:latest` that pulled a newer image. Re-apply the template of the release you run (its `install.sh`, or `make upgrade` from its checkout).
+
+<img src="docs/images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date" width="760">
+
+- **"This updater's deployment is out of date"**: the Deployment was created from an older template than the running image expects, typically an install on `:latest` that pulled a newer image. Re-apply the template of the release you run (its `install.sh`, or `make upgrade` from its checkout). Which version runs: [UPGRADING §1](docs/UPGRADING.md#1-which-version-am-i-running).
 
 What the image checks do:
 - `deploy` and `upgrade` apply `IMAGE@sha256:<digest of TAG>`. A release's `install.sh` resolves its own `:vX.Y.Z` and refuses an image built from another commit.
@@ -107,6 +124,14 @@ oc logs -n $NS deploy/$APP -c app --previous
 
 ## 5. Operations: busy, stuck, interrupted
 
+An operation that another updater pod runs (here, after the pod was evicted mid-update):
+
+<img src="docs/images/banner-remote-operation.png" alt="Banner: qa-user is running Update to nightly on updater pod rhoai-nightly-updater-..., step 8 of 8, with the latest progress" width="760">
+
+An operation whose pod stopped before it finished:
+
+<img src="docs/images/banner-interrupted.png" alt="Banner: Update to nightly was interrupted, with who started it, the pod that stopped and what to do" width="760">
+
 - **409 `cluster_busy` / "Another operation is changing this cluster":** one operation at a time. The banner names who started it and the current step. Wait, or follow it on the Status page.
 - **Lost the progress view:** reload. The page reattaches to a running operation. If the connection was lost, the final card may say "outcome unknown, see the activity log".
 - **"… on updater pod *P*" (a remote operation):** another updater pod runs it. This happens when the pod is deleted or evicted (node drain, cluster upgrade, autoscaler): the ReplicaSet starts a replacement at once while the old pod still drains its operation (up to 980 s). The replacement reads the old pod's lease, shows the operation with its latest step, refuses new changes with 409 `cluster_busy`, and shows the result (`lastCompleted`) when it ends. There is no live step stream for it; the page polls.
@@ -115,7 +140,69 @@ oc logs -n $NS deploy/$APP -c app --previous
 - **"*X* was interrupted":** the operation's marker is still recorded and the process that wrote it holds no live lease: the pod or its container stopped mid-operation (SIGKILL, node loss, OOM), or an updater version without leases left it. An operation that still runs in another pod is not reported as interrupted. Check the operator status, then run the same operation again. Every step is safe to repeat; Update and Reinstall recreate a missing Subscription with the settings recorded before the last operation. For Dashboard Dev, run **Revert**.
 - **Operation deadline:** 15 minutes. OLM gets 8 minutes to reach `Succeeded`, and the CSV must then stay `Succeeded` for 20 seconds: right after an install OLM can briefly move it back to `Pending` (NeedsReinstall) while its webhooks come up. A failure restores the previous catalog and Subscription within about 1 minute.
 
+The cross-pod lock, when a pod is evicted during an update:
+
+```mermaid
+sequenceDiagram
+  participant A as Old updater pod
+  participant L as ConfigMap rhoai-nightly-updater-operation (key lock)
+  participant B as Replacement pod
+  participant U as Browser
+  A->>L: Take the lease (pod, boot ID, operation)
+  loop Every 10 s, also while draining
+    A->>L: Renew the heartbeat, latest step
+  end
+  Note over A: SIGTERM (eviction): no new changes, drains up to 980 s
+  B->>L: Read the lease: heartbeat is recent
+  B-->>U: Banner "... on updater pod A", step from the lease
+  U->>B: A new change
+  B-->>U: 409 cluster_busy, nothing changed
+  A->>L: Done: lastCompleted, release the lease
+  B-->>U: The result of A's operation
+  Note over A,B: If A dies instead (SIGKILL, node loss), its heartbeat stops.<br>After 45 s the lease is free, and B shows "X was interrupted".
+  Note over A: If A's renewals fail for 35 s or find another pod's lease,<br>A stops at once (lock_lost) and does not restore.
+```
+
 ## 6. Update / Reinstall failed
+
+A successful update, for reference: each step turns green, then **Update complete**.
+
+<img src="docs/images/update.gif" alt="Update to latest, confirm, the eight steps run, Update complete" width="760">
+
+The update pipeline, and what happens when a step fails:
+
+```mermaid
+flowchart TD
+  S1["1 Check prerequisites<br>pull secret, IDMS, OperatorGroup,<br>image in a temporary catalog, version"] -->|refused| R0["Nothing was changed"]
+  S1 --> S2["2 Save snapshot"]
+  S2 --> C
+  subgraph C ["Steps that change the cluster"]
+    S3["3 Replace the nightly catalog<br>(Subscription removed; the operator keeps running)"] --> S4["4 Wait for the catalog: READY"]
+    S4 --> S5["5 Detect the channel"]
+    S5 --> S6["6 Remove the old operator version (CSV, InstallPlan)"]
+    S6 --> S7["7 Create the Subscription (same settings)"]
+    S7 --> S8["8 Wait for the operator install<br>(up to 8 min; Succeeded for 20 s)"]
+  end
+  S8 -->|Succeeded| OK["Update complete"]
+  S8 -->|"still installing after 8 min"| KEEP["Keep the new state; the page keeps watching"]
+  C -->|"a step fails"| RS["Restore: the previous catalog and Subscription,<br>remove the half-installed CSV (about 1 min)"]
+```
+
+What the Status page shows when the operator is broken:
+
+<img src="docs/images/status-operator-failed.png" alt="RHOAI on this cluster: Operator failed, with the recommended fix" width="760">
+
+1. **Operator failed**: the CSV phase is `Failed`.
+2. The recommendation, with **Re-deploy the same version**, **Open Diagnostics** and **View in console**.
+3. **Update to latest**: a new build is the usual fix; Update removes the failed version first.
+
+<img src="docs/images/status-no-subscription.png" alt="Alert: The operator has no Subscription" width="760">
+
+**The operator has no Subscription**: usually an interrupted Update or Reinstall. Update or Reinstall recreates the Subscription with the settings recorded before the last operation.
+
+<img src="docs/images/status-recovery.png" alt="The Recovery card: Re-deploy the operator and Reinstall the operator" width="760">
+
+**Recovery** on the Status page: **Re-deploy operator...** installs the same version again; **Reinstall...** removes the operator and installs the target you choose (stable, a nightly, an exact build).
 
 Read the step that failed and its log in the UI first. Then:
 
@@ -161,9 +248,18 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 - **Tags don't load / Quay errors:** the Quay token is derived from the cluster pull secret. Test it on the Status page, then check `oc logs ... -c app | grep -i quay`.
 - **Commit dates show "-", or PR search reports a rate limit:** GitHub allows 60 requests/hour per egress IP without a token. Set `GITHUB_TOKEN` ([README: Configuration](README.md#configuration)). Results are cached in memory per pod (cleared on restart).
-- **A PR shows as not contained, but its change is in the build:** it arrived as a cherry-pick with a different SHA. PR search only follows merge commits.
+- **A PR shows as not contained, but its change is in the build:**
+
+  <img src="docs/images/builds-pr-search.png" alt="PR search for #5123: only rhoai-3.7-ea.1 contains it; the release branches do not" width="760">
+
+  In this example only the build from `main` contains the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. PR search only follows merge commits.
 
 ## 9. Dashboard Dev
+
+<img src="docs/images/dashboard-dev-session.png" alt="Dashboard Dev session active: PR #5123, Operator paused, with Revert to default" width="760">
+
+1. Who deployed which build, and when.
+2. **Revert to default** ends the session.
 
 - **Banner "Dashboard Dev session active":** `dashboard-operator` is paused (0 replicas), so RHOAI updates don't reach the dashboard. Use **Revert** on Dashboard Dev when done. Operator operations offer "Revert Dashboard Dev and continue".
 - **"A dashboard deletion is waiting for the paused dashboard-operator":** this is deadlock D1. Revert at once (§11.1).
@@ -173,6 +269,20 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 ## 10. Test resources
 
 The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from the MinIO earlier versions deployed. Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-test-resources).
+
+<img src="docs/images/s3-incomplete.png" alt="S3 storage (SeaweedFS) Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
+
+1. **Incomplete**: SeaweedFS does not serve through `minio-service` and `minio-ui`.
+2. Why, in one line (here: scaled to 0, for example by a manual rollback).
+3. **Repair** re-runs setup and keeps the stored data:
+
+<img src="docs/images/s3-repair.gif" alt="Repair, confirm Repair S3 storage, the storage is Running again" width="760">
+
+<img src="docs/images/s3-running.png" alt="S3 storage Running; Tear down is blocked by a pipeline server" width="760">
+
+1. **Running**.
+2. **Open admin UI** (user `admin`).
+3. **Tear down** is disabled while a pipeline server uses the storage; the line names it.
 
 | Problem | Fix |
 |---|---|
@@ -191,6 +301,30 @@ The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind
 | MLflow teardown hangs / DSC change waits on MLflow | §11.4 |
 
 ### 10.1 MinIO to SeaweedFS: what the migration does, and how to roll back
+
+<img src="docs/images/s3-migration-pending.png" alt="S3 storage still MinIO: migration pending, with Migrate to SeaweedFS" width="760">
+
+1. **Still MinIO: migration pending**: the MinIO of an earlier version still serves the pipeline servers.
+2. **Migrate to SeaweedFS** opens the confirmation, which lists every change:
+
+<img src="docs/images/s3-migrate-dialog.png" alt="Dialog: Replace MinIO with SeaweedFS? with the changes and the Start fresh warning" width="760">
+
+After **Migrate and start fresh**, the card shows SeaweedFS **Running** and the old volume that was kept:
+
+<img src="docs/images/s3-migrate.gif" alt="Migrate to SeaweedFS, confirm, the storage runs SeaweedFS" width="760">
+
+```mermaid
+flowchart TD
+  M0["MinIO serves minio-service<br>(Still MinIO: migration pending)"] --> M1["Migrate to SeaweedFS (or Set up / Repair)"]
+  M1 --> M2["Start SeaweedFS on seaweedfs-pvc<br>same minio-secret, empty bucket pipelines"]
+  M2 -->|"not ready in time"| MX["Nothing switched: MinIO keeps serving"]
+  M2 -->|ready| M3["Switch minio-service and minio-ui to SeaweedFS"]
+  M3 --> M4["Delete Deployment minio; then NetworkPolicy minio-ingress"]
+  M4 --> M5["Running on SeaweedFS<br>minio-pvc kept, unused, until teardown"]
+  M5 -.->|"rollback (manual, below)"| RB1["Temporary MinIO minio-old on minio-pvc"]
+  RB1 -.-> RB2["Point minio-service at minio-old,<br>scale seaweedfs to 0 (shows Incomplete)"]
+  RB2 -.->|"go forward: Repair"| M5
+```
 
 Setting up S3 storage on a cluster with the tool's MinIO (Deployment `minio`, shown as "Still MinIO: migration pending") replaces it:
 1. SeaweedFS starts next to MinIO on a new PVC `seaweedfs-pvc`, with the same credentials (`minio-secret`) and an empty bucket `pipelines`. MinIO keeps serving meanwhile; if SeaweedFS cannot start, nothing is switched.
@@ -391,6 +525,8 @@ OLM's documented recovery ("Refreshing failing subscriptions"), as a MANUAL ADMI
 
 ### 11.6 Upgrade leftovers the operator cannot fix itself
 
+<img src="docs/images/diag-apply-failures.png" alt="Diagnostics: Deployment redhat-ods-applications/kuberay-operator must be recreated: spec.selector cannot be changed, with the commands" width="760">
+
 The DataScienceCluster, the Platform and the module CRs report objects the operator failed to apply as `failure deploying resource <ns>/<name>: apply failed <group/version>, Kind=<Kind>: …`. Diagnostics ("Objects the operator cannot update") lists each object once, with the CRs that report it and exact commands. It changes nothing. Find them by hand with:
 
 ```bash
@@ -415,6 +551,54 @@ MANUAL ADMIN STEPs, by error:
    There is no automatic fix: the right value needs judgement.
 
 ### 11.7 DataScienceCluster not ready
+
+On **Components**, the DataScienceCluster card names the failing components:
+
+<img src="docs/images/components-cause.png" alt="Components: DataScienceCluster default-dsc Not Ready; trainer Error with the cause Prerequisite operator not installed: JobSet Operator" width="760">
+
+1. **Not Ready**, with the operator's summary.
+2. The **Cause** of each failing component, and a link to Diagnostics, which shows the fix.
+
+On **Diagnostics**, open the problem:
+
+<img src="docs/images/diag-prerequisite-missing.png" alt="Diagnostics: Prerequisite operator Job Set Operator is not installed, with the commands that install it" width="760">
+
+1. **Observed**: the conditions and catalog facts the tool read.
+2. **Fix**: what to do, in plain words. The tool does not install operators.
+3. **Command**: the exact commands (here: Namespace, OperatorGroup, Subscription, `oc wait`, then the operand).
+4. Copy them, read them, and run them as cluster-admin.
+
+The other causes in the table below look the same. Open each example to see it:
+
+<details>
+<summary><b>Installed, but its operand is missing</b></summary>
+
+<img src="docs/images/diag-operand-missing.png" alt="Job Set Operator is installed, but its JobSetOperator/cluster does not exist, with the command that creates it" width="760">
+
+</details>
+
+<details>
+<summary><b>Module operator in back-off</b> (the only one with a Fix button)</summary>
+
+<img src="docs/images/diag-module-backoff.png" alt="The trainer module operator has not retried yet, with the restart command and a Fix button" width="760">
+
+1. **Fix** restarts the module operator, after a confirmation. The **Command** does the same by hand.
+
+</details>
+
+<details>
+<summary><b>Certificate not issued</b> (cert-manager stopped)</summary>
+
+<img src="docs/images/diag-certificate-stale.png" alt="Certificate reports Ready, but its Secret is missing: cert-manager is installed but its controller is not running" width="760">
+
+</details>
+
+<details>
+<summary><b>Upgrade gate</b></summary>
+
+<img src="docs/images/diag-upgrade-gates.png" alt="The DataScienceCluster waits on an upgrade gate, with the oc patch command" width="760">
+
+</details>
 
 Diagnostics ("DataScienceCluster is not ready") lists each failing DSC condition, followed by its classified cause and a **Related** link to the problem that fixes it. Conditions with severity `Info` do not block `Ready`. A prerequisite named only by Info conditions (for example `KserveLLMInferenceServiceWideEPDependencies: LeaderWorkerSet not installed`) is reported as informational: it gates an optional feature. The Components page shows the same cause in a short line. Read the conditions by hand with:
 

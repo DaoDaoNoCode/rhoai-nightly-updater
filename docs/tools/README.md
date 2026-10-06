@@ -37,11 +37,11 @@ GIF frame shows a known state. The browser clock is fixed at
 - **Full pages** (`page-<page>-light.png`, `-dark.png`): 1440 px wide, rendered
   at 2x and scaled down. README uses them in `<picture>` elements with a
   `prefers-color-scheme: dark` source.
-- **Crops** (`<page or area>-<what>.png`): 2x, so show them at about half
+- **Crops** (`<page or area>-<what>.png`): an 860 px window at 2x, so show them at about half
   their pixel width (`width="760"` in the docs). Light theme only.
 - **Callouts**: red numbered badges and boxes drawn into the page before the
   capture. Each annotated image has a numbered legend under it in the docs;
   keep the numbers and the legend in step when you change `capture.js`.
-- **GIFs**: 1000 px wide, at most ~10 s, one palette per GIF, no dithering.
+- **GIFs**: 860 px wide, at most ~10 s, one palette per GIF, no dithering.
   A drawn pointer shows where each click goes.
 - **PNGs** are reduced to 256 colours without dithering (text stays sharp).

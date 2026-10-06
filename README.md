@@ -4,30 +4,107 @@
 
 <h1 align="center">RHOAI Nightly Updater</h1>
 
-<p align="center">
-  A web app for installing and updating Red Hat OpenShift AI nightly builds on your own ROSA HCP / OpenShift cluster,<br/>
-  plus helpers for testing odh-dashboard builds. No <code>oc</code> commands needed day to day.
-</p>
+The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test resources (S3 storage, pipeline servers, MLflow) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
 
 <p align="center">
-  <img src="docs/images/status-page-1.png" alt="Status page: installed vs latest build" width="800" />
-</p>
-<p align="center">
-  <img src="docs/images/status-page-2.png" alt="Status page: update panel, activity and recovery" width="800" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/page-status-dark.png">
+    <img src="docs/images/page-status-light.png" alt="The Status page: the installed RHOAI build next to the newest nightly, with Update to latest" width="880">
+  </picture>
 </p>
 
----
+## Install
 
-**New here? Start with the [Quick Start](docs/QUICKSTART.md).** No clone needed: download the release's `install.sh`, check and read it, then run it:
+Download the release's `install.sh`, check and read it, then run it. You need `oc` (logged in as cluster-admin) and `curl`:
 
 ```bash
 curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh
-echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c
-less install.sh
-bash install.sh --dry-run && bash install.sh     # needs oc (cluster-admin) and curl
+echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c - && less install.sh
+bash install.sh --dry-run && bash install.sh
 ```
 
-Installed before releases existed (your Deployment uses `:latest`)? See [UPGRADING.md](docs/UPGRADING.md).
+On macOS, use `shasum -a 256 -c -` instead of `sha256sum -c -`. The installer prints the app URL when it is done. **New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup and your first update, step by step. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first.
+
+## A short tour
+
+### Status: what is installed, and Update
+
+<img src="docs/images/status-installed-vs-latest.png" alt="The RHOAI on this cluster card, with callouts" width="760">
+
+1. **Installed**: the nightly build the cluster runs (tag, digest, build date, dashboard commit).
+2. **Latest**: the newest build of the same stream on Quay.
+3. The verdict: **Update available**, **Up to date**, **Operator failed** or **No Subscription**.
+4. **Update to latest** installs the newest build. Progress streams step by step; if OLM fails, the previous catalog and Subscription are restored.
+
+The same page has one-time cluster setup (pull secret, image mirror), **Update to a specific build**, **Recent activity** and **Recovery** (**Re-deploy operator...**, **Reinstall...**).
+
+### Components: is RHOAI ready?
+
+<img src="docs/images/components-cause.png" alt="A DataScienceCluster that is Not Ready, with the cause of each failing component" width="760">
+
+1. The DataScienceCluster state (**Ready** or **Not Ready**).
+2. For each failing component, the operator's message and a short **Cause**, with a link to the fix on Diagnostics.
+
+Below it, the Deployments table lists problems first, with pod details, git provenance and what changed since the last update.
+
+### Build Explorer: which build has my change?
+
+<img src="docs/images/build-explorer-pr-search.gif" alt="Typing #5123 in the build search lists which nightly builds contain that PR" width="760">
+
+Every nightly tag on Quay: filter, see the contents of a build, compare it with the installed one, and search by image, commit SHA or PR number (`#5123`). See [PR search](#build-explorer-pr-search) for its limits.
+
+### Dashboard Dev: try an odh-dashboard PR
+
+<img src="docs/images/dashboard-dev-session.png" alt="An active Dashboard Dev session for PR #5123" width="760">
+
+1. Who deployed which build, and when. Everyone on the cluster sees this dashboard until someone reverts.
+2. **Revert to default** restores the release images.
+
+It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI builds (`pr-<N>`, `main`).
+
+### Test resources: S3 storage, pipeline servers, MLflow
+
+<img src="docs/images/s3-running.png" alt="The Storage card: S3 storage (SeaweedFS) Running" width="760">
+
+1. **S3 storage (SeaweedFS)** is **Running**, behind the `minio-service` name kept from MinIO.
+2. **Open admin UI** opens the SeaweedFS admin UI (user `admin`).
+3. **Tear down** stays disabled while a pipeline server uses the storage, and says which one.
+
+Pipeline servers (one per project) and an MLflow instance are on the same page.
+
+### Diagnostics: what is wrong, and how to fix it
+
+<img src="docs/images/diagnostics-copy-command.gif" alt="Opening a Diagnostics problem, showing its command and copying it" width="760">
+
+Diagnostics scans on load and only reads the cluster. Each problem shows what was **Observed**, the **Fix**, and a **Command** you copy and run yourself. A few problems have a **Fix** button, which asks for confirmation first.
+
+<details>
+<summary><b>All pages, full size (light and dark)</b></summary>
+
+| Page | Screenshot |
+|---|---|
+| Components | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-components-dark.png"><img src="docs/images/page-components-light.png" alt="Components page" width="640"></picture> |
+| Build Explorer | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-build-explorer-dark.png"><img src="docs/images/page-build-explorer-light.png" alt="Build Explorer page" width="640"></picture> |
+| Dashboard Dev | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-dashboard-dev-dark.png"><img src="docs/images/page-dashboard-dev-light.png" alt="Dashboard Dev page" width="640"></picture> |
+| Test resources | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-test-resources-dark.png"><img src="docs/images/page-test-resources-light.png" alt="Test resources page" width="640"></picture> |
+| Diagnostics | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-diagnostics-dark.png"><img src="docs/images/page-diagnostics-light.png" alt="Diagnostics page" width="640"></picture> |
+
+The app follows your system theme; the moon icon in the masthead switches it. All screenshots come from a mock backend with made-up data (`make docs-screenshots`, see [docs/tools](docs/tools/README.md)).
+
+</details>
+
+## Documentation
+
+| Doc | For |
+|---|---|
+| [QUICKSTART.md](docs/QUICKSTART.md) | Install, one-time setup, first update, test resources |
+| [UPGRADING.md](docs/UPGRADING.md) | Which version you run, installs from before releases, moving between releases |
+| [RUNBOOK.md](RUNBOOK.md) | Troubleshooting: what the app shows, and the fix |
+| [CHANGELOG.md](CHANGELOG.md) | What each release changed, and its upgrade notes |
+| [CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md) | Every object the tool creates, patches or deletes, and when |
+| [SECURITY.md](SECURITY.md) | Auth, RBAC, network exposure, residual risks |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Local development, tests, CI, releases |
+| [OPENSHIFT_INTEGRATION.md](docs/OPENSHIFT_INTEGRATION.md) | OpenShift and OLM behaviour the code depends on |
 
 ## Versions
 
@@ -36,25 +113,7 @@ Releases are `vMAJOR.MINOR.PATCH` ([CHANGELOG.md](CHANGELOG.md), [GitHub release
 - **MAJOR**: the deployment template changed (`TEMPLATE_REVISION`, RBAC). Upgrade with that release's `install.sh` (or `git checkout vX.Y.Z && make upgrade`), which re-applies the template; a new image alone would not work.
 - **MINOR**: features. **PATCH**: fixes. Same template.
 
-Each release attaches `install.sh` (its template embedded; it installs exactly that release, pinned by digest) and `deploy/template.yaml`. Image tags: `:vX.Y.Z` (immutable), `:vN` (newest release of major N), `:latest` (newest release of the major line it is on; it never moves to a new major by itself), `:main` and `:<8-char commit>` (test builds of `main`). The app shows the running release in the masthead and a notice when a newer one exists.
-
-## Pages
-
-| Page | What it does |
-|---|---|
-| **Status** | The installed build next to the latest nightly (Update available / Up to date), one-time cluster setup (pull secret, IDMS), **Update**, **Re-deploy the same version**, **Reinstall** (stable, a nightly, or an exact FBC image), live progress, and the activity log |
-| **Components** | DSC components with fixes for invalid or extra fields. A no-DSC state offers **Preview and create**. The Deployments table lists problems first, with pod details, git provenance and console log links |
-| **Build Explorer** | Every nightly tag: filter, inspect the FBC contents, compare with the installed build, search by image, commit SHA or PR |
-| **Dashboard Dev** | Deploys an odh-dashboard PR or main to the installed dashboard (RHOAI Konflux builds `odh-pr-<N>`/`odh-stable`, or ODH OpenShift CI builds `pr-<N>`/`main`), then **Revert** |
-| **Test resources** | S3 storage (SeaweedFS, behind the `minio-service` name kept from MinIO), per-project pipeline servers, an MLflow instance and MLflow PR images |
-| **Diagnostics** | Health checks with evidence and guidance. A few problems have an automatic fix, which asks for confirmation |
-
-<p align="center">
-  <img src="docs/images/components-page.png" alt="Components page" width="800" />
-</p>
-<p align="center">
-  <img src="docs/images/build-explorer-page-1.png" alt="Build Explorer: nightly builds" width="800" />
-</p>
+Each release attaches `install.sh` (its template embedded; it installs exactly that release, pinned by digest) and `deploy/template.yaml`. Image tags: `:vX.Y.Z` (immutable), `:vN` (newest release of major N), `:latest` (newest release of the major line it is on; it never moves to a new major by itself), `:main` and `:<8-char commit>` (test builds of `main`). The app shows the running release in the masthead and a notice when a newer one exists ([UPGRADING §1](docs/UPGRADING.md#1-which-version-am-i-running)).
 
 ## How the tool keeps your cluster safe
 
@@ -90,11 +149,12 @@ Platform-owned configurations, and those whose owner is unknown, are never remov
 - delete stale webhooks;
 - delete Failed InstallPlans;
 - assist a stuck rollout (`maxUnavailable: 1`, recorded and restorable);
-- set one allowlisted optional component to Removed.
+- set one allowlisted optional component to Removed;
+- restart a module operator that has not retried (a rolling restart).
 
 Each re-checks its precondition right before acting and reports "Nothing to do" when nothing needs changing.
 
-**If the updater pod restarts mid-operation.** On SIGTERM the pod stops taking new changes (503, "restarting") and reports not ready. It then waits up to 980 s for the running operation: its 15-minute deadline plus a bounded restore and bookkeeping. `terminationGracePeriodSeconds` is 1020 and the strategy is `Recreate`, so rollouts never overlap. A deleted or evicted pod is replaced at once while it still drains, so every operation also holds a lease in the operation ConfigMap: the replacement shows the old pod's operation as running "on updater pod …" and refuses changes until it ends (a crashed pod's lease expires after 45 s). oauth-proxy exits immediately, so **the UI is offline for up to ~17 minutes** in that case. If the pod is killed anyway (SIGKILL, node loss), the next pod finds the operation marker and shows "*X* was interrupted" with what to do. Re-running the same operation is safe.
+**If the updater pod restarts mid-operation.** On SIGTERM the pod stops taking new changes (503, "restarting") and reports not ready. It then waits up to 980 s for the running operation: its 15-minute deadline plus a bounded restore and bookkeeping. `terminationGracePeriodSeconds` is 1020 and the strategy is `Recreate`, so rollouts never overlap. A deleted or evicted pod is replaced at once while it still drains, so every operation also holds a lease in the operation ConfigMap: the replacement shows the old pod's operation as running "on updater pod ..." and refuses changes until it ends (a crashed pod's lease expires after 45 s). oauth-proxy exits immediately, so **the UI is offline for up to ~17 minutes** in that case. If the pod is killed anyway (SIGKILL, node loss), the next pod finds the operation marker and shows "*X* was interrupted" with what to do. Re-running the same operation is safe. Diagrams: [RUNBOOK §5](RUNBOOK.md#5-operations-busy-stuck-interrupted).
 
 ## Build Explorer PR search
 
@@ -133,28 +193,19 @@ Local development variables (`DEV_MODE`, `DEV_TOKEN`, `KUBE_CA_FILE`, `DEV_INSEC
 
 ## Architecture
 
-```
-Browser ──> Route (TLS reencrypt) ──> oauth-proxy :8443 ──> app 127.0.0.1:8080 ──> Kubernetes API (SA token)
-                                                           app :9090  <── probes, Prometheus
+```mermaid
+flowchart LR
+  B["Browser"] --> R["Route (TLS reencrypt)"]
+  R --> P["oauth-proxy :8443"]
+  P --> A["app 127.0.0.1:8080"]
+  A --> K["Kubernetes API (service account token)"]
+  M["Probes, Prometheus"] --> A2["app :9090"]
 ```
 
 - **Backend:** Go `net/http`, a raw-HTTP Kubernetes client (no client-go), JSON logs. API routes are in `pkg/api/routes.go`.
 - **Frontend:** React 18, PatternFly 6, TypeScript, webpack; served by the backend.
 - **Progress:** Update, Re-deploy and Reinstall stream their steps over SSE. Afterwards the page polls `/api/status`, and `GET /api/operation` shows the running operation to every viewer.
-- **State:** ConfigMaps `rhoai-nightly-updater-activity` (audit log), `-snapshot` (pre-operation snapshot and the recorded Subscription), `-operation` (running-operation marker).
-
-## Documentation
-
-| Doc | For |
-|---|---|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Deploying, first update, upgrading/rolling back the updater |
-| [UPGRADING.md](docs/UPGRADING.md) | Installs from before releases, and moving between releases |
-| [CHANGELOG.md](CHANGELOG.md) | What each release changed, and its upgrade notes |
-| [CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md) | Every object the tool creates, patches or deletes, and when |
-| [RUNBOOK.md](RUNBOOK.md) | Troubleshooting and manual recovery |
-| [SECURITY.md](SECURITY.md) | Auth, RBAC, network exposure, residual risks |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Local development, tests, CI |
-| [OPENSHIFT_INTEGRATION.md](docs/OPENSHIFT_INTEGRATION.md) | OpenShift/OLM behaviour the code depends on |
+- **State:** ConfigMaps `rhoai-nightly-updater-activity` (audit log), `-snapshot` (pre-operation snapshot and the recorded Subscription), `-operation` (running-operation marker, last result and the cross-pod lease).
 
 ## License
 

@@ -17,7 +17,76 @@ The commands below use the default names; set yours first:
 NS=rhoai-nightly-updater APP=rhoai-nightly-updater
 ```
 
+## Upgrade paths at a glance
+
+```mermaid
+flowchart TD
+  pre["Before releases: June builds, V0, V1, V2<br>(Deployment on image :latest)"]
+  v1["v1.0.0 (template revision 2)"]
+  v2["v2.0.0 (template revision 4)"]
+  pre -->|"§3: make upgrade TAG=v1.0.0"| v1
+  pre -->|"§4: v2.0.0 install.sh"| v2
+  v1 -->|"§4: v2.0.0 install.sh"| v2
+  v2 -.->|"§5: make rollback TAG=v1.0.0"| v1
+  pre -.->|"§2: by itself, :latest pulls v1.x"| v1
+```
+
+Solid arrows are upgrades you run (sections 3 and 4). The dashed arrows are
+a rollback (section 5) and what an install on `:latest` does by itself
+(section 2). Every upgrade re-applies the release's own template; a new major
+version never works with only a new image.
+
+How an upgrade or a rollback runs:
+
+```mermaid
+flowchart TD
+  A["bash install.sh, make upgrade or make rollback"] --> B{"Logged in as cluster-admin?"}
+  B -- no --> X["Stop: nothing changed"]
+  B -- yes --> C["Resolve the image tag to a digest"]
+  C --> D{"Image built from the release's commit,<br>and the template matches?"}
+  D -- no --> X
+  D -- yes --> E["Apply the template, pinned by digest"]
+  E --> F{"A cluster operation running?"}
+  F -- yes --> G["The old pod finishes it first<br>(UI offline up to ~17 min)"]
+  F -- no --> H["New pod starts (Recreate)"]
+  G --> H
+  H --> I["Old ReplicaSets pruned; sessions kept"]
+  I --> J["Check: ./scripts/smoke-test.sh"]
+```
+
 ## 1. Which version am I running?
+
+### In the app
+
+<img src="images/masthead-version.png" alt="The masthead shows the release v2.0.0" width="380">
+
+1. The masthead shows the running release, for example `v2.0.0`. Builds of
+   `main` or of a commit show no version here.
+
+<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build v2.0.0 with its commit and build date" width="760">
+
+1. **Help** (`?`) → **About this installation** → **Updater build**: the
+   release, its commit and its build date.
+
+When a newer release exists, every page shows a notice. A new MAJOR version
+says it **requires a full redeploy**:
+
+<img src="images/banner-major-update.png" alt="Notice: v2.0.0 is available. This updater runs v1.0.0, and v2.0.0 is a new major version that requires a full redeploy" width="760">
+
+A MINOR or PATCH release needs only that release's `install.sh` (or
+`make upgrade` from its checkout):
+
+<img src="images/banner-patch-update.png" alt="Notice: v2.0.1 is available; an admin upgrades with that release's install.sh or make upgrade" width="760">
+
+If the Deployment was created from an older template than the running image
+expects (typically an install on `:latest` that pulled a newer image), every
+page shows this notice for admins. Upgrade as in sections 3 and 4:
+
+<img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, template revision 3 where 4 is expected" width="760">
+
+Dismissing the release notice hides it until an even newer release.
+
+### From the command line
 
 ```bash
 # The image reference of each container: a tag (:latest), a digest (@sha256:...) or a release (:vX.Y.Z)
