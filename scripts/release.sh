@@ -284,7 +284,7 @@ list_tags() {
 }
 
 has_tag() {
-	printf '%s\n' "$TAGS" | grep -qx "$1"
+	printf '%s\n' "$TAGS" | grep -Fqx -- "$1"
 }
 
 # image_label REF KEY: a label of the image's config, empty when missing.

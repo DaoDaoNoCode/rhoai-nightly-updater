@@ -248,6 +248,13 @@ expect_eq ":v2 follows v2.1.0" "$(tag_digest v2.1.0)" "$(tag_digest v2)"
 expect_eq "commit tag is immutable" "$new" "$(tag_digest 22222222)"
 expect_fail "promote a missing version" "does not exist" promote v9.0.0
 
+# Tags are compared literally: v2x0x1 is not v2.0.1 (a regex dot would match it).
+reset_registry
+seed v2x0x1 "$(config v2x0x1 3333333333333333333333333333333333333333)"
+config v2.0.1 "$SHA2" >"$WORK/image.tar"
+expect_ok "a near-matching tag is another tag" publish v2.0.1
+[ -f "$REG/tags/v2.0.1" ] && pass || fail "v2.0.1 was not pushed next to v2x0x1"
+
 # A new repository: everything is published.
 reset_registry
 config v1.0.0 "$SHA2" >"$WORK/image.tar"
