@@ -6,17 +6,27 @@ import {
   Button,
   Card,
   CardBody,
+  CardHeader,
+  CardTitle,
   Content,
   DataList,
   DataListCell,
   DataListItem,
   DataListItemCells,
   DataListItemRow,
+  EmptyState,
+  EmptyStateBody,
   Flex,
   FlexItem,
-  Label,
+  Form,
+  FormGroup,
+  HelperText,
+  HelperTextItem,
+  InputGroup,
+  InputGroupItem,
   MenuToggle,
   MenuToggleElement,
+  PageSection,
   Select,
   SelectList,
   SelectOption,
@@ -24,12 +34,10 @@ import {
   StackItem,
   TextInput,
   Title,
-  Tooltip,
 } from "@patternfly/react-core";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
-import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
+import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
+import PlusCircleIcon from "@patternfly/react-icons/dist/esm/icons/plus-circle-icon";
 import type { OperationResponse, ResourceState, ResourcesStatus } from "../types";
 import {
   getResourcesStatus,
@@ -49,6 +57,8 @@ import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
 import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
+import { StatusLabel, TagLabel } from "./StatusLabel";
+import { TruncatedText } from "./LongText";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
 /**
@@ -119,46 +129,60 @@ interface QuickResourceCreatorProps {
   mutateBlocker: string | null;
   /** Sees every action result (e.g. to pick up a cluster_busy refusal). */
   onResult?: (res: OperationResponse) => void;
+  /** The page header, given the refresh state of the resource status. */
+  renderHeader?: (header: { loading: boolean; lastRefreshed: Date | null; onRefresh: () => void }) => React.ReactNode;
 }
 
-const StatusLabel: React.FC<{ state: ResourceState }> = ({ state }) => {
-  if (isTerminating(state)) return <Label isCompact color="orange" icon={<InProgressIcon />}>Terminating</Label>;
-  if (state.ready) return <Label isCompact color="green" icon={<CheckCircleIcon />}>Running</Label>;
-  if (!state.deployed) return <Label isCompact color="grey">Not deployed</Label>;
+const ResourceStatus: React.FC<{ state: ResourceState }> = ({ state }) => {
+  if (isTerminating(state)) return <StatusLabel status="warning">Terminating</StatusLabel>;
+  if (state.ready) return <StatusLabel status="success">Running</StatusLabel>;
+  if (!state.deployed) return <StatusLabel status="neutral">Not deployed</StatusLabel>;
   const reason = terminalReason(state);
   if (reason) {
     const short = state.waitingReason || (reason !== "Failed" && reason.length <= 40 ? reason : "");
-    return <Label isCompact color="red" icon={<ExclamationCircleIcon />}>{short ? `Failed: ${short}` : "Failed"}</Label>;
+    return <StatusLabel status="danger">{short ? `Failed: ${short}` : "Failed"}</StatusLabel>;
   }
-  return <Label isCompact color="blue" icon={<InProgressIcon />}>Starting</Label>;
+  return <StatusLabel status="progress">Starting</StatusLabel>;
 };
 
-/** Status text plus the next step, under a resource's name. */
-const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean }> = ({ kind, state, minioReady }) => {
+/** The resource's message, warnings and next step as helper text under its description. */
+const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean; teardownBlocked?: string | null }> = ({ kind, state, minioReady, teardownBlocked }) => {
   const step = nextStep(kind, state, minioReady);
-  const showMessage = state.deployed && !state.ready && !!state.message && state.message !== "Terminating";
-  return (
-    <>
-      {state.managedByTool === false && (
-        <Content component="small"><Label isCompact variant="outline">Not managed by this tool</Label> {state.teardownBlockedReason}</Content>
-      )}
-      {showMessage && <Content component="small" style={{ overflowWrap: "anywhere" }}>{state.message}</Content>}
-      {state.warning && (
-        <Alert variant="warning" isInline isPlain title="Needs attention" style={{ overflowWrap: "anywhere" }}>
-          <Content component="small">{state.warning}</Content>
-        </Alert>
-      )}
-      {step && <Content component="small"><strong>Next step:</strong> {step}</Content>}
-    </>
-  );
+  // The label already says "Starting" / "Terminating": don't repeat it as the message.
+  const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
+  const items: React.ReactNode[] = [];
+  if (state.managedByTool === false && state.teardownBlockedReason) {
+    items.push(<HelperTextItem key="unmanaged">{state.teardownBlockedReason}</HelperTextItem>);
+  }
+  if (showMessage) {
+    items.push(<HelperTextItem key="message" variant={terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{state.message}</TruncatedText></span></HelperTextItem>);
+  }
+  if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
+  if (step) items.push(<HelperTextItem key="step">Next step: {step}</HelperTextItem>);
+  if (teardownBlocked) items.push(<HelperTextItem key="blocked" variant="warning">Tear down is blocked: {teardownBlocked}</HelperTextItem>);
+  return items.length > 0 ? <HelperText className="pf-v6-u-mt-sm">{items}</HelperText> : null;
 };
+
+/** Name, status and category tags of one resource row. */
+const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; extra?: React.ReactNode }> = ({ id, name, state, extra }) => (
+  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+    <FlexItem><strong id={id}>{name}</strong></FlexItem>
+    {state && <FlexItem><ResourceStatus state={state} /></FlexItem>}
+    {state?.managedByTool === false && <FlexItem><TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel></FlexItem>}
+    {extra}
+  </Flex>
+);
+
+const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
+  <Button variant="link" component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
+);
 
 type Pending =
   | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
 
-export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, onResult }) => {
+export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, onResult, renderHeader }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
   const [resAction, setResAction] = useState<string | null>(null);
   const [resResult, setResResult] = useState<OperationResponse | null>(null);
@@ -170,14 +194,20 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [mlflowPR, setMlflowPR] = useState("");
 
   const [resError, setResError] = useState<string | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const fetchResources = useCallback(async () => {
+    setStatusLoading(true);
     try {
       const s = await getResourcesStatus();
       setResStatus(s);
       setResError(null);
+      setLastRefreshed(new Date());
     } catch (e) {
       // Keep the last known state; show why it may be stale.
       setResError(toApiError(e, "Could not load resource status").message);
+    } finally {
+      setStatusLoading(false);
     }
   }, []);
 
@@ -352,250 +382,263 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     }
   })();
 
+  const addPipelineControl = addPipelineReason ? (
+    <TooltipButton variant="secondary" icon={<PlusCircleIcon />} disabledReason={addPipelineReason}>Add to a project</TooltipButton>
+  ) : (
+    <Select
+      isOpen={addProjectOpen}
+      onOpenChange={setAddProjectOpen}
+      onSelect={(_e, val) => {
+        setAddProjectOpen(false);
+        if (val) setPending({ kind: "setup-pipeline-server", project: val as string });
+      }}
+      popperProps={{ position: "right" }}
+      toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
+        <MenuToggle ref={toggleRef} variant="secondary" icon={<PlusCircleIcon />} isExpanded={addProjectOpen} onClick={() => setAddProjectOpen(!addProjectOpen)}>
+          {resAction === "setup-pipeline-server" ? "Setting up..." : "Add to a project"}
+        </MenuToggle>
+      )}
+    >
+      <SelectList aria-label="Data science projects">
+        {availableProjects.map((p) => <SelectOption key={p} value={p}>{p}</SelectOption>)}
+        {availableProjects.length === 0 && <SelectOption isDisabled value="">No project without a pipeline server</SelectOption>}
+      </SelectList>
+    </Select>
+  );
+
+  const rowActions = (children: React.ReactNode) => (
+    <DataListCell key="actions" isFilled={false} alignRight>
+      <Flex gap={{ default: "gapSm" }} justifyContent={{ md: "justifyContentFlexEnd" }} flexWrap={{ default: "wrap" }}>{children}</Flex>
+    </DataListCell>
+  );
+
   return (
     <>
-      <Card>
-        <CardBody>
-          <Stack hasGutter>
-            {resError && (
-              <StackItem>
-                <Alert variant="warning" title="Resource status may be out of date" isInline isPlain component="p">{resError}</Alert>
-              </StackItem>
-            )}
-            {pollGaveUp && resourcesSettling && (
-              <StackItem>
-                <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline isPlain component="p"
-                  actionLinks={<AlertActionLink onClick={checkAgain}>Check again</AlertActionLink>} />
-              </StackItem>
-            )}
-            {resResult && (
-              <StackItem>
-                <Alert
-                  variant={outcomeVariant(resResult)}
-                  title={outcomeTitle(resResult, "The action failed")}
-                  isInline
-                  isLiveRegion
-                  component="p"
-                  actionClose={<AlertActionCloseButton onClose={() => setResResult(null)} />}
-                >
-                  {resResult.success ? undefined : resResult.message}
-                  {resResult.errorCode === "in_progress" ? " This page keeps checking." : ""}
-                  {/oc delete project minio/.test(resResult.message ?? "") && (
-                    <> Namespace <code>minio</code> was kept: run <code>oc delete project minio</code> once you have checked it is empty.</>
-                  )}
-                </Alert>
-              </StackItem>
-            )}
-
-            {/* Storage */}
+      {renderHeader?.({ loading: statusLoading, lastRefreshed, onRefresh: checkAgain })}
+      <PageSection isFilled>
+        <Stack hasGutter>
+          {resError && (
             <StackItem>
-              <Title headingLevel="h3" size="md">Storage</Title>
-              <DataList isCompact aria-label="Storage">
-                <DataListItem aria-labelledby="minio-item">
-                  <DataListItemRow>
-                    <DataListItemCells
-                      dataListCells={[
-                        <DataListCell key="name" width={3}>
-                          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                            <FlexItem><strong id="minio-item">MinIO object storage</strong></FlexItem>
-                            {minio && <FlexItem><StatusLabel state={minio} /></FlexItem>}
-                          </Flex>
-                          <Content component="small">Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files.</Content>
-                          {minio && <StatusDetails kind="minio" state={minio} />}
-                        </DataListCell>,
-                        <DataListCell key="actions" width={2} alignRight>
-                          <Flex justifyContent={{ default: "justifyContentFlexEnd" }} gap={{ default: "gapSm" }}>
-                            {minio?.ready && minio.uiRoute && (
-                              <FlexItem>
-                                <Button variant="link" isInline component="a" href={minio.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Console</Button>
-                              </FlexItem>
-                            )}
-                            {minio && !minio.deployed && !isTerminating(minio) && (
-                              <FlexItem>
-                                <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
-                                  disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
-                              </FlexItem>
-                            )}
-                            {minio?.deployed && minio.managedByTool !== false && !!terminalReason(minio) && !isTerminating(minio) && (
-                              <FlexItem>
-                                <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
-                                  disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
-                              </FlexItem>
-                            )}
-                            {minio && minio.managedByTool !== false && !isTerminating(minio) && (minio.deployed || minioLeftovers) && (
-                              <FlexItem>
-                                <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
-                                  disabledReason={baseReason ?? minio.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                              </FlexItem>
-                            )}
-                          </Flex>
-                          {minio?.deployed && minio.managedByTool !== false && minio.teardownBlockedReason && (
-                            <Content component="small" style={{ textAlign: "end" }}>Tear down is blocked: {minio.teardownBlockedReason}</Content>
-                          )}
-                        </DataListCell>,
-                      ]}
-                    />
-                  </DataListItemRow>
-                </DataListItem>
-              </DataList>
+              <Alert variant="warning" title="Resource status may be out of date" isInline component="p">
+                <TruncatedText>{resError}</TruncatedText>
+              </Alert>
             </StackItem>
-
-            {/* MLflow */}
+          )}
+          {pollGaveUp && resourcesSettling && (
             <StackItem>
-              <Title headingLevel="h3" size="md">MLflow</Title>
-              <DataList isCompact aria-label="MLflow">
-                <DataListItem aria-labelledby="mlflow-item">
-                  <DataListItemRow>
-                    <DataListItemCells
-                      dataListCells={[
-                        <DataListCell key="name" width={3}>
-                          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                            <FlexItem><strong id="mlflow-item">MLflow server</strong></FlexItem>
-                            {mlflow && <FlexItem><StatusLabel state={mlflow} /></FlexItem>}
-                            {mlflow?.prOverride && <FlexItem><Label isCompact color="blue">PR #{mlflow.prNumber ?? "?"}</Label></FlexItem>}
-                          </Flex>
-                          <Content component="small">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.</Content>
-                          {mlflow && <StatusDetails kind="mlflow" state={mlflow} />}
-                          {mlflow?.deployed && (
-                            <Flex alignItems={{ default: "alignItemsFlexEnd" }} gap={{ default: "gapSm" }} style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
-                              <FlexItem>
-                                <TextInput type="text" inputMode="numeric" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val.trim())} placeholder="PR number" aria-label="opendatahub-io/mlflow PR number" style={{ maxWidth: "9rem" }} />
-                              </FlexItem>
-                              <FlexItem>
-                                <TooltipButton variant="secondary" size="sm" onClick={() => setPending({ kind: "deploy-mlflow-pr", pr: Number(mlflowPR) })} isLoading={resAction === "deploy-mlflow-pr"}
-                                  disabledReason={baseReason ?? (!mlflowPRValid ? "Enter an opendatahub-io/mlflow PR number first." : null)}>Deploy PR</TooltipButton>
-                              </FlexItem>
-                              {mlflow.prOverride && (
-                                <FlexItem>
-                                  <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>Revert</TooltipButton>
-                                </FlexItem>
-                              )}
-                            </Flex>
-                          )}
-                        </DataListCell>,
-                        <DataListCell key="actions" width={2} alignRight>
-                          <Flex justifyContent={{ default: "justifyContentFlexEnd" }} gap={{ default: "gapSm" }}>
-                            {mlflow?.ready && mlflow.uiRoute && (
-                              <FlexItem>
-                                <Button variant="link" isInline component="a" href={mlflow.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Open MLflow</Button>
-                              </FlexItem>
-                            )}
-                            {mlflow && !mlflow.deployed && (
-                              <FlexItem>
-                                <TooltipButton variant="primary" size="sm" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
-                                  disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
-                              </FlexItem>
-                            )}
-                            {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
-                              <FlexItem>
-                                <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
-                                  disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                              </FlexItem>
-                            )}
-                          </Flex>
-                        </DataListCell>,
-                      ]}
-                    />
-                  </DataListItemRow>
-                </DataListItem>
-              </DataList>
+              <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline component="p"
+                actionLinks={<AlertActionLink onClick={checkAgain}>Check again</AlertActionLink>} />
             </StackItem>
-
-            {/* Pipelines */}
+          )}
+          {resResult && (
             <StackItem>
-              <Title headingLevel="h3" size="md">Pipeline servers</Title>
-              {resStatus && !minioReady && (
-                <Alert
-                  variant="warning"
-                  title={minio?.deployed ? `Pipeline servers need MinIO, which is not ready${minio.waitingReason ? ` (${minio.waitingReason})` : ""}` : "Pipeline servers need MinIO: set up storage first"}
-                  isInline
-                  isPlain
-                  component="p"
-                />
-              )}
-              <DataList isCompact aria-label="Pipeline servers">
-                {pipelineServers.map((ps) => (
-                  <DataListItem key={ps.namespace} aria-labelledby={`ps-${ps.namespace}`}>
+              <Alert
+                variant={outcomeVariant(resResult)}
+                title={outcomeTitle(resResult, "The action failed")}
+                isInline
+                isLiveRegion
+                component="p"
+                actionClose={<AlertActionCloseButton onClose={() => setResResult(null)} />}
+              >
+                {resResult.success ? undefined : resResult.message}
+                {resResult.errorCode === "in_progress" ? " This page keeps checking." : ""}
+                {/oc delete project minio/.test(resResult.message ?? "") && (
+                  <> Namespace <code>minio</code> was kept: run <code>oc delete project minio</code> once you have checked it is empty.</>
+                )}
+              </Alert>
+            </StackItem>
+          )}
+
+          {/* Storage */}
+          <StackItem>
+            <Card>
+              <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Storage</Title></CardTitle></CardHeader>
+              <CardBody>
+                <DataList aria-label="Storage">
+                  <DataListItem aria-labelledby="minio-item">
                     <DataListItemRow>
                       <DataListItemCells
                         dataListCells={[
-                          <DataListCell key="name" width={3}>
-                            <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                              <FlexItem><strong id={`ps-${ps.namespace}`}>{ps.namespace}</strong></FlexItem>
-                              <FlexItem><StatusLabel state={ps} /></FlexItem>
-                            </Flex>
-                            {ps.name && <Content component="small">DataSciencePipelinesApplication <code>{ps.name}</code></Content>}
-                            <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
+                          <DataListCell key="name">
+                            <RowTitle id="minio-item" name="MinIO object storage" state={minio} />
+                            <Content component="p" className="pf-v6-u-text-color-subtle">Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files.</Content>
+                            {minio && (
+                              <StatusDetails
+                                kind="minio"
+                                state={minio}
+                                teardownBlocked={minio.deployed && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
+                              />
+                            )}
                           </DataListCell>,
-                          <DataListCell key="actions" width={2} alignRight>
-                            <Flex justifyContent={{ default: "justifyContentFlexEnd" }} gap={{ default: "gapSm" }}>
-                              {ps.ready && ps.uiRoute && (
+                          rowActions(
+                            <>
+                              {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>Open console</ExternalLink></FlexItem>}
+                              {minio && !minio.deployed && !isTerminating(minio) && (
                                 <FlexItem>
-                                  <Button variant="link" isInline component="a" href={ps.uiRoute} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">Pipelines</Button>
+                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
+                                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
                                 </FlexItem>
                               )}
-                              {ps.managedByTool !== false && !isTerminating(ps) && (
+                              {minio?.deployed && minio.managedByTool !== false && !!terminalReason(minio) && !isTerminating(minio) && (
                                 <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger size="sm" onClick={() => setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name })}
-                                    isLoading={resAction === "teardown-pipeline-server"} disabledReason={baseReason ?? ps.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
+                                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
                                 </FlexItem>
                               )}
-                            </Flex>
-                          </DataListCell>,
+                              {minio && minio.managedByTool !== false && !isTerminating(minio) && (minio.deployed || minioLeftovers) && (
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
+                                    disabledReason={baseReason ?? minio.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+                                </FlexItem>
+                              )}
+                            </>,
+                          ),
                         ]}
                       />
                     </DataListItemRow>
                   </DataListItem>
-                ))}
-                <DataListItem aria-labelledby="add-pipeline-item">
-                  <DataListItemRow>
-                    <DataListItemCells
-                      dataListCells={[
-                        <DataListCell key="add">
-                          <span id="add-pipeline-item" className="pf-v6-screen-reader">Add a pipeline server</span>
-                          <Select
-                            isOpen={addProjectOpen}
-                            onOpenChange={setAddProjectOpen}
-                            onSelect={(_e, val) => {
-                              setAddProjectOpen(false);
-                              if (val) setPending({ kind: "setup-pipeline-server", project: val as string });
-                            }}
-                            toggle={(toggleRef: React.Ref<MenuToggleElement>) => {
-                              // MenuToggle has no aria-disabled mode: a natively disabled
-                              // toggle loses focus and its tooltip, so keep it focusable,
-                              // mark it aria-disabled and ignore clicks instead.
-                              const toggle = (
-                                <MenuToggle ref={toggleRef} variant="secondary" isExpanded={addProjectOpen && !addPipelineReason}
-                                  aria-disabled={addPipelineReason ? true : undefined}
-                                  className={addPipelineReason ? "pf-m-disabled" : undefined}
-                                  onClick={() => { if (!addPipelineReason) setAddProjectOpen(!addProjectOpen); }}>
-                                  {resAction === "setup-pipeline-server" ? "Setting up..." : "Add to a project"}
-                                </MenuToggle>
-                              );
-                              return addPipelineReason ? <Tooltip content={addPipelineReason}>{toggle}</Tooltip> : toggle;
-                            }}
-                          >
-                            <SelectList aria-label="Data science projects">
-                              {availableProjects.map((p) => <SelectOption key={p} value={p}>{p}</SelectOption>)}
-                              {availableProjects.length === 0 && <SelectOption isDisabled value="">No project without a pipeline server</SelectOption>}
-                            </SelectList>
-                          </Select>
-                          {addPipelineReason && <Content component="small">{addPipelineReason}</Content>}
-                          {unmanagedProjects.size > 0 && (
-                            <Content component="small">
-                              Not offered because they already have a pipeline server this tool did not create: {[...unmanagedProjects].join(", ")}.
-                            </Content>
-                          )}
-                        </DataListCell>,
-                      ]}
-                    />
-                  </DataListItemRow>
-                </DataListItem>
-              </DataList>
-            </StackItem>
-          </Stack>
-        </CardBody>
-      </Card>
+                </DataList>
+              </CardBody>
+            </Card>
+          </StackItem>
+
+          {/* MLflow */}
+          <StackItem>
+            <Card>
+              <CardHeader><CardTitle><Title headingLevel="h2" size="lg">MLflow</Title></CardTitle></CardHeader>
+              <CardBody>
+                <DataList aria-label="MLflow">
+                  <DataListItem aria-labelledby="mlflow-item">
+                    <DataListItemRow>
+                      <DataListItemCells
+                        dataListCells={[
+                          <DataListCell key="name">
+                            <RowTitle id="mlflow-item" name="MLflow server" state={mlflow}
+                              extra={mlflow?.prOverride ? <FlexItem><TagLabel color="blue">PR #{mlflow.prNumber ?? "?"}</TagLabel></FlexItem> : undefined} />
+                            <Content component="p" className="pf-v6-u-text-color-subtle">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.</Content>
+                            {mlflow && <StatusDetails kind="mlflow" state={mlflow} />}
+                            {mlflow?.deployed && (
+                              <Form className="pf-v6-u-mt-md" onSubmit={(e) => e.preventDefault()}>
+                                <FormGroup label="Deploy an opendatahub-io/mlflow PR" fieldId="mlflow-pr">
+                                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsFlexStart" }}>
+                                    <FlexItem>
+                                      <InputGroup>
+                                        <InputGroupItem>
+                                          <TextInput id="mlflow-pr" type="text" inputMode="numeric" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val.trim())} placeholder="PR number" aria-label="opendatahub-io/mlflow PR number" />
+                                        </InputGroupItem>
+                                        <InputGroupItem>
+                                          <TooltipButton variant="control" onClick={() => setPending({ kind: "deploy-mlflow-pr", pr: Number(mlflowPR) })} isLoading={resAction === "deploy-mlflow-pr"}
+                                            disabledReason={baseReason ?? (!mlflowPRValid ? "Enter an opendatahub-io/mlflow PR number first." : null)}>Deploy PR</TooltipButton>
+                                        </InputGroupItem>
+                                      </InputGroup>
+                                    </FlexItem>
+                                    {mlflow.prOverride && (
+                                      <FlexItem>
+                                        <TooltipButton variant="secondary" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>
+                                          Revert the PR image
+                                        </TooltipButton>
+                                      </FlexItem>
+                                    )}
+                                  </Flex>
+                                </FormGroup>
+                              </Form>
+                            )}
+                          </DataListCell>,
+                          rowActions(
+                            <>
+                              {mlflow?.ready && mlflow.uiRoute && <FlexItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></FlexItem>}
+                              {mlflow && !mlflow.deployed && (
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
+                                    disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
+                                </FlexItem>
+                              )}
+                              {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
+                                    disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+                                </FlexItem>
+                              )}
+                            </>,
+                          ),
+                        ]}
+                      />
+                    </DataListItemRow>
+                  </DataListItem>
+                </DataList>
+              </CardBody>
+            </Card>
+          </StackItem>
+
+          {/* Pipelines */}
+          <StackItem>
+            <Card>
+              <CardHeader actions={{ actions: addPipelineControl, hasNoOffset: true }}>
+                <CardTitle><Title headingLevel="h2" size="lg">Pipeline servers</Title></CardTitle>
+              </CardHeader>
+              <CardBody>
+                <Stack hasGutter>
+                  {resStatus && !minioReady && (
+                    <StackItem>
+                      <Alert
+                        variant="warning"
+                        title={minio?.deployed ? `Pipeline servers need MinIO, which is not ready${minio.waitingReason ? ` (${minio.waitingReason})` : ""}` : "Pipeline servers need MinIO: set up storage first"}
+                        isInline
+                        component="p"
+                      />
+                    </StackItem>
+                  )}
+                  <StackItem>
+                    {pipelineServers.length === 0 ? (
+                      <EmptyState headingLevel="h3" titleText="No pipeline servers" variant="xs">
+                        <EmptyStateBody>Add one to a data science project with the button above.</EmptyStateBody>
+                      </EmptyState>
+                    ) : (
+                      <DataList aria-label="Pipeline servers">
+                        {pipelineServers.map((ps) => (
+                          <DataListItem key={ps.namespace} aria-labelledby={`ps-${ps.namespace}`}>
+                            <DataListItemRow>
+                              <DataListItemCells
+                                dataListCells={[
+                                  <DataListCell key="name">
+                                    <RowTitle id={`ps-${ps.namespace}`} name={ps.namespace ?? ""} state={ps} />
+                                    {ps.name && <Content component="p" className="pf-v6-u-text-color-subtle">DataSciencePipelinesApplication <code>{ps.name}</code></Content>}
+                                    <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
+                                  </DataListCell>,
+                                  rowActions(
+                                    <>
+                                      {ps.ready && ps.uiRoute && <FlexItem><ExternalLink href={ps.uiRoute}>Open pipelines</ExternalLink></FlexItem>}
+                                      {ps.managedByTool !== false && !isTerminating(ps) && (
+                                        <FlexItem>
+                                          <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name })}
+                                            isLoading={resAction === "teardown-pipeline-server"} disabledReason={baseReason ?? ps.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+                                        </FlexItem>
+                                      )}
+                                    </>,
+                                  ),
+                                ]}
+                              />
+                            </DataListItemRow>
+                          </DataListItem>
+                        ))}
+                      </DataList>
+                    )}
+                  </StackItem>
+                  {unmanagedProjects.size > 0 && (
+                    <StackItem>
+                      <HelperText>
+                        <HelperTextItem>
+                          Not offered because they already have a pipeline server this tool did not create: {[...unmanagedProjects].join(", ")}.
+                        </HelperTextItem>
+                      </HelperText>
+                    </StackItem>
+                  )}
+                </Stack>
+              </CardBody>
+            </Card>
+          </StackItem>
+        </Stack>
+      </PageSection>
 
       {modal && (
         <ConfirmActionModal

@@ -82,10 +82,10 @@ describe("MLflow PR override (A04-5)", () => {
     render(<QuickResourceCreator mutateBlocker={null} />);
     const mlflow = await screen.findByRole("list", { name: "MLflow" });
     expect(within(mlflow).getByText("PR #399")).toBeInTheDocument();
-    expect(within(mlflow).getByRole("button", { name: "Revert" })).not.toHaveAttribute("aria-disabled");
+    expect(within(mlflow).getByRole("button", { name: "Revert the PR image" })).not.toHaveAttribute("aria-disabled");
     expect(within(mlflow).getByRole("button", { name: "Deploy PR" })).toBeInTheDocument();
     expect(within(mlflow).getByRole("button", { name: "Tear down" })).toBeInTheDocument();
-    fireEvent.click(within(mlflow).getByRole("button", { name: "Revert" }));
+    fireEvent.click(within(mlflow).getByRole("button", { name: "Revert the PR image" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/so the operator's default \(RHOAI\) image is used again/)).toBeInTheDocument();
   });
