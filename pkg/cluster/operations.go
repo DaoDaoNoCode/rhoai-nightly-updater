@@ -559,6 +559,15 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	if blocked != "" {
 		return fail(blocked, "validation")
 	}
+	// Every refusal runs before the first change, including ending the
+	// Dashboard Dev session, so "Nothing was changed" stays true.
+	captured, recoveryErr := captureOperatorRecovery(c)
+	if recoveryErr != nil {
+		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
+	}
+	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
+		return fail(blocked, "prerequisites")
+	}
 	if revertDashboard {
 		emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Ending the Dashboard Dev session..."})
 		if err := RevertDashboardDevForOperation(c); err != nil {
@@ -579,13 +588,6 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 		emit(UpdateStepEvent{Step: "save_snapshot", Status: "success", Message: "Snapshot saved"})
 	}
 
-	captured, recoveryErr := captureOperatorRecovery(c)
-	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
-	}
-	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
-		return fail(blocked, "prerequisites")
-	}
 	recovery = captured
 	if note := captured.recordedNote(); note != "" {
 		logs = append(logs, note)
@@ -1098,6 +1100,15 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		logs = append(logs, fmt.Sprintf("Warning: version comparison not possible (%s); continuing as confirmed: %s -> %s", reason, csv.Name, displayCSV(targetCSV)))
 		validated += fmt.Sprintf(" (confirmed: %s -> %s, version unknown)", csv.Name, displayCSV(targetCSV))
 	}
+	// Every refusal runs before the first change, including ending the
+	// Dashboard Dev session, so "Nothing was changed" stays true.
+	captured, recoveryErr := captureOperatorRecovery(c)
+	if recoveryErr != nil {
+		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
+	}
+	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
+		return fail(blocked, "prerequisites")
+	}
 	if revertDashboard {
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Ending the Dashboard Dev session..."})
 		if err := RevertDashboardDevForOperation(c); err != nil {
@@ -1118,13 +1129,6 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		emit(UpdateStepEvent{Step: "save_snapshot", Status: "success", Message: "Snapshot saved"})
 	}
 
-	captured, recoveryErr := captureOperatorRecovery(c)
-	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
-	}
-	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
-		return fail(blocked, "prerequisites")
-	}
 	recovery = captured
 	if note := captured.recordedNote(); note != "" {
 		logs = append(logs, note)

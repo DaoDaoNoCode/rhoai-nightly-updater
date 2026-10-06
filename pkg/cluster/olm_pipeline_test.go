@@ -787,6 +787,41 @@ func TestReinstallStable_WithoutASubscription(t *testing.T) {
 	}
 }
 
+// R7-L1: with "end the Dashboard Dev session first" confirmed, a refusal
+// (here a foreign Subscription) still comes before the session is ended,
+// so the message "Nothing was changed" is true.
+func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
+	for _, op := range []string{"update", "reinstall", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			f.installPlans["install-gitops"] = map[string]interface{}{
+				"metadata": map[string]interface{}{"ownerReferences": []interface{}{map[string]interface{}{"kind": "Subscription", "name": "rhoai-gitops"}}},
+				"spec":     map[string]interface{}{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+			}
+			c := f.client(context.Background())
+			opts := OperationOptions{RevertDashboardDev: true}
+			var r *types.OperationResponse
+			switch op {
+			case "update":
+				r, _ = UpdateStreamWithOptions(c, testNightlyImage, opts, func(UpdateStepEvent) {})
+			case "reinstall":
+				r, _ = ReinstallStreamWithOptions(c, "nightly", testNightlyImage, "", opts, func(UpdateStepEvent) {})
+			case "refresh":
+				r, _ = RefreshOperatorStreamWithOptions(c, opts, func(UpdateStepEvent) {})
+			}
+			if r == nil || r.Success || !strings.Contains(r.Message, "Another Subscription (rhoai-gitops)") {
+				t.Fatalf("result = %+v", r)
+			}
+			for _, w := range f.writes() {
+				if !strings.Contains(w, "-verify-") {
+					t.Fatalf("changed the cluster (the Dashboard Dev session must stay): %v", f.writes())
+				}
+			}
+		})
+	}
+}
+
 // R5-F9: another Subscription for the package (seen as the owner of an
 // InstallPlan) stops every operation before it changes anything.
 func TestOperationsRefuseAForeignSubscription(t *testing.T) {
