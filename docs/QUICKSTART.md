@@ -28,13 +28,15 @@ Before your first change, read **[How the tool keeps your cluster safe](../READM
 
 ## 1. Install the updater
 
-Pick the newest release on [GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases) or [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases). Download its `install.sh` (it contains that release's `deploy/template.yaml`), check it against the SHA-256 in the release notes, and read it:
+Download the latest release's `install.sh` (it contains that release's `deploy/template.yaml`) and read it before you run it:
 
 ```bash
-curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh
-echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c
+curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest/download/install.sh
 less install.sh
 ```
+
+- **Check the download:** compare `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) with the SHA-256 in the release notes ([GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest), [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases)).
+- **A specific version:** download `https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh` instead.
 
 Then run it:
 

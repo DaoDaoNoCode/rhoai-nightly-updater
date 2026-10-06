@@ -15,15 +15,15 @@ The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShi
 
 ## Install
 
-Download the release's `install.sh`, check and read it, then run it. You need `oc` (logged in as cluster-admin) and `curl`:
+Download the latest release's `install.sh`, read it, then run it. You need `oc` (logged in as cluster-admin) and `curl`:
 
 ```bash
-curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh
-echo "<SHA-256 from the release notes>  install.sh" | sha256sum -c - && less install.sh
+curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest/download/install.sh
+less install.sh
 bash install.sh --dry-run && bash install.sh
 ```
 
-On macOS, use `shasum -a 256 -c -` instead of `sha256sum -c -`. The installer prints the app URL when it is done. **New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup and your first update, step by step. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first.
+The installer prints the app URL when it is done. To check the download, compare `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) with the SHA-256 in the [release notes](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest). For a specific version, download `https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh` instead. **New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup and your first update, step by step. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first.
 
 ## A short tour
 
