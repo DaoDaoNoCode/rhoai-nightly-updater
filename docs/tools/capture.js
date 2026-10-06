@@ -364,11 +364,11 @@ async (page) => {
       });
       await crop("pipeline-servers", card("Pipeline servers"));
 
-      await open("/test-resources", "s3-pending", { width: 1100 }); // at 860 px the description is squeezed into a narrow column
+      await open("/test-resources", "s3-pending");
       const pending = card("Storage");
       await crop("s3-migration-pending", pending, {
         notes: [
-          { at: label(pending, "Still MinIO: migration pending"), n: 1, pos: "r" },
+          { at: label(pending, "MinIO (migration pending)"), n: 1, pos: "r" },
           { at: pending.getByRole("button", { name: "Migrate to SeaweedFS" }), n: 2, pos: "l" },
         ],
         pad: 24,
@@ -435,7 +435,7 @@ async (page) => {
     },
 
     async "gif-migrate"() {
-      await open("/test-resources", "s3-pending", { width: 1100 });
+      await open("/test-resources", "s3-pending");
       gif("s3-migrate", await mainClip());
       await frame(1200);
       await clickShown(card("Storage").getByRole("button", { name: "Migrate to SeaweedFS" }));

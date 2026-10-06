@@ -520,8 +520,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                               )}
                             </>,
                   )}>
-                            <RowTitle id="minio-item" name="S3 storage (SeaweedFS)" state={minio}
-                              extra={minio?.migrationPending ? <FlexItem><TagLabel>Still MinIO: migration pending</TagLabel></FlexItem> : undefined} />
+                            <RowTitle id="minio-item" name="S3 storage" state={minio}
+                              extra={minio?.deployed ? <FlexItem><TagLabel>{minio.migrationPending ? "MinIO (migration pending)" : "SeaweedFS"}</TagLabel></FlexItem> : undefined} />
                             <Content component="p" className="pf-v6-u-text-color-subtle">
                               Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files. Pipeline servers reach it through Service <code>minio-service</code>, a name kept from MinIO for compatibility.{unmanagedNote(minio)}
                             </Content>

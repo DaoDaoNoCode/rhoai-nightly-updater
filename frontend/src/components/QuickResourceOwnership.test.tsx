@@ -149,7 +149,7 @@ describe("S3 storage after FXB (kept namespace, warning, teardown codes)", () =>
     render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
     expect(await within(storage).findByText(warning)).toBeInTheDocument();
-    expect(within(storage).getByText("S3 storage (SeaweedFS)")).toBeInTheDocument();
+    expect(within(storage).getByText("S3 storage")).toBeInTheDocument();
     expect(within(storage).getByText(/a name kept from MinIO for compatibility/)).toBeInTheDocument();
     expect(within(storage).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", "https://minio-ui-minio.apps.example.com");
     expect(within(storage).getByText(/Admin UI login: user/)).toHaveTextContent("Admin UI login: user admin, password in Secret minio-secret (key minio_root_password)");
@@ -228,7 +228,8 @@ describe("migration from MinIO (start fresh)", () => {
     });
     render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
-    expect(await within(storage).findByText("Still MinIO: migration pending")).toBeInTheDocument();
+    expect(await within(storage).findByText("MinIO (migration pending)")).toBeInTheDocument();
+    expect(within(storage).queryByText("SeaweedFS")).not.toBeInTheDocument();
     expect(within(storage).getByText(/Migrate to SeaweedFS replaces this MinIO/)).toBeInTheDocument();
     expect(within(storage).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
     expect(within(storage).getByRole("link", { name: /Open MinIO console/ })).toBeInTheDocument();
@@ -267,7 +268,8 @@ describe("migration from MinIO (start fresh)", () => {
     const storage = await screen.findByRole("list", { name: "Storage" });
     const notice = await within(storage).findByText(/Old MinIO data volume kept/);
     expect(notice).toHaveTextContent("Old MinIO data volume kept: PersistentVolumeClaim minio-pvc (20Gi). SeaweedFS does not use it; it is kept for a rollback or a manual copy of old objects (see RUNBOOK §10). Tear down deletes it.");
-    expect(within(storage).queryByText("Still MinIO: migration pending")).not.toBeInTheDocument();
+    expect(within(storage).queryByText("MinIO (migration pending)")).not.toBeInTheDocument();
+    expect(within(storage).getByText("SeaweedFS")).toBeInTheDocument();
     fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Data is deleted and cannot be recovered").closest(".pf-v6-c-alert")).toHaveTextContent(/seaweedfs-pvc, minio-pvc/);

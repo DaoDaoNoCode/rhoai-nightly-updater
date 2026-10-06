@@ -64,9 +64,9 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 ### Test resources: S3 storage, pipeline servers, MLflow
 
-<img src="docs/images/s3-running.png" alt="The Storage card: S3 storage (SeaweedFS) Running" width="760">
+<img src="docs/images/s3-running.png" alt="The Storage card: S3 storage, Running, on SeaweedFS" width="760">
 
-1. **S3 storage (SeaweedFS)** is **Running**, behind the `minio-service` name kept from MinIO.
+1. **S3 storage** is **Running**, on **SeaweedFS**, behind the `minio-service` name kept from MinIO.
 2. **Open admin UI** opens the SeaweedFS admin UI (user `admin`).
 3. **Tear down** stays disabled while a pipeline server uses the storage, and says which one.
 

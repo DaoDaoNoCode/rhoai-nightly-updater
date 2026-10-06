@@ -160,7 +160,7 @@ Open **Components**, then **Diagnostics**.
 
 Optional, for testing pipelines in the dashboard. Open **Test resources**.
 
-<img src="images/s3-setup.png" alt="The Storage card with S3 storage (SeaweedFS) Not deployed and Set up" width="760">
+<img src="images/s3-setup.png" alt="The Storage card: S3 storage Not deployed, with Set up" width="760">
 
 1. Under **Storage**, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `minio`, with a bucket `pipelines`, behind Service `minio-service`.
 
@@ -168,7 +168,7 @@ Optional, for testing pipelines in the dashboard. Open **Test resources**.
 
 2. Under **Pipeline servers**, open **Add to a project**, pick a data science project and confirm. The pipeline server uses the S3 storage.
 
-**What you should see:** **S3 storage (SeaweedFS)** shows **Running**, with **Open admin UI** (user `admin`; the password is in Secret `minio-secret` in `minio`). The pipeline server shows **Running** after 1–3 minutes. Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
+**What you should see:** **S3 storage** shows **Running** and **SeaweedFS**, with **Open admin UI** (user `admin`; the password is in Secret `minio-secret` in `minio`). The pipeline server shows **Running** after 1–3 minutes. Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
 
 ## Day to day
 

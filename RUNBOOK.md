@@ -18,7 +18,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy` | [§5](#5-operations-busy-stuck-interrupted) |
 | **Operator failed**, **No Subscription**, a failed Update or Reinstall step | [§6](#6-update--reinstall-failed) |
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
-| "Still MinIO: migration pending", S3 storage **Incomplete**, Tear down disabled | [§10](#10-test-resources) |
+| S3 storage on "MinIO (migration pending)", **Incomplete**, Tear down disabled | [§10](#10-test-resources) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
 
 ---
@@ -270,7 +270,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from the MinIO earlier versions deployed. Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-test-resources).
 
-<img src="docs/images/s3-incomplete.png" alt="S3 storage (SeaweedFS) Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
+<img src="docs/images/s3-incomplete.png" alt="S3 storage Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
 
 1. **Incomplete**: SeaweedFS does not serve through `minio-service` and `minio-ui`.
 2. Why, in one line (here: scaled to 0, for example by a manual rollback).
@@ -288,7 +288,7 @@ The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind
 |---|---|
 | S3 storage setup: "not created by this tool" | The `minio` namespace holds foreign objects. Nothing was changed. Remove them or use another cluster |
 | Setup or teardown: "not allowed ... run `make upgrade`" | The image is newer than the template (RBAC for the SeaweedFS names is missing; the banner says the template is outdated). An admin runs `make upgrade`, then retry. Nothing was changed by the refused step |
-| "Still MinIO: migration pending" | MinIO from an earlier version still serves. **Migrate to SeaweedFS** (or re-run setup) replaces it and starts fresh (see below) |
+| "MinIO (migration pending)" | MinIO from an earlier version still serves. **Migrate to SeaweedFS** (or re-run setup) replaces it and starts fresh (see below) |
 | S3 storage "Incomplete" or "Needs repair" | SeaweedFS runs but `minio-service`/`minio-ui` do not point at it, it is scaled to 0, or the MinIO cleanup is unfinished. Press **Repair** (re-runs setup). During a manual rollback (§10.1) this is expected; Repair ends the rollback |
 | SeaweedFS not ready / ImagePullBackOff | MinIO, if it was being replaced, keeps serving. Fix the cause (for example `SEAWEEDFS_IMAGE` to a mirror) and **Repair**/**Migrate** again. `oc logs -n minio deploy/seaweedfs` |
 | S3 storage teardown refused | A pipeline server still uses the storage (the message names it). Tear that down first. After a partial teardown, run Tear down again |
@@ -302,9 +302,9 @@ The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind
 
 ### 10.1 MinIO to SeaweedFS: what the migration does, and how to roll back
 
-<img src="docs/images/s3-migration-pending.png" alt="S3 storage still MinIO: migration pending, with Migrate to SeaweedFS" width="760">
+<img src="docs/images/s3-migration-pending.png" alt="S3 storage still on MinIO (migration pending), with Migrate to SeaweedFS" width="760">
 
-1. **Still MinIO: migration pending**: the MinIO of an earlier version still serves the pipeline servers.
+1. **MinIO (migration pending)**: the MinIO of an earlier version still serves the pipeline servers.
 2. **Migrate to SeaweedFS** opens the confirmation, which lists every change:
 
 <img src="docs/images/s3-migrate-dialog.png" alt="Dialog: Replace MinIO with SeaweedFS? with the changes and the Start fresh warning" width="760">
@@ -315,7 +315,7 @@ After **Migrate and start fresh**, the card shows SeaweedFS **Running** and the 
 
 ```mermaid
 flowchart TD
-  M0["MinIO serves minio-service<br>(Still MinIO: migration pending)"] --> M1["Migrate to SeaweedFS (or Set up / Repair)"]
+  M0["MinIO serves minio-service<br>(MinIO, migration pending)"] --> M1["Migrate to SeaweedFS (or Set up / Repair)"]
   M1 --> M2["Start SeaweedFS on seaweedfs-pvc<br>same minio-secret, empty bucket pipelines"]
   M2 -->|"not ready in time"| MX["Nothing switched: MinIO keeps serving"]
   M2 -->|ready| M3["Switch minio-service and minio-ui to SeaweedFS"]
@@ -326,7 +326,7 @@ flowchart TD
   RB2 -.->|"go forward: Repair"| M5
 ```
 
-Setting up S3 storage on a cluster with the tool's MinIO (Deployment `minio`, shown as "Still MinIO: migration pending") replaces it:
+Setting up S3 storage on a cluster with the tool's MinIO (Deployment `minio`, shown as "MinIO (migration pending)") replaces it:
 1. SeaweedFS starts next to MinIO on a new PVC `seaweedfs-pvc`, with the same credentials (`minio-secret`) and an empty bucket `pipelines`. MinIO keeps serving meanwhile; if SeaweedFS cannot start, nothing is switched.
 2. Once SeaweedFS is ready, `minio-service` and `minio-ui` switch to it. DSPAs keep `minio-service.minio.svc:9000` and their secrets; nothing in the projects changes. The data-science-pipelines operator's object-storage check may flap for a moment.
 3. Deployment `minio` is deleted. NetworkPolicy `minio-ingress` is deleted once no MinIO pod is left (setup waits up to 20 seconds; otherwise it keeps the policy, reports the cleanup as incomplete, and **Repair** finishes it later). **PVC `minio-pvc` is kept**, unused, until teardown.
