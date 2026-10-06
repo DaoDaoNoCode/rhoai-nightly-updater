@@ -522,9 +522,16 @@ export interface ServerOperation {
   stepStatus?: string;
   message?: string;
   pod?: string;
+  /**
+   * The operation runs in another updater pod (for example one that is
+   * shutting down and finishes its operation first). The backend knows it
+   * from that pod's lease: step and message are as of its last heartbeat,
+   * and there is no stream to attach to.
+   */
+  remote?: boolean;
 }
 
-/** An operation a previous updater pod started and never finished. */
+/** An operation an updater pod started and never finished (its pod stopped). */
 export interface InterruptedOperation {
   type: string;
   label: string;

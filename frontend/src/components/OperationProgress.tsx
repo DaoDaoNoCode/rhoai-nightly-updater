@@ -77,7 +77,9 @@ export const OperationProgress: React.FC = () => {
     return () => clearInterval(id);
   }, [connecting, runStartedAt]);
 
-  const startedBy = run?.source === "server" ? run.user || "another session" : undefined;
+  const startedBy = run?.source === "server"
+    ? `${run.user || "another session"}${run.pod ? ` (running on updater pod ${run.pod})` : ""}`
+    : undefined;
   const [dismissedRun, setDismissedRun] = useState<number | null>(null);
 
   if (running && connecting) {

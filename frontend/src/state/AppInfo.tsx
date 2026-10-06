@@ -230,10 +230,15 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
 // Why mutations are blocked right now
 // ---------------------------------------------------------------------------
 
-/** "alice is running "Update to nightly"" / "You are running ..." */
+/** "alice is running "Update to nightly"" / "You are running ..." / "... on updater pod <pod>" */
 export function describeServerOperation(op: ServerOperation, currentUser?: string): string {
   const who = !op.user ? "Someone is" : op.user === currentUser ? "You are" : `${op.user} is`;
-  return `${who} running "${op.label || op.type}"`;
+  return `${who} running "${op.label || op.type}"${remotePodSuffix(op)}`;
+}
+
+/** " on updater pod <pod>" for an operation another updater pod runs, else "". */
+export function remotePodSuffix(op: Pick<ServerOperation, "remote" | "pod">): string {
+  return op.remote ? ` on updater pod ${op.pod || "(unknown)"}` : "";
 }
 
 /** "Step 4 of 8: Wait for the catalog", for streamed operations that reported a step. */

@@ -146,6 +146,8 @@ function useOperationNotice(onStatusPage: boolean): Notice | null {
         actionLinks={link ? <AlertActionLink onClick={() => navigate(link[0])}>{link[1]}</AlertActionLink> : undefined}
       >
         {op.target && <>Target: <BuildId target={op.target} />. </>}
+        {op.remote && op.message && <>Latest progress: {sentence(op.message)} </>}
+        {op.remote && "Another updater pod runs it (for example one that is shutting down finishes its operation first). "}
         Cluster changes from this tool are disabled until it finishes.
       </Alert>
     ),

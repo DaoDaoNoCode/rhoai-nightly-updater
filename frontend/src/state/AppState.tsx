@@ -81,6 +81,8 @@ export interface ServerOperationSnapshot {
   detail?: string;
   /** Who started it. */
   user?: string;
+  /** The other updater pod that runs it, when the backend reports it as remote. */
+  pod?: string;
 }
 
 /**
@@ -314,6 +316,7 @@ export function snapshotFromServer(op: ServerOperation): ServerOperationSnapshot
     steps,
     detail: op.target,
     user: op.user,
+    pod: op.remote ? op.pod : undefined,
   };
 }
 
@@ -332,6 +335,8 @@ export function busyOperationFrom(e: ApiError | undefined): ServerOperation | un
     step: typeof op.step === "string" ? op.step : undefined,
     stepStatus: typeof op.stepStatus === "string" ? op.stepStatus : undefined,
     message: typeof op.message === "string" ? op.message : undefined,
+    pod: typeof op.pod === "string" ? op.pod : undefined,
+    remote: op.remote === true ? true : undefined,
   };
 }
 
@@ -584,7 +589,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     } else {
       if (snapshot.state !== "running") return; // finished before this tab saw it
       id = ++nextRunId.current;
-      dispatch({ type: "start", id, kind: snapshot.kind, source: "server", now: snapshot.startedAt, serverId: snapshot.id, steps: snapshot.steps, detail: snapshot.detail, user: snapshot.user });
+      dispatch({ type: "start", id, kind: snapshot.kind, source: "server", now: snapshot.startedAt, serverId: snapshot.id, steps: snapshot.steps, detail: snapshot.detail, user: snapshot.user, pod: snapshot.pod });
     }
     if (snapshot.state === "succeeded") {
       dispatch({ type: "end", id, outcome: { status: "succeeded", message: snapshot.message || `${OPERATION_NAMES[snapshot.kind]} completed.` }, now });

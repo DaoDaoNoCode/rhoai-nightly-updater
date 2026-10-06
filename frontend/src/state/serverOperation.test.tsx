@@ -58,6 +58,11 @@ describe("snapshotFromServer", () => {
     ]);
   });
 
+  it("keeps the pod only for an operation another updater pod runs", () => {
+    expect(snapshotFromServer({ ...aliceUpdate, pod: "updater-a" })?.pod).toBeUndefined();
+    expect(snapshotFromServer({ ...aliceUpdate, pod: "updater-a", remote: true })?.pod).toBe("updater-a");
+  });
+
   it("maps reinstall targets and ignores operations without steps", () => {
     expect(snapshotFromServer({ ...aliceUpdate, type: "reinstall", target: "stable", step: undefined })?.kind).toBe("reinstall_stable");
     expect(snapshotFromServer({ ...aliceUpdate, type: "reinstall", target: "nightly quay.io/x:y" })?.kind).toBe("reinstall_nightly");
@@ -71,6 +76,26 @@ describe("busyOperationFrom", () => {
     expect(busyOperationFrom(err)?.user).toBe("alice");
     expect(busyOperationFrom(new ApiError({ status: 409, errorCode: "cluster_busy", message: "busy", details: { operation: { id: 1 } } }))).toBeUndefined();
     expect(busyOperationFrom(undefined)).toBeUndefined();
+  });
+
+  it("keeps the pod of an operation another updater pod runs", () => {
+    const err = new ApiError({ status: 409, errorCode: "cluster_busy", message: "busy", details: { operation: { ...aliceUpdate, remote: true, pod: "updater-a" } } });
+    expect(busyOperationFrom(err)).toMatchObject({ remote: true, pod: "updater-a" });
+  });
+});
+
+describe("an operation another updater pod runs (remote)", () => {
+  it("follows it by polling, names the pod, and takes the result from lastCompleted", async () => {
+    const remote: ServerOperation = { ...aliceUpdate, remote: true, pod: "updater-old" };
+    let answer: OperationStatusResponse = { inProgress: true, operation: remote };
+    renderWithApp(<><Probe /><RefreshButton /></>, { operation: async () => answer });
+    await waitFor(() => expect(probe()).toMatchObject({ running: true, source: "server", serverInProgress: true, serverId: "op1" }));
+    expect(probe().blocker).toMatch(/alice is running "Update to nightly" on updater pod updater-old/);
+    expect(probe().steps).toContain("wait_catalog_ready:running");
+
+    answer = { inProgress: false, operation: null, lastCompleted: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: aliceUpdate.startedAt, finishedAt: "2026-10-05T10:09:00Z", success: true, message: "Update complete" } };
+    fireEvent.click(screen.getByText("poll"));
+    await waitFor(() => expect(probe()).toMatchObject({ outcome: "succeeded", serverInProgress: false }));
   });
 });
 

@@ -110,6 +110,18 @@ describe("GlobalBanners", () => {
     expect(screen.getByText("rhoai-3.6 · aaaaaaaaaaaa")).toBeInTheDocument();
   });
 
+  it("names the other updater pod and the latest progress of a remote operation", async () => {
+    renderWithApp(<GlobalBanners />, {
+      operation: async () => ({
+        inProgress: true,
+        operation: { id: "1", type: "setup-minio", label: "Set up MinIO", user: "alice", startedAt: new Date().toISOString(), remote: true, pod: "updater-7d9f-abcde", message: "Waiting for the MinIO pod" },
+      }),
+    }, "/components");
+    expect(await screen.findByText(/alice is running "Set up MinIO" on updater pod updater-7d9f-abcde/)).toBeInTheDocument();
+    expect(screen.getByText(/Latest progress: Waiting for the MinIO pod\./)).toBeInTheDocument();
+    expect(screen.getByText(/Another updater pod runs it/)).toBeInTheDocument();
+  });
+
   it("explains an interrupted operation and lets the user dismiss it", async () => {
     renderWithApp(<GlobalBanners />, {
       operation: async () => ({ inProgress: false, operation: null, interrupted: { type: "update", label: "Update to nightly", user: "alice", startedAt: "2026-10-05T09:00:00Z", pod: "old-pod" } }),

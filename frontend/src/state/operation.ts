@@ -40,6 +40,8 @@ export interface OperationRun {
   detail?: string;
   /** Who started it, for runs reported by the server (another tab or user). */
   user?: string;
+  /** The other updater pod that runs it (the backend reports it as remote). */
+  pod?: string;
   /** statusFingerprint of the operator when this tab started the run. */
   baseline?: string;
 }
@@ -92,7 +94,7 @@ export interface ServerResult {
 }
 
 export type OperationAction =
-  | { type: "start"; id: number; kind: OperationKind; source: OperationSource; now: number; serverId?: string; steps?: UpdateStep[]; detail?: string; user?: string; baseline?: string }
+  | { type: "start"; id: number; kind: OperationKind; source: OperationSource; now: number; serverId?: string; steps?: UpdateStep[]; detail?: string; user?: string; pod?: string; baseline?: string }
   | { type: "step"; id: number; step: UpdateStep }
   | { type: "end"; id: number; outcome: OperationOutcome; now: number }
   /** The backend id of a run this tab streams, learned while its stream held the lock. */
@@ -175,6 +177,7 @@ export function operationReducer(state: OperationState, action: OperationAction)
           serverId: action.serverId,
           detail: action.detail,
           user: action.user,
+          pod: action.pod,
           baseline: action.baseline,
         },
         // A new run supersedes the previous run's tracking and result.
