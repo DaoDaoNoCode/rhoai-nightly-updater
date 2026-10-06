@@ -32,6 +32,7 @@ var routes = []Route{
 	{"GET /api/debug", HandleDebug},
 	{"GET /api/build-explorer/tags", HandleBuildExplorerTags},
 	{"GET /api/build-explorer/content", HandleBuildExplorerContent},
+	{"GET /api/build-explorer/contains", HandleBuildExplorerContains},
 	{"GET /api/dashboard/state", HandleDashboardState},
 	{"POST /api/dashboard/deploy-pr", HandleDashboardDeployPR},
 	{"POST /api/dashboard/deploy-main", HandleDashboardDeployMain},

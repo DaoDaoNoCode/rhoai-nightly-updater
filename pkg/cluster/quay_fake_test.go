@@ -168,6 +168,8 @@ func resetRegistryCaches() {
 	fbcContentCache.Purge()
 	nightlyStatusCache.Purge()
 	dashboardWarmAttempts.Purge()
+	prCache.Purge()
+	compareCache.Purge()
 	githubBackoff.Lock()
 	githubBackoff.until = time.Time{}
 	githubBackoff.Unlock()
