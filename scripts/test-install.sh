@@ -96,9 +96,14 @@ esac
 FAKE
 cat >"$BIN/curl" <<'FAKE'
 #!/usr/bin/env bash
-# Fake curl: answers a manifest HEAD with FAKE_DIGEST, or 404.
+# Fake curl: answers a manifest HEAD with FAKE_DIGEST, or 404. With
+# FAKE_REALM, an anonymous HEAD gets a Bearer challenge for that realm.
 printf 'curl %s\n' "$*" >>"$FAKE_LOG"
-if [ -n "${FAKE_DIGEST:-}" ]; then
+if [[ " $* " == *" -G "* ]]; then
+	echo '{"token": "anon"}'
+elif [ -n "${FAKE_REALM:-}" ] && [[ " $* " != *"Authorization: Bearer"* ]]; then
+	printf 'HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm="%s",service="quay.io"\r\n\r\n' "$FAKE_REALM"
+elif [ -n "${FAKE_DIGEST:-}" ]; then
 	printf 'HTTP/1.1 200 OK\r\nDocker-Content-Digest: %s\r\n\r\n' "$FAKE_DIGEST"
 else
 	printf 'HTTP/1.1 404 Not Found\r\n\r\n'
@@ -175,6 +180,17 @@ expect_ok "asset: uninstall dry run" run bash "$ASSET" uninstall --dry-run --nam
 deletes=$(grep -c '^oc delete' "$LOG" || true)
 expect_eq "uninstall: every delete is a dry run" "$deletes" "$(grep '^oc delete' "$LOG" | grep -c -- '--dry-run=server' || true)"
 grep -q '^oc delete project scratch-ns' "$LOG" && pass || fail "uninstall: namespace not removed"
+# The registry's token service must be on the registry host.
+FAKE_REALM=https://quay.io/v2/auth expect_ok "token from the registry host" run bash "$ASSET" resolve-image
+grep -q -- "-G https://quay.io/v2/auth" "$LOG" && pass || fail "no token request to the registry host"
+grep -q "Authorization: Bearer anon" "$LOG" && pass || fail "the token was not used"
+FAKE_REALM=https://evil.example.com/token expect_ok "token realm elsewhere: falls back to oc" run bash "$ASSET" resolve-image
+grep -q "evil.example.com" <<<"$(grep -- '-G' "$LOG" || true)" && fail "a token was requested from another host" || pass
+FAKE_REALM=https://evil.example.com/token expect_fail "token realm elsewhere: warning" "ignoring the token service" \
+	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
+FAKE_REALM=http://quay.io/v2/auth expect_fail "plain-http token realm: warning" "ignoring the token service" \
+	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
+
 # Legacy objects of this install: a dry run must not delete them.
 FAKE_LEGACY=scratch-ns/rhoai-nightly-updater expect_ok "cleanup-legacy dry run" run bash "$ASSET" cleanup-legacy --dry-run --namespace scratch-ns
 expect_eq "cleanup-legacy dry run: three deletes, all server dry runs" "3 3" \

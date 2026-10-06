@@ -198,7 +198,9 @@ func listRegistryTags(ctx context.Context, client *http.Client, repository strin
 	if err != nil {
 		return nil, err
 	}
+	client = withSameHostRedirects(client)
 	next := base + "/v2/" + path + "/tags/list?n=1000"
+	registryHost := strings.TrimPrefix(base, "https://")
 	token := ""
 	var tags []string
 	for page := 0; next != "" && page < maxTagPages; page++ {
@@ -209,7 +211,7 @@ func listRegistryTags(ctx context.Context, client *http.Client, repository strin
 		if resp.StatusCode == http.StatusUnauthorized && token == "" {
 			challenge := resp.Header.Get("WWW-Authenticate")
 			drain(resp)
-			if token, err = anonymousToken(ctx, client, challenge, path); err != nil {
+			if token, err = anonymousToken(ctx, client, challenge, registryHost, path); err != nil {
 				return nil, err
 			}
 			page--
@@ -251,11 +253,35 @@ func drain(resp *http.Response) {
 	resp.Body.Close()
 }
 
+// withSameHostRedirects returns a copy of client that follows at most three
+// redirects, each to https on the host of the original request.
+func withSameHostRedirects(client *http.Client) *http.Client {
+	c := *client
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("registry: too many redirects")
+		}
+		if req.URL.Scheme != "https" || req.URL.Host != via[0].URL.Host {
+			return fmt.Errorf("registry: refusing a redirect to %s://%s", req.URL.Scheme, req.URL.Host)
+		}
+		return nil
+	}
+	return &c
+}
+
+// tokenHosts are the token services of registries whose realm is not the
+// registry host itself.
+var tokenHosts = map[string]string{
+	"registry-1.docker.io": "auth.docker.io",
+}
+
 var challengeParamRe = regexp.MustCompile(`(\w+)="([^"]*)"`)
 
 // anonymousToken asks the token service named in a Bearer challenge for a
 // pull token (https://distribution.github.io/distribution/spec/auth/token/).
-func anonymousToken(ctx context.Context, client *http.Client, challenge, path string) (string, error) {
+// The realm must be https on the registry host or its known token host, so
+// a registry answer cannot point the backend at another server.
+func anonymousToken(ctx context.Context, client *http.Client, challenge, registryHost, path string) (string, error) {
 	scheme, params, _ := strings.Cut(challenge, " ")
 	if !strings.EqualFold(scheme, "Bearer") {
 		return "", fmt.Errorf("registry asks for %q authentication", scheme)
@@ -267,6 +293,9 @@ func anonymousToken(ctx context.Context, client *http.Client, challenge, path st
 	realm, err := url.Parse(values["realm"])
 	if err != nil || realm.Scheme != "https" || realm.Host == "" {
 		return "", fmt.Errorf("registry token realm %q is not an https URL", values["realm"])
+	}
+	if realm.Host != registryHost && realm.Host != tokenHosts[registryHost] {
+		return "", fmt.Errorf("registry token realm %q is not on the registry host %s", values["realm"], registryHost)
 	}
 	q := realm.Query()
 	if s := values["service"]; s != "" {

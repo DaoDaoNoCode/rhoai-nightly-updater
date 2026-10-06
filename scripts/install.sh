@@ -173,7 +173,7 @@ detect_oauth_proxy_image() {
 # API, anonymously (a bearer token from the registry's token service when it
 # asks for one). Prints nothing when the registry does not answer.
 registry_digest() {
-	local repo=$1 tag=$2 host path scheme=https url headers status www realm service token
+	local repo=$1 tag=$2 host path scheme=https url headers status www realm realm_host service token
 	host=${repo%%/*}
 	path=${repo#*/}
 	case "$host" in
@@ -194,7 +194,17 @@ registry_digest() {
 		realm=$(printf '%s\n' "$www" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
 		service=$(printf '%s\n' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
 		[ -n "$realm" ] || return 0
-		token=$(curl -sS --max-time 20 -G "$realm" --data-urlencode "service=$service" \
+		# The token service must be https on the registry host (or Docker
+		# Hub's known token host), so a registry answer cannot send the
+		# request elsewhere.
+		realm_host=${realm#https://}
+		realm_host=${realm_host%%/*}
+		if [[ $realm != https://* ]] ||
+			{ [ "$realm_host" != "$host" ] && ! { [ "$host" = registry-1.docker.io ] && [ "$realm_host" = auth.docker.io ]; }; }; then
+			err "WARNING: ignoring the token service $realm of $host (not https on the registry host)."
+			return 0
+		fi
+		token=$(curl -sS --max-time 20 --max-filesize 1048576 -G "$realm" --data-urlencode "service=$service" \
 			--data-urlencode "scope=repository:$path:pull" 2>/dev/null |
 			sed -nE 's/.*"(token|access_token)" *: *"([^"]*)".*/\2/p' | head -1) || return 0
 		[ -n "$token" ] || return 0

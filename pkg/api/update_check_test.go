@@ -121,11 +121,62 @@ func TestListRegistryTags(t *testing.T) {
 }
 
 func TestAnonymousTokenNeedsHTTPSRealm(t *testing.T) {
-	if _, err := anonymousToken(context.Background(), http.DefaultClient, `Bearer realm="http://example.com/token"`, "a/b"); err == nil {
+	if _, err := anonymousToken(context.Background(), http.DefaultClient, `Bearer realm="http://example.com/token"`, "example.com", "a/b"); err == nil {
 		t.Fatal("a plain-http token realm must be refused")
 	}
-	if _, err := anonymousToken(context.Background(), http.DefaultClient, `Basic realm="x"`, "a/b"); err == nil {
+	if _, err := anonymousToken(context.Background(), http.DefaultClient, `Basic realm="x"`, "example.com", "a/b"); err == nil {
 		t.Fatal("basic authentication is not anonymous")
+	}
+}
+
+// A registry answer must not send the backend to another server (SSRF).
+func TestRegistryCannotRedirectElsewhere(t *testing.T) {
+	var otherHits atomic.Int32
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "x", "tags": []string{"v9.9.9"}})
+	}))
+	t.Cleanup(other.Close)
+
+	realmElsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="`+other.URL+`/token",service="reg"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(realmElsewhere.Close)
+	redirectElsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(redirectElsewhere.Close)
+
+	for name, srv := range map[string]*httptest.Server{"token realm on another host": realmElsewhere, "redirect to another host": redirectElsewhere} {
+		// The test servers share one certificate, so the client trusts both.
+		_, err := listRegistryTags(context.Background(), srv.Client(), strings.TrimPrefix(srv.URL, "https://")+"/team/app")
+		if err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+	if otherHits.Load() != 0 {
+		t.Fatalf("the other server was contacted %d times", otherHits.Load())
+	}
+	// Docker Hub's realm is its known token host.
+	if _, err := anonymousToken(context.Background(), http.DefaultClient, `Bearer realm="https://evil.example.com/token"`, "registry-1.docker.io", "a/b"); err == nil || !strings.Contains(err.Error(), "not on the registry host") {
+		t.Fatalf("docker hub realm on another host: %v", err)
+	}
+}
+
+func TestSameHostRedirectsAllowed(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/team/app/tags/list" {
+			http.Redirect(w, r, srv.URL+"/v2/moved/tags/list", http.StatusTemporaryRedirect)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string][]string{"tags": {"v1.0.0"}})
+	}))
+	t.Cleanup(srv.Close)
+	tags, err := listRegistryTags(context.Background(), srv.Client(), strings.TrimPrefix(srv.URL, "https://")+"/team/app")
+	if err != nil || len(tags) != 1 {
+		t.Fatalf("same-host redirect: %v %v", tags, err)
 	}
 }
 
