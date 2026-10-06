@@ -28,7 +28,7 @@
 | **Components** | DSC components with fixes for invalid or extra fields. A no-DSC state offers **Preview and create**. The Deployments table lists problems first, with pod details, git provenance and console log links |
 | **Build Explorer** | Every nightly tag: filter, inspect the FBC contents, compare with the installed build, search by image, commit SHA or PR |
 | **Dashboard Dev** | Deploys an odh-dashboard PR or main to the installed dashboard (RHOAI Konflux builds `odh-pr-<N>`/`odh-stable`, or ODH OpenShift CI builds `pr-<N>`/`main`), then **Revert** |
-| **Test resources** | MinIO, per-project pipeline servers, an MLflow instance and MLflow PR images |
+| **Test resources** | S3 storage (SeaweedFS, behind the `minio-service` name kept from MinIO), per-project pipeline servers, an MLflow instance and MLflow PR images |
 | **Diagnostics** | Health checks with evidence and guidance. A few problems have an automatic fix, which asks for confirmation |
 
 <p align="center">
@@ -59,7 +59,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 
 **Recovery on failure.** If the install fails, the previous catalog and Subscription are restored and the half-installed CSV is removed. A timeout while OLM is still installing keeps the new state. Every step is safe to re-run.
 
-**Only the tool's own objects.** Objects the tool creates carry `app.kubernetes.io/managed-by=rhoai-nightly-updater`. Teardown deletes only labelled objects, with UID preconditions, so a look-alike someone else created is never removed. MinIO teardown keeps the `minio` namespace; delete it yourself with `oc delete project minio` once it's empty. Teardown is refused while a pipeline server still uses MinIO.
+**Only the tool's own objects.** Objects the tool creates carry `app.kubernetes.io/managed-by=rhoai-nightly-updater`. Teardown deletes only labelled objects, with UID preconditions, so a look-alike someone else created is never removed. S3 storage teardown keeps the `minio` namespace; delete it yourself with `oc delete project minio` once it's empty. Teardown is refused while a pipeline server still uses the storage.
 
 **Stale webhooks and finalizers.** A webhook configuration is removed only when all three of these hold:
 - its Services are gone, or have had no ready endpoints for 5 minutes;
@@ -92,10 +92,10 @@ Environment variables of the `app` container. The template sets the first group;
 |---|---|---|
 | `BIND_ADDRESS`, `PORT` | `127.0.0.1`, `8080` | API listener, reachable only by oauth-proxy |
 | `METRICS_PORT` | `9090` | probes, `/api/version` and `/metrics` |
-| `TEMPLATE_REVISION` | `2` | lets the UI warn admins when the Deployment is older than the image expects |
+| `TEMPLATE_REVISION` | `3` | lets the UI warn admins when the Deployment is older than the image expects |
 | `GITHUB_TOKEN` | unset | GitHub API token for commit dates and PR search. A read-only fine-grained token with public-repository read access is enough |
-| `MINIO_IMAGE` | pinned `quay.io/hummingbird-community/minio@sha256:...` | must be a MinIO release ≥ 2022-10-29 that reads `MINIO_ROOT_USER/PASSWORD` and supports `--console-address` |
-| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | random per install, kept in `minio/minio-secret` | MinIO credentials |
+| `SEAWEEDFS_IMAGE` | pinned `ghcr.io/chrislusf/seaweedfs@sha256:...` (4.48) | the S3 storage image, for example a mirror; must be a SeaweedFS 4.x whose `weed mini` reads `WEED_ADMIN_*`. `MINIO_IMAGE` is no longer read |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | random per install, kept in `minio/minio-secret` | S3 access key and secret key (the secret key is also the admin UI password); the names are kept from MinIO |
 | `STABLE_SOURCE`, `STABLE_CHANNEL` | `redhat-operators`, detected | the catalog and channel used for "stable" |
 | `DSC_SAMPLE_REF` | unset | take DSC defaults from this rhods-operator git ref instead of the installed CSV's `alm-examples` |
 | `LOG_LEVEL` | `info` | `debug`, `warn`, `error` |

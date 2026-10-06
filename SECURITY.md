@@ -44,11 +44,11 @@ Token rules (pkg/api/identity.go, handlers.go):
 | Secrets | `create` | no (pipeline projects are user-chosen) |
 | Secrets | `get patch delete` | `minio-secret`; `nightly-dspa-s3` (`get delete patch`); legacy `dashboard-dspa-secret` (`get delete`) |
 | Namespaces | `get list create`; `patch` | `patch` only `redhat-ods-operator`, `minio`. Nothing is ever deleted |
-| Deployments | `get list patch create`; `delete` | `delete` only `minio` |
+| Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` and `minio` (the MinIO of earlier versions, removed by the migration) |
 | Services | `get create`; `patch delete` | `patch delete` only `minio-service` |
-| PVCs | `list create`; `patch delete` | `patch delete` only `minio-pvc` |
+| PVCs | `list create`; `patch delete` | `patch delete` only `seaweedfs-pvc`; `delete` only `minio-pvc` (the kept MinIO volume) |
 | Routes | `create`; `get` | `get` on `rhods-dashboard`, `mlflow`, `minio-api`, `minio-ui`; `patch delete` on `minio-api`, `minio-ui` |
-| NetworkPolicies | `create`; `get patch delete` | the second set only on `minio-ingress` |
+| NetworkPolicies | `create`; `get patch delete` | the second set only on `seaweedfs-ingress`; `get delete` on `minio-ingress` (the MinIO policy the migration removes) |
 | Pods, ReplicaSets, Events, EndpointSlices, Nodes | `list` | read-only |
 | Subscriptions | `create`; `get patch delete` | the second set only on `rhods-operator` |
 | OperatorGroups | `create list`; `patch` | `patch` only `rhods-operator` |
@@ -94,7 +94,7 @@ There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read 
 
 - The pull-secret token is never logged, returned, or written to the activity log. Only the `quay.io/rhoai` entry of `kube-system/additional-pull-secret` is replaced; other registries are kept.
 - The Quay token is derived from the cluster pull secret on the server and never sent to the browser.
-- MinIO's root user and password are random per install and stored in `minio/minio-secret`.
+- The S3 storage's access key and secret key are random per install and stored in `minio/minio-secret`. The secret key is also the SeaweedFS admin UI password; it reaches the pod through the environment (`WEED_ADMIN_PASSWORD`), not the command line.
 - `GITHUB_TOKEN` (optional) is sent only to `api.github.com`. Use a read-only token with public-repository access.
 
 ## Local development (`DEV_MODE=true`)
@@ -108,11 +108,12 @@ There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read 
 ## Known limitations and residual risks
 
 - **SA token.** See *Residual risk* above.
-- **MinIO.** The bundled MinIO is the final open-source release (`quay.io/hummingbird-community/minio`, RELEASE.2025-10-15T17-29-55Z, pinned by digest). Advisories published after it, for example GHSA-hv4r-mvr4-25vw, are fixed only in the commercial AIStor, and no open-source build has the fix. Mitigations:
+- **S3 storage (SeaweedFS).** Test resources run SeaweedFS 4.48 (`ghcr.io/chrislusf/seaweedfs`, Apache-2.0, pinned by digest), the object store upstream Kubeflow Pipelines uses by default. It replaced the bundled MinIO, whose open-source line ended (advisories such as GHSA-hv4r-mvr4-25vw are fixed only in the commercial AIStor). SeaweedFS is not supported by Red Hat, publishes advisories often (bump the digest when one applies), and `weed mini` opens many listeners: master, volume and filer HTTP/gRPC, worker gRPC, Iceberg and metrics, and the master and filer HTTP APIs need no authentication. Mitigations:
+  - NetworkPolicy `seaweedfs-ingress`: only the S3 port 8333 from pods in any namespace and the admin UI port 23646 only from the router; every other port is unreachable from the pod network;
   - no Route to the S3 API;
-  - root credentials random per install;
-  - NetworkPolicy `minio-ingress`: S3 port 9000 from pods in any namespace, console port 9090 only from the router.
+  - credentials random per install; the admin UI requires a login (user `admin`, password from the Secret);
+  - the admin password is passed as an environment variable, not an argument, so `ps` does not show it. Anyone who can `oc exec` into the pod or read `minio/minio-secret` can still read it.
 
-  Any pod in the cluster that knows the access key can still reach the S3 API. MinIO is meant for test data only.
+  Any pod in the cluster that knows the access key can still reach the S3 API. The storage is meant for test data only. After a migration, the old MinIO volume `minio-pvc` stays until teardown; no MinIO process reads it.
 - **Restarts.** A running operation delays a pod restart by up to ~17 minutes (see [README: cluster safety](README.md#how-the-tool-keeps-your-cluster-safe)). A SIGKILL or node loss still interrupts it. There is no durable job queue; the next start reports the interrupted operation. A replacement pod that starts while the old one drains refuses changes until the old operation ends (lease in the operation ConfigMap, no new RBAC).
 - **Mirror visibility.** The GitHub mirror contains team-internal links (Bitwarden collection, Slack channels, the IPA realm and AWS SAML alias). They are access-controlled, but internal. Decide with the team whether the mirror should be private.

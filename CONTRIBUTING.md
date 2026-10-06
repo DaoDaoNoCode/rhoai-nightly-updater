@@ -440,7 +440,7 @@ Then `make` commands will use your custom values.
 
 Make variables (`IMAGE`, `TAG`, `NAMESPACE`, `APP_NAME`, `RUNTIME`, `PLATFORM`, `OAUTH_PROXY_IMAGE`, `ROLLOUT_TIMEOUT`, `DRY_RUN`, `ALLOW_TEMPLATE_MISMATCH`, `ALLOW_MUTABLE_TAG`) can be set on the command line or in `.env` (`make env` creates one; there is no `.env.example`). Run `make help` to list them.
 
-Runtime variables of the deployed container (`GITHUB_TOKEN`, `MINIO_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
+Runtime variables of the deployed container (`GITHUB_TOKEN`, `SEAWEEDFS_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
 
 Local development only (`dev.sh` sets the first five):
 

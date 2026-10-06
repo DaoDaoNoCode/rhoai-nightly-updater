@@ -162,16 +162,87 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 ## 10. Test resources
 
+The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from the MinIO earlier versions deployed. Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-test-resources).
+
 | Problem | Fix |
 |---|---|
-| MinIO setup: "not created by this tool" | The `minio` namespace holds foreign objects. Nothing was changed. Remove them or use another cluster |
-| MinIO CrashLoopBackOff after a `MINIO_IMAGE` change | The release is too old for the volume format (needs ≥ 2022-10-29). Tear down, then set up again. **The data is lost** |
-| MinIO teardown refused | A pipeline server still uses MinIO (the message names it). Tear that down first. After a partial teardown, run Tear down again |
+| S3 storage setup: "not created by this tool" | The `minio` namespace holds foreign objects. Nothing was changed. Remove them or use another cluster |
+| Setup or teardown: "not allowed ... run `make upgrade`" | The image is newer than the template (RBAC for the SeaweedFS names is missing; the banner says the template is outdated). An admin runs `make upgrade`, then retry. Nothing was changed by the refused step |
+| "Still MinIO: migration pending" | MinIO from an earlier version still serves. **Migrate to SeaweedFS** (or re-run setup) replaces it and starts fresh (see below) |
+| SeaweedFS not ready / ImagePullBackOff | MinIO, if it was being replaced, keeps serving. Fix the cause (for example `SEAWEEDFS_IMAGE` to a mirror) and **Repair**/**Migrate** again. `oc logs -n minio deploy/seaweedfs` |
+| S3 storage teardown refused | A pipeline server still uses the storage (the message names it). Tear that down first. After a partial teardown, run Tear down again |
 | `minio` namespace left after teardown | Expected: `oc delete project minio` once `oc get all,pvc,secret -n minio` is empty |
-| Reach MinIO S3 from your laptop | `oc port-forward -n minio svc/minio-service 9000`. Credentials: `oc extract secret/minio-secret -n minio --to=-` |
+| Reach the S3 API from your laptop | `oc port-forward -n minio svc/minio-service 9000`, endpoint `http://localhost:9000`, path-style, region `us-east-1`. Keys: `oc extract secret/minio-secret -n minio --to=-` |
+| Admin UI login | **Open admin UI**; user `admin`, password `oc extract -n minio secret/minio-secret --keys=minio_root_password --to=-` |
 | Pipeline server: "already has a pipeline server" | Projects get one DSPA; the existing one was left unchanged |
+| Old pipeline run artifacts return 404 after the migration | Expected: the migration starts fresh. The files are still on `minio-pvc`; copy them (below) if you need them. If a cached step fails because its outputs are gone, re-run with caching disabled |
 | DSPA or project stuck Terminating | §11.4 |
 | MLflow teardown hangs / DSC change waits on MLflow | §11.4 |
+
+### 10.1 MinIO to SeaweedFS: what the migration does, and how to roll back
+
+Setting up S3 storage on a cluster with the tool's MinIO (Deployment `minio`, shown as "Still MinIO: migration pending") replaces it:
+1. SeaweedFS starts next to MinIO on a new PVC `seaweedfs-pvc`, with the same credentials (`minio-secret`) and an empty bucket `pipelines`. MinIO keeps serving meanwhile; if SeaweedFS cannot start, nothing is switched.
+2. Once SeaweedFS is ready, `minio-service` and `minio-ui` switch to it. DSPAs keep `minio-service.minio.svc:9000` and their secrets; nothing in the projects changes. The data-science-pipelines operator's object-storage check may flap for a moment.
+3. Deployment `minio` and NetworkPolicy `minio-ingress` are deleted. **PVC `minio-pvc` is kept**, unused, until teardown.
+
+Nothing is copied: artifacts, logs and cached outputs of earlier runs return 404. Check the result with `oc get deploy,pvc,netpol -n minio` (expect `seaweedfs`, `seaweedfs-pvc`, `minio-pvc`, `seaweedfs-ingress`).
+
+Both procedures below start a MinIO by hand on the kept volume, with the image and container contract earlier versions used. They are manual and not run by the tool. The hand-made objects have no tool label and no NetworkPolicy: delete them when done.
+
+The throwaway MinIO used by both:
+
+```sh
+oc -n minio apply -f - <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: minio-old}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: minio-old}}
+  template:
+    metadata: {labels: {app: minio-old}}
+    spec:
+      containers:
+      - name: minio
+        image: quay.io/hummingbird-community/minio@sha256:25268b5a6539d9ffc7d23b89a2ba846d12a49aac4e81172336700222818d5f45
+        args: [server, /data, --console-address, ":9090"]
+        env:
+        - {name: MINIO_ROOT_USER, valueFrom: {secretKeyRef: {name: minio-secret, key: minio_root_user}}}
+        - {name: MINIO_ROOT_PASSWORD, valueFrom: {secretKeyRef: {name: minio-secret, key: minio_root_password}}}
+        volumeMounts: [{name: data, mountPath: /data, subPath: minio}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: minio-pvc}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: minio-old}
+spec:
+  selector: {app: minio-old}
+  ports: [{name: api, port: 9000, targetPort: 9000}]
+EOF
+oc -n minio rollout status deploy/minio-old
+```
+
+**Copy old objects into SeaweedFS (optional).** `mc` reads the endpoints from `MC_HOST_<alias>`; the keys are the same on both sides. They are visible in the copy pod's spec while it runs.
+
+```sh
+U=$(oc -n minio extract secret/minio-secret --keys=minio_root_user --to=-)
+P=$(oc -n minio extract secret/minio-secret --keys=minio_root_password --to=-)
+oc -n minio run mc-copy --rm -i --restart=Never --image=quay.io/hummingbird-community/minio-client:latest \
+  --env=MC_CONFIG_DIR=/tmp/.mc --env="MC_HOST_old=http://$U:$P@minio-old:9000" --env="MC_HOST_new=http://$U:$P@minio-service:9000" \
+  -- mirror --overwrite old/pipelines new/pipelines
+oc -n minio delete deploy/minio-old svc/minio-old
+```
+
+**Roll back to MinIO (stop-gap).** Only while `minio-pvc` exists (teardown deletes it). Objects written to SeaweedFS since the migration are not carried back. Start the throwaway MinIO above, then point the Service at it and stop SeaweedFS:
+
+```sh
+oc -n minio patch svc minio-service --type=merge -p '{"spec":{"selector":{"app":"minio-old"},"ports":[{"name":"api","port":9000,"targetPort":9000},{"name":"ui","port":9090,"targetPort":9090}]}}'
+oc -n minio scale deploy/seaweedfs --replicas=0
+```
+
+Pipeline servers then reach MinIO again with no edits. To go forward again: `oc -n minio delete deploy/minio-old svc/minio-old`, then **Repair** (or Set up) on the Test resources page, which re-applies the Service and scales SeaweedFS back up.
 
 ## 11. Manual recovery for operator deadlocks
 

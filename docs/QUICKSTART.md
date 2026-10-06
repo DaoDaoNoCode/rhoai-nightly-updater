@@ -111,7 +111,7 @@ Then check the **Components** page (deployments in `redhat-ods-applications`) an
 | Re-deploy the installed version (same version, fresh pods) | Status → Re-deploy the same version |
 | Switch to stable, another nightly, or an exact older build | Status → Reinstall → choose the target (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose RHOAI (Konflux) or ODH (OpenShift CI) build → Deploy; **Revert** when done |
-| MinIO, pipeline servers, MLflow | Test resources |
+| S3 storage (SeaweedFS), pipeline servers, MLflow | Test resources |
 | Which nightly contains PR #N? | Build Explorer → search `#123` (see [README](../README.md#build-explorer-pr-search)) |
 | Something looks wrong | Diagnostics → read the guidance; automatic fixes ask for confirmation |
 
