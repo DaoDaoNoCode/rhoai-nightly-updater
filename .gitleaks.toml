@@ -13,9 +13,11 @@
 #   dXNlcjpwYXM= user:pas          Z2VuZXJpYzp4 generic:x
 #   ZG9ja2VyOno= docker:z          ZGV2Onc=     dev:w
 #   ZXhhbXBsZTp4 example:x
+# and MinIO test Secrets ("minio_root_password", Red Hat "General Secret"):
+#   dGVzdHBhc3M= testpass          b2xkLXBhc3M= old-pass
 
 [allowlist]
-  description = "Placeholder registry credentials in Go tests"
+  description = "Placeholder credentials in Go tests"
   regexes = [
-    '''(^|[^A-Za-z0-9+/])(b2xkOnBhc3M=|cmhvYWk6eQ==|cmVwbzp6|dGVzdDp0ZXN0|dXNlcjpwYXNzd29yZA==|dXNlcjpwYXNz|dXNlcjpwYXM=?|Z2VuZXJpYzp4|ZG9ja2VyOno=|ZGV2Onc=|ZXhhbXBsZTp4)([^A-Za-z0-9+/=]|$)''',
+    '''(^|[^A-Za-z0-9+/])(b2xkOnBhc3M=|cmhvYWk6eQ==|cmVwbzp6|dGVzdDp0ZXN0|dXNlcjpwYXNzd29yZA==|dXNlcjpwYXNz|dXNlcjpwYXM=?|Z2VuZXJpYzp4|ZG9ja2VyOno=|ZGV2Onc=|ZXhhbXBsZTp4|dGVzdHBhc3M=|b2xkLXBhc3M=)([^A-Za-z0-9+/=]|$)''',
   ]
