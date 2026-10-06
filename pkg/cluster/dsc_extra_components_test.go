@@ -105,6 +105,7 @@ func TestRepairDSCRemoveExtraComponentsPreservesRemainingSettings(t *testing.T) 
 					io.WriteString(w, crd)
 				case strings.HasSuffix(r.URL.Path, "/clusterserviceversions"):
 					io.WriteString(w, csvListMock("3.6.0").body)
+				case repairGuardMock(w, r):
 				default:
 					io.WriteString(w, `{}`)
 				}

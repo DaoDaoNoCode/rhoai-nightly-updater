@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -25,14 +26,14 @@ type rolloutFixture struct {
 
 func defaultRollout() rolloutFixture {
 	return rolloutFixture{
-		replicas: 1,
+		replicas: 3,
 		strategy: map[string]interface{}{"type": "RollingUpdate", "rollingUpdate": map[string]interface{}{"maxSurge": "25%", "maxUnavailable": "25%"}},
 		managedFields: []interface{}{
 			map[string]interface{}{"manager": "olm", "operation": "Update", "fieldsV1": map[string]interface{}{
 				"f:spec": map[string]interface{}{"f:strategy": map[string]interface{}{"f:rollingUpdate": map[string]interface{}{"f:maxUnavailable": map[string]interface{}{}}}}}},
 		},
 		newPodSchedule: map[string]interface{}{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes are available: 3 Insufficient cpu."},
-		oldReady:       1,
+		oldReady:       3,
 	}
 }
 
@@ -127,6 +128,40 @@ func TestAssistRollout_NotApplicable(t *testing.T) {
 		{"strategy already allows one unavailable", func(fx *rolloutFixture) {
 			fx.replicas = 4
 		}, "already allows 1"},
+		// R1-4 / R5-F2: only a pure resource shortage is unblocked.
+		{"untolerated taint", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/6 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }. preemption: 0/6 nodes are available: 3 No preemption victims found for incoming pod, 3 Preemption is not helpful for scheduling."
+		}, "untolerated taint"},
+		{"node selector or affinity", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling."
+		}, "node affinity/selector"},
+		{"pod anti-affinity", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/3 nodes are available: 1 Insufficient memory, 2 node(s) didn't match pod anti-affinity rules."
+		}, "anti-affinity"},
+		{"volume zone", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/3 nodes are available: 3 node(s) had volume node affinity conflict."
+		}, "volume node affinity conflict"},
+		{"prefilter message", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling."
+		}, "unbound immediate PersistentVolumeClaims"},
+		{"unparseable message", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "no nodes available to schedule pods"
+		}, "no nodes available"},
+		{"no message", func(fx *rolloutFixture) {
+			delete(fx.newPodSchedule, "message")
+		}, "the scheduler gave no reason"},
+		{"GPU shortage", func(fx *rolloutFixture) {
+			fx.newPodSchedule["message"] = "0/3 nodes are available: 3 Insufficient nvidia.com/gpu."
+		}, "Insufficient nvidia.com/gpu"},
+		// D4: a 1-replica module operator (often a failurePolicy Fail
+		// webhook backend) would drop to 0 ready pods.
+		{"single replica", func(fx *rolloutFixture) {
+			fx.replicas = 1
+			fx.oldReady = 1
+		}, "only 1 pod(s) are ready (1 replica(s))"},
+		{"one ready pod of three", func(fx *rolloutFixture) {
+			fx.oldReady = 1
+		}, "only 1 pod(s) are ready (3 replica(s))"},
 		{"recreate strategy", func(fx *rolloutFixture) {
 			fx.strategy = map[string]interface{}{"type": "Recreate"}
 		}, "Recreate"},
@@ -246,5 +281,18 @@ func TestRestoreRolloutStrategy(t *testing.T) {
 				t.Fatalf("overwrote the owner's value: %s", patches[0].Body)
 			}
 		})
+	}
+}
+
+func TestNonResourceSchedulingReasons(t *testing.T) {
+	for msg, want := range map[string]string{
+		"0/3 nodes are available: 3 Insufficient cpu.": "[]",
+		"0/6 nodes are available: 2 Insufficient memory, 3 Insufficient cpu, 6 Too many pods. preemption: 0/6 nodes are available: 6 No preemption victims found for incoming pod.": "[]",
+		"0/6 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint {node-role.kubernetes.io/master: }.":                                                          "[3 node(s) had untolerated taint {node-role.kubernetes.io/master: }]",
+		"0/3 nodes are available: 3 Insufficient ephemeral-storage.":                                                                                                                "[3 Insufficient ephemeral-storage]",
+	} {
+		if got := fmt.Sprint(nonResourceSchedulingReasons(msg)); got != want {
+			t.Errorf("%q: got %s, want %s", msg, got, want)
+		}
 	}
 }

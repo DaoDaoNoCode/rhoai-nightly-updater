@@ -173,7 +173,13 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 				t.Fatal("no Subscription applied")
 			}
 			spec := applies[len(applies)-1]
-			if spec["installPlanApproval"] != "Manual" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) || spec["startingCSV"] != nil {
+			// Refresh pins the installed CSV (R5-F3); the others drop the
+			// old channel's startingCSV.
+			wantStart := interface{}(nil)
+			if op == "refresh" {
+				wantStart = "rhods-operator.3.6.0"
+			}
+			if spec["installPlanApproval"] != "Manual" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) || spec["startingCSV"] != wantStart {
 				t.Fatalf("settings not preserved: %v", spec)
 			}
 			approved := false
@@ -535,8 +541,321 @@ func TestWaitIgnoresDeletingCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.csvs["rhods-operator.3.6.0"]["metadata"] = map[string]interface{}{"name": "rhods-operator.3.6.0", "deletionTimestamp": "2026-10-05T00:00:00Z"}
 	var logs []string
-	outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{})
+	outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 	if outcome.succeeded || outcome.errorCode != "install_timeout" {
 		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
+// R1-2: on a fresh cluster (no CSV, no Subscription) a failed first install
+// leaves no CSV behind: the CSV did not exist before the operation, so the
+// restore removes it even though the operation deleted no CSV.
+func TestUpdateStream_FailedFirstInstallRemovesTheAttemptCSV(t *testing.T) {
+	const newCSV = "rhods-operator.3.6.1"
+	f := newFakeOLM(t)
+	f.channels = `[{"name":"stable-3.x","currentCSV":"` + newCSV + `"}]`
+	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
+		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Complete"}}
+		f.addCSV(newCSV, "Failed")
+		f.csvs[newCSV]["status"] = map[string]interface{}{"phase": "Failed", "reason": "InstallCheckFailed", "message": "install timeout"}
+		f.sub["status"] = map[string]interface{}{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]interface{}{"name": "install-new"}}
+	}
+	emit, events := eventsRecorder()
+	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+	if err != nil || result.Success || result.ErrorCode != "csv_failed" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if lastStatus(events(), restoreStepName) != "success" || !strings.Contains(result.Message, "There was no previous Subscription") {
+		t.Fatalf("restore: %v / %q", events(), result.Message)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.csvs) != 0 || f.sub != nil || f.catalog != nil {
+		t.Fatalf("leftovers: csvs=%v sub=%v catalog=%v", f.csvs, f.sub, f.catalog)
+	}
+}
+
+// A CSV that existed before the operation and was not deleted by it is
+// never removed by the restore: the restored Subscription adopts it. Here
+// the attempt fails before the CSV step (channel detection).
+func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	c := f.client(context.Background())
+	r, err := captureOperatorRecovery(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.subscriptionChanged = true
+	f.mu.Lock()
+	f.sub = nil
+	f.mu.Unlock()
+	emit, events := eventsRecorder()
+	result := &types.OperationResponse{Message: "failed"}
+	r.restore(c, result, emit)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.csvs["rhods-operator.3.6.0"]; !ok {
+		t.Fatalf("the pre-existing CSV was deleted; writes=%v", f.requests)
+	}
+	if lastStatus(events(), restoreStepName) != "success" || f.sub == nil {
+		t.Fatalf("restore: %v sub=%v", events(), f.sub)
+	}
+	// A CSV with the same name but a new UID was created by the attempt.
+	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]interface{})["uid"] = "recreated"
+	f.mu.Unlock()
+	names, err := r.attemptCSVNames(c)
+	f.mu.Lock()
+	if err != nil || fmt.Sprint(names) != "[rhods-operator.3.6.0]" {
+		t.Fatalf("attempt CSVs = %v, %v", names, err)
+	}
+}
+
+// R1-5: a CSV of the failed attempt that is still deleting when the
+// restore budget ends makes the recovery incomplete (failed), with
+// guidance; the previous Subscription is still re-applied.
+func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	c := f.client(context.Background())
+	r, err := captureOperatorRecovery(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.subscriptionChanged, r.csvRemoved = true, true
+	f.mu.Lock()
+	delete(f.csvs, "rhods-operator.3.6.0")
+	f.addCSV("rhods-operator.3.6.1", "Failed")
+	f.stuckCSVs["rhods-operator.3.6.1"] = true
+	f.mu.Unlock()
+	emit, events := eventsRecorder()
+	result := &types.OperationResponse{Message: "CSV failed."}
+	r.restore(c, result, emit)
+	if lastStatus(events(), restoreStepName) != "failed" || !strings.Contains(result.Message, "recovery is incomplete") ||
+		!strings.Contains(result.Message, "rhods-operator.3.6.1 from the failed attempt is still being deleted") {
+		t.Fatalf("events=%v message=%q", events(), result.Message)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if spec, _ := f.sub["spec"].(map[string]interface{}); spec["channel"] != "fast" {
+		t.Fatalf("previous Subscription not re-applied: %v", f.sub)
+	}
+}
+
+// R5-F4: slow CSV deletions use only their own budget; the catalog and
+// Subscription re-apply always runs with a fresh context.
+func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
+	oldBudget := restoreCSVBudget
+	restoreCSVBudget = 30 * time.Millisecond
+	oldDel := CSVDeletionTimeout
+	CSVDeletionTimeout = time.Second
+	t.Cleanup(func() { restoreCSVBudget, CSVDeletionTimeout = oldBudget, oldDel })
+
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	c := f.client(context.Background())
+	r, _ := captureOperatorRecovery(c)
+	r.subscriptionChanged, r.csvRemoved, r.catalogChanged = true, true, true
+	f.mu.Lock()
+	delete(f.csvs, "rhods-operator.3.6.0")
+	f.addCSV("rhods-operator.3.6.1", "Failed")
+	f.addCSV("rhods-operator.3.6.2", "Failed")
+	f.stuckCSVs["rhods-operator.3.6.1"], f.stuckCSVs["rhods-operator.3.6.2"] = true, true
+	f.catalog = nil
+	f.mu.Unlock()
+	result := &types.OperationResponse{}
+	emit, _ := eventsRecorder()
+	start := time.Now()
+	r.restore(c, result, emit)
+	if time.Since(start) > 900*time.Millisecond {
+		t.Fatalf("restore took %s: the CSV waits did not respect the budget", time.Since(start))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if spec, _ := f.sub["spec"].(map[string]interface{}); spec["channel"] != "fast" || f.catalog == nil {
+		t.Fatalf("re-apply skipped: sub=%v catalog=%v", f.sub, f.catalog)
+	}
+	if !strings.Contains(result.Message, "incomplete") {
+		t.Fatalf("message = %q", result.Message)
+	}
+}
+
+// R5-F3: with Manual approval the tool approves only an InstallPlan for the
+// exact CSV the user confirmed. Anything else OLM proposes is reported and
+// left for an administrator.
+func TestManualApproval_OnlyTheConfirmedCSV(t *testing.T) {
+	proposeNewer := func(f *fakeOLM, _ map[string]interface{}) {
+		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"approved": false, "clusterServiceVersionNames": []interface{}{"rhods-operator.3.7.0"}}, "status": map[string]interface{}{"phase": "RequiresApproval"}}
+		f.sub["status"] = map[string]interface{}{"currentCSV": "rhods-operator.3.7.0", "installPlanRef": map[string]interface{}{"name": "install-new"}}
+	}
+	for _, op := range []string{"update", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"installPlanApproval": "Manual", "channel": "old"})
+			f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
+				if spec["channel"] != "old" || op == "refresh" && spec["startingCSV"] != nil {
+					proposeNewer(f, spec)
+				}
+			}
+			f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"},{"name":"old","currentCSV":"rhods-operator.3.7.0"}]`
+			c := f.client(context.Background())
+			var r *types.OperationResponse
+			if op == "update" {
+				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+			} else {
+				r, _ = RefreshOperator(c)
+			}
+			if r == nil || r.Success || r.ErrorCode != "approval_required" || !strings.Contains(r.Message, "rhods-operator.3.7.0") {
+				t.Fatalf("result = %+v", r)
+			}
+			for _, w := range f.writes() {
+				if w == "PATCH "+namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-new") {
+					t.Fatalf("approved an InstallPlan for a CSV that was not confirmed: %v", f.writes())
+				}
+			}
+		})
+	}
+}
+
+// R5-F3: with Automatic approval, Refresh would install the channel head;
+// when that is not the installed CSV, it refuses before changing anything.
+func TestRefresh_RefusesWhenTheChannelHeadMoved(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.1"}]`
+	r, err := RefreshOperator(f.client(context.Background()))
+	if err != nil || r.Success || r.ErrorCode != "validation" || !strings.Contains(r.Message, "now installs rhods-operator.3.6.1") {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("Refresh changed the cluster: %v", w)
+	}
+}
+
+// R5-F5: the Subscription is recorded before an operation, so after a crash
+// that left no Subscription and no CSV, Refresh re-installs the recorded
+// version with the recorded settings instead of dead-ending.
+func TestRefresh_AfterACrashUsesTheRecordedSubscription(t *testing.T) {
+	config := map[string]interface{}{"nodeSelector": map[string]interface{}{"node-role.kubernetes.io/infra": ""}}
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"config": config})
+	c := f.client(context.Background())
+	if _, err := captureOperatorRecovery(c); err != nil { // an operation starts and records it
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	recorded := f.recordedSub
+	f.sub, f.csvs = nil, map[string]map[string]interface{}{} // the pod died mid-operation
+	f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+	f.mu.Unlock()
+	if !strings.Contains(recorded, `"installedCSV":"rhods-operator.3.6.0"`) {
+		t.Fatalf("recorded = %s", recorded)
+	}
+	r, err := RefreshOperator(c)
+	if err != nil || !r.Success || !strings.Contains(r.Message, "rhods-operator.3.6.0 is installed again") {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	applies := f.subscriptionApplies()
+	if spec := applies[0]; spec["source"] != CatalogName || spec["channel"] != "stable-3.x" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) {
+		t.Fatalf("recreated Subscription = %v", spec)
+	}
+}
+
+// R5-F5: without a recorded Subscription, Refresh explains instead of
+// claiming success.
+func TestRefresh_NothingInstalledNothingRecorded(t *testing.T) {
+	f := newFakeOLM(t)
+	r, _ := RefreshOperator(f.client(context.Background()))
+	if r.Success || r.ErrorCode != "prerequisites" || !strings.Contains(r.Message, "nothing to refresh") {
+		t.Fatalf("result = %+v", r)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
+	}
+}
+
+// R5-F5: "Reinstall to stable" works with no Subscription and no CSV, and
+// carries over the recorded settings.
+func TestReinstallStable_WithoutASubscription(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	f := newFakeOLM(t)
+	f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.5.1","currentCSVDesc":{"version":"3.5.1"}}]`
+	f.recordedSub = `{"recordedAt":"2026-10-01T00:00:00Z","installedCSV":"rhods-operator.3.6.0","spec":{"source":"rhoai-catalog-dev","channel":"stable-3.x","name":"rhods-operator","installPlanApproval":"Automatic","config":{"env":[{"name":"X","value":"1"}]}}}`
+	f.onSubscribe = olmInstalls("rhods-operator.3.5.1")
+	r, err := Reinstall(f.client(context.Background()), "stable", "", "")
+	if err != nil || !r.Success {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	spec := f.subscriptionApplies()[0]
+	if spec["source"] != "redhat-operators" || !strings.Contains(fmt.Sprint(spec["config"]), "X") {
+		t.Fatalf("Subscription = %v", spec)
+	}
+}
+
+// R5-F9: another Subscription for the package (seen as the owner of an
+// InstallPlan) stops every operation before it changes anything.
+func TestOperationsRefuseAForeignSubscription(t *testing.T) {
+	for _, op := range []string{"update", "reinstall", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.installPlans["install-gitops"] = map[string]interface{}{
+				"metadata": map[string]interface{}{"ownerReferences": []interface{}{map[string]interface{}{"kind": "Subscription", "name": "rhoai-gitops"}}},
+				"spec":     map[string]interface{}{"clusterServiceVersionNames": []string{"rhods-operator.3.6.0"}},
+			}
+			c := f.client(context.Background())
+			var r *types.OperationResponse
+			switch op {
+			case "update":
+				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+			case "reinstall":
+				r, _ = Reinstall(c, "nightly", testNightlyImage, "")
+			case "refresh":
+				r, _ = RefreshOperator(c)
+			}
+			if r.Success || !strings.Contains(r.Message, "Another Subscription (rhoai-gitops)") {
+				t.Fatalf("result = %+v", r)
+			}
+			for _, w := range f.writes() {
+				if !strings.Contains(w, "-verify-") {
+					t.Fatalf("changed the cluster: %v", f.writes())
+				}
+			}
+		})
+	}
+}
+
+// R5-F10: a confirmed downgrade is refused before anything changes when the
+// target bundle does not list a version the live CRDs store (OLM would fail
+// its CRD step after the current operator is gone).
+func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	const dsc = "datascienceclusters.datasciencecluster.opendatahub.io"
+	liveCRDs := `{"items":[{"metadata":{"name":"` + dsc + `"},"status":{"storedVersions":["v2"]}}]}`
+	for _, tc := range []struct {
+		name, owned string
+		wantSuccess bool
+		wantCode    string
+		wantMsg     string
+	}{
+		{"target lacks the stored version", `[{"name":"` + dsc + `","version":"v1"}]`, false, "validation", "stores objects as v2"},
+		{"target serves it", `[{"name":"` + dsc + `","version":"v1"},{"name":"` + dsc + `","version":"v2"}]`, true, "", "is installed"},
+		{"catalog does not say", ``, true, "", "is installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"source": CatalogName})
+			desc := `"version":"3.5.1"`
+			if tc.owned != "" {
+				desc += `,"customresourcedefinitions":{"owned":` + tc.owned + `}`
+			}
+			f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.5.1","currentCSVDesc":{` + desc + `}}]`
+			f.crds = liveCRDs
+			f.onSubscribe = olmInstalls("rhods-operator.3.5.1")
+			r, err := ReinstallWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{AllowDowngrade: true})
+			if err != nil || r.Success != tc.wantSuccess || r.ErrorCode != tc.wantCode || !strings.Contains(r.Message, tc.wantMsg) {
+				t.Fatalf("result = %+v, %v", r, err)
+			}
+			if !tc.wantSuccess && len(f.writes()) != 0 {
+				t.Fatalf("changed the cluster: %v", f.writes())
+			}
+			if tc.owned == "" && !strings.Contains(strings.Join(r.Logs, "\n"), "stored versions of the live CRDs were not checked") {
+				t.Fatalf("missing warning: %v", r.Logs)
+			}
+		})
 	}
 }

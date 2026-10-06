@@ -235,14 +235,29 @@ func describeCondition(c olmCondition) string {
 	}
 }
 
+// installDeadlineReserve is kept free before the operation's own deadline so
+// the install wait ends with its own, explicit outcome instead of a
+// cancelled request.
+const installDeadlineReserve = 10 * time.Second
+
 // waitForOperatorInstall follows the Subscription until OLM has installed its
 // CSV (phase Succeeded and recorded as installedCSV), reports a failure, or
-// OperatorInstallTimeout passes. Every wait is bounded. Progress is emitted
-// under step. An InstallPlan that needs approval because the Subscription
-// uses Manual approval is approved when it installs only RHOAI CSVs: the
-// user asked for exactly this install.
-func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery) installOutcome {
+// OperatorInstallTimeout passes (or the operation's deadline comes near,
+// whichever is first). Every wait is bounded. Progress is emitted under
+// step.
+//
+// With Manual approval an InstallPlan is approved only when it installs
+// exactly expectedCSV, the version the user confirmed (Refresh: the
+// installed CSV; Update and Reinstall: the target's channel head).
+// Anything else OLM proposes is reported and left for an administrator:
+// Manual approval is how admins hold back upgrades, and OLM cannot undo an
+// approved upgrade (RHOAI operator notes §1.3, §1.4).
+func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
 	deadline := time.Now().Add(OperatorInstallTimeout)
+	budgetLimited := false
+	if opDeadline, ok := c.ctx.Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
+		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
+	}
 	var resolutionSince, pullSince, csvFailedSince time.Time
 	var ipName, csvName, lastState, lastProgress string
 	var sawCSVFailed, catalogsNoted bool
@@ -284,6 +299,9 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 		case <-time.After(InstallPlanPollInterval):
 		}
 		if time.Now().After(deadline) {
+			if budgetLimited {
+				return stopped("install_timeout", "OLM did not finish installing the operator within the operation's time budget")
+			}
 			return stopped("install_timeout", fmt.Sprintf("OLM did not finish installing the operator within %s", OperatorInstallTimeout))
 		}
 
@@ -367,7 +385,7 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 			ipName = name
 		}
 		if ipName != "" {
-			if outcome, done := checkInstallPlan(c, ipName, approved, logs, progress); done {
+			if outcome, done := checkInstallPlan(c, ipName, expectedCSV, approved, logs, progress); done {
 				outcome.csv = csvName
 				*logs = append(*logs, outcome.message)
 				return outcome
@@ -452,8 +470,8 @@ func parenthesize(s string) string {
 
 // checkInstallPlan inspects the Subscription's InstallPlan. It returns done
 // with a failed outcome when the plan failed or needs an approval this tool
-// must not give.
-func checkInstallPlan(c *Client, name string, approved map[string]bool, logs *[]string, progress func(string)) (installOutcome, bool) {
+// must not give: it approves only a plan that installs exactly expectedCSV.
+func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]bool, logs *[]string, progress func(string)) (installOutcome, bool) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name)
 	body, _, err := c.get(path)
 	if err != nil {
@@ -489,13 +507,20 @@ func checkInstallPlan(c *Client, name string, approved map[string]bool, logs *[]
 		if ip.Spec.Approved || approved[name] {
 			return installOutcome{}, false
 		}
-		for _, csv := range ip.Spec.CSVNames {
-			if !strings.HasPrefix(csv, SubName+".") {
-				return installOutcome{
-					message:   fmt.Sprintf("InstallPlan %s needs manual approval and also installs %s, so it was not approved automatically. Approve it in the console (Operators > Installed Operators) if that is intended.", name, strings.Join(ip.Spec.CSVNames, ", ")),
-					errorCode: "approval_required",
-				}, true
+		proposed := strings.Join(ip.Spec.CSVNames, ", ")
+		if proposed == "" {
+			proposed = "no CSV"
+		}
+		if expectedCSV == "" || len(ip.Spec.CSVNames) != 1 || ip.Spec.CSVNames[0] != expectedCSV {
+			want := "the version to install is unknown"
+			if expectedCSV != "" {
+				want = "the confirmed target is " + expectedCSV
 			}
+			return installOutcome{
+				message: fmt.Sprintf("InstallPlan %s needs manual approval and OLM proposes to install %s, but %s, so the tool did not approve it. "+
+					"The Subscription uses Manual approval, which is how upgrades are held back; approve the plan in the console (Operators > Installed Operators) only if that version is intended.", name, proposed, want),
+				errorCode: "approval_required",
+			}, true
 		}
 		if _, _, err := c.patch(path, []byte(`{"spec":{"approved":true}}`)); err != nil {
 			return installOutcome{message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), errorCode: errorCodeOr(err, "approval_required")}, true
@@ -660,6 +685,9 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 	}
 	if recovery != nil {
 		recovery.restore(c, r, t.send)
+		if r.Success {
+			recordLiveSubscription(c)
+		}
 	}
 	if record != nil {
 		record(r.Success)
@@ -695,4 +723,62 @@ func adminAckNote(c *Client) string {
 		}
 	}
 	return ""
+}
+
+// foreignSubscriptionRefusal reports another Subscription for the
+// rhods-operator package in the operator namespace (for example one created
+// by GitOps under a different name). The tool manages only the Subscription
+// named rhods-operator; creating it next to another one for the same
+// package makes OLM fail resolution, and the other one would reinstall the
+// operator behind the tool's back. The ServiceAccount cannot list
+// Subscriptions, so they are found through the InstallPlans OLM creates for
+// them: each carries an ownerReference to its Subscription (live:
+// install-wpkpm is owned by Subscription/rhods-operator). It returns "" when
+// there is none; a failed lookup refuses, since nothing was changed yet.
+func foreignSubscriptionRefusal(c *Client) string {
+	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
+	if IsK8sError(err, 404) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("Cannot check for other Subscriptions of %s in %s (list InstallPlans: %v). Nothing was changed.", SubName, SubNS, err)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name            string `json:"name"`
+				OwnerReferences []struct {
+					Kind string `json:"kind"`
+					Name string `json:"name"`
+				} `json:"ownerReferences"`
+			} `json:"metadata"`
+			Spec struct {
+				CSVNames []string `json:"clusterServiceVersionNames"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)
+	}
+	var found []string
+	for _, ip := range list.Items {
+		rhoai := false
+		for _, csv := range ip.Spec.CSVNames {
+			rhoai = rhoai || strings.HasPrefix(csv, SubName+".")
+		}
+		if !rhoai {
+			continue
+		}
+		for _, o := range ip.Metadata.OwnerReferences {
+			if o.Kind == "Subscription" && o.Name != SubName && !containsString(found, o.Name) {
+				found = append(found, o.Name)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Another Subscription (%s) in %s installs the %s package. The tool manages only the Subscription named %s; creating it next to another one makes OLM fail to resolve, and the other one would reinstall the operator. "+
+		"Nothing was changed. If the operator is managed elsewhere (for example by GitOps), make changes there, or delete that Subscription first.",
+		strings.Join(found, ", "), SubNS, SubName, SubName)
 }

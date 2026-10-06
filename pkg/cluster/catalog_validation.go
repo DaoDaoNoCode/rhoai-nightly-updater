@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -73,6 +74,31 @@ var (
 type catalogTarget struct {
 	Channel string
 	HeadCSV string
+	// OwnedCRDs maps each CRD the head CSV owns to the versions it lists
+	// (PackageManifest currentCSVDesc.customresourcedefinitions.owned);
+	// nil when the catalog does not say.
+	OwnedCRDs map[string][]string
+}
+
+// ownedCRDVersions reads currentCSVDesc.customresourcedefinitions.owned of
+// a PackageManifest channel entry.
+func ownedCRDVersions(entry map[string]interface{}) map[string][]string {
+	desc, _ := entry["currentCSVDesc"].(map[string]interface{})
+	crds, _ := desc["customresourcedefinitions"].(map[string]interface{})
+	owned, _ := crds["owned"].([]interface{})
+	if len(owned) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, o := range owned {
+		m, _ := o.(map[string]interface{})
+		name, _ := m["name"].(string)
+		version, _ := m["version"].(string)
+		if name != "" && version != "" && !containsString(out[name], version) {
+			out[name] = append(out[name], version)
+		}
+	}
+	return out
 }
 
 func verificationCatalogPrefix() string {
@@ -136,14 +162,15 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 			} else if override != "" {
 				if entry := findChannel(channels, override); entry != nil {
 					head, _ := entry["currentCSV"].(string)
-					return catalogTarget{Channel: override, HeadCSV: head}, nil
+					return catalogTarget{Channel: override, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry)}, nil
 				}
 				lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(channelNames(channels), ", "))
 			} else if ch, err := detectBestChannel(channels, image); err != nil {
 				lastProblem = err.Error()
 			} else if ch != "" {
-				head, _ := findChannel(channels, ch)["currentCSV"].(string)
-				return catalogTarget{Channel: ch, HeadCSV: head}, nil
+				entry := findChannel(channels, ch)
+				head, _ := entry["currentCSV"].(string)
+				return catalogTarget{Channel: ch, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry)}, nil
 			} else {
 				lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 			}
@@ -308,4 +335,38 @@ func channelNames(channels []interface{}) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// storedVersionConflicts compares the CRD versions the target bundle lists
+// with the live CRDs' status.storedVersions. OLM fails an InstallPlan whose
+// CRD drops a version still listed in storedVersions ("risk of data loss",
+// operator-lifecycle-manager lib/crd/storage.go; RHOAI operator notes §1.4),
+// which a downgrade can hit (live: DSC and DSCI store v2, which 2.x bundles
+// lack). Only the operator's own CRDs (OLM package label) are read; CRDs
+// the target does not list are skipped.
+func storedVersionConflicts(c *Client, owned map[string][]string) ([]string, error) {
+	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {rhoaiCRDSelectors[0]}})
+	if err != nil {
+		return nil, fmt.Errorf("list the operator's CRDs: %w", err)
+	}
+	var list struct {
+		Items []conversionCRD `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("parse CRDs: %w", err)
+	}
+	var out []string
+	for _, crd := range list.Items {
+		versions, listed := owned[crd.Metadata.Name]
+		if !listed {
+			continue
+		}
+		for _, stored := range crd.Status.StoredVersions {
+			if !containsString(versions, stored) {
+				out = append(out, fmt.Sprintf("CRD %s stores objects as %s, which the target lists only as %s", crd.Metadata.Name, stored, strings.Join(versions, ", ")))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }

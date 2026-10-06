@@ -20,11 +20,31 @@ import (
 var rolloutNamespaces = []string{"redhat-ods-operator", "redhat-ods-applications"}
 
 // Assist-rollout unblocks exactly one situation: a RollingUpdate Deployment
-// whose new pods are Unschedulable while its old pods still hold the
-// resources, and whose strategy allows zero unavailable pods (the default
-// 25% rounds down to 0 for fewer than 4 replicas). Setting maxUnavailable=1
-// lets the Deployment controller stop one old pod; the scheduler then retries
-// the Unschedulable pod because a pod deletion frees node resources.
+// whose new pods are Unschedulable only because the nodes lack the
+// resources its old pods still hold, and whose strategy allows zero
+// unavailable pods (the default 25% rounds down to 0 for fewer than 4
+// replicas). Setting maxUnavailable=1 lets the Deployment controller stop
+// one old pod; the scheduler then retries the Unschedulable pod because a
+// pod deletion frees node resources.
+//
+// It is refused whenever stopping a pod may not help or may leave nothing
+// serving:
+//   - Every new pod's PodScheduled message must cite only node resources a
+//     stopped pod gives back: "Insufficient cpu", "Insufficient memory" or
+//     "Too many pods" (the NodeResourcesFit filter reasons,
+//     kubernetes pkg/scheduler/framework/plugins/noderesources/fit.go). Any
+//     other reason (an untolerated taint, a node selector or affinity, a
+//     volume zone conflict, a PreFilter message) means the replacement may
+//     stay Pending after the old pod is gone. The message format is
+//     "0/<N> nodes are available: <count> <reason>, ... ." followed by an
+//     optional PostFilter (preemption) part (FitError.Error in
+//     pkg/scheduler/framework/types.go).
+//   - The Deployment must have at least 2 replicas and 2 ready pods. With
+//     maxUnavailable=1 the controller keeps replicas-1 pods available, so a
+//     1-replica Deployment could drop to 0 ready pods. For a module operator
+//     that backs a failurePolicy Fail webhook (odh-model-controller, kserve,
+//     the notebook controllers) that rejects every matching request (RHOAI
+//     operator notes D4).
 //
 // Who undoes the patch: OLM does not (it only compares the
 // olm.deployment-spec-hash label with the CSV's deployment spec,
@@ -279,6 +299,9 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	if a.OldReadyPods == 0 {
 		return notApplicable(a, "no old pods are holding resources, so stopping one would not help"), nil
 	}
+	if ready := a.OldReadyPods + newest.ready; a.Replicas < 2 || ready < 2 {
+		return notApplicable(a, fmt.Sprintf("only %d pod(s) are ready (%d replica(s)), so letting Kubernetes stop one could leave the Deployment with no ready pod while its replacement is still Pending (a module operator's failurePolicy Fail webhooks would then reject requests)", ready, a.Replicas)), nil
+	}
 
 	podSelector := ""
 	if newest.hash != "" {
@@ -300,6 +323,9 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 		}
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == "PodScheduled" && cond.Status == "False" && cond.Reason == "Unschedulable" {
+				if other := nonResourceSchedulingReasons(cond.Message); len(other) > 0 {
+					return notApplicable(a, fmt.Sprintf("pod %s is Unschedulable for a reason that stopping an old pod does not fix (%s)", p.Metadata.Name, strings.Join(other, "; "))), nil
+				}
 				a.PendingPods = append(a.PendingPods, p.Metadata.Name)
 			}
 		}
@@ -312,13 +338,50 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	return a, nil
 }
 
+// schedulerFitPrefix matches the start of the scheduler's FitError message.
+var schedulerFitPrefix = regexp.MustCompile(`^0/\d+ nodes are available: `)
+
+// resourceFitReason matches one filter-histogram entry caused by node
+// resources that stopping a pod gives back.
+var resourceFitReason = regexp.MustCompile(`^\d+ (Insufficient cpu|Insufficient memory|Too many pods)$`)
+
+// nonResourceSchedulingReasons returns the parts of a PodScheduled message
+// that are not resource shortages a stopped pod resolves; nil means every
+// node was rejected only for cpu, memory or pod count. A message the tool
+// cannot parse is returned whole, so it never counts as resources only.
+func nonResourceSchedulingReasons(msg string) []string {
+	msg = strings.TrimSpace(msg)
+	loc := schedulerFitPrefix.FindStringIndex(msg)
+	if loc == nil {
+		if msg == "" {
+			msg = "the scheduler gave no reason"
+		}
+		return []string{msg}
+	}
+	rest := msg[loc[1]:]
+	// The filter histogram ends with ". " before the PostFilter
+	// (preemption) part, or with the final ".".
+	if i := strings.Index(rest, ". "); i >= 0 {
+		rest = rest[:i]
+	} else {
+		rest = strings.TrimSuffix(rest, ".")
+	}
+	var other []string
+	for _, entry := range strings.Split(rest, ", ") {
+		if !resourceFitReason.MatchString(strings.TrimSpace(entry)) {
+			other = append(other, strings.TrimSpace(entry))
+		}
+	}
+	return other
+}
+
 // assistConfirmMessage is the confirmation text for one applicable assessment.
 func assistConfirmMessage(a rolloutAssessment) string {
 	return fmt.Sprintf("This patches Deployment %s: spec.strategy.rollingUpdate.maxUnavailable %s -> 1 (%d replicas). "+
-		"Kubernetes then stops one of the %d old pod(s) so that the Unschedulable pod(s) %s can use its resources. "+
-		"One replica is unavailable during the switch. No pods are deleted by the tool.\n\n"+
+		"Kubernetes then stops one of the %d old pod(s) so that the pod(s) %s, which are Unschedulable only for lack of cpu, memory or pod slots, can use its resources. "+
+		"One replica is unavailable during the switch; at least %d stay available. No pods are deleted by the tool.\n\n"+
 		"The original value is saved in the annotation %s. Nothing resets it automatically; once the rollout has finished, Diagnostics offers to restore it.",
-		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "), assistRolloutAnnotation)
+		a.target(), a.MaxUnavailable, a.Replicas, a.OldReadyPods, strings.Join(a.PendingPods, ", "), a.Replicas-1, assistRolloutAnnotation)
 }
 
 // attachRolloutAssist offers the assist-rollout fix on an Unschedulable

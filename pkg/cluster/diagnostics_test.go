@@ -190,6 +190,7 @@ func buildAllHealthyResponses() map[string]mockResponse {
 		paths["nodes"]:         {body: buildNodeList(3)},
 		paths["opPods"]:        {body: buildHealthyPodList()},
 		paths["appPods"]:       {body: buildEmptyList()},
+		"/api/v1/namespaces":   {body: buildEmptyList()},
 	}
 }
 

@@ -32,6 +32,10 @@ type fakeOLM struct {
 	dashboardOp  string // dashboard-operator Deployment JSON, "" = absent
 	platform     string // Platform "default" JSON, "" = absent
 	failDelete   map[string]int
+	stuckCSVs    map[string]bool // CSVs whose DELETE only sets deletionTimestamp (a finalizer that never finishes)
+	recordedSub  string          // data.operator-subscription of the snapshot ConfigMap
+	crds         string          // CRD list JSON, "" = 404
+	csvSeq       int
 	verifyState  string // state of verification catalogs, "" = READY
 	mainChannels *string
 	rejectDryRun bool
@@ -57,6 +61,7 @@ func newFakeOLM(t *testing.T) *fakeOLM {
 		channels:     `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`,
 		catalogPods:  `{"items":[]}`,
 		failDelete:   map[string]int{},
+		stuckCSVs:    map[string]bool{},
 	}
 }
 
@@ -78,8 +83,9 @@ func (f *fakeOLM) installed(csv string, spec map[string]interface{}) *fakeOLM {
 }
 
 func (f *fakeOLM) addCSV(name, phase string) {
+	f.csvSeq++
 	f.csvs[name] = map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name},
+		"metadata": map[string]interface{}{"name": name, "uid": fmt.Sprintf("uid-%s-%d", name, f.csvSeq)},
 		"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, SubName+".")},
 		"status":   map[string]interface{}{"phase": phase},
 	}
@@ -169,6 +175,9 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !ok:
 			notFound(w)
+		case r.Method == http.MethodDelete && f.stuckCSVs[last]:
+			csv["metadata"].(map[string]interface{})["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+			_, _ = io.WriteString(w, `{}`)
 		case r.Method == http.MethodDelete:
 			delete(f.csvs, last)
 			_, _ = io.WriteString(w, `{}`)
@@ -207,8 +216,31 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = io.WriteString(w, f.platform)
+	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == subscriptionSnapshotManager:
+		data, _ := body["data"].(map[string]interface{})
+		f.recordedSub, _ = data[subscriptionSnapshotKey].(string)
+		_, _ = io.WriteString(w, `{}`)
+	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodGet:
+		writeJSON(w, map[string]interface{}{"data": map[string]interface{}{subscriptionSnapshotKey: f.recordedSub}})
 	case strings.Contains(p, "/configmaps/") && r.Method != http.MethodGet:
 		_, _ = io.WriteString(w, `{}`)
+	case p == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":
+		if f.crds == "" {
+			notFound(w)
+			return
+		}
+		_, _ = io.WriteString(w, f.crds)
+	case strings.HasSuffix(p, "/installplans"):
+		var items []interface{}
+		for name, ip := range f.installPlans {
+			meta, _ := ip["metadata"].(map[string]interface{})
+			if meta == nil {
+				meta = map[string]interface{}{}
+			}
+			meta["name"] = name
+			items = append(items, map[string]interface{}{"metadata": meta, "spec": ip["spec"]})
+		}
+		writeJSON(w, map[string]interface{}{"items": items})
 	default:
 		notFound(w)
 	}

@@ -123,7 +123,87 @@ func checkDSCCompatibilityFor(c *Client, dsc map[string]interface{}, op *install
 	}
 	sort.Strings(result.MissingComponents)
 	sort.Strings(result.ExtraComponents)
+
+	// The repair preview: which components a repair would remove, and which
+	// of those must not be removed now. Only evaluated when a repair would
+	// remove something, so a DSC that matches its defaults costs nothing.
+	result.ResetRemovals = schemaComponents(schema, removedComponents(currentSpec, defaultSpec))
+	candidates := append([]string{}, result.ResetRemovals...)
+	for _, name := range schemaComponents(schema, removedComponents(currentSpec, withoutComponents(currentSpec, result.ExtraComponents))) {
+		if !containsString(candidates, name) {
+			candidates = append(candidates, name)
+		}
+	}
+	sort.Strings(candidates)
+	rc := newRemovalChecker(c)
+	for _, name := range candidates {
+		if reasons := rc.blockers(name); len(reasons) > 0 {
+			result.RemovalBlocks = append(result.RemovalBlocks, types.DSCRemovalBlock{Component: name, Reasons: reasons})
+		}
+	}
 	return result
+}
+
+// componentState returns spec.components[name].managementState.
+func componentState(components map[string]interface{}, name string) (string, bool) {
+	v, ok := components[name]
+	if !ok {
+		return "", false
+	}
+	m, _ := v.(map[string]interface{})
+	state, _ := m["managementState"].(string)
+	return state, true
+}
+
+// removedComponents returns the components that are not Removed in old and
+// are Removed or absent in next: the ones a repair from old to next would
+// remove. A component without a state counts as enabled.
+func removedComponents(oldSpec, nextSpec map[string]interface{}) []string {
+	oldComponents, _ := oldSpec["components"].(map[string]interface{})
+	nextComponents, _ := nextSpec["components"].(map[string]interface{})
+	var out []string
+	for name := range oldComponents {
+		if state, _ := componentState(oldComponents, name); state == "Removed" {
+			continue
+		}
+		if state, present := componentState(nextComponents, name); !present || state == "Removed" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// schemaComponents keeps the names the installed DSC schema defines under
+// spec.components: a key the schema does not define was never seen by the
+// operator, so dropping it removes nothing. Without a schema every name is
+// kept.
+func schemaComponents(specSchema map[string]interface{}, names []string) []string {
+	properties, _ := specSchema["properties"].(map[string]interface{})
+	components, _ := properties["components"].(map[string]interface{})
+	known, _ := components["properties"].(map[string]interface{})
+	if known == nil {
+		return names
+	}
+	var out []string
+	for _, n := range names {
+		if _, ok := known[n]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// withoutComponents returns spec with the named components dropped.
+func withoutComponents(spec map[string]interface{}, names []string) map[string]interface{} {
+	components, _ := spec["components"].(map[string]interface{})
+	kept := make(map[string]interface{}, len(components))
+	for k, v := range components {
+		if !containsString(names, k) {
+			kept[k] = v
+		}
+	}
+	return map[string]interface{}{"components": kept}
 }
 
 // Merge patches need explicit nulls to delete keys that disappeared from a new spec.
@@ -236,6 +316,30 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string, expectedEx
 	resourceVersion, _ := meta["resourceVersion"].(string)
 	if resourceVersion == "" {
 		return nil, fmt.Errorf("DSC has no resourceVersion; refusing an unprotected repair")
+	}
+	// Components the repair switches to Removed (or drops) get the same
+	// preconditions as disable-component; with any of them unmet the whole
+	// repair is refused: a partial reset would be neither the defaults nor
+	// the current DSC.
+	if removals := schemaComponents(schema, removedComponents(oldSpec, nextSpec)); len(removals) > 0 {
+		rc := newRemovalChecker(c)
+		var blocked, safe, reasons []string
+		for _, name := range removals {
+			if why := rc.blockers(name); len(why) > 0 {
+				blocked = append(blocked, name)
+				reasons = append(reasons, fmt.Sprintf("%s: %s", name, strings.Join(why, "; ")))
+			} else {
+				safe = append(safe, name)
+			}
+		}
+		if len(blocked) > 0 {
+			msg := fmt.Sprintf("Not repairing the DSC: it would set %s to Removed, which could hang in deletion now. Nothing was changed.", strings.Join(blocked, ", "))
+			if len(safe) > 0 {
+				msg += fmt.Sprintf(" (%s could be removed safely.)", strings.Join(safe, ", "))
+			}
+			return &types.OperationResponse{Success: false, Message: msg + " " + strings.Join(reasons, " "), Logs: reasons, ErrorCode: "prerequisites"}, nil
+		}
+		detail += ". Components set to Removed: " + strings.Join(removals, ", ")
 	}
 	patch, err := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{"resourceVersion": resourceVersion},

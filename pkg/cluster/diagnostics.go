@@ -251,9 +251,14 @@ func checkRHOAIPods(c *Client) checkOutput {
 	const name = "RHOAI pods"
 	namespaces := append([]string{}, rhoaiPodNamespaces...)
 	// Platform module namespaces (for example opendatahub-ogx-system).
+	// A failed lookup is reported: the module namespaces could hold
+	// unhealthy pods, so the check cannot pass without them.
+	var nsErr error
 	body, _, err := c.do(http.MethodGet, clusterPath("v1", "namespaces", ""), "", nil,
 		url.Values{"labelSelector": {"platform.opendatahub.io/part-of"}})
-	if err == nil {
+	if err != nil {
+		nsErr = err
+	} else {
 		var list struct {
 			Items []struct {
 				Metadata struct {
@@ -261,11 +266,12 @@ func checkRHOAIPods(c *Client) checkOutput {
 				} `json:"metadata"`
 			} `json:"items"`
 		}
-		if json.Unmarshal(body, &list) == nil {
-			for _, item := range list.Items {
-				if item.Metadata.Name != SubNS && !containsString(namespaces, item.Metadata.Name) {
-					namespaces = append(namespaces, item.Metadata.Name)
-				}
+		if err := json.Unmarshal(body, &list); err != nil {
+			nsErr = fmt.Errorf("parse namespace list: %w", err)
+		}
+		for _, item := range list.Items {
+			if item.Metadata.Name != SubNS && !containsString(namespaces, item.Metadata.Name) {
+				namespaces = append(namespaces, item.Metadata.Name)
 			}
 		}
 	}
@@ -277,6 +283,12 @@ func checkRHOAIPods(c *Client) checkOutput {
 			out.check.Status = "warn"
 		}
 		out.check.Detail += "; could not list pods in " + strings.Join(errs, "; ")
+	}
+	if nsErr != nil {
+		if out.check.Status == "pass" {
+			out.check.Status = "warn"
+		}
+		out.check.Detail += fmt.Sprintf("; could not verify the platform module namespaces (labelled platform.opendatahub.io/part-of): %v", nsErr)
 	}
 	return out
 }

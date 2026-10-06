@@ -32,7 +32,14 @@ func TestDataScienceClusterCheck(t *testing.T) {
 		{"dsci error", `{"items":[{"metadata":{"name":"default-dsc"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, 0,
 			`{"items":[{"metadata":{"name":"default-dsci"},"status":{"phase":"Error","conditions":[{"type":"Degraded","status":"True","reason":"ReconcileFailed","message":"boom"}]}}]}`,
 			"fail", []string{"dsci-error"}, "boom", ""},
-		{"read forbidden", "", http.StatusForbidden, "", "warn", nil, "Could not read", ""},
+		{"read forbidden", "", http.StatusForbidden, "", "warn", nil, "could not verify the DataScienceCluster", ""},
+		// R1-7: the DSCI is checked even without a DSC, and an unreadable
+		// DSCI never passes.
+		{"no DSC, DSCI error", `{"items":[]}`, 0,
+			`{"items":[{"metadata":{"name":"default-dsci"},"status":{"phase":"Error","conditions":[{"type":"Degraded","status":"True","reason":"ReconcileFailed","message":"boom"}]}}]}`,
+			"fail", []string{"dsc-missing", "dsci-error"}, "boom", ""},
+		{"ready DSC, DSCI forbidden", `{"items":[{"metadata":{"name":"default-dsc"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, 0,
+			"forbidden", "warn", nil, "could not verify the DSCInitialization", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -44,7 +51,11 @@ func TestDataScienceClusterCheck(t *testing.T) {
 			default:
 				f.json("GET", dscV2List, http.StatusOK, tt.dsc)
 			}
-			if tt.dsci != "" {
+			switch tt.dsci {
+			case "":
+			case "forbidden":
+				f.status("GET", dsciV2List, http.StatusForbidden, "Forbidden")
+			default:
 				f.json("GET", dsciV2List, http.StatusOK, tt.dsci)
 			}
 			out := checkDataScienceCluster(c)
@@ -68,5 +79,19 @@ func TestDataScienceClusterCheck(t *testing.T) {
 				t.Fatalf("unexpected %q in %s", tt.wantNotIn, all)
 			}
 		})
+	}
+}
+
+// R1-6: when the platform module namespaces cannot be listed, the RHOAI
+// pods check cannot pass: their pods were not scanned.
+func TestRHOAIPodsCheck_NamespaceDiscoveryErrorWarns(t *testing.T) {
+	f, c := newFakeAPI(t)
+	for _, ns := range rhoaiPodNamespaces {
+		f.json("GET", "/api/v1/namespaces/"+ns+"/pods", http.StatusOK, `{"items":[]}`)
+	}
+	f.status("GET", "/api/v1/namespaces", http.StatusForbidden, "Forbidden")
+	out := checkRHOAIPods(c)
+	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "could not verify the platform module namespaces") {
+		t.Fatalf("check = %+v", out.check)
 	}
 }

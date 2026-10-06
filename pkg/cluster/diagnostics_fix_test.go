@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -45,6 +46,9 @@ func setupWebhookFixtures(f *fakeAPI) {
 	}})
 	f.json("GET", svcPath("redhat-ods-applications", "odh-model-controller-webhook-service"), http.StatusOK, `{"kind":"Service"}`)
 	// rhods-operator-service and gone-service: unknown GET -> 404.
+	for _, ns := range []string{"redhat-ods-applications", "redhat-ods-operator"} {
+		f.json("GET", fmt.Sprintf(epsPathFmt, ns), http.StatusOK, `{"items":[{"endpoints":[{"conditions":{"ready":true}}]}]}`)
+	}
 }
 
 func TestDeleteStaleWebhooks_DeletesOnlyWebhooksWhoseServiceIsMissing(t *testing.T) {

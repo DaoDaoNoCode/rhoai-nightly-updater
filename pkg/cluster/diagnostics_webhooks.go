@@ -45,9 +45,7 @@ func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	dead, unknown := deadConversions(candidates, newServiceHealthCache(c, staleServiceGrace))
 	var errs []string
 	for _, u := range unknown {
-		if !u.Health.exists {
-			errs = append(errs, fmt.Sprintf("conversion Service of CRD %s: %v", u.CRD, u.Health.err))
-		}
+		errs = append(errs, fmt.Sprintf("conversion Service of CRD %s: %v", u.CRD, u.Health.err))
 	}
 	if len(dead) == 0 {
 		return nil, errs, nil
@@ -223,7 +221,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		details = append(details, "webhook configurations not checked while an operator install is in progress ("+scan.Upgrading+")")
 	}
 	if errs := append(append([]string{}, scan.Errors...), convErrs...); len(errs) > 0 {
-		details = append(details, "could not check: "+strings.Join(errs, "; "))
+		details = append(details, "could not verify: "+strings.Join(errs, "; "))
 		if out.check.Status == "pass" {
 			out.check.Status = "warn"
 		}
