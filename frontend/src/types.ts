@@ -382,6 +382,15 @@ export interface StatusResponse {
 
 export interface DSCCompatibility {
   defaultsSource?: string;
+  /** Enabled components "reset-defaults" would set to Removed or drop (FXA). */
+  resetRemovals?: string[] | null;
+  /** Components a repair would remove that must not be removed now, with why (FXA). */
+  removalBlocks?: DSCRemovalBlock[] | null;
+}
+
+export interface DSCRemovalBlock {
+  component: string;
+  reasons: string[];
 }
 
 export interface ComponentsResponse {

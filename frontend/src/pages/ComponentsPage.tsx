@@ -31,6 +31,7 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import type { OperationResponse } from "../types";
 import { fixProblem, repairDSC, getDSCPreview, toApiError } from "../services/api";
+import { repairPreview, type DSCRepairMode } from "../components/dscRepair";
 import { formatRelativeTime } from "../utils";
 import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
@@ -77,7 +78,7 @@ export const ComponentsPage: React.FC = () => {
   const [fixLoading, setFixLoading] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<Record<string, OperationResponse>>({});
   const [attentionExpanded, setAttentionExpanded] = useState(true);
-  const [repairMode, setRepairMode] = useState<"remove-invalid" | "remove-extra-components" | "reset-defaults" | null>(null);
+  const [repairMode, setRepairMode] = useState<DSCRepairMode | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
   const [repairResult, setRepairResult] = useState<OperationResponse | null>(null);
   const [defaultsPreview, setDefaultsPreview] = useState("");
@@ -95,8 +96,13 @@ export const ComponentsPage: React.FC = () => {
     return () => { active = false; };
   }, [repairMode]);
 
+  const preview = repairMode ? repairPreview(data?.dscCompatibility, repairMode) : null;
+  const repairBlocked = (preview?.blocked.length ?? 0) > 0;
+  const resetBlocked = repairPreview(data?.dscCompatibility, "reset-defaults").blocked;
+  const extraBlocked = repairPreview(data?.dscCompatibility, "remove-extra-components").blocked;
+
   const handleRepairDSC = async () => {
-    if (!repairMode || !data) return;
+    if (!repairMode || !data || repairBlocked) return;
     setRepairLoading(true);
     setRepairResult(null);
     let result: OperationResponse;
@@ -222,6 +228,13 @@ export const ComponentsPage: React.FC = () => {
                           {(data.dscCompatibility.extraComponents?.length ?? 0) > 0 && <FlexItem><TooltipButton variant="secondary" onClick={() => setRepairMode("remove-extra-components")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError} disabledReason={mutateReason}>Remove extra components</TooltipButton></FlexItem>}
                           <FlexItem><TooltipButton variant="secondary" onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!data.dscCompatibility.defaultsError || !!data.dscCompatibility.validationError} disabledReason={mutateReason}>Reset to version defaults</TooltipButton></FlexItem>
                         </Flex></StackItem>
+                        {(resetBlocked.length > 0 || extraBlocked.length > 0) && <StackItem>
+                          <Content component="p">
+                            {resetBlocked.length > 0 && <>Reset to version defaults is not possible now: it would remove {resetBlocked.map((b) => b.component).join(", ")}, which must not be removed yet. </>}
+                            {extraBlocked.length > 0 && <>Remove extra components is not possible now: {extraBlocked.map((b) => b.component).join(", ")} must not be removed yet. </>}
+                            Open the action to see why.
+                          </Content>
+                        </StackItem>}
                       </Stack>
                     </Alert>
                   </StackItem>
@@ -413,13 +426,37 @@ export const ComponentsPage: React.FC = () => {
               : `Remove only invalid keys from ${data?.dscName}. Valid settings and management states will be preserved.`}</Content></StackItem>
             {repairMode === "remove-invalid" && <StackItem><List>{data?.dscCompatibility?.invalidFields.map(field => <ListItem key={field}><code>{field}</code></ListItem>)}</List></StackItem>}
             {repairMode === "remove-extra-components" && <StackItem><List>{data?.dscCompatibility?.extraComponents?.map(name => <ListItem key={name}><code>{name}</code></ListItem>)}</List></StackItem>}
-            {repairMode === "reset-defaults" && <StackItem>{previewError ? <Alert component="p" variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
+            {preview && repairBlocked && <StackItem>
+              <Alert component="div" variant="danger" isInline title="This repair is not possible now">
+                <Content component="p">
+                  It would remove {preview.removals.join(", ")}. The components below must not be removed now, and the
+                  repair is refused as a whole while any of them is blocked. Resolve the reasons, refresh this page, and try again.
+                </Content>
+                <List>{preview.blocked.map((b) => (
+                  <ListItem key={b.component}><code>{b.component}</code>: {b.reasons.join(" ")}</ListItem>
+                ))}</List>
+              </Alert>
+            </StackItem>}
+            {preview && !repairBlocked && repairMode === "reset-defaults" && <StackItem>
+              {preview.removals.length > 0
+                ? <Alert component="div" variant="warning" isInline title={`${preview.removals.length} enabled ${preview.removals.length === 1 ? "component" : "components"} will be set to Removed`}>
+                    <List>{preview.removals.map((name) => <ListItem key={name}><code>{name}</code></ListItem>)}</List>
+                  </Alert>
+                : <Content component="p">No enabled component is set to Removed.</Content>}
+            </StackItem>}
+            {repairMode === "reset-defaults" && !repairBlocked && <StackItem>{previewError ? <Alert component="p" variant="danger" title="Could not load defaults" isInline>{previewError}</Alert>
               : defaultsPreview ? <CodeBlock><CodeBlockCode>{defaultsPreview}</CodeBlockCode></CodeBlock> : <Spinner aria-label="Loading DSC defaults" />}</StackItem>}
           </Stack>
         </ModalBody>
         <ModalFooter>
-          <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={handleRepairDSC} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && !defaultsPreview)}>Confirm</Button>
-          <Button variant="link" onClick={() => setRepairMode(null)} isDisabled={repairLoading}>Cancel</Button>
+          {repairBlocked ? (
+            <Button variant="primary" onClick={() => setRepairMode(null)}>Close</Button>
+          ) : (
+            <>
+              <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={handleRepairDSC} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && !defaultsPreview)}>Confirm</Button>
+              <Button variant="link" onClick={() => setRepairMode(null)} isDisabled={repairLoading}>Cancel</Button>
+            </>
+          )}
         </ModalFooter>
       </Modal>
 
