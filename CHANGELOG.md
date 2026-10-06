@@ -16,7 +16,7 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
-## [2.0.0] - unreleased
+## [2.0.0] - 2026-10-06
 
 ### Upgrade notes
 
@@ -66,6 +66,22 @@ only accepts a tag whose version is the top dated section. See
   `TAG=<commit>`.
 - The restart fix resolves `maxSurge` and `maxUnavailable` like the
   Deployment controller.
+
+### Documentation
+
+- A visual guide: README tour, a step-by-step QUICKSTART, UPGRADING (with the
+  pre-v1 deployment variants verified live) and RUNBOOK troubleshooting, with
+  annotated crops, light and dark screenshots, GIFs and Mermaid diagrams. All
+  images come from a mock backend (`make docs-screenshots`), never a real cluster.
+
+### Fixed
+
+- Small UI text and layout issues found while capturing the docs: a missing
+  full stop in the remote-operation banner, a sentence starting in lower case
+  in the module back-off problem, a repeated tag in the Build Explorer compare
+  header, the S3 storage row squeezing its text on mid-size windows, the S3
+  storage title naming SeaweedFS while MinIO still runs, and "Not managed by
+  this tool" shown for resources that do not exist.
 
 ### Security
 
