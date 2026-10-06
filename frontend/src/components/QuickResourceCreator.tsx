@@ -25,6 +25,7 @@ import {
   StackItem,
   TextInput,
   Title,
+  Tooltip,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
@@ -47,7 +48,7 @@ import {
 } from "../services/api";
 import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
-import { TooltipButton, NO_PERMISSION_REASON } from "./TooltipButton";
+import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
@@ -75,7 +76,6 @@ export function terminalReason(state: ResourceState | undefined): string | null 
     const reason = TERMINAL_REASONS.find((r) => text.includes(r));
     if (reason) return state.message && state.message !== reason ? state.message : reason;
   }
-  if (state.terminal) return state.waitingReason || state.message || "Failed";
   return null;
 }
 
@@ -113,7 +113,13 @@ export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = 
 const BUSY_REASON = "Another operation is in progress";
 
 interface QuickResourceCreatorProps {
-  canMutate: boolean;
+  /**
+   * Why cluster changes are disabled now, or null: the app-wide
+   * useMutationBlocker (permissions, session, the operation lock).
+   */
+  mutateBlocker: string | null;
+  /** Sees every action result (e.g. to pick up a cluster_busy refusal). */
+  onResult?: (res: OperationResponse) => void;
 }
 
 const StatusLabel: React.FC<{ state: ResourceState }> = ({ state }) => {
@@ -148,7 +154,7 @@ type Pending =
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
 
-export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canMutate }) => {
+export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, onResult }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
   const [resAction, setResAction] = useState<string | null>(null);
   const [resResult, setResResult] = useState<OperationResponse | null>(null);
@@ -221,6 +227,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
     }
     setResResult(res);
     setResAction(null);
+    onResult?.(res);
     void fetchResources();
     refreshProjects();
   };
@@ -239,11 +246,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
     }
   };
 
-  const baseReason = !canMutate ? NO_PERMISSION_REASON : resAction ? BUSY_REASON : null;
+  const baseReason = mutateBlocker ?? (resAction ? BUSY_REASON : null);
   const unmanagedProjects = new Set(resStatus?.unmanagedPipelineProjects ?? []);
   const availableProjects = projectList.filter((p) => !pipelineServers.some((ps) => ps.namespace === p) && !unmanagedProjects.has(p));
   const mlflowPRValid = /^\d+$/.test(mlflowPR) && Number(mlflowPR) > 0;
   const minioReady = !!minio?.ready;
+  // N10: every cause is a tooltip on the toggle, which stays focusable (aria-disabled).
+  const addPipelineReason = baseReason ?? (!minioReady ? "Available once MinIO is running." : null);
   const pvcList = (state: ResourceState | undefined) => (state?.dataPVCs ?? []);
 
   const modal = (() => {
@@ -533,19 +542,27 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ canM
                               setAddProjectOpen(false);
                               if (val) setPending({ kind: "setup-pipeline-server", project: val as string });
                             }}
-                            toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
-                              <MenuToggle ref={toggleRef} onClick={() => setAddProjectOpen(!addProjectOpen)} isExpanded={addProjectOpen}
-                                isDisabled={!canMutate || !minioReady || !!resAction} variant="secondary">
-                                {resAction === "setup-pipeline-server" ? "Setting up..." : "Add to a project"}
-                              </MenuToggle>
-                            )}
+                            toggle={(toggleRef: React.Ref<MenuToggleElement>) => {
+                              // MenuToggle has no aria-disabled mode: a natively disabled
+                              // toggle loses focus and its tooltip, so keep it focusable,
+                              // mark it aria-disabled and ignore clicks instead.
+                              const toggle = (
+                                <MenuToggle ref={toggleRef} variant="secondary" isExpanded={addProjectOpen && !addPipelineReason}
+                                  aria-disabled={addPipelineReason ? true : undefined}
+                                  className={addPipelineReason ? "pf-m-disabled" : undefined}
+                                  onClick={() => { if (!addPipelineReason) setAddProjectOpen(!addProjectOpen); }}>
+                                  {resAction === "setup-pipeline-server" ? "Setting up..." : "Add to a project"}
+                                </MenuToggle>
+                              );
+                              return addPipelineReason ? <Tooltip content={addPipelineReason}>{toggle}</Tooltip> : toggle;
+                            }}
                           >
                             <SelectList aria-label="Data science projects">
                               {availableProjects.map((p) => <SelectOption key={p} value={p}>{p}</SelectOption>)}
                               {availableProjects.length === 0 && <SelectOption isDisabled value="">No project without a pipeline server</SelectOption>}
                             </SelectList>
                           </Select>
-                          {!canMutate ? <Content component="small">{NO_PERMISSION_REASON}</Content> : !minioReady ? <Content component="small">Available once MinIO is running.</Content> : null}
+                          {addPipelineReason && <Content component="small">{addPipelineReason}</Content>}
                           {unmanagedProjects.size > 0 && (
                             <Content component="small">
                               Not offered because they already have a pipeline server this tool did not create: {[...unmanagedProjects].join(", ")}.

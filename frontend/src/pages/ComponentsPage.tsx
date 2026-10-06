@@ -36,9 +36,9 @@ import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { DeploymentsTable } from "../components/DeploymentsTable";
 import { DSCEmptyState } from "../components/DSCEmptyState";
-import { TooltipButton, NO_PERMISSION_REASON } from "../components/TooltipButton";
+import { TooltipButton } from "../components/TooltipButton";
 import { useComponentsData } from "../hooks/useComponentsData";
-import { usePermissions, CHECKING_PERMISSIONS_REASON } from "../hooks/usePermissions";
+import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
 function statusColor(
@@ -65,8 +65,12 @@ function statusColor(
 export const ComponentsPage: React.FC = () => {
   // Polled data with git labels merged in by deployment and image.
   const { data, loading, labelsLoading, error, lastRefreshed, refresh: handleRefresh } = useComponentsData();
-  const { canMutate, loaded: permissionsLoaded } = usePermissions();
-  const mutateReason = !permissionsLoaded ? CHECKING_PERMISSIONS_REASON : !canMutate ? NO_PERMISSION_REASON : null;
+  // One source for every cluster change: permissions, session and the
+  // operation lock. Fixes repair what may be stuck in an operator install,
+  // so that install alone does not block them.
+  const mutateReason = useMutationBlocker();
+  const fixReason = useMutationBlocker({ ignoreReconcile: true });
+  const onResult = useClusterBusyHandler();
 
   // DSC component fix state
   const [fixConfirm, setFixConfirm] = useState<{ action: string; title: string; message: string } | null>(null);
@@ -75,7 +79,7 @@ export const ComponentsPage: React.FC = () => {
   const [attentionExpanded, setAttentionExpanded] = useState(true);
   const [repairMode, setRepairMode] = useState<"remove-invalid" | "remove-extra-components" | "reset-defaults" | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
-  const [repairResult, setRepairResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [repairResult, setRepairResult] = useState<OperationResponse | null>(null);
   const [defaultsPreview, setDefaultsPreview] = useState("");
   const [previewVersion, setPreviewVersion] = useState("");
   const [previewError, setPreviewError] = useState("");
@@ -95,19 +99,21 @@ export const ComponentsPage: React.FC = () => {
     if (!repairMode || !data) return;
     setRepairLoading(true);
     setRepairResult(null);
+    let result: OperationResponse;
     try {
-      const result = await repairDSC(data.dscName, repairMode, repairMode === "reset-defaults" ? previewVersion
+      // A failed repair is a 422 OperationResponse with errorCode and logs (N7).
+      result = await repairDSC(data.dscName, repairMode, repairMode === "reset-defaults" ? previewVersion
         : repairMode === "remove-extra-components" ? data.dscCompatibility?.operatorVersion : undefined,
         repairMode === "remove-extra-components" ? data.dscCompatibility?.extraComponents : undefined);
-      setRepairResult(result);
-      setRepairMode(null);
-      if (result.success) handleRefresh();
     } catch (err) {
-      setRepairResult({ success: false, message: toApiError(err).message });
-      setRepairMode(null);
-    } finally {
-      setRepairLoading(false);
+      result = errorResult(err, "Could not repair the DataScienceCluster");
     }
+    setRepairResult(result);
+    setRepairMode(null);
+    setRepairLoading(false);
+    onResult(result);
+    // Success, "nothing to do" and "changed meanwhile" all mean the shown DSC state is stale.
+    handleRefresh();
   };
 
   const handleComponentFix = useCallback(async (action: string) => {
@@ -121,8 +127,9 @@ export const ComponentsPage: React.FC = () => {
     }
     setFixResult(prev => ({ ...prev, [action]: res }));
     setFixLoading(null);
+    onResult(res);
     if (res.success || res.errorCode === "nothing_to_do") handleRefresh();
-  }, [handleRefresh]);
+  }, [handleRefresh, onResult]);
 
   useEffect(() => {
     document.title = "Components — RHOAI Nightly Updater";
@@ -161,8 +168,8 @@ export const ComponentsPage: React.FC = () => {
           dscState={dscState}
           operatorVersion={data.operatorVersion}
           operatorPhase={data.operatorPhase}
-          canMutate={canMutate}
-          permissionsLoaded={permissionsLoaded}
+          mutateBlocker={mutateReason}
+          onResult={onResult}
           onCreated={handleRefresh}
         />
       )}
@@ -219,7 +226,16 @@ export const ComponentsPage: React.FC = () => {
                     </Alert>
                   </StackItem>
                 )}
-                {repairResult && <StackItem><Alert component="p" variant={repairResult.success ? "success" : "danger"} title={repairResult.message} isInline isLiveRegion /></StackItem>}
+                {repairResult && (
+                  <StackItem>
+                    <Alert component="p" variant={outcomeVariant(repairResult)} title={outcomeTitle(repairResult, "Could not repair the DataScienceCluster")} isInline isLiveRegion>
+                      {repairResult.success ? undefined : repairResult.message}
+                      {(repairResult.logs?.length ?? 0) > 0 && (
+                        <details><summary>Details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{repairResult.logs!.join("\n")}</pre></details>
+                      )}
+                    </Alert>
+                  </StackItem>
+                )}
               </Stack>
             </PageSection>
           )}
@@ -297,7 +313,7 @@ export const ComponentsPage: React.FC = () => {
                                               <TooltipButton variant="link" isInline size="sm"
                                                 isLoading={fixLoading === c.fixAction}
                                                 isDisabled={fixLoading !== null}
-                                                disabledReason={mutateReason}
+                                                disabledReason={fixReason}
                                                 onClick={() => setFixConfirm({
                                                   action: c.fixAction!,
                                                   title: c.fixTitle!,
@@ -376,8 +392,8 @@ export const ComponentsPage: React.FC = () => {
                   deployments={data.deployments}
                   labelsLoading={labelsLoading}
                   consoleURL={data.consoleURL}
-                  canMutate={canMutate}
-                  permissionsLoaded={permissionsLoaded}
+                  mutateBlocker={fixReason}
+                  onResult={onResult}
                   onRefresh={handleRefresh}
                 />
               </CardBody>

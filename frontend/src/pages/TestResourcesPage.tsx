@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { PageSection, Title, Content } from "@patternfly/react-core";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
-import { usePermissions } from "../hooks/usePermissions";
+import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
 /**
  * Test resources (MinIO, MLflow, pipeline servers) as their own page
@@ -10,7 +10,8 @@ import { usePermissions } from "../hooks/usePermissions";
  * "Test resources" tab of Dashboard Dev (/dashboard-dev?tab=resources).
  */
 export const TestResourcesPage: React.FC = () => {
-  const { canMutate } = usePermissions();
+  const blocker = useMutationBlocker();
+  const onResult = useClusterBusyHandler();
   useEffect(() => {
     document.title = "Test resources — RHOAI Nightly Updater";
   }, []);
@@ -21,7 +22,7 @@ export const TestResourcesPage: React.FC = () => {
         <Content component="p">Storage, MLflow and pipeline servers to test the dashboard against.</Content>
       </PageSection>
       <PageSection>
-        <QuickResourceCreator canMutate={canMutate} />
+        <QuickResourceCreator mutateBlocker={blocker} onResult={onResult} />
       </PageSection>
     </>
   );

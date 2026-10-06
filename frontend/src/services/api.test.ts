@@ -7,6 +7,7 @@ import {
   parseErrorResponse,
   repairDSC,
   streamSSE,
+  streamUpdate,
   toApiError,
   type StreamDetachReason,
 } from "./api";
@@ -58,6 +59,31 @@ describe("request()", () => {
   it("reports an HTML login page as an expired session", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>Login</html>", { status: 200, headers: { "Content-Type": "text/html" } })));
     await expect(getStatus()).rejects.toMatchObject({ errorCode: "session_expired", status: 200 });
+  });
+
+  // N3, checked on the live route: oauth-proxy answers a request without a
+  // valid session cookie with its sign-in page as HTTP 403 text/html.
+  it.each([
+    ["403 text/html (oauth-proxy sign-in page)", 403, "text/html; charset=utf-8", "<!DOCTYPE html><html><body>Log In</body></html>"],
+    ["401 text/html", 401, "text/html", "<html>Unauthorized</html>"],
+    ["403 text/plain", 403, "text/plain", "Forbidden"],
+    ["403 with an empty body", 403, "text/html", ""],
+  ])("treats a non-JSON %s as an expired session", async (_name, status, type, body) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status, headers: { "Content-Type": type } })));
+    await expect(getStatus()).rejects.toMatchObject({ errorCode: "session_expired", status });
+  });
+
+  it("keeps a JSON 403 from the backend a permission error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Read-only access: requires cluster-admin", errorCode: "forbidden" }, 403)));
+    await expect(getStatus()).rejects.toMatchObject({ errorCode: "forbidden", status: 403 });
+  });
+
+  it("reports oauth-proxy's 403 sign-in page on an SSE start as an expired session", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } })));
+    const done = new Promise<{ success: boolean; err?: { errorCode: string } }>((resolve) => {
+      streamUpdate("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6", () => {}, (success, _m, err) => resolve({ success, err }));
+    });
+    await expect(done).resolves.toMatchObject({ success: false, err: { errorCode: "session_expired" } });
   });
 
   it("maps a network failure to errorCode network", async () => {

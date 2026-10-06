@@ -26,16 +26,17 @@ import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
 import type { OperationResponse } from "../types";
 import { createDSC, getDSCPreview, trackFeature, type DSCPreviewResponse } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
-import { TooltipButton, NO_PERMISSION_REASON } from "./TooltipButton";
-import { CHECKING_PERMISSIONS_REASON } from "../hooks/usePermissions";
+import { TooltipButton } from "./TooltipButton";
 
 interface DSCEmptyStateProps {
   /** "no-dsc" or "no-crd" (from /api/components dscState). */
   dscState: string;
   operatorVersion?: string;
   operatorPhase?: string;
-  canMutate: boolean;
-  permissionsLoaded: boolean;
+  /** Why cluster changes are disabled now (useMutationBlocker), or null. */
+  mutateBlocker: string | null;
+  /** Sees the create result (e.g. to pick up a cluster_busy refusal). */
+  onResult?: (res: OperationResponse) => void;
   onCreated: () => void;
 }
 
@@ -45,7 +46,7 @@ interface DSCEmptyStateProps {
  * example after showing it. "no-crd": the DSC API does not exist, so RHOAI
  * is not installed (or is still installing).
  */
-export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operatorVersion, operatorPhase, canMutate, permissionsLoaded, onCreated }) => {
+export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operatorVersion, operatorPhase, mutateBlocker, onResult, onCreated }) => {
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<(DSCPreviewResponse & { yaml: string }) | null>(null);
   const [previewError, setPreviewError] = useState("");
@@ -75,7 +76,9 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
     setCreating(false);
     setOpen(false);
     setResult(res);
-    if (res.success) onCreated();
+    onResult?.(res);
+    // "Already exists" (nothing_to_do) also means the page shows a stale state.
+    if (res.success || res.errorCode === "nothing_to_do" || res.errorCode === "conflict") onCreated();
   };
 
   if (dscState === "no-crd") {
@@ -104,7 +107,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
     );
   }
 
-  const disabledReason = !permissionsLoaded ? CHECKING_PERMISSIONS_REASON : !canMutate ? NO_PERMISSION_REASON : null;
+  const disabledReason = mutateBlocker;
   return (
     <PageSection>
       <Card>
@@ -153,7 +156,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
           </Stack>
         </ModalBody>
         <ModalFooter>
-          <Button variant="primary" onClick={create} isLoading={creating} isDisabled={creating || !preview || !!previewError || !canMutate}>Create</Button>
+          <Button variant="primary" onClick={create} isLoading={creating} isDisabled={creating || !preview || !!previewError || !!mutateBlocker}>Create</Button>
           <Button variant="link" onClick={() => setOpen(false)} isDisabled={creating}>Cancel</Button>
         </ModalFooter>
       </Modal>

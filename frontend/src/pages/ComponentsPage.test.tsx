@@ -1,9 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { ComponentsPage } from "./ComponentsPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
-import { resetPermissionsCache } from "../hooks/usePermissions";
+import { renderPage as renderInApp } from "../test/providers";
 import type { ComponentsResponse, DeploymentInfo } from "../types";
 
 function dep(name: string, over: Partial<DeploymentInfo> = {}): DeploymentInfo {
@@ -24,10 +23,9 @@ function present(deployments: DeploymentInfo[]): ComponentsResponse {
 }
 
 function renderPage() {
-  return render(<MemoryRouter><ComponentsPage /></MemoryRouter>);
+  return renderInApp(<ComponentsPage />);
 }
 
-beforeEach(() => resetPermissionsCache());
 
 describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
   it("no-dsc shows the create flow with the operator's defaults, not 'not installed'", async () => {
@@ -166,5 +164,34 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
     await new Promise((r) => setTimeout(r, 50));
     fireEvent.click(screen.getByRole("button", { name: "Unblock rollout" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("ComponentsPage and the app-wide lock (R4b c, N1, N7)", () => {
+  const busy = async () => ({ inProgress: true, operation: { id: "op1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } });
+
+  it("a teammate's running operation disables Create DSC with the reason", async () => {
+    stubApi({ "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded" } });
+    renderInApp(<ComponentsPage />, "/", { operation: busy });
+    const create = await screen.findByRole("button", { name: "Preview and create DataScienceCluster" });
+    await waitFor(() => expect(create).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.mouseEnter(create);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
+  });
+
+  it("a DSC repair refused with a 422 OperationResponse keeps its errorCode and logs, and re-fetches", async () => {
+    const api = stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { operatorVersion: "3.6.0", branch: "rhoai-3.6", invalidFields: ["spec.components.foo"], missingComponents: [] } },
+      "POST /api/components/dsc/repair": () => jsonResponse({ success: false, errorCode: "nothing_to_do", message: "No invalid fields left.", logs: ["checked spec.components.foo"] }, 422),
+    });
+    renderInApp(<ComponentsPage />);
+    const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
+    await waitFor(() => expect(remove).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(remove);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("Nothing to do")).toBeInTheDocument();
+    expect(screen.getByText("No invalid fields left.").closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
+    expect(screen.getByText("checked spec.components.foo")).toBeInTheDocument();
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("GET /api/components")).length).toBeGreaterThan(1));
   });
 });

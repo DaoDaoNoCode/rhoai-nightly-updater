@@ -43,8 +43,7 @@ import { assistRolloutFor, trackFeature } from "../services/api";
 import { formatRelativeTime } from "../utils";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { ImageRef } from "./ImageRef";
-import { TooltipButton, NO_PERMISSION_REASON } from "./TooltipButton";
-import { CHECKING_PERMISSIONS_REASON } from "../hooks/usePermissions";
+import { TooltipButton } from "./TooltipButton";
 import {
   activePods,
   deploymentHealth,
@@ -89,8 +88,10 @@ interface DeploymentsTableProps {
   deployments: DeploymentInfo[];
   labelsLoading: boolean;
   consoleURL?: string;
-  canMutate: boolean;
-  permissionsLoaded: boolean;
+  /** Why cluster changes are disabled now (useMutationBlocker), or null. */
+  mutateBlocker: string | null;
+  /** Sees every unblock result (e.g. to pick up a cluster_busy refusal). */
+  onResult?: (res: OperationResponse) => void;
   onRefresh: () => void;
 }
 
@@ -103,8 +104,8 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
   deployments,
   labelsLoading,
   consoleURL: rawConsoleURL,
-  canMutate,
-  permissionsLoaded,
+  mutateBlocker,
+  onResult,
   onRefresh,
 }) => {
   const [sortKey, setSortKey] = useState<DeploymentSortKey>("status");
@@ -147,7 +148,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
     };
   };
 
-  const mutateReason = !permissionsLoaded ? CHECKING_PERMISSIONS_REASON : !canMutate ? NO_PERMISSION_REASON : unblocking ? "Another rollout is being unblocked." : null;
+  const mutateReason = mutateBlocker ?? (unblocking ? "Another rollout is being unblocked." : null);
 
   const runUnblock = async (dep: DeploymentInfo) => {
     const key = `${dep.namespace}/${dep.name}`;
@@ -162,6 +163,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
     }
     setResults((prev) => ({ ...prev, [key]: res }));
     setUnblocking(null);
+    onResult?.(res);
     onRefresh();
   };
 

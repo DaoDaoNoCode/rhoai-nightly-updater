@@ -5,8 +5,8 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { AppStateProvider, useClusterStatus, useOperation, type ServerOperationSnapshot } from "./AppState";
 import { LiveAnnouncerProvider } from "./LiveAnnouncer";
 import { streamUpdate } from "../services/api";
-import type { StatusResponse } from "../types";
-import { jsonResponse, sseEvent, sseResponse } from "../test/utils";
+import type { OperationStatusResponse, StatusResponse } from "../types";
+import { deferred, jsonResponse, sseEvent, sseResponse } from "../test/utils";
 
 function statusWith(phase: string): StatusResponse {
   return {
@@ -220,6 +220,65 @@ describe("AppStateProvider operation lifecycle", () => {
     fireEvent.click(screen.getByText("clear"));
     await tick();
     expect(probe()).toMatchObject({ running: false, phase: "reconciling", outcome: "detached", reason: "server_lost" });
+  });
+});
+
+describe("reconcile tracking restored after a reload (R4b a)", () => {
+  it("waits for GET /api/operation before a Succeeded CSV finishes it, and keeps the outcome unknown", async () => {
+    sessionStorage.setItem("rhoai-reconciling", "true");
+    sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 1_000));
+    sessionStorage.setItem("rhoai-reconcile-kind", "update");
+    const op = deferred<OperationStatusResponse>();
+    const fetchStatus = vi.fn(async () => statusWith("Succeeded"));
+    const ResultProbe: React.FC = () => <span data-testid="result">{useOperation().state.reconcile.result}</span>;
+    render(
+      <LiveAnnouncerProvider>
+        <MemoryRouter>
+          <AppStateProvider fetchStatus={fetchStatus} fetchOperation={() => op.promise}>
+            <Probe />
+            <ResultProbe />
+          </AppStateProvider>
+        </MemoryRouter>
+      </LiveAnnouncerProvider>,
+    );
+    await tick();
+    await tick(5_000);
+    expect(fetchStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // The old operator's Succeeded does not end tracking while the server may still run the update.
+    expect(probe()).toMatchObject({ phase: "reconciling" });
+
+    op.resolve({ inProgress: false, operation: null });
+    await tick();
+    await tick(5_000);
+    expect(probe()).toMatchObject({ phase: "complete" });
+    expect(screen.getByTestId("result")).toHaveTextContent("unknown");
+    expect(screen.getByTestId("live-region-polite")).toHaveTextContent(/outcome is unknown/);
+  });
+});
+
+describe("background status polls (N9)", () => {
+  it("do not toggle loading once a status is shown", async () => {
+    const fetchStatus = vi.fn(async () => statusWith("Succeeded"));
+    const renders: boolean[] = [];
+    const LoadingProbe: React.FC = () => {
+      renders.push(useClusterStatus().loading);
+      return null;
+    };
+    render(
+      <LiveAnnouncerProvider>
+        <MemoryRouter>
+          <AppStateProvider fetchStatus={fetchStatus} fetchOperation={idleOperation}>
+            <LoadingProbe />
+          </AppStateProvider>
+        </MemoryRouter>
+      </LiveAnnouncerProvider>,
+    );
+    await tick();
+    expect(renders[renders.length - 1]).toBe(false);
+    renders.length = 0;
+    await tick(60_000);
+    expect(fetchStatus).toHaveBeenCalledTimes(2);
+    expect(renders).not.toContain(true);
   });
 });
 

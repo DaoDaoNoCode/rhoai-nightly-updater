@@ -46,9 +46,10 @@ import { OperationProgress, useHasOperationProgress } from "../components/Operat
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, useOperatorActions } from "../components/OperatorActions";
 import { TooltipButton } from "../components/TooltipButton";
 import { describeError } from "../errors";
+import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
-import { useDashboardOverride, useMutationBlocker, usePermissions } from "../state/AppInfo";
+import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker, usePermissions } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
@@ -57,6 +58,7 @@ export const StatusPage: React.FC = () => {
   const { status, loading, error, lastRefreshed, refresh } = useClusterStatus();
   const operation = useOperation();
   const blocker = useMutationBlocker();
+  const onResult = useClusterBusyHandler();
   const permissions = usePermissions();
   const { override } = useDashboardOverride();
   const showProgress = useHasOperationProgress();
@@ -147,16 +149,17 @@ export const StatusPage: React.FC = () => {
     trackFeature("create_dsc");
     setDscLoading(true);
     setDscResult(null);
+    let res: OperationResponse;
     try {
-      const res = await createDSC();
-      setDscResult(res);
-      if (res.success) setTimeout(() => { refresh(); }, 2000);
+      res = await createDSC();
     } catch (e) {
-      const { title, body } = describeError(e, "Could not create the DataScienceCluster");
-      setDscResult({ success: false, message: `${title}: ${body}`, logs: [] });
-    } finally {
-      setDscLoading(false);
+      // A failed create is a 422 OperationResponse: keep its errorCode and logs (N7).
+      res = errorResult(e, "Could not create the DataScienceCluster");
     }
+    setDscResult(res);
+    setDscLoading(false);
+    onResult(res);
+    if (res.success || res.errorCode === "nothing_to_do" || res.errorCode === "conflict") setTimeout(() => { refresh(); }, 2000);
   };
 
   const confirmUpdate = (options: { revertDashboardDev?: boolean }) => {
@@ -291,13 +294,18 @@ export const StatusPage: React.FC = () => {
                 {dscResult && (
                   <StackItem>
                     <Alert
-                      variant={dscResult.success ? "success" : "danger"}
-                      title={dscResult.message}
+                      variant={outcomeVariant(dscResult)}
+                      title={outcomeTitle(dscResult, "Could not create the DataScienceCluster")}
                       isInline
                       isLiveRegion
                       component="p"
-                      actionClose={dscResult.success ? <AlertActionCloseButton onClose={() => setDscResult(null)} /> : undefined}
-                    />
+                      actionClose={<AlertActionCloseButton onClose={() => setDscResult(null)} />}
+                    >
+                      {dscResult.success ? undefined : dscResult.message}
+                      {(dscResult.logs?.length ?? 0) > 0 && (
+                        <details><summary>Details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{dscResult.logs!.join("\n")}</pre></details>
+                      )}
+                    </Alert>
                   </StackItem>
                 )}
               </Stack>

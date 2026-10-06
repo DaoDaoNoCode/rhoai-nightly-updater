@@ -52,7 +52,7 @@ import { HelpButton } from "./components/HelpModal";
 import { GlobalBanners } from "./components/GlobalBanners";
 import { NAV_ITEMS } from "./constants";
 import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
-import { AppInfoProvider, usePermissions, useSessionExpired, useVersion } from "./state/AppInfo";
+import { AppInfoProvider, useSessionExpired, useVersion } from "./state/AppInfo";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 
 // Route-level code splitting: each page is its own chunk.
@@ -125,7 +125,6 @@ function initialDarkMode(): boolean {
 const AppLayout: React.FC = () => {
   const { status, error: statusError } = useClusterStatus();
   const { state: operationState } = useOperation();
-  const { canMutate } = usePermissions();
   const sessionExpired = useSessionExpired();
   const version = useVersion();
   const reconciling = operationState.reconcile.active;
@@ -336,7 +335,7 @@ const AppLayout: React.FC = () => {
           <Route path="/" element={<StatusPage />} />
           <Route path="/components" element={<ComponentsPage />} />
           <Route path="/builds" element={<BuildExplorerPage />} />
-          <Route path="/dashboard-dev" element={<DashboardDevPage canMutate={canMutate} />} />
+          <Route path="/dashboard-dev" element={<DashboardDevPage />} />
           <Route path="/diagnostics" element={<TroubleshootingPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

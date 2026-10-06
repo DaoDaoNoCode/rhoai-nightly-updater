@@ -22,7 +22,8 @@ test('stream results distinguish rejection, disconnect, pending and terminal fai
   const previous = global.fetch;
   try {
     for (const tc of [
-      { name: 'forbidden', status: 403, text: 'Read-only access', success: false, error: /403.*Read-only/ },
+      { name: 'forbidden (backend JSON)', status: 403, contentType: 'application/json', text: JSON.stringify({ error: 'Read-only access', errorCode: 'forbidden' }), success: false, error: /Read-only/ },
+      { name: 'oauth-proxy sign-in page (403 text/html)', status: 403, contentType: 'text/html', text: '<html>Log In</html>', success: false, error: /session has expired/i },
       { name: 'busy', status: 409, text: 'Another operation is in progress', success: false, error: /409/ },
       { name: 'validation', status: 400, text: 'Invalid image', success: false, error: /400.*Invalid image/ },
       { name: 'truncated stream', text: event('delete_subscription', 'success', 'Deleted'), drop: true },

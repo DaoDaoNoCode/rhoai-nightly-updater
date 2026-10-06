@@ -148,11 +148,13 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       setPermError(null);
     } catch (e) {
       const err = toApiError(e, "Could not check your permissions");
-      // 403 is an answer (read-only). Everything else, 503
-      // authorization_unavailable included, is "unknown": fail closed.
-      setPermStatus(err.status === 403 || err.errorCode === "forbidden" ? "denied" : "unknown");
+      const expired = isSessionExpired(err);
+      // A JSON 403 is an answer (read-only). An expired session (oauth-proxy's
+      // HTML 403) and everything else, 503 authorization_unavailable
+      // included, is "unknown": fail closed.
+      setPermStatus(!expired && (err.status === 403 || err.errorCode === "forbidden") ? "denied" : "unknown");
       setPermError(err);
-      if (isSessionExpired(err)) setSessionExpired(true);
+      if (expired) setSessionExpired(true);
     }
   }, []);
   const permPoller = usePolling(checkPermissions, {
@@ -244,16 +246,31 @@ export function serverOperationStep(op: ServerOperation): string | null {
 }
 
 /**
- * Why a cluster-changing button must stay disabled now, or null. Covers the
- * user's permissions, this tab's own operation, any operation the backend
- * reports (another tab or a teammate), and OLM still installing after the
- * last operation (the backend lock is already free then).
+ * After a request the backend refused with 409 cluster_busy, ask it at once
+ * which operation holds the lock, so the banner and the disabled buttons
+ * appear without waiting for the next poll.
  */
-export function useMutationBlocker(): string | null {
+export function useClusterBusyHandler(): (res: { errorCode?: string }) => void {
+  const { refreshServerOperation } = useOperation();
+  return useCallback((res: { errorCode?: string }) => {
+    if (res.errorCode === "cluster_busy") refreshServerOperation();
+  }, [refreshServerOperation]);
+}
+
+/**
+ * Why a cluster-changing button must stay disabled now, or null: the one
+ * source every page uses. Covers the user's permissions and session, this
+ * tab's own operation, any operation the backend reports (another tab or a
+ * teammate), and OLM still installing after the last operation (the backend
+ * lock is already free then). `ignoreReconcile` is for repairs of what may
+ * be stuck in that install (Diagnostics fixes, rollout assists).
+ */
+export function useMutationBlocker(options: { ignoreReconcile?: boolean } = {}): string | null {
   const { reason } = usePermissions();
   const { run, server, state } = useOperation();
   const { status } = useClusterStatus();
   if (reason) return reason;
+  if (options.ignoreReconcile && !isRunning(run) && !server.inProgress) return null;
   if (isRunning(run) && run.source === "stream") {
     return `Your ${OPERATION_NAMES[run.kind].toLowerCase()} is still running. Wait for it to finish.`;
   }

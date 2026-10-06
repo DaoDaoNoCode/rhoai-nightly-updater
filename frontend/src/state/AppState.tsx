@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import type { OperationStatusResponse, ServerOperation, StatusResponse, UpdateStep } from "../types";
+import type { CompletedOperation, OperationStatusResponse, ServerOperation, StatusResponse, UpdateStep } from "../types";
 import {
   ApiError,
   getOperation,
@@ -23,16 +23,19 @@ import {
   STREAM_MAX_MS,
 } from "../constants";
 import { usePolling } from "../hooks/usePolling";
-import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel, type OperationKind, type ReconcileKind } from "../operationSteps";
+import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, reconcileKindFor, stepLabel, type OperationKind, type ReconcileKind } from "../operationSteps";
 import {
   initialOperationState,
   isRunning,
   operationPhase,
   operationReducer,
+  statusFingerprint,
   type OperationOutcome,
   type OperationPhase,
   type OperationRun,
   type OperationState,
+  type ReconcileResult,
+  type ServerResult,
 } from "./operation";
 import { useAnnounce } from "./LiveAnnouncer";
 
@@ -105,8 +108,11 @@ export interface OperationContextValue {
   phase: OperationPhase;
   /** Start a streamed operation. Returns the run id, or null if one is already running. */
   start: (kind: OperationKind, open: StreamOpener, detail?: string) => number | null;
-  /** Apply server-side operation state (null: the server reports no operation). */
-  syncServerOperation: (snapshot: ServerOperationSnapshot | null) => void;
+  /**
+   * Apply server-side operation state (null: the server reports no
+   * operation; `lastCompleted` then tells how a followed operation ended).
+   */
+  syncServerOperation: (snapshot: ServerOperationSnapshot | null, lastCompleted?: CompletedOperation | null) => void;
   dismissTimeout: () => void;
   dismissFinished: () => void;
 }
@@ -134,6 +140,28 @@ const SESSION_KEY_RECONCILING = "rhoai-reconciling";
 const SESSION_KEY_RECONCILE_START = "rhoai-reconcile-start";
 const SESSION_KEY_RECONCILE_KIND = "rhoai-reconcile-kind";
 
+/** The tracked operation's result, backend id and pre-operation fingerprint (JSON). */
+const SESSION_KEY_RECONCILE_META = "rhoai-reconcile-meta";
+
+interface ReconcileMeta {
+  result?: ReconcileResult;
+  serverId?: string;
+  baseline?: string;
+}
+
+function readMeta(): ReconcileMeta {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(SESSION_KEY_RECONCILE_META) || "{}") as Record<string, unknown>;
+    return {
+      result: raw.result === "succeeded" ? "succeeded" : "unknown",
+      serverId: typeof raw.serverId === "string" ? raw.serverId : undefined,
+      baseline: typeof raw.baseline === "string" ? raw.baseline : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 function restoreReconcile(): OperationState {
   try {
     const active = sessionStorage.getItem(SESSION_KEY_RECONCILING) === "true";
@@ -142,7 +170,10 @@ function restoreReconcile(): OperationState {
     const kind: ReconcileKind = storedKind === "refresh" || storedKind === "reinstall" ? storedKind : "update";
     if (active && startTime > 0) {
       if (Date.now() - startTime < RECONCILE_TIMEOUT_MS) {
-        return initialOperationState({ active: true, startTime, kind });
+        // After a reload the operation may still run on the server: wait for
+        // GET /api/operation before trusting a Succeeded CSV.
+        const meta = readMeta();
+        return initialOperationState({ active: true, startTime, kind, awaitingServer: true, result: meta.result ?? "unknown", serverId: meta.serverId, baseline: meta.baseline });
       }
       persistReconcile(false, 0, kind);
     }
@@ -152,16 +183,18 @@ function restoreReconcile(): OperationState {
   return initialOperationState();
 }
 
-function persistReconcile(active: boolean, startTime: number, kind: ReconcileKind): void {
+function persistReconcile(active: boolean, startTime: number, kind: ReconcileKind, meta: ReconcileMeta = {}): void {
   try {
     if (active) {
       sessionStorage.setItem(SESSION_KEY_RECONCILING, "true");
       sessionStorage.setItem(SESSION_KEY_RECONCILE_START, String(startTime));
       sessionStorage.setItem(SESSION_KEY_RECONCILE_KIND, kind);
+      sessionStorage.setItem(SESSION_KEY_RECONCILE_META, JSON.stringify(meta));
     } else {
       sessionStorage.removeItem(SESSION_KEY_RECONCILING);
       sessionStorage.removeItem(SESSION_KEY_RECONCILE_START);
       sessionStorage.removeItem(SESSION_KEY_RECONCILE_KIND);
+      sessionStorage.removeItem(SESSION_KEY_RECONCILE_META);
     }
   } catch {
     // sessionStorage may be disabled
@@ -202,19 +235,53 @@ interface AppStateProviderProps {
   fetchOperation?: (signal?: AbortSignal) => Promise<OperationStatusResponse>;
 }
 
-/** How long after this tab's own run ended a matching server report is still that run. */
-const OWN_RUN_GRACE_MS = 15_000;
+/**
+ * Without a backend id: how far apart this tab's start of a run and the
+ * server's startedAt of the same operation can be (request latency plus
+ * clock skew between browser and server).
+ */
+export const SAME_START_TOLERANCE_MS = 30_000;
+
+/** How often a streamed run asks GET /api/operation for its backend id until it has one. */
+const BIND_RETRY_MS = 5_000;
+
+type OperationIdentity = Pick<ServerOperation, "id" | "type" | "target" | "startedAt">;
 
 /**
- * True when a server-reported operation of `kind` is most likely this tab's
- * own run that just ended (the lock is released right after the last
- * event). A run the backend rejected (409 cluster_busy, 400...) never held
- * the lock, so an operation reported after it belongs to someone else.
+ * True when a backend operation (running, or lastCompleted) is `run`. Runs
+ * are matched by the backend operation id. A run that never learned its id
+ * (the stream ended before the first GET /api/operation answered) falls back
+ * to the same kind and a start within SAME_START_TOLERANCE_MS.
  */
-export function isOwnRecentRun(run: OperationRun | null, kind: OperationKind | undefined, now: number): boolean {
-  if (!run || run.source !== "stream" || !run.endedAt || run.kind !== kind) return false;
-  if (run.outcome?.status === "failed" && run.outcome.rejected) return false;
-  return now - run.endedAt < OWN_RUN_GRACE_MS;
+export function matchesRun(run: OperationRun | null, op: OperationIdentity | null | undefined): boolean {
+  if (!run || !op) return false;
+  if (run.serverId) return run.serverId === op.id;
+  const kind = operationKindForServerType(op.type, op.target);
+  if (!kind || reconcileKindFor(kind) !== reconcileKindFor(run.kind)) return false;
+  const started = Date.parse(op.startedAt);
+  return Number.isFinite(started) && Math.abs(started - run.startedAt) < SAME_START_TOLERANCE_MS;
+}
+
+/**
+ * True when a server-reported operation is this tab's own streamed run that
+ * already has its result: the lock is released just after the final event,
+ * so a poll can still see it. A rejected request (409 cluster_busy, 400...)
+ * never held the lock, and a detached run still runs on the server, so
+ * neither hides a reported operation.
+ */
+export function isOwnFinishedRun(run: OperationRun | null, op: OperationIdentity | null | undefined): boolean {
+  if (!run || run.source !== "stream" || !run.outcome) return false;
+  if (run.outcome.status === "detached") return false;
+  if (run.outcome.status === "failed" && run.outcome.rejected) return false;
+  return matchesRun(run, op);
+}
+
+/** The lastCompleted result when it is the operation `state` tracks, else undefined. */
+export function trackedResult(state: OperationState, last: CompletedOperation | null | undefined): ServerResult | undefined {
+  if (!last || typeof last.success !== "boolean" || typeof last.id !== "string") return undefined;
+  const id = state.reconcile.serverId ?? state.run?.serverId;
+  const same = id ? last.id === id : matchesRun(state.run, last);
+  return same ? { success: last.success, message: typeof last.message === "string" ? last.message : undefined } : undefined;
 }
 
 /**
@@ -294,9 +361,12 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const activePollingTime = useRef(0);
   const lastPollTimestamp = useRef(0);
 
-  const refresh = useCallback(async () => {
+  // `background`: a poll, not a user's refresh. Polls do not toggle `loading`
+  // once a status is shown, so status consumers re-render once per poll.
+  const loadStatus = useCallback(async (background: boolean) => {
     const requestId = ++latestStatusRequest.current;
-    setLoading(true);
+    const requestedAt = Date.now();
+    if (!background || !statusRef.current) setLoading(true);
     try {
       const s = await fetchStatusRef.current();
       // An older poll must not overwrite a newer response.
@@ -314,7 +384,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
           if (delta < RECONCILE_POLL_SLOW_MS * 2.5) activePollingTime.current += delta;
         }
         lastPollTimestamp.current = now;
-        dispatch({ type: "statusPolled", csvPhase: s.csv.phase });
+        dispatch({ type: "statusPolled", csvPhase: s.csv.phase, fingerprint: statusFingerprint(s), requestedAt });
         if (activePollingTime.current >= RECONCILE_TIMEOUT_MS) dispatch({ type: "reconcileTimedOut" });
       }
     } catch (e) {
@@ -324,9 +394,11 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       if (requestId === latestStatusRequest.current) setLoading(false);
     }
   }, []);
+  const refresh = useCallback(() => loadStatus(false), [loadStatus]);
+  const pollStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // One poller for /api/status: adaptive while reconciling, 60 s otherwise.
@@ -336,7 +408,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     () => {
       const run = stateRef.current.run;
       if (isRunning(run) && run.source === "stream" && Date.now() - run.startedAt < STREAM_MAX_MS) return undefined;
-      return refresh();
+      return pollStatus();
     },
     {
       delay: () => (stateRef.current.reconcile.active ? reconcilePollInterval(activePollingTime.current) : BACKGROUND_POLL_MS),
@@ -345,8 +417,11 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
 
   // --- Reconcile tracking side effects --------------------------------------
   const { active: reconcileActive, startTime: reconcileStart, kind: reconcileKind, finished: reconcileFinished, timedOut: reconcileTimedOut } = state.reconcile;
+  const { result: reconcileResult, serverId: reconcileServerId, baseline: reconcileBaseline } = state.reconcile;
   useEffect(() => {
-    persistReconcile(reconcileActive, reconcileStart, reconcileKind);
+    persistReconcile(reconcileActive, reconcileStart, reconcileKind, { result: reconcileResult, serverId: reconcileServerId, baseline: reconcileBaseline });
+  }, [reconcileActive, reconcileStart, reconcileKind, reconcileResult, reconcileServerId, reconcileBaseline]);
+  useEffect(() => {
     if (reconcileActive) {
       activePollingTime.current = 0;
       lastPollTimestamp.current = 0;
@@ -359,7 +434,10 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     if (!reconcileFinished) return;
     const csv = statusRef.current?.csv;
     const failed = csv?.phase === "Failed";
-    announce(`Operator reconciliation finished: ${csv?.name || "the operator"} is ${csv?.phase || "ready"}.`, failed ? "assertive" : "polite");
+    const operatorState = `${csv?.name || "the operator"} is ${csv?.phase || "ready"}`;
+    announce(stateRef.current.reconcile.result === "unknown"
+      ? `The operation finished, but its outcome is unknown: see the activity log. ${operatorState}.`
+      : `Operator reconciliation finished: ${operatorState}.`, failed ? "assertive" : "polite");
   }, [reconcileFinished, announce]);
 
   useEffect(() => {
@@ -379,8 +457,8 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     }
     const { text, assertive } = outcomeAnnouncement(runKind, outcome);
     announce(text, assertive ? "assertive" : "polite");
-    void refresh();
-  }, [runId, outcome, runKind, announce, refresh]);
+    void pollStatus();
+  }, [runId, outcome, runKind, announce, pollStatus]);
 
   const announcedSteps = useRef(new Map<string, string>());
   const steps = run?.steps;
@@ -404,17 +482,43 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const start = useCallback((kind: OperationKind, open: StreamOpener, detail?: string): number | null => {
     if (isRunning(stateRef.current.run)) return null;
     const id = ++nextRunId.current;
-    const startAction = { type: "start", id, kind, source: "stream", now: Date.now(), detail } as const;
+    const startAction = { type: "start", id, kind, source: "stream", now: Date.now(), detail, baseline: statusFingerprint(statusRef.current) } as const;
     // Update the ref synchronously so a double click cannot start two runs.
     stateRef.current = operationReducer(stateRef.current, startAction);
     dispatch(startAction);
     announce(`${OPERATION_NAMES[kind]} started.`);
+
+    // Learn the backend id of this run. While the stream delivers events,
+    // this request holds the backend's single mutation lock (pkg/api
+    // lockCluster answers 409 before any event otherwise), so the operation
+    // GET /api/operation reports is this one.
+    const binding = { inFlight: false, last: 0 };
+    const bind = () => {
+      const now = Date.now();
+      const current = stateRef.current.run;
+      if (!current || current.id !== id || current.outcome || current.serverId) return;
+      if (binding.inFlight || now - binding.last < BIND_RETRY_MS) return;
+      binding.inFlight = true;
+      binding.last = now;
+      fetchOperationRef.current()
+        .then((res) => {
+          const op = res.inProgress ? res.operation : null;
+          const latest = stateRef.current.run;
+          if (!op || !latest || latest.id !== id || latest.outcome || latest.serverId) return;
+          const opKind = operationKindForServerType(op.type, op.target);
+          if (!opKind || reconcileKindFor(opKind) !== reconcileKindFor(kind)) return;
+          dispatch({ type: "bindServerId", id, serverId: op.id });
+        })
+        .catch(() => { /* retried on a later event */ })
+        .finally(() => { binding.inFlight = false; });
+    };
 
     const end = (outcomeValue: OperationOutcome) => dispatch({ type: "end", id, outcome: outcomeValue, now: Date.now() });
     const controller = open({
       onStep: (step) => {
         // Render each step as it arrives instead of batching a burst of events.
         flushSync(() => dispatch({ type: "step", id, step }));
+        if (step.step !== "operation_complete") bind();
       },
       onDone: (success, message, apiError) => {
         if (success) {
@@ -443,17 +547,23 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     return id;
   }, [announce]);
 
-  const syncServerOperation = useCallback((snapshot: ServerOperationSnapshot | null) => {
+  const syncServerOperation = useCallback((snapshot: ServerOperationSnapshot | null, lastCompleted?: CompletedOperation | null) => {
     const current = stateRef.current.run;
     // This tab's own stream is the richer source while it is open.
     if (isRunning(current) && current.source === "stream") return;
     const now = Date.now();
-    // The backend releases its lock just after the final event, so a poll
-    // right after this tab's own run can still report that run.
-    if (snapshot && isOwnRecentRun(current, snapshot.kind, now)) return;
     if (!snapshot) {
       if (isRunning(current) && current.source === "server") {
-        dispatch({ type: "end", id: current.id, outcome: { status: "detached", reason: "server_lost", message: DETACH_MESSAGES.server_lost }, now });
+        // The backend tells how it ended (lastCompleted); without that, say
+        // nothing about success: the old CSV may well be Succeeded.
+        const last = lastCompleted && current.serverId && lastCompleted.id === current.serverId && typeof lastCompleted.success === "boolean" ? lastCompleted : undefined;
+        if (last?.success) {
+          dispatch({ type: "end", id: current.id, outcome: { status: "succeeded", message: last.message || `${OPERATION_NAMES[current.kind]} completed.` }, now });
+        } else if (last) {
+          dispatch({ type: "end", id: current.id, outcome: { status: "failed", message: last.message || `${OPERATION_NAMES[current.kind]} failed.`, rejected: false }, now });
+        } else {
+          dispatch({ type: "end", id: current.id, outcome: { status: "detached", reason: "server_lost", message: DETACH_MESSAGES.server_lost }, now });
+        }
       }
       return;
     }
@@ -461,6 +571,10 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     if (current && current.source === "server" && current.serverId === snapshot.id) {
       id = current.id;
       if (current.outcome) return;
+      // A reinstall's target (stable or nightly) can arrive after the first poll.
+      if (snapshot.kind !== current.kind || (snapshot.detail && snapshot.detail !== current.detail)) {
+        dispatch({ type: "retarget", id, kind: snapshot.kind, detail: snapshot.detail });
+      }
       for (const step of snapshot.steps) dispatch({ type: "step", id, step });
     } else {
       if (snapshot.state !== "running") return; // finished before this tab saw it
@@ -479,10 +593,28 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   const serverRef = useRef(server);
   serverRef.current = server;
 
+  // Every answer applied to `server` gets a number; an older answer that
+  // lands after a newer one (a poll reset while another was in flight, an
+  // idle poll after a 409 body) is dropped.
+  const operationSeq = useRef(0);
+
   const applyServerOperation = useCallback((res: OperationStatusResponse) => {
     const op = res.inProgress ? res.operation : null;
-    const run = stateRef.current.run;
-    const ownFinishedRun = !!op && isOwnRecentRun(run, snapshotFromServer(op)?.kind, Date.now());
+    const current = stateRef.current;
+    const ownFinishedRun = !!op && isOwnFinishedRun(current.run, op);
+
+    // Tracking that waits for the backend (a detached stream, a reload) may
+    // finish once the server no longer runs that operation.
+    const r = current.reconcile;
+    if (r.active && r.awaitingServer) {
+      const tracked = !!op && (r.serverId ? op.id === r.serverId : matchesRun(current.run, op));
+      if (!tracked) {
+        dispatch({ type: "serverSettled", now: Date.now(), result: trackedResult(current, res.lastCompleted) });
+        // Only a status requested from now on describes the cluster after the operation.
+        void pollStatus();
+      }
+    }
+
     const next: ServerOperationState = {
       loaded: true,
       inProgress: res.inProgress && !ownFinishedRun,
@@ -491,32 +623,43 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
     };
     serverRef.current = next;
     setServer(next);
-    syncServerOperation(op && !ownFinishedRun ? snapshotFromServer(op) : null);
-  }, [syncServerOperation]);
+    // A detached run of this tab that still runs on the server is followed
+    // as a server run from here on (banner, lock, steps).
+    syncServerOperation(op && !ownFinishedRun ? snapshotFromServer(op) : null, res.lastCompleted);
+  }, [syncServerOperation, pollStatus]);
 
   const pollServerOperation = useCallback(async () => {
     const current = stateRef.current.run;
     // While this tab streams its own operation, the stream is the source.
     if (isRunning(current) && current.source === "stream" && Date.now() - current.startedAt < STREAM_MAX_MS) return;
+    const seq = ++operationSeq.current;
     try {
-      applyServerOperation(await fetchOperationRef.current());
+      const res = await fetchOperationRef.current();
+      if (seq !== operationSeq.current) return;
+      applyServerOperation(res);
     } catch {
       // Keep the last answer: a failed poll says nothing about the cluster.
     }
   }, [applyServerOperation]);
 
   const operationPoller = usePolling(pollServerOperation, {
-    delay: () => (serverRef.current.inProgress || isRunning(stateRef.current.run) ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
+    delay: () => (serverRef.current.inProgress || isRunning(stateRef.current.run) || stateRef.current.reconcile.awaitingServer ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
     runImmediately: true,
   });
   const refreshServerOperation = useCallback(() => operationPoller.reset({ runNow: true }), [operationPoller]);
 
-  // After a run of this tab ends, look again soon: the lock is free by then,
-  // or a cluster_busy rejection named the operation that holds it.
+  // After a run of this tab ends, look again: at once when the stream
+  // detached (the operation may still hold the lock), else soon (the lock is
+  // free by then), or use the operation a cluster_busy rejection named.
   useEffect(() => {
     if (runId === undefined || !outcome) return;
     if (outcome.status === "failed" && outcome.busyOperation) {
+      operationSeq.current++;
       applyServerOperation({ inProgress: true, operation: outcome.busyOperation });
+    }
+    if (outcome.status === "detached" && outcome.reason !== "server_lost") {
+      operationPoller.reset({ runNow: true });
+      return;
     }
     const id = setTimeout(() => operationPoller.reset({ runNow: true }), 1_500);
     return () => clearTimeout(id);

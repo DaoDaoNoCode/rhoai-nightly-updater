@@ -36,7 +36,7 @@ function setup(status: ResourcesStatus, extra: Record<string, unknown> = {}) {
 describe("terminal states (A08-3, A06-5)", () => {
   it("MinIO in ImagePullBackOff shows the reason and the next step, offers Repair, and explains why teardown is blocked", async () => {
     setup(live());
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     expect(await screen.findByText("Failed: ImagePullBackOff")).toBeInTheDocument();
     expect(screen.getByText(/Repair applies the MinIO Deployment again/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair" })).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe("terminal states (A08-3, A06-5)", () => {
 describe("ownership", () => {
   it("a browser-created MLflow is 'not managed by this tool' and has no Tear down", async () => {
     setup(live());
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     const mlflow = await screen.findByRole("list", { name: "MLflow" });
     await within(mlflow).findByText("Not managed by this tool");
     expect(within(mlflow).getByText(/was not created by this tool/)).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("ownership", () => {
 
   it("projects with someone else's pipeline server are not offered, and say why", async () => {
     setup(live({ minio: { deployed: true, ready: true, managedByTool: true, namespace: "minio" } }));
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     expect(await screen.findByText(/already have a pipeline server this tool did not create: team-x/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add to a project" }));
     const options = await screen.findAllByRole("option");
@@ -79,7 +79,7 @@ describe("ownership", () => {
 describe("MLflow PR override (A04-5)", () => {
   it("Revert and Deploy PR stay available when the PR image broke MLflow", async () => {
     setup(live({ mlflow: { deployed: true, ready: false, managedByTool: true, prOverride: true, prNumber: 399, revertImage: "", waitingReason: "CrashLoopBackOff", terminalError: true, message: "CrashLoopBackOff" } }));
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     const mlflow = await screen.findByRole("list", { name: "MLflow" });
     expect(within(mlflow).getByText("PR #399")).toBeInTheDocument();
     expect(within(mlflow).getByRole("button", { name: "Revert" })).not.toHaveAttribute("aria-disabled");
@@ -92,7 +92,7 @@ describe("MLflow PR override (A04-5)", () => {
 
   it("deploying a PR on an MLflow the tool did not create warns in the confirmation", async () => {
     setup(live());
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     const mlflow = await screen.findByRole("list", { name: "MLflow" });
     fireEvent.change(within(mlflow).getByRole("textbox", { name: /mlflow PR number/ }), { target: { value: "42" } });
     fireEvent.click(within(mlflow).getByRole("button", { name: "Deploy PR" }));
@@ -107,7 +107,7 @@ describe("teardown confirmations state the data loss", () => {
     const api = setup(live({ minio: { deployed: true, ready: true, managedByTool: true, namespace: "minio" } }), {
       "POST /api/resources/pipeline-server/teardown": () => jsonResponse({ success: false, message: "The DSPA is still being deleted by the pipelines operator.", logs: [], errorCode: "in_progress" }, 422),
     });
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     const list = await screen.findByRole("list", { name: "Pipeline servers" });
     fireEvent.click(within(list).getByRole("button", { name: "Tear down" }));
     const dialog = await screen.findByRole("dialog");
@@ -124,7 +124,7 @@ describe("teardown confirmations state the data loss", () => {
     setup(live({ minio: { ...brokenMinio, teardownBlockedReason: undefined }, pipelineServers: [] }), {
       "POST /api/resources/minio/teardown": () => jsonResponse({ success: false, errorCode: "prerequisites", logs: [], message: "Refusing to delete namespace minio: CRD mcpservers.mcp.x-k8s.io has a conversion webhook whose Service redhat-ods-applications/mcp-lifecycle-operator-webhook-service is missing." }, 422),
     });
-    render(<QuickResourceCreator canMutate />);
+    render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
     await waitFor(() => expect(within(storage).getByRole("button", { name: "Tear down" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));

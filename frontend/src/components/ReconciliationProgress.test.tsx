@@ -47,6 +47,29 @@ describe("ReconciliationProgress stuck guidance (B2 contract)", () => {
     expect(result.closest(".pf-v6-c-alert")).toHaveClass("pf-m-info");
   });
 
+  it("a cluster_busy refusal is a 'Cluster busy' warning, and the problems are scanned again (N8)", async () => {
+    let scans = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "/api/diagnostics") {
+        scans++;
+        return jsonResponse({ problems: [{
+          id: "webhook-stale", severity: "warning", title: "1 webhook configuration points to a missing Service", description: "Leftover webhook.",
+          fix: "Delete it.", autoFixable: true, autoFixAction: "delete-stale-webhooks",
+        }], checks: [] });
+      }
+      if (url === "/api/diagnostics/fix") return jsonResponse({ error: "alice is running \"Update to nightly\". Wait for it to finish.", errorCode: "cluster_busy" }, 409);
+      return jsonResponse({});
+    }));
+    renderStuck();
+    const apply = await screen.findByRole("button", { name: /Apply fix/ });
+    await waitFor(() => expect(apply).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(apply);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Apply fix" }));
+    const title = await screen.findByText("Cluster busy");
+    expect(title.closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
+    await waitFor(() => expect(scans).toBe(2));
+  });
+
   it("shows guidance-only problems with instructions and no fix button", async () => {
     stubDiagnostics([{
       id: "pod-stuck-creating-redhat-ods-applications-odh-observability", severity: "warning", title: "odh-observability: 2 pods stuck in ContainerCreating",
@@ -68,11 +91,29 @@ describe("Reconcile completion after a reload (A07-8)", () => {
   afterEach(() => sessionStorage.clear());
 
   it("names the operation that finished, shows the build, and can be dismissed", async () => {
+    // The run succeeded before the reload (the stream said so).
+    sessionStorage.setItem("rhoai-reconcile-meta", JSON.stringify({ result: "succeeded", serverId: "op-1" }));
     renderWithApp(<OperationProgress />);
     expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
     expect(screen.getByText(/Operator rhods-operator.3.6.0 is Succeeded/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Close/ }));
     await waitFor(() => expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument());
+  });
+
+  it("does not claim success when the result was never seen (N4), unless the server reports it", async () => {
+    const view = renderWithApp(<OperationProgress />);
+    expect(await screen.findByText("Re-deploy finished (outcome unknown, see the activity log)")).toBeInTheDocument();
+    expect(screen.queryByText("Re-deploy complete")).not.toBeInTheDocument();
+    view.unmount();
+
+    sessionStorage.setItem("rhoai-reconciling", "true");
+    sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 60_000));
+    sessionStorage.setItem("rhoai-reconcile-kind", "refresh");
+    sessionStorage.setItem("rhoai-reconcile-meta", JSON.stringify({ serverId: "op-7" }));
+    renderWithApp(<OperationProgress />, {
+      operation: async () => ({ inProgress: false, operation: null, lastCompleted: { id: "op-7", type: "refresh", label: "Re-deploy", user: "me", startedAt: "2026-10-05T10:00:00Z", success: true } }),
+    });
+    expect(await screen.findByText("Re-deploy complete")).toBeInTheDocument();
   });
 });
 
