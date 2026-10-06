@@ -142,7 +142,11 @@ make rollback TAG=v1.0.0 NAMESPACE=$NS APP_NAME=$APP DRY_RUN=1   # validate
 make rollback TAG=v1.0.0 NAMESPACE=$NS APP_NAME=$APP
 ```
 
-It applies that release's own template with its image and keeps sessions.
+It applies that release's own template with its image (by digest) and keeps
+sessions. Check it with `./scripts/smoke-test.sh $NS $APP`: it compares the
+template revision with what the running image expects, and only notes that
+your checkout is a newer revision (verified live on a v1.0.0 install with
+the v2 smoke test: all checks pass).
 It does not undo what the newer version did on the cluster: a SeaweedFS
 migration stays (see [RUNBOOK §10.1](../RUNBOOK.md#101-minio-to-seaweedfs-what-the-migration-does-and-how-to-roll-back)
 to go back to MinIO), and RBAC that only the newer template had stays until

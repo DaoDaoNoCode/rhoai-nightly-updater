@@ -31,6 +31,7 @@ WARN=0
 pass() { echo -e "  ✅ $*"; PASS=$((PASS+1)); }
 fail() { echo -e "  ❌ $*"; FAIL=$((FAIL+1)); }
 warn() { echo -e "  ⚠  $*"; WARN=$((WARN+1)); }
+info() { echo -e "  ℹ  $*"; }
 expect() { # expect <label> <actual> <wanted>
   if [[ "$2" == "$3" ]]; then pass "$1: $2"; else fail "$1: '${2:-unset}' (template: $3)"; fi
 }
@@ -56,7 +57,7 @@ DEPLOY_JSON_ARGS=(deployment "$APP" -n "$NS")
 echo "1. Deployment matches deploy/template.yaml"
 expect "Strategy" "$(jp "${DEPLOY_JSON_ARGS[@]}" -o jsonpath='{.spec.strategy.type}')" "$T_STRATEGY"
 expect "terminationGracePeriodSeconds" "$(jp "${DEPLOY_JSON_ARGS[@]}" -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}')" "$T_GRACE"
-expect "TEMPLATE_REVISION" "$(jp "${DEPLOY_JSON_ARGS[@]}" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].env[?(@.name=="TEMPLATE_REVISION")].value}')" "$T_REVISION"
+DEPLOY_REVISION=$(jp "${DEPLOY_JSON_ARGS[@]}" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].env[?(@.name=="TEMPLATE_REVISION")].value}')
 
 # 2. Pods and app build
 echo ""
@@ -80,6 +81,17 @@ if [[ -n "$VERSION_JSON" ]]; then
   fi
 else
   warn "Could not read /api/version from the pod (older image, or no exec permission)"
+fi
+# The template revision must be the one the RUNNING image expects; after a
+# rollback that is the older release's, not this checkout's.
+EXPECTED_REVISION=$(echo "$VERSION_JSON" | sed -n 's/.*"expectedTemplateRevision":"\([^"]*\)".*/\1/p')
+if [[ -n "$EXPECTED_REVISION" ]]; then
+  expect "TEMPLATE_REVISION (expected by the running image)" "$DEPLOY_REVISION" "$EXPECTED_REVISION"
+else
+  expect "TEMPLATE_REVISION" "$DEPLOY_REVISION" "$T_REVISION"
+fi
+if [[ -n "$EXPECTED_REVISION" && "$DEPLOY_REVISION" != "$T_REVISION" ]]; then
+  info "This checkout's template is revision $T_REVISION and the install runs revision ${DEPLOY_REVISION:-unset} (another release, for example after a rollback); for exact template checks, run the smoke test of that release"
 fi
 
 # 3. Route and oauth-proxy
