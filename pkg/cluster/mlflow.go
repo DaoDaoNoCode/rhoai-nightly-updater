@@ -338,7 +338,14 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	slog.Info("mlflow teardown", "user", getUser(c))
 	recordMLflowActivity(c, "teardown-mlflow", mlflowNamespace, true)
 
-	if !waitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll) {
+	gone, waitErr := waitForDeletion(c, crPath, MLflowDeleteTimeout, MLflowDeletePoll)
+	if waitErr != nil {
+		return &types.OperationResponse{
+			Success: false, Message: fmt.Sprintf("MLflow deletion was requested, but whether the CR is gone cannot be checked: %v.%s", waitErr, dataNote),
+			Logs: logs, ErrorCode: firstNonEmpty(errorCodeFromK8sErr(waitErr), "in_progress"),
+		}, nil
+	}
+	if !gone {
 		note := ""
 		if latest, err := getMLflowCR(c); err == nil {
 			note = mlflowFinalizerNote(latest)

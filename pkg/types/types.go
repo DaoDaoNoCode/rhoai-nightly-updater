@@ -512,6 +512,10 @@ type ResourceState struct {
 	// RevertImage is the image Revert restores. Empty with PROverride set
 	// means the operator default (spec.image.image removed).
 	RevertImage string `json:"revertImage,omitempty"`
+	// Warning is a security or upgrade notice that needs the user's action
+	// but does not stop the resource from working (for example MinIO still
+	// running the 2019 release, or its S3 API exposed through a Route).
+	Warning string `json:"warning,omitempty"`
 }
 
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.

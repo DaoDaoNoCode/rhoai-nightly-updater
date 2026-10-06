@@ -71,6 +71,15 @@ func putMinIOPod(f *resourceFake, name, image, reason, message string) {
 		"containerStatuses":[{"name":"minio","state":{"waiting":{"reason":"`+reason+`","message":"`+message+`"}}}]}}`)
 }
 
+func hasExactMutation(f *resourceFake, want string) bool {
+	for _, m := range f.mutations() {
+		if m == want {
+			return true
+		}
+	}
+	return false
+}
+
 func hasMutation(f *resourceFake, prefix string) bool {
 	for _, m := range f.mutations() {
 		if strings.HasPrefix(m, prefix) {
@@ -96,7 +105,6 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 		minioNSPath, minioPVCPath, minioDeployPath,
 		"/api/v1/namespaces/minio/secrets/minio-secret",
 		"/api/v1/namespaces/minio/services/minio-service",
-		"/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api",
 		"/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui",
 	} {
 		obj := f.get(path)
@@ -133,11 +141,22 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	}
 	_ = json.Unmarshal(raw, &deploy)
 	ctr := deploy.Spec.Template.Spec.Containers[0]
-	if ctr.Image != minioDefaultImage || !strings.Contains(ctr.Image, "@sha256:") || strings.Contains(ctr.Image, "quay.io/minio/") {
-		t.Errorf("image = %q, want the digest-pinned ODH MinIO", ctr.Image)
+	if ctr.Image != minioDefaultImage || !strings.Contains(ctr.Image, "@sha256:") || strings.Contains(ctr.Image, "RELEASE.2019") {
+		t.Errorf("image = %q, want the digest-pinned patched MinIO", ctr.Image)
 	}
-	if strings.Join(ctr.Args, " ") != "server /data" {
-		t.Errorf("args = %v; the 2019 MinIO release has no --console-address", ctr.Args)
+	if strings.Join(ctr.Args, " ") != "server /data --console-address :9001" {
+		t.Errorf("args = %v; the console must have its own port", ctr.Args)
+	}
+	if f.has("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api") {
+		t.Error("the S3 API must not be exposed through a Route")
+	}
+	ui, _ := json.Marshal(f.get("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui"))
+	if !strings.Contains(string(ui), `"targetPort":"console"`) {
+		t.Errorf("console Route must target the console port only: %s", ui)
+	}
+	pvcAnn, _ := f.get(minioPVCPath)["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if pvcAnn[minioBackendAnnotation] != minioBackendXL {
+		t.Errorf("new PVC lacks the backend annotation: %v", pvcAnn)
 	}
 	if _, fixed := ctr.SecurityContext["runAsUser"]; fixed || deploy.Spec.Template.Spec.SecurityContext != nil {
 		t.Errorf("a fixed UID would conflict with restricted-v2: %v", ctr.SecurityContext)
@@ -146,8 +165,8 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	for _, e := range ctr.Env {
 		envs[e.Name] = true
 	}
-	if !envs["MINIO_ACCESS_KEY"] || !envs["MINIO_SECRET_KEY"] {
-		t.Errorf("env %v lacks the variables the 2019 MinIO reads", envs)
+	if !envs["MINIO_ROOT_USER"] || !envs["MINIO_ROOT_PASSWORD"] || envs["MINIO_ACCESS_KEY"] {
+		t.Errorf("env %v: want only the MINIO_ROOT_* variables", envs)
 	}
 }
 
@@ -207,8 +226,10 @@ func TestSetupMinIO_AdoptsNamespaceFromEarlierVersion(t *testing.T) {
 	if labels[managedByLabelKey] != managedByLabelValue || labels["kubernetes.io/metadata.name"] != "minio" {
 		t.Errorf("namespace labels after adoption: %v", labels)
 	}
-	if hasMutation(f, "POST /api/v1/namespaces") {
-		t.Error("an existing namespace must not be re-created")
+	for _, m := range f.mutations() {
+		if m == "POST /api/v1/namespaces" {
+			t.Error("an existing namespace must not be re-created")
+		}
 	}
 }
 
@@ -264,7 +285,7 @@ func TestSetupMinIO_NeverReportsSuccessWhileNotReady(t *testing.T) {
 func TestSetupMinIO_ApplyFailureReportsPartialProgress(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
-	f.fail["PATCH "+minioDeployPath] = 500
+	f.fail["POST /apis/apps/v1/namespaces/minio/deployments"] = 500
 	resp, _ := SetupMinIO(c)
 	if resp.Success || !strings.Contains(resp.Message, "Failed to apply Deployment") || !strings.Contains(resp.Message, "PVC, Secret") {
 		t.Fatalf("want a partial-progress failure, got %+v", resp)
@@ -406,10 +427,10 @@ func TestTeardownMinIO(t *testing.T) {
 			managedNS(f)
 			dspa(f, "team-a", "dspa", "s3.amazonaws.com", false)
 		}, wantOK: true, wantDelete: true},
-		{name: "foreign PVC in the namespace", setup: func(f *resourceFake) {
+		{name: "foreign PVC in the namespace keeps the namespace", setup: func(f *resourceFake) {
 			managedNS(f)
 			f.putJSON("/api/v1/namespaces/minio/persistentvolumeclaims/someone-else", `{"metadata":{}}`)
-		}, wantCode: "not_managed", wantMsg: "someone-else"},
+		}, wantOK: true, wantMsg: "kept because it contains objects this tool did not create: PersistentVolumeClaim someone-else"},
 		{name: "DSPA CRD missing", setup: func(f *resourceFake) {
 			managedNS(f)
 			f.fail["GET "+dspaListPath] = 404
@@ -439,7 +460,7 @@ func TestTeardownMinIO(t *testing.T) {
 			if resp.Success != tc.wantOK || (tc.wantCode != "" && resp.ErrorCode != tc.wantCode) {
 				t.Fatalf("got %+v", resp)
 			}
-			if got := hasMutation(f, "DELETE "+minioNSPath); got != tc.wantDelete {
+			if got := hasExactMutation(f, "DELETE "+minioNSPath); got != tc.wantDelete {
 				t.Errorf("namespace DELETE = %v, want %v (%v)", got, tc.wantDelete, f.mutations())
 			}
 			if tc.wantMsg != "" && !strings.Contains(resp.Message, tc.wantMsg) {
