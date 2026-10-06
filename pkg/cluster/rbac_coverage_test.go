@@ -772,12 +772,21 @@ func templateGrants(t *testing.T) []grant {
 		t.Fatal(err)
 	}
 	var tmpl struct {
-		Objects []templateObject `yaml:"objects"`
+		Parameters []templateParameter `yaml:"parameters"`
+		Objects    []templateObject    `yaml:"objects"`
 	}
 	if err := yaml.Unmarshal(data, &tmpl); err != nil {
 		t.Fatal(err)
 	}
-	norm := func(s string) string { return strings.ReplaceAll(s, "${NAMESPACE}", appNSMarker) }
+	// Other namespace parameters (the pull-secret and marketplace
+	// namespaces) resolve to their default values.
+	norm := func(s string) string {
+		s = strings.ReplaceAll(s, "${NAMESPACE}", appNSMarker)
+		for _, p := range tmpl.Parameters {
+			s = strings.ReplaceAll(s, "${"+p.Name+"}", p.Value)
+		}
+		return s
+	}
 	roles := map[string]templateObject{}
 	for _, o := range tmpl.Objects {
 		if o.Kind == "ClusterRole" || o.Kind == "Role" {
@@ -993,5 +1002,38 @@ func TestRBACGrantMatching(t *testing.T) {
 	cluster := grant{rule: rbacRule{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"create"}}}
 	if !cluster.allows(rbacRequest{Verb: "create", Resource: "secrets", Namespace: anyNS}) {
 		t.Error("a cluster-wide rule covers any namespace")
+	}
+}
+
+type templateParameter struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
+// `oc process` drops a hard-coded metadata.namespace from template objects
+// and keeps only parameterised ones, so a literal namespace would create the
+// object in whatever project is current (seen live: the kube-system and
+// openshift-marketplace Roles landed in "default").
+func TestTemplateNamespacesAreParameters(t *testing.T) {
+	data, err := os.ReadFile(templateRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tmpl struct {
+		Objects []struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name      string `yaml:"name"`
+				Namespace string `yaml:"namespace"`
+			} `yaml:"metadata"`
+		} `yaml:"objects"`
+	}
+	if err := yaml.Unmarshal(data, &tmpl); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range tmpl.Objects {
+		if ns := o.Metadata.Namespace; ns != "" && !strings.HasPrefix(ns, "${") {
+			t.Errorf("%s %s has the literal namespace %q; use a template parameter, or oc process drops it", o.Kind, o.Metadata.Name, ns)
+		}
 	}
 }

@@ -17,6 +17,14 @@ parameters:
     value: rhoai-nightly-updater
   - name: APP_NAME
     value: rhoai-nightly-updater
+  # Namespaces of the cluster pull secret and of the CatalogSources. They are
+  # parameters because `oc process` drops a hard-coded metadata.namespace
+  # from template objects (it keeps only parameterised ones), which would
+  # create these Roles in the current project instead.
+  - name: PULL_SECRET_NAMESPACE
+    value: kube-system
+  - name: MARKETPLACE_NAMESPACE
+    value: openshift-marketplace
   - name: OAUTH_PROXY_IMAGE
     # Match the tag to your cluster's OCP minor version (e.g., v4.17 for OCP 4.17.x).
     # Find available tags: oc image info registry.redhat.io/openshift4/ose-oauth-proxy-rhel9 --filter-by-os=linux/amd64
@@ -303,7 +311,7 @@ objects:
     kind: Role
     metadata:
       name: ${APP_NAME}-${NAMESPACE}
-      namespace: kube-system
+      namespace: ${PULL_SECRET_NAMESPACE}
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     rules:
@@ -315,7 +323,7 @@ objects:
     kind: RoleBinding
     metadata:
       name: ${APP_NAME}-${NAMESPACE}
-      namespace: kube-system
+      namespace: ${PULL_SECRET_NAMESPACE}
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     roleRef:
@@ -332,7 +340,7 @@ objects:
     kind: Role
     metadata:
       name: ${APP_NAME}-${NAMESPACE}
-      namespace: openshift-marketplace
+      namespace: ${MARKETPLACE_NAMESPACE}
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     rules:
@@ -346,7 +354,7 @@ objects:
     kind: RoleBinding
     metadata:
       name: ${APP_NAME}-${NAMESPACE}
-      namespace: openshift-marketplace
+      namespace: ${MARKETPLACE_NAMESPACE}
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     roleRef:
