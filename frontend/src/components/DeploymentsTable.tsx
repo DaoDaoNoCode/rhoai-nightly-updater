@@ -346,7 +346,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
                       {commitURL ? (
                         <a href={commitURL} target="_blank" rel="noopener noreferrer" aria-label={`Commit ${dep.gitCommit} on GitHub`}><code>{shortSha}</code></a>
                       ) : <code>{shortSha}</code>}
-                      {dep.commitDate && <div><RelativeTime date={dep.commitDate} prefix="merged " /></div>}
+                      {dep.commitDate && <div className="pf-v6-u-text-nowrap"><RelativeTime date={dep.commitDate} prefix="merged " /></div>}
                     </>
                   ) : <span className="pf-v6-u-text-color-subtle">Unknown</span>}
                 </Td>

@@ -26,25 +26,26 @@ import type { StatusResponse } from '../types';
 const MIRROR_COMMAND = `rosa create image-mirror --cluster=<your-cluster-name> \\
   --source=registry.redhat.io/rhoai --mirrors=quay.io/rhoai`;
 
+/** A one-line shell command: monospace, with a copy button. */
 const Command: React.FC<{ children: string; label: string }> = ({ children, label }) => (
-  <ClipboardCopy isReadOnly isCode hoverTip="Copy command" clickTip="Copied" textAriaLabel={label}>
+  <ClipboardCopy variant="inline-compact" isBlock isCode hoverTip="Copy command" clickTip="Copied" copyAriaLabel={`Copy the ${label}`}>
     {children}
   </ClipboardCopy>
 );
 
-/** The multi-line command as a code block with a copy action, so its line break survives. */
-const MirrorCommand: React.FC = () => {
+/** A multi-line shell command as a code block with a copy action, so its line breaks survive. */
+const MultiLineCommand: React.FC<{ children: string; label: string; id: string }> = ({ children, label, id }) => {
   const [copied, setCopied] = useState(false);
   return (
     <CodeBlock
       actions={
         <CodeBlockAction>
           <ClipboardCopyButton
-            id="copy-image-mirror-command"
-            textId="image-mirror-command"
-            aria-label="Copy the image mirror command"
+            id={`copy-${id}`}
+            textId={id}
+            aria-label={`Copy the ${label}`}
             onClick={() => {
-              void navigator.clipboard?.writeText(MIRROR_COMMAND).then(() => setCopied(true)).catch(() => {});
+              void navigator.clipboard?.writeText(children).then(() => setCopied(true)).catch(() => {});
             }}
             exitDelay={copied ? 1500 : 600}
             onTooltipHidden={() => setCopied(false)}
@@ -55,7 +56,7 @@ const MirrorCommand: React.FC = () => {
         </CodeBlockAction>
       }
     >
-      <CodeBlockCode id="image-mirror-command">{MIRROR_COMMAND}</CodeBlockCode>
+      <CodeBlockCode id={id}>{children}</CodeBlockCode>
     </CodeBlock>
   );
 };
@@ -91,7 +92,7 @@ const IDMSInstructions: React.FC = () => (
         <ListItem>
           <Stack hasGutter>
             <StackItem>Create the image mirror:</StackItem>
-            <StackItem><MirrorCommand /></StackItem>
+            <StackItem><MultiLineCommand id="cmd-image-mirror" label="image mirror command">{MIRROR_COMMAND}</MultiLineCommand></StackItem>
           </Stack>
         </ListItem>
       </List>

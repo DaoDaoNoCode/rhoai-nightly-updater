@@ -76,7 +76,7 @@ export const HelpButton: React.FC = () => {
             <Content component={ContentVariants.h3}>Dashboard Dev</Content>
             <Content component={ContentVariants.p}>
               Deploys an odh-dashboard PR or main build into RHOAI by pausing dashboard-operator. While it is paused, the
-              dashboard does not follow RHOAI updates; a banner on every page says so. Update, Re-deploy and Reinstall
+              dashboard does not follow RHOAI updates; a notice on every page says so. Update, Re-deploy and Reinstall
               offer to revert it first.
             </Content>
 
