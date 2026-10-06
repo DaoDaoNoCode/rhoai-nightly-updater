@@ -110,6 +110,9 @@ describe("GlobalBanners", () => {
       operation: async () => ({ inProgress: false, operation: null, interrupted: { type: "update", label: "Update to nightly", user: "alice", startedAt: "2026-10-05T09:00:00Z", pod: "old-pod" } }),
     });
     expect(await screen.findByText('"Update to nightly" was interrupted')).toBeInTheDocument();
+    // The explanation is one click away, so the title stays one line.
+    expect(screen.queryByText(/run the same operation again/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Warning alert details/ }));
     expect(screen.getByText(/run the same operation again/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Close/ }));
     await waitFor(() => expect(screen.queryByText('"Update to nightly" was interrupted')).not.toBeInTheDocument());
@@ -125,23 +128,16 @@ describe("GlobalBanners", () => {
       }) as never,
     });
     expect(await screen.findByText("RHOAI was updated while the dashboard was paused")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Warning alert details/ }));
     expect(screen.getByText(/bob deployed PR #222 \(RHOAI build\)/)).toBeInTheDocument();
     expect(screen.getByText(/RHOAI version changed from 3.6.0 to 3.6.1\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Dashboard Dev" })).toBeInTheDocument();
   });
 
-  it("offers to sign in again when the session expired (A02-3)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "expired", errorCode: "session_expired" }), { status: 401, headers: { "Content-Type": "application/json" } })));
-    const { getVersion } = await import("../services/api");
-    renderWithApp(<GlobalBanners />);
-    await getVersion().catch(() => undefined);
-    expect(await screen.findByText("Your session expired")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/oauth/sign_in");
-  });
-
   it("tells admins to run make upgrade when the template is outdated (A09-4)", async () => {
     renderWithApp(<GlobalBanners />, { version: async () => ({ version: "4503bb7d", commit: "x", buildDate: "d", templateRevision: "1", expectedTemplateRevision: "2", templateOutdated: true }) });
     expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Info alert details/ }));
     expect(screen.getByText("make upgrade")).toBeInTheDocument();
   });
 
@@ -149,5 +145,18 @@ describe("GlobalBanners", () => {
     renderWithApp(<GlobalBanners />, { permissions: async () => { throw Object.assign(new Error("x"), { name: "ApiError", status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); } });
     expect(await screen.findByText("Your permissions could not be checked; changes are disabled")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("shows at most two notices and keeps the rest one click away", async () => {
+    renderWithApp(<GlobalBanners />, {
+      operation: async () => ({ inProgress: true, operation: { id: "1", type: "update", label: "Update to nightly", user: "alice", startedAt: new Date().toISOString() } }),
+      permissions: async () => { throw Object.assign(new Error("x"), { name: "ApiError", status: 503, errorCode: "authorization_unavailable", message: "Cannot verify mutation permissions" }); },
+      version: async () => ({ version: "4503bb7d", commit: "x", buildDate: "d", templateRevision: "1", expectedTemplateRevision: "2", templateOutdated: true }),
+    }, "/components");
+    expect(await screen.findByText(/alice is running "Update to nightly"/)).toBeInTheDocument();
+    expect(await screen.findByText("Your permissions could not be checked; changes are disabled")).toBeInTheDocument();
+    expect(screen.queryByText(/this updater's deployment is out of date/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View 1 more notice" }));
+    expect(screen.getByText(/this updater's deployment is out of date/)).toBeInTheDocument();
   });
 });

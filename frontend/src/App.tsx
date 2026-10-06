@@ -1,11 +1,13 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import {
-  Bullseye,
+  Brand,
   Button,
+  Divider,
   EmptyState,
   EmptyStateActions,
   EmptyStateBody,
   EmptyStateFooter,
+  Flex,
   Page,
   PageSection,
   PageSidebar,
@@ -21,9 +23,9 @@ import {
   NavItem,
   NavList,
   Dropdown,
+  DropdownGroup,
   DropdownItem,
   DropdownList,
-  Label,
   MenuToggle,
   SkipToContent,
   Spinner,
@@ -31,9 +33,9 @@ import {
   ToolbarContent,
   ToolbarItem,
   ToolbarGroup,
+  Truncate,
 } from "@patternfly/react-core";
 import ThIcon from "@patternfly/react-icons/dist/esm/icons/th-icon";
-import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import SunIcon from "@patternfly/react-icons/dist/esm/icons/sun-icon";
 import MoonIcon from "@patternfly/react-icons/dist/esm/icons/moon-icon";
 import BarsIcon from "@patternfly/react-icons/dist/esm/icons/bars-icon";
@@ -51,10 +53,12 @@ import {
 import { trackPageView } from "./services/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
-import { GlobalBanners } from "./components/GlobalBanners";
+import { PageLoading, SessionExpiredState } from "./components/PageStates";
+import { StatusLabel } from "./components/StatusLabel";
 import { NAV_ITEMS } from "./constants";
+import { LOGO_SRC } from "./logo";
 import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
-import { AppInfoProvider, useSessionExpired, useVersion } from "./state/AppInfo";
+import { AppInfoProvider, useSessionExpired } from "./state/AppInfo";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 
 // Route-level code splitting: each page is its own chunk.
@@ -88,14 +92,6 @@ const NotFoundPage: React.FC = () => {
   );
 };
 
-const PageLoading: React.FC = () => (
-  <PageSection isFilled>
-    <Bullseye>
-      <Spinner size="xl" aria-label="Loading page" />
-    </Bullseye>
-  </PageSection>
-);
-
 /**
  * Adapts react-router's Link to NavItem's `component` prop: NavItem passes
  * the `to` value as `href`, plus its class names, aria-current and click handler.
@@ -104,6 +100,12 @@ const RouterNavLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttrib
   ({ href, ...props }, ref) => <Link ref={ref} to={href ?? "/"} {...props} />,
 );
 RouterNavLink.displayName = "RouterNavLink";
+
+/** MastheadLogo as a router link to the Status page. */
+const HomeLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttributes<HTMLAnchorElement>>(
+  (props, ref) => <Link ref={ref} to="/" aria-label="RHOAI Nightly Updater home" {...props} />,
+);
+HomeLink.displayName = "HomeLink";
 
 /** /dashboard-dev?tab=resources was the Test resources tab; it now has its own page. */
 export const DashboardDevRoute: React.FC = () => {
@@ -132,11 +134,15 @@ function initialDarkMode(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
+/** The RHOAI dashboard route next to the console route (same cluster apps domain). */
+export function rhoaiDashboardURL(consoleURL: string): string {
+  return consoleURL.replace("console-openshift-console", "data-science-gateway");
+}
+
 const AppLayout: React.FC = () => {
   const { status, error: statusError } = useClusterStatus();
   const { state: operationState } = useOperation();
   const sessionExpired = useSessionExpired();
-  const version = useVersion();
   const reconciling = operationState.reconcile.active;
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
@@ -157,31 +163,36 @@ const AppLayout: React.FC = () => {
     try { localStorage.setItem("pf-theme", isDark ? "dark" : "light"); } catch { /* localStorage may be disabled */ }
   }, [isDark]);
 
+  const consoleURL = status?.consoleURL?.startsWith("https://") ? status.consoleURL : "";
+
   const header = (
-    <Masthead>
+    <Masthead display={{ default: "inline" }}>
       <MastheadMain>
         <MastheadToggle>
-          <PageToggleButton
-            variant="plain"
-            aria-label="Global navigation"
-          >
+          <PageToggleButton variant="plain" aria-label="Global navigation">
             <BarsIcon />
           </PageToggleButton>
         </MastheadToggle>
         <MastheadBrand>
-          <MastheadLogo component={(props: React.HTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" aria-label="RHOAI Nightly Updater home" style={{ color: "inherit", textDecoration: "none" }} />}>
-            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==" alt="" height="38" />
-            <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.2, marginLeft: "8px" }}>
-              <strong style={{ fontSize: "var(--pf-t--global--font--size--body--default)" }}>RHOAI</strong>
-              <span style={{ fontSize: "var(--pf-t--global--font--size--body--default)", fontWeight: "var(--pf-t--global--font--weight--body--default)" }}>Nightly Updater</span>
-            </span>
+          <MastheadLogo component={HomeLink}>
+            <Flex component="span" alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+              <Brand src={LOGO_SRC} alt="" heights={{ default: "32px" }} />
+              <span className="pf-v6-u-display-none pf-v6-u-display-inline-on-sm pf-v6-u-font-size-lg pf-v6-u-font-weight-bold pf-v6-u-text-color-regular pf-v6-u-text-nowrap">
+                RHOAI Nightly Updater
+              </span>
+            </Flex>
           </MastheadLogo>
         </MastheadBrand>
       </MastheadMain>
       <MastheadContent>
         <Toolbar isStatic>
           <ToolbarContent>
-            <ToolbarGroup align={{ default: "alignEnd" }} gap={{ default: "gapNone", md: "gapMd" }}>
+            <ToolbarGroup align={{ default: "alignEnd" }} gap={{ default: "gapNone", md: "gapMd" }} alignItems="center">
+              {reconciling && (
+                <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
+                  <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>Reconciling</StatusLabel>
+                </ToolbarItem>
+              )}
               <ToolbarItem>
                 <Button
                   variant="plain"
@@ -194,112 +205,71 @@ const AppLayout: React.FC = () => {
               <ToolbarItem>
                 <HelpButton />
               </ToolbarItem>
+              {consoleURL && (
+                <ToolbarItem>
+                  <Dropdown
+                    isOpen={appLauncherOpen}
+                    onSelect={() => setAppLauncherOpen(false)}
+                    onOpenChange={setAppLauncherOpen}
+                    popperProps={{ position: "right" }}
+                    toggle={(toggleRef) => (
+                      <MenuToggle
+                        ref={toggleRef}
+                        onClick={() => setAppLauncherOpen(!appLauncherOpen)}
+                        isExpanded={appLauncherOpen}
+                        variant="plain"
+                        aria-label="Applications"
+                        icon={<ThIcon />}
+                      />
+                    )}
+                  >
+                    <DropdownList>
+                      <DropdownItem key="console" to={consoleURL} isExternalLink>OpenShift console</DropdownItem>
+                      <DropdownItem key="rhoai-dashboard" to={rhoaiDashboardURL(consoleURL)} isExternalLink>RHOAI dashboard</DropdownItem>
+                    </DropdownList>
+                  </Dropdown>
+                </ToolbarItem>
+              )}
               {status ? (
-                <>
-                  <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
-                    <Dropdown
-                      isOpen={appLauncherOpen}
-                      onSelect={() => setAppLauncherOpen(false)}
-                      onOpenChange={setAppLauncherOpen}
-                      popperProps={{ position: "right" }}
-                      toggle={(toggleRef) => (
-                        <MenuToggle
-                          ref={toggleRef}
-                          onClick={() => setAppLauncherOpen(!appLauncherOpen)}
-                          isExpanded={appLauncherOpen}
-                          variant="plain"
-                          aria-label="Applications"
-                          icon={<ThIcon />}
-                        />
-                      )}
-                    >
+                <ToolbarItem>
+                  <Dropdown
+                    isOpen={userMenuOpen}
+                    onSelect={() => setUserMenuOpen(false)}
+                    onOpenChange={setUserMenuOpen}
+                    popperProps={{ position: "right" }}
+                    toggle={(toggleRef) => (
+                      <MenuToggle
+                        ref={toggleRef}
+                        onClick={() => setUserMenuOpen(!userMenuOpen)}
+                        isExpanded={userMenuOpen}
+                        variant="plainText"
+                        aria-label={`User menu for ${status.cluster.user}`}
+                      >
+                        <Truncate content={status.cluster.user} maxCharsDisplayed={16} position="end" />
+                      </MenuToggle>
+                    )}
+                  >
+                    <DropdownGroup label={`Signed in as ${status.cluster.user}`} labelHeadingLevel="h2">
+                      <Divider component="li" />
                       <DropdownList>
-                        {status.consoleURL && (
-                          <DropdownItem
-                            key="console"
-                            onClick={() => window.open(status.consoleURL, "_blank")}
-                            icon={<ExternalLinkAltIcon />}
-                          >
-                            OpenShift Console
-                          </DropdownItem>
-                        )}
-                        {status.consoleURL && (
-                          <DropdownItem
-                            key="rhoai-dashboard"
-                            onClick={() => {
-                              const dashboardURL = status.consoleURL?.replace("console-openshift-console", "data-science-gateway");
-                              window.open(dashboardURL, "_blank");
-                            }}
-                            icon={<ExternalLinkAltIcon />}
-                          >
-                            RHOAI Dashboard
-                          </DropdownItem>
-                        )}
-                      </DropdownList>
-                    </Dropdown>
-                  </ToolbarItem>
-                  {reconciling && (
-                    <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
-                      <Label isCompact color="orange" icon={<Spinner size="sm" aria-label="Reconciling" />}>
-                        Reconciling...
-                      </Label>
-                    </ToolbarItem>
-                  )}
-                  <ToolbarItem visibility={{ default: "hidden", lg: "visible" }}>
-                    <Label isCompact color="blue">
-                      OCP {status.cluster.version}
-                    </Label>
-                  </ToolbarItem>
-                  <ToolbarItem>
-                    <Dropdown
-                      isOpen={userMenuOpen}
-                      onSelect={() => setUserMenuOpen(false)}
-                      onOpenChange={setUserMenuOpen}
-                      popperProps={{ position: "right" }}
-                      toggle={(toggleRef) => (
-                        <MenuToggle
-                          ref={toggleRef}
-                          onClick={() => setUserMenuOpen(!userMenuOpen)}
-                          isExpanded={userMenuOpen}
-                          variant="plainText"
-                          aria-label={`User menu for ${status.cluster.user}`}
-                        >
-                          <span style={{ display: "inline-block", maxWidth: "8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
-                            {status.cluster.user}
-                          </span>
-                        </MenuToggle>
-                      )}
-                    >
-                      <DropdownList>
-                        <DropdownItem key="cluster" isDisabled description={`OCP ${status.cluster.version}`}>
-                          {status.cluster.user}
-                        </DropdownItem>
-                        {version && (
-                          <DropdownItem key="version" isDisabled description={version.buildDate && version.buildDate !== "unknown" ? `Built ${version.buildDate}` : undefined}>
-                            Updater build {version.version}
-                          </DropdownItem>
-                        )}
-                        <DropdownItem
-                          key="logout"
-                          onClick={() => { window.location.href = "/oauth/sign_in"; }}
-                        >
+                        <DropdownItem key="logout" onClick={() => { window.location.href = "/oauth/sign_in"; }}>
                           Log out
                         </DropdownItem>
                       </DropdownList>
-                    </Dropdown>
-                  </ToolbarItem>
-                </>
+                    </DropdownGroup>
+                  </Dropdown>
+                </ToolbarItem>
               ) : sessionExpired ? (
                 <ToolbarItem>
-                  <Label isCompact color="red" variant="outline">Signed out</Label>
+                  <StatusLabel status="danger">Signed out</StatusLabel>
                 </ToolbarItem>
               ) : statusError ? (
                 <ToolbarItem>
-                  <Label isCompact color="red" variant="outline">Cluster unavailable</Label>
+                  <StatusLabel status="danger">Cluster unavailable</StatusLabel>
                 </ToolbarItem>
               ) : (
                 <ToolbarItem>
-                  <Spinner size="sm" aria-label="Loading cluster info" />
+                  <Spinner size="md" aria-label="Loading cluster info" />
                 </ToolbarItem>
               )}
             </ToolbarGroup>
@@ -336,21 +306,26 @@ const AppLayout: React.FC = () => {
       masthead={header}
       sidebar={sidebar}
       isManagedSidebar
+      isContentFilled
       skipToContent={<SkipToContent href={`#${MAIN_CONTENT_ID}`}>Skip to content</SkipToContent>}
       mainContainerId={MAIN_CONTENT_ID}
     >
-      <GlobalBanners />
-      <Suspense fallback={<PageLoading />}>
-        <Routes>
-          <Route path="/" element={<StatusPage />} />
-          <Route path="/components" element={<ComponentsPage />} />
-          <Route path="/builds" element={<BuildExplorerPage />} />
-          <Route path="/dashboard-dev" element={<DashboardDevRoute />} />
-          <Route path="/test-resources" element={<TestResourcesPage />} />
-          <Route path="/diagnostics" element={<TroubleshootingPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </Suspense>
+      {sessionExpired ? (
+        // Nothing on any page works until the user signs in again (UX-Global-16).
+        <SessionExpiredState />
+      ) : (
+        <Suspense fallback={<PageLoading title="Loading page" />}>
+          <Routes>
+            <Route path="/" element={<StatusPage />} />
+            <Route path="/components" element={<ComponentsPage />} />
+            <Route path="/builds" element={<BuildExplorerPage />} />
+            <Route path="/dashboard-dev" element={<DashboardDevRoute />} />
+            <Route path="/test-resources" element={<TestResourcesPage />} />
+            <Route path="/diagnostics" element={<TroubleshootingPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </Suspense>
+      )}
     </Page>
   );
 };

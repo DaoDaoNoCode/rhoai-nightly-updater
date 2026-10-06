@@ -10,6 +10,9 @@ vi.mock("../state/AppState", () => ({
   useClusterStatus: () => ({ status: statusRef.current, loading: false, error: null, lastRefreshed: null, refresh: async () => {} }),
 }));
 
+// The app-wide notices need the AppInfo provider; they are tested on their own.
+vi.mock("../components/GlobalBanners", () => ({ GlobalBanners: () => null }));
+
 const { BuildExplorerPage } = await import("./BuildExplorerPage");
 
 const FBC = "quay.io/rhoai/rhoai-fbc-fragment";

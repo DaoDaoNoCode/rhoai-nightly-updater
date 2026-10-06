@@ -15,7 +15,7 @@ import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external
 import type { RelatedImage } from "../types";
 import { formatRelativeTime } from "../utils";
 import { useFbcContent } from "../hooks/useFbcContent";
-import { CopyableText } from "./CopyableText";
+import { ImageRef } from "./ImageRef";
 
 export const CATEGORY_LABELS: Record<string, string> = {
   core: "Core",
@@ -83,7 +83,7 @@ export const ComponentImagesTable: React.FC<{
         return (
           <Tr key={ri.name || ri.image}>
             <Td dataLabel="Component">
-              <CopyableText text={ri.name || ri.image} value={ri.image} what="image reference" />
+              <ImageRef image={ri.image} display={ri.name || undefined} isCode={!ri.name} what={`image reference of ${ri.name || "this component"}`} />
             </Td>
             <Td dataLabel="Commit">
               {shortSha ? (

@@ -28,6 +28,7 @@ export function formatRelativeTime(dateStr: string): string {
     const date = new Date(dateStr);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
+    if (Number.isNaN(diffMs)) return dateStr;
     if (diffMs < 0) return "just now";
 
     const mins = Math.floor(diffMs / 60000);
@@ -39,8 +40,9 @@ export function formatRelativeTime(dateStr: string): string {
 
     const days = Math.floor(hours / 24);
     if (days < 7) return `${days}d ago`;
-
-    return date.toLocaleDateString();
+    if (days < 30) return `${Math.floor(days / 7)}w ago`;
+    if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+    return `${Math.floor(days / 365)}y ago`;
   } catch {
     return dateStr;
   }

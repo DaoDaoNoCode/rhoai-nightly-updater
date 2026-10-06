@@ -1,6 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, PageSection } from "@patternfly/react-core";
 import { describeLoadError } from "../outcomes";
+import { TruncatedText } from "./LongText";
 
 interface LoadErrorAlertProps {
   error: unknown;
@@ -10,7 +11,11 @@ interface LoadErrorAlertProps {
   stale?: boolean;
 }
 
-/** A failed page load, classified by errorCode, with a Retry action (A08-6, A04-9). */
+/**
+ * A failed page load, classified by errorCode, with a Retry action (A08-6,
+ * A04-9). The one alert for page-level load errors: a normal PageSection
+ * under the header, the raw cause truncated to two lines.
+ */
 export const LoadErrorAlert: React.FC<LoadErrorAlertProps> = ({ error, genericTitle, onRetry, stale }) => {
   const { title, body, variant } = describeLoadError(error, genericTitle);
   return (
@@ -23,8 +28,9 @@ export const LoadErrorAlert: React.FC<LoadErrorAlertProps> = ({ error, genericTi
         component="p"
         actionLinks={onRetry ? <AlertActionLink onClick={onRetry}>Retry</AlertActionLink> : undefined}
       >
-        {body}
-        {stale ? " The data below is from the last successful refresh." : ""}
+        <TruncatedText>
+          {stale ? "The data below is from the last successful refresh. " : ""}{body}
+        </TruncatedText>
       </Alert>
     </PageSection>
   );

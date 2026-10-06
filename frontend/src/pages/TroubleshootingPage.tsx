@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActionListItem,
   Alert,
   AlertActionCloseButton,
   Bullseye,
@@ -32,11 +33,12 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import InfoCircleIcon from "@patternfly/react-icons/dist/esm/icons/info-circle-icon";
-import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
+import CopyIcon from "@patternfly/react-icons/dist/esm/icons/copy-icon";
 import type { CheckResult, OperationResponse, Problem, DiagnosticResult } from "../types";
 import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
+import { PageHeader } from "../components/PageHeader";
 import { TooltipButton } from "../components/TooltipButton";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
@@ -160,6 +162,7 @@ export const TroubleshootingPage: React.FC = () => {
   const [fixResult, setFixResult] = useState<OperationResponse | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmFix, setConfirmFix] = useState<Problem | null>(null);
+  const [lastScanned, setLastScanned] = useState<Date | null>(null);
   // Permissions, session and the operation lock. An operator install in
   // progress alone does not block a fix: that may be what is stuck.
   const fixReason = useMutationBlocker({ ignoreReconcile: true });
@@ -173,6 +176,7 @@ export const TroubleshootingPage: React.FC = () => {
       const result = await getDiagnostics();
       if (!mountedRef.current) return;
       setData(result);
+      setLastScanned(new Date());
       setScanState("done");
     } catch (err) {
       if (!mountedRef.current) return;
@@ -231,35 +235,22 @@ export const TroubleshootingPage: React.FC = () => {
 
   return (
     <>
-      <PageSection>
-        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-          <FlexItem>
-            <Title headingLevel="h1" size="xl" style={{ marginBottom: "0.25rem" }}>
-              Diagnostics
-            </Title>
-            <Content component="p">
-              Live health checks of the RHOAI install, with the cause of each problem and how to fix it
-            </Content>
-          </FlexItem>
-          <FlexItem>
-            <Flex>
-              <FlexItem>
-                <Button variant="secondary" icon={<SyncAltIcon />} onClick={runScan} isDisabled={scanState === "loading"} isLoading={scanState === "loading"}>
-                  Re-scan
-                </Button>
-              </FlexItem>
-              {data && (
-                <FlexItem>
-                  <Button variant="secondary" onClick={handleCopyReport}>
-                    {copied ? "Copied!" : "Copy diagnostic report"}
-                  </Button>
-                  <span className="pf-v6-screen-reader" role="status">{copied ? "Diagnostic report copied to the clipboard" : ""}</span>
-                </FlexItem>
-              )}
-            </Flex>
-          </FlexItem>
-        </Flex>
-      </PageSection>
+      <PageHeader
+        title="Diagnostics"
+        description="Live health checks of the RHOAI install, with the cause of each problem and how to fix it."
+        lastRefreshed={lastScanned}
+        loading={scanState === "loading"}
+        onRefresh={runScan}
+        refreshText="Re-scan"
+        actions={data && (
+          <ActionListItem>
+            <Button variant="secondary" icon={<CopyIcon />} onClick={handleCopyReport}>
+              {copied ? "Copied" : "Copy diagnostic report"}
+            </Button>
+            <span className="pf-v6-screen-reader" role="status">{copied ? "Diagnostic report copied to the clipboard" : ""}</span>
+          </ActionListItem>
+        )}
+      />
 
       {scanState === "loading" && !data && (
         <PageSection>

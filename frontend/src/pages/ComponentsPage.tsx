@@ -149,6 +149,7 @@ export const ComponentsPage: React.FC = () => {
     <>
       <PageHeader
         title="Components"
+        description="The DataScienceCluster and every RHOAI deployment: what is ready, what changed since the last update, and how to fix what is not."
         lastRefreshed={lastRefreshed}
         loading={loading}
         onRefresh={handleRefresh}

@@ -250,7 +250,10 @@ export const BuildExplorerPage: React.FC = () => {
 
   return (
     <>
-      <PageHeader title="Build Explorer" lastRefreshed={lastRefreshed} loading={loading} onRefresh={fetchTags} />
+      <PageHeader
+        title="Build Explorer"
+        description="Nightly builds on Quay: what each one contains, which builds include a commit or PR, and how they differ from the installed build."
+        lastRefreshed={lastRefreshed} loading={loading} onRefresh={fetchTags} />
 
       {error && <LoadErrorAlert error={error} genericTitle="Could not load the nightly builds" onRetry={fetchTags} stale={tags.length > 0} />}
 

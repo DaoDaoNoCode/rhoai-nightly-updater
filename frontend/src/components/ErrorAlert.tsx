@@ -5,6 +5,7 @@ import {
   PageSection,
 } from "@patternfly/react-core";
 import { describeError } from "../errors";
+import { TruncatedText } from "./LongText";
 
 interface ErrorAlertProps {
   error: unknown;
@@ -54,11 +55,10 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = React.memo(({
       component="p"
       actionLinks={actions}
     >
-      {body}
-      {hint && <> {hint}</>}
+      <TruncatedText>{body}{hint && <> {hint}</>}</TruncatedText>
     </Alert>
   );
   if (inline) return alert;
-  return <PageSection padding={{ default: "noPadding" }}>{alert}</PageSection>;
+  return <PageSection>{alert}</PageSection>;
 });
 ErrorAlert.displayName = "ErrorAlert";

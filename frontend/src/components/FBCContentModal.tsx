@@ -19,7 +19,7 @@ import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external
 import { Link } from "react-router-dom";
 import { formatRelativeTime } from "../utils";
 import { useFbcContent } from "../hooks/useFbcContent";
-import { CopyableText } from "./CopyableText";
+import { ImageRef } from "./ImageRef";
 import { CATEGORY_LABELS } from "./BuildContents";
 
 interface FBCContentModalProps {
@@ -117,9 +117,7 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
                       return (
                         <Tr key={`${img.name}-${idx}`}>
                           <Td dataLabel="Component">
-                            <Content component="small">
-                              <CopyableText text={img.name} value={img.image} what="image reference" />
-                            </Content>
+                            <ImageRef image={img.image} display={img.name || undefined} isCode={!img.name} what={`image reference of ${img.name || "this component"}`} />
                           </Td>
                           <Td dataLabel="Commit">
                             {shortSha ? (

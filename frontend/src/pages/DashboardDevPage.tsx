@@ -257,7 +257,10 @@ export const DashboardDevPage: React.FC = () => {
 
   return (
     <>
-      <PageHeader title="Dashboard Dev" lastRefreshed={lastRefreshed} loading={loading} onRefresh={() => { setResult(null); void fetchState(); }} />
+      <PageHeader
+        title="Dashboard Dev"
+        description="Run an odh-dashboard pull request or the latest main build in this cluster's RHOAI, then revert to the release."
+        lastRefreshed={lastRefreshed} loading={loading} onRefresh={() => { setResult(null); void fetchState(); }} />
 
       {error && !notDeployed && (
         <LoadErrorAlert error={error} genericTitle="Could not load the dashboard state" onRetry={() => void fetchState()} stale={!!dashState} />
