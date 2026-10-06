@@ -70,10 +70,14 @@ module.exports = (env, argv) => {
       runtimeChunk: 'single',
     },
     devServer: {
+      // Loopback only: the backend behind this proxy runs with the
+      // developer's own cluster token (DEV_MODE), so nobody else on the
+      // network may reach it.
+      host: '127.0.0.1',
       hot: true,
       liveReload: true,
       historyApiFallback: true,
-      proxy: [{ context: ['/api'], target: process.env.API_TARGET || 'http://localhost:8080' }],
+      proxy: [{ context: ['/api'], target: process.env.API_TARGET || 'http://127.0.0.1:8080' }],
     },
     // No source maps in production.
     devtool: isProd ? false : 'eval-source-map',
