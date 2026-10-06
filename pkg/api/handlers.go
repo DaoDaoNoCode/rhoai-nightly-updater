@@ -234,11 +234,20 @@ type statusWriter struct {
 	user   string
 	client *cluster.Client
 	opID   string // set by lockCluster
+
+	// The start of a JSON response body, from which the operation's
+	// outcome is read; streams report it in their final event instead.
+	body      []byte
+	streaming bool
 }
+
+// maxCapturedResponse bounds the response bytes kept for the outcome.
+const maxCapturedResponse = 16 << 10
 
 func (sw *statusWriter) WriteHeader(code int) {
 	if sw.status == 0 {
 		sw.status = code
+		sw.streaming = strings.HasPrefix(sw.Header().Get("Content-Type"), "text/event-stream")
 	}
 	sw.ResponseWriter.WriteHeader(code)
 }
@@ -246,6 +255,10 @@ func (sw *statusWriter) WriteHeader(code int) {
 func (sw *statusWriter) Write(b []byte) (int, error) {
 	if sw.status == 0 {
 		sw.status = http.StatusOK
+		sw.streaming = strings.HasPrefix(sw.Header().Get("Content-Type"), "text/event-stream")
+	}
+	if !sw.streaming && len(sw.body) < maxCapturedResponse {
+		sw.body = append(sw.body, b[:min(len(b), maxCapturedResponse-len(sw.body))]...)
 	}
 	return sw.ResponseWriter.Write(b)
 }
@@ -339,20 +352,37 @@ func resolveUsername(r *http.Request) string {
 }
 
 // extractUserToken returns the user's OAuth token for identity purposes.
+//
+// In the cluster only X-Forwarded-Access-Token counts. oauth-proxy sets it
+// from the user's own session, which it got through its OAuth flow, and
+// replaces any client-sent copy (setRequestHeader in openshift/oauth-proxy
+// oauthproxy.go). Without --openshift-delegate-urls the proxy does not
+// accept client bearer tokens at all, and with --pass-basic-auth (default
+// true) it overwrites the Authorization header with Basic credentials. So a
+// Bearer token would come from somewhere else; requestUser rejects it. A
+// bearer token is accepted only in DEV_MODE, where there is no proxy.
 func extractUserToken(r *http.Request) string {
 	if token := r.Header.Get("X-Forwarded-Access-Token"); token != "" {
 		return token
 	}
-	auth := r.Header.Get("Authorization")
-	if len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:]
-	}
 	if os.Getenv("DEV_MODE") == "true" {
+		if token, ok := bearerToken(r); ok {
+			return token
+		}
 		if token := os.Getenv("DEV_TOKEN"); token != "" {
 			return token
 		}
 	}
 	return ""
+}
+
+// bearerToken returns the request's "Authorization: Bearer" token.
+func bearerToken(r *http.Request) (string, bool) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 // cachedToken holds the SA token and the time it was read, so we avoid
@@ -662,7 +692,7 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	defer close(done)
 	go sseHeartbeat(sseWriter, done)
 
-	setOperationTarget(w, req.Image)
+	beginOperation(w, req.Image)
 	slog.Info("mutation", "op", "update-stream", "image", req.Image)
 
 	result, updateErr := runUpdateStream(c, req.Image, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, forwardSteps(sseWriter))
@@ -709,6 +739,7 @@ var HandleCreatePullSecret = withMutationAuth(func(c *cluster.Client, w http.Res
 		return
 	}
 
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "create-pull-secret")
 
 	result, err := cluster.CreatePullSecret(c, req.Auth)
@@ -865,6 +896,7 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		writeError(w, "Provide a DSC name and mode: remove-invalid, remove-extra-components or reset-defaults", http.StatusBadRequest, "validation")
 		return
 	}
+	beginOperation(w, req.Name+" ("+req.Mode+")")
 	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedExtraComponents)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusUnprocessableEntity, "validation")
@@ -892,6 +924,11 @@ var HandleAssistRollout = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 
+	target := ""
+	if req.Deployment != "" {
+		target = req.Namespace + "/" + req.Deployment
+	}
+	beginOperation(w, target)
 	slog.Info("mutation", "op", "assist-rollout", "namespace", req.Namespace, "deployment", req.Deployment)
 
 	var result *types.OperationResponse
@@ -970,6 +1007,7 @@ var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.Re
 		return
 	}
 
+	beginOperation(w, fmt.Sprintf("PR #%d", req.PR))
 	slog.Info("mutation", "op", "deploy-pr", "pr", req.PR, "flavor", req.Flavor)
 
 	result, err := cluster.DeployPRImageWithFlavor(c, req.PR, req.Flavor)
@@ -987,6 +1025,7 @@ var HandleDashboardRevert = withMutationAuth(func(c *cluster.Client, w http.Resp
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "revert-dashboard")
 
 	result, err := cluster.RevertDashboardImage(c)
@@ -1014,6 +1053,7 @@ var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.
 		writeError(w, "flavor must be rhoai or odh", http.StatusBadRequest, "validation")
 		return
 	}
+	beginOperation(w, req.Flavor)
 	slog.Info("mutation", "op", "deploy-dashboard-main", "flavor", req.Flavor)
 	result, err := cluster.DeployDashboardMainWithFlavor(c, req.Flavor)
 	if err != nil {
@@ -1066,7 +1106,7 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 	if req.Image != "" {
 		target += " " + req.Image
 	}
-	setOperationTarget(w, target)
+	beginOperation(w, target)
 	slog.Info("mutation", "op", "reinstall-stream", "targetType", req.TargetType, "image", req.Image)
 
 	opts := cluster.OperationOptions{AllowDowngrade: req.AllowDowngrade, RevertDashboardDev: req.RevertDashboardDev}
@@ -1119,6 +1159,7 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	defer close(done)
 	go sseHeartbeat(sseWriter, done)
 
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "refresh-stream")
 
 	result, refreshErr := runRefreshStream(c, cluster.OperationOptions{RevertDashboardDev: req.RevertDashboardDev}, forwardSteps(sseWriter))
@@ -1164,6 +1205,7 @@ var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "setup-minio")
 	result, err := cluster.SetupMinIO(c)
 	if err != nil {
@@ -1180,6 +1222,7 @@ var HandleMinIOTeardown = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "teardown-minio")
 	result, err := cluster.TeardownMinIO(c)
 	if err != nil {
@@ -1206,6 +1249,7 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
 		return
 	}
+	beginOperation(w, req.Project)
 	slog.Info("mutation", "op", "setup-pipeline-server", "project", req.Project)
 	result, err := cluster.SetupPipelineServer(c, req.Project)
 	if err != nil {
@@ -1232,6 +1276,7 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
 		return
 	}
+	beginOperation(w, req.Project)
 	slog.Info("mutation", "op", "teardown-pipeline-server", "project", req.Project)
 	result, err := cluster.TeardownPipelineServer(c, req.Project)
 	if err != nil {
@@ -1248,6 +1293,7 @@ var HandleMLflowSetup = withMutationAuth(func(c *cluster.Client, w http.Response
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "setup-mlflow")
 	result, err := cluster.SetupMLflow(c)
 	if err != nil {
@@ -1264,6 +1310,7 @@ var HandleMLflowTeardown = withMutationAuth(func(c *cluster.Client, w http.Respo
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "teardown-mlflow")
 	result, err := cluster.TeardownMLflow(c)
 	if err != nil {
@@ -1290,6 +1337,7 @@ var HandleMLflowDeployPR = withMutationAuth(func(c *cluster.Client, w http.Respo
 		writeError(w, "pr must be a positive integer", http.StatusBadRequest, "validation")
 		return
 	}
+	beginOperation(w, fmt.Sprintf("PR #%d", req.PR))
 	slog.Info("mutation", "op", "deploy-mlflow-pr", "pr", req.PR)
 	result, err := cluster.DeployMLflowPR(c, req.PR)
 	if err != nil {
@@ -1306,6 +1354,7 @@ var HandleMLflowRevert = withMutationAuth(func(c *cluster.Client, w http.Respons
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "revert-mlflow")
 	result, err := cluster.RevertMLflowImage(c)
 	if err != nil {
@@ -1346,6 +1395,7 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 		return
 	}
 
+	beginOperation(w, req.ProblemID)
 	slog.Info("mutation", "op", "diagnostics-fix", "problemId", req.ProblemID)
 
 	result, err := cluster.ApplyFix(c, req.ProblemID)
@@ -1385,6 +1435,7 @@ var HandleCreateDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		return
 	}
 	defer releaseClusterMutationLock()
+	beginOperation(w, "")
 	slog.Info("mutation", "op", "create-dsc")
 
 	result, err := cluster.CreateDefaultDSC(c)

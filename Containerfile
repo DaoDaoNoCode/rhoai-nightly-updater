@@ -17,6 +17,10 @@ FROM docker.io/library/golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3
 ARG GIT_SHA=unknown
 ARG VERSION=dev
 ARG BUILD_DATE=unknown
+# Set by podman/buildah and BuildKit from --platform. Kaniko (GitLab CI)
+# does not set it (v1.23.2 has no automatic platform ARGs), so amd64 is the
+# default.
+ARG TARGETARCH
 WORKDIR /app
 COPY go.mod go.sum* ./
 RUN go mod download
@@ -24,7 +28,7 @@ COPY main.go ./
 COPY pkg/ ./pkg/
 COPY deploy/template.yaml ./deploy/template.yaml
 RUN go vet ./... && go test ./...
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} go build -trimpath \
     -ldflags "-s -w \
       -X github.com/juntwang/rhoai-nightly-updater/pkg/api.Version=${VERSION} \
       -X github.com/juntwang/rhoai-nightly-updater/pkg/api.Commit=${GIT_SHA} \

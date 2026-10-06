@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -49,44 +50,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	registerProbes(mux)
-	mux.HandleFunc("GET /api/status", api.HandleStatus)
-	mux.HandleFunc("GET /api/operation", api.HandleOperation)
-	mux.HandleFunc("POST /api/update", api.HandleUpdate) // dry run only
-	mux.HandleFunc("POST /api/update/stream", api.HandleUpdateStream)
-	mux.HandleFunc("POST /api/rollback/stream", api.HandleReinstallStream)
-	mux.HandleFunc("POST /api/components/dsc/repair", api.HandleRepairDSC)
-	mux.HandleFunc("POST /api/refresh/stream", api.HandleRefreshStream)
-	mux.HandleFunc("POST /api/assist-rollout", api.HandleAssistRollout)
-	mux.HandleFunc("GET /api/activity", api.HandleActivity)
-	mux.HandleFunc("GET /api/latest-nightly", api.HandleLatestNightly)
-	mux.HandleFunc("GET /api/nightly-tags", api.HandleNightlyTags)
-	mux.HandleFunc("GET /api/test-pull-secret", api.HandleTestPullSecret)
-	mux.HandleFunc("POST /api/setup/pull-secret", api.HandleCreatePullSecret)
-	mux.HandleFunc("GET /api/verify-nodes", api.HandleVerifyNodes)
-	mux.HandleFunc("GET /api/user/permissions", api.HandleUserPermissions)
-	mux.HandleFunc("GET /api/components", api.HandleComponents)
-	mux.HandleFunc("GET /api/debug", api.HandleDebug)
-	mux.HandleFunc("GET /api/build-explorer/tags", api.HandleBuildExplorerTags)
-	mux.HandleFunc("GET /api/build-explorer/content", api.HandleBuildExplorerContent)
-	mux.HandleFunc("GET /api/dashboard/state", api.HandleDashboardState)
-	mux.HandleFunc("POST /api/dashboard/deploy-pr", api.HandleDashboardDeployPR)
-	mux.HandleFunc("POST /api/dashboard/deploy-main", api.HandleDashboardDeployMain)
-	mux.HandleFunc("POST /api/dashboard/revert", api.HandleDashboardRevert)
-	mux.HandleFunc("GET /api/resources/status", api.HandleResourcesStatus)
-	mux.HandleFunc("GET /api/resources/projects", api.HandleDSProjects)
-	mux.HandleFunc("POST /api/resources/minio/setup", api.HandleMinIOSetup)
-	mux.HandleFunc("POST /api/resources/minio/teardown", api.HandleMinIOTeardown)
-	mux.HandleFunc("POST /api/resources/pipeline-server/setup", api.HandlePipelineServerSetup)
-	mux.HandleFunc("POST /api/resources/pipeline-server/teardown", api.HandlePipelineServerTeardown)
-	mux.HandleFunc("POST /api/resources/mlflow/setup", api.HandleMLflowSetup)
-	mux.HandleFunc("POST /api/resources/mlflow/teardown", api.HandleMLflowTeardown)
-	mux.HandleFunc("POST /api/resources/mlflow/deploy-pr", api.HandleMLflowDeployPR)
-	mux.HandleFunc("POST /api/resources/mlflow/revert", api.HandleMLflowRevert)
-	mux.HandleFunc("GET /api/diagnostics", api.HandleDiagnostics)
-	mux.HandleFunc("POST /api/diagnostics/fix", api.HandleDiagnosticsFix)
-	mux.HandleFunc("GET /api/setup/dsc/preview", api.HandleDSCPreview)
-	mux.HandleFunc("POST /api/setup/dsc", api.HandleCreateDSC)
-	mux.HandleFunc("POST /api/pageview", api.HandlePageView)
+	api.Register(mux)
 	mux.HandleFunc("/api/", middleware.APINotFound)
 	mux.Handle("/", middleware.StaticFiles(absStaticDir))
 
@@ -108,6 +72,18 @@ func main() {
 	bindAddress := os.Getenv("BIND_ADDRESS")
 	if bindAddress == "" && devMode {
 		bindAddress = "127.0.0.1"
+	}
+	if devMode && !isLoopbackHost(bindAddress) {
+		// Every DEV_MODE request runs with the developer's token and no
+		// mutation gate, and the Host check does not stop a client that
+		// sends Host: 127.0.0.1 itself.
+		if os.Getenv("DEV_ALLOW_REMOTE") != "true" {
+			slog.Error("refusing to serve DEV_MODE on a non-loopback address: anyone who can reach it acts with your cluster token; "+
+				"unset BIND_ADDRESS, or set DEV_ALLOW_REMOTE=true to accept that", "bindAddress", bindAddress)
+			os.Exit(1)
+		}
+		slog.Warn("DEV_ALLOW_REMOTE=true: DEV_MODE serves a non-loopback address; anyone who can reach it acts with your cluster token and no permission check",
+			"bindAddress", bindAddress)
 	}
 
 	srv := &http.Server{
@@ -169,6 +145,11 @@ func main() {
 		slog.Warn("shutting down with cluster operations still running", "count", running)
 	}
 	cancelDrain()
+	// A finished operation whose marker could not be cleared would be
+	// reported as interrupted by the next process: try once more.
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 10*time.Second)
+	api.FlushOperationMarker(flushCtx)
+	cancelFlush()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -182,6 +163,17 @@ func main() {
 	}
 	slog.Info("server stopped")
 	os.Exit(exitCode)
+}
+
+// isLoopbackHost reports whether a BIND_ADDRESS host only accepts
+// connections from this machine. An empty host listens on all interfaces.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func registerProbes(mux *http.ServeMux) {

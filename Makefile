@@ -20,8 +20,8 @@ ROLLOUT_TIMEOUT ?= 20m
 INSTANCE  = $(APP_NAME)-$(NAMESPACE)
 PROXY_SECRET = $(APP_NAME)-proxy
 
-.PHONY: all build push deploy upgrade undeploy dev lint lint-go lint-frontend test test-go test-frontend vuln clean help env \
-	ensure-proxy-secret apply-template consolelink cleanup-legacy
+.PHONY: all build push deploy upgrade rollback undeploy dev lint lint-go lint-frontend test test-go test-frontend vuln clean help env \
+	ensure-proxy-secret apply-template consolelink cleanup-legacy check-image-template
 
 .DEFAULT_GOAL := help
 
@@ -39,6 +39,7 @@ push:  ## Push image to registry (latest + 8-character git SHA tags)
 	$(RUNTIME) push $(IMAGE):$(GIT_SHA)
 
 deploy:  ## First install on OpenShift (requires cluster-admin and oc login)
+	@$(MAKE) --no-print-directory check-image-template
 	oc get project $(NAMESPACE) >/dev/null 2>&1 || oc new-project $(NAMESPACE)
 	@$(MAKE) --no-print-directory ensure-proxy-secret apply-template
 	@echo "Restarting deployment to pull $(IMAGE):$(TAG)..."
@@ -46,14 +47,85 @@ deploy:  ## First install on OpenShift (requires cluster-admin and oc login)
 	oc rollout status deployment/$(APP_NAME) -n $(NAMESPACE) --timeout=$(ROLLOUT_TIMEOUT)
 	@$(MAKE) --no-print-directory consolelink cleanup-legacy
 
-upgrade:  ## Upgrade an existing install: re-apply the template (keeps sessions), restart, wait. Pin with TAG=<8-char sha>
+upgrade:  ## Upgrade to :latest (or TAG=<this checkout's commit>): re-apply the template (keeps sessions), restart, wait
 	@oc get deployment $(APP_NAME) -n $(NAMESPACE) >/dev/null || { echo "No deployment $(APP_NAME) in $(NAMESPACE); run 'make deploy' first."; exit 1; }
+	@$(MAKE) --no-print-directory check-image-template
 	@echo "Note: a running cluster operation delays the restart until it finishes (up to ~17 minutes)."
 	@$(MAKE) --no-print-directory ensure-proxy-secret apply-template
 	oc rollout restart deployment/$(APP_NAME) -n $(NAMESPACE)
 	oc rollout status deployment/$(APP_NAME) -n $(NAMESPACE) --timeout=$(ROLLOUT_TIMEOUT)
 	@$(MAKE) --no-print-directory consolelink cleanup-legacy
 	@echo "Upgraded. Verify with ./scripts/smoke-test.sh $(NAMESPACE) $(APP_NAME)"
+
+# An image only works with the deploy/template.yaml of its own commit: the
+# template sets its ports, probes, environment and RBAC. For example an image
+# built before the metrics listener never answers the probes on METRICS_PORT,
+# and with the Recreate strategy the old pod is already gone, so the tool
+# stays down. Image tags are commits (CI_COMMIT_SHORT_SHA, 8 characters;
+# older builds have 7) or latest, whose org.opencontainers.image.revision
+# label names its commit. deploy and upgrade refuse an image whose commit
+# has a different template than this checkout; `make rollback` applies the
+# image's own template instead. ALLOW_TEMPLATE_MISMATCH=1 skips the check.
+check-image-template:
+	@if [ "$(ALLOW_TEMPLATE_MISMATCH)" = "1" ]; then \
+		echo "WARNING: ALLOW_TEMPLATE_MISMATCH=1: not checking that $(IMAGE):$(TAG) matches deploy/template.yaml."; exit 0; \
+	fi; \
+	if [ "$(TAG)" = "latest" ]; then \
+		REV=$$(oc image info "$(IMAGE):latest" --filter-by-os=$(PLATFORM) -o json 2>/dev/null | sed -n 's/.*"org.opencontainers.image.revision": *"\([0-9a-f]\{40\}\)".*/\1/p' | head -1); \
+		if [ -z "$$REV" ] || ! git cat-file -e "$$REV^{commit}" 2>/dev/null; then \
+			echo "WARNING: cannot tell which commit $(IMAGE):latest was built from ($${REV:-no revision label})."; \
+			echo "  Make sure this checkout is up to date with origin/main (git pull) so its template matches the image."; \
+			exit 0; \
+		fi; \
+		WHAT="$(IMAGE):latest (built from $$REV)"; \
+	else \
+		REV=$$(git rev-parse --verify --quiet "$(TAG)^{commit}") || { \
+			echo "ERROR: TAG=$(TAG) is not a commit in this clone (run 'git fetch origin'), so the template it needs is unknown."; \
+			echo "  Set ALLOW_TEMPLATE_MISMATCH=1 to apply this checkout's template anyway."; exit 1; }; \
+		[ "$$REV" != "$$(git rev-parse HEAD)" ] || exit 0; \
+		WHAT="TAG=$(TAG) (commit $$REV)"; \
+	fi; \
+	git diff --quiet "$$REV" -- deploy/template.yaml && exit 0; \
+	echo "ERROR: deploy/template.yaml in this checkout differs from the template $$WHAT was built with."; \
+	echo "  To run an older build, use its own template:  make rollback TAG=<commit>"; \
+	echo "  For :latest, update this checkout (git pull) or wait until CI has published it."; \
+	echo "  Set ALLOW_TEMPLATE_MISMATCH=1 to apply this checkout's template anyway."; \
+	exit 1
+
+# Rolls back (or pins) to the build of an older commit with that commit's
+# own deploy/template.yaml, so ports, probes and RBAC match its code. The
+# cookie secret is kept, so sessions survive: a template that still takes a
+# COOKIE_SECRET parameter gets the value of the current Secret. Legacy
+# cluster objects that an old template creates are left alone here (the old
+# build needs them); the next `make upgrade` removes them again. Roll
+# forward with `make upgrade`. DRY_RUN=1 only validates with the API server.
+rollback:  ## Roll back to an older build with that commit's own template: TAG=<commit> (DRY_RUN=1 validates only)
+	@case "$(TAG)" in latest|"") echo "Usage: make rollback TAG=<commit> (an image tag such as 4503bb7d, or any commit in this clone)"; exit 1;; esac
+	@case "$(OAUTH_PROXY_IMAGE)" in *:v) echo "Cannot detect the OCP version; set OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.<minor>"; exit 1;; esac
+	@oc get deployment $(APP_NAME) -n $(NAMESPACE) >/dev/null || { echo "No deployment $(APP_NAME) in $(NAMESPACE); run 'make deploy' first."; exit 1; }
+	@$(if $(DRY_RUN),true,$(MAKE) --no-print-directory ensure-proxy-secret)
+	@set -e; \
+	REV=$$(git rev-parse --verify --quiet "$(TAG)^{commit}") || { echo "Commit $(TAG) is not in this clone; run 'git fetch origin' and retry."; exit 1; }; \
+	git cat-file -e "$$REV:deploy/template.yaml" 2>/dev/null || { echo "Commit $$REV has no deploy/template.yaml."; exit 1; }; \
+	SHORT8=$$(echo "$$REV" | cut -c1-8); SHORT7=$$(echo "$$REV" | cut -c1-7); IMG_TAG=; \
+	for t in "$(TAG)" "$$SHORT8" "$$SHORT7"; do \
+		if oc image info "$(IMAGE):$$t" --filter-by-os=$(PLATFORM) >/dev/null 2>&1; then IMG_TAG=$$t; break; fi; \
+	done; \
+	[ -n "$$IMG_TAG" ] || { echo "No image $(IMAGE) for commit $$REV (tried the tags $(TAG), $$SHORT8 and $$SHORT7)."; exit 1; }; \
+	LABEL=$$(oc image info "$(IMAGE):$$IMG_TAG" --filter-by-os=$(PLATFORM) -o json 2>/dev/null | sed -n 's/.*"org.opencontainers.image.revision": *"\([0-9a-f]\{40\}\)".*/\1/p' | head -1); \
+	if [ -n "$$LABEL" ] && [ "$$LABEL" != "$$REV" ]; then echo "WARNING: $(IMAGE):$$IMG_TAG reports revision $$LABEL, not $$REV."; fi; \
+	TMP=$$(mktemp -d); trap 'rm -rf "$$TMP"' EXIT; umask 077; \
+	git show "$$REV:deploy/template.yaml" > "$$TMP/template.yaml"; \
+	printf '%s\n' "IMAGE=$(IMAGE):$$IMG_TAG" "NAMESPACE=$(NAMESPACE)" "APP_NAME=$(APP_NAME)" "OAUTH_PROXY_IMAGE=$(OAUTH_PROXY_IMAGE)" > "$$TMP/params"; \
+	if oc process -f "$$TMP/template.yaml" --parameters | awk 'NR > 1 {print $$1}' | grep -qx COOKIE_SECRET; then \
+		SECRET=$$(oc get secret $(PROXY_SECRET) -n $(NAMESPACE) -o jsonpath='{.data.session_secret}' 2>/dev/null | base64 -d 2>/dev/null || true); \
+		[ -n "$$SECRET" ] || SECRET=$$(oc get deployment $(APP_NAME) -n $(NAMESPACE) -o jsonpath='{.spec.template.spec.containers[?(@.name=="oauth-proxy")].env[?(@.name=="COOKIE_SECRET")].value}' 2>/dev/null || true); \
+		[ $${#SECRET} -eq 32 ] || { echo "Could not read the current 32-character cookie secret (Secret $(PROXY_SECRET))."; exit 1; }; \
+		printf 'COOKIE_SECRET=%s\n' "$$SECRET" >> "$$TMP/params"; \
+	fi; \
+	echo "$(if $(DRY_RUN),Validating,Applying) $(IMAGE):$$IMG_TAG with the template of commit $$REV..."; \
+	oc process -f "$$TMP/template.yaml" --param-file="$$TMP/params" --ignore-unknown-parameters | oc apply $(if $(DRY_RUN),--dry-run=server,) -f -
+	@$(if $(DRY_RUN),echo "Dry run only; nothing was changed.",echo "Note: a running cluster operation delays the restart until it finishes (up to ~17 minutes)." && oc rollout status deployment/$(APP_NAME) -n $(NAMESPACE) --timeout=$(ROLLOUT_TIMEOUT) && echo "Rolled back. Roll forward again with: make upgrade")
 
 # The oauth-proxy cookie secret lives in a Secret that the template only
 # references, so re-applying keeps everyone's session. An existing install
@@ -66,7 +138,9 @@ ensure-proxy-secret:
 		if [ -z "$$SECRET" ]; then SECRET=$$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32); fi; \
 		[ $${#SECRET} -eq 32 ] || { echo "Could not produce a 32-character cookie secret"; exit 1; }; \
 		oc create secret generic $(PROXY_SECRET) -n $(NAMESPACE) --from-literal=session_secret="$$SECRET" >/dev/null && \
-		echo "Created Secret $(PROXY_SECRET)."; \
+		echo "Created Secret $(PROXY_SECRET)." && \
+		echo "Note: old ReplicaSets still hold the cookie secret in their pod template. After the rollout, delete them with" && \
+		printf '%s\n' "  oc get rs -n $(NAMESPACE) -l app=$(APP_NAME) -o jsonpath='{range .items[?(@.spec.replicas==0)]}{.metadata.name}{\"\\n\"}{end}' | xargs oc delete rs -n $(NAMESPACE)"; \
 	fi
 
 apply-template:
@@ -143,7 +217,7 @@ test-frontend:  ## Run frontend tests
 	cd frontend && npm test
 
 vuln:  ## Check Go and npm dependencies for known vulnerabilities
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 	cd frontend && npm audit --omit=dev --audit-level=high
 
 clean:  ## Remove build artifacts
@@ -182,7 +256,8 @@ help:  ## Show this help
 	@echo "Examples:"
 	@echo "  make all                                Build, push, and deploy (uses defaults)"
 	@echo "  make upgrade                            Re-apply the template and restart on :latest"
-	@echo "  make upgrade TAG=4503bb7d               Pin (or roll back) to an 8-character commit tag"
+	@echo "  make rollback TAG=4503bb7d              Roll back to an older build with that commit's own template"
+	@echo "  make rollback TAG=4503bb7d DRY_RUN=1    Only validate the rollback with the API server"
 	@echo "  make build IMAGE=quay.io/myorg/myapp    Build with custom registry"
 	@echo "  make build RUNTIME=docker               Build with docker instead of podman"
 	@echo "  make deploy NAMESPACE=my-ns             Deploy to custom namespace"

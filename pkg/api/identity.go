@@ -107,6 +107,13 @@ func writeAuthError(w http.ResponseWriter, err error, unavailableMsg string) {
 // requestUser authenticates the request's token. It writes the error
 // response and returns false when the request must not proceed.
 func requestUser(w http.ResponseWriter, r *http.Request) (string, *http.Request, bool) {
+	if _, ok := bearerToken(r); ok && os.Getenv("DEV_MODE") != "true" {
+		// oauth-proxy never forwards a client's bearer token (see
+		// extractUserToken), so this request did not come through it.
+		slog.Warn("rejected a request with a bearer token", "path", r.URL.Path)
+		writeError(w, "Bearer tokens are not accepted. Open the updater through its route and sign in.", http.StatusUnauthorized, "unauthorized")
+		return "", r, false
+	}
 	userToken := extractUserToken(r)
 	if userToken == "" {
 		writeError(w, "no auth token", http.StatusUnauthorized, "unauthorized")

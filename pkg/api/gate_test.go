@@ -245,14 +245,20 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	allowMutations(t)
 	t.Setenv("HOSTNAME", "updater-pod-1")
 	var saved []*types.OperationMarker
+	var completed []*types.CompletedOperation
 	var mu sync.Mutex
-	saveOperationMarker = func(op *Operation) {
+	saveOperationMarker = func(_ *cluster.Client, m *types.OperationMarker) error {
 		mu.Lock()
 		defer mu.Unlock()
-		saved = append(saved, operationMarker(op))
+		saved = append(saved, m)
+		return nil
 	}
-	cleared := 0
-	clearOperationMarker = func(*cluster.Client) { mu.Lock(); cleared++; mu.Unlock() }
+	saveCompletedOperation = func(_ *cluster.Client, done *types.CompletedOperation) error {
+		mu.Lock()
+		defer mu.Unlock()
+		completed = append(completed, done)
+		return nil
+	}
 
 	image := "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"
 	stepped, release := make(chan struct{}), make(chan struct{})
@@ -314,8 +320,15 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(saved) != 1 || saved[0].User != "alice" || saved[0].Pod != "updater-pod-1" || cleared != 1 {
-		t.Fatalf("marker saved=%+v cleared=%d", saved, cleared)
+	// One marker, written once the request was validated, naming the image
+	// and this process; one completion, which clears it.
+	if len(saved) != 1 || saved[0].User != "alice" || saved[0].Pod != "updater-pod-1" || saved[0].Target != image ||
+		saved[0].BootID != bootID || saved[0].ID == "" {
+		t.Fatalf("marker saved=%+v", saved)
+	}
+	if len(completed) != 1 || completed[0].ID != saved[0].ID || !completed[0].Success || completed[0].Message != "done" ||
+		completed[0].Target != image || completed[0].Type != "update" || completed[0].FinishedAt == "" {
+		t.Fatalf("completed=%+v", completed)
 	}
 }
 
@@ -335,8 +348,9 @@ func TestLockReleasedWhenOperationPanics(t *testing.T) {
 
 func TestInterruptedOperationReportedAfterRestart(t *testing.T) {
 	setupDevMode(t)
-	t.Setenv("HOSTNAME", "new-pod")
-	marker := &types.OperationMarker{Type: "reinstall", Label: "Reinstall operator", User: "alice", StartedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), Pod: "old-pod"}
+	t.Setenv("HOSTNAME", "same-pod")
+	recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	marker := &types.OperationMarker{Type: "reinstall", Label: "Reinstall operator", User: "alice", StartedAt: recent, Pod: "old-pod", BootID: "old-boot"}
 	for _, tc := range []struct {
 		name   string
 		marker *types.OperationMarker
@@ -344,12 +358,18 @@ func TestInterruptedOperationReportedAfterRestart(t *testing.T) {
 		want   bool
 	}{
 		{"left by a dead pod", marker, nil, true},
+		// The kubelet restarted the container (OOM kill, liveness failure):
+		// same pod name, new process.
+		{"container restarted in the same pod", &types.OperationMarker{Pod: "same-pod", BootID: "old-boot", StartedAt: recent}, nil, true},
+		{"written by an older version", &types.OperationMarker{Pod: "same-pod", StartedAt: recent}, nil, true},
 		{"none", nil, nil, false},
-		{"own pod", &types.OperationMarker{Pod: "new-pod", StartedAt: marker.StartedAt}, nil, false},
-		{"too old", &types.OperationMarker{Pod: "old-pod", StartedAt: time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)}, nil, false},
+		{"this process", &types.OperationMarker{Pod: "same-pod", BootID: bootID, StartedAt: recent}, nil, false},
+		{"too old", &types.OperationMarker{Pod: "old-pod", BootID: "old-boot", StartedAt: time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)}, nil, false},
 		{"unreadable", nil, errors.New("forbidden"), false},
 	} {
-		readOperationMarker = func(*cluster.Client) (*types.OperationMarker, error) { return tc.marker, tc.err }
+		readOperationState = func(*cluster.Client) (*types.OperationMarker, *types.CompletedOperation, error) {
+			return tc.marker, nil, tc.err
+		}
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/api/operation", nil)
 		r.Header.Set("X-Forwarded-Access-Token", "tok")
