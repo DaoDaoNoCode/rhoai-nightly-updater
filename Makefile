@@ -27,7 +27,6 @@ OAUTH_PROXY_IMAGE ?=
 ROLLOUT_TIMEOUT ?= 20m
 # Where the app links release notes; empty keeps the template's default.
 RELEASES_URL ?=
-INSTANCE  = $(APP_NAME)-$(NAMESPACE)
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
 	test test-go test-frontend test-scripts vuln clean help env
@@ -89,13 +88,8 @@ release:  ## Tag a release: VERSION=vX.Y.Z (checks main, CHANGELOG and the templ
 	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=vX.Y.Z"; exit 1; }
 	@./scripts/release.sh tag '$(VERSION)'
 
-undeploy:  ## Remove the app, its cluster-wide RBAC, Roles in other namespaces and the ConsoleLink
-	oc delete consolelink,clusterrolebinding,clusterrole -l app.kubernetes.io/instance=$(INSTANCE) --ignore-not-found
-	for ns in kube-system openshift-marketplace openshift-ingress; do \
-		oc delete rolebinding,role -n $$ns -l app.kubernetes.io/instance=$(INSTANCE) --ignore-not-found; \
-	done
-	@$(INSTALL) cleanup-legacy
-	oc delete project $(NAMESPACE)
+undeploy:  ## Remove the app, its cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
+	@$(INSTALL) uninstall
 
 dev:  ## Start local dev server (Go backend + React frontend)
 	./dev.sh

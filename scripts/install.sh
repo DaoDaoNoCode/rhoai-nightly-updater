@@ -18,6 +18,7 @@
 #                      template (--version <release or commit>)
 #     resolve-image    print the digest reference that would be applied
 #     cleanup-legacy   remove this install's objects from before namespaced names
+#     uninstall        remove the app, its RBAC, ConsoleLink and namespace
 #   Options (each also has an environment variable):
 #     --dry-run              validate with the API server only        DRY_RUN=1
 #     --namespace NAME       default rhoai-nightly-updater            NAMESPACE
@@ -66,7 +67,7 @@ TAG_EXPLICIT=""
 need_value() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value (see --help)."; }
 while [ $# -gt 0 ]; do
 	case "$1" in
-	install | deploy | upgrade | rollback | resolve-image | cleanup-legacy) ACTION=$1 ;;
+	install | deploy | upgrade | rollback | resolve-image | cleanup-legacy | uninstall) ACTION=$1 ;;
 	--dry-run) DRY_RUN=1 ;;
 	--namespace | --app-name | --image-repo | --version)
 		need_value "$@"
@@ -101,6 +102,7 @@ APP_NAME=${APP_NAME:-rhoai-nightly-updater}
 PLATFORM=${PLATFORM:-linux/amd64}
 ROLLOUT_TIMEOUT=${ROLLOUT_TIMEOUT:-20m}
 case "${DRY_RUN:-}" in "" | 0 | false | no) DRY="" ;; *) DRY=1 ;; esac
+DRY_FLAG=${DRY:+--dry-run=server}
 INSTANCE="$APP_NAME-$NAMESPACE"
 PROXY_SECRET="$APP_NAME-proxy"
 
@@ -518,6 +520,24 @@ rollback() {
 	err "Rolled back. Roll forward again with: make upgrade"
 }
 
+# Removes the app, its cluster-wide RBAC, its Roles in other namespaces, the
+# ConsoleLink and the namespace. RHOAI and everything the app created on the
+# cluster (catalog, pull secret, IDMS, test resources) stay.
+uninstall() {
+	preflight
+	local ns
+	# shellcheck disable=SC2086 # DRY_FLAG is one word or nothing
+	oc delete consolelink,clusterrolebinding,clusterrole -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
+	for ns in kube-system openshift-marketplace openshift-ingress; do
+		# shellcheck disable=SC2086
+		oc delete rolebinding,role -n "$ns" -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
+	done
+	[ -n "$DRY" ] || cleanup_legacy
+	# shellcheck disable=SC2086
+	oc delete project "$NAMESPACE" --ignore-not-found $DRY_FLAG
+	if [ -n "$DRY" ]; then err "Dry run only; nothing was changed."; else err "Removed $APP_NAME from $NAMESPACE."; fi
+}
+
 case "$ACTION" in
 install)
 	require_tag
@@ -530,4 +550,5 @@ resolve-image)
 	printf '%s\n' "$REF"
 	;;
 cleanup-legacy) cleanup_legacy ;;
+uninstall) uninstall ;;
 esac

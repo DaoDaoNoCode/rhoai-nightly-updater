@@ -168,6 +168,10 @@ FAKE_INSTALLED=1 FAKE_REVISION="" FAKE_NS=1 TAG=main \
 FAKE_INSTALLED=1 expect_fail "clone: rollback needs a TAG" "Usage: make rollback TAG=" run bash "$CLONE" rollback --dry-run
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 expect_ok "clone: rollback dry run" run bash "$CLONE" rollback --dry-run
 expect_eq "rollback dry run changes nothing" "" "$(mutations)"
+expect_ok "asset: uninstall dry run" run bash "$ASSET" uninstall --dry-run --namespace scratch-ns
+deletes=$(grep -c '^oc delete' "$LOG" || true)
+expect_eq "uninstall: every delete is a dry run" "$deletes" "$(grep '^oc delete' "$LOG" | grep -c -- '--dry-run=server' || true)"
+grep -q '^oc delete project scratch-ns' "$LOG" && pass || fail "uninstall: namespace not removed"
 expect_fail "asset: no rollback" "Rollback needs a clone" run bash "$ASSET" rollback --version v9.8.7
 
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
