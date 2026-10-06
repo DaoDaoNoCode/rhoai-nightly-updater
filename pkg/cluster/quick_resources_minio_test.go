@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,14 @@ func putS3Deployment(f *resourceFake, ready int) {
 	f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},
 		"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+seaweedfsDefaultImage+`"}]}}},
 		"status":{"observedGeneration":1,"replicas":1,"readyReplicas":`+itoa(ready)+`,"updatedReplicas":1}}`)
+}
+
+// putS3Serving puts minio-service and Route minio-ui as setup applies them:
+// they send traffic to SeaweedFS.
+func putS3Serving(f *resourceFake) {
+	f.putJSON(minioSvcPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"selector":{"app":"seaweedfs"},"clusterIP":"172.30.10.20",
+		"ports":[{"name":"api","port":9000,"targetPort":8333},{"name":"ui","port":9090,"targetPort":23646}]}}`)
+	f.putJSON(minioUIRoute, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"host":"minio-ui-minio.apps.example.com","to":{"kind":"Service","name":"minio-service"},"port":{"targetPort":"ui"}}}`)
 }
 
 // readyAfterApply makes the SeaweedFS deployment report a ready rollout of
@@ -402,6 +411,7 @@ func TestGetMinIOStatus_KeptMinIOVolume(t *testing.T) {
 	f, c := newResourceFake(t)
 	putNamespace(f, toolLabelJSON, toolFieldManager)
 	putS3Deployment(f, 1)
+	putS3Serving(f)
 	f.putJSON(s3PVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"resources":{"requests":{"storage":"10Gi"}}},"status":{"capacity":{"storage":"20Gi"}}}`)
 
@@ -419,6 +429,74 @@ func TestGetMinIOStatus_KeptMinIOVolume(t *testing.T) {
 	f.putJSON(minioPVCPath, foreignJSON(""))
 	if st := getMinIOStatus(c); len(st.KeptPVCs) != 0 || len(st.DataPVCs) != 1 {
 		t.Errorf("foreign minio-pvc reported: %+v", st)
+	}
+}
+
+// Status comes from the serving configuration: SeaweedFS counts as Running
+// only when it is ready and minio-service and Route minio-ui send traffic to
+// it. Otherwise it is incomplete, says why, and asks for Repair.
+func TestGetMinIOStatus_ServingConfiguration(t *testing.T) {
+	const (
+		svcOn = `{"metadata":{"labels":` + toolLabelJSON + `},"spec":{"selector":%s,"ports":[{"name":"api","port":9000,"targetPort":%s},{"name":"ui","port":9090,"targetPort":23646}]}}`
+	)
+	svc := func(selector, target string) func(f *resourceFake) {
+		return func(f *resourceFake) { f.putJSON(minioSvcPath, fmt.Sprintf(svcOn, selector, target)) }
+	}
+	cases := []struct {
+		name       string
+		change     func(f *resourceFake)
+		ready      int
+		wantReady  bool
+		wantRepair string // substring; "" means none
+		wantTerm   bool
+		wantMsg    string
+	}{
+		{name: "serving", ready: 1, wantReady: true, wantMsg: "Running"},
+		{name: "Service still on MinIO", change: svc(`{"app":"minio"}`, `9000`), ready: 1, wantRepair: "selects app=minio instead of SeaweedFS", wantTerm: true},
+		{name: "Service port not switched", change: svc(`{"app":"seaweedfs"}`, `9000`), ready: 1, wantRepair: "port 9000 forwards to 9000", wantTerm: true},
+		{name: "Service by port name", change: svc(`{"app":"seaweedfs"}`, `"s3"`), ready: 1, wantRepair: "forwards to s3", wantTerm: true},
+		{name: "Service missing (setup stopped before the switch)", change: func(f *resourceFake) {
+			f.mu.Lock()
+			delete(f.objects, fakeKey{gv: "v1", ns: "minio", plural: "services", name: "minio-service"})
+			f.mu.Unlock()
+		}, ready: 1, wantRepair: "Service minio-service is missing", wantTerm: true},
+		{name: "Route missing", change: func(f *resourceFake) {
+			f.mu.Lock()
+			delete(f.objects, fakeKey{gv: "route.openshift.io/v1", ns: "minio", plural: "routes", name: "minio-ui"})
+			f.mu.Unlock()
+		}, ready: 1, wantRepair: "Route minio-ui (the admin UI) is missing", wantTerm: true},
+		{name: "Route on another Service", change: func(f *resourceFake) {
+			f.putJSON(minioUIRoute, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"to":{"name":"minio-old"},"port":{"targetPort":"ui"}}}`)
+		}, ready: 1, wantRepair: "Route minio-ui does not point at port ui", wantTerm: true},
+		{name: "still starting before the switch", change: svc(`{"app":"minio"}`, `9000`), ready: 0, wantRepair: "selects app=minio", wantMsg: "0/1 ready"},
+		{name: "scaled to zero", change: func(f *resourceFake) {
+			f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":2},"spec":{"replicas":0,"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+seaweedfsDefaultImage+`"}]}}},"status":{"observedGeneration":2}}`)
+		}, wantRepair: "scaled to 0 replicas", wantTerm: true},
+		{name: "Route unreadable", change: func(f *resourceFake) { f.fail["GET "+minioUIRoute] = 500 }, ready: 1, wantMsg: "cannot be checked"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putNamespace(f, toolLabelJSON, toolFieldManager)
+			putS3Deployment(f, tc.ready)
+			putS3Serving(f)
+			if tc.change != nil {
+				tc.change(f)
+			}
+			st := getMinIOStatus(c)
+			if !st.Deployed || st.Ready != tc.wantReady || st.TerminalError != tc.wantTerm {
+				t.Fatalf("state = %+v", st)
+			}
+			if (tc.wantRepair == "") != (st.RepairNeeded == "") || !strings.Contains(st.RepairNeeded, tc.wantRepair) {
+				t.Errorf("repairNeeded = %q, want %q", st.RepairNeeded, tc.wantRepair)
+			}
+			if tc.wantTerm && st.Message != st.RepairNeeded {
+				t.Errorf("message = %q, want the reason", st.Message)
+			}
+			if tc.wantMsg != "" && !strings.Contains(st.Message, tc.wantMsg) {
+				t.Errorf("message = %q, want %q", st.Message, tc.wantMsg)
+			}
+		})
 	}
 }
 

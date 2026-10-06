@@ -363,6 +363,9 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 		s3Err        error
 		legacyBody   []byte
 		legacyErr    error
+		legacyNP     objectMeta
+		legacyNPOK   bool
+		legacyNPErr  error
 		apiHost      string
 		uiHost       string
 		endpoints    minioEndpoints
@@ -370,10 +373,14 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 		pvcs         []minioPVC
 		pvcErr       error
 	)
-	wg.Add(4)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		s3Body, _, s3Err = c.get(namespacedPath("apps/v1", "deployments", minioNamespace, s3Deployment))
+	}()
+	go func() {
+		defer wg.Done()
+		legacyNP, legacyNPOK, legacyNPErr = readMinIOObject(c, "NetworkPolicy", legacyMinIONetworkPolicy)
 	}()
 	go func() {
 		defer wg.Done()
@@ -449,13 +456,44 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 		return state, endpoints, endpointsErr
 	}
 	state.CurrentImage = deploy.image(container)
+	serving := ""
 	if container == s3Container {
 		state.UIUser = s3AdminUser
 		if ns.Managed && state.CurrentImage != "" && state.CurrentImage != s3Image() {
 			state.Warning = strings.TrimSpace(fmt.Sprintf("SeaweedFS runs %s, not the image this version deploys (%s). Re-run setup to update it; the data PVC is kept. %s", state.CurrentImage, s3Image(), state.Warning))
 		}
+		// SeaweedFS serves only through minio-service and Route minio-ui,
+		// which setup switches once it is ready: a setup that stopped
+		// before that, a failed migration (the Service still on MinIO) or a
+		// manual rollback leaves it running but unused.
+		if ns.Managed {
+			switch {
+			case deploy.Spec.Replicas != nil && *deploy.Spec.Replicas == 0:
+				state.RepairNeeded = "Deployment seaweedfs is scaled to 0 replicas (for example by a manual rollback)."
+			case endpointsErr == nil:
+				serving = endpoints.s3ServingProblem()
+				state.RepairNeeded = serving
+			}
+			if state.RepairNeeded == "" && legacyNPErr == nil && legacyNPOK && minioObjectOwned(legacyNP) && IsK8sError(legacyErr, 404) {
+				state.RepairNeeded = "NetworkPolicy minio-ingress of the replaced MinIO was not removed yet (its pods were still shutting down)."
+			}
+		}
 	}
-	if deploy.Status.ReadyReplicas >= 1 {
+	switch {
+	case container == s3Container && ns.Managed && deploy.Spec.Replicas != nil && *deploy.Spec.Replicas == 0:
+		// Nothing will start on its own: say so instead of "starting".
+		state.Message = state.RepairNeeded
+		state.TerminalError = true
+		return state, endpoints, endpointsErr
+	case deploy.Status.ReadyReplicas < 1:
+	case serving != "":
+		state.Message = serving
+		state.TerminalError = true
+		return state, endpoints, endpointsErr
+	case container == s3Container && ns.Managed && endpointsErr != nil:
+		state.Message = "SeaweedFS is running, but whether minio-service and Route minio-ui point at it cannot be checked: " + endpointsErr.Error()
+		return state, endpoints, endpointsErr
+	default:
 		state.Ready = true
 		state.Message = "Running"
 		return state, endpoints, endpointsErr

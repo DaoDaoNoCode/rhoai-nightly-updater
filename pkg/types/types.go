@@ -585,6 +585,11 @@ type ResourceState struct {
 	// MinIO volume), for a rollback or a manual copy. Teardown deletes them;
 	// they are also listed in DataPVCs.
 	KeptPVCs []KeptPVC `json:"keptPVCs,omitempty"`
+	// RepairNeeded explains what re-running setup (Repair) would fix: the
+	// server does not serve through its Service or Route, is scaled to
+	// zero, or a migration left cleanup undone. With Ready false the
+	// resource is incomplete; with Ready true it works but is degraded.
+	RepairNeeded string `json:"repairNeeded,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim kept on purpose, and its size.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,12 +183,42 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	return out, nil
 }
 
-// minioEndpoints are the addresses of the tool's MinIO besides its service
-// DNS names: the hosts of its Routes and the ClusterIP of minio-service.
+// minioEndpoints are the addresses of the tool's S3 storage besides its
+// service DNS names: the hosts of its Routes and the ClusterIP of
+// minio-service. It also records where minio-service and Route minio-ui
+// send traffic, for the status (see s3ServingProblem).
 type minioEndpoints struct {
 	apiHost   string // Route minio-api (earlier versions)
 	uiHost    string // Route minio-ui
 	clusterIP string
+
+	svcFound     bool
+	svcSelector  string // "key=value" pairs, sorted, comma-separated
+	svcAPITarget string // targetPort of port 9000
+	svcUITarget  string // targetPort of port "ui"
+	uiFound      bool
+	uiService    string // spec.to.name of Route minio-ui
+	uiPort       string // spec.port.targetPort of Route minio-ui
+}
+
+// s3ServingProblem explains why minio-service or Route minio-ui does not
+// send traffic to SeaweedFS, or returns "".
+func (e minioEndpoints) s3ServingProblem() string {
+	switch {
+	case !e.svcFound:
+		return "Service minio-service is missing, so pipeline servers cannot reach SeaweedFS."
+	case e.svcSelector != s3AppSelector:
+		return fmt.Sprintf("Service minio-service selects %s instead of SeaweedFS (%s), so pipeline servers do not reach SeaweedFS.", firstNonEmpty(e.svcSelector, "no pods"), s3AppSelector)
+	case e.svcAPITarget != strconv.Itoa(s3Port):
+		return fmt.Sprintf("Service minio-service port %d forwards to %s instead of SeaweedFS's S3 port %d.", minioServiceAPIPort, firstNonEmpty(e.svcAPITarget, "nothing"), s3Port)
+	case e.svcUITarget != strconv.Itoa(s3AdminPort):
+		return fmt.Sprintf("Service minio-service port ui forwards to %s instead of SeaweedFS's admin UI port %d.", firstNonEmpty(e.svcUITarget, "nothing"), s3AdminPort)
+	case !e.uiFound:
+		return "Route minio-ui (the admin UI) is missing."
+	case e.uiService != minioServiceName || e.uiPort != "ui":
+		return "Route minio-ui does not point at port ui of Service minio-service."
+	}
+	return ""
 }
 
 // readMinIOEndpoints reads the Route hosts and the service ClusterIP. A
@@ -201,9 +232,11 @@ func readMinIOEndpoints(c *Client) (minioEndpoints, error) {
 	if e.apiHost, err = readRouteHost(c, minioNamespace, "minio-api"); err != nil {
 		return minioEndpoints{}, err
 	}
-	if e.uiHost, err = readRouteHost(c, minioNamespace, "minio-ui"); err != nil {
+	ui, err := readRoute(c, minioNamespace, "minio-ui")
+	if err != nil {
 		return minioEndpoints{}, err
 	}
+	e.uiHost, e.uiFound, e.uiService, e.uiPort = ui.host, ui.found, ui.toService, ui.targetPort
 	body, _, err := c.get(namespacedPath("v1", "services", minioNamespace, minioServiceName))
 	switch {
 	case IsK8sError(err, 404):
@@ -213,7 +246,13 @@ func readMinIOEndpoints(c *Client) (minioEndpoints, error) {
 	}
 	var svc struct {
 		Spec struct {
-			ClusterIP string `json:"clusterIP"`
+			ClusterIP string            `json:"clusterIP"`
+			Selector  map[string]string `json:"selector"`
+			Ports     []struct {
+				Name       string          `json:"name"`
+				Port       int             `json:"port"`
+				TargetPort json.RawMessage `json:"targetPort"`
+			} `json:"ports"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &svc); err != nil {
@@ -222,28 +261,73 @@ func readMinIOEndpoints(c *Client) (minioEndpoints, error) {
 	if svc.Spec.ClusterIP != "None" {
 		e.clusterIP = svc.Spec.ClusterIP
 	}
+	e.svcFound = true
+	pairs := make([]string, 0, len(svc.Spec.Selector))
+	for k, v := range svc.Spec.Selector {
+		pairs = append(pairs, k+"="+v)
+	}
+	sort.Strings(pairs)
+	e.svcSelector = strings.Join(pairs, ",")
+	for _, p := range svc.Spec.Ports {
+		switch {
+		case p.Port == minioServiceAPIPort:
+			e.svcAPITarget = intOrString(p.TargetPort)
+		case p.Name == "ui":
+			e.svcUITarget = intOrString(p.TargetPort)
+		}
+	}
 	return e, nil
+}
+
+// intOrString returns a JSON IntOrString (a port number or name) as text.
+func intOrString(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// routeSpec is the part of a Route the tool reads.
+type routeSpec struct {
+	found      bool
+	host       string
+	toService  string
+	targetPort string
+}
+
+// readRoute reads a Route; found is false when the Route (or the Route API)
+// does not exist. Any other read or parse error is returned.
+func readRoute(c *Client, namespace, name string) (routeSpec, error) {
+	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
+	switch {
+	case IsK8sError(err, 404):
+		return routeSpec{}, nil
+	case err != nil:
+		return routeSpec{}, fmt.Errorf("read Route %s: %w", name, err)
+	}
+	var route struct {
+		Spec struct {
+			Host string `json:"host"`
+			To   struct {
+				Name string `json:"name"`
+			} `json:"to"`
+			Port struct {
+				TargetPort json.RawMessage `json:"targetPort"`
+			} `json:"port"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &route); err != nil {
+		return routeSpec{}, fmt.Errorf("parse Route %s: %w", name, err)
+	}
+	return routeSpec{found: true, host: route.Spec.Host, toService: route.Spec.To.Name, targetPort: intOrString(route.Spec.Port.TargetPort)}, nil
 }
 
 // readRouteHost returns a Route's spec.host, "" when the Route (or the Route
 // API) does not exist, or the read or parse error.
 func readRouteHost(c *Client, namespace, name string) (string, error) {
-	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
-	switch {
-	case IsK8sError(err, 404):
-		return "", nil
-	case err != nil:
-		return "", fmt.Errorf("read Route %s: %w", name, err)
-	}
-	var route struct {
-		Spec struct {
-			Host string `json:"host"`
-		} `json:"spec"`
-	}
-	if err := json.Unmarshal(body, &route); err != nil {
-		return "", fmt.Errorf("parse Route %s: %w", name, err)
-	}
-	return route.Spec.Host, nil
+	r, err := readRoute(c, namespace, name)
+	return r.host, err
 }
 
 // endpointHostname returns the lower-case host name of an S3 endpoint given

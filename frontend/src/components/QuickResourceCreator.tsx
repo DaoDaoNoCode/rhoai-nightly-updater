@@ -97,6 +97,9 @@ export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = 
   if (kind === "minio" && managed && state.migrationPending) {
     return "Migrate to SeaweedFS replaces this MinIO from an earlier version. It starts with an empty bucket; the MinIO data volume is kept.";
   }
+  if (kind === "minio" && managed && state.repairNeeded) {
+    return "Repair re-runs setup: it scales SeaweedFS back up if needed, waits for it, points Service minio-service and Route minio-ui at it and finishes the MinIO cleanup. Stored data is kept.";
+  }
   if (!terminalReason(state)) return null;
   const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;
   if (/ImagePullBackOff|ErrImagePull|InvalidImageName/.test(text)) {
@@ -135,6 +138,8 @@ interface QuickResourceCreatorProps {
 
 const ResourceStatus: React.FC<{ state: ResourceState }> = ({ state }) => {
   if (isTerminating(state)) return <StatusLabel status="warning">Terminating</StatusLabel>;
+  // Running, but not serving through its Service/Route: Repair fixes it.
+  if (state.deployed && !state.ready && state.terminalError && state.repairNeeded) return <StatusLabel status="warning">Incomplete</StatusLabel>;
   if (state.ready) return <StatusLabel status="success">Running</StatusLabel>;
   if (!state.deployed) return <StatusLabel status="neutral">Not deployed</StatusLabel>;
   const reason = terminalReason(state);
@@ -155,6 +160,9 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
     items.push(<HelperTextItem key="message" variant={terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message!)}</TruncatedText></span></HelperTextItem>);
   }
   if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
+  if (state.repairNeeded && !(showMessage && state.message === state.repairNeeded)) {
+    items.push(<HelperTextItem key="repair" variant="warning">Needs repair: {state.repairNeeded}</HelperTextItem>);
+  }
   if (step) items.push(<HelperTextItem key="step">Next step: {step}</HelperTextItem>);
   if (teardownBlocked) items.push(<HelperTextItem key="blocked" variant="warning">Tear down is blocked: {teardownBlocked}</HelperTextItem>);
   notes?.forEach((note, i) => items.push(<HelperTextItem key={`note-${i}`}>{note}</HelperTextItem>));
@@ -498,7 +506,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Migrate to SeaweedFS</TooltipButton>
                                 </FlexItem>
                               )}
-                              {minio?.deployed && !minio.migrationPending && minio.managedByTool !== false && !!terminalReason(minio) && !isTerminating(minio) && (
+                              {minio?.deployed && !minio.migrationPending && minio.managedByTool !== false && (!!terminalReason(minio) || !!minio.repairNeeded) && !isTerminating(minio) && (
                                 <FlexItem>
                                   <TooltipButton variant="secondary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
                                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>

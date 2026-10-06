@@ -257,6 +257,9 @@ func TestSetupMinIO_KeepsMinIOPolicyWhileItsPodsRun(t *testing.T) {
 	if !f.has(minioNPPath) || f.has(minioDeployPath) || hasMutation(f, "DELETE "+minioNPPath) {
 		t.Fatalf("policy kept = %v, MinIO deployment kept = %v", f.has(minioNPPath), f.has(minioDeployPath))
 	}
+	if st := getMinIOStatus(c); !st.Ready || !strings.Contains(st.RepairNeeded, "minio-ingress") {
+		t.Errorf("status must stay Running and offer Repair for the cleanup: %+v", st)
+	}
 
 	// The pod exits; Repair finishes the cleanup.
 	f.mu.Lock()
@@ -264,6 +267,9 @@ func TestSetupMinIO_KeepsMinIOPolicyWhileItsPodsRun(t *testing.T) {
 	f.mu.Unlock()
 	if resp, _ := SetupMinIO(c); !resp.Success || f.has(minioNPPath) {
 		t.Fatalf("repair = %+v, policy kept = %v", resp, f.has(minioNPPath))
+	}
+	if st := getMinIOStatus(c); st.RepairNeeded != "" || !st.Ready {
+		t.Errorf("status after repair = %+v", st)
 	}
 }
 

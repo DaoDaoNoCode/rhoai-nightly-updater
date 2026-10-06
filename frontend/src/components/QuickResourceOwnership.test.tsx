@@ -273,3 +273,40 @@ describe("migration from MinIO (start fresh)", () => {
     expect(within(dialog).getByText("Data is deleted and cannot be recovered").closest(".pf-v6-c-alert")).toHaveTextContent(/seaweedfs-pvc, minio-pvc/);
   });
 });
+
+describe("status from the serving configuration (Repair)", () => {
+  const base: ResourceState = { deployed: true, namespace: "minio", managedByTool: true, uiUser: "admin", dataPVCs: ["seaweedfs-pvc"], ready: false };
+  const onMinIO = "Service minio-service selects app=minio instead of SeaweedFS (app=seaweedfs), so pipeline servers do not reach SeaweedFS.";
+  const scaledDown = "Deployment seaweedfs is scaled to 0 replicas (for example by a manual rollback).";
+
+  it.each([
+    ["the Service still points at MinIO", { ...base, terminalError: true, message: onMinIO, repairNeeded: onMinIO }, "Incomplete", onMinIO],
+    ["SeaweedFS is scaled to zero", { ...base, terminalError: true, message: scaledDown, repairNeeded: scaledDown }, "Incomplete", scaledDown],
+    ["it is still starting before the switch", { ...base, message: "0/1 ready", repairNeeded: onMinIO }, "Starting", `Needs repair: ${onMinIO}`],
+    ["the MinIO cleanup is unfinished", { ...base, ready: true, message: "Running", repairNeeded: "NetworkPolicy minio-ingress of the replaced MinIO was not removed yet (its pods were still shutting down)." }, "Running", "Needs repair: NetworkPolicy minio-ingress"],
+  ])("when %s, it says so and offers Repair, which re-runs setup", async (_name, minio, label, text) => {
+    const api = setup(live({ minio: minio as ResourceState, pipelineServers: [] }), {
+      "POST /api/resources/minio/setup": () => jsonResponse({ success: true, message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.", logs: [] }),
+    });
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByText(label)).toBeInTheDocument();
+    expect(within(storage).getByText(new RegExp(text.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
+    expect(within(storage).getByText(/Repair re-runs setup/)).toBeInTheDocument();
+    expect(within(storage).queryByText(/^Failed/)).not.toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+    fireEvent.click(within(storage).getByRole("button", { name: "Repair" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Repair S3 storage" }));
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/setup"))).toHaveLength(1));
+  });
+
+  it("a serving SeaweedFS has no Repair", async () => {
+    setup(live({ minio: { ...base, ready: true, message: "Running" }, pipelineServers: [] }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByText("Running")).toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
+    expect(within(storage).queryByText(/Needs repair/)).not.toBeInTheDocument();
+  });
+});

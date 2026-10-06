@@ -508,6 +508,12 @@ export interface ResourceState {
   migrationPending?: boolean;
   /** Data volumes kept on purpose after the migration (the old MinIO PVC); teardown deletes them. */
   keptPVCs?: KeptPVC[] | null;
+  /**
+   * What re-running setup (Repair) would fix: the server does not serve
+   * through its Service or Route, is scaled to zero, or a migration left
+   * cleanup undone. Not ready: incomplete; ready: degraded.
+   */
+  repairNeeded?: string;
 }
 
 export interface KeptPVC {
