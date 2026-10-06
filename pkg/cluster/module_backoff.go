@@ -3,10 +3,8 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +37,7 @@ type operatorDeployment struct {
 	Namespace, Name, UID, ResourceVersion string
 	Strategy                              string // RollingUpdate (default) or Recreate
 	Replicas, Available                   int
-	MaxUnavailable                        interface{}
+	MaxUnavailable, MaxSurge              interface{}
 	TemplateLabels                        map[string]string
 	OwnerKinds                            []string
 	PartOf                                string
@@ -65,6 +63,7 @@ type deploymentJSON struct {
 			Type          string `json:"type"`
 			RollingUpdate *struct {
 				MaxUnavailable interface{} `json:"maxUnavailable"`
+				MaxSurge       interface{} `json:"maxSurge"`
 			} `json:"rollingUpdate"`
 		} `json:"strategy"`
 		Template struct {
@@ -89,6 +88,7 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 	}
 	if j.Spec.Strategy.RollingUpdate != nil {
 		d.MaxUnavailable = j.Spec.Strategy.RollingUpdate.MaxUnavailable
+		d.MaxSurge = j.Spec.Strategy.RollingUpdate.MaxSurge
 	}
 	for _, o := range j.Metadata.OwnerReferences {
 		d.OwnerKinds = append(d.OwnerKinds, o.Kind)
@@ -112,27 +112,18 @@ func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDe
 	return &d, nil
 }
 
-// maxUnavailablePods resolves spec.strategy.rollingUpdate.maxUnavailable
-// (default 25%, rounded down: Kubernetes Deployment docs).
-func (d operatorDeployment) maxUnavailablePods() int {
-	v := d.MaxUnavailable
-	if v == nil {
-		v = "25%"
+// maxUnavailablePods is the number of pods a rolling update may take down,
+// as the Deployment controller computes it (pkg/controller/deployment/util
+// ResolveFenceposts): maxSurge rounds up, maxUnavailable rounds down
+// (defaults 25%), and when both resolve to 0, maxUnavailable becomes 1. ok
+// is false when a value does not parse, so the caller assumes the worst.
+func (d operatorDeployment) maxUnavailablePods() (int, bool) {
+	surge, _, err1 := resolveIntOrPercent(d.MaxSurge, d.Replicas, true, "25%")
+	unavailable, _, err2 := resolveIntOrPercent(d.MaxUnavailable, d.Replicas, false, "25%")
+	if surge == 0 && unavailable == 0 {
+		unavailable = 1
 	}
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case string:
-		if pct, ok := strings.CutSuffix(x, "%"); ok {
-			if n, err := strconv.Atoi(pct); err == nil {
-				return int(math.Floor(float64(n) * float64(d.Replicas) / 100))
-			}
-		}
-		if n, err := strconv.Atoi(x); err == nil {
-			return n
-		}
-	}
-	return 0
+	return unavailable, err1 == nil && err2 == nil
 }
 
 // findModuleOperator returns the Deployment that runs a module's operator:
@@ -216,7 +207,8 @@ func assessRestart(c *Client, d operatorDeployment) restartAssessment {
 		return restartAssessment{Reason: fmt.Sprintf("could not check which webhooks %s serves (%v), so the effect of a restart is unknown", d.ref(), err)}
 	}
 	a := restartAssessment{Hooks: hooks}
-	gap := d.Strategy == "Recreate" || d.maxUnavailablePods() >= d.Available
+	unavailable, parsed := d.maxUnavailablePods()
+	gap := d.Strategy == "Recreate" || !parsed || unavailable >= d.Available
 	switch {
 	case len(hooks) > 0 && gap:
 		a.Reason = fmt.Sprintf("its pods serve the failurePolicy Fail webhooks %s, and its rollout strategy (%s) stops the running pod before a new one is ready, so matching requests would be rejected meanwhile; restart it yourself at a quiet moment", strings.Join(hooks, ", "), d.strategyText())
@@ -236,11 +228,15 @@ func (d operatorDeployment) strategyText() string {
 	if d.Strategy == "Recreate" {
 		return "Recreate"
 	}
-	maxUnavailable := "25%"
-	if d.MaxUnavailable != nil {
-		maxUnavailable = fmt.Sprint(d.MaxUnavailable)
+	show := func(v interface{}) string {
+		if v == nil {
+			return "25%"
+		}
+		return fmt.Sprint(v)
 	}
-	return fmt.Sprintf("RollingUpdate with maxUnavailable %s for %s", maxUnavailable, countNoun(d.Replicas, "replica", "replicas"))
+	unavailable, _ := d.maxUnavailablePods()
+	return fmt.Sprintf("RollingUpdate with maxSurge %s and maxUnavailable %s for %s (up to %d unavailable)",
+		show(d.MaxSurge), show(d.MaxUnavailable), countNoun(d.Replicas, "replica", "replicas"), unavailable)
 }
 
 // webhooksServedBy lists the failurePolicy Fail webhooks whose Service

@@ -322,6 +322,49 @@ func TestRestartAssessment(t *testing.T) {
 	}
 }
 
+func TestMaxUnavailablePods_MatchesDeploymentController(t *testing.T) {
+	for _, tt := range []struct {
+		replicas      int
+		surge, unav   interface{}
+		want          int
+		wantParseable bool
+	}{
+		{1, nil, nil, 0, true},                // 25% surge rounds up to 1, 25% unavailable down to 0
+		{1, float64(0), "25%", 1, true},       // both 0: maxUnavailable becomes 1
+		{1, "0%", "0%", 1, true},              // same with percentages
+		{4, "25%", "25%", 1, true},            // 1 and 1
+		{2, float64(1), float64(0), 0, true},  // surge first
+		{3, "50%", "50%", 1, true},            // surge 2, unavailable 1
+		{1, float64(0), "nonsense", 1, false}, // unparseable: assume the worst
+	} {
+		d := operatorDeployment{Replicas: tt.replicas, MaxSurge: tt.surge, MaxUnavailable: tt.unav}
+		got, ok := d.maxUnavailablePods()
+		if got != tt.want || ok != tt.wantParseable {
+			t.Errorf("replicas=%d surge=%v unavailable=%v: got %d,%v want %d,%v", tt.replicas, tt.surge, tt.unav, got, ok, tt.want, tt.wantParseable)
+		}
+	}
+}
+
+// replicas=1, maxSurge=0, maxUnavailable=25%: Kubernetes takes the only pod
+// down first, so a Fail webhook it serves would go unserved.
+func TestRestartAssessment_SurgeZeroWithFailWebhookRefuses(t *testing.T) {
+	w := newDSCWorld(t, nil)
+	dep := operatorDeploymentJSON("trainer-operator-controller-manager", "RollingUpdate", 1)
+	dep["spec"].(map[string]interface{})["strategy"] = map[string]interface{}{"type": "RollingUpdate", "rollingUpdate": map[string]interface{}{"maxSurge": 0, "maxUnavailable": "25%"}}
+	w.f.obj("GET", trainerOperatorPath, dep)
+	w.f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", 200, `{"items":[{"metadata":{"name":"trainer-webhook","labels":{"platform.opendatahub.io/part-of":"trainer"}},
+		"webhooks":[{"name":"vtrainer.kb.io","failurePolicy":"Fail","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"svc"}}}]}]}`)
+	w.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/services/svc", 200, `{"spec":{"selector":{"app.kubernetes.io/name":"trainer-operator-controller-manager"}}}`)
+	d, why := findModuleOperator(w.c, "trainer", "redhat-ods-applications")
+	if d == nil {
+		t.Fatal(why)
+	}
+	a := assessRestart(w.c, *d)
+	if a.OK || !strings.Contains(a.Reason, "would be rejected meanwhile") || !strings.Contains(a.Reason, "maxSurge 0 and maxUnavailable 25%") {
+		t.Fatalf("assessment = %+v", a)
+	}
+}
+
 func TestFindModuleOperator_GenericPlatformOwnedDeployment(t *testing.T) {
 	f, c := newFakeAPI(t)
 	items := []interface{}{
