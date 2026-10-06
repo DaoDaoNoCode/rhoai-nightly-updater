@@ -229,6 +229,108 @@ func TestDiagnoseCluster_CertificateRootCause(t *testing.T) {
 	}
 }
 
+// Live test 3: cert-manager-operator and the cert-manager controller scaled
+// to 0, the Secret deleted, the observability pods deleted. The
+// Certificate still says Ready=True; the pods fail to mount the Secret.
+func staleCertWorld(t *testing.T, managementState string) (*fakeAPI, *Client) {
+	t.Helper()
+	f, c := certWorld(t)
+	f.obj("GET", appCertsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+		"metadata": map[string]string{"name": "odh-observability-webhook-cert", "namespace": "redhat-ods-applications", "creationTimestamp": ago(30 * 24 * time.Hour)},
+		"spec":     map[string]string{"secretName": "odh-observability-webhook-cert"},
+		"status":   map[string]interface{}{"conditions": []dcond{{"type": "Ready", "status": "True", "reason": "Ready", "message": "Certificate is up to date and has not expired"}}},
+	}}})
+	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"odh-observability-abc","namespace":"redhat-ods-applications",
+		"creationTimestamp":"`+ago(time.Hour)+`","labels":{"pod-template-hash":"abc","app":"odh-observability"},
+		"ownerReferences":[{"kind":"ReplicaSet","name":"odh-observability-abc","controller":true}]},
+		"spec":{"volumes":[{"name":"webhook-certs","secret":{"secretName":"odh-observability-webhook-cert"}}]},
+		"status":{"phase":"Pending","conditions":[{"type":"PodScheduled","status":"True"}],"containerStatuses":[{"name":"c","state":{"waiting":{"reason":"ContainerCreating"}}}]}}]}`)
+	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/events", 200, `{"items":[{"type":"Warning","reason":"FailedMount",
+		"message":"MountVolume.SetUp failed for volume \"webhook-certs\" : secret \"odh-observability-webhook-cert\" not found","lastTimestamp":"`+ago(time.Minute)+`"}]}`)
+	f.json("GET", "/apis/apps/v1/deployments", 200, `{"items":[{"metadata":{"name":"cert-manager","namespace":"cert-manager",
+		"labels":{"app":"cert-manager","app.kubernetes.io/name":"cert-manager","app.kubernetes.io/component":"controller"}},"spec":{"replicas":0},"status":{}}]}`)
+	f.obj("GET", clusterCSVsPath, map[string]interface{}{"items": []interface{}{map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "cert-manager-operator.v1.20.1", "namespace": "cert-manager-operator",
+			"labels": map[string]string{"operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator": ""}, "annotations": map[string]string{"alm-examples": certManagerExamples}},
+		"spec": map[string]interface{}{"displayName": "cert-manager Operator for Red Hat OpenShift",
+			"install": map[string]interface{}{"spec": map[string]interface{}{"deployments": []interface{}{map[string]string{"name": "cert-manager-operator-controller-manager"}}}}},
+		"status": map[string]string{"phase": "Succeeded", "lastTransitionTime": ago(time.Hour)},
+	}}})
+	f.json("GET", "/apis/apps/v1/namespaces/cert-manager-operator/deployments/cert-manager-operator-controller-manager", 200,
+		`{"metadata":{"name":"cert-manager-operator-controller-manager","namespace":"cert-manager-operator"},"spec":{"replicas":0},"status":{}}`)
+	f.json("GET", "/apis/operator.openshift.io/v1alpha1", 200, `{"resources":[{"name":"certmanagers","kind":"CertManager"},{"name":"trustmanagers","kind":"TrustManager"}]}`)
+	f.json("GET", "/apis/operator.openshift.io/v1alpha1/certmanagers/cluster", 200, `{"metadata":{"name":"cluster"},"spec":{"managementState":"`+managementState+`"}}`)
+	return f, c
+}
+
+func TestCertificatesCheck_StaleReadyWithControllerDown(t *testing.T) {
+	f, c := staleCertWorld(t, "Managed")
+	out := checkCertificates(c)
+	p, ok := problemsByID(out)["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
+	if !ok || out.check.Status != "fail" || !strings.Contains(out.check.Detail, "stale") {
+		t.Fatalf("out = %+v %v", out.check, ids(out))
+	}
+	ev := strings.Join(p.Evidence, "\n")
+	for _, want := range []string{
+		"Ready=True is stale: Secret odh-observability-webhook-cert does not exist",
+		"cert-manager/cert-manager (0 of 0 available)",
+		"cert-manager Operator for Red Hat OpenShift is installed (CSV cert-manager-operator/cert-manager-operator.v1.20.1 Succeeded)",
+		"Operator Deployment cert-manager-operator/cert-manager-operator-controller-manager: 0 of 0 available (scaled to 0",
+		"CertManager/cluster has managementState Managed",
+		"Cannot start without Secret odh-observability-webhook-cert: Pod redhat-ods-applications/odh-observability-abc",
+	} {
+		if !strings.Contains(ev, want) {
+			t.Errorf("evidence lacks %q:\n%s", want, ev)
+		}
+	}
+	if p.Title != "Certificate redhat-ods-applications/odh-observability-webhook-cert reports Ready, but its Secret odh-observability-webhook-cert is missing: cert-manager is installed but its controller is not running" ||
+		p.TechnicalCmd != "oc scale deployment/cert-manager-operator-controller-manager -n cert-manager-operator --replicas=1" || p.AutoFixable {
+		t.Fatalf("problem = %+v", p)
+	}
+	if _, ok := problemsByID(out)["prerequisite-missing-openshift-cert-manager-operator"]; ok {
+		t.Fatal("an installed cert-manager reported as missing")
+	}
+	assertWrites(t, f)
+}
+
+func TestCertificatesCheck_UnmanagedOperandGetsPatchCommand(t *testing.T) {
+	_, c := staleCertWorld(t, "Unmanaged")
+	p := problemsByID(checkCertificates(c))["certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert"]
+	if !strings.Contains(p.TechnicalCmd, `oc patch certmanager.operator.openshift.io cluster --type merge -p '{"spec":{"managementState":"Managed"}}'`) {
+		t.Fatalf("cmd = %s", p.TechnicalCmd)
+	}
+}
+
+// The whole report for live test 3: the pod symptom is folded into the
+// stale Certificate.
+func TestDiagnoseCluster_StaleCertificateFoldsPod(t *testing.T) {
+	_, c := staleCertWorld(t, "Managed")
+	resp, err := RunDiagnostics(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findProblem(resp, "pod-stuck-creating-redhat-ods-applications-odh-observability") != nil {
+		t.Fatal("the stuck pod is reported separately")
+	}
+	cert := findProblem(resp, "certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert")
+	if cert == nil || !strings.Contains(strings.Join(cert.Evidence, "\n"), "Also explains: odh-observability: 1 pod stuck in ContainerCreating") {
+		t.Fatalf("certificate = %+v", cert)
+	}
+	if chk := findCheck(resp, "Certificates"); chk == nil || chk.Status != "fail" {
+		t.Fatalf("check = %+v", chk)
+	}
+}
+
+func TestCertificatesCheck_ReadyWithSecretIsReady(t *testing.T) {
+	f, c := staleCertWorld(t, "Managed")
+	f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"odh-observability-abc"},
+		"spec":{"volumes":[{"secret":{"secretName":"odh-observability-webhook-cert"}}]},"status":{"phase":"Running"}}]}`)
+	out := checkCertificates(c)
+	if out.check.Status != "pass" || len(out.problems) != 0 || !strings.Contains(out.check.Detail, "1 Certificate Ready") {
+		t.Fatalf("out = %+v %v", out.check, ids(out))
+	}
+}
+
 func TestMergeProblem(t *testing.T) {
 	dst := Problem{ID: "p", Severity: "info", Evidence: []string{"a"}, mergeable: true}
 	mergeProblem(&dst, Problem{ID: "p", Severity: "warning", Evidence: []string{"a", "b"}, AffectedObjects: []string{"X y"}, RelatedProblems: []string{"r"}})

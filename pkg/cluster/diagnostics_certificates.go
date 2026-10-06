@@ -56,30 +56,76 @@ func (ci certificateItem) readyCondition() *dscCondition {
 }
 
 // certManagerRunning reports whether a cert-manager controller has an
-// available pod anywhere, by the labels of the upstream chart and of the
-// Red Hat operator's deployment (app.kubernetes.io/name=cert-manager,
-// app.kubernetes.io/component=controller).
-func certManagerRunning(c *Client) (bool, string, error) {
-	body, _, err := c.do(http.MethodGet, "/apis/apps/v1/deployments", "", nil,
-		url.Values{"labelSelector": {"app.kubernetes.io/name=cert-manager,app.kubernetes.io/component=controller"}})
-	if err != nil {
-		return false, "", err
-	}
-	var list struct {
-		Items []deploymentJSON `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return false, "", fmt.Errorf("parse deployments: %w", err)
-	}
-	var seen []string
-	for _, d := range list.Items {
-		ref := d.Metadata.Namespace + "/" + d.Metadata.Name
-		if d.Status.AvailableReplicas > 0 {
-			return true, ref, nil
+// available pod anywhere. Controllers are found by the labels of the
+// upstream chart and of the Red Hat operator's operand
+// (app.kubernetes.io/name=cert-manager or app=cert-manager; the cainjector
+// and webhook Deployments carry other names or a component label other
+// than controller). seen lists the controllers found, with their pods.
+func certManagerRunning(c *Client) (running bool, seen string, err error) {
+	var found []string
+	byRef := map[string]bool{}
+	for _, sel := range []string{"app.kubernetes.io/name=cert-manager", "app=cert-manager"} {
+		body, _, err := c.do(http.MethodGet, "/apis/apps/v1/deployments", "", nil, url.Values{"labelSelector": {sel}})
+		if err != nil {
+			return false, "", err
 		}
-		seen = append(seen, ref+" (no available pod)")
+		var list struct {
+			Items []deploymentJSON `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return false, "", fmt.Errorf("parse deployments: %w", err)
+		}
+		for _, j := range list.Items {
+			ref := j.Metadata.Namespace + "/" + j.Metadata.Name
+			if comp := j.Metadata.Labels["app.kubernetes.io/component"]; byRef[ref] || (comp != "" && comp != "controller") {
+				continue
+			}
+			byRef[ref] = true
+			replicas := 1
+			if j.Spec.Replicas != nil {
+				replicas = *j.Spec.Replicas
+			}
+			if j.Status.AvailableReplicas > 0 {
+				running = true
+			}
+			found = append(found, fmt.Sprintf("%s (%d of %d available)", ref, j.Status.AvailableReplicas, replicas))
+		}
 	}
-	return false, strings.Join(seen, ", "), nil
+	sort.Strings(found)
+	return running, strings.Join(found, ", "), nil
+}
+
+// certManagerOperatorState describes the installed cert-manager operator
+// when its controller does not run: its own Deployments (from the CSV's
+// install strategy) and its operand's managementState, with the commands
+// that bring the controller back.
+func certManagerOperatorState(c *Client, d *dependency) (evidence, cmds []string) {
+	for _, name := range d.CSV.Deployments {
+		od, err := readOperatorDeployment(c, d.CSV.Namespace, name, "")
+		if err != nil {
+			evidence = append(evidence, fmt.Sprintf("Operator Deployment %s/%s: %v", d.CSV.Namespace, name, err))
+			continue
+		}
+		line := fmt.Sprintf("Operator Deployment %s: %d of %d available", od.ref(), od.Available, od.Replicas)
+		if od.Replicas == 0 {
+			line += " (scaled to 0, so nothing restores the controller)"
+			cmds = append(cmds, shellCommand("oc", "scale", "deployment/"+od.Name, "-n", od.Namespace, "--replicas=1"))
+		}
+		evidence = append(evidence, line)
+	}
+	if d.Operand != nil && d.OperandSt == operandPresent {
+		state, err := operandManagementState(c, *d.Operand)
+		switch {
+		case err != nil:
+			evidence = append(evidence, fmt.Sprintf("%s: could not read managementState: %v%s", d.Operand.ref(), err, templateHint(err)))
+		case state != "" && state != "Managed":
+			evidence = append(evidence, fmt.Sprintf("%s has managementState %s, so the operator does not run cert-manager", d.Operand.ref(), state))
+			cmds = append(cmds, shellCommand("oc", "patch", d.Operand.resourceArg(), d.Operand.objName(), "--type", "merge", "-p", `{"spec":{"managementState":"Managed"}}`))
+		default:
+			evidence = append(evidence, fmt.Sprintf("%s has managementState %s", d.Operand.ref(), nonEmpty(state, "unset")))
+		}
+	}
+	return evidence, cmds
 }
 
 // certPod is the part of a pod the Certificates check reads.
@@ -213,12 +259,29 @@ func checkCertificates(c *Client) checkOutput {
 		return out
 	}
 
+	// A Certificate is effectively ready only if its Secret exists too: with
+	// no cert-manager controller running, nothing updates a Ready=True
+	// condition after the Secret is gone. The ServiceAccount may not read
+	// Secrets (only a few by name), so a missing Secret is known from the
+	// pods: a FailedMount event or a container waiting on it by name.
+	pods := &podLister{c: c, pods: map[string][]certPod{}, errs: map[string]error{}}
+	mounts := map[string]secretMounts{}
 	var pending []certificateItem
-	ready := 0
+	ready, stale := 0, 0
 	for _, ci := range certs {
+		if ci.Spec.SecretName != "" {
+			var m secretMounts
+			m.blocked, m.other, m.err = podsBlockedOnSecret(c, pods, ci.Metadata.Namespace, ci.Spec.SecretName)
+			mounts[ci.ref()] = m
+		}
 		rc := ci.readyCondition()
 		if rc != nil && rc.Status == "True" {
-			ready++
+			if len(mounts[ci.ref()].blocked) == 0 {
+				ready++
+				continue
+			}
+			stale++
+			pending = append(pending, ci)
 			continue
 		}
 		if created, ok := parseK8sTime(ci.Metadata.CreationTimestamp); ok && now.Sub(created) < certificateGrace {
@@ -232,14 +295,13 @@ func checkCertificates(c *Client) checkOutput {
 		var configs []admissionConfig
 		var cfgErrs []string
 		configs, cfgErrs = listAdmissionConfigs(c)
-		pods := &podLister{c: c, pods: map[string][]certPod{}, errs: map[string]error{}}
 		var dep *dependency
 		if runErr == nil && !running {
 			dep = &dependency{Mention: "cert-manager", Key: normalizeOperatorName("cert-manager")}
 			resolveDependencies(c, []*dependency{dep})
 		}
 		for _, ci := range pending {
-			p := certificateProblem(c, ci, certificateCause{running: running, controller: controller, runErr: runErr, dep: dep}, configs, pods)
+			p := certificateProblem(c, ci, certificateCause{running: running, controller: controller, runErr: runErr, dep: dep}, configs, mounts[ci.ref()])
 			out.problems = append(out.problems, p)
 		}
 		if dep != nil && dep.problemID() != "" {
@@ -256,6 +318,9 @@ func checkCertificates(c *Client) checkOutput {
 		}
 		out.check.Status = "fail"
 		out.check.Detail = fmt.Sprintf("%s not issued", countNoun(len(pending), "Certificate", "Certificates"))
+		if stale > 0 {
+			out.check.Detail += fmt.Sprintf(" (%d %s Ready, but %s Secret is missing: stale)", stale, verb(stale, "reports", "report"), verb(stale, "its", "their"))
+		}
 	} else {
 		out.check.Detail = fmt.Sprintf("%s Ready in %s", countNoun(ready, "Certificate", "Certificates"), strings.Join(namespaces, ", "))
 	}
@@ -268,6 +333,12 @@ func checkCertificates(c *Client) checkOutput {
 	return out
 }
 
+// secretMounts are the pods that mount a Certificate's Secret.
+type secretMounts struct {
+	blocked, other []string
+	err            error
+}
+
 type certificateCause struct {
 	running    bool
 	controller string
@@ -275,8 +346,9 @@ type certificateCause struct {
 	dep        *dependency
 }
 
-func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []admissionConfig, pods *podLister) Problem {
+func certificateProblem(c *Client, ci certificateItem, cause certificateCause, configs []admissionConfig, mounts secretMounts) Problem {
 	rc := ci.readyCondition()
+	staleReady := rc != nil && rc.Status == "True" && len(mounts.blocked) > 0
 	evidence := []string{}
 	if rc == nil {
 		evidence = append(evidence, fmt.Sprintf("Certificate %s (Secret %s) has no Ready condition", ci.ref(), nonEmpty(ci.Spec.SecretName, "unset")))
@@ -291,41 +363,56 @@ func certificateProblem(c *Client, ci certificateItem, cause certificateCause, c
 			"and webhooks whose CA it injects (%s) have no serving certificate. Those symptoms are listed here instead of as separate problems.", nonEmpty(ci.Spec.SecretName, "(unset)"), injectCAAnnotation),
 		TechnicalCmd: shellCommand("oc", "describe", "certificate.cert-manager.io", ci.Metadata.Name, "-n", ci.Metadata.Namespace),
 	}
+	subject := fmt.Sprintf("Certificate %s is not issued", ci.ref())
+	if staleReady {
+		subject = fmt.Sprintf("Certificate %s reports Ready, but its Secret %s is missing", ci.ref(), ci.Spec.SecretName)
+		evidence = append(evidence, fmt.Sprintf("Ready=True is stale: Secret %s does not exist (pods fail to mount it), and only a running cert-manager would update the condition", ci.Spec.SecretName))
+		p.Description = fmt.Sprintf("cert-manager keeps Secret %s from this Certificate. The Secret is gone but the Certificate still says Ready, because no cert-manager controller runs to notice. "+
+			"Until it is issued again, pods that mount the Secret stay in ContainerCreating, and webhooks whose CA it injects (%s) have no serving certificate. Those symptoms are listed here instead of as separate problems.", ci.Spec.SecretName, injectCAAnnotation)
+	}
 	switch {
 	case rc != nil && rc.Status == "False" && rc.Message != "":
 		p.Title = fmt.Sprintf("Certificate %s is not issued: %s", ci.ref(), truncate(rc.Message, 120))
 		p.Fix = "Fix what the Certificate's Ready condition names (for example a missing Issuer); cert-manager retries on its own."
 	case cause.runErr != nil:
-		p.Title = fmt.Sprintf("Certificate %s is not issued", ci.ref())
+		p.Title = subject
 		evidence = append(evidence, fmt.Sprintf("Could not check whether cert-manager runs: %v%s", cause.runErr, templateHint(cause.runErr)))
 		p.Fix = "Check that cert-manager is installed and its pods run (oc get pods -A -l app.kubernetes.io/name=cert-manager), then read the Certificate's events."
 	case !cause.running:
-		p.Title = fmt.Sprintf("Certificate %s is not issued: cert-manager is not installed or not running", ci.ref())
-		line := "No cert-manager controller Deployment (labels app.kubernetes.io/name=cert-manager, app.kubernetes.io/component=controller) has an available pod"
+		p.Title = subject + ": cert-manager is not installed or not running"
+		line := "No cert-manager controller Deployment (labels app.kubernetes.io/name=cert-manager or app=cert-manager) has an available pod"
 		if cause.controller != "" {
 			line += ": " + cause.controller
 		}
 		evidence = append(evidence, line)
 		d := cause.dep
 		switch {
+		case d != nil && d.problemID() == "":
+			p.Title = subject + ": cert-manager is installed but its controller is not running"
+			evidence = append(evidence, fmt.Sprintf("%s is installed (CSV %s/%s Succeeded)", d.displayName(), d.CSV.Namespace, d.CSV.Name))
+			opEvidence, cmds := certManagerOperatorState(c, d)
+			evidence = append(evidence, opEvidence...)
+			if len(cmds) > 0 {
+				p.Fix = fmt.Sprintf("Bring the %s back (commands below); it then restarts the cert-manager controller, which issues the Secret again, and the pods start on their own.", d.displayName())
+				p.TechnicalCmd = strings.Join(cmds, "\n")
+			} else {
+				p.Fix = fmt.Sprintf("%s runs and manages cert-manager, but the controller has no available pod: read the controller's pods and events (command below).", d.displayName())
+				p.TechnicalCmd = "oc get deployments,pods -A -l app.kubernetes.io/name=cert-manager"
+			}
 		case d == nil:
 			p.Fix = "Install cert-manager (cert-manager Operator for Red Hat OpenShift); it then issues the Certificate and the pods start."
 		case d.problemID() != "":
 			p.RelatedProblems = []string{d.problemID()}
 			p.Fix = fmt.Sprintf("Install or finish %s (see the related problem for the exact commands); cert-manager then issues the Certificate and the pods start on their own.", d.displayName())
-		default:
-			evidence = append(evidence, fmt.Sprintf("%s is installed (CSV %s/%s Succeeded)", d.displayName(), d.CSV.Namespace, d.CSV.Name))
-			p.Fix = fmt.Sprintf("%s is installed but its controller does not run. Check the operator's pods and its operand (for the Red Hat operator, CertManager/cluster) and the namespace cert-manager.", d.displayName())
-			p.TechnicalCmd = "oc get pods -A -l app.kubernetes.io/name=cert-manager; oc get certmanagers.operator.openshift.io cluster -o yaml"
 		}
 	default:
-		p.Title = fmt.Sprintf("Certificate %s is not issued", ci.ref())
+		p.Title = subject
 		evidence = append(evidence, "cert-manager runs ("+cause.controller+") but has not issued it")
 		p.Fix = "Read the Certificate's events and its Issuer's status (command below); cert-manager logs name the cause."
 	}
 
 	if ci.Spec.SecretName != "" {
-		blocked, other, err := podsBlockedOnSecret(c, pods, ci.Metadata.Namespace, ci.Spec.SecretName)
+		blocked, other, err := mounts.blocked, mounts.other, mounts.err
 		if err != nil {
 			evidence = append(evidence, fmt.Sprintf("Could not list pods in %s: %v", ci.Metadata.Namespace, err))
 		}

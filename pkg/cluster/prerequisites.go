@@ -420,6 +420,7 @@ type clusterCSV struct {
 	Changed                             time.Time // status.lastTransitionTime
 	Examples                            []almExample
 	Owned                               []ownedCRD
+	Deployments                         []string // spec.install.spec.deployments[].name
 }
 
 // ownedCRD is one entry of spec.customresourcedefinitions.owned.
@@ -461,6 +462,13 @@ func listClusterCSVs(c *Client) ([]clusterCSV, error) {
 				CustomResourceDefinitions struct {
 					Owned []ownedCRD `json:"owned"`
 				} `json:"customresourcedefinitions"`
+				Install struct {
+					Spec struct {
+						Deployments []struct {
+							Name string `json:"name"`
+						} `json:"deployments"`
+					} `json:"spec"`
+				} `json:"install"`
 			} `json:"spec"`
 			Status struct {
 				Phase              string `json:"phase"`
@@ -477,6 +485,9 @@ func listClusterCSVs(c *Client) ([]clusterCSV, error) {
 		csv.Changed, _ = parseK8sTime(it.Status.LastTransitionTime)
 		csv.Examples = parseALMExamples(it.Metadata.Annotations["alm-examples"])
 		csv.Owned = it.Spec.CustomResourceDefinitions.Owned
+		for _, d := range it.Spec.Install.Spec.Deployments {
+			csv.Deployments = append(csv.Deployments, d.Name)
+		}
 		out = append(out, csv)
 	}
 	return out, nil
@@ -561,6 +572,32 @@ func readSingletonOperand(c *Client, e almExample) (operandState, error) {
 	default:
 		return operandUnverified, err
 	}
+}
+
+// operandManagementState reads spec.managementState of a readable
+// singleton operand ("" when it has none).
+func operandManagementState(c *Client, e almExample) (string, error) {
+	group, version, ok := strings.Cut(e.APIVersion, "/")
+	if !ok || group != operandAPIGroup || e.objName() != "cluster" || !dns1123Label.MatchString(version) {
+		return "", errOperandGroup
+	}
+	resource, found, err := discoverPlural(c, version, e.Kind)
+	if err != nil || !found {
+		return "", err
+	}
+	body, _, err := c.get("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
+	if err != nil {
+		return "", err
+	}
+	var obj struct {
+		Spec struct {
+			ManagementState string `json:"managementState"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return "", fmt.Errorf("parse %s: %w", e.ref(), err)
+	}
+	return obj.Spec.ManagementState, nil
 }
 
 // discoverPlural finds the resource of a kind in operandAPIGroup from API
