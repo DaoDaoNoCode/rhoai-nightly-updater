@@ -640,6 +640,42 @@ func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
 	}
 }
 
+// Review fix 5: a Platform gate is the new operator's only with the same
+// evidence as a DSC gate; one that only an earlier operator could have set
+// is reported as possibly stale.
+func TestUpgradeGateNotePlatformFreshness(t *testing.T) {
+	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
+	upgradeGateWait, upgradeGatePoll = 200*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
+	now := time.Now().UTC().Format(time.RFC3339)
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	platform := func(at string) string {
+		return `{"metadata":{"name":"default"},"status":{"conditions":[{"type":"ProvisioningProgress","status":"False","reason":"AdminAckRequired","message":"gate kserve-3.7 not acknowledged","lastTransitionTime":"` + at + `"}]}}`
+	}
+	dsc := func(release string) string {
+		return `{"metadata":{"name":"default-dsc"},"status":{"release":{"version":"` + release + `"},"conditions":[]}}`
+	}
+	const hedge = "reported before this install finished"
+	for _, tc := range []struct {
+		name, platform, dsc string
+		hedged              bool
+	}{
+		{"set after the install", platform(now), dsc("3.5.1"), false},
+		{"set long before, DSC not on the new version", platform(old), dsc("3.5.1"), true},
+		{"set long before, the new operator reconciled the DSC", platform(old), dsc("3.6.0"), false},
+		{"set long before, no DSC", platform(old), "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeOLM(t)
+			f.platform, f.dsc = tc.platform, tc.dsc
+			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
+			if !strings.Contains(note, "AdminAckRequired") || strings.Contains(note, hedge) != tc.hedged {
+				t.Fatalf("note %q", note)
+			}
+		})
+	}
+}
+
 // E3: a confirmed downgrade that installed says what to expect and how to
 // go back; the confirmation says what OLM does to the CRDs.
 func TestConfirmedDowngradeNote(t *testing.T) {

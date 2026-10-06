@@ -731,11 +731,17 @@ func isUpgradeGateCondition(cond dscCondition) bool {
 	return cond.Reason == "AdminAckRequired" || strings.Contains(strings.ToLower(cond.Message), "upgrade gate")
 }
 
-// readUpgradeGates returns the gate conditions of the Platform "default"
-// (RHOAI 3.6 and later) and of the DataScienceCluster. reported is true
+// readUpgradeGates returns the gate conditions of the DataScienceCluster
+// and of the Platform "default" (RHOAI 3.6 and later). reported is true
 // once the DSC reports version as its release (the new operator has
 // reconciled it); dscFound is false when there is no DSC to wait for.
 // Read errors count as "nothing reported": the note is best effort.
+//
+// A gate is fresh (reported by the newly installed operator) when its
+// condition changed after the install wait began, or when the DSC reports
+// the installed version. The Platform has no release of its own and is
+// left alone by operators older than 3.6, so its gates follow the same
+// rule: a gate that only an earlier operator could have set is stale.
 func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgradeGate, reported, dscFound bool) {
 	type statusObject struct {
 		Metadata struct {
@@ -751,43 +757,35 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 			} `json:"release"`
 		} `json:"status"`
 	}
-	collect := func(where string, obj statusObject, platform bool) {
-		releaseMatches := version != "" && obj.Status.Release.Version == version
+	collect := func(where string, obj statusObject) {
 		for _, cond := range obj.Status.Conditions {
 			if !isUpgradeGateCondition(cond.dscCondition) {
 				continue
 			}
-			// The Platform is only reconciled by 3.6 and later operators and
-			// says nothing about an older one; a DSC condition is the new
-			// operator's when the DSC reports its version or changed after
-			// the install started.
-			fresh := platform || releaseMatches
+			fresh := reported
 			if t, ok := parseK8sTime(cond.LastTransitionTime); ok && !t.Before(since.Add(-upgradeGateSkew)) {
 				fresh = true
 			}
 			gates = append(gates, upgradeGate{where: where + " " + obj.Metadata.Name, cond: cond.dscCondition, fresh: fresh})
 		}
 	}
+	var dsc statusObject
+	if path, err := dataScienceClusterPath(c); err == nil {
+		if body, _, err := c.get(path); err == nil && json.Unmarshal(body, &dsc) == nil {
+			dscFound = true
+			reported = version != "" && dsc.Status.Release.Version == version
+		}
+	}
+	if dscFound {
+		collect("DataScienceCluster", dsc)
+	}
 	if body, _, err := c.get(clusterPath("config.opendatahub.io/v1alpha1", "platforms", "default")); err == nil {
 		var pl statusObject
 		if json.Unmarshal(body, &pl) == nil {
-			collect("Platform", pl, true)
+			collect("Platform", pl)
 		}
 	}
-	path, err := dataScienceClusterPath(c)
-	if err != nil {
-		return gates, false, false
-	}
-	body, _, err := c.get(path)
-	if err != nil {
-		return gates, false, false
-	}
-	var dsc statusObject
-	if json.Unmarshal(body, &dsc) != nil {
-		return gates, false, false
-	}
-	collect("DataScienceCluster", dsc, false)
-	return gates, version != "" && dsc.Status.Release.Version == version, true
+	return gates, reported, dscFound
 }
 
 // adminAckNote reports when the newly installed operator (CSV csvName)
@@ -795,13 +793,15 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 // (AdminAckRequired) or a gate it cannot resolve, on the Platform or on
 // any DataScienceCluster condition. That is a manual step, not a failed
 // install. It is quiet when nothing is gated; since is when the install
-// wait began.
+// wait began. A gate that may date from before the install is reported
+// with that caveat once the wait ends.
 func adminAckNote(c *Client, csvName string, since time.Time) string {
 	version := strings.TrimPrefix(csvName, SubName+".")
 	end := time.Now().Add(upgradeGateWait)
 	if d, ok := c.ctx.Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
 		end = d.Add(-installDeadlineReserve)
 	}
+	const staleHedge = " It was reported before this install finished, so it may clear once the new operator reconciles."
 	for {
 		gates, reported, dscFound := readUpgradeGates(c, version, since)
 		var fresh, stale []string
@@ -812,15 +812,16 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 				stale = append(stale, g.String())
 			}
 		}
-		last := !time.Now().Add(upgradeGatePoll).Before(end)
+		last := !dscFound || !time.Now().Add(upgradeGatePoll).Before(end)
 		switch {
 		case len(fresh) > 0:
 			return upgradeGateMessage(fresh, "")
-		case !dscFound || reported:
+		case reported:
 			return ""
 		case last:
+			// Nothing more to wait for: no DSC, or the wait is over.
 			if len(stale) > 0 {
-				return upgradeGateMessage(stale, " It was reported before this install finished, so it may clear once the new operator reconciles.")
+				return upgradeGateMessage(stale, staleHedge)
 			}
 			return ""
 		}
