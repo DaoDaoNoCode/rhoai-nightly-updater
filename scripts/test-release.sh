@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2015,SC2016,SC2086 # pass never fails; quoted $ is literal; $SH may be "busybox sh"
 # Tests for scripts/release.sh. Needs git and a POSIX shell; no network and
 # no registry: a fake crane keeps the registry in a directory.
 #   sh scripts/test-release.sh

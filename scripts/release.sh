@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2016 # backticks in single-quoted printf formats are Markdown
 # Release tooling shared by `make release`, the GitLab release pipeline and
 # the GitHub release workflow. POSIX sh: it runs under bash, dash and
 # busybox ash. scripts/test-release.sh tests it.

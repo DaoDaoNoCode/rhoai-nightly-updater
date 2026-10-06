@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015 # "check && pass || fail": pass never fails
 # Tests for scripts/install.sh and the release asset that
 # `scripts/release.sh installer` builds from it. Offline: fake oc and curl
 # commands record what the installer would do.
