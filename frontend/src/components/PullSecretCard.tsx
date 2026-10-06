@@ -28,6 +28,8 @@ import { createPullSecret, testPullSecret, toApiError } from "../services/api";
 import { describeError } from "../errors";
 import { sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
+import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { errorResult } from "../outcomes";
 
 export const isValidBase64Auth = (value: string): boolean => {
   const trimmed = value.trim();
@@ -43,8 +45,6 @@ export const isValidBase64Auth = (value: string): boolean => {
 interface PullSecretCardProps {
   pullSecret: PullSecretInfo;
   onStatusRefresh?: () => void;
-  /** Why saving a secret is not possible now (permissions, another operation), or null. */
-  disabledReason?: string | null;
 }
 
 const CREDENTIALS_HELP = (
@@ -57,8 +57,12 @@ const CREDENTIALS_HELP = (
 export const PullSecretCard: React.FC<PullSecretCardProps> = ({
   pullSecret,
   onStatusRefresh,
-  disabledReason = null,
 }) => {
+  // The unified gate (permissions, session, this tab's stream, the backend
+  // lock). Saving the secret repairs an install, so OLM still installing
+  // after an operation does not block it.
+  const disabledReason = useMutationBlocker({ ignoreReconcile: true });
+  const onBusy = useClusterBusyHandler();
   const invalid = pullSecret.exists && !pullSecret.valid;
   const [authValue, setAuthValue] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
@@ -84,6 +88,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
     } catch (e) {
       const { title, body } = describeError(e, "Could not save the pull secret");
       setAuthResult({ success: false, message: `${title}: ${body}`, logs: [] });
+      onBusy(errorResult(e, "Could not save the pull secret"));
     } finally {
       setAuthLoading(false);
     }

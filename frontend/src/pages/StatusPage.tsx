@@ -49,7 +49,7 @@ import { describeError } from "../errors";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
-import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker, usePermissions } from "../state/AppInfo";
+import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
@@ -59,7 +59,6 @@ export const StatusPage: React.FC = () => {
   const operation = useOperation();
   const blocker = useMutationBlocker();
   const onResult = useClusterBusyHandler();
-  const permissions = usePermissions();
   const { override } = useDashboardOverride();
   const showProgress = useHasOperationProgress();
   const { runOperator, followUps } = useOperatorActions();
@@ -177,7 +176,6 @@ export const StatusPage: React.FC = () => {
     <PullSecretCard
       pullSecret={status.pullSecret}
       onStatusRefresh={refresh}
-      disabledReason={permissions.reason ?? (operation.server.inProgress ? blocker : null)}
     />
   ) : null;
 
