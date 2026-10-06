@@ -263,6 +263,21 @@ func (cc *classifiedCondition) classify(deps map[string]*dependency, order *[]*d
 	if cc.Cond.Status == "True" && cc.Cond.Type != "Degraded" {
 		return
 	}
+	for _, om := range parseMissingOperands(msg) {
+		key := "operand-" + strings.ToLower(om.Kind)
+		d := deps[key]
+		if d == nil {
+			mention := om.Kind + " CR"
+			if om.Name != "" {
+				mention = om.Kind + "/" + om.Name
+			}
+			d = &dependency{Mention: mention, Key: key, OperandKind: om.Kind, OperandName: om.Name}
+			deps[key] = d
+			*order = append(*order, d)
+		}
+		d.Reporters = append(d.Reporters, cc)
+		cc.Deps = append(cc.Deps, d)
+	}
 	for _, name := range parseMissingDependencies(msg) {
 		key := normalizeOperatorName(name)
 		if key == "" {
@@ -366,7 +381,7 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 			}
 			switch d.OperandSt {
 			case operandPresent:
-				line += fmt.Sprintf("; %s/cluster exists", d.Operand.Kind)
+				line += fmt.Sprintf("; %s exists", d.Operand.ref())
 			}
 			installed = append(installed, line+")")
 		}
@@ -404,9 +419,13 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 func joinMentions(deps []*dependency) string {
 	var names []string
 	for _, d := range deps {
-		names = append(names, d.Mention)
+		if d.OperandKind != "" {
+			names = append(names, d.Mention+" as missing")
+		} else {
+			names = append(names, d.Mention+" as not installed")
+		}
 	}
-	return strings.Join(names, " and ") + " as not installed"
+	return strings.Join(names, " and ")
 }
 
 // analyzeCurrentDSC reads the DataScienceCluster and DSCInitialization and
@@ -453,19 +472,18 @@ func (a *dscAnalysis) conditionCauses(cc *classifiedCondition, titles map[string
 		}
 		for _, d := range cc.Deps {
 			switch {
+			case d.installed() && d.OperandSt == operandMissing:
+				add(fmt.Sprintf("%s is installed, but %s does not exist", d.displayName(), d.Operand.ref()), d.problemID())
+			case d.operandProblem():
+				add(fmt.Sprintf("%s is installed, but whether %s exists could not be checked", d.displayName(), d.Operand.ref()), d.problemID())
 			case !d.satisfied():
-				state := "not installed"
-				switch {
-				case d.installed() && d.OperandSt == operandMissing:
-					state = fmt.Sprintf("installed, but %s/cluster does not exist", d.Operand.Kind)
-				case d.operandProblem():
-					state = fmt.Sprintf("installed, but whether %s/cluster exists could not be checked", d.Operand.Kind)
-				case d.CSV != nil:
-					state = "installed but not ready (CSV " + nonEmpty(d.CSV.Phase, "phase unknown") + ")"
-				}
 				kind := "missing prerequisite operator"
 				if !cc.Blocking {
 					kind = "optional prerequisite operator"
+				}
+				state := "not installed"
+				if d.CSV != nil {
+					state = "installed but not ready (CSV " + nonEmpty(d.CSV.Phase, "phase unknown") + ")"
 				}
 				add(fmt.Sprintf("%s %s is %s", kind, d.displayName(), state), d.problemID())
 			case b != nil:

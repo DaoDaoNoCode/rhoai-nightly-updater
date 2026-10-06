@@ -77,6 +77,42 @@ func parseMissingDependencies(msg string) []string {
 	return out
 }
 
+// Modules also name a missing operand directly (live, after
+// JobSetOperator/cluster was deleted):
+//
+//	dependency not met: JobSetOperator CR with name 'cluster' not found. Please create the JobSetOperator CR to enable the JobSet controller.
+var (
+	operandNotFoundPhrase = regexp.MustCompile(`\b([A-Z][A-Za-z0-9]*) (?:CR|custom resource) (?:with name |named )?['"]([a-z0-9][a-z0-9.-]*)['"] (?:not found|does not exist)`)
+	operandCreatePhrase   = regexp.MustCompile(`(?i:please create) (?:the |an? )?([A-Z][A-Za-z0-9]*) (?:CR|custom resource)\b`)
+)
+
+// operandMention is a missing operand named in a condition message; Name
+// is "" when the message does not name it.
+type operandMention struct{ Kind, Name string }
+
+// parseMissingOperands returns the operands a message reports missing.
+func parseMissingOperands(msg string) []operandMention {
+	var out []operandMention
+	add := func(kind, name string) {
+		for i := range out {
+			if out[i].Kind == kind {
+				if out[i].Name == "" {
+					out[i].Name = name
+				}
+				return
+			}
+		}
+		out = append(out, operandMention{Kind: kind, Name: name})
+	}
+	for _, m := range operandNotFoundPhrase.FindAllStringSubmatch(msg, -1) {
+		add(m[1], m[2])
+	}
+	for _, m := range operandCreatePhrase.FindAllStringSubmatch(msg, -1) {
+		add(m[1], "")
+	}
+	return out
+}
+
 // operatorNameStopWords are dropped when names are compared: they appear in
 // some spellings of an operator's name and not in others.
 var operatorNameStopWords = map[string]bool{
@@ -137,6 +173,12 @@ func (e almExample) group() string {
 	return g
 }
 
+// objName is the operand's name ("cluster" when the example has none).
+func (e almExample) objName() string { return nonEmpty(e.Name, "cluster") }
+
+// ref is "<Kind>/<name>".
+func (e almExample) ref() string { return e.Kind + "/" + e.objName() }
+
 // resourceArg is the kind as oc accepts it, qualified by its group.
 func (e almExample) resourceArg() string {
 	if g := e.group(); g != "" {
@@ -159,6 +201,7 @@ type catalogPackage struct {
 	SuggestedNS      string
 	ClusterMonitor   bool // operatorframework.io/cluster-monitoring=true
 	Examples         []almExample
+	OwnedKinds       []string // kinds of the head CSV's owned CRDs
 }
 
 // rank orders the catalogs a package may come from: the Red Hat catalog,
@@ -280,7 +323,10 @@ func parsePackageManifests(body []byte) ([]catalogPackage, error) {
 							Type      string `json:"type"`
 							Supported bool   `json:"supported"`
 						} `json:"installModes"`
-						Annotations map[string]string `json:"annotations"`
+						Annotations               map[string]string `json:"annotations"`
+						CustomResourceDefinitions struct {
+							Owned []ownedCRD `json:"owned"`
+						} `json:"customresourcedefinitions"`
 					} `json:"currentCSVDesc"`
 				} `json:"channels"`
 			} `json:"status"`
@@ -318,6 +364,9 @@ func parsePackageManifests(body []byte) ([]catalogPackage, error) {
 			p.SuggestedNS = d.Annotations["operatorframework.io/suggested-namespace"]
 			p.ClusterMonitor = d.Annotations["operatorframework.io/cluster-monitoring"] == "true"
 			p.Examples = parseALMExamples(d.Annotations["alm-examples"])
+			for _, o := range d.CustomResourceDefinitions.Owned {
+				p.OwnedKinds = append(p.OwnedKinds, o.Kind)
+			}
 		}
 		out = append(out, p)
 	}
@@ -486,11 +535,15 @@ const (
 
 var errOperandGroup = errors.New("the tool only reads singleton operands in " + operandAPIGroup)
 
-// readSingletonOperand reports whether <Kind>/cluster exists.
+// readSingletonOperand reports whether the cluster-scoped operand
+// <Kind>/cluster exists. Other names and groups are not readable (RBAC).
 func readSingletonOperand(c *Client, e almExample) (operandState, error) {
 	group, version, ok := strings.Cut(e.APIVersion, "/")
 	if !ok || group != operandAPIGroup || !dns1123Label.MatchString(version) {
 		return operandUnverified, errOperandGroup
+	}
+	if e.objName() != "cluster" || e.Namespace != "" {
+		return operandUnverified, fmt.Errorf("the tool only reads cluster-scoped operands named cluster, not %s", e.ref())
 	}
 	resource, found, err := discoverPlural(c, version, e.Kind)
 	if err != nil {
@@ -542,16 +595,19 @@ func discoverPlural(c *Client, version, kind string) (string, bool, error) {
 // dependency is one prerequisite operator named in conditions, resolved
 // against the catalogs and the installed CSVs.
 type dependency struct {
-	Mention    string // as the first message names it
-	Key        string // normalised
-	Package    *catalogPackage
-	Others     []catalogPackage // other catalog matches, best first
-	CatalogErr error
-	CSV        *clusterCSV
-	CSVErr     error
-	Operand    *almExample
-	OperandSt  operandState
-	OperandErr error
+	Mention string // as the first message names it
+	// OperandKind/OperandName: the message names a missing operand
+	// rather than an operator; its operator is the CSV that owns the kind.
+	OperandKind, OperandName string
+	Key                      string // normalised
+	Package                  *catalogPackage
+	Others                   []catalogPackage // other catalog matches, best first
+	CatalogErr               error
+	CSV                      *clusterCSV
+	CSVErr                   error
+	Operand                  *almExample
+	OperandSt                operandState
+	OperandErr               error
 	// Reporters are the conditions that name it.
 	Reporters []*classifiedCondition
 	// NeededBy are other findings that need it (a Certificate that is
@@ -579,6 +635,8 @@ func (d *dependency) operandProblem() bool {
 
 func (d *dependency) displayName() string {
 	switch {
+	case d.OperandKind != "" && d.CSV == nil && d.Package == nil:
+		return "the operator that provides " + d.OperandKind
 	case d.Package != nil && d.Package.DisplayName != "":
 		return d.Package.DisplayName
 	case d.CSV != nil && d.CSV.DisplayName != "":
@@ -641,6 +699,10 @@ func resolveDependencies(c *Client, deps []*dependency) {
 	wg.Wait()
 	for _, d := range deps {
 		d.CatalogErr, d.CSVErr = pkgErr, csvErr
+		if d.OperandKind != "" {
+			resolveOperandMention(c, d, pkgs, csvs)
+			continue
+		}
 		if pkgErr == nil {
 			if matches := matchPackages(pkgs, d.Key); len(matches) > 0 {
 				d.Package = &matches[0]
@@ -662,6 +724,62 @@ func resolveDependencies(c *Client, deps []*dependency) {
 		if d.Operand != nil && d.installed() {
 			d.OperandSt, d.OperandErr = readSingletonOperand(c, *d.Operand)
 		}
+	}
+}
+
+// resolveOperandMention finds the operator of a missing operand: the
+// installed CSV that owns its kind (its own alm-examples give the object),
+// else the catalog package whose head CSV owns it.
+func resolveOperandMention(c *Client, d *dependency, pkgs []catalogPackage, csvs []clusterCSV) {
+	var owned *ownedCRD
+	for i := range csvs {
+		for j, o := range csvs[i].Owned {
+			if o.Kind == d.OperandKind && (d.CSV == nil || (d.CSV.Phase != "Succeeded" && csvs[i].Phase == "Succeeded")) {
+				d.CSV, owned = &csvs[i], &csvs[i].Owned[j]
+			}
+		}
+	}
+	examples := []almExample(nil)
+	if d.CSV != nil {
+		examples = d.CSV.Examples
+	} else {
+		for i, p := range pkgs {
+			if containsString(p.OwnedKinds, d.OperandKind) && (d.Package == nil || p.rank() < d.Package.rank()) {
+				d.Package = &pkgs[i]
+			}
+		}
+		if d.Package != nil {
+			examples = d.Package.Examples
+		}
+	}
+	var pick *almExample
+	for i, e := range examples {
+		if e.Kind != d.OperandKind {
+			continue
+		}
+		if pick == nil || (d.OperandName != "" && e.Name == d.OperandName) {
+			pick = &examples[i]
+		}
+	}
+	switch {
+	case pick != nil:
+		op := *pick
+		if d.OperandName != "" {
+			op.Name = d.OperandName
+		}
+		d.Operand = &op
+	case owned != nil:
+		// No example: the kind's group and version from the owned CRD.
+		if _, group, ok := strings.Cut(owned.Name, "."); ok && owned.Version != "" {
+			d.Operand = &almExample{APIVersion: group + "/" + owned.Version, Kind: d.OperandKind, Name: d.OperandName}
+		}
+	}
+	if d.Operand == nil && d.installed() {
+		// Nothing to build the object from: guidance only.
+		d.Operand = &almExample{Kind: d.OperandKind, Name: d.OperandName}
+	}
+	if d.Operand != nil && d.installed() {
+		d.OperandSt, d.OperandErr = readSingletonOperand(c, *d.Operand)
 	}
 }
 
@@ -717,20 +835,20 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 		csv := d.CSV
 		evidence = append(evidence, fmt.Sprintf("Installed: CSV %s/%s is Succeeded", csv.Namespace, csv.Name))
 		if d.OperandSt == operandMissing {
-			evidence = append(evidence, fmt.Sprintf("%s/cluster (%s) does not exist", d.Operand.Kind, d.Operand.APIVersion))
-			p.Title = fmt.Sprintf("%s is installed, but its %s/cluster does not exist", name, d.Operand.Kind)
+			evidence = append(evidence, fmt.Sprintf("%s (%s) does not exist", d.Operand.ref(), d.Operand.APIVersion))
+			p.Title = fmt.Sprintf("%s is installed, but its %s does not exist", name, d.Operand.ref())
 		} else {
-			evidence = append(evidence, fmt.Sprintf("Whether %s/cluster (%s) exists could not be checked: %v%s", d.Operand.Kind, d.Operand.APIVersion, d.OperandErr, templateHint(d.OperandErr)))
-			p.Title = fmt.Sprintf("%s is installed; check that its %s/cluster exists", name, d.Operand.Kind)
-			fixes = append(fixes, fmt.Sprintf("The tool could not read %s/cluster, so it cannot tell a missing operand from a module operator that has not retried, and offers no restart.", d.Operand.Kind))
+			evidence = append(evidence, fmt.Sprintf("Whether %s (%s) exists could not be checked: %v%s", d.Operand.ref(), d.Operand.APIVersion, d.OperandErr, templateHint(d.OperandErr)))
+			p.Title = fmt.Sprintf("%s is installed; check that its %s exists", name, d.Operand.ref())
+			fixes = append(fixes, fmt.Sprintf("The tool could not read %s, so it cannot tell a missing operand from a module operator that has not retried, and offers no restart.", d.Operand.ref()))
 		}
-		p.Description = fmt.Sprintf("Modules check for the operator and for its operand: %s does nothing until %s/cluster exists, and the module keeps reporting it as not installed. %s", name, d.Operand.Kind, impact)
-		p.AffectedObjects = []string{d.Operand.Kind + " cluster"}
+		p.Description = fmt.Sprintf("Modules check for the operator and for its operand: %s does nothing until %s exists, and the module keeps reporting it as not installed. %s", name, d.Operand.ref(), impact)
+		p.AffectedObjects = []string{d.Operand.Kind + " " + d.Operand.objName()}
 		cmd, err := operandCommand(*d.Operand)
 		if err != nil {
-			fixes = append(fixes, fmt.Sprintf("Create %s/cluster as the operator's documentation describes (%v).", d.Operand.Kind, err))
+			fixes = append(fixes, fmt.Sprintf("Create %s as the operator's documentation describes (%v).", d.Operand.ref(), err))
 		} else {
-			fixes = append(fixes, fmt.Sprintf("Create %s/cluster from the example the operator ships in its CSV (command below; it creates the object only if it is still missing). Then, if the module still reports it after a few minutes, restart the module's operator (Diagnostics offers it once it can see the operand).", d.Operand.Kind))
+			fixes = append(fixes, fmt.Sprintf("Create %s from the example the operator ships in its CSV (command below; it creates the object only if it is still missing). Then, if the module still reports it after a few minutes, restart the module's operator (Diagnostics offers it once it can see the operand).", d.Operand.ref()))
 			p.TechnicalCmd = cmd
 		}
 	case d.CSV != nil && !d.installed():
@@ -741,6 +859,11 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 		p.AffectedObjects = []string{fmt.Sprintf("ClusterServiceVersion %s/%s", csv.Namespace, csv.Name)}
 		fixes = append(fixes, "Read the CSV's status message (command below). Installing usually finishes within minutes; a Failed CSV needs its cause fixed, after which OLM retries.")
 		p.TechnicalCmd = shellCommand("oc", "get", "csv", csv.Name, "-n", csv.Namespace, "-o", "jsonpath={.status.phase}: {.status.reason}: {.status.message}")
+	case d.OperandKind != "" && d.Package == nil && d.CSV == nil:
+		p.Title = fmt.Sprintf("No installed operator provides %s, which a module needs", d.OperandKind)
+		p.Description = fmt.Sprintf("A module reports %s missing. No installed CSV owns the %s kind, and no package in this cluster's catalogs does. %s", d.Mention, d.OperandKind, impact)
+		fixes = append(fixes, fmt.Sprintf("Install the operator that provides %s (the module's message names its purpose), then create %s.", d.OperandKind, d.Mention))
+		p.TechnicalCmd = "oc get crd -o custom-columns=NAME:.metadata.name,KIND:.spec.names.kind | grep -w " + shellQuote(d.OperandKind)
 	case d.Package == nil:
 		p.Title = fmt.Sprintf("Prerequisite operator %q is not installed", d.Mention)
 		p.Description = fmt.Sprintf("%q is not installed, and no package in this cluster's catalogs matches that name. %s", d.Mention, impact)
@@ -844,7 +967,7 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 		cmd, err := operandCommand(*operand)
 		if err == nil {
 			lines = append(lines, cmd)
-			plan.notes = append(plan.notes, fmt.Sprintf("The last command creates %s/cluster from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", operand.Kind))
+			plan.notes = append(plan.notes, fmt.Sprintf("The last command creates %s from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", operand.ref()))
 		}
 	}
 	plan.script = strings.Join(lines, "\n")
@@ -855,10 +978,10 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 // exists. The quoted here-document keeps the shell from expanding it, and
 // the JSON is re-encoded so no line can end the here-document early.
 func operandCommand(e almExample) (string, error) {
-	if !kindPattern.MatchString(e.Kind) || !groupVersion.MatchString(e.APIVersion) {
-		return "", fmt.Errorf("the example has an unexpected apiVersion or kind")
+	if !kindPattern.MatchString(e.Kind) || !groupVersion.MatchString(e.APIVersion) || !dns1123Subdomain.MatchString(e.objName()) || e.Namespace != "" {
+		return "", fmt.Errorf("the example has an unexpected apiVersion, kind, name or a namespace")
 	}
-	obj := map[string]interface{}{"apiVersion": e.APIVersion, "kind": e.Kind, "metadata": map[string]string{"name": "cluster"}}
+	obj := map[string]interface{}{"apiVersion": e.APIVersion, "kind": e.Kind, "metadata": map[string]string{"name": e.objName()}}
 	if len(e.Spec) > 0 && string(e.Spec) != "null" {
 		obj["spec"] = e.Spec
 	}
@@ -866,7 +989,7 @@ func operandCommand(e almExample) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return shellCommand("oc", "get", e.resourceArg()+"/cluster") + " >/dev/null 2>&1 || oc create -f - <<'EOF'\n" + string(data) + "\nEOF", nil
+	return shellCommand("oc", "get", e.resourceArg()+"/"+e.objName()) + " >/dev/null 2>&1 || oc create -f - <<'EOF'\n" + string(data) + "\nEOF", nil
 }
 
 // existingOperatorGroup returns the name of an OperatorGroup in namespace,
