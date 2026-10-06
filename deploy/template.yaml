@@ -72,7 +72,8 @@ objects:
         resources: ["events"]
         verbs: ["list"]
       # Namespaces: list DS projects; create redhat-ods-operator, minio and
-      # pipeline projects; only minio is ever deleted.
+      # pipeline projects. None is ever deleted: MinIO teardown removes only
+      # the tool's own objects and keeps the minio namespace.
       - apiGroups: [""]
         resources: ["namespaces"]
         verbs: ["get", "list", "create"]
@@ -80,10 +81,6 @@ objects:
         resources: ["namespaces"]
         resourceNames: ["redhat-ods-operator", "minio"]
         verbs: ["patch"]
-      - apiGroups: [""]
-        resources: ["namespaces"]
-        resourceNames: ["minio"]
-        verbs: ["delete"]
       # Secrets: no list and no general read. MinIO credentials and the
       # pipeline-server connection secret in user projects.
       - apiGroups: [""]
@@ -92,7 +89,7 @@ objects:
       - apiGroups: [""]
         resources: ["secrets"]
         resourceNames: ["minio-secret"]
-        verbs: ["get", "patch"]
+        verbs: ["get", "patch", "delete"]
       # The pipeline-server S3 secret; dashboard-dspa-secret is the name
       # older versions used, kept so their teardown still works.
       - apiGroups: [""]
@@ -109,7 +106,7 @@ objects:
         resourceNames: ["odh-upgrade-acks"]
         verbs: ["get"]
       # Webhook and CRD-conversion backing Services and their endpoints
-      # (stale-webhook check, MinIO namespace-deletion guard), and MinIO
+      # (stale-webhook check), and MinIO
       - apiGroups: [""]
         resources: ["services"]
         verbs: ["get", "create"]
@@ -119,7 +116,7 @@ objects:
       - apiGroups: [""]
         resources: ["services"]
         resourceNames: ["minio-service"]
-        verbs: ["patch"]
+        verbs: ["patch", "delete"]
       # PVCs: MinIO's own, and listing the minio and MLflow namespaces to
       # name the data a teardown deletes
       - apiGroups: [""]
@@ -128,7 +125,7 @@ objects:
       - apiGroups: [""]
         resources: ["persistentvolumeclaims"]
         resourceNames: ["minio-pvc"]
-        verbs: ["patch"]
+        verbs: ["patch", "delete"]
       # Pods in the RHOAI and module namespaces and openshift-marketplace:
       # status, debug info and diagnostics (read-only)
       - apiGroups: [""]
@@ -140,6 +137,10 @@ objects:
         resources: ["deployments"]
         verbs: ["get", "list", "patch", "create"]
       - apiGroups: ["apps"]
+        resources: ["deployments"]
+        resourceNames: ["minio"]
+        verbs: ["delete"]
+      - apiGroups: ["apps"]
         resources: ["replicasets"]
         verbs: ["list"]
       - apiGroups: ["route.openshift.io"]
@@ -149,7 +150,7 @@ objects:
       - apiGroups: ["route.openshift.io"]
         resources: ["routes"]
         resourceNames: ["minio-api", "minio-ui"]
-        verbs: ["patch"]
+        verbs: ["patch", "delete"]
       - apiGroups: ["route.openshift.io"]
         resources: ["routes"]
         verbs: ["create"]

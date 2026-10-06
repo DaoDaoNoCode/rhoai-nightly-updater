@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -147,9 +148,13 @@ func TestMinioCredentials_HexCharacters(t *testing.T) {
 	}
 }
 
-func TestMinioCredentials_DefaultUser(t *testing.T) {
-	if user, _ := mustMinioCredentials(t, freshMinioClient(t)); user != "minio" {
-		t.Errorf("expected user %q, got %q", "minio", user)
+// The root user is random per install too (minio-<12 hex>), so the access
+// key is not guessable.
+func TestMinioCredentials_RandomUser(t *testing.T) {
+	first, _ := mustMinioCredentials(t, freshMinioClient(t))
+	second, _ := mustMinioCredentials(t, freshMinioClient(t))
+	if !regexp.MustCompile(`^minio-[0-9a-f]{12}$`).MatchString(first) || first == second {
+		t.Errorf("users %q, %q: want two different random minio-<hex> users", first, second)
 	}
 }
 
@@ -203,7 +208,7 @@ func TestSetupMinIO_ResponseDoesNotLeakPassword(t *testing.T) {
 		minioBucketCreator = func(*Client, string) error { return bucketErr }
 		f, client := newResourceFake(t)
 		readyAfterApply(f)
-		f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"bWluaW8=","minio_root_password":"dGVzdHBhc3M="}}`)
+		f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"data":{"minio_root_user":"bWluaW8=","minio_root_password":"dGVzdHBhc3M="}}`)
 
 		resp, err := SetupMinIO(client)
 		if err != nil {

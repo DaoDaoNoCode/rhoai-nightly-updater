@@ -96,7 +96,6 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 		minioNSPath, minioPVCPath, minioDeployPath,
 		"/api/v1/namespaces/minio/secrets/minio-secret",
 		"/api/v1/namespaces/minio/services/minio-service",
-		"/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api",
 		"/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui",
 	} {
 		obj := f.get(path)
@@ -133,11 +132,18 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	}
 	_ = json.Unmarshal(raw, &deploy)
 	ctr := deploy.Spec.Template.Spec.Containers[0]
-	if ctr.Image != minioDefaultImage || !strings.Contains(ctr.Image, "@sha256:") || strings.Contains(ctr.Image, "quay.io/minio/") {
-		t.Errorf("image = %q, want the digest-pinned ODH MinIO", ctr.Image)
+	if ctr.Image != minioDefaultImage || !strings.Contains(ctr.Image, "@sha256:") || strings.Contains(ctr.Image, "RELEASE.2019") {
+		t.Errorf("image = %q, want the digest-pinned patched MinIO", ctr.Image)
 	}
-	if strings.Join(ctr.Args, " ") != "server /data" {
-		t.Errorf("args = %v; the 2019 MinIO release has no --console-address", ctr.Args)
+	if strings.Join(ctr.Args, " ") != "server /data --console-address :9090" {
+		t.Errorf("args = %v; the console must have its own port", ctr.Args)
+	}
+	if f.has("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api") {
+		t.Error("the S3 API must not be exposed through a Route")
+	}
+	ui, _ := json.Marshal(f.get("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui"))
+	if !strings.Contains(string(ui), `"targetPort":"ui"`) {
+		t.Errorf("console Route must target the console port only: %s", ui)
 	}
 	if _, fixed := ctr.SecurityContext["runAsUser"]; fixed || deploy.Spec.Template.Spec.SecurityContext != nil {
 		t.Errorf("a fixed UID would conflict with restricted-v2: %v", ctr.SecurityContext)
@@ -146,8 +152,8 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	for _, e := range ctr.Env {
 		envs[e.Name] = true
 	}
-	if !envs["MINIO_ACCESS_KEY"] || !envs["MINIO_SECRET_KEY"] {
-		t.Errorf("env %v lacks the variables the 2019 MinIO reads", envs)
+	if !envs["MINIO_ROOT_USER"] || !envs["MINIO_ROOT_PASSWORD"] || envs["MINIO_ACCESS_KEY"] {
+		t.Errorf("env %v: want only the MINIO_ROOT_* variables", envs)
 	}
 }
 
@@ -207,8 +213,10 @@ func TestSetupMinIO_AdoptsNamespaceFromEarlierVersion(t *testing.T) {
 	if labels[managedByLabelKey] != managedByLabelValue || labels["kubernetes.io/metadata.name"] != "minio" {
 		t.Errorf("namespace labels after adoption: %v", labels)
 	}
-	if hasMutation(f, "POST /api/v1/namespaces") {
-		t.Error("an existing namespace must not be re-created")
+	for _, m := range f.mutations() {
+		if m == "POST /api/v1/namespaces" {
+			t.Error("an existing namespace must not be re-created")
+		}
 	}
 }
 
@@ -264,7 +272,7 @@ func TestSetupMinIO_NeverReportsSuccessWhileNotReady(t *testing.T) {
 func TestSetupMinIO_ApplyFailureReportsPartialProgress(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
-	f.fail["PATCH "+minioDeployPath] = 500
+	f.fail["POST /apis/apps/v1/namespaces/minio/deployments"] = 500
 	resp, _ := SetupMinIO(c)
 	if resp.Success || !strings.Contains(resp.Message, "Failed to apply Deployment") || !strings.Contains(resp.Message, "PVC, Secret") {
 		t.Fatalf("want a partial-progress failure, got %+v", resp)
@@ -347,21 +355,24 @@ func TestTeardownMinIO(t *testing.T) {
 			`{"metadata":{"creationTimestamp":"`+created+`"`+del+`},"spec":{"objectStorage":{"externalStorage":{"host":"`+host+`"}}}}`)
 	}
 	cases := []struct {
-		name       string
-		setup      func(f *resourceFake)
-		wantOK     bool
-		wantCode   string
-		wantDelete bool
-		wantMsg    string
+		name     string
+		setup    func(f *resourceFake)
+		wantOK   bool
+		wantCode string
+		wantGone bool // the tool's Deployment and PVC were deleted
+		wantMsg  string
 	}{
 		{name: "not deployed", setup: func(*resourceFake) {}, wantOK: true},
-		{name: "namespace not created by the tool", setup: func(f *resourceFake) { putNamespace(f, `{}`, "kubectl-create") }, wantCode: "not_managed"},
-		{name: "managed", setup: managedNS, wantOK: true, wantDelete: true, wantMsg: "minio-pvc"},
+		{name: "namespace not created by the tool", setup: func(f *resourceFake) {
+			putNamespace(f, `{}`, "kubectl-create")
+			putMinIODeployment(f, toolFieldManager, 1)
+		}, wantCode: "not_managed"},
+		{name: "managed", setup: managedNS, wantOK: true, wantGone: true, wantMsg: "oc delete project minio"},
 		{name: "legacy namespace", setup: func(f *resourceFake) {
 			putNamespace(f, `{}`, legacyPostManager)
 			putMinIODeployment(f, toolFieldManager, 0)
 			f.putJSON(minioPVCPath, `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`}}`)
-		}, wantOK: true, wantDelete: true, wantMsg: "minio-pvc"},
+		}, wantOK: true, wantGone: true, wantMsg: "minio-pvc"},
 		{name: "pipeline server created by someone else still uses it", setup: func(f *resourceFake) {
 			managedNS(f)
 			dspa(f, "team-a", "dspa", minioS3Host(), false)
@@ -374,58 +385,37 @@ func TestTeardownMinIO(t *testing.T) {
 			managedNS(f)
 			dspa(f, "minio", "x", "s3.amazonaws.com", false)
 		}, wantCode: "prerequisites", wantMsg: "minio/x"},
-		{name: "dead conversion webhook Service", setup: func(f *resourceFake) {
-			managedNS(f)
-			putConversionCRD(f, "mcpservers.mcp.x-k8s.io", "Namespaced", "redhat-ods-applications", "mcp-lifecycle-operator-webhook-service")
-		}, wantCode: "prerequisites", wantMsg: "mcpservers.mcp.x-k8s.io (Service redhat-ods-applications/mcp-lifecycle-operator-webhook-service not found)"},
-		{name: "conversion webhook Service without ready endpoints", setup: func(f *resourceFake) {
-			managedNS(f)
-			putConversionCRD(f, "a.example.com", "Namespaced", "ns1", "svc")
-			f.putJSON("/api/v1/namespaces/ns1/services/svc", `{}`)
-			putEndpointSlice(f, "ns1", "svc", `false`)
-		}, wantCode: "prerequisites", wantMsg: "has no ready endpoints"},
-		{name: "healthy conversion webhook", setup: func(f *resourceFake) {
-			managedNS(f)
-			putConversionCRD(f, "a.example.com", "Namespaced", "ns1", "svc")
-			f.putJSON("/api/v1/namespaces/ns1/services/svc", `{}`)
-			putEndpointSlice(f, "ns1", "svc", `true`)
-		}, wantOK: true, wantDelete: true},
-		{name: "cluster-scoped CRD with dead webhook does not block", setup: func(f *resourceFake) {
-			managedNS(f)
-			putConversionCRD(f, "b.example.com", "Cluster", "ns1", "gone")
-		}, wantOK: true, wantDelete: true},
-		{name: "CRD list forbidden fails closed", setup: func(f *resourceFake) {
-			managedNS(f)
-			f.fail["GET /apis/apiextensions.k8s.io/v1/customresourcedefinitions"] = 403
-		}, wantCode: "forbidden"},
-		{name: "namespace already terminating", setup: func(f *resourceFake) {
+		{name: "namespace being deleted by someone else", setup: func(f *resourceFake) {
 			f.putJSON(minioNSPath, `{"metadata":{"labels":`+toolLabelJSON+`,"deletionTimestamp":"`+created+`"},"status":{"phase":"Terminating",
 				"conditions":[{"type":"NamespaceContentRemaining","status":"True","message":"Some resources are remaining: pods. has 1 resource instances"}]}}`)
 		}, wantCode: "in_progress", wantMsg: "Some resources are remaining"},
 		{name: "pipeline server on other storage does not block", setup: func(f *resourceFake) {
 			managedNS(f)
 			dspa(f, "team-a", "dspa", "s3.amazonaws.com", false)
-		}, wantOK: true, wantDelete: true},
-		{name: "foreign PVC in the namespace", setup: func(f *resourceFake) {
-			managedNS(f)
-			f.putJSON("/api/v1/namespaces/minio/persistentvolumeclaims/someone-else", `{"metadata":{}}`)
-		}, wantCode: "not_managed", wantMsg: "someone-else"},
+		}, wantOK: true, wantGone: true},
 		{name: "DSPA CRD missing", setup: func(f *resourceFake) {
 			managedNS(f)
 			f.fail["GET "+dspaListPath] = 404
-		}, wantOK: true, wantDelete: true},
+		}, wantOK: true, wantGone: true},
 		{name: "DSPA list error", setup: func(f *resourceFake) {
 			managedNS(f)
 			f.fail["GET "+dspaListPath] = 500
 		}},
-		{name: "namespace delete error", setup: func(f *resourceFake) {
+		{name: "delete error", setup: func(f *resourceFake) {
 			managedNS(f)
-			f.fail["DELETE "+minioNSPath] = 500
-		}, wantDelete: true},
-		{name: "namespace still terminating", setup: func(f *resourceFake) {
+			f.fail["DELETE "+minioPVCPath] = 500
+		}, wantCode: "partial_failure", wantMsg: "PersistentVolumeClaim minio-pvc"},
+		{name: "read forbidden", setup: func(f *resourceFake) {
 			managedNS(f)
-			f.namespacesLinger = true
-		}, wantCode: "in_progress", wantDelete: true, wantMsg: "still terminating"},
+			f.fail["GET "+minioDeployPath] = 403
+		}, wantCode: "partial_failure", wantMsg: "Deployment minio: cannot read it"},
+		{name: "PVC still terminating", setup: func(f *resourceFake) {
+			managedNS(f)
+			f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`,"finalizers":["kubernetes.io/pvc-protection"]}}`)
+		}, wantCode: "in_progress", wantMsg: "still terminating"},
+		{name: "already removed, namespace left", setup: func(f *resourceFake) {
+			putNamespace(f, toolLabelJSON, toolFieldManager)
+		}, wantOK: true, wantMsg: "No MinIO objects created by this tool remain"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -439,39 +429,56 @@ func TestTeardownMinIO(t *testing.T) {
 			if resp.Success != tc.wantOK || (tc.wantCode != "" && resp.ErrorCode != tc.wantCode) {
 				t.Fatalf("got %+v", resp)
 			}
-			if got := hasMutation(f, "DELETE "+minioNSPath); got != tc.wantDelete {
-				t.Errorf("namespace DELETE = %v, want %v (%v)", got, tc.wantDelete, f.mutations())
+			for _, m := range f.mutations() {
+				if m == "DELETE "+minioNSPath {
+					t.Fatal("teardown must never delete the minio namespace")
+				}
+				if strings.Contains(m, "customresourcedefinitions") || strings.Contains(m, "endpointslices") {
+					t.Errorf("unexpected request %s", m)
+				}
+			}
+			if gone := !f.has(minioDeployPath) && !f.has(minioPVCPath); gone != tc.wantGone && tc.wantGone {
+				t.Errorf("tool objects deleted = %v, want %v (%v)", gone, tc.wantGone, f.mutations())
 			}
 			if tc.wantMsg != "" && !strings.Contains(resp.Message, tc.wantMsg) {
 				t.Errorf("message %q lacks %q", resp.Message, tc.wantMsg)
 			}
+			if tc.wantOK && f.has(minioNSPath) && !strings.Contains(resp.Message, "oc delete project minio") {
+				t.Errorf("message must say the namespace was kept and how to delete it: %q", resp.Message)
+			}
 		})
+	}
+}
+
+// A legacy namespace is recognised by its Deployment, so teardown labels it
+// before deleting that Deployment; setup can then still reuse it.
+func TestTeardownMinIO_LegacyNamespaceStaysManaged(t *testing.T) {
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	putNamespace(f, `{}`, legacyPostManager)
+	putMinIODeployment(f, toolFieldManager, 1)
+	if resp, _ := TeardownMinIO(c); !resp.Success {
+		t.Fatalf("teardown = %+v", resp)
+	}
+	if st := getMinIOStatus(c); !st.ManagedByTool || st.SetupBlockedReason != "" {
+		t.Errorf("after teardown the kept namespace must stay usable by setup: %+v", st)
 	}
 }
 
 func TestTeardownMinIO_DeleteUsesUIDPrecondition(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
-	putNamespace(f, `{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}`, toolFieldManager)
+	putNamespace(f, toolLabelJSON, toolFieldManager)
+	putMinIODeployment(f, toolFieldManager, 1)
 	// The ownership check sees a different object than the one the DELETE
-	// reaches, as if the namespace had been recreated in between.
+	// reaches, as if the Deployment had been recreated in between.
 	f.onGet = func(k fakeKey, obj map[string]interface{}) {
-		if k.plural == "namespaces" && k.name == "minio" {
+		if k.plural == "deployments" && k.name == "minio" {
 			obj["metadata"].(map[string]interface{})["uid"] = "uid-seen-by-check"
 		}
 	}
 	resp, _ := TeardownMinIO(c)
-	if resp.Success || resp.ErrorCode != "conflict" || !f.has(minioNSPath) {
-		t.Fatalf("a namespace with a different UID must not be deleted: %+v", resp)
+	if resp.Success || !f.has(minioDeployPath) || !strings.Contains(resp.Message, "Deployment minio") {
+		t.Fatalf("a Deployment with a different UID must not be deleted: %+v", resp)
 	}
-}
-
-func putConversionCRD(f *resourceFake, name, scope, svcNS, svcName string) {
-	f.putJSON("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/"+name, `{"spec":{"scope":"`+scope+`","conversion":{"strategy":"Webhook",
-		"webhook":{"clientConfig":{"service":{"namespace":"`+svcNS+`","name":"`+svcName+`"}}}}}}`)
-}
-
-func putEndpointSlice(f *resourceFake, ns, svc, ready string) {
-	f.putJSON("/apis/discovery.k8s.io/v1/namespaces/"+ns+"/endpointslices/"+svc+"-abc", `{"metadata":{"labels":{"kubernetes.io/service-name":"`+svc+`"}},
-		"endpoints":[{"conditions":{"ready":`+ready+`}}]}`)
 }

@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -123,6 +125,133 @@ func deleteWithUID(c *Client, path, uid string) (int, error) {
 // record this tool as their manager.
 func withToolFieldManager(path string) string {
 	return path + "?fieldManager=" + url.QueryEscape(toolFieldManager)
+}
+
+// foreignObjectError reports an object that has a name the tool uses but was
+// not created by the tool, so the tool refuses to change it.
+type foreignObjectError struct {
+	Desc string // for example "Secret minio/minio-secret"
+}
+
+func (e *foreignObjectError) Error() string {
+	return e.Desc + " already exists and was not created by this tool"
+}
+
+// errObjectChanged means an object the tool owns kept changing between the
+// ownership check and the write, so the write was not made.
+var errObjectChanged = errors.New("it changed while the tool was updating it; re-run to retry")
+
+// toolObjectReader returns the current metadata of one object, and whether it
+// exists.
+type toolObjectReader func() (objectMeta, bool, error)
+
+// ensureToolObject creates obj when it is absent and updates it when this
+// tool owns it, without ever writing to an object someone else created:
+//   - An absent object is created with POST, which fails with 409 instead of
+//     overwriting an object created concurrently. On 409 the object is read
+//     again and its ownership decided again.
+//   - An owned object is server-side applied with metadata.resourceVersion
+//     set to the version that was checked. The API server rejects the apply
+//     with 409 when the object changed in between, including when it was
+//     deleted and recreated by someone else (verified with
+//     `oc apply --server-side --force-conflicts --dry-run=server` and a stale
+//     resourceVersion on OpenShift 4.22: "the object has been modified").
+//
+// current is the object as already read by the caller (found=false when it
+// was absent). createPath is the collection POST path (query allowed), path
+// the object path. It returns "created" or "updated".
+func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]interface{}, current objectMeta, found bool, read toolObjectReader, owned func(objectMeta) bool) (string, error) {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		if !found {
+			_, _, postErr := c.post(createPath, data)
+			if postErr == nil {
+				return "created", nil
+			}
+			if !IsK8sError(postErr, http.StatusConflict) {
+				return "", postErr
+			}
+			if current, found, err = read(); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if !owned(current) {
+			return "", &foreignObjectError{Desc: desc}
+		}
+		if current.terminating() {
+			return "", fmt.Errorf("%s is being deleted; wait until it is gone, then retry", desc)
+		}
+		guarded := make(map[string]interface{}, len(obj))
+		for k, v := range obj {
+			guarded[k] = v
+		}
+		meta := map[string]interface{}{}
+		if m, ok := obj["metadata"].(map[string]interface{}); ok {
+			for k, v := range m {
+				meta[k] = v
+			}
+		}
+		meta["resourceVersion"] = current.ResourceVersion
+		guarded["metadata"] = meta
+		_, _, applyErr := c.apply(path, guarded)
+		if applyErr == nil {
+			return "updated", nil
+		}
+		if !IsK8sError(applyErr, http.StatusConflict) {
+			return "", applyErr
+		}
+		if current, found, err = read(); err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("%s: %w", desc, errObjectChanged)
+}
+
+// waitForGone polls until gone reports true, an error occurs, or the timeout
+// passes. Every poll runs under one context bounded by the timeout, so a call
+// that starts just before the deadline cannot overrun it. It returns
+// (false, nil) on timeout and (false, err) on any read error, including
+// 401/403: an unreadable object is not "still being deleted".
+func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Client) (bool, error)) (bool, error) {
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	defer cancel()
+	cc := c.WithContext(ctx)
+	for {
+		done, err := gone(cc)
+		if done && err == nil {
+			return true, nil
+		}
+		if ctx.Err() != nil {
+			// The caller's own context ended (client gone): report it. The
+			// local deadline only means "not gone yet".
+			if c.ctx.Err() != nil {
+				return false, c.ctx.Err()
+			}
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(interval):
+		}
+	}
+}
+
+// waitForDeletion polls path until it returns 404. See waitForGone.
+func waitForDeletion(c *Client, path string, timeout, interval time.Duration) (bool, error) {
+	return waitForGone(c, timeout, interval, func(cc *Client) (bool, error) {
+		_, _, err := cc.get(path)
+		if IsK8sError(err, http.StatusNotFound) {
+			return true, nil
+		}
+		return false, err
+	})
 }
 
 // workloadPodIssue is the most relevant reason a workload's pods are not ready.
@@ -276,12 +405,13 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		dspas       []dspaInfo
 		dspasErr    error
 		dashHost    string
+		minioEP     minioEndpoints
 		status      = &types.ResourcesStatus{}
 	)
 	wg.Add(5)
 	go func() { defer wg.Done(); projects, projectsErr = GetDSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
-	go func() { defer wg.Done(); status.MinIO = getMinIOStatus(c) }()
+	go func() { defer wg.Done(); status.MinIO, minioEP = minioStatusAndEndpoints(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
 	go func() { defer wg.Done(); dashHost = routeHost(c, dashboardNamespace, "rhods-dashboard") }()
 	wg.Wait()
@@ -316,7 +446,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	})
 
 	if status.MinIO.Deployed && status.MinIO.ManagedByTool {
-		if reason := minioTeardownBlocker(dspas); reason != "" {
+		if reason := minioTeardownBlocker(dspas, minioEP); reason != "" {
 			status.MinIO.TeardownBlockedReason = reason
 		}
 	}

@@ -617,7 +617,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	}
 
 	deployPath := namespacedPath("apps/v1", "deployments", dashboardNamespace, dashboardDeploymentName)
-	restored, err := legacyRevertAnnotations(c)
+	restored, managedNote, err := legacyRevertAnnotations(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Cannot read %s before reverting: %v", dashboardDeploymentName, err),
@@ -650,10 +650,14 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 		}, nil
 	}
 	logs = append(logs, fmt.Sprintf("OK: %d container images restored", len(containerPatches)))
-	if value, ok := restored["opendatahub.io/managed"].(string); ok {
-		logs = append(logs, fmt.Sprintf("OK: opendatahub.io/managed restored to its original value %q", value))
-	} else {
+	switch value, set := restored["opendatahub.io/managed"]; {
+	case managedNote != "":
+		logs = append(logs, "Warning:"+managedNote)
+	case !set:
+	case value == nil:
 		logs = append(logs, "OK: opendatahub.io/managed removed (it was not set before the PR deployment)")
+	default:
+		logs = append(logs, fmt.Sprintf("OK: opendatahub.io/managed restored to its original value %q", value))
 	}
 
 	// Revert standalone module deployments
@@ -680,12 +684,12 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	})
 	if len(failedModules) > 0 {
 		sort.Strings(failedModules)
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Dashboard partially restored: %d containers restored. Failed modules: %s. Retry to finish restoring.", totalReverted, strings.Join(failedModules, ", ")), Logs: logs, ErrorCode: "partial_failure"}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Dashboard partially restored: %d containers restored. Failed modules: %s. Retry to finish restoring.%s", totalReverted, strings.Join(failedModules, ", "), managedNote), Logs: logs, ErrorCode: "partial_failure"}, nil
 	}
 
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("All %d containers restored to operator-managed images.", totalReverted),
+		Message: fmt.Sprintf("All %d containers restored to operator-managed images.%s", totalReverted, managedNote),
 		Logs:    logs,
 	}, nil
 }
@@ -719,9 +723,9 @@ func getDeploymentAnnotations(c *Client, name string) (map[string]string, error)
 }
 
 // legacyDeployAnnotations returns the annotations a legacy PR deployment sets:
-// managed=false and, on the first deployment only, the original value. A
-// pre-existing "false" without a record was left by an earlier PR deployment
-// of this tool, so it is recorded as absent.
+// managed=false and, on the first deployment only, the original value:
+// absent, "true" or "false". A "false" the user set before the deployment is
+// recorded like any other value, so revert keeps it.
 func legacyDeployAnnotations(c *Client) (map[string]interface{}, error) {
 	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
 	if err != nil {
@@ -730,7 +734,7 @@ func legacyDeployAnnotations(c *Client) (map[string]interface{}, error) {
 	annotations := map[string]interface{}{"opendatahub.io/managed": "false"}
 	if _, saved := current[legacyOriginalManagedAnnotation]; !saved {
 		record := legacyManagedRecord{}
-		if value, ok := current["opendatahub.io/managed"]; ok && value != "false" {
+		if value, ok := current["opendatahub.io/managed"]; ok {
 			record = legacyManagedRecord{Present: true, Value: value}
 		}
 		raw, err := json.Marshal(record)
@@ -742,20 +746,42 @@ func legacyDeployAnnotations(c *Client) (map[string]interface{}, error) {
 	return annotations, nil
 }
 
-// legacyRevertAnnotations restores opendatahub.io/managed to the saved
-// original (null removes it) and drops the record. Without a record the
-// annotation is removed, which is the operator's default.
-func legacyRevertAnnotations(c *Client) (map[string]interface{}, error) {
+// legacyRevertAnnotations returns the annotation patch that restores
+// opendatahub.io/managed to the value saved by legacyDeployAnnotations (null
+// removes it) and drops the record. Without a usable record the value before
+// the PR deployment is unknown, so opendatahub.io/managed is left as it is,
+// and note (otherwise "") tells the user what to check.
+func legacyRevertAnnotations(c *Client) (patch map[string]interface{}, note string, err error) {
 	current, err := getDeploymentAnnotations(c, dashboardDeploymentName)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	var managed interface{}
+	value, managedSet := current["opendatahub.io/managed"]
+	raw, saved := current[legacyOriginalManagedAnnotation]
 	var record legacyManagedRecord
-	if raw, ok := current[legacyOriginalManagedAnnotation]; ok && json.Unmarshal([]byte(raw), &record) == nil && record.Present && record.Value != "false" {
-		managed = record.Value
+	switch {
+	case saved && json.Unmarshal([]byte(raw), &record) == nil:
+		var managed interface{}
+		if record.Present {
+			managed = record.Value
+		}
+		return map[string]interface{}{"opendatahub.io/managed": managed, legacyOriginalManagedAnnotation: nil}, "", nil
+	case saved:
+		// Unreadable record: drop it, keep the current value.
+		patch = map[string]interface{}{legacyOriginalManagedAnnotation: nil}
+		if managedSet {
+			note = fmt.Sprintf(" The saved original value of opendatahub.io/managed on %s could not be read (%s=%q), so its current value %q was left unchanged.", dashboardDeploymentName, legacyOriginalManagedAnnotation, raw, value)
+		}
+	default:
+		patch = map[string]interface{}{}
+		if managedSet {
+			note = fmt.Sprintf(" No record of the opendatahub.io/managed value %s had before the PR deployment was found, so its current value %q was left unchanged.", dashboardDeploymentName, value)
+		}
 	}
-	return map[string]interface{}{"opendatahub.io/managed": managed, legacyOriginalManagedAnnotation: nil}, nil
+	if note != "" && value == "false" {
+		note += fmt.Sprintf(" While it is \"false\" the operator does not update the dashboard; if this tool set it, remove it with `oc annotate deployment/%s -n %s opendatahub.io/managed-`.", dashboardDeploymentName, dashboardNamespace)
+	}
+	return patch, note, nil
 }
 
 // getOriginalImages reads all dashboard container images from the operator's

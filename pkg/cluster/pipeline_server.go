@@ -180,17 +180,103 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	return out, nil
 }
 
+// minioEndpoints are the addresses of the tool's MinIO besides its service
+// DNS names: the hosts of its Routes and the ClusterIP of minio-service.
+type minioEndpoints struct {
+	apiHost   string // Route minio-api (earlier versions)
+	uiHost    string // Route minio-ui
+	clusterIP string
+}
+
+// readMinIOEndpoints reads the Route hosts and the service ClusterIP. Missing
+// or unreadable objects are skipped: the DNS names still match.
+func readMinIOEndpoints(c *Client) minioEndpoints {
+	e := minioEndpoints{
+		apiHost: routeHost(c, minioNamespace, "minio-api"),
+		uiHost:  routeHost(c, minioNamespace, "minio-ui"),
+	}
+	if body, _, err := c.get(namespacedPath("v1", "services", minioNamespace, minioServiceName)); err == nil {
+		var svc struct {
+			Spec struct {
+				ClusterIP string `json:"clusterIP"`
+			} `json:"spec"`
+		}
+		if json.Unmarshal(body, &svc) == nil && svc.Spec.ClusterIP != "None" {
+			e.clusterIP = svc.Spec.ClusterIP
+		}
+	}
+	return e
+}
+
+// endpointHostname returns the lower-case host name of an S3 endpoint given
+// as "host", "host:port" or "scheme://host[:port][/path]".
+func endpointHostname(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "//" + s
+	}
+	if u, err := url.Parse(s); err == nil {
+		return strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	}
+	// Unparseable (for example a bad port): cut the scheme, path and port by
+	// hand so a typo cannot hide a dependency.
+	s = s[strings.Index(s, "//")+2:]
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "@"); i >= 0 {
+		s = s[i+1:]
+	}
+	if i := strings.Index(s, ":"); i >= 0 && !strings.HasPrefix(s, "[") {
+		s = s[:i]
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.Trim(s, "[]")), ".")
+}
+
+// usesMinIO reports whether a pipeline server in namespace dspaNamespace with
+// object-storage host host talks to the tool's MinIO, whatever form the
+// address takes: the service DNS name in any of its forms
+// (https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#namespaces-of-services),
+// with or without scheme and port, the ClusterIP, or a Route host.
+func (e minioEndpoints) usesMinIO(dspaNamespace, host string) bool {
+	h := endpointHostname(host)
+	if h == "" {
+		return false
+	}
+	svc := minioServiceName + "." + minioNamespace
+	switch h {
+	case svc, svc + ".svc", svc + ".svc.cluster.local":
+		return true
+	case minioServiceName:
+		// A bare service name resolves in the client's own namespace: the
+		// pod DNS search path starts with <namespace>.svc.cluster.local.
+		return dspaNamespace == minioNamespace
+	}
+	if e.clusterIP != "" && h == e.clusterIP {
+		return true
+	}
+	for _, r := range []string{e.apiHost, e.uiHost} {
+		if r != "" && h == strings.TrimSuffix(strings.ToLower(r), ".") {
+			return true
+		}
+	}
+	return false
+}
+
 // minioTeardownBlocker explains why MinIO cannot be torn down because of
 // pipeline servers, or returns "". Any DSPA that stores artifacts in the
-// tool's MinIO, or lives in the minio namespace, blocks it, whoever created
-// it. Terminating ones block too: only a running data-science-pipelines
-// operator removes their finalizer (DSPO dspipeline_controller.go), so
-// MinIO waits until they are really gone (teardown order DSPA, then MinIO).
-func minioTeardownBlocker(dspas []dspaInfo) string {
+// tool's MinIO (see usesMinIO), or lives in the minio namespace, blocks it,
+// whoever created it. Terminating ones block too: only a running
+// data-science-pipelines operator removes their finalizer (DSPO
+// dspipeline_controller.go), so MinIO waits until they are really gone
+// (teardown order DSPA, then MinIO).
+func minioTeardownBlocker(dspas []dspaInfo, endpoints minioEndpoints) string {
 	var live, deleting []string
 	for _, d := range dspas {
-		host := strings.TrimPrefix(strings.TrimPrefix(d.Host, "http://"), "https://")
-		if host != minioS3Host() && d.Meta.Namespace != minioNamespace {
+		if !endpoints.usesMinIO(d.Meta.Namespace, d.Host) && d.Meta.Namespace != minioNamespace {
 			continue
 		}
 		name := d.Meta.Namespace + "/" + d.Meta.Name
@@ -286,11 +372,14 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	case err != nil:
 		return fail(fmt.Sprintf("Cannot check for existing pipeline servers: %v", err), errorCodeFromK8sErr(err), "list failed")
 	}
+	var dspaMeta objectMeta
+	dspaFound := false
 	for _, d := range existing {
 		if d.Meta.Name == dspaName && d.Meta.hasToolLabel() {
 			if d.Meta.terminating() {
 				return fail(fmt.Sprintf("The pipeline server in '%s' is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
 			}
+			dspaMeta, dspaFound = d.Meta, true
 			continue
 		}
 		if d.managedByTool() {
@@ -365,12 +454,23 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	// secret of the same name that someone else created.
 	logs = append(logs, "Creating pipeline server secret...")
 	dspaSecretPath := namespacedPath("v1", "secrets", project, dspaSecretName)
-	if body, _, getErr := c.get(dspaSecretPath); getErr == nil {
-		if meta, perr := parseObjectMeta(body); perr != nil || !meta.hasToolLabel() {
-			return fail(fmt.Sprintf("Secret '%s' already exists in '%s' and was not created by this tool. It was left unchanged.", dspaSecretName, project), "not_managed", "secret exists")
+	readSecret := func() (objectMeta, bool, error) {
+		body, _, getErr := c.get(dspaSecretPath)
+		if IsK8sError(getErr, 404) {
+			return objectMeta{}, false, nil
 		}
-	} else if !IsK8sError(getErr, 404) {
-		return fail(fmt.Sprintf("Cannot read secret '%s': %v", dspaSecretName, getErr), errorCodeFromK8sErr(getErr), "secret read failed")
+		if getErr != nil {
+			return objectMeta{}, false, getErr
+		}
+		meta, perr := parseObjectMeta(body)
+		return meta, true, perr
+	}
+	secretMeta, secretFound, err := readSecret()
+	if err != nil {
+		return fail(fmt.Sprintf("Cannot read secret '%s': %v", dspaSecretName, err), errorCodeFromK8sErr(err), "secret read failed")
+	}
+	if secretFound && !secretMeta.hasToolLabel() {
+		return fail(fmt.Sprintf("Secret '%s' already exists in '%s' and was not created by this tool. It was left unchanged.", dspaSecretName, project), "not_managed", "secret exists")
 	}
 	dspaSecret := map[string]interface{}{
 		"apiVersion": "v1", "kind": "Secret",
@@ -384,12 +484,18 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			"AWS_SECRET_ACCESS_KEY": secretKey,
 		},
 	}
-	if _, _, err := c.apply(dspaSecretPath, dspaSecret); err != nil {
-		return fail(fmt.Sprintf("Failed to create DSPA secret: %v", err), errorCodeFromK8sErr(err), "secret apply failed")
+	// POST when absent, resourceVersion-guarded apply when owned, so a
+	// secret someone creates after the check above is never overwritten.
+	secretAction, err := ensureToolObject(c, fmt.Sprintf("Secret %s/%s", project, dspaSecretName), dspaSecretPath,
+		withToolFieldManager(namespacedPath("v1", "secrets", project, "")), dspaSecret, secretMeta, secretFound, readSecret, objectMeta.hasToolLabel)
+	if err != nil {
+		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
+		return fail(msg, code, "secret write failed")
 	}
-	logs = append(logs, "OK: Secret created")
+	logs = append(logs, "OK: Secret "+secretAction)
 
-	// Step 4: Create DSPA. Server-side apply rejects fields the CRD does not
+	// Step 4: Create DSPA. fieldValidation=Strict (and server-side apply,
+	// which always validates strictly) rejects fields the CRD does not
 	// declare, so a manifest that drifts from the CRD fails here instead of
 	// being silently pruned.
 	logs = append(logs, "Creating pipeline server (DSPA)...")
@@ -424,10 +530,25 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		},
 	}
 	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
-	if _, _, err := c.apply(dspaPath, dspa); err != nil {
-		return fail(fmt.Sprintf("Failed to create DSPA (the credentials secret '%s' was created; re-run setup or tear down to clean up): %v", dspaSecretName, err), errorCodeFromK8sErr(err), "DSPA apply failed")
+	readDSPA := func() (objectMeta, bool, error) {
+		body, _, getErr := c.get(dspaPath)
+		if IsK8sError(getErr, 404) {
+			return objectMeta{}, false, nil
+		}
+		if getErr != nil {
+			return objectMeta{}, false, getErr
+		}
+		meta, perr := parseObjectMeta(body)
+		return meta, true, perr
 	}
-	logs = append(logs, "OK: Pipeline server created")
+	dspaAction, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
+		withToolFieldManager(namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
+		dspa, dspaMeta, dspaFound, readDSPA, objectMeta.hasToolLabel)
+	if err != nil {
+		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
+		return fail(fmt.Sprintf("%s The credentials secret '%s' is in place; re-run setup, or tear down to clean up.", msg, dspaSecretName), code, "DSPA write failed")
+	}
+	logs = append(logs, "OK: Pipeline server "+dspaAction)
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
 	slog.Info("pipeline server setup", "project", project, "user", getUser(c))
@@ -539,7 +660,17 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	// secret behind with no pipeline server left to show a Tear down button.
 	secretNote := deleteDSPASecret(c, project, target, all, &logs)
 
-	if !waitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll) {
+	gone, waitErr := waitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
+	if waitErr != nil {
+		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (cannot confirm deletion: %v)", project, waitErr), false)
+		return &types.OperationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Deletion of pipeline server '%s' was requested, but whether it is gone cannot be checked: %v.%s", target.Meta.Name, waitErr, secretNote),
+			Logs:      logs,
+			ErrorCode: firstNonEmpty(errorCodeFromK8sErr(waitErr), "in_progress"),
+		}, nil
+	}
+	if !gone {
 		recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (still terminating)", project), false)
 		return &types.OperationResponse{
 			Success:   false,
@@ -608,20 +739,17 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 	return ""
 }
 
-// waitForDeletion polls path until it returns 404 or the timeout passes.
-func waitForDeletion(c *Client, path string, timeout, interval time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if _, _, err := c.get(path); IsK8sError(err, 404) {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		select {
-		case <-c.ctx.Done():
-			return false
-		case <-time.After(interval):
-		}
+// pipelineWriteFailure turns an ensureToolObject error into a message and an
+// error code.
+func pipelineWriteFailure(what, project string, err error) (string, string) {
+	var foreign *foreignObjectError
+	switch {
+	case errors.As(err, &foreign):
+		return fmt.Sprintf("A %s was created in '%s' by someone else while setup was running. It was left unchanged.", what, project), "not_managed"
+	case errors.Is(err, errObjectChanged):
+		return fmt.Sprintf("The %s in '%s' kept changing while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
+	case IsK8sError(err, 409):
+		return fmt.Sprintf("The %s in '%s' changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	}
+	return fmt.Sprintf("Failed to create or update the %s in '%s': %v.", what, project, err), errorCodeFromK8sErr(err)
 }
