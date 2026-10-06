@@ -30,7 +30,7 @@ export const RelativeTime: React.FC<RelativeTimeProps> = ({ date, prefix = "", s
   const d = typeof date === "string" ? new Date(date) : date;
   if (Number.isNaN(d.getTime())) return <span className="pf-v6-u-text-color-subtle">Unknown</span>;
   return (
-    <Timestamp className={size === "inherit" ? "pf-v6-u-font-size-md pf-v6-u-text-color-regular" : undefined} date={d} tooltip={{ variant: TimestampTooltipVariant.custom, content: d.toLocaleString() }}>
+    <Timestamp className={size === "inherit" ? "pf-v6-u-font-size-md pf-v6-u-text-color-regular" : "pf-v6-u-font-size-sm"} date={d} tooltip={{ variant: TimestampTooltipVariant.custom, content: d.toLocaleString() }}>
       {prefix}{formatRelativeTime(d.toISOString())}
     </Timestamp>
   );

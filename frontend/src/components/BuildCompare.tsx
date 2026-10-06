@@ -7,21 +7,28 @@ import {
   CardHeader,
   CardTitle,
   Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
   ExpandableSection,
-  Flex,
-  FlexItem,
-  Label,
   List,
   ListItem,
   SearchInput,
   Skeleton,
   Stack,
   StackItem,
+  Title,
+  Toolbar,
+  ToolbarContent,
+  ToolbarItem,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
+import TimesIcon from "@patternfly/react-icons/dist/esm/icons/times-icon";
 import { useFbcContent } from "../hooks/useFbcContent";
-import { formatRelativeTime } from "../utils";
+import { RelativeTime } from "./RelativeTime";
+import { TagLabel } from "./StatusLabel";
 import { compareBuilds, compareURL, imageDigest, shortBuildRef, type RepoChange } from "./buildDiff";
 
 export interface BuildSide {
@@ -38,17 +45,17 @@ const ImageNames: React.FC<{ change: RepoChange }> = ({ change }) => {
   const names = change.images.map((i) => i.name);
   const shown = all ? names : names.slice(0, MAX_NAMES);
   return (
-    <Content component="small" style={{ overflowWrap: "anywhere" }}>
+    <span className="pf-v6-u-text-break-word">
       {shown.join(", ")}
       {names.length > MAX_NAMES && (
         <>
           {" "}
-          <Button variant="link" isInline size="sm" onClick={() => setAll((v) => !v)} aria-expanded={all}>
-            {all ? "Show fewer" : `and ${names.length - MAX_NAMES} more`}
+          <Button variant="link" isInline onClick={() => setAll((v) => !v)} aria-expanded={all}>
+            {all ? "show fewer" : `and ${names.length - MAX_NAMES} more`}
           </Button>
         </>
       )}
-    </Content>
+    </span>
   );
 };
 
@@ -57,7 +64,7 @@ const Sha: React.FC<{ sha?: string }> = ({ sha }) => (sha ? <code title={sha}>{s
 const SideText: React.FC<{ side: BuildSide }> = ({ side }) => (
   <>
     <strong>{side.label}</strong> <code>{shortBuildRef(side.image)}</code>
-    {side.buildDate && <> (built <time dateTime={side.buildDate} title={new Date(side.buildDate).toLocaleString()}>{formatRelativeTime(side.buildDate)}</time>)</>}
+    {side.buildDate && <> (built <RelativeTime date={side.buildDate} size="inherit" />)</>}
   </>
 );
 
@@ -85,43 +92,60 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
 
   return (
     <Card>
-      <CardHeader actions={{ actions: <Button variant="secondary" onClick={onClose}>Close comparison</Button>, hasNoOffset: true }}>
-        <CardTitle component="h2">Compare builds</CardTitle>
-        <Content component="small">
-          <SideText side={from} /> &rarr; <SideText side={{ ...to, label: `Selected: ${to.label}` }} />
-        </Content>
+      <CardHeader actions={{ actions: <Button variant="plain" icon={<TimesIcon />} aria-label="Close comparison" onClick={onClose} />, hasNoOffset: true }}>
+        <CardTitle><Title headingLevel="h2" size="lg">Compare builds</Title></CardTitle>
       </CardHeader>
       <CardBody>
+        <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "10ch" }} className="pf-v6-u-mb-md">
+          <DescriptionListGroup>
+            <DescriptionListTerm>From</DescriptionListTerm>
+            <DescriptionListDescription><SideText side={from} /></DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
+            <DescriptionListTerm>To</DescriptionListTerm>
+            <DescriptionListDescription><SideText side={to} /></DescriptionListDescription>
+          </DescriptionListGroup>
+        </DescriptionList>
         {same ? (
           <Alert component="p" variant="info" isInline title="Both are the same build (same digest)." />
         ) : error ? (
           <Alert component="p" variant="danger" isInline isLiveRegion title="Could not load a build to compare">{error.message}</Alert>
         ) : !result ? (
-          <div aria-busy="true">
-            <Content component="small" aria-live="polite">
-              {a.loading || b.loading ? "Reading both catalogs..." : "Resolving git commits of both builds..."}
-            </Content>
-            <Skeleton height="1.5rem" screenreaderText="Comparing builds" />
-            <Skeleton height="1.5rem" />
-          </div>
+          <Stack hasGutter aria-busy="true">
+            <StackItem>
+              <Content component="p" className="pf-v6-u-text-color-subtle" aria-live="polite">
+                {a.loading || b.loading ? "Reading both catalogs..." : "Resolving git commits of both builds..."}
+              </Content>
+            </StackItem>
+            <StackItem><Skeleton height="1.5rem" screenreaderText="Comparing builds" /></StackItem>
+            <StackItem><Skeleton height="1.5rem" /></StackItem>
+          </Stack>
         ) : (
           <Stack hasGutter>
             <StackItem>
-              <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }} aria-live="polite">
-                <FlexItem><Label color="blue">{withCommits} repositories with new commits</Label></FlexItem>
-                <FlexItem><Label color="grey">{result.changedImages} images changed</Label></FlexItem>
-                {rebuilt > 0 && <FlexItem><Label color="grey">{rebuilt} rebuilt from the same commit</Label></FlexItem>}
-                {result.added.length > 0 && <FlexItem><Label color="green">{result.added.length} added</Label></FlexItem>}
-                {result.removed.length > 0 && <FlexItem><Label color="orange">{result.removed.length} removed</Label></FlexItem>}
-                <FlexItem><Label color="grey" variant="outline">{result.unchangedImages} unchanged</Label></FlexItem>
-              </Flex>
+              <Content component="p" aria-live="polite">
+                {[
+                  `${withCommits} ${withCommits === 1 ? "repository" : "repositories"} with new commits`,
+                  `${result.changedImages} images changed`,
+                  rebuilt > 0 ? `${rebuilt} rebuilt from the same commit` : "",
+                  result.added.length > 0 ? `${result.added.length} added` : "",
+                  result.removed.length > 0 ? `${result.removed.length} removed` : "",
+                  `${result.unchangedImages} unchanged`,
+                ].filter(Boolean).join(" · ")}
+              </Content>
               {(a.data?.bundleName || b.data?.bundleName) && (
-                <Content component="small">Operator bundle: {a.data?.bundleName || "unknown"} &rarr; {b.data?.bundleName || "unknown"}</Content>
+                <Content component="p" className="pf-v6-u-text-color-subtle">Operator bundle: {a.data?.bundleName || "unknown"} &rarr; {b.data?.bundleName || "unknown"}</Content>
               )}
             </StackItem>
             {result.repos.length > 0 && (
               <StackItem>
-                <SearchInput aria-label="Filter compared repositories" placeholder="Filter by repository or image" value={filter} onChange={(_e, v) => setFilter(v)} onClear={() => setFilter("")} style={{ maxWidth: "24rem" }} />
+                <Toolbar inset={{ default: "insetNone" }}>
+                  <ToolbarContent>
+                    <ToolbarItem>
+                      <SearchInput aria-label="Filter compared repositories" placeholder="Filter by repository or image" value={filter} onChange={(_e, v) => setFilter(v)} onClear={() => setFilter("")} />
+                    </ToolbarItem>
+                  </ToolbarContent>
+                </Toolbar>
               </StackItem>
             )}
             <StackItem>
@@ -144,18 +168,18 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
                       return (
                         <Tr key={`${r.gitURL}|${r.fromCommit}|${r.toCommit}|${r.kind}`}>
                           <Td dataLabel="Repository">
-                            <span style={{ overflowWrap: "anywhere" }}>{r.repo}</span>
-                            {r.kind === "rebuilt" && <>{" "}<Label isCompact color="grey">Rebuilt, same commit</Label></>}
-                            {r.kind === "unknown" && <>{" "}<Label isCompact color="grey">No commit labels</Label></>}
+                            <span className="pf-v6-u-text-break-word">{r.repo}</span>
+                            {r.kind === "rebuilt" && <>{" "}<TagLabel>Rebuilt, same commit</TagLabel></>}
+                            {r.kind === "unknown" && <>{" "}<TagLabel>No commit labels</TagLabel></>}
                           </Td>
                           <Td dataLabel="Installed"><Sha sha={r.fromCommit} /></Td>
                           <Td dataLabel="Selected"><Sha sha={r.toCommit} /></Td>
                           <Td dataLabel="Images"><ImageNames change={r} /></Td>
                           <Td dataLabel="GitHub compare">
                             {url && (
-                              <Button variant="link" isInline component="a" href={url} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm" aria-label={`Compare ${r.repo} commits on GitHub`}>
-                                Compare
-                              </Button>
+                              <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Compare ${r.repo} commits on GitHub`}>
+                                Compare <ExternalLinkAltIcon />
+                              </a>
                             )}
                           </Td>
                         </Tr>
@@ -169,8 +193,8 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
               <StackItem>
                 <ExpandableSection toggleText={`Added and removed images (${result.added.length + result.removed.length})`}>
                   <List>
-                    {result.added.map((i) => <ListItem key={`+${i.name}`}><Label isCompact color="green">Added</Label> {i.name}</ListItem>)}
-                    {result.removed.map((i) => <ListItem key={`-${i.name}`}><Label isCompact color="orange">Removed</Label> {i.name}</ListItem>)}
+                    {result.added.map((i) => <ListItem key={`+${i.name}`}><TagLabel color="teal">Added</TagLabel> {i.name}</ListItem>)}
+                    {result.removed.map((i) => <ListItem key={`-${i.name}`}><TagLabel>Removed</TagLabel> {i.name}</ListItem>)}
                   </List>
                 </ExpandableSection>
               </StackItem>

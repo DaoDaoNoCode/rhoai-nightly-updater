@@ -69,6 +69,6 @@ describe("useFbcContent (A06-8)", () => {
       slowLabelsForA.resolve(jsonResponse(content("rhoai-3.6", "STALE-FROM-A")));
     });
     expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /All \(1\)/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Component category: All categories" })).toHaveTextContent("1");
   });
 });
