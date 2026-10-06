@@ -273,6 +273,25 @@ How to cut a release:
 
 The guard (`scripts/release.sh check`, the same in `make release` and CI) fails when the tag is not the top dated CHANGELOG section, or when `TEMPLATE_REVISION` differs from the previous release tag's (the highest lower `v*` tag) and the MAJOR is not higher. A MAJOR bump without a template change is allowed. Retrying a release pipeline is safe: an image already published from the same commit is kept; one from another commit stops the job.
 
+### Moving the image repository
+
+The default repository, `quay.io/juntao_wang/rhoai-nightly-updater`, is a personal Quay namespace, kept because the published images live there. Everything that uses it at run time takes another one:
+
+| Where | Setting |
+|---|---|
+| GitLab CI (builds, releases, the embedded repo of `install.sh`) | project CI/CD variable `IMAGE`, with `QUAY_USER`/`QUAY_TOKEN` for its registry (the registry host comes from `IMAGE`) |
+| GitHub release (notes, `install.sh`, the image wait) | repository variable `IMAGE` |
+| `make` | `IMAGE=...` (or `.env`) |
+| `install.sh` | `--image-repo` or `IMAGE` |
+| The app's update check | template parameter `IMAGE_REPOSITORY` (`install.sh` and `make` pass the repository they install from); `RELEASES_URL` for the notes link |
+
+To move for good:
+1. Copy the release tags to the new repository (`:vX.Y.Z`, `:vN`, `:latest`) so existing references keep resolving.
+2. Set the CI variables.
+3. Change the defaults in `Makefile`, `scripts/install.sh` (`DEFAULT_IMAGE`), `deploy/template.yaml` (`IMAGE_REPOSITORY`), `.gitlab-ci.yml` and `.github/workflows/release.yml` in one commit.
+
+Installs of older releases keep checking the old repository for updates, so keep publishing there until they upgrade, or leave it in place as a mirror.
+
 ## Code Patterns
 
 ### Backend Patterns
