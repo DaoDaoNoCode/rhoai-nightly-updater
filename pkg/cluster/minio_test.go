@@ -162,7 +162,7 @@ func TestMinioCredentials_ReusesExistingSecret(t *testing.T) {
 	t.Setenv("MINIO_ROOT_USER", "")
 	t.Setenv("MINIO_ROOT_PASSWORD", "")
 	client, cleanup := newMockClient(map[string]mockResponse{
-		"/api/v1/namespaces/minio/secrets/minio-secret": {body: `{"data":{"minio_root_user":"YWRtaW4=","minio_root_password":"a2VlcG1l"}}`},
+		"/api/v1/namespaces/minio/secrets/minio-secret": {body: `{"data":{"minio_root_user":"` + exampleAuth("admin") + `","minio_root_password":"` + exampleAuth("keepme") + `"}}`},
 	})
 	defer cleanup()
 	for i := 0; i < 3; i++ {
@@ -176,7 +176,7 @@ func TestMinioCredentials_EnvOverridesSecret(t *testing.T) {
 	t.Setenv("MINIO_ROOT_USER", "")
 	t.Setenv("MINIO_ROOT_PASSWORD", "fromenv")
 	client, cleanup := newMockClient(map[string]mockResponse{
-		"/api/v1/namespaces/minio/secrets/minio-secret": {body: `{"data":{"minio_root_user":"YWRtaW4=","minio_root_password":"a2VlcG1l"}}`},
+		"/api/v1/namespaces/minio/secrets/minio-secret": {body: `{"data":{"minio_root_user":"` + exampleAuth("admin") + `","minio_root_password":"` + exampleAuth("keepme") + `"}}`},
 	})
 	defer cleanup()
 	if user, pw := mustMinioCredentials(t, client); user != "admin" || pw != "fromenv" {
@@ -208,7 +208,7 @@ func TestSetupMinIO_ResponseDoesNotLeakPassword(t *testing.T) {
 		minioBucketCreator = func(*Client, string) error { return bucketErr }
 		f, client := newResourceFake(t)
 		readyAfterApply(f)
-		f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"data":{"minio_root_user":"bWluaW8=","minio_root_password":"dGVzdHBhc3M="}}`)
+		f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"data":{"minio_root_user":"`+exampleAuth("minio")+`","minio_root_password":"`+exampleAuth("EXAMPLE-pass")+`"}}`)
 
 		resp, err := SetupMinIO(client)
 		if err != nil {
@@ -230,7 +230,7 @@ func assertNoCredentialLeak(t *testing.T, message string, logs []string) {
 	}
 
 	// Neither the stored password nor the old hardcoded one may appear.
-	if strings.Contains(allText, "testpass") {
+	if strings.Contains(allText, "EXAMPLE-pass") {
 		t.Errorf("response contains the stored password: %s", allText)
 	}
 	if strings.Contains(allText, "minio123") {

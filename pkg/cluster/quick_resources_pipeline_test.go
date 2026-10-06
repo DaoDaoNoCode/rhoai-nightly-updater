@@ -33,7 +33,7 @@ func putDSProject(f *resourceFake, ns string) {
 func putReadyManagedMinIO(f *resourceFake) {
 	putNamespace(f, toolLabelJSON, toolFieldManager)
 	putS3Deployment(f, 1)
-	f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"bWluaW8=","minio_root_password":"cGFzcw=="}}`)
+	f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"`+exampleAuth("minio")+`","minio_root_password":"`+exampleAuth("pass")+`"}}`)
 }
 
 func putDSPO(f *resourceFake, ready int) {

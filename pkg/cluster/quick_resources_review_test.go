@@ -107,7 +107,7 @@ func TestSetupMinIO_ObjectReplacedBetweenCheckAndUpdate(t *testing.T) {
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
 	managedMinIONamespace(f)
-	f.putJSON(minioSecretPath, `{"metadata":{"labels":`+toolLabelJSON+`,"resourceVersion":"5"},"data":{"minio_root_user":"dQ==","minio_root_password":"cA=="}}`)
+	f.putJSON(minioSecretPath, `{"metadata":{"labels":`+toolLabelJSON+`,"resourceVersion":"5"},"data":{"minio_root_user":"`+exampleAuth("u")+`","minio_root_password":"`+exampleAuth("p")+`"}}`)
 	var once sync.Once
 	f.beforeServe = func(method, path string) {
 		if method == http.MethodPatch && path == minioSecretPath {
@@ -139,7 +139,7 @@ func TestSetupMinIO_MigratesReleasedInstallAndKeepsMinIOVolume(t *testing.T) {
 		"spec":{"template":{"spec":{"containers":[{"name":"minio","image":"quay.io/minio/minio:latest"}]}}},"status":{"readyReplicas":1}}`)
 	f.putJSON(minioPVCPath, `{"metadata":{"uid":"pvc","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"status":{"capacity":{"storage":"20Gi"}}}`)
 	f.putJSON(minioNPPath, `{"metadata":{"uid":"np","labels":`+toolLabelJSON+`}}`)
-	f.putJSON(minioSecretPath, `{"metadata":{"uid":"sec","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"data":{"minio_root_user":"b2xkLXVzZXI=","minio_root_password":"b2xkLXBhc3M="}}`)
+	f.putJSON(minioSecretPath, `{"metadata":{"uid":"sec","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"data":{"minio_root_user":"`+exampleAuth("old-user")+`","minio_root_password":"`+exampleAuth("EXAMPLE-old-pass")+`"}}`)
 	f.putJSON(minioSvcPath, `{"metadata":{"uid":"svc","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"spec":{"selector":{"app":"minio"},"clusterIP":"172.30.10.20"}}`)
 	f.putJSON(minioAPIRoute, `{"metadata":{"uid":"api","creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"spec":{"host":"minio-api-minio.apps.example.com"}}`)
 	f.putJSON(minioUIRoute, applied("ui"))
@@ -164,7 +164,7 @@ func TestSetupMinIO_MigratesReleasedInstallAndKeepsMinIOVolume(t *testing.T) {
 	}
 	// The credentials stay, so pipeline servers' copies stay valid.
 	sec, _ := json.Marshal(f.get(minioSecretPath))
-	if !strings.Contains(string(sec), `"minio_root_user":"old-user"`) || !strings.Contains(string(sec), `"minio_root_password":"old-pass"`) {
+	if !strings.Contains(string(sec), `"minio_root_user":"old-user"`) || !strings.Contains(string(sec), `"minio_root_password":"EXAMPLE-old-pass"`) {
 		t.Errorf("credentials changed: %s", sec)
 	}
 	svc, _ := json.Marshal(f.get(minioSvcPath))
