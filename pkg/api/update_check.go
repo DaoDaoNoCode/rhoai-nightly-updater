@@ -233,6 +233,11 @@ func listRegistryTags(ctx context.Context, client *http.Client, repository strin
 		tags = append(tags, body.Tags...)
 		next = nextPage(next, link)
 	}
+	if next != "" {
+		// The newest release may be on a page not read: no answer is
+		// better than a wrong one (the caller does not cache errors).
+		return nil, fmt.Errorf("tag list of %s: more than %d pages, incomplete", repository, maxTagPages)
+	}
 	return tags, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -161,6 +162,42 @@ func TestRegistryCannotRedirectElsewhere(t *testing.T) {
 	// Docker Hub's realm is its known token host.
 	if _, err := anonymousToken(context.Background(), http.DefaultClient, `Bearer realm="https://evil.example.com/token"`, "registry-1.docker.io", "a/b"); err == nil || !strings.Contains(err.Error(), "not on the registry host") {
 		t.Fatalf("docker hub realm on another host: %v", err)
+	}
+}
+
+func TestIncompleteTagListIsAnError(t *testing.T) {
+	var pages atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := pages.Add(1)
+		w.Header().Set("Link", `</v2/team/app/tags/list?n=1000&last=p`+strconv.Itoa(int(n))+`>; rel="next"`)
+		_ = json.NewEncoder(w).Encode(map[string][]string{"tags": {"v1." + strconv.Itoa(int(n)) + ".0"}})
+	}))
+	t.Cleanup(srv.Close)
+	tags, err := listRegistryTags(context.Background(), srv.Client(), strings.TrimPrefix(srv.URL, "https://")+"/team/app")
+	if err == nil || !strings.Contains(err.Error(), "incomplete") || tags != nil {
+		t.Fatalf("an endless tag list: tags %v, err %v", tags, err)
+	}
+	if pages.Load() != maxTagPages {
+		t.Fatalf("read %d pages, want %d", pages.Load(), maxTagPages)
+	}
+
+	// The checker keeps its previous answer instead of a partial one.
+	now := time.Now()
+	calls := 0
+	c := &updateChecker{now: func() time.Time { return now }, fetch: func(ctx context.Context, repo string) ([]string, error) {
+		calls++
+		if calls == 1 {
+			return []string{"v1.0.0"}, nil
+		}
+		return listRegistryTags(ctx, srv.Client(), repo)
+	}}
+	repo := strings.TrimPrefix(srv.URL, "https://") + "/team/app"
+	if got := c.latestRelease(repo); got != "v1.0.0" {
+		t.Fatalf("first answer %q", got)
+	}
+	now = now.Add(updateCheckTTL + time.Minute)
+	if got := c.latestRelease(repo); got != "v1.0.0" {
+		t.Fatalf("an incomplete list replaced the answer: %q", got)
 	}
 }
 
