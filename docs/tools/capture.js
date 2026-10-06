@@ -8,6 +8,10 @@ async (page) => {
   const { name: job, out } = await (await page.request.get(`${origin}/__docs/job`)).json();
   const W = 1440;
   const H = 900;
+  // Crops and GIFs use a narrower window, close to the width the docs show
+  // them at (760 px), so their text is not scaled down. Full pages use W.
+  const CW = 860;
+  let vw = W;
   const RED = "#EE0000";
   await page.clock.setFixedTime(new Date("2026-10-06T14:30:00Z"));
   // Every target is found by role, label or text, never by coordinates. When
@@ -32,9 +36,9 @@ async (page) => {
   }
 
   /** Opens path in scenario sc, in the light or dark theme, with clean storage. */
-  async function open(path, sc, { dark = false, height = H } = {}) {
+  async function open(path, sc, { dark = false, height = H, width = vw } = {}) {
     if (sc) await scenario(sc);
-    await page.setViewportSize({ width: W, height });
+    await page.setViewportSize({ width, height });
     await page.goto(origin + "/__docs/state");
     await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("pf-theme", t); }, dark ? "dark" : "light");
     await page.goto(origin + path);
@@ -50,7 +54,7 @@ async (page) => {
       const m = document.querySelector(".pf-v6-c-page__main");
       return innerHeight - m.clientHeight + m.scrollHeight;
     });
-    await page.setViewportSize({ width: W, height: Math.max(H, Math.ceil(h)) });
+    await page.setViewportSize({ width: page.viewportSize().width, height: Math.max(H, Math.ceil(h)) });
     await wait(300);
   }
 
@@ -144,8 +148,11 @@ async (page) => {
     frameNo += 1;
     await page.screenshot({ path: `${out}/frames/${gifName}/${String(frameNo).padStart(3, "0")}-${ms}.png`, clip: gifClip });
   }
-  /** The main content area of a 1440x900 viewport (no masthead or sidebar). */
-  const mainClip = { x: 290, y: 60, width: 1140, height: 840 };
+  /** The page below the masthead, at most maxHeight tall. */
+  async function mainClip(maxHeight = 2000) {
+    const top = await page.evaluate(() => Math.ceil(document.querySelector(".pf-v6-c-masthead").getBoundingClientRect().bottom));
+    return { x: 0, y: top, width: page.viewportSize().width, height: Math.min(page.viewportSize().height - top, maxHeight) };
+  }
 
   /** A pointer drawn into the page, so GIFs show where the click goes. */
   async function pointer(loc, { dx = 0.5, dy = 0.5 } = {}) {
@@ -176,14 +183,14 @@ async (page) => {
   /** Scrolls the page's main area so loc's top sits near the top of the clip. */
   async function scrollTo(loc, offset = 20) {
     const b = await loc.boundingBox();
-    await page.evaluate(({ dy }) => { document.querySelector(".pf-v6-c-page__main").scrollBy(0, dy); }, { dy: b.y - mainClip.y - offset });
+    await page.evaluate(({ dy }) => { document.querySelector(".pf-v6-c-page__main").scrollBy(0, dy); }, { dy: b.y - gifClip.y - offset });
     await wait(250);
   }
 
   /** An update or first install: click, confirm, the steps two at a time, the result. */
   async function operatorFlow(name, sc, button, confirmName) {
     await open("/", sc);
-    gif(name, mainClip);
+    gif(name, await mainClip());
     await frame(1000);
     await clickShown(page.getByRole("button", { name: button }), 600);
     await wait(700);
@@ -294,13 +301,13 @@ async (page) => {
       await open("/components", "healthy");
       await crop("masthead-version", head, { notes: [{ at: page.getByText("v2.0.0", { exact: true }), n: 1, pos: "l" }] });
       // Tall enough for the whole Help dialog, so its body does not scroll.
-      await page.setViewportSize({ width: W, height: 2600 });
+      await page.setViewportSize({ width: vw, height: 2600 });
       await page.getByRole("button", { name: /help/i }).first().click();
       await wait(800);
       const about = page.getByRole("dialog").locator('[aria-label="About this installation"]');
       await crop("help-about", [page.getByRole("dialog").getByRole("heading", { name: "About this installation" }), page.locator(".pf-v6-c-modal-box__footer")], {
         notes: [{ at: about.locator(".pf-v6-c-description-list__group").filter({ hasText: "Updater build" }), n: 1, pos: "tl" }],
-        noFit: true, pad: 0,
+        noFit: true, pad: 12,
       });
       await page.keyboard.press("Escape");
 
@@ -357,7 +364,7 @@ async (page) => {
       });
       await crop("pipeline-servers", card("Pipeline servers"));
 
-      await open("/test-resources", "s3-pending");
+      await open("/test-resources", "s3-pending", { width: 1100 }); // at 860 px the description is squeezed into a narrow column
       const pending = card("Storage");
       await crop("s3-migration-pending", pending, {
         notes: [
@@ -428,8 +435,8 @@ async (page) => {
     },
 
     async "gif-migrate"() {
-      await open("/test-resources", "s3-pending");
-      gif("s3-migrate", mainClip);
+      await open("/test-resources", "s3-pending", { width: 1100 });
+      gif("s3-migrate", await mainClip());
       await frame(1200);
       await clickShown(card("Storage").getByRole("button", { name: "Migrate to SeaweedFS" }));
       await wait(700);
@@ -447,7 +454,7 @@ async (page) => {
 
     async "gif-repair"() {
       await open("/test-resources", "s3-incomplete");
-      gif("s3-repair", mainClip);
+      gif("s3-repair", await mainClip());
       await frame(1200);
       await clickShown(card("Storage").getByRole("button", { name: "Repair" }));
       await wait(700);
@@ -465,7 +472,7 @@ async (page) => {
 
     async "gif-diagnostics"() {
       await open("/diagnostics", "diag-prerequisite-missing");
-      gif("diagnostics-copy-command", mainClip);
+      gif("diagnostics-copy-command", await mainClip());
       await frame(1000);
       const item = problem("Prerequisite operator Job Set Operator is not installed");
       await clickShown(item.getByRole("button", { name: "Details" }));
@@ -485,7 +492,7 @@ async (page) => {
 
     async "gif-pr-search"() {
       await open("/builds", "update-available");
-      gif("build-explorer-pr-search", { x: 290, y: 60, width: 1140, height: 700 });
+      gif("build-explorer-pr-search", await mainClip(640));
       await frame(1000);
       const search = page.getByPlaceholder("Image, commit SHA or PR #");
       await clickShown(search, 600);
@@ -501,6 +508,7 @@ async (page) => {
     },
   };
 
+  if (job !== "pages") vw = CW;
   if (!jobs[job]) throw new Error(`unknown job ${job}; jobs: ${Object.keys(jobs).join(" ")}`);
   await jobs[job]();
   await page.setViewportSize({ width: W, height: H });

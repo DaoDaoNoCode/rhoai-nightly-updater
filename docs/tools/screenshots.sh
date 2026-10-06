@@ -100,7 +100,7 @@ for dir in "$RAW"/frames/*/; do
   done
   [ -n "$last" ] || continue
   printf "file '%s'\n" "$last" >>"$list"
-  width=${GIF_WIDTH:-1000}
+  width=${GIF_WIDTH:-860}
   ffmpeg -v error -y -f concat -safe 0 -i "$list" \
     -vf "scale=$width:-1:flags=lanczos,palettegen=max_colors=256:stats_mode=full" "$WORK/$name-palette.png"
   ffmpeg -v error -y -f concat -safe 0 -i "$list" -i "$WORK/$name-palette.png" \
