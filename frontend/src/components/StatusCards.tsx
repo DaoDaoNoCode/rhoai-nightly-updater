@@ -34,6 +34,9 @@ import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
 
+/** CSV phases of an install OLM is still working on. */
+const INSTALLING_PHASES = new Set(["Installing", "Replacing", "Pending", "InstallReady"]);
+
 /** The CSV phase as a status label. */
 export function PhaseLabel({ phase }: { phase: string }): React.ReactElement {
   switch (phase) {
@@ -43,12 +46,10 @@ export function PhaseLabel({ phase }: { phase: string }): React.ReactElement {
       return <StatusLabel status="danger">Failed</StatusLabel>;
     case "Not Found":
       return <StatusLabel status="neutral">Not installed</StatusLabel>;
-    case "Installing":
-    case "Replacing":
-    case "Pending":
-    case "InstallReady":
-      return <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>{phase}</StatusLabel>;
     default:
+      if (INSTALLING_PHASES.has(phase)) {
+        return <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>{phase}</StatusLabel>;
+      }
       return <StatusLabel status="warning">{phase || "Unknown"}</StatusLabel>;
   }
 }
@@ -98,12 +99,23 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   const updateAvailable = nightly?.updateAvailable;
   const setupReason = !prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null;
   const actionReason = blocker ?? setupReason;
+  // An operator version is installed but its Subscription is gone (for
+  // example after an interrupted Update or Reinstall): neither nightly nor
+  // stable, and OLM no longer updates or repairs it.
+  const subscriptionMissing = installed && !status.subscription.source;
+  const csvInstalling = INSTALLING_PHASES.has(csv.phase);
 
+  // The verdict never contradicts the operator row: a Failed or not yet
+  // Succeeded CSV is not "Up to date".
   let verdict: React.ReactNode;
   if (!installed) verdict = <StatusLabel status="neutral">Not installed</StatusLabel>;
+  else if (csv.phase === "Failed") verdict = <StatusLabel status="danger">Operator failed</StatusLabel>;
+  else if (subscriptionMissing) verdict = <StatusLabel status="warning">No Subscription</StatusLabel>;
   else if (!onNightly) verdict = <TagLabel color="purple">Stable release</TagLabel>;
   else if (updateAvailable === true) verdict = <StatusLabel status="info" icon={<ArrowCircleUpIcon />}>Update available</StatusLabel>;
-  else if (updateAvailable === false) verdict = <StatusLabel status="success">Up to date</StatusLabel>;
+  else if (csvInstalling) verdict = <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>Installing</StatusLabel>;
+  else if (updateAvailable === false && csv.phase === "Succeeded") verdict = <StatusLabel status="success">Up to date</StatusLabel>;
+  else if (updateAvailable === false) verdict = <StatusLabel status="warning">Operator not ready</StatusLabel>;
   else verdict = <StatusLabel status="warning">Not checked</StatusLabel>;
 
   // A newer release line than the installed stream (e.g. rhoai-3.7 while on rhoai-3.6).
@@ -128,7 +140,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   } else if (!onNightly) {
     primary = target ? (
       <TooltipButton variant="primary" onClick={() => onUpdate(target)} disabledReason={actionReason}>
-        Switch to latest nightly{target.tag ? ` (${target.tag})` : ""}
+        {subscriptionMissing ? "Update to latest nightly" : "Switch to latest nightly"}{target.tag ? ` (${target.tag})` : ""}
       </TooltipButton>
     ) : null;
   } else if (updateAvailable === true && target) {
@@ -181,6 +193,11 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                     <BuildSummary build={nightly.installed} />
                   ) : onNightly ? (
                     <code className="pf-v6-u-text-break-word">{status.catalogSource.image || "nightly catalog (image unknown)"}</code>
+                  ) : subscriptionMissing ? (
+                    <span>
+                      <strong>{csv.version ? `RHOAI ${csv.version}` : csv.name}</strong>
+                      {subtle(" (its Subscription is missing)")}
+                    </span>
                   ) : (
                     <span>
                       <strong>{csv.version ? `RHOAI ${csv.version}` : csv.name}</strong>
@@ -211,8 +228,14 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                   <DescriptionListTerm>Catalog</DescriptionListTerm>
                   <DescriptionListDescription>
                     <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
-                      <FlexItem>{status.subscription.source || "none"} / {status.subscription.channel || "no channel"}</FlexItem>
-                      {onNightly && status.catalogSource.exists && (
+                      <FlexItem>
+                        {!subscriptionMissing
+                          ? `${status.subscription.source} / ${status.subscription.channel || "no channel"}`
+                          : status.catalogSource.exists
+                            ? <>{status.catalogSource.name}{subtle(" (no Subscription uses it)")}</>
+                            : subtle("No Subscription and no nightly catalog")}
+                      </FlexItem>
+                      {(onNightly || subscriptionMissing) && status.catalogSource.exists && (
                         <FlexItem>
                           {status.catalogSource.state === "READY"
                             ? <StatusLabel status="success">Catalog ready</StatusLabel>
@@ -267,6 +290,21 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
               >
                 Recommended: update to {onNightly && updateAvailable === false ? "another" : "the latest"} nightly; a new build
                 is the usual fix for a broken one. Update removes the failed version first.
+              </Alert>
+            </StackItem>
+          )}
+          {subscriptionMissing && (
+            <StackItem>
+              <Alert
+                variant="warning"
+                isInline
+                component="p"
+                title="The operator has no Subscription"
+                actionLinks={<AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>}
+              >
+                {csv.name || "The operator"} is installed, but its Subscription is missing, so OLM does not update or repair it.
+                This usually means an Update or Reinstall was interrupted. Update or Reinstall recreates the Subscription with
+                the settings recorded before the last operation.
               </Alert>
             </StackItem>
           )}

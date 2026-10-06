@@ -95,6 +95,54 @@ describe("InstalledBuildCard (A07-1)", () => {
     expect(screen.getByRole("button", { name: "Update to latest" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
+  it("says the Subscription is missing instead of calling it a stable release (E4)", () => {
+    const s = nightlyStatus({
+      subscription: { name: "", source: "", channel: "", state: "Not Installed" },
+      csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Succeeded" },
+      nightly: undefined,
+    });
+    renderCard(s, { latest: { tag: "rhoai-3.6", image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "c".repeat(64) } });
+    expect(screen.getByText("No Subscription")).toBeInTheDocument();
+    expect(screen.queryByText("Stable release")).not.toBeInTheDocument();
+    expect(installedRow().textContent).toContain("RHOAI 3.6.0");
+    expect(installedRow().textContent).toContain("its Subscription is missing");
+    expect(installedRow().textContent).not.toMatch(/from\s*\//);
+    // The real nightly CatalogSource, not "none / no channel".
+    const catalogRow = screen.getByText("Catalog").closest(".pf-v6-c-description-list__group") as HTMLElement;
+    expect(catalogRow.textContent).toContain("rhoai-catalog-dev");
+    expect(catalogRow.textContent).not.toContain("no channel");
+    expect(within(catalogRow).getByText("Catalog ready")).toBeInTheDocument();
+    expect(screen.getByText("The operator has no Subscription")).toBeInTheDocument();
+    expect(screen.getByText(/Update or Reinstall recreates the Subscription/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update to latest nightly (rhoai-3.6)" })).toBeInTheDocument();
+  });
+
+  it("without a Subscription or a nightly catalog, says so", () => {
+    renderCard(nightlyStatus({
+      subscription: { name: "", source: "", channel: "", state: "Not Installed" },
+      catalogSource: { exists: false, name: "", image: "", state: "" },
+      nightly: undefined,
+    }));
+    const catalogRow = screen.getByText("Catalog").closest(".pf-v6-c-description-list__group") as HTMLElement;
+    expect(catalogRow.textContent).toContain("No Subscription and no nightly catalog");
+  });
+
+  it("never says Up to date next to a Failed or installing operator (E4)", () => {
+    const failed = nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Failed" } });
+    failed.nightly = { ...failed.nightly!, latest: failed.nightly!.installed, updateAvailable: false };
+    renderCard(failed);
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+    expect(screen.getByText("Operator failed")).toBeInTheDocument();
+  });
+
+  it("shows an installing operator as installing, not Up to date", () => {
+    const s = nightlyStatus({ csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Installing" } });
+    s.nightly = { ...s.nightly!, latest: s.nightly!.installed, updateAvailable: false };
+    renderCard(s);
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Installing").length).toBe(2); // the verdict and the operator row
+  });
+
   it("disables Update with the reason while another operation runs (A07-9)", () => {
     renderCard(nightlyStatus(), { blocker: 'alice is running "Update to nightly". Wait for it to finish.' });
     expect(screen.getByRole("button", { name: "Update to latest" })).toHaveAttribute("aria-disabled", "true");
