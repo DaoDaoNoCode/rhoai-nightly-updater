@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -336,7 +337,7 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 
 	if apiHost != "" {
 		state.APIRoute = "https://" + apiHost
-		state.Warning = "Route 'minio-api' exposes MinIO's S3 API outside the cluster. Re-run MinIO setup to remove it; pipeline servers use the in-cluster service."
+		state.Warning = "Route 'minio-api' exposes MinIO's S3 API outside the cluster. Re-run MinIO setup to remove it; setup keeps it while a pipeline server uses its host."
 	}
 	if uiHost != "" {
 		state.UIRoute = "https://" + uiHost
@@ -776,8 +777,22 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: Bucket '%s' created", minioBucket))
 
 	// Step 6: Remove the minio-api Route earlier versions created: it
-	// exposed the S3 API outside the cluster.
+	// exposed the S3 API outside the cluster. A pipeline server whose
+	// object storage points at the Route's host would lose its artifacts
+	// store, so the Route is kept while any DSPA uses it, and also when
+	// that cannot be checked (fail closed).
+	keptRouteNote := ""
 	if cur := existing["Route/minio-api"]; cur.found {
+		users, err := minioAPIRouteUsers(c)
+		if err != nil {
+			return fail(fmt.Sprintf("MinIO is running with bucket '%s', but Route minio-api, which exposes its S3 API outside the cluster, was kept: cannot check whether a pipeline server uses it: %v. Re-run setup to retry.", minioBucket, err), "partial_failure", "route consumer check failed")
+		}
+		if len(users) > 0 {
+			keptRouteNote = fmt.Sprintf(" Route minio-api, which exposes MinIO's S3 API outside the cluster, was kept because pipeline server(s) %s use its host. Point their object storage at host %s with scheme http (the in-cluster service), then re-run setup to remove the Route.", strings.Join(users, ", "), minioS3Host())
+			logs = append(logs, "Kept Route minio-api: used by "+strings.Join(users, ", "))
+		}
+	}
+	if cur := existing["Route/minio-api"]; cur.found && keptRouteNote == "" {
 		path, _ := minioDeletePath("Route", "minio-api")
 		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
 			return fail(fmt.Sprintf("MinIO is running with bucket '%s', but Route minio-api, which exposes its S3 API outside the cluster, could not be removed: %v. Delete it with `oc delete route -n minio minio-api`, or re-run setup.", minioBucket, err), "partial_failure", "route cleanup failed")
@@ -789,9 +804,40 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	recordMinIOActivity(c, "setup-minio", fmt.Sprintf("namespace=%s bucket=%s", minioNamespace, minioBucket), true)
 
 	return &types.OperationResponse{
-		Success: true, Message: fmt.Sprintf("MinIO deployed with bucket '%s'. Console credentials are stored in secret 'minio-secret' in namespace '%s'.", minioBucket, minioNamespace),
+		Success: true, Message: fmt.Sprintf("MinIO deployed with bucket '%s'. Console credentials are stored in secret 'minio-secret' in namespace '%s'.%s", minioBucket, minioNamespace, keptRouteNote),
 		Logs: logs,
 	}, nil
+}
+
+// minioAPIRouteUsers returns the pipeline servers (namespace/name, sorted)
+// whose object-storage host is the host of Route minio-api. A missing DSPA
+// CRD means there are none; any other read error is returned.
+func minioAPIRouteUsers(c *Client) ([]string, error) {
+	host, err := readRouteHost(c, minioNamespace, "minio-api")
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return nil, nil
+	}
+	dspas, err := listDSPAs(c, "")
+	if errors.Is(err, errDSPACRDMissing) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	routeHostname := strings.TrimSuffix(strings.ToLower(host), ".")
+	var users []string
+	for _, d := range dspas {
+		// Only the Route host counts here: a DSPA on the service DNS name
+		// or ClusterIP does not need the Route.
+		if endpointHostname(d.Host) == routeHostname {
+			users = append(users, d.Meta.Namespace+"/"+d.Meta.Name)
+		}
+	}
+	sort.Strings(users)
+	return users, nil
 }
 
 var (

@@ -99,3 +99,62 @@ func TestResourcesStatus_TeardownBlockedWhenEndpointsUnreadable(t *testing.T) {
 		t.Fatalf("teardownBlockedReason = %q", st.MinIO.TeardownBlockedReason)
 	}
 }
+
+func TestSetupMinIO_KeepsAPIRouteWhilePipelineServersUseIt(t *testing.T) {
+	const apiRoute = `{"metadata":{"uid":"api-uid","labels":` + toolLabelJSON + `},"spec":{"host":"minio-api-minio.apps.example.com"}}`
+	cases := []struct {
+		name      string
+		dspaHost  string // "" means no pipeline server
+		failDSPA  bool
+		failRoute bool
+		wantOK    bool
+		wantKept  bool
+		wantInMsg string
+	}{
+		{name: "no pipeline server", wantOK: true},
+		{name: "pipeline server on the service", dspaHost: minioS3Host(), wantOK: true},
+		{name: "pipeline server on the Route host", dspaHost: "https://minio-api-minio.apps.example.com", wantOK: true, wantKept: true, wantInMsg: "team/dspa"},
+		{name: "Route host in another case with port", dspaHost: "MINIO-API-minio.apps.example.com.:443", wantOK: true, wantKept: true, wantInMsg: "team/dspa"},
+		{name: "pipeline servers unreadable", failDSPA: true, wantKept: true, wantInMsg: "cannot check whether a pipeline server uses it"},
+		{name: "Route host unreadable", dspaHost: minioS3Host(), failRoute: true, wantKept: true, wantInMsg: "cannot check whether a pipeline server uses it"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fastMinIOTimings(t)
+			f, c := newResourceFake(t)
+			readyAfterApply(f)
+			managedMinIONamespace(f)
+			f.putJSON(minioAPIRoute, apiRoute)
+			if tc.dspaHost != "" {
+				putDSPA(f, "team", "dspa", `{}`, "Mozilla", "Update", tc.dspaHost, "s", "", "")
+			}
+			if tc.failDSPA {
+				f.fail["GET /apis/"+dspaAPIGroup+"/datasciencepipelinesapplications"] = 500
+			}
+			if tc.failRoute {
+				// The first read (the ownership check) succeeds; the later
+				// host read fails.
+				reads := 0
+				f.beforeServe = func(method, path string) {
+					if method == "GET" && path == minioAPIRoute {
+						if reads++; reads > 1 {
+							f.mu.Lock()
+							f.fail["GET "+minioAPIRoute] = 500
+							f.mu.Unlock()
+						}
+					}
+				}
+			}
+			resp, _ := SetupMinIO(c)
+			if resp.Success != tc.wantOK {
+				t.Fatalf("setup = %+v", resp)
+			}
+			if f.has(minioAPIRoute) != tc.wantKept {
+				t.Errorf("minio-api kept = %v, want %v", f.has(minioAPIRoute), tc.wantKept)
+			}
+			if tc.wantInMsg != "" && !strings.Contains(resp.Message, tc.wantInMsg) {
+				t.Errorf("message = %q, want it to mention %q", resp.Message, tc.wantInMsg)
+			}
+		})
+	}
+}
