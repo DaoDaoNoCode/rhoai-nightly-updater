@@ -179,7 +179,10 @@ const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; extr
   <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
     <FlexItem><strong id={id}>{name}</strong></FlexItem>
     {state && <FlexItem><ResourceStatus state={state} /></FlexItem>}
-    {state?.managedByTool === false && <FlexItem><TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel></FlexItem>}
+    {/* Only for something that exists: the backend also reports managedByTool false when nothing is deployed. */}
+    {state?.managedByTool === false && (state.deployed || isTerminating(state) || !!state.setupBlockedReason) && (
+      <FlexItem><TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel></FlexItem>
+    )}
     {extra}
   </Flex>
 );

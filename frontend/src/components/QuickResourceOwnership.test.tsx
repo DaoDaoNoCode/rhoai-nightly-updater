@@ -59,6 +59,25 @@ describe("terminal states (A08-3, A06-5)", () => {
 });
 
 describe("ownership", () => {
+  it("does not call a resource that does not exist 'not managed by this tool'", async () => {
+    // The backend reports managedByTool false when nothing is deployed.
+    const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
+    setup(live({ minio: none, mlflow: none, pipelineServers: [] }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    await within(storage).findByText("Not deployed");
+    expect(screen.queryByText("Not managed by this tool")).not.toBeInTheDocument();
+    expect(within(storage).getByRole("button", { name: "Set up" })).toBeInTheDocument();
+  });
+
+  it("still marks a foreign namespace that blocks setup", async () => {
+    const foreign: ResourceState = { deployed: false, ready: false, managedByTool: false, message: "Namespace exists but the S3 storage is not deployed", setupBlockedReason: "Namespace 'minio' exists but was not created by this tool." };
+    setup(live({ minio: foreign }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByText("Not managed by this tool")).toBeInTheDocument();
+  });
+
   it("a browser-created MLflow is 'not managed by this tool' and has no Tear down", async () => {
     setup(live());
     render(<QuickResourceCreator mutateBlocker={null} />);
