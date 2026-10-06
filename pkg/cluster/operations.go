@@ -1120,10 +1120,11 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		if err != nil {
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the current CSV to be deleted", Logs: logs}, err
 		}
-		if !gone {
+		if gone {
+			logs = append(logs, "OK: CSV "+csv.Name+" deleted")
+		} else {
 			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
 		}
-		logs = append(logs, "OK: CSV "+csv.Name+" deleted")
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "CSV removed: " + csv.Name})
 	} else {
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: "No current CSV"})

@@ -540,3 +540,133 @@ func TestWaitIgnoresDeletingCSV(t *testing.T) {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 }
+
+// R1-2: on a fresh cluster (no CSV, no Subscription) a failed first install
+// leaves no CSV behind: the CSV did not exist before the operation, so the
+// restore removes it even though the operation deleted no CSV.
+func TestUpdateStream_FailedFirstInstallRemovesTheAttemptCSV(t *testing.T) {
+	const newCSV = "rhods-operator.3.6.1"
+	f := newFakeOLM(t)
+	f.channels = `[{"name":"stable-3.x","currentCSV":"` + newCSV + `"}]`
+	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
+		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{"phase": "Complete"}}
+		f.addCSV(newCSV, "Failed")
+		f.csvs[newCSV]["status"] = map[string]interface{}{"phase": "Failed", "reason": "InstallCheckFailed", "message": "install timeout"}
+		f.sub["status"] = map[string]interface{}{"currentCSV": newCSV, "installedCSV": newCSV, "installPlanRef": map[string]interface{}{"name": "install-new"}}
+	}
+	emit, events := eventsRecorder()
+	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+	if err != nil || result.Success || result.ErrorCode != "csv_failed" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if lastStatus(events(), restoreStepName) != "success" || !strings.Contains(result.Message, "There was no previous Subscription") {
+		t.Fatalf("restore: %v / %q", events(), result.Message)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.csvs) != 0 || f.sub != nil || f.catalog != nil {
+		t.Fatalf("leftovers: csvs=%v sub=%v catalog=%v", f.csvs, f.sub, f.catalog)
+	}
+}
+
+// A CSV that existed before the operation and was not deleted by it is
+// never removed by the restore: the restored Subscription adopts it. Here
+// the attempt fails before the CSV step (channel detection).
+func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	c := f.client(context.Background())
+	r, err := captureOperatorRecovery(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.subscriptionChanged = true
+	f.mu.Lock()
+	f.sub = nil
+	f.mu.Unlock()
+	emit, events := eventsRecorder()
+	result := &types.OperationResponse{Message: "failed"}
+	r.restore(c, result, emit)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.csvs["rhods-operator.3.6.0"]; !ok {
+		t.Fatalf("the pre-existing CSV was deleted; writes=%v", f.requests)
+	}
+	if lastStatus(events(), restoreStepName) != "success" || f.sub == nil {
+		t.Fatalf("restore: %v sub=%v", events(), f.sub)
+	}
+	// A CSV with the same name but a new UID was created by the attempt.
+	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]interface{})["uid"] = "recreated"
+	f.mu.Unlock()
+	names, err := r.attemptCSVNames(c)
+	f.mu.Lock()
+	if err != nil || fmt.Sprint(names) != "[rhods-operator.3.6.0]" {
+		t.Fatalf("attempt CSVs = %v, %v", names, err)
+	}
+}
+
+// R1-5: a CSV of the failed attempt that is still deleting when the
+// restore budget ends makes the recovery incomplete (failed), with
+// guidance; the previous Subscription is still re-applied.
+func TestRestore_CSVDeletionTimeoutIsIncomplete(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	c := f.client(context.Background())
+	r, err := captureOperatorRecovery(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.subscriptionChanged, r.csvRemoved = true, true
+	f.mu.Lock()
+	delete(f.csvs, "rhods-operator.3.6.0")
+	f.addCSV("rhods-operator.3.6.1", "Failed")
+	f.stuckCSVs["rhods-operator.3.6.1"] = true
+	f.mu.Unlock()
+	emit, events := eventsRecorder()
+	result := &types.OperationResponse{Message: "CSV failed."}
+	r.restore(c, result, emit)
+	if lastStatus(events(), restoreStepName) != "failed" || !strings.Contains(result.Message, "recovery is incomplete") ||
+		!strings.Contains(result.Message, "rhods-operator.3.6.1 from the failed attempt is still being deleted") {
+		t.Fatalf("events=%v message=%q", events(), result.Message)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if spec, _ := f.sub["spec"].(map[string]interface{}); spec["channel"] != "fast" {
+		t.Fatalf("previous Subscription not re-applied: %v", f.sub)
+	}
+}
+
+// R5-F4: slow CSV deletions use only their own budget; the catalog and
+// Subscription re-apply always runs with a fresh context.
+func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
+	oldBudget := restoreCSVBudget
+	restoreCSVBudget = 30 * time.Millisecond
+	oldDel := CSVDeletionTimeout
+	CSVDeletionTimeout = time.Second
+	t.Cleanup(func() { restoreCSVBudget, CSVDeletionTimeout = oldBudget, oldDel })
+
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
+	c := f.client(context.Background())
+	r, _ := captureOperatorRecovery(c)
+	r.subscriptionChanged, r.csvRemoved, r.catalogChanged = true, true, true
+	f.mu.Lock()
+	delete(f.csvs, "rhods-operator.3.6.0")
+	f.addCSV("rhods-operator.3.6.1", "Failed")
+	f.addCSV("rhods-operator.3.6.2", "Failed")
+	f.stuckCSVs["rhods-operator.3.6.1"], f.stuckCSVs["rhods-operator.3.6.2"] = true, true
+	f.catalog = nil
+	f.mu.Unlock()
+	result := &types.OperationResponse{}
+	emit, _ := eventsRecorder()
+	start := time.Now()
+	r.restore(c, result, emit)
+	if time.Since(start) > 900*time.Millisecond {
+		t.Fatalf("restore took %s: the CSV waits did not respect the budget", time.Since(start))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if spec, _ := f.sub["spec"].(map[string]interface{}); spec["channel"] != "fast" || f.catalog == nil {
+		t.Fatalf("re-apply skipped: sub=%v catalog=%v", f.sub, f.catalog)
+	}
+	if !strings.Contains(result.Message, "incomplete") {
+		t.Fatalf("message = %q", result.Message)
+	}
+}

@@ -32,6 +32,8 @@ type fakeOLM struct {
 	dashboardOp  string // dashboard-operator Deployment JSON, "" = absent
 	platform     string // Platform "default" JSON, "" = absent
 	failDelete   map[string]int
+	stuckCSVs    map[string]bool // CSVs whose DELETE only sets deletionTimestamp (a finalizer that never finishes)
+	csvSeq       int
 	verifyState  string // state of verification catalogs, "" = READY
 	mainChannels *string
 	rejectDryRun bool
@@ -57,6 +59,7 @@ func newFakeOLM(t *testing.T) *fakeOLM {
 		channels:     `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`,
 		catalogPods:  `{"items":[]}`,
 		failDelete:   map[string]int{},
+		stuckCSVs:    map[string]bool{},
 	}
 }
 
@@ -78,8 +81,9 @@ func (f *fakeOLM) installed(csv string, spec map[string]interface{}) *fakeOLM {
 }
 
 func (f *fakeOLM) addCSV(name, phase string) {
+	f.csvSeq++
 	f.csvs[name] = map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name},
+		"metadata": map[string]interface{}{"name": name, "uid": fmt.Sprintf("uid-%s-%d", name, f.csvSeq)},
 		"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, SubName+".")},
 		"status":   map[string]interface{}{"phase": phase},
 	}
@@ -169,6 +173,9 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !ok:
 			notFound(w)
+		case r.Method == http.MethodDelete && f.stuckCSVs[last]:
+			csv["metadata"].(map[string]interface{})["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+			_, _ = io.WriteString(w, `{}`)
 		case r.Method == http.MethodDelete:
 			delete(f.csvs, last)
 			_, _ = io.WriteString(w, `{}`)
