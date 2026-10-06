@@ -1,11 +1,10 @@
 import React, { useState } from "react";
-import { Content, ExpandableSection, Flex, FlexItem, Label } from "@patternfly/react-core";
+import { Card, CardBody, CardExpandableContent, CardHeader, CardTitle, Content, Flex, FlexItem, Stack, StackItem, Title } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
-import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import type { DashboardDevImage } from "../types";
 import { ImageRef } from "./ImageRef";
+import { StatusLabel, TagLabel } from "./StatusLabel";
+import { TruncatedText } from "./LongText";
 
 export function componentName(container: string): string {
   if (container === "rhods-dashboard") return "Dashboard";
@@ -56,7 +55,11 @@ export function imageProblems(images: DashboardDevImage[]): number {
   return images.filter((i) => statusOf(i).kind === "problem").length;
 }
 
-/** Per-container images of the dashboard: what runs where, and why a container is not ready. */
+const RUNNING_COLORS: Record<ReturnType<typeof runningLabel>["color"], "blue" | "purple" | "grey" | "teal"> = {
+  blue: "blue", purple: "purple", grey: "grey", orange: "teal",
+};
+
+/** Per-container images of the dashboard as an expandable card: what runs where, and why a container is not ready. */
 export const DashboardImages: React.FC<{ images: DashboardDevImage[]; defaultExpanded?: boolean }> = ({ images, defaultExpanded = false }) => {
   const problems = imageProblems(images);
   const [expanded, setExpanded] = useState(defaultExpanded || problems > 0);
@@ -69,45 +72,66 @@ export const DashboardImages: React.FC<{ images: DashboardDevImage[]; defaultExp
   const summary = [...counts.entries()].map(([t, n]) => `${n} ${t}`).join(", ");
 
   return (
-    <ExpandableSection
-      toggleText={`Dashboard containers: ${ready}/${images.length} ready${problems ? `, ${problems} with problems` : ""} (${summary})`}
-      isExpanded={expanded}
-      onToggle={(_event, value) => setExpanded(value)}
-    >
-      <Table aria-label="Dashboard container images" variant="compact">
-        <Thead><Tr><Th width={25}>Component</Th><Th width={45}>Running</Th><Th width={30}>Status</Th></Tr></Thead>
-        <Tbody>
-          {images.map(image => {
-            const running = runningLabel(image);
-            const status = statusOf(image);
-            const tag = imageTagOf(image.currentImage);
-            return (
-              <Tr key={`${image.deployment}/${image.container}`}>
-                <Td dataLabel="Component">
-                  <strong>{componentName(image.container)}</strong>
-                  <Content component="small">{image.deployment}</Content>
-                </Td>
-                <Td dataLabel="Running">
-                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                    <FlexItem><Label isCompact color={running.color}>{running.text}</Label></FlexItem>
-                    {tag && running.text !== "Release" && <FlexItem><Content component="small"><code>{tag}</code></Content></FlexItem>}
-                    {image.flavor && running.text !== "Release" && <FlexItem><Content component="small">{image.flavor === "odh" ? "ODH build" : "RHOAI build"}</Content></FlexItem>}
-                  </Flex>
-                  <div style={{ maxWidth: "28rem" }}><ImageRef image={image.currentImage} /></div>
-                </Td>
-                <Td dataLabel="Status">
-                  <Label isCompact color={status.kind === "ok" ? "green" : status.kind === "progress" ? "blue" : "red"}
-                    icon={status.kind === "ok" ? <CheckCircleIcon /> : status.kind === "progress" ? <InProgressIcon /> : <ExclamationCircleIcon />}>
-                    {status.text}
-                  </Label>
-                  {status.detail && <Content component="small" style={{ overflowWrap: "anywhere" }}>{status.detail}</Content>}
-                  {image.podName && status.kind !== "ok" && <Content component="small">Pod: {image.podName}</Content>}
-                </Td>
-              </Tr>
-            );
-          })}
-        </Tbody>
-      </Table>
-    </ExpandableSection>
+    <Card isExpanded={expanded}>
+      <CardHeader
+        onExpand={() => setExpanded(!expanded)}
+        toggleButtonProps={{ id: "dashboard-containers-toggle", "aria-label": "Dashboard containers details", "aria-expanded": expanded, "aria-labelledby": "dashboard-containers-toggle dashboard-containers-title" }}
+        actions={{
+          actions: (
+            <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+              <FlexItem>
+                <StatusLabel status={ready === images.length ? "success" : problems > 0 ? "danger" : "progress"}>{ready}/{images.length} ready</StatusLabel>
+              </FlexItem>
+              {problems > 0 && <FlexItem><StatusLabel status="danger">{problems} with problems</StatusLabel></FlexItem>}
+            </Flex>
+          ),
+          hasNoOffset: true,
+        }}
+      >
+        <CardTitle><Title headingLevel="h2" size="lg" id="dashboard-containers-title">Dashboard containers ({images.length})</Title></CardTitle>
+      </CardHeader>
+      <CardExpandableContent>
+        <CardBody>
+          <Stack hasGutter>
+            <StackItem><Content component="p" className="pf-v6-u-text-color-subtle">Running: {summary}.</Content></StackItem>
+            <StackItem>
+              <Table aria-label="Dashboard container images" variant="compact">
+                <Thead><Tr><Th width={25}>Component</Th><Th width={45}>Running</Th><Th width={30}>Status</Th></Tr></Thead>
+                <Tbody>
+                  {images.map(image => {
+                    const running = runningLabel(image);
+                    const status = statusOf(image);
+                    const tag = imageTagOf(image.currentImage);
+                    return (
+                      <Tr key={`${image.deployment}/${image.container}`}>
+                        <Td dataLabel="Component">
+                          <strong>{componentName(image.container)}</strong>
+                          <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{image.deployment}</div>
+                        </Td>
+                        <Td dataLabel="Running">
+                          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} className="pf-v6-u-mb-xs">
+                            <FlexItem><TagLabel color={RUNNING_COLORS[running.color]}>{running.text}</TagLabel></FlexItem>
+                            {tag && running.text !== "Release" && <FlexItem><code>{tag}</code></FlexItem>}
+                            {image.flavor && running.text !== "Release" && <FlexItem className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{image.flavor === "odh" ? "ODH build" : "RHOAI build"}</FlexItem>}
+                          </Flex>
+                          <ImageRef image={image.currentImage} />
+                        </Td>
+                        <Td dataLabel="Status">
+                          <StatusLabel status={status.kind === "ok" ? "success" : status.kind === "progress" ? "progress" : "danger"}>
+                            {status.text}
+                          </StatusLabel>
+                          {status.detail && <div className="pf-v6-u-font-size-sm pf-v6-u-text-break-word"><TruncatedText>{status.detail}</TruncatedText></div>}
+                          {image.podName && status.kind !== "ok" && <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">Pod: {image.podName}</div>}
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </Tbody>
+              </Table>
+            </StackItem>
+          </Stack>
+        </CardBody>
+      </CardExpandableContent>
+    </Card>
   );
 };
