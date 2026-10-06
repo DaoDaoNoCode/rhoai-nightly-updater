@@ -85,9 +85,22 @@ case "$1 $2" in
 "get clusterrolebinding") [ -z "${FAKE_LEGACY:-}" ] || echo "$FAKE_LEGACY" ;;
 "get route") echo app.example.com ;;
 "get consolelink") [ -z "${FAKE_LEGACY:-}" ] || echo https://app.example.com ;;
-"get deployment") [ -n "${FAKE_INSTALLED:-}" ] ;;
+"get deployment")
+	case "$*" in
+	*kubernetes*revision*) echo 3 ;;
+	*metadata.uid*) echo uid-1 ;;
+	*COOKIE_SECRET*) printf '%s' "${FAKE_COOKIE:-}" ;;
+	*) [ -n "${FAKE_INSTALLED:-}" ] ;;
+	esac ;;
+"get rs")
+	# The current ReplicaSet, an old one of this Deployment, one of another owner.
+	printf '%s\n' "rs-old 2 uid-1 0 0" "rs-cur 3 uid-1 1 1" "rs-foreign 1 uid-2 0 0" ;;
 "get namespace" | "get project") [ -n "${FAKE_NS:-}" ] ;;
-"get secret") [ -n "${FAKE_NS:-}" ] ;;
+"get secret") [ -n "${FAKE_SECRET:-}" ] ;;
+"create secret")
+	for a in "$@"; do case "$a" in --from-env-file=*) cat "${a#--from-env-file=}" >"$FAKE_LOG.secret" ;; esac; done ;;
+"apply -f")
+	[ "$3" != - ] || cat >"$FAKE_LOG.stdin" ;;
 "process -f")
 	if [[ " $* " == *" --parameters "* ]]; then echo "NAME DESCRIPTION GENERATOR VALUE"; echo "IMAGE"; exit 0; fi
 	for a in "$@"; do case "$a" in --param-file=*) cat "${a#--param-file=}" >>"$FAKE_LOG.params" ;; esac; done
@@ -200,6 +213,39 @@ FAKE_REALM=https://evil.example.com/token expect_fail "token realm elsewhere: wa
 	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
 FAKE_REALM=http://quay.io/v2/auth expect_fail "plain-http token realm: warning" "ignoring the token service" \
 	run sh -c "bash '$ASSET' resolve-image 2>&1; exit 1"
+
+# --- The mutating paths (no dry run), against the fake oc ----------------------
+calls() { grep -E "^oc ($1)" "$LOG" | sed 's/ --from-env-file=.*//' || true; }
+
+expect_ok "fresh install" run bash "$ASSET" --namespace scratch-ns
+expect_eq "fresh install: the steps in order" "$(printf '%s\n' \
+	'oc new-project scratch-ns' \
+	'oc create secret generic rhoai-nightly-updater-proxy -n scratch-ns' \
+	'oc apply -f' \
+	'oc rollout status deployment/rhoai-nightly-updater -n scratch-ns --timeout=20m' \
+	'oc apply -f -' \
+	'oc delete rs -n scratch-ns rs-old')" \
+	"$(calls 'new-project|create|apply|rollout|delete' | sed 's|^oc apply -f /.*|oc apply -f|')"
+grep -Eqx 'session_secret=[a-zA-Z0-9]{32}' "$LOG.secret" && pass || fail "fresh install: no 32-character cookie secret"
+grep -q 'href: https://app.example.com' "$LOG.stdin" && pass || fail "fresh install: ConsoleLink without the Route host"
+grep -q 'name: rhoai-nightly-updater-scratch-ns' "$LOG.stdin" && pass || fail "fresh install: ConsoleLink name"
+grep -qx "IMAGE=quay.io/example/app@$DIGEST" "$LOG.params" && pass || fail "fresh install: not by digest"
+
+LEGACY_COOKIE=abcdefghijklmnopqrstuvwxyz012345
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_COOKIE=$LEGACY_COOKIE FAKE_LEGACY=scratch-ns/rhoai-nightly-updater \
+	expect_ok "upgrade of a legacy install" run bash "$ASSET" --namespace scratch-ns
+expect_eq "legacy upgrade: the cookie secret is carried over" "session_secret=$LEGACY_COOKIE" "$(cat "$LOG.secret")"
+expect_eq "legacy upgrade: no new project" "" "$(calls new-project)"
+expect_eq "legacy upgrade: legacy objects and the old ReplicaSet removed" "$(printf '%s\n' \
+	'oc delete clusterrolebinding rhoai-nightly-updater' \
+	'oc delete clusterrole rhoai-nightly-updater --ignore-not-found' \
+	'oc delete consolelink rhoai-nightly-updater' \
+	'oc delete rs -n scratch-ns rs-old')" "$(calls delete)"
+
+rm -f "$LOG.secret"
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 expect_ok "upgrade with the Secret in place" run bash "$ASSET" --namespace scratch-ns
+expect_eq "upgrade: the Secret is kept" "" "$(calls create)"
+[ ! -e "$LOG.secret" ] && pass || fail "upgrade: a Secret was written"
 
 # Legacy objects of this install: a dry run must not delete them.
 FAKE_LEGACY=scratch-ns/rhoai-nightly-updater expect_ok "cleanup-legacy dry run" run bash "$ASSET" cleanup-legacy --dry-run --namespace scratch-ns
