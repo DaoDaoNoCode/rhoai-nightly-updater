@@ -195,12 +195,13 @@ make build             # Build using podman or docker (auto-detected)
      - Copies frontend static files from frontend stage
      - Sets `STATIC_DIR=/app/static`, `PORT=8080`
      - Runs as non-root user `1001`
-3. Tags image as `IMAGE:TAG` and `IMAGE:GIT_SHA`
+3. Tags the image as `IMAGE:GIT_SHA`, plus `IMAGE:TAG` when `TAG` is a test tag of your own (never `latest`, `main`, `vN` or `vX.Y.Z`: CI publishes those)
 
 **Build variables** (override via environment, command line, or `.env` file):
 
 - `IMAGE` — Registry and image name (default: `quay.io/juntao_wang/rhoai-nightly-updater`)
-- `TAG` — Image tag (default: `latest`)
+- `TAG` — Image tag (default: the release tag HEAD is on, else none). `deploy`/`upgrade` install this tag
+- `BUILD_VERSION` — The version the binary reports (default: the release tag HEAD is on, else `GIT_SHA`)
 - `GIT_SHA` — 8-character commit tag (default: the first 8 characters of the HEAD commit, the same as GitLab's `CI_COMMIT_SHORT_SHA`)
 - `RUNTIME` — Container runtime (default: auto-detected `podman` or `docker`)
 - `PLATFORM` — Target platform (default: `linux/amd64`)
@@ -217,37 +218,60 @@ make build NO_CACHE=1                       # Force full rebuild
 ### Push to Registry
 
 ```bash
-make push              # Push IMAGE:TAG and IMAGE:GIT_SHA to registry
+make push              # Push IMAGE:GIT_SHA (and IMAGE:TAG for a test tag of your own)
 ```
 
-Requires prior `docker login` or `podman login` to the registry.
-
-To build and publish to the default Quay repository, with Podman running:
-
-```bash
-podman login quay.io
-make build push RUNTIME=podman IMAGE=quay.io/juntao_wang/rhoai-nightly-updater TAG=latest
-```
-
-This builds for `linux/amd64` and publishes both `latest` and the current short Git commit tag. For Docker, use `docker login quay.io` and set `RUNTIME=docker` in the same command. Building and publishing do not deploy the app; `make all` also deploys to OpenShift.
+Requires prior `docker login` or `podman login` to the registry. To test your build on a cluster: `make build push`, then `make upgrade TAG=<GIT_SHA>` (or `make all`, which deploys `:<GIT_SHA>`). For Docker, set `RUNTIME=docker`.
 
 ### Automatic Image Publishing
 
-GitLab CI (`.gitlab-ci.yml`) runs on merge requests and on branch pushes:
+GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`; other tags run nothing):
 
 - **test** stage, all must pass, no lint exceptions:
   - `go`: gofmt, `go vet`, `go test -race`, govulncheck;
   - `golangci-lint`;
-  - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build.
-- **build** stage (kaniko):
-  - On `main`, every pipeline publishes the immutable tag `:$CI_COMMIT_SHORT_SHA` (8 characters).
-  - `:latest` moves only if that commit is still the tip of `main`, so an older pipeline that finishes late never moves `:latest` back.
-  - Other branches have a manual job that publishes `:$CI_COMMIT_REF_SLUG`.
-  - It needs the CI variables `QUAY_USER`/`QUAY_TOKEN`.
+  - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build;
+  - `release-scripts`: `scripts/test-release.sh` and `scripts/test-install.sh`;
+  - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases).
+- **main**: `build-main` publishes the immutable `:$CI_COMMIT_SHORT_SHA` (8 characters) and `:main`. `:main` moves only while the commit is still the tip of `main`. It never touches `:latest`.
+- **Other branches**: a manual job publishes `:$CI_COMMIT_REF_SLUG`.
+- **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (one job at a time, resource group `publish-release`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
+- The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests. Nothing is published from GitHub.
+GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests; `release.yml` runs them on release tags and creates the GitHub Release. Nothing is published to a registry from GitHub.
 
-Teammates' pods run what `make upgrade` resolves from `:latest` (by digest), so a broken `main` reaches whoever upgrades next.
+Teammates install releases, so a broken `main` only reaches people who test `:main` on purpose.
+
+## Releases
+
+Version numbers (`vMAJOR.MINOR.PATCH`):
+
+- **MAJOR**: the deploy contract changed: `TEMPLATE_REVISION` in `deploy/template.yaml` (with `api.ExpectedTemplateRevision`), RBAC, or anything else that needs the template re-applied. Upgrading needs a full redeploy.
+- **MINOR**: features with the same template. **PATCH**: fixes.
+
+Image tags:
+
+| Tag | Moves | Set by |
+|---|---|---|
+| `:vX.Y.Z` | never (refused if it exists from another commit) | the tag pipeline |
+| `:vN` | to the newest release of major N | the tag pipeline |
+| `:latest` | to a newer release of the **same** major only; an unlabelled `:latest` (from before releases) counts as v1 | the tag pipeline; across majors only the manual `promote-latest` job |
+| `:main` | to every new tip of `main` | `build-main` |
+| `:<8-char commit>` | never | `build-main` (or the tag pipeline when main never built that commit) |
+
+How to cut a release:
+
+1. On `main`, change the top `CHANGELOG.md` section from `## [X.Y.Z] - unreleased` to `## [X.Y.Z] - YYYY-MM-DD` (today) in a commit; merge it.
+2. With `main` checked out, clean and up to date:
+   ```bash
+   make release VERSION=vX.Y.Z
+   ```
+   It checks the branch, the tree, `origin/main`, the CHANGELOG section and the template guard, creates an annotated tag and prints the push commands. Nothing is pushed.
+3. Push the tag to both remotes, as printed: `git push origin vX.Y.Z` (GitLab: images, `install.sh`, GitLab Release) and `git push github vX.Y.Z` (GitHub Release).
+4. Watch the tag pipeline. For a new MAJOR, `:latest` stays on the old major; when teammates have been told, run the manual `promote-latest` job of that pipeline.
+5. Start the next section: `## [X.Y.Z+1] - unreleased` (or the next planned version).
+
+The guard (`scripts/release.sh check`, the same in `make release` and CI) fails when the tag is not the top dated CHANGELOG section, or when `TEMPLATE_REVISION` differs from the previous release tag's (the highest lower `v*` tag) and the MAJOR is not higher. A MAJOR bump without a template change is allowed. Retrying a release pipeline is safe: an image already published from the same commit is kept; one from another commit stops the job.
 
 ## Code Patterns
 
@@ -390,16 +414,16 @@ make build
 #### 2. Push to Registry
 
 ```bash
-make push              # Pushes IMAGE:TAG and IMAGE:GIT_SHA
+make push              # Pushes IMAGE:GIT_SHA (and a test TAG of your own)
 ```
 
 #### 3. Deploy to OpenShift
 
 ```bash
-make deploy            # first install; make upgrade afterwards. Requires cluster-admin and 'oc login'
+make deploy TAG=<GIT_SHA>   # first install; make upgrade afterwards. Requires cluster-admin and 'oc login'
 ```
 
-Both resolve `IMAGE:TAG` to a digest, check that the image was built from a commit with this checkout's `deploy/template.yaml`, create the cookie Secret once, apply the template, wait for the rollout, then add the ConsoleLink, remove legacy objects and prune old ReplicaSets. `DRY_RUN=1` only validates. Overrides, rollback and the first-time `ALLOW_TEMPLATE_MISMATCH=1` are described in [RUNBOOK §2](RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater). To deploy an image you pushed yourself, push it first (`make build push`), then run `make upgrade TAG=<GIT_SHA>`. If you changed the template, commit it first.
+Both run `scripts/install.sh` (the script every release attaches as `install.sh`): they resolve `IMAGE:TAG` to a digest, check that the image was built from a commit with this checkout's `deploy/template.yaml`, create the cookie Secret once, apply the template, wait for the rollout, then add the ConsoleLink, remove legacy objects and prune old ReplicaSets. `DRY_RUN=1` only validates. Overrides, rollback and the first-time `ALLOW_TEMPLATE_MISMATCH=1` are described in [RUNBOOK §2](RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater). To deploy an image you pushed yourself, push it first (`make build push`), then run `make upgrade TAG=<GIT_SHA>`. If you changed the template, commit it first.
 
 If you change `deploy/template.yaml` in a way the running code depends on, bump `TEMPLATE_REVISION` there and `api.ExpectedTemplateRevision` together; the UI then tells admins to upgrade.
 
@@ -414,7 +438,7 @@ Read-only. Expected values (route and proxy timeouts, strategy, grace period, te
 ### Undeploy
 
 ```bash
-make undeploy          # the app namespace, its ClusterRole/Binding, Roles in other namespaces, ConsoleLink
+make undeploy          # install.sh uninstall: the app namespace, its ClusterRole/Binding, Roles in other namespaces, ConsoleLink
 ```
 
 ### Custom Configuration
@@ -438,7 +462,7 @@ Then `make` commands will use your custom values.
 
 ## Environment Variables
 
-Make variables (`IMAGE`, `TAG`, `NAMESPACE`, `APP_NAME`, `RUNTIME`, `PLATFORM`, `OAUTH_PROXY_IMAGE`, `ROLLOUT_TIMEOUT`, `DRY_RUN`, `ALLOW_TEMPLATE_MISMATCH`, `ALLOW_MUTABLE_TAG`) can be set on the command line or in `.env` (`make env` creates one; there is no `.env.example`). Run `make help` to list them.
+Make variables (`IMAGE`, `TAG`, `NAMESPACE`, `APP_NAME`, `RUNTIME`, `PLATFORM`, `OAUTH_PROXY_IMAGE`, `ROLLOUT_TIMEOUT`, `RELEASES_URL`, `DRY_RUN`, `ALLOW_TEMPLATE_MISMATCH`, `ALLOW_MUTABLE_TAG`) can be set on the command line or in `.env` (`make env` creates one). Run `make help` to list them.
 
 Runtime variables of the deployed container (`GITHUB_TOKEN`, `SEAWEEDFS_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
 
