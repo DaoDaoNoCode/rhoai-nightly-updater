@@ -396,9 +396,11 @@ objects:
         spec:
           serviceAccountName: ${APP_NAME}
           automountServiceAccountToken: true
-          # On shutdown the server waits up to 16 minutes for running cluster
-          # operations (15-minute deadline plus recovery), then 30 seconds for
-          # connections. Keep this above that total so they are not killed.
+          # On shutdown the server waits for running cluster operations (their
+          # 15-minute deadline, automatic recovery and bookkeeping), then up to
+          # 20 seconds for connections and 10 for the operation marker.
+          # pkg/cluster/budget_test.go checks that the total stays below this
+          # value with a margin, so operations are not killed mid-way.
           terminationGracePeriodSeconds: 1020
           affinity:
             podAntiAffinity:

@@ -193,7 +193,7 @@ func stuckModuleProblem(c *Client, m stuckModule) Problem {
 	case "dashboard":
 		fix += " If Dashboard Dev paused dashboard-operator (0 replicas), use Revert on the Dashboard Dev page; the deletion then completes."
 	case "mlflowoperator":
-		fix = "The MLflowOperator finalizer waits until no MLflow CR exists. Tear down MLflow (Dashboard Dev > Resources) or delete the MLflow CR; the deletion then completes. " + fix
+		fix = "The MLflowOperator finalizer waits until no MLflow CR exists. Tear down MLflow (Test resources page) or delete the MLflow CR; the deletion then completes. " + fix
 	case "aipipelines":
 		fix = "Delete the pipeline servers (DSPAs) first; their finalizers need the pipelines operator. " + fix
 	}

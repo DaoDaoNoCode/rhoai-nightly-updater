@@ -96,7 +96,7 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
               {!installing && (
                 <EmptyStateFooter>
                   <EmptyStateActions>
-                    <Link to="/">Go to the Dashboard to install RHOAI</Link>
+                    <Link to="/">Go to Status to install RHOAI</Link>
                   </EmptyStateActions>
                 </EmptyStateFooter>
               )}
