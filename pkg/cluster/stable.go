@@ -12,6 +12,8 @@ type stableTarget struct {
 	Source  string
 	Channel string
 	Version string
+	// HeadCSV is the channel head's CSV name (what OLM installs).
+	HeadCSV string
 	Pinned  bool
 }
 
@@ -87,7 +89,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			}
 			if override != "" {
 				if channel.Name == override {
-					target.Channel, target.Version, target.Pinned = channel.Name, displayVersion, true
+					target.Channel, target.Version, target.HeadCSV, target.Pinned = channel.Name, displayVersion, channel.CurrentCSV, true
 					return target, nil
 				}
 				continue
@@ -106,7 +108,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			comparison := compareTags(version, best)
 			if target.Channel == "" || comparison > 0 || (comparison == 0 &&
 				(preference > bestPreference || (preference == bestPreference && channel.Name < target.Channel))) {
-				target.Channel, target.Version = channel.Name, displayVersion
+				target.Channel, target.Version, target.HeadCSV = channel.Name, displayVersion, channel.CurrentCSV
 				best, bestPreference = version, preference
 			}
 		}

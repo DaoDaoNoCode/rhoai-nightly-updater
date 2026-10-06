@@ -173,7 +173,13 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 				t.Fatal("no Subscription applied")
 			}
 			spec := applies[len(applies)-1]
-			if spec["installPlanApproval"] != "Manual" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) || spec["startingCSV"] != nil {
+			// Refresh pins the installed CSV (R5-F3); the others drop the
+			// old channel's startingCSV.
+			wantStart := interface{}(nil)
+			if op == "refresh" {
+				wantStart = "rhods-operator.3.6.0"
+			}
+			if spec["installPlanApproval"] != "Manual" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) || spec["startingCSV"] != wantStart {
 				t.Fatalf("settings not preserved: %v", spec)
 			}
 			approved := false
@@ -535,7 +541,7 @@ func TestWaitIgnoresDeletingCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.csvs["rhods-operator.3.6.0"]["metadata"] = map[string]interface{}{"name": "rhods-operator.3.6.0", "deletionTimestamp": "2026-10-05T00:00:00Z"}
 	var logs []string
-	outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{})
+	outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 	if outcome.succeeded || outcome.errorCode != "install_timeout" {
 		t.Fatalf("outcome = %+v", outcome)
 	}
@@ -668,5 +674,55 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "incomplete") {
 		t.Fatalf("message = %q", result.Message)
+	}
+}
+
+// R5-F3: with Manual approval the tool approves only an InstallPlan for the
+// exact CSV the user confirmed. Anything else OLM proposes is reported and
+// left for an administrator.
+func TestManualApproval_OnlyTheConfirmedCSV(t *testing.T) {
+	proposeNewer := func(f *fakeOLM, _ map[string]interface{}) {
+		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"approved": false, "clusterServiceVersionNames": []interface{}{"rhods-operator.3.7.0"}}, "status": map[string]interface{}{"phase": "RequiresApproval"}}
+		f.sub["status"] = map[string]interface{}{"currentCSV": "rhods-operator.3.7.0", "installPlanRef": map[string]interface{}{"name": "install-new"}}
+	}
+	for _, op := range []string{"update", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"installPlanApproval": "Manual", "channel": "old"})
+			f.onSubscribe = func(f *fakeOLM, spec map[string]interface{}) {
+				if spec["channel"] != "old" || op == "refresh" && spec["startingCSV"] != nil {
+					proposeNewer(f, spec)
+				}
+			}
+			f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"},{"name":"old","currentCSV":"rhods-operator.3.7.0"}]`
+			c := f.client(context.Background())
+			var r *types.OperationResponse
+			if op == "update" {
+				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+			} else {
+				r, _ = RefreshOperator(c)
+			}
+			if r == nil || r.Success || r.ErrorCode != "approval_required" || !strings.Contains(r.Message, "rhods-operator.3.7.0") {
+				t.Fatalf("result = %+v", r)
+			}
+			for _, w := range f.writes() {
+				if w == "PATCH "+namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-new") {
+					t.Fatalf("approved an InstallPlan for a CSV that was not confirmed: %v", f.writes())
+				}
+			}
+		})
+	}
+}
+
+// R5-F3: with Automatic approval, Refresh would install the channel head;
+// when that is not the installed CSV, it refuses before changing anything.
+func TestRefresh_RefusesWhenTheChannelHeadMoved(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.1"}]`
+	r, err := RefreshOperator(f.client(context.Background()))
+	if err != nil || r.Success || r.ErrorCode != "validation" || !strings.Contains(r.Message, "now installs rhods-operator.3.6.1") {
+		t.Fatalf("result = %+v, %v", r, err)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("Refresh changed the cluster: %v", w)
 	}
 }

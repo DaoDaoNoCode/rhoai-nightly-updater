@@ -1136,6 +1136,9 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 		subPath:                {body: string(subJSON)},
 		appDeployListPath:      {body: string(emptyDeployList)},
 		opDeployListPath:       {body: string(emptyDeployList)},
+		// The channel still installs the installed CSV, so Refresh does not
+		// become an upgrade.
+		"/apis/packages.operators.coreos.com/v1/namespaces/" + CatalogNS + "/packagemanifests": {body: `{"items":[{"metadata":{"name":"` + SubName + `"},"status":{"packageName":"` + SubName + `","catalogSource":"` + CatalogName + `","catalogSourceNamespace":"` + CatalogNS + `","channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}]}`},
 	}
 
 	return responses, paths
@@ -1289,6 +1292,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 			"DELETE " + subPath:        {body: `{"kind":"Status","status":"Success"}`},
 			"GET " + appDeployListPath: {body: string(emptyDeployList)},
 			"GET " + opDeployListPath:  {body: string(emptyDeployList)},
+			"GET /apis/packages.operators.coreos.com/v1/namespaces/" + CatalogNS + "/packagemanifests": {body: `{"items":[{"metadata":{"name":"` + SubName + `"},"status":{"packageName":"` + SubName + `","catalogSource":"` + CatalogName + `","catalogSourceNamespace":"` + CatalogNS + `","channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}]}`},
 		}
 		resp, ok := responses[key]
 		if !ok {
