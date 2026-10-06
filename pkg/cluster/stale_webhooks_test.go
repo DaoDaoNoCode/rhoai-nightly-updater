@@ -23,7 +23,8 @@ type whFixture struct {
 	owner    string // ownerReference "Kind" in components.platform.opendatahub.io
 	services []string
 	created  string
-	ignore   bool // failurePolicy Ignore
+	ignore   bool     // failurePolicy Ignore
+	urls     []string // webhooks called through clientConfig.url
 }
 
 func (w whFixture) object() map[string]interface{} {
@@ -45,6 +46,9 @@ func (w whFixture) object() map[string]interface{} {
 			hook["failurePolicy"] = "Ignore"
 		}
 		hooks = append(hooks, hook)
+	}
+	for i, u := range w.urls {
+		hooks = append(hooks, map[string]interface{}{"name": fmt.Sprintf("url%d", i), "clientConfig": map[string]interface{}{"url": u}})
 	}
 	return map[string]interface{}{"metadata": meta, "webhooks": hooks}
 }
@@ -377,4 +381,60 @@ func TestStaleWebhookCheck_PlatformWebhookWithIgnoreIsInfo(t *testing.T) {
 		t.Fatalf("problem = %+v", p)
 	}
 	assertWrites(t, f)
+}
+
+// A configuration that mixes a dead Service-backed webhook with a URL-backed
+// one is never stale: the URL webhook may be serving, and deleting the
+// configuration would remove it too (R1-1). The same configuration without
+// the URL hook is deletable, so the URL hook is what keeps it.
+func TestStaleWebhookScan_URLBackedHookKeepsTheConfig(t *testing.T) {
+	gone := SubNS + "/old-operator-service"
+	f, c := newFakeAPI(t)
+	serveWebhooks(f, []whFixture{
+		{name: "mixed-url.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{gone}, urls: []string{"https://validator.example.com/validate"}},
+		{name: "url-only.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), urls: []string{"https://validator.example.com/validate"}},
+		{name: "service-only.opendatahub.io-a", labels: olmOwned("rhods-operator.3.5.0"), services: []string{gone}},
+	}, "Succeeded", nil, nil)
+	f.json("DELETE", vwcPath+"/service-only.opendatahub.io-a", http.StatusOK, `{}`)
+	scan := scanStaleWebhooks(c)
+	got := verdictsByName(scan)
+	if _, ok := got["mixed-url.opendatahub.io-a"]; ok {
+		t.Fatalf("a config with a URL-backed webhook must not be stale: %+v", got["mixed-url.opendatahub.io-a"])
+	}
+	if _, ok := got["url-only.opendatahub.io-a"]; ok {
+		t.Fatal("a URL-only config must not be stale")
+	}
+	if v, ok := got["service-only.opendatahub.io-a"]; !ok || !v.Deletable {
+		t.Fatalf("control: the Service-only config should be deletable: %+v", got)
+	}
+	d := deleteStaleWebhookConfigs(c, scan.Verdicts)
+	if len(d.Deleted) != 1 || d.Deleted[0] != "ValidatingWebhookConfiguration service-only.opendatahub.io-a" {
+		t.Fatalf("deleted = %v", d.Deleted)
+	}
+}
+
+// A part-of value that maps to no served component kind, or a component API
+// that is not served at all, means the producer is unknown: reported, never
+// deletable (R5-F6).
+func TestStaleWebhookScan_UnknownModuleIsNeverDeletable(t *testing.T) {
+	cfg := whFixture{name: "mystery-webhook", kind: "m", labels: map[string]string{"platform.opendatahub.io/part-of": "notamodule"}, services: []string{"redhat-ods-applications/gone"}}
+	t.Run("unmapped part-of", func(t *testing.T) {
+		f, c := newFakeAPI(t)
+		serveWebhooks(f, []whFixture{cfg}, "Succeeded", nil, map[string]bool{"Ray": false})
+		v, ok := verdictsByName(scanStaleWebhooks(c))["mystery-webhook"]
+		if !ok || v.Deletable || !strings.Contains(v.Reason, "cannot tell whether module notamodule is installed") {
+			t.Fatalf("verdict = %+v", v)
+		}
+	})
+	t.Run("component API not served", func(t *testing.T) {
+		f, c := newFakeAPI(t)
+		ray := cfg
+		ray.labels = map[string]string{"platform.opendatahub.io/part-of": "ray"}
+		serveWebhooks(f, []whFixture{ray}, "Succeeded", nil, nil)
+		f.status("GET", "/apis/components.platform.opendatahub.io", http.StatusNotFound, "NotFound")
+		v, ok := verdictsByName(scanStaleWebhooks(c))["mystery-webhook"]
+		if !ok || v.Deletable {
+			t.Fatalf("verdict = %+v", v)
+		}
+	})
 }

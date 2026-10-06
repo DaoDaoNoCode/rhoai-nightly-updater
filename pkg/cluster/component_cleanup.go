@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -46,10 +47,23 @@ func cachedComponentAPI(c *Client) func() (componentAPI, error) {
 	}
 }
 
+// errModuleKindUnknown: no served components.platform.opendatahub.io kind
+// matches the module name (an unmapped part-of value, or the component API
+// is not served at all, e.g. while its CRDs are reinstalled).
+var errModuleKindUnknown = errors.New("no served " + componentAPIGroup + " kind matches it")
+
 // moduleCRPresent reports whether any CR of the module (lower-case kind)
-// exists. A kind that is not served means no CR exists; discovery and list
-// errors are returned.
+// exists. A module whose kind is not served returns errModuleKindUnknown:
+// "no CR" cannot be told apart from "unknown producer" then, so callers
+// must not treat it as removed. Discovery and list errors are returned.
 func moduleCRPresent(c *Client, discover func() (componentAPI, error), module string) (bool, error) {
+	api, err := discover()
+	if err != nil {
+		return false, err
+	}
+	if _, ok := api.resourceForModule(module); !ok {
+		return false, fmt.Errorf("module %q: %w", module, errModuleKindUnknown)
+	}
 	items, err := listModuleCRs(c, discover, module)
 	return len(items) > 0, err
 }

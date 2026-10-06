@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,11 +17,14 @@ import (
 // guard (namespace deletion). It follows RHOAI_OPERATOR_NOTES §3.4.
 //
 // A webhook configuration is stale only when ALL of these hold:
-//  1. Not one of its webhooks can be served: every Service it calls is
-//     NotFound, or exists but has had no ready endpoint for longer than
-//     staleServiceGrace (a restarting pod is not staleness). Deleting a
-//     configuration removes all of its webhooks, so one serving Service is
-//     enough to keep it.
+//  1. Not one of its webhooks can be served: every webhook calls a Service
+//     (clientConfig.service), and every such Service is NotFound, or exists
+//     but has had no ready endpoint for longer than staleServiceGrace (a
+//     restarting pod is not staleness). Deleting a configuration removes all
+//     of its webhooks, so one webhook that may still serve keeps it: a
+//     serving Service, a Service that cannot be checked, and any webhook
+//     called through clientConfig.url (admissionregistration/v1
+//     WebhookClientConfig), whose availability the tool cannot prove.
 //  2. Its producer is not coming back:
 //     - olm.owner=<rhods-operator CSV>: that CSV is NotFound or being
 //       deleted. While the CSV exists OLM heals its configs itself: a
@@ -256,6 +260,7 @@ type admissionConfig struct {
 		Name          string  `json:"name"`
 		FailurePolicy *string `json:"failurePolicy"`
 		ClientConfig  struct {
+			URL     *string `json:"url"`
 			Service *struct {
 				Namespace string `json:"namespace"`
 				Name      string `json:"name"`
@@ -283,6 +288,19 @@ func (a admissionConfig) isRHOAI() bool {
 		}
 	}
 	return false
+}
+
+// unverifiableHooks names the webhooks that do not call an in-cluster
+// Service (clientConfig.url, or an incomplete service reference). The tool
+// cannot prove those are down, so their configuration is never stale.
+func (a admissionConfig) unverifiableHooks() []string {
+	var out []string
+	for _, wh := range a.Webhooks {
+		if svc := wh.ClientConfig.Service; svc == nil || svc.Name == "" || svc.Namespace == "" {
+			out = append(out, wh.Name)
+		}
+	}
+	return out
 }
 
 func (a admissionConfig) services() []string {
@@ -467,10 +485,11 @@ func platformConfig(cfg admissionConfig) bool {
 	return false
 }
 
-// evaluate returns nil when the configuration can still be served.
+// evaluate returns nil when the configuration can still be served, or when
+// any of its webhooks cannot be proven down (URL-backed hooks).
 func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
 	svcs := cfg.services()
-	if len(svcs) == 0 {
+	if len(svcs) == 0 || len(cfg.unverifiableHooks()) > 0 {
 		return nil
 	}
 	var down []string
@@ -511,6 +530,8 @@ func (e *webhookEnv) evaluate(cfg admissionConfig) *webhookVerdict {
 		module := configModule(cfg)
 		st := e.moduleCRExists(module)
 		switch {
+		case errors.Is(st.err, errModuleKindUnknown):
+			v.Reason = fmt.Sprintf("the tool cannot tell whether module %s is installed: %v", module, st.err)
 		case st.err != nil:
 			v.Reason = fmt.Sprintf("could not check whether module %s is installed: %v", module, st.err)
 		case st.exists:
