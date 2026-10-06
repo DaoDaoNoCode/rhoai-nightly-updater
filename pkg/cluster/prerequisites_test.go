@@ -197,7 +197,8 @@ func TestPlanInstall(t *testing.T) {
 		}
 	})
 	t.Run("AllNamespaces only goes to openshift-operators without an OperatorGroup", func(t *testing.T) {
-		_, c := newFakeAPI(t)
+		f, c := newFakeAPI(t)
+		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-operators/operatorgroups", 200, `{"items":[{"metadata":{"name":"global-operators"},"spec":{}}]}`)
 		plan, err := planInstall(c, byName["cert-manager"], nil)
 		if err != nil {
 			t.Fatal(err)
@@ -209,14 +210,45 @@ func TestPlanInstall(t *testing.T) {
 	})
 	t.Run("an existing OperatorGroup is reused", func(t *testing.T) {
 		f, c := newFakeAPI(t)
-		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-lws-operator/operatorgroups", 200, `{"items":[{"metadata":{"name":"lws-og"}}]}`)
+		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-lws-operator/operatorgroups", 200, `{"items":[{"metadata":{"name":"lws-og"},"spec":{"targetNamespaces":["openshift-lws-operator"]}}]}`)
 		p := byName["leader-worker-set"]
 		plan, err := planInstall(c, p, p.singletonFor("leaderworkerset"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(plan.script, "kind: OperatorGroup") || !strings.Contains(strings.Join(plan.notes, " "), "already has OperatorGroup lws-og") {
+		if strings.Contains(plan.script, "kind: OperatorGroup") || !strings.Contains(strings.Join(plan.notes, " "), "already has OperatorGroup lws-og (install mode OwnNamespace") {
 			t.Fatalf("script:\n%s\nnotes: %q", plan.script, plan.notes)
+		}
+	})
+	t.Run("an existing OperatorGroup with an unsupported mode is refused", func(t *testing.T) {
+		for name, ogs := range map[string]string{
+			"AllNamespaces for an OwnNamespace-only CSV": `[{"metadata":{"name":"all"},"spec":{}}]`,
+			"another namespace (SingleNamespace)":        `[{"metadata":{"name":"single"},"spec":{"targetNamespaces":["other"]}}]`,
+			"two OperatorGroups":                         `[{"metadata":{"name":"a"},"spec":{}},{"metadata":{"name":"b"},"spec":{}}]`,
+			"a label selector":                           `[{"metadata":{"name":"sel"},"spec":{"selector":{"matchLabels":{"x":"y"}}}}]`,
+		} {
+			f, c := newFakeAPI(t)
+			f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-lws-operator/operatorgroups", 200, `{"items":`+ogs+`}`)
+			p := byName["leader-worker-set"]
+			_, err := planInstall(c, p, p.singletonFor("leaderworkerset"))
+			if err == nil {
+				t.Errorf("%s: expected a refusal", name)
+				continue
+			}
+			t.Logf("%s: %v", name, err)
+		}
+		// openshift-operators whose OperatorGroup does not watch all namespaces.
+		f, c := newFakeAPI(t)
+		f.json("GET", "/apis/operators.coreos.com/v1/namespaces/openshift-operators/operatorgroups", 200, `{"items":[{"metadata":{"name":"own"},"spec":{"targetNamespaces":["openshift-operators"]}}]}`)
+		if _, err := planInstall(c, byName["cert-manager"], nil); err == nil || !strings.Contains(err.Error(), "install mode OwnNamespace") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("openshift-operators without an OperatorGroup gets one for all namespaces", func(t *testing.T) {
+		_, c := newFakeAPI(t)
+		plan, err := planInstall(c, byName["cert-manager"], nil)
+		if err != nil || !strings.Contains(plan.script, "kind: OperatorGroup\nmetadata:\n  name: global-operators\n  namespace: openshift-operators\nspec: {}") {
+			t.Fatalf("plan = %+v, %v", plan, err)
 		}
 	})
 	t.Run("SingleNamespace only has no commands", func(t *testing.T) {

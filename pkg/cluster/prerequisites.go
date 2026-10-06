@@ -938,19 +938,37 @@ func planInstall(c *Client, p catalogPackage, operand *almExample) (prerequisite
 			where = "a namespace named after the package (the CSV suggests none)"
 		}
 		plan.notes = append(plan.notes, fmt.Sprintf("It goes into %s %s, watching only that namespace (install mode OwnNamespace, which the CSV supports).", where, ns))
-		og, err := existingOperatorGroup(c, ns)
+		ogs, err := listOperatorGroups(c, ns)
 		switch {
 		case err != nil:
-			plan.notes = append(plan.notes, fmt.Sprintf("Could not check for an existing OperatorGroup in %s (%v); if one exists, leave the OperatorGroup out: a namespace may have only one.", ns, err))
+			plan.notes = append(plan.notes, fmt.Sprintf("Could not check for an existing OperatorGroup in %s (%v); if one exists, leave the OperatorGroup out: a namespace may have only one, and it must target a mode the CSV supports.", ns, err))
 			fallthrough
-		case og == "":
+		case len(ogs) == 0:
 			objects = append(objects, "apiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: "+ns+"\n  namespace: "+ns+"\nspec:\n  targetNamespaces:\n  - "+ns)
 		default:
-			plan.notes = append(plan.notes, fmt.Sprintf("%s already has OperatorGroup %s, so none is created (a namespace may have only one).", ns, og))
+			note, err := reuseOperatorGroup(p, ns, ogs)
+			if err != nil {
+				return prerequisiteInstall{}, err
+			}
+			plan.notes = append(plan.notes, note)
 		}
 	case p.supports("AllNamespaces"):
 		ns = "openshift-operators"
-		plan.notes = append(plan.notes, "The CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators, which already has the cluster-wide OperatorGroup global-operators.")
+		plan.notes = append(plan.notes, "The CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators.")
+		ogs, err := listOperatorGroups(c, ns)
+		switch {
+		case err != nil:
+			plan.notes = append(plan.notes, fmt.Sprintf("Could not read the OperatorGroup of openshift-operators (%v); OpenShift creates global-operators there, which watches all namespaces.", err))
+		case len(ogs) == 0:
+			objects = append(objects, "apiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: global-operators\n  namespace: openshift-operators\nspec: {}")
+			plan.notes = append(plan.notes, "openshift-operators has no OperatorGroup (OpenShift normally creates global-operators), so one that watches all namespaces is created.")
+		default:
+			note, err := reuseOperatorGroup(p, ns, ogs)
+			if err != nil {
+				return prerequisiteInstall{}, err
+			}
+			plan.notes = append(plan.notes, note)
+		}
 	default:
 		return prerequisiteInstall{}, fmt.Errorf("the CSV supports only the install modes %s, which need a target namespace chosen by you", nonEmpty(strings.Join(p.InstallModes, ", "), "(none)"))
 	}
@@ -992,28 +1010,76 @@ func operandCommand(e almExample) (string, error) {
 	return shellCommand("oc", "get", e.resourceArg()+"/"+e.objName()) + " >/dev/null 2>&1 || oc create -f - <<'EOF'\n" + string(data) + "\nEOF", nil
 }
 
-// existingOperatorGroup returns the name of an OperatorGroup in namespace,
-// "" when there is none (or the namespace does not exist).
-func existingOperatorGroup(c *Client, namespace string) (string, error) {
+// operatorGroup is the part of an OperatorGroup that decides the install
+// mode of the operators in its namespace.
+type operatorGroup struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		TargetNamespaces []string                   `json:"targetNamespaces"`
+		Selector         map[string]json.RawMessage `json:"selector"`
+	} `json:"spec"`
+}
+
+// installMode is the OLM install mode the OperatorGroup gives operators in
+// namespace ns ("" when a label selector picks the namespaces, which the
+// tool cannot evaluate).
+func (og operatorGroup) installMode(ns string) string {
+	t := og.Spec.TargetNamespaces
+	switch {
+	case len(og.Spec.Selector) > 0:
+		return ""
+	case len(t) == 0:
+		return "AllNamespaces"
+	case len(t) == 1 && t[0] == ns:
+		return "OwnNamespace"
+	case len(t) == 1:
+		return "SingleNamespace"
+	}
+	return "MultiNamespace"
+}
+
+// listOperatorGroups returns the OperatorGroups of a namespace (none when
+// it does not exist).
+func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""))
 	if IsK8sError(err, http.StatusNotFound) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
+		Items []operatorGroup `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return "", err
+		return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)
 	}
-	if len(list.Items) == 0 {
-		return "", nil
+	return list.Items, nil
+}
+
+// reuseOperatorGroup checks that the namespace's existing OperatorGroup
+// gives an install mode the CSV supports (OLM fails the CSV with
+// UnsupportedOperatorGroup otherwise, and with TooManyOperatorGroups when
+// a namespace has several).
+func reuseOperatorGroup(p catalogPackage, ns string, ogs []operatorGroup) (string, error) {
+	if len(ogs) > 1 {
+		var names []string
+		for _, og := range ogs {
+			names = append(names, og.Metadata.Name)
+		}
+		sort.Strings(names)
+		return "", fmt.Errorf("namespace %s has %d OperatorGroups (%s); OLM installs nothing there until only one is left (TooManyOperatorGroups), so the tool gives no commands for it", ns, len(ogs), strings.Join(names, ", "))
 	}
-	return list.Items[0].Metadata.Name, nil
+	og := ogs[0]
+	mode := og.installMode(ns)
+	switch {
+	case mode == "":
+		return "", fmt.Errorf("namespace %s has OperatorGroup %s, which picks its target namespaces with a label selector; check that it gives an install mode the CSV supports (%s) and install from the console", ns, og.Metadata.Name, strings.Join(p.InstallModes, ", "))
+	case !p.supports(mode):
+		return "", fmt.Errorf("namespace %s has OperatorGroup %s with install mode %s (targetNamespaces %s), which %s does not support (%s); OLM would fail the install. Use another namespace or change that OperatorGroup",
+			ns, og.Metadata.Name, mode, nonEmpty(strings.Join(og.Spec.TargetNamespaces, ", "), "all"), nonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "))
+	}
+	return fmt.Sprintf("%s already has OperatorGroup %s (install mode %s, which the CSV supports), so none is created: a namespace may have only one.", ns, og.Metadata.Name, mode), nil
 }
