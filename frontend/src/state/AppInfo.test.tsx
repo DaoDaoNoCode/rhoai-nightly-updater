@@ -2,7 +2,7 @@ import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { overrideFromDashboardResponse, useDashboardOverride, usePermissions, useSessionExpired } from "./AppInfo";
-import { ApiError, getComponents, isSessionExpired } from "../services/api";
+import { ApiError, getComponents, getUserPermissions, isSessionExpired } from "../services/api";
 import { renderWithApp } from "../test/providers";
 import { jsonResponse } from "../test/utils";
 
@@ -46,6 +46,20 @@ describe("session expiry (A02-3)", () => {
     const err = await getComponents().catch((e) => e);
     expect(isSessionExpired(err)).toBe(true);
     expect(isSessionExpired(new ApiError({ status: 401, errorCode: "unauthorized", message: "SA token rejected" }))).toBe(false);
+  });
+
+  it("shows oauth-proxy's 403 HTML sign-in page as an expired session, not as read-only access (N3)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<!DOCTYPE html><html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } })));
+    // The real permissions call, as after a night with the tab open.
+    renderWithApp(<Probe />, { permissions: getUserPermissions });
+    await waitFor(() => expect(probe()).toMatchObject({ expired: true, canMutate: false, status: "unknown" }));
+    expect(probe().reason).toMatch(/session has expired/);
+  });
+
+  it("keeps a JSON 403 a permission answer", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Read-only access", errorCode: "forbidden" }, 403)));
+    renderWithApp(<Probe />, { permissions: getUserPermissions });
+    await waitFor(() => expect(probe()).toMatchObject({ expired: false, status: "denied" }));
   });
 });
 

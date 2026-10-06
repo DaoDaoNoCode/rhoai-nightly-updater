@@ -148,11 +148,13 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       setPermError(null);
     } catch (e) {
       const err = toApiError(e, "Could not check your permissions");
-      // 403 is an answer (read-only). Everything else, 503
-      // authorization_unavailable included, is "unknown": fail closed.
-      setPermStatus(err.status === 403 || err.errorCode === "forbidden" ? "denied" : "unknown");
+      const expired = isSessionExpired(err);
+      // A JSON 403 is an answer (read-only). An expired session (oauth-proxy's
+      // HTML 403) and everything else, 503 authorization_unavailable
+      // included, is "unknown": fail closed.
+      setPermStatus(!expired && (err.status === 403 || err.errorCode === "forbidden") ? "denied" : "unknown");
       setPermError(err);
-      if (isSessionExpired(err)) setSessionExpired(true);
+      if (expired) setSessionExpired(true);
     }
   }, []);
   const permPoller = usePolling(checkPermissions, {

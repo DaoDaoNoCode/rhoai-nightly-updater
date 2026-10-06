@@ -107,6 +107,14 @@ export async function parseErrorResponse(resp: Response): Promise<ApiError> {
     const errorCode = typeof body.errorCode === 'string' && body.errorCode ? body.errorCode : defaultErrorCode(resp.status);
     return new ApiError({ status: resp.status, errorCode, message, details: parsed });
   }
+  if (resp.status === 401 || resp.status === 403) {
+    // The backend answers every error with JSON (writeError in pkg/api), so a
+    // 401/403 without a JSON body comes from oauth-proxy in front of it. With
+    // a missing or expired session cookie it serves its sign-in page as
+    // HTTP 403 text/html (checked on the live route); that is an expired
+    // session, not a permission answer.
+    return new ApiError({ status: resp.status, errorCode: CLIENT_ERROR_CODES.sessionExpired, message: SESSION_EXPIRED_MESSAGE });
+  }
   const contentType = resp.headers.get('content-type') || '';
   const trimmed = text.trim();
   const message = !trimmed || contentType.includes('text/html')
