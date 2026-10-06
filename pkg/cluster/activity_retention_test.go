@@ -148,7 +148,7 @@ func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
 	}{
 		{types.ActivityEntry{Action: "update", Success: true}, "Updated to nightly", "operator"},
 		{types.ActivityEntry{Action: "update", Success: false}, "Update to nightly failed", "operator"},
-		{types.ActivityEntry{Action: "teardown-minio", Success: false}, "MinIO teardown failed", "test-resources"},
+		{types.ActivityEntry{Action: "teardown-minio", Success: false}, "S3 storage teardown failed", "test-resources"},
 		{types.ActivityEntry{Action: "setup-mlflow", Success: true}, "MLflow set up", "test-resources"},
 		{types.ActivityEntry{Action: "deploy-dashboard-main", Success: true}, "Dashboard main deployed", "dashboard-dev"},
 		{types.ActivityEntry{Action: "assist-rollout", Success: false}, "Stuck rollout assisted", "diagnostics"},

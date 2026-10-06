@@ -1231,7 +1231,7 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	_ = result
 })
 
-// HandleResourcesStatus returns the state of test infrastructure (MinIO, Pipeline Server).
+// HandleResourcesStatus returns the state of test infrastructure (S3 storage, MLflow, pipeline servers).
 // Uses the SA client to list all DS projects -- this is an internal team tool
 // where all authenticated users see all projects.
 var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
@@ -1257,7 +1257,7 @@ var HandleDSProjects = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 	writeJSON(w, map[string]interface{}{"projects": projects}, "ds-projects")
 })
 
-// HandleMinIOSetup deploys MinIO with a bucket for pipeline artifacts.
+// HandleMinIOSetup deploys the S3 storage (SeaweedFS) with a bucket for pipeline artifacts, replacing the MinIO of earlier versions.
 var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
@@ -1268,13 +1268,13 @@ var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 	result, err := cluster.SetupMinIO(c)
 	if err != nil {
 		slog.Error("setup-minio failed", "error", err)
-		writeError(w, "MinIO setup failed", http.StatusInternalServerError)
+		writeError(w, "S3 storage setup failed", http.StatusInternalServerError)
 		return
 	}
 	writeOperationResult(w, result, "setup-minio")
 })
 
-// HandleMinIOTeardown deletes the MinIO namespace and all its resources.
+// HandleMinIOTeardown deletes the S3 storage objects this tool created; the minio namespace is kept.
 var HandleMinIOTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
@@ -1285,7 +1285,7 @@ var HandleMinIOTeardown = withMutationAuth(func(c *cluster.Client, w http.Respon
 	result, err := cluster.TeardownMinIO(c)
 	if err != nil {
 		slog.Error("teardown-minio failed", "error", err)
-		writeError(w, "MinIO teardown failed", http.StatusInternalServerError)
+		writeError(w, "S3 storage teardown failed", http.StatusInternalServerError)
 		return
 	}
 	writeOperationResult(w, result, "teardown-minio")

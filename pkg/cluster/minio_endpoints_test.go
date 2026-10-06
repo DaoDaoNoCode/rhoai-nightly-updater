@@ -14,8 +14,8 @@ import (
 // and Service, all created by the tool.
 func deployedToolMinIO(f *resourceFake) {
 	managedMinIONamespace(f)
-	putMinIODeployment(f, toolFieldManager, 1)
-	f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	putS3Deployment(f, 1)
+	f.putJSON(s3PVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	f.putJSON(minioUIRoute, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"host":"minio-ui-minio.apps.example.com"}}`)
 	f.putJSON(minioSvcPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"clusterIP":"172.30.10.20"}}`)
 }
@@ -44,7 +44,7 @@ func TestTeardownMinIO_FailsClosedWhenEndpointsUnreadable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.Success || !strings.Contains(resp.Message, "Cannot verify which pipeline servers use MinIO") {
+			if resp.Success || !strings.Contains(resp.Message, "Cannot verify which pipeline servers use the S3 storage") {
 				t.Fatalf("teardown = %+v, want a refusal", resp)
 			}
 			if tc.wantCode != "" && resp.ErrorCode != tc.wantCode {
@@ -53,7 +53,7 @@ func TestTeardownMinIO_FailsClosedWhenEndpointsUnreadable(t *testing.T) {
 			if m := f.mutations(); len(m) != 0 {
 				t.Errorf("teardown changed objects although it refused: %v", m)
 			}
-			if !f.has(minioPVCPath) {
+			if !f.has(s3PVCPath) {
 				t.Error("the data PVC was deleted")
 			}
 		})
@@ -68,8 +68,8 @@ func TestTeardownMinIO_UnreadableEndpointsWithoutPipelineServersProceeds(t *test
 	resp, _ := TeardownMinIO(c)
 	// With no pipeline server nothing can depend on MinIO, so the guard
 	// passes; the unreadable Route itself is then reported as not removed.
-	if f.has(minioPVCPath) || resp.ErrorCode != "partial_failure" || !strings.Contains(resp.Message, "Route minio-api: cannot read it") {
-		t.Fatalf("teardown = %+v, pvc kept = %v", resp, f.has(minioPVCPath))
+	if f.has(s3PVCPath) || resp.ErrorCode != "partial_failure" || !strings.Contains(resp.Message, "Route minio-api: cannot read it") {
+		t.Fatalf("teardown = %+v, pvc kept = %v", resp, f.has(s3PVCPath))
 	}
 }
 
@@ -96,15 +96,19 @@ func TestResourcesStatus_TeardownBlockedWhenEndpointsUnreadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(st.MinIO.TeardownBlockedReason, "Cannot verify which pipeline servers use MinIO") {
+	if !strings.Contains(st.MinIO.TeardownBlockedReason, "Cannot verify which pipeline servers use the S3 storage") {
 		t.Fatalf("teardownBlockedReason = %q", st.MinIO.TeardownBlockedReason)
 	}
 }
 
-const minioNPPath = "/apis/networking.k8s.io/v1/namespaces/minio/networkpolicies/minio-ingress"
+const (
+	minioNPPath = "/apis/networking.k8s.io/v1/namespaces/minio/networkpolicies/minio-ingress"
+	s3NPPath    = "/apis/networking.k8s.io/v1/namespaces/minio/networkpolicies/seaweedfs-ingress"
+)
 
-// R6-1: setup fences in MinIO's ports with a tool-owned NetworkPolicy:
-// S3 from pods in any namespace, the console only from the router.
+// R6-1: setup fences in SeaweedFS's ports with a tool-owned NetworkPolicy:
+// S3 from pods in any namespace, the admin UI only from the router, and
+// nothing else (master, volume, filer and worker ports stay unreachable).
 func TestSetupMinIO_CreatesIngressPolicy(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
@@ -113,9 +117,12 @@ func TestSetupMinIO_CreatesIngressPolicy(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("setup = %+v", resp)
 	}
-	np := f.get(minioNPPath)
+	np := f.get(s3NPPath)
 	if np == nil {
-		t.Fatal("NetworkPolicy minio-ingress was not created")
+		t.Fatal("NetworkPolicy seaweedfs-ingress was not created")
+	}
+	if f.has(minioNPPath) {
+		t.Error("a fresh setup must not create the MinIO policy")
 	}
 	labels, _ := np["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
 	if labels[managedByLabelKey] != managedByLabelValue {
@@ -123,15 +130,32 @@ func TestSetupMinIO_CreatesIngressPolicy(t *testing.T) {
 	}
 	raw, _ := json.Marshal(np["spec"])
 	for _, want := range []string{
-		`"podSelector":{"matchLabels":{"app":"minio"}}`,
+		`"podSelector":{"matchLabels":{"app":"seaweedfs"}}`,
 		`"policyTypes":["Ingress"]`,
-		`{"from":[{"namespaceSelector":{}}],"ports":[{"port":9000,"protocol":"TCP"}]}`,
+		`{"from":[{"namespaceSelector":{}}],"ports":[{"port":8333,"protocol":"TCP"}]}`,
 		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/ingress":""}}}`,
-		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/host-network":""}}}],"ports":[{"port":9090,"protocol":"TCP"}]`,
+		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/host-network":""}}}],"ports":[{"port":23646,"protocol":"TCP"}]`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("spec lacks %s: %s", want, raw)
 		}
+	}
+	var spec struct {
+		Ingress []struct {
+			Ports []struct {
+				Port int `json:"port"`
+			} `json:"ports"`
+		} `json:"ingress"`
+	}
+	_ = json.Unmarshal(raw, &spec)
+	var ports []int
+	for _, rule := range spec.Ingress {
+		for _, p := range rule.Ports {
+			ports = append(ports, p.Port)
+		}
+	}
+	if len(ports) != 2 || ports[0] != 8333 || ports[1] != 23646 {
+		t.Errorf("only the S3 and admin UI ports may be reachable: %v", ports)
 	}
 }
 
@@ -140,22 +164,23 @@ func TestSetupMinIO_RefusesForeignIngressPolicy(t *testing.T) {
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
 	managedMinIONamespace(f)
-	f.putJSON(minioNPPath, foreignJSON(`,"spec":{"podSelector":{}}`))
+	f.putJSON(s3NPPath, foreignJSON(`,"spec":{"podSelector":{}}`))
 	resp, _ := SetupMinIO(c)
-	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, "NetworkPolicy minio-ingress") {
+	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, "NetworkPolicy seaweedfs-ingress") {
 		t.Fatalf("setup = %+v", resp)
 	}
-	assertForeignUntouched(t, f, minioNPPath, "spec", `"podSelector":{}`)
+	assertForeignUntouched(t, f, s3NPPath, "spec", `"podSelector":{}`)
 }
 
 func TestTeardownMinIO_RemovesIngressPolicy(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
 	deployedToolMinIO(f)
-	f.putJSON(minioNPPath, `{"metadata":{"uid":"np-uid","labels":`+toolLabelJSON+`}}`)
+	f.putJSON(s3NPPath, `{"metadata":{"uid":"np-uid","labels":`+toolLabelJSON+`}}`)
+	f.putJSON(minioNPPath, `{"metadata":{"uid":"old-np-uid","labels":`+toolLabelJSON+`}}`)
 	resp, _ := TeardownMinIO(c)
-	if !resp.Success || f.has(minioNPPath) {
-		t.Fatalf("teardown = %+v, policy kept = %v", resp, f.has(minioNPPath))
+	if !resp.Success || f.has(s3NPPath) || f.has(minioNPPath) {
+		t.Fatalf("teardown = %+v, policies kept = %v %v", resp, f.has(s3NPPath), f.has(minioNPPath))
 	}
 }
 

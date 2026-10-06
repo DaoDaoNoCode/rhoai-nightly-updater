@@ -21,7 +21,7 @@ var (
 // TEMPLATE_REVISION env var; bump both together whenever a template change
 // matters to the running code (probes, listeners, strategy, timeouts, RBAC).
 // An install whose template predates the variable reports revision "".
-const ExpectedTemplateRevision = "2"
+const ExpectedTemplateRevision = "3"
 
 // templateRevision reads the revision of the template that deployed us.
 func templateRevision() string {

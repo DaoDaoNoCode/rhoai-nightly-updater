@@ -49,9 +49,11 @@ var (
 	errDSPACRDMissing = errors.New("the DataSciencePipelinesApplication CRD is not installed")
 )
 
-// minioS3Host is the in-cluster S3 endpoint of the tool's MinIO.
+// minioS3Host is the in-cluster S3 endpoint of the tool's S3 storage. It is
+// the MinIO Service address of earlier versions, kept so their pipeline
+// servers keep working; the Service now routes to SeaweedFS.
 func minioS3Host() string {
-	return fmt.Sprintf("%s.%s.svc:9000", minioServiceName, minioNamespace)
+	return fmt.Sprintf("%s.%s.svc:%d", minioServiceName, minioNamespace, minioServiceAPIPort)
 }
 
 // dspaInfo is the part of a DataSciencePipelinesApplication the tool reads.
@@ -302,13 +304,13 @@ func (e minioEndpoints) usesMinIO(dspaNamespace, host string) bool {
 	return false
 }
 
-// minioTeardownBlocker explains why MinIO cannot be torn down because of
+// minioTeardownBlocker explains why the S3 storage cannot be torn down because of
 // pipeline servers, or returns "". Any DSPA that stores artifacts in the
-// tool's MinIO (see usesMinIO), or lives in the minio namespace, blocks it,
+// tool's S3 storage (see usesMinIO), or lives in the minio namespace, blocks it,
 // whoever created it. Terminating ones block too: only a running
 // data-science-pipelines operator removes their finalizer (DSPO
-// dspipeline_controller.go), so MinIO waits until they are really gone
-// (teardown order DSPA, then MinIO).
+// dspipeline_controller.go), so the storage waits until they are really gone
+// (teardown order DSPA, then S3 storage).
 func minioTeardownBlocker(dspas []dspaInfo, endpoints minioEndpoints) string {
 	var live, deleting []string
 	for _, d := range dspas {
@@ -326,7 +328,7 @@ func minioTeardownBlocker(dspas []dspaInfo, endpoints minioEndpoints) string {
 	sort.Strings(deleting)
 	var parts []string
 	if len(live) > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s this MinIO: %s. Tear %s down first.", countNoun(len(live), "pipeline server", "pipeline servers"), verb(len(live), "uses", "use"), strings.Join(live, ", "), verb(len(live), "it", "them")))
+		parts = append(parts, fmt.Sprintf("%s %s this S3 storage: %s. Tear %s down first.", countNoun(len(live), "pipeline server", "pipeline servers"), verb(len(live), "uses", "use"), strings.Join(live, ", "), verb(len(live), "it", "them")))
 	}
 	if len(deleting) > 0 {
 		parts = append(parts, fmt.Sprintf("%s %s still being deleted: %s. Wait until %s gone; the data-science-pipelines operator must be running to finish the cleanup.", countNoun(len(deleting), "pipeline server", "pipeline servers"), verb(len(deleting), "is", "are"), strings.Join(deleting, ", "), verb(len(deleting), "it is", "they are")))
@@ -396,7 +398,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 
 	minio := getMinIOStatus(c)
 	if !minio.Deployed || !minio.ManagedByTool || !minio.Ready {
-		return fail("MinIO is not deployed or not ready. Set up MinIO first.", "prerequisites", "MinIO not ready")
+		return fail("The S3 storage is not deployed or not ready. Set up S3 storage first.", "prerequisites", "S3 storage not ready")
 	}
 
 	// Never add a second pipeline server next to one this tool did not
@@ -467,24 +469,24 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		logs = append(logs, "OK: Project created")
 	}
 
-	// Step 2: Read MinIO credentials
-	logs = append(logs, "Reading MinIO credentials...")
+	// Step 2: Read the S3 credentials
+	logs = append(logs, "Reading S3 storage credentials...")
 	secretBody, _, err := c.get(namespacedPath("v1", "secrets", minioNamespace, "minio-secret"))
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to read MinIO secret: %v", err), errorCodeFromK8sErr(err), "MinIO secret read failed")
+		return fail(fmt.Sprintf("Failed to read the S3 storage secret minio-secret: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "S3 secret read failed")
 	}
 	var minioSecret struct {
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(secretBody, &minioSecret); err != nil {
-		return fail("Failed to parse MinIO secret", "", "MinIO secret parse failed")
+		return fail("Failed to parse the S3 storage secret minio-secret", "", "S3 secret parse failed")
 	}
 	accessKey := decodeBase64Field(minioSecret.Data["minio_root_user"])
 	secretKey := decodeBase64Field(minioSecret.Data["minio_root_password"])
 	if accessKey == "" || secretKey == "" {
-		return fail("MinIO credentials are empty. Check that minio-secret has fields: minio_root_user, minio_root_password.", "prerequisites", "MinIO credentials empty")
+		return fail("The S3 credentials are empty. Check that minio-secret has fields: minio_root_user, minio_root_password.", "prerequisites", "S3 credentials empty")
 	}
-	logs = append(logs, "OK: MinIO credentials read")
+	logs = append(logs, "OK: S3 storage credentials read")
 
 	// Step 3: Create the DSPA credentials secret, without taking over a
 	// secret of the same name that someone else created.

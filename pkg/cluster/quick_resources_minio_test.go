@@ -8,11 +8,15 @@ import (
 )
 
 const (
-	minioNSPath     = "/api/v1/namespaces/minio"
+	minioNSPath = "/api/v1/namespaces/minio"
+	// The MinIO an earlier version deployed.
 	minioDeployPath = "/apis/apps/v1/namespaces/minio/deployments/minio"
 	minioPVCPath    = "/api/v1/namespaces/minio/persistentvolumeclaims/minio-pvc"
-	dspaListPath    = "/apis/datasciencepipelinesapplications.opendatahub.io/v1/datasciencepipelinesapplications"
-	created         = "2026-08-27T21:30:55Z"
+	// The S3 storage (SeaweedFS).
+	s3DeployPath = "/apis/apps/v1/namespaces/minio/deployments/seaweedfs"
+	s3PVCPath    = "/api/v1/namespaces/minio/persistentvolumeclaims/seaweedfs-pvc"
+	dspaListPath = "/apis/datasciencepipelinesapplications.opendatahub.io/v1/datasciencepipelinesapplications"
+	created      = "2026-08-27T21:30:55Z"
 )
 
 // fastMinIOTimings shortens the MinIO waits and stubs bucket creation.
@@ -28,6 +32,7 @@ func fastMinIOTimings(t *testing.T) *int {
 		MinIOReadyTimeout, MinIOReadyPoll, MinIODeleteTimeout, MinIODeletePoll, minioBucketCreator, minioBucketRetryDelay = oldReady, oldPoll, oldDel, oldDelPoll, oldBucket, oldRetry
 	})
 	t.Setenv("MINIO_IMAGE", "")
+	t.Setenv("SEAWEEDFS_IMAGE", "")
 	t.Setenv("MINIO_ROOT_USER", "")
 	t.Setenv("MINIO_ROOT_PASSWORD", "")
 	return &calls
@@ -43,15 +48,26 @@ func putNamespace(f *resourceFake, labels, manager string) {
 	f.putJSON(minioNSPath, `{"metadata":{"labels":`+labels+`,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(manager, "Update")+`},"status":{"phase":"Active"}}`)
 }
 
+// putMinIODeployment puts the MinIO Deployment of an earlier version,
+// created by server-side apply with manager.
 func putMinIODeployment(f *resourceFake, manager string, ready int) {
-	f.putJSON(minioDeployPath, `{"metadata":{"creationTimestamp":"`+created+`","generation":1,"managedFields":`+managedFieldsJSON(manager, "Apply")+`},"status":{"observedGeneration":1,"replicas":1,"readyReplicas":`+itoa(ready)+`,"updatedReplicas":1}}`)
+	f.putJSON(minioDeployPath, `{"metadata":{"creationTimestamp":"`+created+`","generation":1,"managedFields":`+managedFieldsJSON(manager, "Apply")+`},
+		"spec":{"template":{"spec":{"containers":[{"name":"minio","image":"quay.io/hummingbird-community/minio@sha256:25268b5a"}]}}},
+		"status":{"observedGeneration":1,"replicas":1,"readyReplicas":`+itoa(ready)+`,"updatedReplicas":1}}`)
 }
 
-// readyAfterApply makes the MinIO deployment report a ready rollout of the
-// current generation, like the deployment controller would.
+// putS3Deployment puts the tool's SeaweedFS Deployment.
+func putS3Deployment(f *resourceFake, ready int) {
+	f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},
+		"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+seaweedfsDefaultImage+`"}]}}},
+		"status":{"observedGeneration":1,"replicas":1,"readyReplicas":`+itoa(ready)+`,"updatedReplicas":1}}`)
+}
+
+// readyAfterApply makes the SeaweedFS deployment report a ready rollout of
+// the current generation, like the deployment controller would.
 func readyAfterApply(f *resourceFake) {
 	f.onGet = func(k fakeKey, obj map[string]interface{}) {
-		if k.plural == "deployments" && k.name == "minio" {
+		if k.plural == "deployments" && k.name == s3Deployment {
 			obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
 		}
 	}
@@ -59,7 +75,7 @@ func readyAfterApply(f *resourceFake) {
 
 func notReadyAfterApply(f *resourceFake) {
 	f.onGet = func(k fakeKey, obj map[string]interface{}) {
-		if k.plural == "deployments" && k.name == "minio" {
+		if k.plural == "deployments" && k.name == s3Deployment {
 			obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 0, "updatedReplicas": 1}
 		}
 	}
@@ -69,6 +85,12 @@ func putMinIOPod(f *resourceFake, name, image, reason, message string) {
 	f.putJSON("/api/v1/namespaces/minio/pods/"+name, `{"metadata":{"labels":{"app":"minio"}},"spec":{"containers":[{"name":"minio","image":"`+image+`"}]},
 		"status":{"phase":"Pending","conditions":[{"type":"PodScheduled","status":"True"}],
 		"containerStatuses":[{"name":"minio","state":{"waiting":{"reason":"`+reason+`","message":"`+message+`"}}}]}}`)
+}
+
+func putS3Pod(f *resourceFake, name, image, reason, message string) {
+	f.putJSON("/api/v1/namespaces/minio/pods/"+name, `{"metadata":{"labels":{"app":"seaweedfs"}},"spec":{"containers":[{"name":"seaweedfs","image":"`+image+`"}]},
+		"status":{"phase":"Pending","conditions":[{"type":"PodScheduled","status":"True"}],
+		"containerStatuses":[{"name":"seaweedfs","state":{"waiting":{"reason":"`+reason+`","message":"`+message+`"}}}]}}`)
 }
 
 func hasMutation(f *resourceFake, prefix string) bool {
@@ -93,7 +115,8 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 		t.Errorf("bucket created %d times, want 1", *bucketCalls)
 	}
 	for _, path := range []string{
-		minioNSPath, minioPVCPath, minioDeployPath,
+		minioNSPath, s3PVCPath, s3DeployPath,
+		"/apis/networking.k8s.io/v1/namespaces/minio/networkpolicies/seaweedfs-ingress",
 		"/api/v1/namespaces/minio/secrets/minio-secret",
 		"/api/v1/namespaces/minio/services/minio-service",
 		"/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui",
@@ -112,7 +135,10 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 		t.Errorf("namespace POST did not set fieldManager: %v", nsFields)
 	}
 
-	raw, _ := json.Marshal(f.get(minioDeployPath))
+	if f.has(minioPVCPath) || f.has(minioDeployPath) {
+		t.Error("a fresh setup must not create MinIO objects")
+	}
+	raw, _ := json.Marshal(f.get(s3DeployPath))
 	var deploy struct {
 		Spec struct {
 			Template struct {
@@ -123,7 +149,9 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 						Args            []string               `json:"args"`
 						SecurityContext map[string]interface{} `json:"securityContext"`
 						Env             []struct {
-							Name string `json:"name"`
+							Name      string          `json:"name"`
+							Value     string          `json:"value"`
+							ValueFrom json.RawMessage `json:"valueFrom"`
 						} `json:"env"`
 					} `json:"containers"`
 				} `json:"spec"`
@@ -132,11 +160,12 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	}
 	_ = json.Unmarshal(raw, &deploy)
 	ctr := deploy.Spec.Template.Spec.Containers[0]
-	if ctr.Image != minioDefaultImage || !strings.Contains(ctr.Image, "@sha256:") || strings.Contains(ctr.Image, "RELEASE.2019") {
-		t.Errorf("image = %q, want the digest-pinned patched MinIO", ctr.Image)
+	if ctr.Image != seaweedfsDefaultImage || !strings.HasPrefix(ctr.Image, "ghcr.io/chrislusf/seaweedfs@sha256:") {
+		t.Errorf("image = %q, want the digest-pinned SeaweedFS", ctr.Image)
 	}
-	if strings.Join(ctr.Args, " ") != "server /data --console-address :9090" {
-		t.Errorf("args = %v; the console must have its own port", ctr.Args)
+	// The admin password must not be on the command line.
+	if strings.Join(ctr.Args, " ") != "mini -dir=/data -webdav=false -bucket=pipelines" {
+		t.Errorf("args = %v", ctr.Args)
 	}
 	if f.has("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api") {
 		t.Error("the S3 API must not be exposed through a Route")
@@ -148,26 +177,61 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 	if _, fixed := ctr.SecurityContext["runAsUser"]; fixed || deploy.Spec.Template.Spec.SecurityContext != nil {
 		t.Errorf("a fixed UID would conflict with restricted-v2: %v", ctr.SecurityContext)
 	}
-	envs := map[string]bool{}
+	envs := map[string]string{}
 	for _, e := range ctr.Env {
-		envs[e.Name] = true
+		envs[e.Name] = e.Value + string(e.ValueFrom)
 	}
-	if !envs["MINIO_ROOT_USER"] || !envs["MINIO_ROOT_PASSWORD"] || envs["MINIO_ACCESS_KEY"] {
-		t.Errorf("env %v: want only the MINIO_ROOT_* variables", envs)
+	for name, key := range map[string]string{"AWS_ACCESS_KEY_ID": "minio_root_user", "AWS_SECRET_ACCESS_KEY": "minio_root_password", "WEED_ADMIN_PASSWORD": "minio_root_password"} {
+		if !strings.Contains(envs[name], `"name":"minio-secret"`) || !strings.Contains(envs[name], `"key":"`+key+`"`) {
+			t.Errorf("env %s = %s, want secret minio-secret key %s", name, envs[name], key)
+		}
+	}
+	if envs["WEED_ADMIN_USER"] != s3AdminUser || len(envs) != 4 {
+		t.Errorf("env = %v", envs)
+	}
+	svc, _ := json.Marshal(f.get("/api/v1/namespaces/minio/services/minio-service")["spec"])
+	for _, want := range []string{`{"name":"api","port":9000,"targetPort":8333}`, `{"name":"ui","port":9090,"targetPort":23646}`, `"selector":{"app":"seaweedfs"}`} {
+		if !strings.Contains(string(svc), want) {
+			t.Errorf("Service spec lacks %s: %s", want, svc)
+		}
+	}
+	if !strings.Contains(resp.Message, "Sign in to the admin UI as 'admin'") {
+		t.Errorf("message must name the admin UI user: %q", resp.Message)
 	}
 }
 
+// Setup applies the Service only once SeaweedFS is ready, so a MinIO being
+// replaced keeps serving if SeaweedFS cannot start.
+func TestSetupMinIO_ServiceFollowsReadiness(t *testing.T) {
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	notReadyAfterApply(f)
+	if resp, _ := SetupMinIO(c); resp.Success {
+		t.Fatalf("setup = %+v", resp)
+	}
+	if f.has("/api/v1/namespaces/minio/services/minio-service") || f.has(minioUIRouteTestPath) {
+		t.Error("the Service and the Route must wait for a ready SeaweedFS")
+	}
+}
+
+const minioUIRouteTestPath = "/apis/route.openshift.io/v1/namespaces/minio/routes/minio-ui"
+
 func TestSetupMinIO_ImageOverride(t *testing.T) {
 	fastMinIOTimings(t)
+	t.Setenv("SEAWEEDFS_IMAGE", "mirror.example.com/seaweedfs@sha256:abc")
 	t.Setenv("MINIO_IMAGE", "mirror.example.com/minio@sha256:abc")
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
-	if resp, _ := SetupMinIO(c); !resp.Success {
+	resp, _ := SetupMinIO(c)
+	if !resp.Success {
 		t.Fatalf("setup failed: %+v", resp)
 	}
-	raw, _ := json.Marshal(f.get(minioDeployPath))
-	if !strings.Contains(string(raw), "mirror.example.com/minio@sha256:abc") {
-		t.Errorf("MINIO_IMAGE override not applied: %s", raw)
+	raw, _ := json.Marshal(f.get(s3DeployPath))
+	if !strings.Contains(string(raw), "mirror.example.com/seaweedfs@sha256:abc") || strings.Contains(string(raw), "mirror.example.com/minio") {
+		t.Errorf("SEAWEEDFS_IMAGE override not applied, or MINIO_IMAGE used: %s", raw)
+	}
+	if !strings.Contains(strings.Join(resp.Logs, "\n"), "MINIO_IMAGE is set but no longer used") {
+		t.Errorf("logs must say MINIO_IMAGE is ignored: %v", resp.Logs)
 	}
 }
 
@@ -225,7 +289,7 @@ func TestSetupMinIO_StopsEarlyOnImagePullBackOff(t *testing.T) {
 	MinIOReadyTimeout = 5 * time.Second
 	f, c := newResourceFake(t)
 	notReadyAfterApply(f)
-	putMinIOPod(f, "minio-new", minioDefaultImage, "ImagePullBackOff", "Back-off pulling image: unauthorized: access to the requested resource is not authorized")
+	putS3Pod(f, "seaweedfs-new", seaweedfsDefaultImage, "ImagePullBackOff", "Back-off pulling image: unauthorized: access to the requested resource is not authorized")
 
 	start := time.Now()
 	resp, _ := SetupMinIO(c)
@@ -244,8 +308,8 @@ func TestSetupMinIO_IgnoresPodsOfAnOlderImage(t *testing.T) {
 	fastMinIOTimings(t)
 	f, c := newResourceFake(t)
 	notReadyAfterApply(f)
-	putMinIOPod(f, "minio-old", "quay.io/minio/minio:latest", "ImagePullBackOff", "unauthorized")
-	putMinIOPod(f, "minio-new", minioDefaultImage, "ContainerCreating", "")
+	putS3Pod(f, "seaweedfs-old", "ghcr.io/chrislusf/seaweedfs:4.47", "ImagePullBackOff", "unauthorized")
+	putS3Pod(f, "seaweedfs-new", seaweedfsDefaultImage, "ContainerCreating", "")
 
 	resp, _ := SetupMinIO(c)
 	if resp.Success || resp.ErrorCode != "timeout" {
@@ -291,27 +355,87 @@ func TestSetupMinIO_TerminatingNamespace(t *testing.T) {
 func TestGetMinIOStatus_ReportsWaitingReasonAndTerminalFlag(t *testing.T) {
 	f, c := newResourceFake(t)
 	putNamespace(f, `{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}`, toolFieldManager)
-	putMinIODeployment(f, toolFieldManager, 0)
-	putMinIOPod(f, "minio-1", "quay.io/minio/minio:latest", "ImagePullBackOff", "Back-off pulling image quay.io/minio/minio:latest")
-	f.putJSON(minioPVCPath, `{"metadata":{"labels":{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}}}`)
+	putS3Deployment(f, 0)
+	putS3Pod(f, "seaweedfs-1", "ghcr.io/chrislusf/seaweedfs:4.48", "ImagePullBackOff", "Back-off pulling image ghcr.io/chrislusf/seaweedfs:4.48")
+	f.putJSON(s3PVCPath, `{"metadata":{"labels":{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}}}`)
 
 	st := getMinIOStatus(c)
-	if !st.Deployed || st.Ready || !st.ManagedByTool {
+	if !st.Deployed || st.Ready || !st.ManagedByTool || st.MigrationPending || st.UIUser != "admin" {
 		t.Fatalf("state = %+v", st)
 	}
 	if st.WaitingReason != "ImagePullBackOff" || !st.TerminalError || !strings.HasPrefix(st.Message, "ImagePullBackOff: Back-off pulling image") {
 		t.Errorf("waiting reason not surfaced: %+v", st)
 	}
-	if len(st.DataPVCs) != 1 || st.DataPVCs[0] != "minio-pvc" {
-		t.Errorf("DataPVCs = %v", st.DataPVCs)
+	if len(st.DataPVCs) != 1 || st.DataPVCs[0] != "seaweedfs-pvc" || len(st.KeptPVCs) != 0 {
+		t.Errorf("DataPVCs = %v, KeptPVCs = %v", st.DataPVCs, st.KeptPVCs)
+	}
+}
+
+// The MinIO of an earlier version reports its own pods and readiness, and
+// that setup would migrate it.
+func TestGetMinIOStatus_MigrationPending(t *testing.T) {
+	f, c := newResourceFake(t)
+	putNamespace(f, toolLabelJSON, toolFieldManager)
+	putMinIODeployment(f, toolFieldManager, 0)
+	putMinIOPod(f, "minio-1", "quay.io/minio/minio:latest", "ImagePullBackOff", "Back-off pulling image quay.io/minio/minio:latest")
+	f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`},"status":{"capacity":{"storage":"20Gi"}}}`)
+
+	st := getMinIOStatus(c)
+	if !st.Deployed || st.Ready || !st.MigrationPending || st.WaitingReason != "ImagePullBackOff" || st.UIUser != "" {
+		t.Fatalf("state = %+v", st)
+	}
+	for _, want := range []string{"Re-run setup to replace it with SeaweedFS", "not copied", "return 404", "minio-pvc"} {
+		if !strings.Contains(st.Warning, want) {
+			t.Errorf("warning lacks %q: %q", want, st.Warning)
+		}
+	}
+	if len(st.DataPVCs) != 1 || len(st.KeptPVCs) != 0 {
+		t.Errorf("the volume in use is not kept yet: DataPVCs = %v, KeptPVCs = %v", st.DataPVCs, st.KeptPVCs)
+	}
+}
+
+// After the migration the MinIO volume is reported as kept, with its size.
+func TestGetMinIOStatus_KeptMinIOVolume(t *testing.T) {
+	f, c := newResourceFake(t)
+	putNamespace(f, toolLabelJSON, toolFieldManager)
+	putS3Deployment(f, 1)
+	f.putJSON(s3PVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"resources":{"requests":{"storage":"10Gi"}}},"status":{"capacity":{"storage":"20Gi"}}}`)
+
+	st := getMinIOStatus(c)
+	if !st.Ready || st.MigrationPending || st.Warning != "" {
+		t.Fatalf("state = %+v", st)
+	}
+	if len(st.KeptPVCs) != 1 || st.KeptPVCs[0].Name != "minio-pvc" || st.KeptPVCs[0].Size != "20Gi" {
+		t.Errorf("KeptPVCs = %+v", st.KeptPVCs)
+	}
+	if strings.Join(st.DataPVCs, ",") != "seaweedfs-pvc,minio-pvc" && strings.Join(st.DataPVCs, ",") != "minio-pvc,seaweedfs-pvc" {
+		t.Errorf("teardown deletes both volumes: DataPVCs = %v", st.DataPVCs)
+	}
+	// Someone else's PVC of that name is neither kept nor deleted by the tool.
+	f.putJSON(minioPVCPath, foreignJSON(""))
+	if st := getMinIOStatus(c); len(st.KeptPVCs) != 0 || len(st.DataPVCs) != 1 {
+		t.Errorf("foreign minio-pvc reported: %+v", st)
+	}
+}
+
+// A SeaweedFS that runs another image than this version deploys says so.
+func TestGetMinIOStatus_ImageDrift(t *testing.T) {
+	t.Setenv("SEAWEEDFS_IMAGE", "")
+	f, c := newResourceFake(t)
+	putNamespace(f, toolLabelJSON, toolFieldManager)
+	f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"ghcr.io/chrislusf/seaweedfs:4.47"}]}}},"status":{"readyReplicas":1}}`)
+	st := getMinIOStatus(c)
+	if !strings.HasPrefix(st.Warning, "SeaweedFS runs ghcr.io/chrislusf/seaweedfs:4.47, not the image this version deploys") || !strings.Contains(st.Warning, "Re-run setup to update it") {
+		t.Errorf("warning = %q", st.Warning)
 	}
 }
 
 func TestGetMinIOStatus_ContainerCreatingIsNotTerminal(t *testing.T) {
 	f, c := newResourceFake(t)
 	putNamespace(f, `{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}`, toolFieldManager)
-	putMinIODeployment(f, toolFieldManager, 0)
-	putMinIOPod(f, "minio-1", minioDefaultImage, "ContainerCreating", "")
+	putS3Deployment(f, 0)
+	putS3Pod(f, "seaweedfs-1", seaweedfsDefaultImage, "ContainerCreating", "")
 	st := getMinIOStatus(c)
 	if st.WaitingReason != "ContainerCreating" || st.TerminalError {
 		t.Errorf("state = %+v", st)
@@ -335,7 +459,7 @@ func TestGetMinIOStatus_LegacyNamespaceIsManaged(t *testing.T) {
 	f, c := newResourceFake(t)
 	putNamespace(f, `{}`, legacyPostManager)
 	putMinIODeployment(f, toolFieldManager, 1)
-	if st := getMinIOStatus(c); !st.ManagedByTool || !st.Ready || st.TeardownBlockedReason != "" {
+	if st := getMinIOStatus(c); !st.ManagedByTool || !st.Ready || st.TeardownBlockedReason != "" || !st.MigrationPending {
 		t.Errorf("state = %+v", st)
 	}
 }
@@ -343,8 +467,8 @@ func TestGetMinIOStatus_LegacyNamespaceIsManaged(t *testing.T) {
 func TestTeardownMinIO(t *testing.T) {
 	managedNS := func(f *resourceFake) {
 		putNamespace(f, `{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}`, toolFieldManager)
-		putMinIODeployment(f, toolFieldManager, 1)
-		f.putJSON(minioPVCPath, `{"metadata":{"labels":{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}}}`)
+		putS3Deployment(f, 1)
+		f.putJSON(s3PVCPath, `{"metadata":{"labels":{"`+managedByLabelKey+`":"`+managedByLabelValue+`"}}}`)
 	}
 	dspa := func(f *resourceFake, ns, name, host string, terminating bool) {
 		del := ""
@@ -359,7 +483,7 @@ func TestTeardownMinIO(t *testing.T) {
 		setup    func(f *resourceFake)
 		wantOK   bool
 		wantCode string
-		wantGone bool // the tool's Deployment and PVC were deleted
+		wantGone bool // the tool's Deployments and PVCs were deleted
 		wantMsg  string
 	}{
 		{name: "not deployed", setup: func(*resourceFake) {}, wantOK: true},
@@ -368,6 +492,20 @@ func TestTeardownMinIO(t *testing.T) {
 			putMinIODeployment(f, toolFieldManager, 1)
 		}, wantCode: "not_managed"},
 		{name: "managed", setup: managedNS, wantOK: true, wantGone: true, wantMsg: "oc delete project minio"},
+		{name: "migrated, with the MinIO volume kept", setup: func(f *resourceFake) {
+			managedNS(f)
+			f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+		}, wantOK: true, wantGone: true, wantMsg: "PVCs seaweedfs-pvc and minio-pvc and all stored objects"},
+		{name: "migration pending", setup: func(f *resourceFake) {
+			putNamespace(f, toolLabelJSON, toolFieldManager)
+			putMinIODeployment(f, toolFieldManager, 1)
+			f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+		}, wantOK: true, wantGone: true, wantMsg: "PVC minio-pvc and all stored objects"},
+		{name: "kept MinIO volume used by a pipeline server", setup: func(f *resourceFake) {
+			putNamespace(f, toolLabelJSON, toolFieldManager)
+			f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+			dspa(f, "team-a", "dspa", minioS3Host(), false)
+		}, wantCode: "prerequisites", wantMsg: "team-a/dspa"},
 		{name: "legacy namespace", setup: func(f *resourceFake) {
 			putNamespace(f, `{}`, legacyPostManager)
 			putMinIODeployment(f, toolFieldManager, 0)
@@ -403,19 +541,26 @@ func TestTeardownMinIO(t *testing.T) {
 		}},
 		{name: "delete error", setup: func(f *resourceFake) {
 			managedNS(f)
-			f.fail["DELETE "+minioPVCPath] = 500
-		}, wantCode: "partial_failure", wantMsg: "PersistentVolumeClaim minio-pvc"},
+			f.fail["DELETE "+s3PVCPath] = 500
+		}, wantCode: "partial_failure", wantMsg: "PersistentVolumeClaim seaweedfs-pvc"},
 		{name: "read forbidden", setup: func(f *resourceFake) {
 			managedNS(f)
-			f.fail["GET "+minioDeployPath] = 403
-		}, wantCode: "partial_failure", wantMsg: "Deployment minio: cannot read it"},
+			f.fail["GET "+s3DeployPath] = 403
+		}, wantCode: "partial_failure", wantMsg: "Deployment seaweedfs: cannot read it"},
+		// The new image under an old template: the policy of the new name
+		// is not readable yet. The message says how to fix it.
+		{name: "RBAC from an older template", setup: func(f *resourceFake) {
+			putNamespace(f, toolLabelJSON, toolFieldManager)
+			putMinIODeployment(f, toolFieldManager, 1)
+			f.fail["GET /apis/networking.k8s.io/v1/namespaces/minio/networkpolicies/seaweedfs-ingress"] = 403
+		}, wantCode: "partial_failure", wantMsg: "run `make upgrade`"},
 		{name: "PVC still terminating", setup: func(f *resourceFake) {
 			managedNS(f)
-			f.putJSON(minioPVCPath, `{"metadata":{"labels":`+toolLabelJSON+`,"finalizers":["kubernetes.io/pvc-protection"]}}`)
-		}, wantCode: "in_progress", wantMsg: "still terminating"},
+			f.putJSON(s3PVCPath, `{"metadata":{"labels":`+toolLabelJSON+`,"finalizers":["kubernetes.io/pvc-protection"]}}`)
+		}, wantCode: "in_progress", wantMsg: "PVC seaweedfs-pvc is still terminating"},
 		{name: "already removed, namespace left", setup: func(f *resourceFake) {
 			putNamespace(f, toolLabelJSON, toolFieldManager)
-		}, wantOK: true, wantMsg: "No MinIO objects created by this tool remain"},
+		}, wantOK: true, wantMsg: "No S3 storage objects created by this tool remain"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,7 +582,7 @@ func TestTeardownMinIO(t *testing.T) {
 					t.Errorf("unexpected request %s", m)
 				}
 			}
-			if gone := !f.has(minioDeployPath) && !f.has(minioPVCPath); gone != tc.wantGone && tc.wantGone {
+			if gone := !f.has(minioDeployPath) && !f.has(minioPVCPath) && !f.has(s3DeployPath) && !f.has(s3PVCPath); gone != tc.wantGone && tc.wantGone {
 				t.Errorf("tool objects deleted = %v, want %v (%v)", gone, tc.wantGone, f.mutations())
 			}
 			if tc.wantMsg != "" && !strings.Contains(resp.Message, tc.wantMsg) {

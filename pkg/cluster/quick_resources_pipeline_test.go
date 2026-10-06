@@ -32,7 +32,7 @@ func putDSProject(f *resourceFake, ns string) {
 
 func putReadyManagedMinIO(f *resourceFake) {
 	putNamespace(f, toolLabelJSON, toolFieldManager)
-	putMinIODeployment(f, toolFieldManager, 1)
+	putS3Deployment(f, 1)
 	f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"bWluaW8=","minio_root_password":"cGFzcw=="}}`)
 }
 
@@ -96,7 +96,7 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 	}
 	// Every live DSPA on the tool's MinIO blocks its teardown, including
 	// the dashboard-created one and the one in a hidden project.
-	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this MinIO: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
+	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this S3 storage: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
 		t.Errorf("MinIO teardown reason = %q", st.MinIO.TeardownBlockedReason)
 	}
 }

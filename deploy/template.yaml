@@ -125,28 +125,34 @@ objects:
         resources: ["services"]
         resourceNames: ["minio-service"]
         verbs: ["patch", "delete"]
-      # PVCs: MinIO's own, and listing the minio and MLflow namespaces to
-      # name the data a teardown deletes
+      # PVCs: the S3 storage's own (SeaweedFS), the data PVC of the MinIO it
+      # replaced (kept until teardown), and listing the minio and MLflow
+      # namespaces to name the data a teardown deletes
       - apiGroups: [""]
         resources: ["persistentvolumeclaims"]
         verbs: ["list", "create"]
       - apiGroups: [""]
         resources: ["persistentvolumeclaims"]
-        resourceNames: ["minio-pvc"]
+        resourceNames: ["seaweedfs-pvc"]
         verbs: ["patch", "delete"]
+      - apiGroups: [""]
+        resources: ["persistentvolumeclaims"]
+        resourceNames: ["minio-pvc"]
+        verbs: ["delete"]
       # Pods in the RHOAI and module namespaces and openshift-marketplace:
       # status, debug info and diagnostics (read-only)
       - apiGroups: [""]
         resources: ["pods"]
         verbs: ["list"]
       # Deployments: dashboard image overrides, dashboard-operator pause and
-      # restore, operator restart, rollout assist, MinIO
+      # restore, operator restart, rollout assist, the S3 storage (SeaweedFS,
+      # and removing the MinIO of earlier versions it replaces)
       - apiGroups: ["apps"]
         resources: ["deployments"]
         verbs: ["get", "list", "patch", "create"]
       - apiGroups: ["apps"]
         resources: ["deployments"]
-        resourceNames: ["minio"]
+        resourceNames: ["seaweedfs", "minio"]
         verbs: ["delete"]
       - apiGroups: ["apps"]
         resources: ["replicasets"]
@@ -162,15 +168,21 @@ objects:
       - apiGroups: ["route.openshift.io"]
         resources: ["routes"]
         verbs: ["create"]
-      # MinIO's ingress policy (S3 port from cluster pods, console from the
-      # router), created with MinIO and removed by its teardown
+      # The S3 storage's ingress policy (S3 port from cluster pods, admin UI
+      # from the router), created with SeaweedFS and removed by its teardown;
+      # minio-ingress is the policy of the MinIO it replaces, removed by
+      # setup once SeaweedFS serves
       - apiGroups: ["networking.k8s.io"]
         resources: ["networkpolicies"]
         verbs: ["create"]
       - apiGroups: ["networking.k8s.io"]
         resources: ["networkpolicies"]
-        resourceNames: ["minio-ingress"]
+        resourceNames: ["seaweedfs-ingress"]
         verbs: ["get", "patch", "delete"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["networkpolicies"]
+        resourceNames: ["minio-ingress"]
+        verbs: ["get", "delete"]
       # The RHOAI operator (redhat-ods-operator namespace)
       - apiGroups: ["operators.coreos.com"]
         resources: ["subscriptions"]
@@ -424,7 +436,7 @@ objects:
                 # Must match api.ExpectedTemplateRevision; bump both when a
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
-                  value: "2"
+                  value: "3"
               ports:
                 - containerPort: 9090
                   name: metrics

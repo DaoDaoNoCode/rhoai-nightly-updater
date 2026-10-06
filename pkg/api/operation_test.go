@@ -381,7 +381,7 @@ func TestOperationOutcome(t *testing.T) {
 		{"operation response", Operation{}, 200, `{"success":true,"message":"MinIO is ready","logs":[]}`, false, true, "MinIO is ready"},
 		{"failed operation response", Operation{}, 422, `{"success":false,"message":"No DSC"}`, false, false, "No DSC"},
 		{"200 with success false", Operation{}, 200, `{"success":false,"message":"Fix not applied"}`, false, false, "Fix not applied"},
-		{"error", Operation{}, 500, `{"error":"MinIO setup failed","errorCode":"internal"}`, false, false, "MinIO setup failed"},
+		{"error", Operation{}, 500, `{"error":"S3 storage setup failed","errorCode":"internal"}`, false, false, "S3 storage setup failed"},
 		{"no body", Operation{}, 204, "", false, true, "Completed."},
 		{"no body, failed", Operation{}, 502, "", false, false, "Failed (HTTP 502)."},
 		{"no response (panic)", Operation{}, 0, "", false, false, "The operation ended without reporting a result."},

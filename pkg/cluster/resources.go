@@ -15,7 +15,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// Ownership of the quick resources (MinIO, pipeline servers, MLflow).
+// Ownership of the quick resources (S3 storage, pipeline servers, MLflow).
 //
 // Everything the tool creates carries managedByLabelKey=managedByLabelValue,
 // and only labelled objects are listed for teardown. Objects created by older
@@ -407,7 +407,7 @@ func truncateMessage(s string) string {
 }
 
 // GetResourcesStatus checks the state of test infrastructure resources. It
-// lists DS projects, pipeline servers (one cluster-wide LIST), MinIO, MLflow
+// lists DS projects, pipeline servers (one cluster-wide LIST), S3 storage, MLflow
 // and the dashboard route concurrently, so the cost no longer grows with the
 // number of projects. Pipeline servers are reported only for projects the
 // user can see.
@@ -460,9 +460,11 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		return status.PipelineServers[i].Namespace < status.PipelineServers[j].Namespace
 	})
 
-	if status.MinIO.Deployed && status.MinIO.ManagedByTool {
+	// Also for a storage that is gone but left its data PVCs (the kept MinIO
+	// volume): teardown deletes them under the same guard.
+	if status.MinIO.ManagedByTool && (status.MinIO.Deployed || len(status.MinIO.DataPVCs) > 0) {
 		if minioEPErr != nil && len(dspas) > 0 {
-			status.MinIO.TeardownBlockedReason = "Cannot verify which pipeline servers use MinIO: " + minioEPErr.Error()
+			status.MinIO.TeardownBlockedReason = "Cannot verify which pipeline servers use the S3 storage: " + minioEPErr.Error()
 		} else if reason := minioTeardownBlocker(dspas, minioEP); reason != "" {
 			status.MinIO.TeardownBlockedReason = reason
 		}

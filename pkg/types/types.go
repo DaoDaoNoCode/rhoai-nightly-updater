@@ -570,9 +570,27 @@ type ResourceState struct {
 	// means the operator default (spec.image.image removed).
 	RevertImage string `json:"revertImage,omitempty"`
 	// Warning is a security or upgrade notice that needs the user's action
-	// but does not stop the resource from working (for example MinIO still
-	// running the 2019 release, or its S3 API exposed through a Route).
+	// but does not stop the resource from working (for example the S3
+	// storage running another image than this version deploys, or its S3
+	// API exposed through a Route).
 	Warning string `json:"warning,omitempty"`
+	// UIUser is the login name of the resource's web UI, when it has a
+	// fixed one (the SeaweedFS admin UI).
+	UIUser string `json:"uiUser,omitempty"`
+	// MigrationPending is true while the MinIO server an earlier version of
+	// this tool deployed still runs; re-running setup replaces it with
+	// SeaweedFS and starts with an empty bucket.
+	MigrationPending bool `json:"migrationPending,omitempty"`
+	// KeptPVCs are data volumes kept on purpose after a migration (the old
+	// MinIO volume), for a rollback or a manual copy. Teardown deletes them;
+	// they are also listed in DataPVCs.
+	KeptPVCs []KeptPVC `json:"keptPVCs,omitempty"`
+}
+
+// KeptPVC is a PersistentVolumeClaim kept on purpose, and its size.
+type KeptPVC struct {
+	Name string `json:"name"`
+	Size string `json:"size,omitempty"`
 }
 
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.
