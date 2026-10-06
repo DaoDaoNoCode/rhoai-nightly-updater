@@ -76,6 +76,13 @@ export const HelpButton: React.FC = () => {
               offer to revert it first.
             </Content>
 
+            <Content component={ContentVariants.h3}>Test resources</Content>
+            <Content component={ContentVariants.p}>
+              Sets up MinIO storage, MLflow and pipeline servers with defaults that work on a fresh cluster, and tears down
+              only what this tool created. MinIO teardown keeps the <code>minio</code> namespace; delete it with{" "}
+              <code>oc delete project minio</code> once it is empty.
+            </Content>
+
             <Content component={ContentVariants.h3}>One-time cluster setup</Content>
             <List>
               <ListItem><strong>Pull secret:</strong> <code>additional-pull-secret</code> in kube-system with credentials for quay.io/rhoai.</ListItem>

@@ -45,6 +45,8 @@ import {
   Route,
   useLocation,
   useNavigate,
+  Navigate,
+  useSearchParams,
 } from "react-router-dom";
 import { trackPageView } from "./services/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -60,6 +62,7 @@ const StatusPage = lazy(() => import("./pages/StatusPage").then((m) => ({ defaul
 const ComponentsPage = lazy(() => import("./pages/ComponentsPage").then((m) => ({ default: m.ComponentsPage })));
 const BuildExplorerPage = lazy(() => import("./pages/BuildExplorerPage").then((m) => ({ default: m.BuildExplorerPage })));
 const DashboardDevPage = lazy(() => import("./pages/DashboardDevPage").then((m) => ({ default: m.DashboardDevPage })));
+const TestResourcesPage = lazy(() => import("./pages/TestResourcesPage").then((m) => ({ default: m.TestResourcesPage })));
 const TroubleshootingPage = lazy(() => import("./pages/TroubleshootingPage").then((m) => ({ default: m.TroubleshootingPage })));
 
 const MAIN_CONTENT_ID = "main-content";
@@ -102,12 +105,19 @@ const RouterNavLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttrib
 );
 RouterNavLink.displayName = "RouterNavLink";
 
+/** /dashboard-dev?tab=resources was the Test resources tab; it now has its own page. */
+export const DashboardDevRoute: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  return searchParams.get("tab") === "resources" ? <Navigate to="/test-resources" replace /> : <DashboardDevPage />;
+};
+
 /** Page-view names for adoption metrics (aggregate only, no user identity). */
 const PAGE_VIEW_NAMES: Record<string, string> = {
   "/": "dashboard",
   "/components": "components",
   "/builds": "build_explorer",
   "/dashboard-dev": "dashboard_dev",
+  "/test-resources": "test_resources",
   "/diagnostics": "diagnostics",
 };
 
@@ -335,7 +345,8 @@ const AppLayout: React.FC = () => {
           <Route path="/" element={<StatusPage />} />
           <Route path="/components" element={<ComponentsPage />} />
           <Route path="/builds" element={<BuildExplorerPage />} />
-          <Route path="/dashboard-dev" element={<DashboardDevPage />} />
+          <Route path="/dashboard-dev" element={<DashboardDevRoute />} />
+          <Route path="/test-resources" element={<TestResourcesPage />} />
           <Route path="/diagnostics" element={<TroubleshootingPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

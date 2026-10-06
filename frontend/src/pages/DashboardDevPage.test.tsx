@@ -207,11 +207,9 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     expect(screen.getByRole("button", { name: "Deploy latest main" })).not.toHaveAttribute("aria-disabled");
   });
 
-  it("a teammate's running operation disables deploys and test resources with the reason (N1)", async () => {
+  it("a teammate's running operation disables deploys with the reason (N1)", async () => {
     stubApi({
       "/api/dashboard/state": clean(),
-      "/api/resources/status": { minio: { deployed: false, ready: false }, mlflow: { deployed: false, ready: false }, pipelineServers: [] },
-      "/api/resources/projects": { projects: [] },
     });
     renderWithApp(<DashboardDevPage />, {
       permissions: async () => ({ canMutate: true, user: "me" }),
@@ -221,9 +219,6 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     await waitFor(() => expect(main).toHaveAttribute("aria-disabled", "true"));
     fireEvent.mouseEnter(main);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(/alice is running "Update to nightly"/);
-    fireEvent.click(screen.getByRole("tab", { name: "Test resources" }));
-    const setUp = (await screen.findAllByRole("button", { name: "Set up" }))[0];
-    expect(setUp).toHaveAttribute("aria-disabled", "true");
   });
 
   it("refreshes the app-wide Dashboard Dev override after a change (N2)", async () => {
