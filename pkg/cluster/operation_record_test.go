@@ -325,6 +325,44 @@ func TestCompletionReleasesTheLeaseInTheSameWrite(t *testing.T) {
 	}
 }
 
+// Review fix 4: pod A's completion write failed and is retried after pod B
+// recorded a newer completion. The retry clears A's own marker and lease
+// but keeps B's lastCompleted.
+func TestDelayedCompletionKeepsANewerLastCompleted(t *testing.T) {
+	now := time.Now()
+	f, c := newFakeOperationConfigMap(t)
+	newer := &types.CompletedOperation{ID: "op-b", FinishedAt: now.UTC().Format(time.RFC3339), Success: true}
+	f.set(lastCompletedKey, newer)
+	f.set(operationKey, &types.OperationMarker{ID: "op-a", BootID: "boot-a"})
+	f.set(leaseKey, testLease("op-a", "boot-a", now.Add(-time.Minute)))
+	older := &types.CompletedOperation{ID: "op-a", FinishedAt: now.Add(-2 * time.Minute).UTC().Format(time.RFC3339), Success: false}
+	if err := SaveCompletedOperation(c, older, &LeaseOwner{BootID: "boot-a", ID: "op-a"}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := ReadOperationRecord(c)
+	if err != nil || rec.LastCompleted == nil || rec.LastCompleted.ID != "op-b" || rec.Marker != nil || rec.Lease != nil {
+		t.Fatalf("record %+v err %v", rec, err)
+	}
+
+	// Nothing of A's left and B's completion newer: no write at all.
+	before := len(f.reqs())
+	if err := SaveCompletedOperation(c, older, &LeaseOwner{BootID: "boot-a", ID: "op-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.reqs()[before:]; len(r) != 1 || r[0] != "GET" {
+		t.Fatalf("requests %v", r)
+	}
+
+	// The same finish time: the completion being written wins.
+	same := &types.CompletedOperation{ID: "op-c", FinishedAt: newer.FinishedAt}
+	if err := SaveCompletedOperation(c, same, &LeaseOwner{BootID: "boot-c", ID: "op-c"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := ReadOperationRecord(c); rec.LastCompleted.ID != "op-c" {
+		t.Fatalf("lastCompleted %+v", rec.LastCompleted)
+	}
+}
+
 func TestLeaseLive(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {

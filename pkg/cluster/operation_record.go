@@ -128,14 +128,17 @@ func (o LeaseOwner) owns(l *types.OperationLease) bool {
 // done as the last completed operation in a single write, so the two never
 // disagree. With an owner, the same write releases owner's lease, so no
 // other pod ever sees the lease gone while the marker remains (which would
-// report a finished operation as interrupted). Without an owner it is a
-// JSON merge patch of the marker and lastCompleted only.
+// report a finished operation as interrupted). Without an owner (only an
+// operation that never held a lease, which pkg/api no longer runs) it is a
+// blind JSON merge patch of the marker and lastCompleted.
 //
 // With an owner the write is conditional on the ConfigMap's
 // resourceVersion and retried on a conflict, and it touches only what is
-// this process's own: the lease only while owner holds it, and the marker
+// this process's own: the lease only while owner holds it, the marker
 // unless another process wrote it (a pod that took the lease over after
-// this one's heartbeat stopped; its marker describes its own operation).
+// this one's heartbeat stopped; its marker describes its own operation),
+// and lastCompleted only when the recorded one did not finish later (a
+// delayed retry must not hide another pod's newer completion).
 func SaveCompletedOperation(c *Client, done *types.CompletedOperation, owner *LeaseOwner) error {
 	value, err := json.Marshal(done)
 	if err != nil {
@@ -153,12 +156,21 @@ func SaveCompletedOperation(c *Client, done *types.CompletedOperation, owner *Le
 		if err != nil {
 			return fmt.Errorf("save completed operation: %w", err)
 		}
-		data := map[string]string{lastCompletedKey: string(value)}
-		if rec.Marker == nil || rec.Marker.BootID == "" || rec.Marker.BootID == owner.BootID {
+		data := map[string]string{}
+		// A delayed retry (this pod's write failed and is repeated in the
+		// background) must not replace a completion another pod recorded
+		// since.
+		if rec.LastCompleted == nil || !finishedAfter(rec.LastCompleted, done) {
+			data[lastCompletedKey] = string(value)
+		}
+		if rec.Marker != nil && (rec.Marker.BootID == "" || rec.Marker.BootID == owner.BootID) {
 			data[operationKey] = ""
 		}
 		if owner.owns(rec.Lease) {
 			data[leaseKey] = ""
+		}
+		if len(data) == 0 {
+			return nil
 		}
 		err = writeOperationRecord(c, rec, data)
 		if IsK8sError(err, 409) {
@@ -170,6 +182,14 @@ func SaveCompletedOperation(c *Client, done *types.CompletedOperation, owner *Le
 		return nil
 	}
 	return fmt.Errorf("save completed operation: %w", ErrOperationRecordContended)
+}
+
+// finishedAfter reports whether a finished strictly after b (RFC 3339
+// times; an unreadable time never counts as later).
+func finishedAfter(a, b *types.CompletedOperation) bool {
+	ta, errA := time.Parse(time.RFC3339, a.FinishedAt)
+	tb, errB := time.Parse(time.RFC3339, b.FinishedAt)
+	return errA == nil && errB == nil && ta.After(tb)
 }
 
 // maxLeaseWriteAttempts bounds the read-modify-write cycles of one
