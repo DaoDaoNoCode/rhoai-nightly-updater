@@ -33,8 +33,12 @@ type resourceFake struct {
 	namespacesLinger bool
 	// onGet may change an object before a GET returns it (for example to
 	// simulate a controller updating status).
-	onGet    func(k fakeKey, obj map[string]interface{})
-	requests []string
+	onGet func(k fakeKey, obj map[string]interface{})
+	// beforeServe runs before a request is handled, outside the lock, so it
+	// can change the stored objects (for example to inject a foreign object
+	// between the tool's check and its write).
+	beforeServe func(method, path string)
+	requests    []string
 }
 
 type fakeKey struct {
@@ -207,6 +211,9 @@ func (f *resourceFake) addManagedField(meta map[string]interface{}, manager, op 
 
 func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
+	if f.beforeServe != nil {
+		f.beforeServe(r.Method, r.URL.Path)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
@@ -291,6 +298,17 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				f.objects[k] = obj
 				f.write(w, 201, obj)
 				return
+			}
+			// A resourceVersion in the applied object is a precondition,
+			// as on a real API server.
+			if pm, ok := patch["metadata"].(map[string]interface{}); ok {
+				if rv, ok := pm["resourceVersion"]; ok {
+					if rv != ensureMap(obj, "metadata")["resourceVersion"] {
+						f.status(w, 409, "the object has been modified")
+						return
+					}
+					delete(pm, "resourceVersion")
+				}
 			}
 			// Server-side apply replaces the manager's fields; for these
 			// tests replacing spec/data and merging metadata is enough.
