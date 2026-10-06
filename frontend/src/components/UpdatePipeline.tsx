@@ -150,9 +150,7 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
 
   return (
     <Card>
-      <CardHeader
-        actions={active ? { actions: <Spinner size="md" aria-label={`${pipelineTitle} in progress`} />, hasNoOffset: true } : undefined}
-      >
+      <CardHeader>
         <CardTitle>
           <Title headingLevel="h2" size="lg">{pipelineTitle}{active ? " in progress" : anyFailed ? " failed" : ""}</Title>
         </CardTitle>
@@ -173,7 +171,7 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
           )}
 
           <StackItem>
-            <ProgressStepper isVertical isCompact aria-label={`${pipelineTitle} progress`}>
+            <ProgressStepper isVertical aria-label={`${pipelineTitle} progress`}>
               {pipelineSteps.map((def, index) => {
                 const event = latestEventForStep(def.id, events);
                 const duration = event && event.status !== "running" ? stepDuration(pipelineSteps, index, events) : 0;

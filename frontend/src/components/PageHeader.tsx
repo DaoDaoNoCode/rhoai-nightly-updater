@@ -79,7 +79,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                       {lastRefreshed && <RelativeTime date={lastRefreshed} prefix="Updated " />}
                       <Button
                         variant="link"
-                        icon={<SyncAltIcon />}
+                        icon={loading ? undefined : <SyncAltIcon />}
                         isLoading={loading}
                         onClick={() => { if (!loading) onRefresh(); }}
                         aria-label={`${refreshText} ${title.toLowerCase()}`}

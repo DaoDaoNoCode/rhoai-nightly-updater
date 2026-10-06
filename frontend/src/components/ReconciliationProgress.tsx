@@ -405,7 +405,7 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
             </Flex>
           </StackItem>
           <StackItem>
-            <ProgressStepper isVertical isCompact aria-label="Reconciliation progress">
+            <ProgressStepper isVertical aria-label="Reconciliation progress">
               {steps.map((step) => {
                 const variant = stepVariant(step.id, displayPhase, steps);
                 const isCurrent = step.id === displayPhase;

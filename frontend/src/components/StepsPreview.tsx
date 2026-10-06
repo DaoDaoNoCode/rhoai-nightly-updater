@@ -14,7 +14,7 @@ export const StepsPreview: React.FC<{ steps: PipelineStepDef[]; idPrefix: string
       isExpanded={expanded}
       onToggle={(_e, value) => setExpanded(value)}
     >
-      <ProgressStepper isVertical isCompact aria-label="Steps of this operation">
+      <ProgressStepper isVertical aria-label="Steps of this operation">
         {steps.map((step) => (
           <ProgressStep
             key={step.id}

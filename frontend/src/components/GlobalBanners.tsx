@@ -4,6 +4,7 @@ import {
   AlertActionCloseButton,
   AlertActionLink,
   AlertGroup,
+  Button,
 } from "@patternfly/react-core";
 import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -324,13 +325,18 @@ export const GlobalBanners: React.FC = () => {
   if (notices.length === 0) return null;
   const hidden = showAll ? 0 : Math.max(0, notices.length - MAX_VISIBLE_NOTICES);
   const visible = hidden > 0 ? notices.slice(0, MAX_VISIBLE_NOTICES) : notices;
+  const extra = notices.length - MAX_VISIBLE_NOTICES;
   return (
-    <AlertGroup
-      aria-label="Notices"
-      overflowMessage={hidden > 0 ? `View ${hidden} more ${hidden === 1 ? "notice" : "notices"}` : undefined}
-      onOverflowClick={() => setShowAll(true)}
-    >
-      {visible.map((n) => React.cloneElement(n.element, { key: n.key }))}
-    </AlertGroup>
+    <div>
+      <AlertGroup aria-label="Notices">
+        {visible.map((n) => React.cloneElement(n.element, { key: n.key }))}
+      </AlertGroup>
+      {extra > 0 && (
+        // A plain link: AlertGroup's overflow button is styled for toast groups.
+        <Button variant="link" isInline className="pf-v6-u-mt-sm" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}>
+          {hidden > 0 ? `View ${hidden} more ${hidden === 1 ? "notice" : "notices"}` : "Show fewer notices"}
+        </Button>
+      )}
+    </div>
   );
 };
