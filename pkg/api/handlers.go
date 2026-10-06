@@ -352,20 +352,37 @@ func resolveUsername(r *http.Request) string {
 }
 
 // extractUserToken returns the user's OAuth token for identity purposes.
+//
+// In the cluster only X-Forwarded-Access-Token counts. oauth-proxy sets it
+// from the user's own session, which it got through its OAuth flow, and
+// replaces any client-sent copy (setRequestHeader in openshift/oauth-proxy
+// oauthproxy.go). Without --openshift-delegate-urls the proxy does not
+// accept client bearer tokens at all, and with --pass-basic-auth (default
+// true) it overwrites the Authorization header with Basic credentials. So a
+// Bearer token would come from somewhere else; requestUser rejects it. A
+// bearer token is accepted only in DEV_MODE, where there is no proxy.
 func extractUserToken(r *http.Request) string {
 	if token := r.Header.Get("X-Forwarded-Access-Token"); token != "" {
 		return token
 	}
-	auth := r.Header.Get("Authorization")
-	if len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:]
-	}
 	if os.Getenv("DEV_MODE") == "true" {
+		if token, ok := bearerToken(r); ok {
+			return token
+		}
 		if token := os.Getenv("DEV_TOKEN"); token != "" {
 			return token
 		}
 	}
 	return ""
+}
+
+// bearerToken returns the request's "Authorization: Bearer" token.
+func bearerToken(r *http.Request) (string, bool) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 // cachedToken holds the SA token and the time it was read, so we avoid

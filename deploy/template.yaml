@@ -459,6 +459,10 @@ objects:
                 # ends before the token it carries stops working.
                 - --cookie-expire=23h
                 - --cookie-samesite=strict
+                # The app trusts only the token of this proxy's own OAuth
+                # session (X-Forwarded-Access-Token) and refuses bearer
+                # tokens. Do not add --openshift-delegate-urls or
+                # --pass-user-bearer-token, which accept client tokens.
                 - --pass-access-token=true
                 - --pass-user-headers=true
                 - --openshift-sar={"resource":"pods","verb":"list","namespace":"redhat-ods-operator"}

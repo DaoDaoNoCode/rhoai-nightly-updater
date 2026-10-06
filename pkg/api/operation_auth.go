@@ -29,6 +29,17 @@ var mutationRequirement = struct{ verb, resource, group, namespace string }{"*",
 const readOnlyMessage = "Read-only access: changing the cluster through this tool requires the cluster-admin role."
 
 // checkPermission asks the API server; tests replace it.
+//
+// It evaluates the token owner's full RBAC, not the token's OAuth scopes:
+// the token oauth-proxy holds is scoped to "user:info user:check-access"
+// (the openshift provider's default scope), which on its own grants no
+// cluster changes. That is safe because the only token accepted in the
+// cluster is the one oauth-proxy obtained through its own OAuth flow for
+// this tool (X-Forwarded-Access-Token; see extractUserToken). A token issued
+// to another OAuth client cannot be presented here. This relies on the
+// template not enabling --openshift-delegate-urls or
+// --pass-user-bearer-token on oauth-proxy, which would let client bearer
+// tokens through; TestOAuthProxyForwardsOnlyItsOwnSessionToken pins that.
 var checkPermission = cluster.CheckUserPermissionWithToken
 
 // mutationPermission evaluates the gate for each request with the user's
