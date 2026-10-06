@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RelatedImage } from "../types";
-import { classifySearch, compareBuilds, compareURL, imageDigest, imageTag, imagesBuiltFrom, installedBuild, shortBuildRef } from "./buildDiff";
+import { classifySearch, compareBuilds, compareURL, imageDigest, imageTag, imagesBuiltFrom, installedBuild, shortBuildRef, sideRefText } from "./buildDiff";
 
 const D1 = "sha256:4eff06d60bd10119e9c9bbdd9e69c3db14147ec4c655f7f8adb0ec9a4bf83e6d";
 const IMG = `quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@${D1}`;
@@ -107,5 +107,16 @@ describe("classifySearch and imagesBuiltFrom", () => {
     expect(imagesBuiltFrom(imgs, "32A2131").map((i) => i.name)).toEqual(["a"]);
     expect(imagesBuiltFrom(imgs, "a3b6b581").map((i) => i.name)).toEqual(["b"]);
     expect(imagesBuiltFrom(imgs, "ffffff0")).toEqual([]);
+  });
+});
+
+describe("sideRefText (the compare header does not repeat the tag)", () => {
+  it("shows only what the label does not already say", () => {
+    expect(sideRefText("Installed", IMG)).toBe("rhoai-3.6 @ 4eff06d");
+    expect(sideRefText("Latest rhoai-3.6", IMG)).toBe("@ 4eff06d");
+    expect(sideRefText("rhoai-3.6", IMG)).toBe("@ 4eff06d");
+    expect(sideRefText("Installed (rhoai-3.6 @ 4eff06d)", IMG)).toBe("");
+    // Another tag's name inside the label is not this tag.
+    expect(sideRefText("rhoai-3.6-ea.2", IMG)).toBe("rhoai-3.6 @ 4eff06d");
   });
 });

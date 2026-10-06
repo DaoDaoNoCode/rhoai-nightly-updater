@@ -22,6 +22,20 @@ export function shortBuildRef(image: string): string {
   return tag || digest || image;
 }
 
+/**
+ * The build reference to show after a comparison side's label, without
+ * repeating what the label already says: "Latest rhoai-3.6" gets
+ * "@ 4eff06d", "Installed" gets "rhoai-3.6 @ 4eff06d", and a label that
+ * already holds the reference gets nothing.
+ */
+export function sideRefText(label: string, image: string): string {
+  const ref = shortBuildRef(image);
+  if (label.includes(ref)) return "";
+  const tag = imageTag(image);
+  if (tag && ref.startsWith(`${tag} @ `) && label.split(/[\s()]+/).includes(tag)) return ref.slice(tag.length + 1);
+  return ref;
+}
+
 export interface InstalledBuild {
   image: string;
   digest: string;

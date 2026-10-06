@@ -30,7 +30,7 @@ import { useFbcContent } from "../hooks/useFbcContent";
 import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { InlineItems } from "./InlineItems";
 import { TagLabel } from "./StatusLabel";
-import { compareBuilds, compareURL, imageDigest, shortBuildRef, type RepoChange } from "./buildDiff";
+import { compareBuilds, compareURL, imageDigest, sideRefText, type RepoChange } from "./buildDiff";
 
 export interface BuildSide {
   image: string;
@@ -62,12 +62,15 @@ const ImageNames: React.FC<{ change: RepoChange }> = ({ change }) => {
 
 const Sha: React.FC<{ sha?: string }> = ({ sha }) => (sha ? <code title={sha}>{sha.slice(0, 7)}</code> : <NotRecorded what="No commit label" />);
 
-const SideText: React.FC<{ side: BuildSide }> = ({ side }) => (
-  <>
-    <strong>{side.label}</strong> <code>{shortBuildRef(side.image)}</code>
-    {side.buildDate && <> (built <RelativeTime date={side.buildDate} size="inherit" />)</>}
-  </>
-);
+const SideText: React.FC<{ side: BuildSide }> = ({ side }) => {
+  const ref = sideRefText(side.label, side.image);
+  return (
+    <>
+      <strong>{side.label}</strong>{ref && <> <code>{ref}</code></>}
+      {side.buildDate && <> (built <RelativeTime date={side.buildDate} size="inherit" />)</>}
+    </>
+  );
+};
 
 /**
  * "Compare with installed" (A08-5): the repositories whose commits differ
