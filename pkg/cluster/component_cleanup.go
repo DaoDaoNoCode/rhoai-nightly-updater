@@ -217,6 +217,8 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			Items []struct {
 				Metadata struct {
 					Name              string   `json:"name"`
+					UID               string   `json:"uid"`
+					ResourceVersion   string   `json:"resourceVersion"`
 					Finalizers        []string `json:"finalizers"`
 					DeletionTimestamp *string  `json:"deletionTimestamp"`
 				} `json:"metadata"`
@@ -251,8 +253,26 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				warnings = append(warnings, fmt.Sprintf("cannot check operator %s for %s: %v; left untouched", owner, id, depErr))
 				continue
 			}
-			if _, _, err := c.patch(listPath+"/"+m.Name, []byte(`{"metadata":{"finalizers":[]}}`)); err != nil {
-				warnings = append(warnings, fmt.Sprintf("remove finalizers from %s: %v", id, err))
+			if m.UID == "" || m.ResourceVersion == "" {
+				warnings = append(warnings, fmt.Sprintf("%s has no uid or resourceVersion to guard the change; left untouched", id))
+				continue
+			}
+			// Guarded by the inspected object: the API server rejects a merge
+			// patch whose metadata.resourceVersion differs from the stored
+			// one with 409 Conflict, so a CR that was deleted and recreated
+			// under the same name, or whose finalizers changed since they
+			// were inspected, is left alone. A recreated CR always has a new
+			// resourceVersion (and uid, which is immutable).
+			patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{
+				"uid": m.UID, "resourceVersion": m.ResourceVersion, "finalizers": []string{},
+			}})
+			if _, _, err := c.patch(listPath+"/"+m.Name, patch); err != nil {
+				switch {
+				case IsK8sError(err, 409), IsK8sError(err, 404), IsK8sError(err, 422):
+					warnings = append(warnings, fmt.Sprintf("%s changed or was replaced after it was checked; its finalizers were left untouched", id))
+				default:
+					warnings = append(warnings, fmt.Sprintf("remove finalizers from %s: %v", id, err))
+				}
 				continue
 			}
 			slog.Info("removed stuck finalizer from component CR whose operator is gone",
