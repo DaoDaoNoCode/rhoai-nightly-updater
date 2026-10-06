@@ -1098,3 +1098,43 @@ func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 		})
 	}
 }
+
+// Right after a fresh install OLM can move a Succeeded CSV back to Pending
+// (NeedsReinstall) while its webhooks or CRD conversion come up. The install
+// counts as done only once the CSV has stayed Succeeded for
+// CSVSucceededSettle, so a failure in that second pass is not reported as
+// success.
+func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
+	setPhase := func(f *fakeOLM, phase string) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.csvs["rhods-operator.3.6.0"]["status"] = map[string]interface{}{"phase": phase, "reason": "NeedsReinstall"}
+	}
+	t.Run("flips back and stays down", func(t *testing.T) {
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+		go func() { time.Sleep(CSVSucceededSettle / 2); setPhase(f, "Pending") }()
+		var logs []string
+		outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
+		if outcome.succeeded {
+			t.Fatalf("a CSV that left Succeeded within the settle window was reported installed: %+v", outcome)
+		}
+	})
+	t.Run("flips back and recovers", func(t *testing.T) {
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+		go func() {
+			time.Sleep(CSVSucceededSettle / 2)
+			setPhase(f, "Pending")
+			time.Sleep(2 * CSVSucceededSettle)
+			setPhase(f, "Succeeded")
+		}()
+		start := time.Now()
+		var logs []string
+		outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
+		if !outcome.succeeded {
+			t.Fatalf("outcome = %+v", outcome)
+		}
+		if min := CSVSucceededSettle/2 + 2*CSVSucceededSettle + CSVSucceededSettle; time.Since(start) < min {
+			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", time.Since(start), min)
+		}
+	})
+}

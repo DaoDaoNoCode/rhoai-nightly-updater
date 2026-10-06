@@ -22,6 +22,7 @@ func TestMain(m *testing.M) {
 	ResolutionFailedGrace = 60 * time.Millisecond
 	BundlePullFailureGrace = 60 * time.Millisecond
 	CSVFailedGrace = 60 * time.Millisecond
+	CSVSucceededSettle = 30 * time.Millisecond
 	CSVDeletionTimeout = 50 * time.Millisecond
 	CatalogImagePullGrace = 30 * time.Millisecond
 

@@ -45,6 +45,13 @@ var (
 	// CSVFailedGrace is how long the new CSV may stay Failed before the
 	// operation is treated as failed.
 	CSVFailedGrace = 90 * time.Second
+	// CSVSucceededSettle is how long the new CSV must stay Succeeded before
+	// the install counts as done. Right after a fresh install OLM can find
+	// the CSV's webhooks or CRD conversion not available yet and move it
+	// Succeeded -> Pending (NeedsReinstall) -> ... -> Succeeded again
+	// (seen live: 2s after the first Succeeded). A failure in that second
+	// pass must not be reported as a successful install.
+	CSVSucceededSettle = 20 * time.Second
 	// CSVDeletionTimeout bounds the wait for a deleted CSV to disappear (OLM
 	// runs its csv-cleanup finalizer first).
 	CSVDeletionTimeout = 60 * time.Second
@@ -248,7 +255,7 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 	if opDeadline, ok := c.ctx.Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
 		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
 	}
-	var resolutionSince, pullSince, csvFailedSince time.Time
+	var resolutionSince, pullSince, csvFailedSince, succeededSince time.Time
 	var ipName, csvName, lastState, lastProgress string
 	var sawCSVFailed, catalogsNoted bool
 	approved := map[string]bool{}
@@ -436,7 +443,20 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 			continue
 		}
 		csvFailedSince = time.Time{}
+		if phase != "Succeeded" {
+			succeededSince = time.Time{}
+		}
 		if phase == "Succeeded" && sub.Status.InstalledCSV == name {
+			if succeededSince.IsZero() {
+				succeededSince = time.Now()
+			}
+			// Stay until the CSV has kept Succeeded for CSVSucceededSettle,
+			// unless the next poll would pass the deadline: a CSV that is
+			// Succeeded then is reported as installed.
+			if time.Since(succeededSince) < CSVSucceededSettle && time.Now().Add(InstallPlanPollInterval).Before(deadline) {
+				progress(fmt.Sprintf("CSV %s: Succeeded; confirming that OLM keeps it installed", name))
+				continue
+			}
 			*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
 			outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c, name, waitStart)}
 			if outcome.note != "" {
