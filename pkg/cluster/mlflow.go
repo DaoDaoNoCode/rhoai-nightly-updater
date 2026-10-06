@@ -333,7 +333,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 
 	dataNote := " Its PVC (tracking database, model registry and artifacts) is garbage-collected with it."
 	if pvcErr == nil && len(pvcs) > 0 {
-		dataNote = fmt.Sprintf(" PVC(s) %v (tracking database, model registry and artifacts) are garbage-collected with it.", pvcs)
+		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", verb(len(pvcs), "PVC", "PVCs"), pvcs, verb(len(pvcs), "is", "are"))
 	}
 	slog.Info("mlflow teardown", "user", getUser(c))
 	recordMLflowActivity(c, "teardown-mlflow", mlflowNamespace, true)
@@ -501,5 +501,5 @@ func mlflowFinalizerNote(cr mlflowCR) string {
 	if len(cr.Metadata.Finalizers) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" It is waiting on finalizer(s) %s; the controller that added them must be running to remove them.", strings.Join(cr.Metadata.Finalizers, ", "))
+	return fmt.Sprintf(" It is waiting on %s %s; the controller that added %s must be running to remove %s.", verb(len(cr.Metadata.Finalizers), "finalizer", "finalizers"), strings.Join(cr.Metadata.Finalizers, ", "), verb(len(cr.Metadata.Finalizers), "it", "them"), verb(len(cr.Metadata.Finalizers), "it", "them"))
 }

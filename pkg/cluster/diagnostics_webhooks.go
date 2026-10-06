@@ -131,7 +131,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-webhooks",
 			Severity: severity,
-			Title:    fmt.Sprintf("%d leftover RHOAI webhook configuration(s) point to a Service that cannot serve them", len(deletable)),
+			Title:    fmt.Sprintf("%s %s to a Service that cannot serve %s", countNoun(len(deletable), "leftover RHOAI webhook configuration", "leftover RHOAI webhook configurations"), verb(len(deletable), "points", "point"), verb(len(deletable), "it", "them")),
 			Description: "The API server calls these webhooks, but nothing serves them and their owner is gone, so nothing will recreate them. " +
 				"With failurePolicy Fail (the default), every matching request is rejected until the configuration is deleted.",
 			Evidence: evidence,
@@ -166,7 +166,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "webhook-service-missing",
 			Severity: severity,
-			Title:    fmt.Sprintf("%d RHOAI webhook configuration(s) call a Service that cannot serve them", len(guidance)),
+			Title:    fmt.Sprintf("%s %s a Service that cannot serve %s", countNoun(len(guidance), "RHOAI webhook configuration", "RHOAI webhook configurations"), verb(len(guidance), "calls", "call"), verb(len(guidance), "it", "them")),
 			Description: "Requests that these webhooks intercept are rejected while their Service is missing or has no ready pods. Their owner still exists (or is unknown), " +
 				"so deleting them would not help: the owner recreates them, or they may still be needed.",
 			Evidence:        evidence,
@@ -198,7 +198,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:       "stale-crd-conversion",
 			Severity: "critical",
-			Title:    fmt.Sprintf("%d CRD(s) use a conversion webhook whose Service cannot serve", len(conversions)),
+			Title:    fmt.Sprintf("%s %s a conversion webhook whose Service cannot serve", countNoun(len(conversions), "CRD", "CRDs"), verb(len(conversions), "uses", "use")),
 			Description: "Reading or writing these objects at a version other than the one they are stored in fails, which also breaks garbage collection " +
 				"and makes namespace deletion hang in Terminating. The tool does not change this automatically: switching the CRD to conversion strategy None changes how stored objects are read.",
 			Evidence:        evidence,
@@ -215,7 +215,7 @@ func checkStaleWebhooks(c *Client) checkOutput {
 		details = append(details, "No RHOAI webhook or CRD conversion points to a Service that cannot serve it")
 	default:
 		out.check.Status = "fail"
-		details = append(details, fmt.Sprintf("%d webhook configuration(s) and %d CRD conversion(s) point to a Service that cannot serve them", len(scan.Verdicts), len(conversions)))
+		details = append(details, fmt.Sprintf("%s and %s point to a Service that cannot serve them", countNoun(len(scan.Verdicts), "webhook configuration", "webhook configurations"), countNoun(len(conversions), "CRD conversion", "CRD conversions")))
 	}
 	if scan.Upgrading != "" {
 		details = append(details, "webhook configurations not checked while an operator install is in progress ("+scan.Upgrading+")")
@@ -303,7 +303,7 @@ func applyFixDeleteStaleWebhooks(c *Client) (*types.OperationResponse, error) {
 	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Deleted %d leftover webhook configuration(s): %s.", len(d.Deleted), strings.Join(d.Deleted, ", ")),
+		Message: fmt.Sprintf("Deleted %s: %s.", countNoun(len(d.Deleted), "leftover webhook configuration", "leftover webhook configurations"), strings.Join(d.Deleted, ", ")),
 		Logs:    logs,
 	}, nil
 }

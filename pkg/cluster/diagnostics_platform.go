@@ -287,9 +287,9 @@ func checkManagedConfig(c *Client) checkOutput {
 		}
 	}
 	if out.check.Status == "pass" {
-		details = append([]string{fmt.Sprintf("%d deployment(s) under operator management", count)}, details...)
+		details = append([]string{fmt.Sprintf("%s under operator management", countNoun(count, "deployment", "deployments"))}, details...)
 	} else if len(out.problems) > 0 {
-		details = append([]string{fmt.Sprintf("%d finding(s)", len(out.problems))}, details...)
+		details = append([]string{countNoun(len(out.problems), "finding", "findings")}, details...)
 	}
 	out.check.Detail = strings.Join(details, "; ")
 	return out

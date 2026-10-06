@@ -296,7 +296,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 func podIssuesOutput(c *Client, name string, issues []podIssue, podCount int, scanned []string, critical bool) checkOutput {
 	if len(issues) == 0 {
 		return checkOutput{check: CheckResult{Name: name, Status: "pass",
-			Detail: fmt.Sprintf("%d pod(s) healthy in %s", podCount, strings.Join(scanned, ", "))}}
+			Detail: fmt.Sprintf("%s healthy in %s", countNoun(podCount, "pod", "pods"), strings.Join(scanned, ", "))}}
 	}
 	out := checkOutput{}
 	var summaries []string
@@ -948,7 +948,7 @@ func checkNodeCapacity(c *Client) checkOutput {
 		out.problems = append(out.problems, Problem{
 			ID:           "nodes-not-ready",
 			Severity:     "warning",
-			Title:        fmt.Sprintf("%d cluster node(s) are not ready", len(notReadyNodes)),
+			Title:        fmt.Sprintf("%s %s not ready", countNoun(len(notReadyNodes), "cluster node", "cluster nodes"), verb(len(notReadyNodes), "is", "are")),
 			Description:  "Some cluster nodes are not in a Ready state. This can prevent pods from being scheduled and cause deployments to get stuck.",
 			Evidence:     append([]string{fmt.Sprintf("Not-ready nodes: %s", strings.Join(notReadyNodes, ", "))}, fmt.Sprintf("Total nodes: %d", totalNodes)),
 			Fix:          "Check the cluster infrastructure. Node issues are typically caused by resource exhaustion, network problems, or infrastructure failures.",
@@ -1074,7 +1074,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 
 	switch {
 	case len(deleted) == 0 && len(failed) == 0 && len(changed) > 0:
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Install plan(s) %s changed after they were checked, so nothing was deleted. Run diagnostics again.", strings.Join(changed, ", ")), Logs: logs, ErrorCode: "conflict"}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s %s changed after %s checked, so nothing was deleted. Run diagnostics again.", verb(len(changed), "Install plan", "Install plans"), strings.Join(changed, ", "), verb(len(changed), "it was", "they were")), Logs: logs, ErrorCode: "conflict"}, nil
 	case len(deleted) == 0 && len(failed) == 0:
 		return nothingToDo("no failed install plan can be deleted safely (see the log). Nothing was deleted.", logs), nil
 	case len(failed) > 0 && len(deleted) == 0:
@@ -1089,7 +1089,7 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 	}
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("Deleted %d failed install plan(s): %s. OLM resolves the Subscription again if it was waiting on one of them.", len(deleted), strings.Join(deleted, ", ")),
+		Message: fmt.Sprintf("Deleted %s: %s. OLM resolves the Subscription again if it was waiting on one of them.", countNoun(len(deleted), "failed install plan", "failed install plans"), strings.Join(deleted, ", ")),
 		Logs:    logs,
 	}, nil
 }

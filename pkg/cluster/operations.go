@@ -1197,7 +1197,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	// during deletion. Remove finalizers to unblock (K8s finalizer docs pattern).
 	unstuckCount, componentWarnings := cleanupStuckComponentCRs(c)
 	if unstuckCount > 0 {
-		logs = append(logs, fmt.Sprintf("Unblocked %d stuck component CR(s) by removing finalizers", unstuckCount))
+		logs = append(logs, fmt.Sprintf("Unblocked %s by removing finalizers", countNoun(unstuckCount, "stuck component CR", "stuck component CRs")))
 	}
 	for _, w := range componentWarnings {
 		slog.Warn("stuck component CR cleanup issue", "detail", w)

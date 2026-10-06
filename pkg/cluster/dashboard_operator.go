@@ -1107,7 +1107,7 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 		if mode == "pr" {
 			retry = fmt.Sprintf("Deploy PR #%d", pr)
 		}
-		message = fmt.Sprintf("Partial deployment of %s: %d deployment(s) failed. Retry %s to finish, or Revert to default to resume operator reconciliation.", label, len(failures), retry)
+		message = fmt.Sprintf("Partial deployment of %s: %s failed. Retry %s to finish, or Revert to default to resume operator reconciliation.", label, countNoun(len(failures), "deployment", "deployments"), retry)
 	}
 	RecordActivity(c, types.ActivityEntry{Timestamp: now, User: user, Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
 	code := ""

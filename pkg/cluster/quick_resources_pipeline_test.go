@@ -96,7 +96,7 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 	}
 	// Every live DSPA on the tool's MinIO blocks its teardown, including
 	// the dashboard-created one and the one in a hidden project.
-	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline server(s) use this MinIO: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
+	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this MinIO: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
 		t.Errorf("MinIO teardown reason = %q", st.MinIO.TeardownBlockedReason)
 	}
 }
@@ -388,5 +388,14 @@ func TestPipelineTeardown_RerunRemovesOrphanSecret(t *testing.T) {
 	f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{}}`)
 	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", dspaSecretName)) {
 		t.Fatalf("got %+v", resp)
+	}
+}
+
+func TestCountNounAndVerbAgree(t *testing.T) {
+	if got := countNoun(1, "pipeline server", "pipeline servers") + " " + verb(1, "uses", "use"); got != "1 pipeline server uses" {
+		t.Errorf("singular: %q", got)
+	}
+	if got := countNoun(2, "pipeline server", "pipeline servers") + " " + verb(2, "uses", "use"); got != "2 pipeline servers use" {
+		t.Errorf("plural: %q", got)
 	}
 }

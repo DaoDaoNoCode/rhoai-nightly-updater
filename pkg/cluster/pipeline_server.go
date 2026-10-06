@@ -326,10 +326,10 @@ func minioTeardownBlocker(dspas []dspaInfo, endpoints minioEndpoints) string {
 	sort.Strings(deleting)
 	var parts []string
 	if len(live) > 0 {
-		parts = append(parts, fmt.Sprintf("%d pipeline server(s) use this MinIO: %s. Tear them down first.", len(live), strings.Join(live, ", ")))
+		parts = append(parts, fmt.Sprintf("%s %s this MinIO: %s. Tear %s down first.", countNoun(len(live), "pipeline server", "pipeline servers"), verb(len(live), "uses", "use"), strings.Join(live, ", "), verb(len(live), "it", "them")))
 	}
 	if len(deleting) > 0 {
-		parts = append(parts, fmt.Sprintf("%d pipeline server(s) are still being deleted: %s. Wait until they are gone; the data-science-pipelines operator must be running to finish their cleanup.", len(deleting), strings.Join(deleting, ", ")))
+		parts = append(parts, fmt.Sprintf("%s %s still being deleted: %s. Wait until %s gone; the data-science-pipelines operator must be running to finish the cleanup.", countNoun(len(deleting), "pipeline server", "pipeline servers"), verb(len(deleting), "is", "are"), strings.Join(deleting, ", "), verb(len(deleting), "it is", "they are")))
 	}
 	return strings.Join(parts, " ")
 }

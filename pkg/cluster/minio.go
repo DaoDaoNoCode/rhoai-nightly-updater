@@ -850,7 +850,7 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 			return fail(fmt.Sprintf("MinIO is running with bucket '%s', but Route minio-api, which exposes its S3 API outside the cluster, was kept: cannot check whether a pipeline server uses it: %v. Re-run setup to retry.", minioBucket, err), "partial_failure", "route consumer check failed")
 		}
 		if len(users) > 0 {
-			keptRouteNote = fmt.Sprintf(" Route minio-api, which exposes MinIO's S3 API outside the cluster, was kept because pipeline server(s) %s use its host. Point their object storage at host %s with scheme http (the in-cluster service), then re-run setup to remove the Route.", strings.Join(users, ", "), minioS3Host())
+			keptRouteNote = fmt.Sprintf(" Route minio-api, which exposes MinIO's S3 API outside the cluster, was kept because %s %s %s its host. Point their object storage at host %s with scheme http (the in-cluster service), then re-run setup to remove the Route.", verb(len(users), "pipeline server", "pipeline servers"), strings.Join(users, ", "), verb(len(users), "uses", "use"), minioS3Host())
 			logs = append(logs, "Kept Route minio-api: used by "+strings.Join(users, ", "))
 		}
 	}

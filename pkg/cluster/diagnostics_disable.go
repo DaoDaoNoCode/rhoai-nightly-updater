@@ -128,8 +128,8 @@ func (rc *removalChecker) blockers(component string) []string {
 	case convErr != nil:
 		blockers = append(blockers, fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, convErr))
 	case len(crds) > 0:
-		blockers = append(blockers, fmt.Sprintf("CRD(s) %s convert their objects through a webhook Service of %s. Removing the component deletes that Service but not the CRDs, so reading their objects at another version, garbage collection and namespace deletion would fail (the dead mcpservers conversion on this cluster is the same case). "+
-			"Delete those objects first (the tool cannot list them), then change the component in the OpenShift console", strings.Join(crds, ", "), component))
+		blockers = append(blockers, fmt.Sprintf("%s %s %s objects through a webhook Service of %s. Removing the component deletes that Service but not the %s, so reading those objects at another version, garbage collection and namespace deletion would fail (the dead mcpservers conversion on this cluster is the same case). "+
+			"Delete those objects first (the tool cannot list them), then change the component in the OpenShift console", verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), verb(len(crds), "converts its", "convert their"), component, verb(len(crds), "CRD", "CRDs")))
 	}
 	return blockers
 }

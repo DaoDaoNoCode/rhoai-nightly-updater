@@ -147,7 +147,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 			evidence := []string{fmt.Sprintf("DataScienceCluster %s: Ready=%s (%s): %s", dsc.Metadata.Name, ready.Status, ready.Reason, truncate(ready.Message, 400))}
 			evidence = append(evidence, failing...)
 			out.check.Status = "fail"
-			details = append(details, fmt.Sprintf("%s is not ready (%d failing condition(s))", dsc.Metadata.Name, len(failing)))
+			details = append(details, fmt.Sprintf("%s is not ready (%s)", dsc.Metadata.Name, countNoun(len(failing), "failing condition", "failing conditions")))
 			out.problems = append(out.problems, Problem{
 				ID:       "dsc-not-ready",
 				Severity: "warning",
