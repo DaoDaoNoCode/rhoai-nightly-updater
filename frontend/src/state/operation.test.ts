@@ -78,6 +78,22 @@ describe("operationReducer", () => {
     expect(s.run?.outcome).toMatchObject({ status: "failed", message: "CSV failed; previous operator restored", rejected: false });
   });
 
+  it("shows a failed run when a reloaded tab learns the operation failed (R7 M1)", () => {
+    // restoreReconcile after a reload: tracking only, no run.
+    let s: OperationState = { ...initialOperationState(), reconcile: { ...initialOperationState().reconcile, active: true, startTime: 100, kind: "reinstall", awaitingServer: true, result: "unknown" as const, serverId: "op-7" } };
+    s = operationReducer(s, { type: "serverSettled", now: 600, result: { success: false, message: "The CSV did not become ready", type: "reinstall", target: "stable" } });
+    expect(s.reconcile).toMatchObject({ active: false, awaitingServer: false });
+    expect(s.run).toMatchObject({ source: "server", serverId: "op-7", startedAt: 100, endedAt: 600 });
+    expect(s.run?.outcome).toEqual({ status: "failed", message: "The CSV did not become ready. See the activity log for details.", rejected: false });
+  });
+
+  it("names the failed operation from the reconcile kind when the server record has no type", () => {
+    let s: OperationState = { ...initialOperationState(), reconcile: { ...initialOperationState().reconcile, active: true, startTime: 100, kind: "update", awaitingServer: true, result: "unknown" as const } };
+    s = operationReducer(s, { type: "serverSettled", now: 600, result: { success: false } });
+    expect(s.run?.kind).toBe("update");
+    expect(s.run?.outcome).toMatchObject({ status: "failed", message: expect.stringMatching(/failed\. See the activity log for details\.$/) });
+  });
+
   it("keeps the outcome unknown when the server settles without a result (older backend)", () => {
     let s = operationReducer(started(), { type: "end", id: 1, outcome: { status: "detached", reason: "stalled", message: "x" }, now: 500 });
     s = operationReducer(s, { type: "serverSettled", now: 600 });

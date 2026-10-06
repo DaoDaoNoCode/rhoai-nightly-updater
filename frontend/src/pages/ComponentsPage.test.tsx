@@ -195,3 +195,76 @@ describe("ComponentsPage and the app-wide lock (R4b c, N1, N7)", () => {
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("GET /api/components")).length).toBeGreaterThan(1));
   });
 });
+
+describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
+  const block = { component: "mcplifecycleoperator", reasons: ["CRD(s) mcpservers.mcp.x-k8s.io convert their objects through a webhook Service of mcplifecycleoperator."] };
+  const compat = {
+    operatorVersion: "3.6.0", branch: "rhoai-3.6", invalidFields: [], missingComponents: [], extraComponents: ["legacycomponent"],
+    resetRemovals: ["mcplifecycleoperator", "trainer"],
+  };
+
+  it("lists what a reset sets to Removed before the user confirms", async () => {
+    const api = stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: null } },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
+      "POST /api/components/dsc/repair": { success: true, message: "DSC reset. Components set to Removed: mcplifecycleoperator, trainer", logs: [] },
+    });
+    renderInApp(<ComponentsPage />);
+    const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
+    await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(reset);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("2 enabled components will be set to Removed")).toBeInTheDocument();
+    expect(within(dialog).getByText("trainer")).toBeInTheDocument();
+    await within(dialog).findByText(/kind: DataScienceCluster/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/components/dsc/repair"))).toHaveLength(1));
+  });
+
+  it("a blocked reset shows each blocked component and why, and offers no Confirm", async () => {
+    const api = stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: [block] } },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
+    });
+    renderInApp(<ComponentsPage />);
+    expect(await screen.findByText(/Reset to version defaults is not possible now: it would remove mcplifecycleoperator/)).toBeInTheDocument();
+    const reset = screen.getByRole("button", { name: "Reset to version defaults" });
+    await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(reset);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("This repair is not possible now")).toBeInTheDocument();
+    expect(within(dialog).getByText(/refused as a whole/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/mcpservers.mcp.x-k8s.io convert their objects/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "Close" }).slice(-1)[0]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.calls.filter((c) => c.startsWith("POST"))).toEqual([]);
+  });
+
+  it("remove-extra is blocked only by its own components; a reset block does not block it", async () => {
+    stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: [block] } },
+    });
+    renderInApp(<ComponentsPage />);
+    const extra = await screen.findByRole("button", { name: "Remove extra components" });
+    await waitFor(() => expect(extra).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(extra);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeInTheDocument();
+    expect(within(dialog).queryByText("This repair is not possible now")).not.toBeInTheDocument();
+  });
+
+  it("remove-extra with a blocked extra component offers no Confirm", async () => {
+    stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: [{ component: "legacycomponent", reasons: ["Its operator has no ready pod."] }] } },
+    });
+    renderInApp(<ComponentsPage />);
+    expect(await screen.findByText(/Remove extra components is not possible now: legacycomponent/)).toBeInTheDocument();
+    const extra = screen.getByRole("button", { name: "Remove extra components" });
+    await waitFor(() => expect(extra).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(extra);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/Its operator has no ready pod/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+  });
+});

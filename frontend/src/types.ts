@@ -308,6 +308,8 @@ export interface ResourceState {
   currentImage?: string;
   /** Planned backend field: a container waiting reason such as ImagePullBackOff. */
   waitingReason?: string;
+  /** A notice that needs action but does not stop the resource (FXB: old MinIO image, exposed S3 Route). */
+  warning?: string;
 }
 
 export interface UpdateStep {
@@ -382,6 +384,15 @@ export interface StatusResponse {
 
 export interface DSCCompatibility {
   defaultsSource?: string;
+  /** Enabled components "reset-defaults" would set to Removed or drop (FXA). */
+  resetRemovals?: string[] | null;
+  /** Components a repair would remove that must not be removed now, with why (FXA). */
+  removalBlocks?: DSCRemovalBlock[] | null;
+}
+
+export interface DSCRemovalBlock {
+  component: string;
+  reasons: string[];
 }
 
 export interface ComponentsResponse {
@@ -555,4 +566,32 @@ export interface VersionInfo {
   expectedTemplateRevision?: string;
   /** The Deployment predates the template this build expects (run make upgrade). */
   templateOutdated: boolean;
+}
+
+/** One build's answer in GET /api/build-explorer/contains. */
+export interface PRContainsBuild {
+  image: string;
+  tag?: string;
+  installed?: boolean;
+  /** The component image's vcs-ref, and "owner/name" from its git.url label. */
+  commit?: string;
+  commitRepo?: string;
+  result: "contains" | "not_contained" | "unknown";
+  /** Why the result is unknown: rate_limited, commit_not_found, no_component_image, no_commit_label, unexpected_repo, build_unreadable, github_error. */
+  reason?: string;
+  message?: string;
+  compareURL?: string;
+}
+
+/** GET /api/build-explorer/contains?pr=N[&image=...] */
+export interface PRContainsResponse {
+  repo: string;
+  pr: number;
+  title?: string;
+  url?: string;
+  mergeCommit?: string;
+  mergedAt?: string;
+  builds: PRContainsBuild[];
+  rateLimited?: boolean;
+  retryAfterSeconds?: number;
 }

@@ -128,15 +128,103 @@ describe("Build Explorer search", () => {
     expect(builds).toEqual(["Installed (rhoai-3.6 @ 4444444)", "rhoai-3.6-ea.2"]);
   });
 
-  it("explains that PR numbers cannot be searched instead of failing", async () => {
-    const api = setup();
+  it.each(["#9938", "PR 9938", "pr#9938", "9938"])("%s searches which builds contain the merged PR, with links and progress", async (query) => {
+    const merge = "fa1bcdbf5d61a7efd4b83f3c36e9d61f591326b3";
+    const verdicts: Record<string, { result: string; commit: string }> = {
+      [INSTALLED]: { result: "not_contained", commit: "32a213123fbc434a602ba5b05e4a2022dd0d85d6" },
+      [LATEST]: { result: "contains", commit: "a3b6b581b465f97f8701f220efadcf8787879dde" },
+      [EA]: { result: "not_contained", commit: "32a213123fbc434a602ba5b05e4a2022dd0d85d6" },
+      [R35]: { result: "contains", commit: "eeeeeee1eeeeeee1eeeeeee1eeeeeee1eeeeeee1" },
+    };
+    const first = deferred<void>();
+    const gate = deferred<void>();
+    const api = setup({
+      "/api/build-explorer/contains": async (url: string) => {
+        const params = new URL(url, "http://x").searchParams;
+        const image = params.get("image")!;
+        await (image === INSTALLED ? first.promise : gate.promise);
+        const v = verdicts[image];
+        return jsonResponse({
+          repo: "opendatahub-io/odh-dashboard", pr: Number(params.get("pr")), title: "Fix the thing", url: "https://github.com/opendatahub-io/odh-dashboard/pull/9938",
+          mergeCommit: merge, mergedAt: "2026-10-05T21:16:13Z",
+          builds: [{ image, result: v.result, commit: v.commit, commitRepo: "red-hat-data-services/odh-dashboard", compareURL: `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...${v.commit}` }],
+        });
+      },
+    });
     renderPage();
     await screen.findByRole("grid", { name: "Nightly builds" });
     const box = screen.getByRole("textbox", { name: /Find a build/ });
-    fireEvent.change(box, { target: { value: "#10085" } });
+    fireEvent.change(box, { target: { value: query } });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect(await screen.findByText("Search by PR number (#10085) is not available")).toBeInTheDocument();
-    expect(api.calls.filter((c) => c.includes("/content"))).toEqual([]);
+    // The PR is resolved with the first build alone, then the rest go a few at a time.
+    expect(await screen.findByText(/Checked 0 of 4 builds for PR #9938/)).toBeInTheDocument();
+    await waitFor(() => expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(1);
+    first.resolve();
+    expect(await screen.findByText(/Checked 1 of 4 builds for PR #9938/)).toBeInTheDocument();
+    await waitFor(() => expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(4));
+    gate.resolve();
+    expect(await screen.findByText(/Checked 4 builds: 2 contain PR #9938/)).toBeInTheDocument();
+    const calls = api.calls.filter((c) => c.includes("/contains"));
+    expect(calls).toHaveLength(4);
+    expect(calls.every((c) => c.startsWith("GET ") && c.includes("pr=9938"))).toBe(true);
+    expect(screen.getByRole("link", { name: /^PR #9938$/ })).toHaveAttribute("href", "https://github.com/opendatahub-io/odh-dashboard/pull/9938");
+    expect(screen.getByText("fa1bcdbf5d61")).toBeInTheDocument();
+    const table = screen.getByRole("grid", { name: "Builds and PR #9938" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((r) => [r.querySelector("strong")?.textContent, r.querySelector(".pf-v6-c-label")?.textContent])).toEqual([
+      ["Installed (rhoai-3.6 @ 4444444)", "Does not contain"],
+      ["rhoai-3.6", "Contains PR #9938"],
+      ["rhoai-3.6-ea.2", "Does not contain"],
+      ["rhoai-3.5", "Contains PR #9938"],
+    ]);
+    expect(within(rows[1]).getByRole("link", { name: /GitHub comparison of PR #9938's merge commit with rhoai-3.6/ }))
+      .toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...a3b6b581b465f97f8701f220efadcf8787879dde`);
+    expect(within(rows[1]).getByRole("link", { name: "a3b6b58" })).toHaveAttribute("href", "https://github.com/red-hat-data-services/odh-dashboard/commit/a3b6b581b465f97f8701f220efadcf8787879dde");
+    expect(within(rows[0]).queryByRole("button", { name: "Compare with installed" })).not.toBeInTheDocument();
+    expect(within(rows[1]).getByRole("button", { name: "Compare with installed" })).toBeInTheDocument();
+  });
+
+  it("a PR that is not merged stops after one request and says so", async () => {
+    const api = setup({
+      "/api/build-explorer/contains": () => jsonResponse({ error: "PR #10089 is open, so no build contains it", errorCode: "pr_not_merged" }, 422),
+    });
+    renderPage();
+    await screen.findByRole("grid", { name: "Nightly builds" });
+    const box = screen.getByRole("textbox", { name: /Find a build/ });
+    fireEvent.change(box, { target: { value: "PR #10089" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText("PR #10089 is not merged")).toBeInTheDocument();
+    expect(screen.getByText(/PR #10089 is open, so no build contains it\./)).toBeInTheDocument();
+    expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(1);
+    expect(screen.queryByRole("grid", { name: /Builds and PR/ })).not.toBeInTheDocument();
+  });
+
+  it("a GitHub rate limit shows unknown builds, when to retry, and searches again on request", async () => {
+    let limited = true;
+    const api = setup({
+      "/api/build-explorer/contains": (url: string) => {
+        const image = new URL(url, "http://x").searchParams.get("image")!;
+        return jsonResponse(limited
+          ? { repo: "opendatahub-io/odh-dashboard", pr: 1, builds: [{ image, result: "unknown", reason: "rate_limited", commit: "32a213123fbc434a602ba5b05e4a2022dd0d85d6", commitRepo: "red-hat-data-services/odh-dashboard" }], rateLimited: true, retryAfterSeconds: 600 }
+          : { repo: "opendatahub-io/odh-dashboard", pr: 1, mergeCommit: "f".repeat(40), builds: [{ image, result: "contains" }] });
+      },
+    });
+    renderPage();
+    await screen.findByRole("grid", { name: "Nightly builds" });
+    const box = screen.getByRole("textbox", { name: /Find a build/ });
+    fireEvent.change(box, { target: { value: "#1" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText("GitHub's rate limit was reached")).toBeInTheDocument();
+    expect(screen.getByText(/Try again in about 10 minutes/)).toBeInTheDocument();
+    expect(screen.getByText(/Checked 4 builds: none contains PR #1, 4 unknown/)).toBeInTheDocument();
+    expect(screen.getAllByText("Unknown (GitHub rate limit)")).toHaveLength(4);
+    limited = false;
+    fireEvent.click(screen.getByRole("button", { name: "Search again" }));
+    expect(await screen.findByText(/Checked 4 builds: 4 contain PR #1/)).toBeInTheDocument();
+    expect(screen.queryByText("GitHub's rate limit was reached")).not.toBeInTheDocument();
+    expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(8);
   });
 });
 

@@ -560,3 +560,38 @@ type PipelineServerRequest struct {
 type DiagnosticsFixRequest struct {
 	ProblemID string `json:"problemId"`
 }
+
+// PRContainsResponse answers GET /api/build-explorer/contains: which nightly
+// builds contain a merged pull request.
+type PRContainsResponse struct {
+	Repo        string            `json:"repo"` // repository the PR was opened in, e.g. "opendatahub-io/odh-dashboard"
+	PR          int               `json:"pr"`
+	Title       string            `json:"title,omitempty"`
+	URL         string            `json:"url,omitempty"`         // the PR page
+	MergeCommit string            `json:"mergeCommit,omitempty"` // merge_commit_sha of the merged PR
+	MergedAt    string            `json:"mergedAt,omitempty"`
+	Builds      []PRContainsBuild `json:"builds"`
+	// RateLimited is set when GitHub's rate limit stopped some lookups; their
+	// builds are "unknown". RetryAfterSeconds says when to try again.
+	RateLimited       bool `json:"rateLimited,omitempty"`
+	RetryAfterSeconds int  `json:"retryAfterSeconds,omitempty"`
+}
+
+// PRContainsBuild is the answer for one nightly build.
+type PRContainsBuild struct {
+	Image     string `json:"image"` // FBC catalog image (digest-pinned)
+	Tag       string `json:"tag,omitempty"`
+	Installed bool   `json:"installed,omitempty"` // the build the nightly CatalogSource uses
+	// Commit and CommitRepo come from the component image's vcs-ref and
+	// git.url labels, e.g. "red-hat-data-services/odh-dashboard".
+	Commit     string `json:"commit,omitempty"`
+	CommitRepo string `json:"commitRepo,omitempty"`
+	// Result is "contains", "not_contained" or "unknown".
+	Result string `json:"result"`
+	// Reason explains "unknown": "rate_limited", "commit_not_found",
+	// "no_component_image", "no_commit_label", "unexpected_repo",
+	// "build_unreadable" or "github_error".
+	Reason     string `json:"reason,omitempty"`
+	Message    string `json:"message,omitempty"`
+	CompareURL string `json:"compareURL,omitempty"` // GitHub compare page: merge commit...build commit
+}

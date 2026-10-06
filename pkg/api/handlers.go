@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -854,6 +855,57 @@ var HandleBuildExplorerContent = withAuth(func(c *cluster.Client, w http.Respons
 	}
 
 	writeJSON(w, result, "build-explorer-content")
+})
+
+// prSearchMaxImages bounds the builds one PR search request names.
+const prSearchMaxImages = 40
+
+// HandleBuildExplorerContains reports which nightly builds contain a merged
+// pull request: GET /api/build-explorer/contains?pr=<N>[&repo=<owner/name>][&image=<FBC ref>...].
+// Without image, the installed build and the newest build of every tag are
+// checked. A GitHub rate limit gives partial results (rateLimited), never an error.
+var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = cluster.DefaultPRSearchRepo
+	}
+	if !cluster.IsPRSearchRepo(repo) {
+		writeError(w, fmt.Sprintf("PR search supports only %s", strings.Join(cluster.PRSearchRepos(), ", ")), http.StatusBadRequest, "validation")
+		return
+	}
+	pr, err := strconv.Atoi(q.Get("pr"))
+	if err != nil || pr <= 0 || pr > 99999999 {
+		writeError(w, "'pr' must be a pull request number", http.StatusBadRequest, "validation")
+		return
+	}
+	images := q["image"]
+	if len(images) > prSearchMaxImages {
+		writeError(w, fmt.Sprintf("at most %d images per request", prSearchMaxImages), http.StatusBadRequest, "validation")
+		return
+	}
+	for _, image := range images {
+		// Digest-pinned builds only: a tag moves, so its answer would change.
+		if !customFBCImageRegex.MatchString(image) || !strings.Contains(image, "@sha256:") {
+			writeError(w, "each 'image' must be a digest-pinned quay.io/rhoai/rhoai-fbc-fragment reference", http.StatusBadRequest, "validation")
+			return
+		}
+	}
+	slog.Info("request", "op", "build-explorer-contains", "repo", repo, "pr", pr, "images", len(images))
+
+	result, err := cluster.FindBuildsContainingPR(r.Context(), c, repo, pr, images)
+	if err != nil {
+		var searchErr *cluster.PRSearchError
+		if errors.As(err, &searchErr) {
+			writeError(w, searchErr.Msg, searchErr.Status, searchErr.Code)
+			return
+		}
+		slog.Error("build-explorer-contains failed", "error", err)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "failed to search the builds", code, errorCode)
+		return
+	}
+	writeJSON(w, result, "build-explorer-contains")
 })
 
 // HandleActivity returns the activity log.

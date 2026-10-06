@@ -44,6 +44,8 @@ import { BuildCompare, type BuildSide } from "../components/BuildCompare";
 import { classifySearch, imageDigest, installedBuild, shortBuildRef, type InstalledBuild } from "../components/buildDiff";
 import { useClusterStatus } from "../state/AppState";
 import { useCommitSearch, type SearchBuild } from "../hooks/useCommitSearch";
+import { usePRSearch } from "../hooks/usePRSearch";
+import { PRSearchResults } from "../components/PRSearchResults";
 
 export function parseTagVersion(
   tag: string,
@@ -237,6 +239,8 @@ export const BuildExplorerPage: React.FC = () => {
   }, [searchParams]);
 
   const commitSearch = useCommitSearch(submitted?.kind === "commit" ? submitted.value : null, submitted?.builds ?? [], submitted?.nonce);
+  const prSearch = usePRSearch(submitted?.kind === "pr" ? parseInt(submitted.value, 10) : null, submitted?.builds ?? [], submitted?.nonce);
+  const retrySearch = useCallback(() => setSubmitted((prev) => (prev ? { ...prev, nonce: prev.nonce + 1 } : prev)), []);
 
   const openCompare = (to: BuildSide) => {
     setCompareTo(to);
@@ -276,7 +280,7 @@ export const BuildExplorerPage: React.FC = () => {
                 <FormGroup label="Find a build" fieldId="build-search">
                   <SearchInput
                     id="build-search"
-                    placeholder="Image reference, commit SHA, or PR number"
+                    placeholder="Image reference, commit SHA, or PR number (#123)"
                     value={searchText}
                     onChange={(_e, val) => setSearchText(val)}
                     onSearch={(_e, val) => submitSearch(val)}
@@ -288,6 +292,7 @@ export const BuildExplorerPage: React.FC = () => {
                     <HelperText id="build-search-help">
                       <HelperTextItem>
                         <code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code> shows that build. A commit SHA (7-40 characters) lists the builds with a component built from it.
+                        {" "}<code>#123</code> or <code>PR 123</code> checks which builds contain that merged opendatahub-io/odh-dashboard PR.
                       </HelperTextItem>
                     </HelperText>
                   </FormHelperText>
@@ -295,8 +300,10 @@ export const BuildExplorerPage: React.FC = () => {
                 <SearchResults
                   submitted={submitted}
                   commitSearch={commitSearch}
+                  prSearch={prSearch}
                   canCompare={!!installedSide}
                   onCompare={openCompare}
+                  onRetry={retrySearch}
                 />
               </CardBody>
             </Card>
@@ -424,9 +431,11 @@ export const BuildExplorerPage: React.FC = () => {
 const SearchResults: React.FC<{
   submitted: { kind: string; value: string; nonce: number; builds: SearchBuild[] } | null;
   commitSearch: ReturnType<typeof useCommitSearch>;
+  prSearch: ReturnType<typeof usePRSearch>;
   canCompare: boolean;
   onCompare: (to: BuildSide) => void;
-}> = ({ submitted, commitSearch, canCompare, onCompare }) => {
+  onRetry: () => void;
+}> = ({ submitted, commitSearch, prSearch, canCompare, onCompare, onRetry }) => {
   if (!submitted) return null;
   if (submitted.kind === "image") {
     return (
@@ -437,17 +446,22 @@ const SearchResults: React.FC<{
   }
   if (submitted.kind === "pr") {
     return (
-      <Alert component="p" variant="info" isInline isLiveRegion title={`Search by PR number (#${submitted.value}) is not available`} style={{ marginTop: "var(--pf-t--global--spacer--md)" }}>
-        The build data records the commit each component was built from, not the pull requests it contains, and this page
-        cannot ask GitHub. Paste the PR&apos;s merge commit SHA instead (shown at the end of the PR page): the builds with a
-        component built from exactly that commit are listed. Later builds of the same stream also contain it.
-      </Alert>
+      <PRSearchResults
+        key={submitted.nonce}
+        pr={submitted.value}
+        search={prSearch}
+        plannedTotal={submitted.builds.length}
+        installedLabel={INSTALLED_LABEL}
+        canCompare={canCompare}
+        onCompare={onCompare}
+        onRetry={onRetry}
+      />
     );
   }
   if (submitted.kind === "invalid") {
     return (
       <Alert component="p" variant="warning" isInline isLiveRegion title="Not a build reference, commit SHA or PR number" style={{ marginTop: "var(--pf-t--global--spacer--md)" }}>
-        Enter an image reference such as quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:..., a commit SHA of 7 to 40 hex characters, or a PR number.
+        Enter an image reference such as quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:..., a commit SHA of 7 to 40 hex characters, or a PR number such as #123.
       </Alert>
     );
   }

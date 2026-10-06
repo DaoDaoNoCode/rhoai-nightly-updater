@@ -148,7 +148,10 @@ export function classifySearch(raw: string): { kind: SearchKind; value: string }
   const value = raw.trim();
   if (!value) return { kind: "empty", value };
   if (value.includes("/") || value.includes("@") || value.includes(":")) return { kind: "image", value };
-  if (/^#\d{1,7}$/.test(value) || /^\d{1,6}$/.test(value)) return { kind: "pr", value: value.replace(/^#/, "") };
+  // "#123", "PR 123", "pr#123", "PR #123", or a bare number (up to 6 digits;
+  // 7 or more digits may be an abbreviated commit SHA).
+  const pr = value.match(/^(?:#|pr\s*#?\s*)(\d{1,7})$/i) ?? value.match(/^(\d{1,6})$/);
+  if (pr && parseInt(pr[1], 10) > 0) return { kind: "pr", value: String(parseInt(pr[1], 10)) };
   if (/^[0-9a-f]{7,40}$/i.test(value)) return { kind: "commit", value: value.toLowerCase() };
   return { kind: "invalid", value };
 }

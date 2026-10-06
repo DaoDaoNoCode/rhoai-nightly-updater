@@ -129,9 +129,79 @@ describe("teardown confirmations state the data loss", () => {
     await waitFor(() => expect(within(storage).getByRole("button", { name: "Tear down" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("minio-pvc")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("minio-pvc").length).toBeGreaterThan(0);
     fireEvent.click(within(dialog).getByRole("button", { name: "Tear down MinIO" }));
     expect(await screen.findByText("Blocked: prerequisites not met")).toBeInTheDocument();
     expect(screen.getByText(/mcpservers.mcp.x-k8s.io has a conversion webhook/)).toBeInTheDocument();
+  });
+});
+
+describe("MinIO after FXB (kept namespace, warning, teardown codes)", () => {
+  const kept = "MinIO removed. PVC minio-pvc and all stored objects (pipeline artifacts, models, test files) are deleted with it. Namespace 'minio' was kept: it may hold objects this tool did not create. Delete it with `oc delete project minio` once you've checked it's empty.";
+  const afterTeardown: ResourceState = { deployed: false, ready: false, namespace: "minio", managedByTool: true, message: "Namespace exists but MinIO not deployed" };
+  const running: ResourceState = { deployed: true, ready: true, namespace: "minio", managedByTool: true, message: "Running", dataPVCs: ["minio-pvc"] };
+
+  it("shows the warning of a running MinIO", async () => {
+    const warning = "MinIO runs quay.io/minio/minio:latest, not the image this version deploys. Re-run MinIO setup to update it; the data PVC is kept.";
+    setup(live({ minio: { ...running, warning }, pipelineServers: [] }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByText(warning)).toBeInTheDocument();
+  });
+
+  it("after a teardown the kept namespace is 'Not deployed' with Setup only, and the result names oc delete project", async () => {
+    let status: ResourceState = running;
+    const api = stubApi({
+      "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
+      "/api/resources/projects": { projects: [] },
+      "POST /api/resources/minio/teardown": () => { status = afterTeardown; return jsonResponse({ success: true, message: kept, logs: [] }); },
+    });
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    const teardown = await within(storage).findByRole("button", { name: "Tear down" });
+    fireEvent.click(teardown);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/Namespace minio is kept/);
+    expect(within(dialog).queryByText(/deleted with everything in it/)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down MinIO" }));
+    expect((await screen.findByText(/^MinIO removed/)).closest(".pf-v6-c-alert")).toHaveTextContent(/was kept: run oc delete project minio once you have checked it is empty/);
+    expect(await within(storage).findByText("Not deployed")).toBeInTheDocument();
+    expect(within(storage).queryByText("Running")).not.toBeInTheDocument();
+    expect(within(storage).queryByText(/^Failed/)).not.toBeInTheDocument();
+    expect(within(storage).getByRole("button", { name: "Set up" })).toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "Tear down" })).not.toBeInTheDocument();
+    expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(1);
+  });
+
+  it.each([
+    ["partial_failure", "Partly done", "Some MinIO objects could not be removed: Secret minio-secret: forbidden. Re-run teardown to retry."],
+    ["delete_failed", "Nothing could be deleted", "No MinIO object could be removed: Deployment minio: forbidden."],
+    ["in_progress", "Still in progress", "MinIO's objects were deleted, but PVC minio-pvc is still terminating after 1m0s; re-run teardown to check again."],
+  ])("a %s teardown keeps Tear down available next to Setup", async (code, title, message) => {
+    let status: ResourceState = running;
+    const api = stubApi({
+      "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
+      "/api/resources/projects": { projects: [] },
+      "POST /api/resources/minio/teardown": () => { status = afterTeardown; return jsonResponse({ success: false, errorCode: code, message, logs: [] }, 422); },
+    });
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    fireEvent.click(await within(storage).findByRole("button", { name: "Tear down" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down MinIO" }));
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(message.slice(0, 30).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
+    expect(await within(storage).findByText("Not deployed")).toBeInTheDocument();
+    expect(within(storage).getByRole("button", { name: "Set up" })).toBeInTheDocument();
+    fireEvent.click(within(storage).getByRole("button", { name: "Tear down" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down MinIO" }));
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(2));
+  });
+
+  it("a kept namespace that still reports the data PVC offers Tear down without an earlier failure in this tab", async () => {
+    setup(live({ minio: { ...afterTeardown, dataPVCs: ["minio-pvc"] }, pipelineServers: [] }));
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByRole("button", { name: "Tear down" })).toBeInTheDocument();
+    expect(within(storage).getByText("Not deployed")).toBeInTheDocument();
   });
 });

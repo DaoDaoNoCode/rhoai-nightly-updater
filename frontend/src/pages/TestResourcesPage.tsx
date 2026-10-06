@@ -4,10 +4,8 @@ import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
 /**
- * Test resources (MinIO, MLflow, pipeline servers) as their own page
- * (A08-15). Not routed yet: the route and nav item are in App.tsx and
- * constants.ts (see the F2 handoff). Until then the same content is the
- * "Test resources" tab of Dashboard Dev (/dashboard-dev?tab=resources).
+ * Test resources (MinIO, MLflow, pipeline servers), at /test-resources
+ * (A08-15). The old /dashboard-dev?tab=resources link redirects here.
  */
 export const TestResourcesPage: React.FC = () => {
   const blocker = useMutationBlocker();
@@ -19,7 +17,7 @@ export const TestResourcesPage: React.FC = () => {
     <>
       <PageSection>
         <Title headingLevel="h1" size="xl">Test resources</Title>
-        <Content component="p">Storage, MLflow and pipeline servers to test the dashboard against.</Content>
+        <Content component="p">Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster.</Content>
       </PageSection>
       <PageSection>
         <QuickResourceCreator mutateBlocker={blocker} onResult={onResult} />

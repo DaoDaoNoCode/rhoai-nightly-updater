@@ -1,6 +1,6 @@
 import type { ServerOperation, UpdateStep } from "../types";
 import type { StreamDetachReason } from "../services/api";
-import { OPERATION_NAMES, reconcileKindFor, type OperationKind, type ReconcileKind } from "../operationSteps";
+import { OPERATION_NAMES, operationKindForServerType, reconcileKindFor, type OperationKind, type ReconcileKind } from "../operationSteps";
 
 /**
  * Where an operation's progress comes from: the SSE stream this tab opened,
@@ -86,6 +86,9 @@ export interface OperationState {
 export interface ServerResult {
   success: boolean;
   message?: string;
+  /** lastCompleted.type and target, to name an operation this tab has no run for (after a reload). */
+  type?: string;
+  target?: string;
 }
 
 export type OperationAction =
@@ -226,9 +229,23 @@ export function operationReducer(state: OperationState, action: OperationAction)
       if (action.result && !action.result.success) {
         // The operation failed (the backend restores the previous operator):
         // show a failed run, never a finished rollout.
-        const failedRun: OperationRun | null = run && run.outcome?.status === "detached"
-          ? { ...run, outcome: { status: "failed", message: action.result.message || `${OPERATION_NAMES[run.kind]} failed.`, rejected: false } }
-          : run;
+        let failedRun: OperationRun | null = run;
+        if (run && run.outcome?.status === "detached") {
+          failedRun = { ...run, outcome: { status: "failed", message: action.result.message || `${OPERATION_NAMES[run.kind]} failed.`, rejected: false } };
+        } else if (!run || run.outcome) {
+          // No run of this operation in this tab (the page was reloaded while
+          // it ran): show the failure from the server's record instead of
+          // silently dropping the card (R7 M1).
+          const kind = (action.result.type ? operationKindForServerType(action.result.type, action.result.target) : null)
+            ?? (r.kind === "reinstall" ? "reinstall_nightly" : r.kind);
+          const said = action.result.message || `${OPERATION_NAMES[kind]} failed.`;
+          const message = `${said}${/[.!?]$/.test(said) ? "" : "."} See the activity log for details.`;
+          failedRun = {
+            id: -action.now, kind, source: "server", startedAt: r.startTime || action.now, steps: [], endedAt: action.now,
+            serverId: r.serverId, detail: action.result.target || undefined,
+            outcome: { status: "failed", message, rejected: false },
+          };
+        }
         return { run: failedRun, reconcile: { ...r, active: false, awaitingServer: false } };
       }
       return {
