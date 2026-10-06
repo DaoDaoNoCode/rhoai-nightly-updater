@@ -325,7 +325,7 @@ export const StatusPage: React.FC = () => {
       {status && (
         <PageSection>
           <Grid hasGutter>
-            <GridItem lg={7} md={12}>
+            <GridItem lg={6} md={12}>
               <Card isFullHeight>
                 <CardHeader>
                   <CardTitle><Title headingLevel="h2" size="lg">Update to a specific build</Title></CardTitle>
@@ -343,7 +343,7 @@ export const StatusPage: React.FC = () => {
                 </CardBody>
               </Card>
             </GridItem>
-            <GridItem lg={5} md={12}>
+            <GridItem lg={6} md={12}>
               <ActivityLog activity={status.activity} />
             </GridItem>
           </Grid>

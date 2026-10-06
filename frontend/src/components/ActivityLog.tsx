@@ -162,7 +162,7 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
                               {!entry.success && !/failed$/i.test(activityLabel(entry)) && <span className="pf-v6-u-text-color-subtle"> (failed)</span>}
                             </div>
                             {detail && entry.build && (
-                              <div className="pf-v6-u-font-family-monospace pf-v6-u-font-size-sm">
+                              <div className="pf-v6-u-font-family-monospace pf-v6-u-font-size-xs">
                                 {entry.build.split(" · ").map((part, j) => (
                                   <React.Fragment key={j}>
                                     {j > 0 && " · "}

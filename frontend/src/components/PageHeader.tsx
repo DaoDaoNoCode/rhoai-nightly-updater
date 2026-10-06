@@ -1,8 +1,6 @@
 import React from "react";
 import {
   ActionList,
-  ActionListGroup,
-  ActionListItem,
   Button,
   Content,
   Flex,
@@ -71,10 +69,10 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           </FlexItem>
           {(actions || onRefresh) && (
             <FlexItem>
-              <ActionList>
-                {actions && <ActionListGroup>{actions}</ActionListGroup>}
+              <Flex gap={{ default: "gapSm", md: "gapMd" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+                {actions && <FlexItem><ActionList>{actions}</ActionList></FlexItem>}
                 {onRefresh && (
-                  <ActionListItem>
+                  <FlexItem>
                     <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
                       {lastRefreshed && <RelativeTime date={lastRefreshed} prefix="Updated " />}
                       <Button
@@ -87,9 +85,9 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                         {refreshText}
                       </Button>
                     </Flex>
-                  </ActionListItem>
+                  </FlexItem>
                 )}
-              </ActionList>
+              </Flex>
             </FlexItem>
           )}
         </Flex>
