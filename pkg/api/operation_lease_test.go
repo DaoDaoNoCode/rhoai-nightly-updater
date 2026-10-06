@@ -323,31 +323,40 @@ func TestDryRunReleasesItsLease(t *testing.T) {
 	}
 }
 
-// TestLeaseErrorPolicy: an API error fails open (the operation runs and
-// the heartbeat keeps trying), persistent write conflicts refuse.
+// TestLeaseErrorPolicy: fail closed. A lease that cannot be read or
+// written (an API error, or conflicts through every retry) refuses with 503
+// lock_unavailable and Retry-After, runs nothing and frees the local lock.
 func TestLeaseErrorPolicy(t *testing.T) {
-	setupDevMode(t)
-	allowMutations(t)
-	f := installFakeRecord(t)
-	f.writeErr = errors.New("etcdserver: request timed out")
-	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"}, nil)
-	w := httptest.NewRecorder()
-	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"success"`) {
-		t.Fatalf("API error did not fail open: %d %s", w.Code, w.Body.String())
-	}
-
-	f.mu.Lock()
-	f.writeErr = cluster.ErrOperationRecordContended
-	f.mu.Unlock()
-	mutationLimiter = newRateLimiter(30 * time.Second)
-	w = httptest.NewRecorder()
-	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
-	if w.Code != 409 || !strings.Contains(w.Body.String(), "cluster_busy") {
-		t.Fatalf("contended lease: %d %s", w.Code, w.Body.String())
-	}
-	if clusterMutationInProgress.Load() {
-		t.Fatal("local lock held after the refusal")
+	for _, leaseErr := range []error{errors.New("etcdserver: request timed out"), cluster.ErrOperationRecordContended} {
+		setupDevMode(t)
+		allowMutations(t)
+		f := installFakeRecord(t)
+		f.writeErr = leaseErr
+		ran := false
+		runRefreshStream = func(*cluster.Client, cluster.OperationOptions, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+			ran = true
+			return &types.OperationResponse{Success: true}, nil
+		}
+		w := httptest.NewRecorder()
+		HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
+		var body struct{ Error, ErrorCode string }
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != 503 || ran || body.ErrorCode != "lock_unavailable" || w.Header().Get("Retry-After") == "" ||
+			!strings.Contains(body.Error, "Cannot verify that no other updater pod is running an operation") {
+			t.Fatalf("%v: %d ran=%v %s", leaseErr, w.Code, ran, w.Body.String())
+		}
+		if clusterMutationInProgress.Load() || inflight.snapshot() != nil || inflight.lastCompleted() != nil {
+			t.Fatalf("%v: local lock or operation kept after the refusal", leaseErr)
+		}
+		// The refusal does not use up the rate-limit slot: a retry runs.
+		f.mu.Lock()
+		f.writeErr = nil
+		f.mu.Unlock()
+		w = httptest.NewRecorder()
+		HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
+		if w.Code != 200 || !ran {
+			t.Fatalf("%v: retry %d %s", leaseErr, w.Code, w.Body.String())
+		}
 	}
 }
 

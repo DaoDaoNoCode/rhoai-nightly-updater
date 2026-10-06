@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,10 +81,17 @@ func lockCluster(w http.ResponseWriter) bool {
 		writeClusterBusy(w, remoteOperation(holder), "")
 		return false
 	}
-	slog.Warn("operation refused: the cross-pod operation lock is contended", "error", err)
-	writeClusterBusy(w, nil, "Another updater pod is writing the operation lock right now. Nothing was changed; try again in a few seconds.")
+	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", err)
+	w.Header().Set("Retry-After", strconv.Itoa(int(lockUnavailableRetryAfter.Seconds())))
+	writeError(w, lockUnavailableMessage, http.StatusServiceUnavailable, "lock_unavailable")
 	return false
 }
+
+// The refusal when the lease cannot be read or written (fail closed).
+const (
+	lockUnavailableMessage    = "Cannot verify that no other updater pod is running an operation (the operation lock could not be read or written). Nothing was changed; try again."
+	lockUnavailableRetryAfter = 10 * time.Second
+)
 
 // writeClusterBusy answers 409 cluster_busy, naming op when it is known.
 func writeClusterBusy(w http.ResponseWriter, op *Operation, message string) {

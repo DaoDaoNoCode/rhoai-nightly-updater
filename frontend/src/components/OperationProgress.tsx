@@ -21,7 +21,7 @@ import { OPERATION_NAMES, STEP_SETS, type ReconcileKind } from "../operationStep
 import { describeOutcomeError } from "../errors";
 
 /** Backend refusals that guarantee nothing changed on the cluster (pkg/cluster operations). */
-const NOTHING_CHANGED_CODES = new Set(["dashboard_dev_active", "downgrade_requires_confirmation", "validation", "prerequisites", "catalog_image_pull", "cluster_busy"]);
+const NOTHING_CHANGED_CODES = new Set(["dashboard_dev_active", "downgrade_requires_confirmation", "validation", "prerequisites", "catalog_image_pull", "cluster_busy", "lock_unavailable"]);
 import { isRunning } from "../state/operation";
 import { useClusterStatus, useOperation } from "../state/AppState";
 

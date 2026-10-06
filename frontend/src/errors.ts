@@ -53,6 +53,9 @@ function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
       return { title: "The OpenShift API is throttling requests", body: err.message, hint: "Wait a minute, then retry.", variant: "warning" };
     case "shutting_down":
       return { title: "The updater is restarting", body: err.message, hint: "Retry in a minute.", variant: "warning" };
+    case "lock_unavailable":
+      // pkg/api fails closed when it cannot read or write the cross-pod operation lock.
+      return { title: "Could not check for an operation in another updater pod", body: err.message, hint: "Nothing was changed. Retry in a few seconds.", variant: "warning" };
     case "authorization_unavailable":
       return { title: "Could not check your identity or permissions", body: err.message, hint: "The OpenShift API did not answer. Retry shortly.", variant: "warning" };
     case "network":

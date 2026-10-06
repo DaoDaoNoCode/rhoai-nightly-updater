@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -28,13 +27,16 @@ import (
 // finds a live lease of another process refuses with 409 cluster_busy and
 // reports that operation as running (remote) instead of interrupted.
 //
-// Error policy: the lease must not make the tool unusable when the API
-// server hiccups. A failed read or write (other than a conflict) is logged
-// as a warning and the operation continues without the lease ("fail open");
-// the heartbeat keeps trying to write it. A live lease of another process
-// that was actually read always refuses ("never fail open on a read lease"),
-// and so do write conflicts that persist through every retry, since they
-// mean another process is writing the record right now.
+// Error policy: fail closed. An operation starts only after its lease was
+// written. A live lease of another process refuses with 409 cluster_busy
+// and names that operation. A lease that cannot be read or written (API
+// errors, timeouts, or write conflicts that persist through every retry)
+// refuses with 503 lock_unavailable and Retry-After: without the lease the
+// tool cannot tell whether another updater pod is changing the cluster,
+// and two concurrent Updates or Reinstalls would both delete and recreate
+// the Subscription, CatalogSource and CSV. Nothing was changed then; the
+// user retries. While the operation runs, losing the lease stops it
+// (startHeartbeat).
 var (
 	writeOperationLease   = cluster.WriteOperationLease
 	releaseOperationLease = cluster.ReleaseOperationLease
@@ -95,10 +97,6 @@ func remoteOperation(l *types.OperationLease) *Operation {
 	}
 }
 
-// errLeaseContended: the lease could not be written because another
-// process kept writing the record.
-var errLeaseContended = cluster.ErrOperationRecordContended
-
 // leaseKeeper holds this process's lease while an operation runs and
 // renews it in the background.
 type leaseKeeper struct {
@@ -111,21 +109,16 @@ type leaseKeeper struct {
 var leases = &leaseKeeper{}
 
 // acquire takes the lease for op. It returns the lease of another process
-// that holds the lock, or errLeaseContended; the caller then refuses the
-// operation. Any other failure only logs a warning (see the error policy).
-// On success the heartbeat runs until stop; when the lease is lost it
-// stops the operation through cancelOp (see startHeartbeat).
+// that holds the lock, or the error that kept it from reading or writing
+// the lease; either way the caller refuses the operation (see the error
+// policy). On success the heartbeat runs until stop; when the lease is
+// lost it stops the operation through cancelOp (see startHeartbeat).
 func (k *leaseKeeper) acquire(c *cluster.Client, op *Operation, cancelOp context.CancelCauseFunc) (*types.OperationLease, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), leaseWriteTimeout)
 	defer cancel()
 	holder, err := writeOperationLease(c.WithContext(ctx), leaseFor(op, time.Now()), leaseHeldElsewhere)
-	switch {
-	case holder != nil:
-		return holder, nil
-	case errors.Is(err, errLeaseContended):
-		return nil, err
-	case err != nil:
-		slog.Warn("could not take the cross-pod operation lock; the operation continues without it", "operation", op.ID, "error", err)
+	if holder != nil || err != nil {
+		return holder, err
 	}
 	k.startHeartbeat(c, op.ID, cancelOp)
 	return nil, nil
