@@ -29,7 +29,7 @@ ROLLOUT_TIMEOUT ?= 20m
 RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
-	test test-go test-frontend test-scripts vuln clean help env
+	test test-go test-frontend test-scripts vuln clean help env docs-fixtures docs-mock docs-screenshots
 
 .DEFAULT_GOAL := help
 
@@ -120,6 +120,15 @@ test-scripts:  ## Test the release and install scripts (offline)
 vuln:  ## Check Go and npm dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 	cd frontend && npm audit --omit=dev --audit-level=high
+
+docs-fixtures:  ## Regenerate the docs mock's Diagnostics answers from the backend's test fakes
+	DOCS_FIXTURES_DIR="$(CURDIR)/docs/tools/mock/diagnostics" go test ./pkg/cluster/ -run '^TestWriteDocsFixtures$$' -count=1
+
+docs-mock:  ## Serve the built frontend with the docs mock backend (SCENARIO=healthy, PORT=18181)
+	node docs/tools/mock/server.mjs --port $(or $(PORT),18181) --scenario $(or $(SCENARIO),healthy)
+
+docs-screenshots:  ## Regenerate every docs image and GIF from the mock (JOBS="..." for a subset; needs playwright-cli, ffmpeg, ImageMagick)
+	./docs/tools/screenshots.sh $(JOBS)
 
 clean:  ## Remove build artifacts
 	rm -f server

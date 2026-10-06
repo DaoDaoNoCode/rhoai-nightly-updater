@@ -130,6 +130,27 @@ func applyFailureCR(name string, ready string, msgs ...string) map[string]interf
 }
 
 func TestCheckApplyFailures(t *testing.T) {
+	c, crdLookups := applyFailuresWorld(t)
+
+	out := checkApplyFailures(c.WithContext(context.Background()))
+	if out.check.Status != "fail" || len(out.problems) != 4 {
+		t.Fatalf("check %+v, %d problems: %+v", out.check, len(out.problems), out.problems)
+	}
+	byID := map[string]Problem{}
+	for _, p := range out.problems {
+		byID[p.ID] = p
+		if p.AutoFixable || p.Fix == "" || p.TechnicalCmd == "" || len(p.AffectedObjects) == 0 || len(p.Evidence) == 0 {
+			t.Errorf("incomplete problem %+v", p)
+		}
+	}
+	checkApplyFailureProblems(t, byID, *crdLookups)
+}
+
+// applyFailuresWorld serves four apply failures (an immutable selector, two
+// controller owners, a CRD schema mismatch, a module the tool does not
+// know) and records the CRD lookups.
+func applyFailuresWorld(t *testing.T) (*Client, *[]string) {
+	t.Helper()
 	f, c := newFakeAPI(t)
 	serveComponentGroup(f)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200,
@@ -146,9 +167,9 @@ func TestCheckApplyFailures(t *testing.T) {
 	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/aihubs", map[string]interface{}{"items": []interface{}{applyFailureCR("default-aihub", "True")}})
 	f.obj("GET", "/apis/components.platform.opendatahub.io/v1alpha1/newmodules", map[string]interface{}{"items": []interface{}{
 		applyFailureCR("default-newmodule", "True", strings.ReplaceAll(msgImmutableSelector, "kuberay-operator", "new-operator"))}})
-	var crdLookups []string
+	crdLookups := new([]string)
 	f.handle("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", func(r *http.Request, _ []byte) (int, string) {
-		crdLookups = append(crdLookups, r.URL.Query().Get("fieldSelector"))
+		*crdLookups = append(*crdLookups, r.URL.Query().Get("fieldSelector"))
 		b, _ := json.Marshal(map[string]interface{}{"items": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{
 			"name": "trustyais.components.platform.opendatahub.io",
 			"managedFields": []interface{}{
@@ -158,19 +179,11 @@ func TestCheckApplyFailures(t *testing.T) {
 		}}}})
 		return 200, string(b)
 	})
+	return c, crdLookups
+}
 
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if out.check.Status != "fail" || len(out.problems) != 4 {
-		t.Fatalf("check %+v, %d problems: %+v", out.check, len(out.problems), out.problems)
-	}
-	byID := map[string]Problem{}
-	for _, p := range out.problems {
-		byID[p.ID] = p
-		if p.AutoFixable || p.Fix == "" || p.TechnicalCmd == "" || len(p.AffectedObjects) == 0 || len(p.Evidence) == 0 {
-			t.Errorf("incomplete problem %+v", p)
-		}
-	}
-
+func checkApplyFailureProblems(t *testing.T, byID map[string]Problem, crdLookups []string) {
+	t.Helper()
 	imm, ok := byID["operator-apply-failed-deployment-redhat-ods-applications-kuberay-operator"]
 	if !ok {
 		t.Fatalf("ids %v", keysOf(byID))

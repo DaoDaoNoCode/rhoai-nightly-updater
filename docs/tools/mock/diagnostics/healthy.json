@@ -1,0 +1,20 @@
+{
+  "problems": [],
+  "checks": [
+    { "name": "Catalog health", "status": "pass", "detail": "Nightly catalog is healthy (quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:e84ba5c4ad1153f8b6e04754d5dfbe192b1be7e09d0606df3b370044d0715699)" },
+    { "name": "Operator pods", "status": "pass", "detail": "3 pods healthy in redhat-ods-operator" },
+    { "name": "Subscription health", "status": "pass", "detail": "Subscription active (channel: stable-3.x, source: rhoai-catalog-dev)" },
+    { "name": "Operator installed", "status": "pass", "detail": "rhods-operator.3.6.0 (Succeeded)" },
+    { "name": "Install plan", "status": "pass", "detail": "Latest install plan completed (install-7xk2p)" },
+    { "name": "Pull secret", "status": "pass", "detail": "Pull secret is configured and valid" },
+    { "name": "Image mirror", "status": "pass", "detail": "Image mirror configured (rhoai-quay-mirror)" },
+    { "name": "Stale webhooks", "status": "pass", "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it" },
+    { "name": "Node capacity", "status": "pass", "detail": "All 3 nodes are ready" },
+    { "name": "DataScienceCluster", "status": "pass", "detail": "default-dsc is Ready; DSCInitialization default-dsci phase Ready" },
+    { "name": "RHOAI pods", "status": "pass", "detail": "41 pods healthy in redhat-ods-applications, redhat-ods-monitoring" },
+    { "name": "Certificates", "status": "pass", "detail": "2 Certificates Ready in redhat-ods-operator, redhat-ods-applications, redhat-ods-monitoring" },
+    { "name": "Platform modules", "status": "pass", "detail": "No module is stuck in deletion; Platform default phase: Ready" },
+    { "name": "Objects the operator cannot update", "status": "pass", "detail": "No apply failures reported (13 CRs checked)" },
+    { "name": "Operator-managed config", "status": "pass", "detail": "39 deployments under operator management" }
+  ]
+}

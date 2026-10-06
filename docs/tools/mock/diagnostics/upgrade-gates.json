@@ -1,0 +1,118 @@
+{
+  "problems": [
+    {
+      "id": "dsc-upgrade-gate",
+      "severity": "critical",
+      "title": "The DataScienceCluster waits on an upgrade gate",
+      "description": "Before provisioning a new version, the operator checks upgrade gates. An unacknowledged gate blocks provisioning until an administrator sets its key to \"true\" in ConfigMap odh-upgrade-acks. This is a deliberate manual step, not a bug. The operator cannot work out which release the gates are for. That happens when an older operator runs over resources a newer version created (a downgrade, or an install of an older build); acknowledging does not help.",
+      "evidence": [
+        "DataScienceCluster default-dsc: Ready=False (Error): failed to resolve upgrade gate version: unable to determine target release for upgrade gates",
+        "DataScienceCluster default-dsc: ModulesReady=False (AdminAckRequired): Waiting for upgrade gates to be acknowledged",
+        "Not acknowledged: kserve-v2=\"false\""
+      ],
+      "fix": "Read what each gate is about (the operator's release notes name it), then acknowledge it with the commands below. Install the operator version that created these resources, or a newer one (Update on the Status page).",
+      "autoFixable": false,
+      "affectedObjects": [
+        "ConfigMap redhat-ods-operator/odh-upgrade-acks"
+      ],
+      "technicalCmd": "oc patch configmap odh-upgrade-acks -n redhat-ods-operator --type merge -p '{\"data\":{\"kserve-v2\":\"true\"}}'"
+    },
+    {
+      "id": "dsc-not-ready",
+      "severity": "warning",
+      "title": "DataScienceCluster default-dsc is not ready",
+      "description": "The operator reports that some components or modules failed to deploy or are unhealthy. Each failing condition below is the operator's own message, followed by its cause as far as the tool can tell. Conditions with severity Info (for example components set to Removed) are not listed.",
+      "evidence": [
+        "DataScienceCluster default-dsc: Ready=False (Error): failed to resolve upgrade gate version: unable to determine target release for upgrade gates",
+        "ModulesReady=False (AdminAckRequired): Waiting for upgrade gates to be acknowledged → cause: an upgrade gate holds provisioning (see \"The DataScienceCluster waits on an upgrade gate\")",
+        "Ready=False (Error): failed to resolve upgrade gate version: unable to determine target release for upgrade gates → cause: an upgrade gate holds provisioning (see \"The DataScienceCluster waits on an upgrade gate\")"
+      ],
+      "fix": "Fix the causes with the problems listed under Related: \"The DataScienceCluster waits on an upgrade gate\".",
+      "autoFixable": false,
+      "affectedObjects": [
+        "DataScienceCluster default-dsc"
+      ],
+      "technicalCmd": "oc get datasciencecluster default-dsc -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'",
+      "relatedProblems": [
+        "dsc-upgrade-gate"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "Catalog health",
+      "status": "pass",
+      "detail": "Nightly catalog is healthy (quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:e84ba5c4ad1153f8b6e04754d5dfbe192b1be7e09d0606df3b370044d0715699)"
+    },
+    {
+      "name": "Operator pods",
+      "status": "pass",
+      "detail": "3 pods healthy in redhat-ods-operator"
+    },
+    {
+      "name": "Subscription health",
+      "status": "pass",
+      "detail": "Subscription active (channel: stable-3.x, source: rhoai-catalog-dev)"
+    },
+    {
+      "name": "Operator installed",
+      "status": "pass",
+      "detail": "rhods-operator.3.6.0 (Succeeded)"
+    },
+    {
+      "name": "Install plan",
+      "status": "pass",
+      "detail": "Latest install plan completed (install-7xk2p)"
+    },
+    {
+      "name": "Pull secret",
+      "status": "pass",
+      "detail": "Pull secret is configured and valid"
+    },
+    {
+      "name": "Image mirror",
+      "status": "pass",
+      "detail": "Image mirror configured (rhoai-quay-mirror)"
+    },
+    {
+      "name": "Stale webhooks",
+      "status": "pass",
+      "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it"
+    },
+    {
+      "name": "Node capacity",
+      "status": "pass",
+      "detail": "All 3 nodes are ready"
+    },
+    {
+      "name": "DataScienceCluster",
+      "status": "fail",
+      "detail": "default-dsc is not ready (2 failing conditions); DSCInitialization default-dsci phase Ready"
+    },
+    {
+      "name": "RHOAI pods",
+      "status": "pass",
+      "detail": "41 pods healthy in redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Certificates",
+      "status": "pass",
+      "detail": "2 Certificates Ready in redhat-ods-operator, redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Platform modules",
+      "status": "pass",
+      "detail": "No module is stuck in deletion; Platform default phase: Ready"
+    },
+    {
+      "name": "Objects the operator cannot update",
+      "status": "pass",
+      "detail": "No apply failures reported (13 CRs checked)"
+    },
+    {
+      "name": "Operator-managed config",
+      "status": "pass",
+      "detail": "39 deployments under operator management"
+    }
+  ]
+}

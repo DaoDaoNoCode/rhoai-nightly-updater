@@ -1,0 +1,107 @@
+{
+  "problems": [
+    {
+      "id": "certificate-not-ready-redhat-ods-applications-odh-observability-webhook-cert",
+      "severity": "warning",
+      "title": "Certificate redhat-ods-applications/odh-observability-webhook-cert reports Ready, but its Secret odh-observability-webhook-cert is missing: cert-manager is installed but its controller is not running",
+      "description": "cert-manager keeps Secret odh-observability-webhook-cert from this Certificate. The Secret is gone but the Certificate still says Ready, because no cert-manager controller runs to notice. Until it is issued again, pods that mount the Secret stay in ContainerCreating, and webhooks whose CA it injects (cert-manager.io/inject-ca-from) have no serving certificate. Those symptoms are listed here instead of as separate problems.",
+      "evidence": [
+        "Certificate redhat-ods-applications/odh-observability-webhook-cert (Secret odh-observability-webhook-cert): Ready=True (Ready): Certificate is up to date and has not expired",
+        "Ready=True is stale: Secret odh-observability-webhook-cert does not exist (pods fail to mount it), and only a running cert-manager would update the condition",
+        "No cert-manager controller Deployment (labels app.kubernetes.io/name=cert-manager or app=cert-manager) has an available pod: cert-manager/cert-manager (0 of 0 available)",
+        "cert-manager Operator for Red Hat OpenShift is installed (CSV cert-manager-operator/cert-manager-operator.v1.20.1 Succeeded)",
+        "Operator Deployment cert-manager-operator/cert-manager-operator-controller-manager: 0 of 0 available (scaled to 0, so nothing restores the controller)",
+        "CertManager/cluster has managementState Managed",
+        "Cannot start without Secret odh-observability-webhook-cert: Pod redhat-ods-applications/odh-observability-abc",
+        "CA injected from it (cert-manager.io/inject-ca-from): ValidatingWebhookConfiguration odh-observability-webhook",
+        "Also explains: 1 RHOAI webhook configuration calls a Service that cannot serve it",
+        "Also explains: odh-observability: 1 pod stuck in ContainerCreating: secret \"odh-observability-webhook-cert\" not found"
+      ],
+      "fix": "Bring the cert-manager Operator for Red Hat OpenShift back (commands below); it then restarts the cert-manager controller, which issues the Secret again, and the pods start on their own.",
+      "autoFixable": false,
+      "affectedObjects": [
+        "Certificate redhat-ods-applications/odh-observability-webhook-cert",
+        "Pod redhat-ods-applications/odh-observability-abc",
+        "ValidatingWebhookConfiguration odh-observability-webhook"
+      ],
+      "technicalCmd": "oc scale deployment/cert-manager-operator-controller-manager -n cert-manager-operator --replicas=1"
+    }
+  ],
+  "checks": [
+    {
+      "name": "Catalog health",
+      "status": "pass",
+      "detail": "Nightly catalog is healthy (quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:e84ba5c4ad1153f8b6e04754d5dfbe192b1be7e09d0606df3b370044d0715699)"
+    },
+    {
+      "name": "Operator pods",
+      "status": "pass",
+      "detail": "3 pods healthy in redhat-ods-operator"
+    },
+    {
+      "name": "Subscription health",
+      "status": "pass",
+      "detail": "Subscription active (channel: stable-3.x, source: rhoai-catalog-dev)"
+    },
+    {
+      "name": "Operator installed",
+      "status": "pass",
+      "detail": "rhods-operator.3.6.0 (Succeeded)"
+    },
+    {
+      "name": "Install plan",
+      "status": "pass",
+      "detail": "Latest install plan completed (install-7xk2p)"
+    },
+    {
+      "name": "Pull secret",
+      "status": "pass",
+      "detail": "Pull secret is configured and valid"
+    },
+    {
+      "name": "Image mirror",
+      "status": "pass",
+      "detail": "Image mirror configured (rhoai-quay-mirror)"
+    },
+    {
+      "name": "Stale webhooks",
+      "status": "pass",
+      "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it"
+    },
+    {
+      "name": "Node capacity",
+      "status": "pass",
+      "detail": "All 3 nodes are ready"
+    },
+    {
+      "name": "DataScienceCluster",
+      "status": "pass",
+      "detail": "default-dsc is Ready; DSCInitialization default-dsci phase Ready"
+    },
+    {
+      "name": "RHOAI pods",
+      "status": "pass",
+      "detail": "41 pods healthy in redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Certificates",
+      "status": "fail",
+      "detail": "1 Certificate not issued (1 reports Ready, but its Secret is missing: stale)"
+    },
+    {
+      "name": "Platform modules",
+      "status": "pass",
+      "detail": "No module is stuck in deletion; Platform default phase: Ready"
+    },
+    {
+      "name": "Objects the operator cannot update",
+      "status": "pass",
+      "detail": "No apply failures reported (13 CRs checked)"
+    },
+    {
+      "name": "Operator-managed config",
+      "status": "pass",
+      "detail": "39 deployments under operator management"
+    }
+  ]
+}

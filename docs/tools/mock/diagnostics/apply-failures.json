@@ -1,0 +1,133 @@
+{
+  "problems": [
+    {
+      "id": "operator-apply-failed-deployment-redhat-ods-applications-kuberay-operator",
+      "severity": "critical",
+      "title": "Deployment redhat-ods-applications/kuberay-operator must be recreated: spec.selector cannot be changed",
+      "description": "The operator cannot apply its version of Deployment redhat-ods-applications/kuberay-operator because spec.selector is immutable; an older version created the object with a different value. The operator keeps failing until the object is deleted.",
+      "evidence": [
+        "Reported by Ray default-ray, DataScienceCluster default-dsc",
+        "Failure deploying Deployment redhat-ods-applications/kuberay-operator (apps/v1): unable to patch apps/v1, Kind=Deployment redhat-ods-applications/kuberay-operator: Deployment.apps \"kuberay-operator\" is invalid: spec.selector: Invalid value: {\"matchLabels\":{\"app.kubernetes.io/component\":\"kuberay-operator\",\"app.kubernetes.io/name\":\"kuberay\"}}: field is immutable"
+      ],
+      "fix": "Delete Deployment redhat-ods-applications/kuberay-operator, then restart redhat-ods-applications/ray-module-operator-controller-manager so it reconciles at once instead of after its back-off; the operator recreates it with the current spec and owner. Its pods stop until the operator recreates it; for a controller Deployment that is safe, because the operator recreates it with the current spec.",
+      "autoFixable": false,
+      "affectedObjects": [
+        "Deployment redhat-ods-applications/kuberay-operator"
+      ],
+      "technicalCmd": "oc delete deployment.apps kuberay-operator -n redhat-ods-applications; oc rollout restart deployment/ray-module-operator-controller-manager -n redhat-ods-applications"
+    },
+    {
+      "id": "operator-apply-failed-trustyai--default-trustyai",
+      "severity": "critical",
+      "title": "TrustyAI default-trustyai does not match its CRD's schema",
+      "description": "The live CRD and the object disagree on the type of a field, so the operator cannot update the object. This usually follows a downgrade or a round trip to an older version: OLM applies every CRD of the bundle it installs, so an older bundle replaces a same-named CRD, and a CRD the newer version no longer ships keeps the older schema after going back.",
+      "evidence": [
+        "Reported by TrustyAI default-trustyai, DataScienceCluster default-dsc",
+        "Failure deploying TrustyAI default-trustyai (components.platform.opendatahub.io/v1alpha1): unable to patch components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI /default-trustyai: failed to create typed live object (/default-trustyai; components.platform.opendatahub.io/v1alpha1, Kind=TrustyAI): errors: .spec.eval.lmeval.permitCodeExecution: expected boolean, got \u0026{deny}",
+        "Field .spec.eval.lmeval.permitCodeExecution: expected boolean, got \u0026{deny}",
+        "CRD trustyais.components.platform.opendatahub.io: spec.versions last written by catalog (Update) at 2026-10-05T12:00:00Z; OLM's catalog operator writes the CRDs of a bundle when it installs it"
+      ],
+      "fix": "Re-apply trustyais.components.platform.opendatahub.io from the installed operator version's bundle, then correct the listed fields of TrustyAI default-trustyai to the type that CRD expects. The right value needs judgement, so there is no automatic fix. Afterwards restart redhat-ods-applications/trustyai-operator-module-controller-manager so it reconciles at once instead of after its back-off.",
+      "autoFixable": false,
+      "affectedObjects": [
+        "TrustyAI default-trustyai",
+        "CustomResourceDefinition trustyais.components.platform.opendatahub.io"
+      ],
+      "technicalCmd": "oc get trustyai.components.platform.opendatahub.io default-trustyai -o yaml; oc get crd trustyais.components.platform.opendatahub.io -o 'jsonpath={.metadata.managedFields}'; oc rollout restart deployment/trustyai-operator-module-controller-manager -n redhat-ods-applications"
+    },
+    {
+      "id": "operator-apply-failed-servicemonitor-redhat-ods-applications-aihub-controller-manager-metrics-monitor",
+      "severity": "warning",
+      "title": "ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor has two controller owners",
+      "description": "Ownership of ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor moved between operator versions, and the object still carries the old controller reference, so the operator that owns it now cannot update it.",
+      "evidence": [
+        "Reported by Platform default",
+        "Failure deploying ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor (monitoring.coreos.com/v1): unable to patch monitoring.coreos.com/v1, Kind=ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor: ServiceMonitor.monitoring.coreos.com \"aihub-controller-manager-metrics-monitor\" is invalid: metadata.ownerReferences: Invalid value: [{\"apiVersion\":\"config.opendatahub.io/v1alpha1\",\"kind\":\"Platform\",\"name\":\"default\",\"uid\":\"1\",\"controller\":true},{\"apiVersion\":\"components.platform.opendatahub.io/v1alpha1\",\"kind\":\"AIHub\",\"name\":\"default-aihub\",\"uid\":\"2\",\"controller\":true}]...",
+        "Controller references: Platform/default and AIHub/default-aihub"
+      ],
+      "fix": "Delete ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor, then restart the RHOAI operator (redhat-ods-operator/rhods-operator) so it reconciles at once instead of after its back-off; the operator recreates it with the current spec and owner. The operator recreates it on its next reconcile.",
+      "autoFixable": false,
+      "affectedObjects": [
+        "ServiceMonitor redhat-ods-applications/aihub-controller-manager-metrics-monitor"
+      ],
+      "technicalCmd": "oc delete servicemonitor.monitoring.coreos.com aihub-controller-manager-metrics-monitor -n redhat-ods-applications; oc delete pod -n redhat-ods-operator -l name=rhods-operator"
+    }
+  ],
+  "checks": [
+    {
+      "name": "Catalog health",
+      "status": "pass",
+      "detail": "Nightly catalog is healthy (quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:e84ba5c4ad1153f8b6e04754d5dfbe192b1be7e09d0606df3b370044d0715699)"
+    },
+    {
+      "name": "Operator pods",
+      "status": "pass",
+      "detail": "3 pods healthy in redhat-ods-operator"
+    },
+    {
+      "name": "Subscription health",
+      "status": "pass",
+      "detail": "Subscription active (channel: stable-3.x, source: rhoai-catalog-dev)"
+    },
+    {
+      "name": "Operator installed",
+      "status": "pass",
+      "detail": "rhods-operator.3.6.0 (Succeeded)"
+    },
+    {
+      "name": "Install plan",
+      "status": "pass",
+      "detail": "Latest install plan completed (install-7xk2p)"
+    },
+    {
+      "name": "Pull secret",
+      "status": "pass",
+      "detail": "Pull secret is configured and valid"
+    },
+    {
+      "name": "Image mirror",
+      "status": "pass",
+      "detail": "Image mirror configured (rhoai-quay-mirror)"
+    },
+    {
+      "name": "Stale webhooks",
+      "status": "pass",
+      "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it"
+    },
+    {
+      "name": "Node capacity",
+      "status": "pass",
+      "detail": "All 3 nodes are ready"
+    },
+    {
+      "name": "DataScienceCluster",
+      "status": "pass",
+      "detail": "default-dsc is Ready; DSCInitialization default-dsci phase Ready"
+    },
+    {
+      "name": "RHOAI pods",
+      "status": "pass",
+      "detail": "41 pods healthy in redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Certificates",
+      "status": "pass",
+      "detail": "2 Certificates Ready in redhat-ods-operator, redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Platform modules",
+      "status": "pass",
+      "detail": "No module is stuck in deletion; Platform default phase: Ready"
+    },
+    {
+      "name": "Objects the operator cannot update",
+      "status": "fail",
+      "detail": "4 objects the operator cannot update"
+    },
+    {
+      "name": "Operator-managed config",
+      "status": "pass",
+      "detail": "39 deployments under operator management"
+    }
+  ]
+}
