@@ -1,7 +1,8 @@
 # Release tags (vX.Y.Z) on the GitHub mirror: the same checks as CI, the
 # release guard, then a GitHub Release with the CHANGELOG notes, install.sh
 # (the no-clone installer) and deploy/template.yaml. No images are published
-# here: GitLab CI owns the image registry.
+# here: GitLab CI owns the image registry, and the release stays a draft
+# until GitLab has published the image of the tag.
 name: Release
 
 on:
@@ -45,11 +46,33 @@ jobs:
           INSTALLER="$RUNNER_TEMP/install.sh" \
           INSTALLER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/install.sh" \
             sh scripts/release.sh notes "$TAG" HEAD > "$RUNNER_TEMP/notes.md"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.1"
+      # GitLab CI publishes the image. Publish this release only once
+      # IMAGE:<tag> exists and was built from the tag's commit (read
+      # anonymously, at most 30 minutes); otherwise create a draft, so the
+      # installer never points at a missing image.
+      - name: Wait for the image
+        id: image
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.22.1
+          if sh scripts/release.sh wait-image "$TAG"; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            printf '\n> **Draft:** `%s:%s` was not published from this tag within 30 minutes. Publish this release once the GitLab tag pipeline has published the image.\n' \
+              "$IMAGE" "$TAG" >> "$RUNNER_TEMP/notes.md"
+          fi
       - name: GitHub Release
+        env:
+          PUBLISHED: ${{ steps.image.outputs.published }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "The GitHub Release $TAG exists already; leaving it."
             exit 0
           fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
+          draft=""
+          if [ "$PUBLISHED" != "true" ]; then draft="--draft"; fi
+          gh release create "$TAG" --verify-tag $draft --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
             "$RUNNER_TEMP/install.sh" "$RUNNER_TEMP/template.yaml"

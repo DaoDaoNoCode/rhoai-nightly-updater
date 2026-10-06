@@ -22,6 +22,8 @@
 #   release.sh promote-latest VERSION  CI, manual: move :latest to VERSION
 #   release.sh publish-main            CI, main: push the image tarball as the
 #                                      commit tag (written once) and move :main
+#   release.sh wait-image VERSION      wait (bounded) until IMAGE:VERSION exists,
+#                                      built from the commit of tag VERSION
 #   release.sh gitlab-release VERSION  CI: create the GitLab Release
 #   release.sh should-move NAME NEW CURRENT
 #                                      whether tag NAME (latest or vN) moves
@@ -439,6 +441,32 @@ cmd_publish_main() {
 	fi
 }
 
+# cmd_wait_image VERSION: waits until IMAGE:VERSION exists and was built from
+# the commit of tag VERSION (its revision label), reading anonymously.
+# Gives up after WAIT_SECONDS (default 1800), checking every WAIT_INTERVAL
+# (default 30) seconds. The GitHub release uses it, so it never publishes
+# an installer for an image GitLab has not published.
+cmd_wait_image() {
+	version=$1
+	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
+	require_publish_env
+	commit=$(git rev-parse --verify --quiet "$version^{commit}") || die "Tag $version is not in this repository."
+	deadline=$(($(date +%s) + ${WAIT_SECONDS:-1800}))
+	while :; do
+		if config=$(crane_cmd config "$IMAGE:$version" 2>/dev/null); then
+			built_from=$(printf '%s\n' "$config" | sed -n 's/.*"org\.opencontainers\.image\.revision": *"\([^"]*\)".*/\1/p' | head -1)
+			if [ "$built_from" = "$commit" ]; then
+				info "$IMAGE:$version is published, built from $commit."
+				return 0
+			fi
+			[ -z "$built_from" ] || die "$IMAGE:$version was built from $built_from, not $commit."
+		fi
+		[ "$(date +%s)" -lt "$deadline" ] || die "$IMAGE:$version did not appear within ${WAIT_SECONDS:-1800} seconds."
+		info "Waiting for $IMAGE:$version..."
+		sleep "${WAIT_INTERVAL:-30}"
+	done
+}
+
 cmd_promote_latest() {
 	version=$1
 	is_release "$version" || die "A release version looks like v1.2.3, not '$version'."
@@ -513,6 +541,7 @@ tag) [ $# -eq 1 ] || usage; cmd_tag "$1" ;;
 publish) [ $# -eq 1 ] || usage; cmd_publish "$1" ;;
 promote-latest) [ $# -eq 1 ] || usage; cmd_promote_latest "$1" ;;
 publish-main) [ $# -eq 0 ] || usage; cmd_publish_main ;;
+wait-image) [ $# -eq 1 ] || usage; cmd_wait_image "$1" ;;
 gitlab-release) [ $# -eq 1 ] || usage; cmd_gitlab_release "$1" ;;
 should-move) [ $# -eq 3 ] || usage; cmd_should_move "$@" ;;
 *) usage ;;

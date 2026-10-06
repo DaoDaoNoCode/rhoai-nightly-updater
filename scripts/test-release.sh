@@ -298,6 +298,17 @@ expect_fail "registry unreachable" "Cannot list the tags" env FAKE_LS_ERROR="dia
 expect_fail "IMAGE with a tag" "without a tag" env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app:latest \
 	CI_COMMIT_SHA="$SHA2" $SH "$RELEASE" publish v1.0.1
 
+# --- wait-image (GitHub release) ------------------------------------------------
+waitimg() { env FAKE_REGISTRY="$REG" CRANE="$CRANE" IMAGE=quay.io/example/app WAIT_SECONDS=1 WAIT_INTERVAL=1 $SH "$RELEASE" wait-image "$@"; }
+V1COMMIT=$(git rev-parse 'v1.0.0^{commit}')
+reset_registry
+expect_fail "wait-image: never published" "did not appear within 1 seconds" waitimg v1.0.0
+seed v1.0.0 "$(config v1.0.0 "$SHA3")"
+expect_fail "wait-image: built from another commit" "was built from $SHA3" waitimg v1.0.0
+seed v1.0.0 "$(config v1.0.0 "$V1COMMIT")"
+expect_ok "wait-image: published from the tag's commit" waitimg v1.0.0
+expect_fail "wait-image: unknown tag" "not in this repository" waitimg v7.7.7
+
 # --- tag (make release) -----------------------------------------------------------
 git init -q --bare "$WORK/origin.git"
 git remote add origin "$WORK/origin.git"
