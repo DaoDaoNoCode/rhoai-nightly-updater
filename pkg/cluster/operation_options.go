@@ -8,7 +8,7 @@ import "fmt"
 type OperationOptions struct {
 	// AllowDowngrade confirms a Reinstall to an operator version older than
 	// the installed one (OLM has no downgrade path; the user accepts that
-	// CRDs keep the newer schema).
+	// OLM replaces the CRDs of the older bundle with their older versions).
 	AllowDowngrade bool
 	// RevertDashboardDev ends an active Dashboard Dev session first. The
 	// operations refuse to run while dashboard-operator is paused: the new

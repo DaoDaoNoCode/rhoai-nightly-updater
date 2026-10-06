@@ -31,6 +31,7 @@ type fakeOLM struct {
 	catalogPods  string // pod list JSON for olm.catalogSource pods
 	dashboardOp  string // dashboard-operator Deployment JSON, "" = absent
 	platform     string // Platform "default" JSON, "" = absent
+	dsc          string // DataScienceCluster "default-dsc" JSON, "" = no DSC API
 	failDelete   map[string]int
 	stuckCSVs    map[string]bool // CSVs whose DELETE only sets deletionTimestamp (a finalizer that never finishes)
 	recordedSub  string          // data.operator-subscription of the snapshot ConfigMap
@@ -235,6 +236,10 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(p, "/deployments") || strings.HasSuffix(p, "/pods") ||
 		strings.HasSuffix(p, "webhookconfigurations"):
 		_, _ = io.WriteString(w, `{"items":[]}`)
+	case strings.HasSuffix(p, "/datascienceclusters") && f.dsc != "":
+		_, _ = io.WriteString(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+	case strings.HasSuffix(p, "/datascienceclusters/default-dsc") && f.dsc != "":
+		_, _ = io.WriteString(w, f.dsc)
 	case strings.HasSuffix(p, "/platforms/default"):
 		if f.platform == "" {
 			notFound(w)

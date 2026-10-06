@@ -198,7 +198,7 @@ export function useOperatorActions(): {
                 id="downgrade-ack-followup"
                 isChecked={downgradeAck}
                 onChange={(_e, checked) => setDowngradeAck(checked)}
-                label="I understand: the older operator keeps the newer CRDs and may reject or ignore fields created by the newer version."
+                label="I understand: OLM replaces the CRDs of the older bundle with their older versions, and the older operator may refuse to manage resources the newer version created."
               />
             </StackItem>
           </Stack>

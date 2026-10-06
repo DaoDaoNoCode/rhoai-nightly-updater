@@ -365,9 +365,11 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             {knownDowngrade && (
               <StackItem>
                 <Alert variant="danger" isInline component="p" title="This installs an older operator version">
-                  OLM cannot downgrade an operator, so Reinstall removes it and installs the older one. The CRDs keep the
-                  newer schema, and the older operator may reject or ignore fields that the newer version created in
-                  your DataScienceCluster and DSCInitialization.
+                  OLM cannot downgrade an operator, so Reinstall removes it and installs the older one. OLM replaces the
+                  CRDs that ship in the older bundle with their older versions: fields only the newer version knows can be
+                  pruned from your DataScienceCluster, and a CRD the newer version no longer ships stays at the older schema
+                  after you go back with Update (Diagnostics flags it). The older operator may also refuse to manage, or
+                  stop at upgrade gates for, resources the newer version created.
                 </Alert>
               </StackItem>
             )}

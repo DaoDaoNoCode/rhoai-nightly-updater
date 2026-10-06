@@ -52,7 +52,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 
 **Versions.**
 - Update refuses an older build.
-- Reinstall to an older version requires an explicit confirmation checkbox. OLM cannot downgrade, and the CRDs keep the newer schema.
+- Reinstall to an older version requires an explicit confirmation checkbox. OLM cannot downgrade: it replaces the CRDs that ship in the older bundle with their older versions, so newer-only fields can be pruned and a CRD the newer version no longer ships stays at the older schema after going back (Diagnostics flags it).
 - Re-deploy never changes the version. With Automatic approval it refuses if the channel head has moved; with Manual approval it pins `startingCSV`.
 
 **Manual approval is respected.** The Subscription's `installPlanApproval` and `spec.config` are kept. Under Manual approval, the tool approves only the InstallPlan it caused, and only if that plan installs exactly the confirmed rhods-operator CSV.

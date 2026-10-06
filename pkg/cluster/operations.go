@@ -1060,6 +1060,9 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	verdict, reason := compareWithInstalled(csv, targetCSV)
 	// crdWarning is shown in the downgrade confirmation and the result.
 	crdWarning := ""
+	// downgraded: a confirmed install of an older operator over newer
+	// resources; the result then carries downgradeNote.
+	downgraded := false
 	if verdict == verdictOlder || verdict == verdictUnknown {
 		// A possible downgrade: OLM fails it in the CRD step when the older
 		// bundle drops a version the live CRDs still store, after the
@@ -1088,15 +1091,16 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	case verdictOlder:
 		if !opts.AllowDowngrade {
 			recordActivity = false
-			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Reinstall would remove the operator and install the older version, while the CRDs keep the newer schema, which the older operator may reject. Nothing was changed. Confirm the downgrade to continue.%s", targetCSV, csv.Name, spaced(crdWarning)), errorCodeDowngrade)
+			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Reinstall would remove the operator and install the older version. %s Nothing was changed. Confirm the downgrade to continue.%s", targetCSV, csv.Name, downgradeCRDEffects, spaced(crdWarning)), errorCodeDowngrade)
 		}
-		logs = append(logs, fmt.Sprintf("Warning: downgrade confirmed: %s -> %s. CRDs keep the newer schema.", csv.Name, targetCSV))
+		downgraded = true
+		logs = append(logs, fmt.Sprintf("Warning: downgrade confirmed: %s -> %s. %s", csv.Name, targetCSV, downgradeCRDEffects))
 		validated += fmt.Sprintf(" (downgrade: %s -> %s)", csv.Name, targetCSV)
 	case verdictUnknown:
 		// Fail closed: an unreadable version must not let a downgrade through.
 		if !opts.AllowDowngrade {
 			recordActivity = false
-			return fail(fmt.Sprintf("Cannot tell whether the target %s is older than the installed %s: %s. OLM cannot downgrade an operator, so a downgrade could leave CRDs the older operator rejects. Nothing was changed. Confirm to continue anyway.%s", displayCSV(targetCSV), csv.Name, reason, spaced(crdWarning)), errorCodeDowngrade)
+			return fail(fmt.Sprintf("Cannot tell whether the target %s is older than the installed %s: %s. OLM cannot downgrade an operator; if it is older: %s Nothing was changed. Confirm to continue anyway.%s", displayCSV(targetCSV), csv.Name, reason, downgradeCRDEffects, spaced(crdWarning)), errorCodeDowngrade)
 		}
 		logs = append(logs, fmt.Sprintf("Warning: version comparison not possible (%s); continuing as confirmed: %s -> %s", reason, csv.Name, displayCSV(targetCSV)))
 		validated += fmt.Sprintf(" (confirmed: %s -> %s, version unknown)", csv.Name, displayCSV(targetCSV))
@@ -1226,10 +1230,26 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 
 	// --- Steps 9+ diverge for stable vs nightly ---
 	if isNightly {
-		return reinstallNightlySteps(c, image, channelOverride, approveCSV, recovery, logs, emit)
+		result, opErr = reinstallNightlySteps(c, image, channelOverride, approveCSV, recovery, logs, emit)
+	} else {
+		result, opErr = reinstallStableSteps(c, stableSource, stableChannel, approveCSV, recovery, logs, emit)
 	}
-	return reinstallStableSteps(c, stableSource, stableChannel, approveCSV, recovery, logs, emit)
+	if downgraded && result != nil && result.Success {
+		result.Message = strings.TrimSpace(result.Message + " " + downgradeNote)
+		result.Logs = append(result.Logs, "Note: "+downgradeNote)
+	}
+	return result, opErr
 }
+
+// downgradeCRDEffects is what a downgrade does to the CRDs. OLM applies
+// every CRD of the bundle it installs, so the older bundle's CRDs replace
+// the newer ones of the same name.
+const downgradeCRDEffects = "OLM replaces the CRDs that ship in the older bundle with their older versions: fields that only the newer version knows can be pruned " +
+	"from objects such as the DataScienceCluster, and a CRD that the newer version no longer ships stays at the older schema after you go back (Diagnostics flags it)."
+
+// downgradeNote follows a confirmed downgrade that installed.
+const downgradeNote = "An older operator now runs over resources that a newer version created: it may refuse to manage some of them, or stop at upgrade gates. " +
+	"Check the Components page and Diagnostics. To go back to the newer version, use Update."
 
 // displayCSV names a target bundle in messages, including an unknown one.
 func displayCSV(name string) string {

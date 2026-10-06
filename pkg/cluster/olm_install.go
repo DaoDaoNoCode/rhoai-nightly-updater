@@ -242,7 +242,8 @@ const installDeadlineReserve = 10 * time.Second
 // Manual approval is how admins hold back upgrades, and OLM cannot undo an
 // approved upgrade (RHOAI operator notes §1.3, §1.4).
 func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
-	deadline := time.Now().Add(OperatorInstallTimeout)
+	waitStart := time.Now()
+	deadline := waitStart.Add(OperatorInstallTimeout)
 	budgetLimited := false
 	if opDeadline, ok := c.ctx.Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
 		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
@@ -437,7 +438,7 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 		csvFailedSince = time.Time{}
 		if phase == "Succeeded" && sub.Status.InstalledCSV == name {
 			*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
-			outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c)}
+			outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c, name, waitStart)}
 			if outcome.note != "" {
 				*logs = append(*logs, "Warning: "+outcome.note)
 			}
@@ -687,35 +688,148 @@ func (t *stepTracker) finish(c *Client, result **types.OperationResponse, opErr 
 	}
 }
 
-// adminAckNote reports when the newly installed operator holds provisioning
-// for an admin acknowledgement (Platform "default" condition
-// ProvisioningProgress=False, reason AdminAckRequired; rhods-operator
-// docs/upgrade-ordering.md "Admin ack gates"). That is a manual gate, not a
-// failed install. The Platform API does not exist before RHOAI 3.6 or right
-// after a fresh install, which is not an error.
-func adminAckNote(c *Client) string {
-	body, _, err := c.get(clusterPath("config.opendatahub.io/v1alpha1", "platforms", "default"))
-	if err != nil {
-		return ""
-	}
-	var platform struct {
+// Waiting for the upgrade-gate note. After OLM reports the CSV Succeeded,
+// the new operator still has to start and reconcile before it reports a
+// gate, so the note polls for at most upgradeGateWait. The wait runs on the
+// operation's own context and ends installDeadlineReserve before its
+// deadline, so it stays inside the operation's time budget
+// (operator_recovery.go). It ends at once when there is no
+// DataScienceCluster, and as soon as the DSC reports the installed version.
+var (
+	upgradeGateWait = 45 * time.Second
+	upgradeGatePoll = 5 * time.Second
+)
+
+// upgradeGateSkew is how much older than the start of the install wait a
+// condition's lastTransitionTime may be and still count as reported by the
+// new operator (clock skew between the operator and this pod).
+const upgradeGateSkew = 30 * time.Second
+
+// upgradeGate is one condition that says provisioning waits on an upgrade
+// gate.
+type upgradeGate struct {
+	where string // "Platform default", "DataScienceCluster default-dsc"
+	cond  dscCondition
+	fresh bool // reported by the newly installed operator
+}
+
+func (g upgradeGate) String() string {
+	return fmt.Sprintf("%s %s=%s (%s): %s", g.where, g.cond.Type, g.cond.Status, g.cond.Reason, truncate(g.cond.Message, 300))
+}
+
+// isUpgradeGateCondition: reason AdminAckRequired, or a message about
+// upgrade gates (rhods-operator docs/upgrade-ordering.md "Admin ack gates";
+// a 3.5 operator over newer resources reports "failed to resolve upgrade
+// gate version" on the DSC Ready condition).
+func isUpgradeGateCondition(cond dscCondition) bool {
+	return cond.Reason == "AdminAckRequired" || strings.Contains(strings.ToLower(cond.Message), "upgrade gate")
+}
+
+// readUpgradeGates returns the gate conditions of the Platform "default"
+// (RHOAI 3.6 and later) and of the DataScienceCluster. reported is true
+// once the DSC reports version as its release (the new operator has
+// reconciled it); dscFound is false when there is no DSC to wait for.
+// Read errors count as "nothing reported": the note is best effort.
+func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgradeGate, reported, dscFound bool) {
+	type statusObject struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
 		Status struct {
-			Conditions []olmCondition `json:"conditions"`
+			Conditions []struct {
+				dscCondition
+				LastTransitionTime string `json:"lastTransitionTime"`
+			} `json:"conditions"`
+			Release struct {
+				Version string `json:"version"`
+			} `json:"release"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &platform) != nil {
-		return ""
-	}
-	for _, cond := range platform.Status.Conditions {
-		if cond.Type == "ProvisioningProgress" && cond.Reason == "AdminAckRequired" {
-			msg := "The operator is installed, but it does not provision components until an administrator acknowledges the upgrade (AdminAckRequired)"
-			if cond.Message != "" {
-				msg += ": " + cond.Message
+	collect := func(where string, obj statusObject, platform bool) {
+		releaseMatches := version != "" && obj.Status.Release.Version == version
+		for _, cond := range obj.Status.Conditions {
+			if !isUpgradeGateCondition(cond.dscCondition) {
+				continue
 			}
-			return msg + ". Set the listed keys to \"true\" in ConfigMap odh-upgrade-acks in " + SubNS + "."
+			// The Platform is only reconciled by 3.6 and later operators and
+			// says nothing about an older one; a DSC condition is the new
+			// operator's when the DSC reports its version or changed after
+			// the install started.
+			fresh := platform || releaseMatches
+			if t, ok := parseK8sTime(cond.LastTransitionTime); ok && !t.Before(since.Add(-upgradeGateSkew)) {
+				fresh = true
+			}
+			gates = append(gates, upgradeGate{where: where + " " + obj.Metadata.Name, cond: cond.dscCondition, fresh: fresh})
 		}
 	}
-	return ""
+	if body, _, err := c.get(clusterPath("config.opendatahub.io/v1alpha1", "platforms", "default")); err == nil {
+		var pl statusObject
+		if json.Unmarshal(body, &pl) == nil {
+			collect("Platform", pl, true)
+		}
+	}
+	path, err := dataScienceClusterPath(c)
+	if err != nil {
+		return gates, false, false
+	}
+	body, _, err := c.get(path)
+	if err != nil {
+		return gates, false, false
+	}
+	var dsc statusObject
+	if json.Unmarshal(body, &dsc) != nil {
+		return gates, false, false
+	}
+	collect("DataScienceCluster", dsc, false)
+	return gates, version != "" && dsc.Status.Release.Version == version, true
+}
+
+// adminAckNote reports when the newly installed operator (CSV csvName)
+// holds provisioning at an upgrade gate: an admin acknowledgement
+// (AdminAckRequired) or a gate it cannot resolve, on the Platform or on
+// any DataScienceCluster condition. That is a manual step, not a failed
+// install. It is quiet when nothing is gated; since is when the install
+// wait began.
+func adminAckNote(c *Client, csvName string, since time.Time) string {
+	version := strings.TrimPrefix(csvName, SubName+".")
+	end := time.Now().Add(upgradeGateWait)
+	if d, ok := c.ctx.Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
+		end = d.Add(-installDeadlineReserve)
+	}
+	for {
+		gates, reported, dscFound := readUpgradeGates(c, version, since)
+		var fresh, stale []string
+		for _, g := range gates {
+			if g.fresh {
+				fresh = append(fresh, g.String())
+			} else {
+				stale = append(stale, g.String())
+			}
+		}
+		last := !time.Now().Add(upgradeGatePoll).Before(end)
+		switch {
+		case len(fresh) > 0:
+			return upgradeGateMessage(fresh, "")
+		case !dscFound || reported:
+			return ""
+		case last:
+			if len(stale) > 0 {
+				return upgradeGateMessage(stale, " It was reported before this install finished, so it may clear once the new operator reconciles.")
+			}
+			return ""
+		}
+		select {
+		case <-c.ctx.Done():
+			return ""
+		case <-time.After(upgradeGatePoll):
+		}
+	}
+}
+
+func upgradeGateMessage(gates []string, hedge string) string {
+	return "The operator is installed, but it does not provision components while an upgrade gate holds it: " + strings.Join(gates, "; ") + "." + hedge +
+		" Read what the gate is about: an admin acknowledgement is given by setting its key to \"true\" in ConfigMap odh-upgrade-acks in " + SubNS +
+		" (Diagnostics lists the keys); a gate the operator cannot resolve usually means it is older than the resources it found. Check the Components page."
 }
 
 // foreignSubscriptionRefusal reports another Subscription for the

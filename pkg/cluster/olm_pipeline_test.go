@@ -536,6 +536,81 @@ func TestAdminAckReported(t *testing.T) {
 	}
 }
 
+// E3: an operator that stops at upgrade gates reports them on the DSC (a
+// 3.5 operator does not update the Platform). The note reads any DSC
+// condition, waits a bounded time for the new operator to report, and stays
+// quiet when nothing is gated.
+func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
+	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
+	upgradeGateWait, upgradeGatePoll = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
+	now := time.Now().UTC().Format(time.RFC3339)
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	dsc := func(release string, conds ...string) string {
+		return `{"metadata":{"name":"default-dsc"},"status":{"release":{"version":"` + release + `"},"conditions":[` + strings.Join(conds, ",") + `]}}`
+	}
+	cond := func(typ, status, reason, msg, at string) string {
+		return fmt.Sprintf(`{"type":%q,"status":%q,"reason":%q,"message":%q,"lastTransitionTime":%q}`, typ, status, reason, msg, at)
+	}
+	gated := []string{
+		cond("Ready", "False", "Error", "failed to resolve upgrade gate version: unable to determine target release for upgrade gates", now),
+		cond("ModulesReady", "False", "AdminAckRequired", "Waiting for upgrade gates to be acknowledged", now),
+	}
+	for _, tc := range []struct {
+		name    string
+		dsc     string
+		want    []string
+		quiet   bool
+		maxTime time.Duration
+	}{
+		{"gated by the new operator", dsc("3.5.1", gated...), []string{"ModulesReady=False (AdminAckRequired)", "failed to resolve upgrade gate version", "odh-upgrade-acks"}, false, time.Second},
+		{"a gate from before the install", dsc("3.4.0", cond("ModulesReady", "False", "AdminAckRequired", "Waiting for upgrade gates to be acknowledged", old)),
+			[]string{"reported before this install finished"}, false, 5 * time.Second},
+		{"reported, nothing gated", dsc("3.6.0", cond("Ready", "True", "Ready", "", now)), nil, true, 250 * time.Millisecond},
+		{"no DSC", "", nil, true, 250 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+			f.dsc = tc.dsc
+			start := time.Now()
+			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", start)
+			if tc.quiet != (note == "") || time.Since(start) > tc.maxTime {
+				t.Fatalf("note %q after %s", note, time.Since(start))
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(note, w) {
+					t.Errorf("note lacks %q: %s", w, note)
+				}
+			}
+		})
+	}
+}
+
+// E3: a confirmed downgrade that installed says what to expect and how to
+// go back; the confirmation says what OLM does to the CRDs.
+func TestConfirmedDowngradeNote(t *testing.T) {
+	f := newFakeOLM(t)
+	installedCSVFixture{csvName: "rhods-operator.3.7.0", version: "3.7.0"}.apply(f)
+	f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+	c := f.client(context.Background())
+	refused, _ := Reinstall(c, "nightly", testNightlyImage, "")
+	if refused.Success || !strings.Contains(refused.Message, "OLM replaces the CRDs that ship in the older bundle") || strings.Contains(refused.Message, "keep the newer schema") {
+		t.Fatalf("confirmation text: %s", refused.Message)
+	}
+	result, err := ReinstallWithOptions(c, "nightly", testNightlyImage, "", OperationOptions{AllowDowngrade: true})
+	if err != nil || !result.Success || !strings.Contains(result.Message, "use Update") || !strings.Contains(result.Message, "upgrade gates") {
+		t.Fatalf("result %+v err %v", result, err)
+	}
+	// A same-version reinstall has no such note.
+	f2 := newFakeOLM(t)
+	installedCSVFixture{csvName: "rhods-operator.3.6.0", version: "3.6.0"}.apply(f2)
+	f2.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+	if same, _ := Reinstall(f2.client(context.Background()), "nightly", testNightlyImage, ""); !same.Success || strings.Contains(same.Message, "older operator") {
+		t.Fatalf("same version: %+v", same)
+	}
+}
+
 // A same-name CSV that is still being deleted is not the new install.
 func TestWaitIgnoresDeletingCSV(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
