@@ -11,12 +11,6 @@ import {
   CodeBlock,
   CodeBlockCode,
   Content,
-  DataList,
-  DataListCell,
-  DataListContent,
-  DataListItem,
-  DataListItemCells,
-  DataListItemRow,
   EmptyState,
   EmptyStateBody,
   Grid,
@@ -43,6 +37,7 @@ import { ReinstallPanel } from "../components/ReinstallPanel";
 import { SetupModal } from "../components/PrerequisitesPanel";
 import { ActivityLog } from "../components/ActivityLog";
 import { PageErrorState, PageLoading } from "../components/PageStates";
+import { CardList, CardListItem } from "../components/CardList";
 import { TechnicalDetails } from "../components/LongText";
 import { StepsPreview } from "../components/StepsPreview";
 import { PageHeader } from "../components/PageHeader";
@@ -359,68 +354,58 @@ export const StatusPage: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardBody>
-              <DataList aria-label="Recovery actions">
-                <DataListItem aria-labelledby="recovery-redeploy">
-                  <DataListItemRow>
-                    <DataListItemCells
-                      dataListCells={[
-                        <DataListCell key="text">
-                          <Title headingLevel="h3" size="md" id="recovery-redeploy">Re-deploy the operator</Title>
-                          <Content component="p" className="pf-v6-u-text-color-subtle">
-                            Deletes and recreates the Subscription and CSV from the same catalog and channel. Keeps the Subscription
-                            settings, DSC, DSCI and workloads. It does not fetch a newer build: use Update for that.
-                          </Content>
-                        </DataListCell>,
-                        <DataListCell key="action" isFilled={false} alignRight>
-                        <TooltipButton
-                          variant="secondary"
-                          onClick={() => setRefreshConfirmOpen(true)}
-                          isLoading={!!refreshRun && !refreshRun.outcome}
-                          disabledReason={blocker}
-                        >
-                          Re-deploy operator...
-                        </TooltipButton>
-                        </DataListCell>,
-                      ]}
-                    />
-                  </DataListItemRow>
-                </DataListItem>
-                <DataListItem aria-labelledby="recovery-reinstall" isExpanded={reinstallExpanded}>
-                  <DataListItemRow>
-                    <DataListItemCells
-                      dataListCells={[
-                        <DataListCell key="text">
-                          <Title headingLevel="h3" size="md" id="recovery-reinstall">Reinstall the operator</Title>
-                          <Content component="p" className="pf-v6-u-text-color-subtle">
-                            Uninstalls the operator and installs it again from the target you choose: the GA release, an older
-                            build, or when Update and Re-deploy can&apos;t recover it. RHOAI can&apos;t be changed for 5-10 minutes;
-                            running workloads keep running.
-                          </Content>
-                        </DataListCell>,
-                        <DataListCell key="action" isFilled={false} alignRight>
-                        <Button
-                          variant="secondary"
-                          onClick={() => setReinstallExpanded(!reinstallExpanded)}
-                          aria-expanded={reinstallExpanded}
-                          aria-controls="recovery-reinstall-content"
-                        >
-                          {reinstallExpanded ? "Hide reinstall options" : "Reinstall..."}
-                        </Button>
-                        </DataListCell>,
-                      ]}
-                    />
-                  </DataListItemRow>
-                  <DataListContent id="recovery-reinstall-content" aria-label="Reinstall options" isHidden={!reinstallExpanded}>
-                    <ReinstallPanel
-                      status={status}
-                      nightlyTags={nightlyTags}
-                      tagsLoading={tagsLoading}
-                      prerequisitesMet={prerequisitesMet}
-                      runOperator={runOperator}
-                    />
-                  </DataListContent>
-                </DataListItem>
-              </DataList>
+              <CardList aria-label="Recovery actions">
+                <CardListItem
+                  labelledBy="recovery-redeploy"
+                  actions={
+                    <TooltipButton
+                      variant="secondary"
+                      onClick={() => setRefreshConfirmOpen(true)}
+                      isLoading={!!refreshRun && !refreshRun.outcome}
+                      disabledReason={blocker}
+                    >
+                      Re-deploy operator...
+                    </TooltipButton>
+                  }
+                >
+                  <Title headingLevel="h3" size="md" id="recovery-redeploy">Re-deploy the operator</Title>
+                  <Content component="p" className="pf-v6-u-text-color-subtle">
+                    Deletes and recreates the Subscription and CSV from the same catalog and channel. Keeps the Subscription
+                    settings, DSC, DSCI and workloads. It does not fetch a newer build: use Update for that.
+                  </Content>
+                </CardListItem>
+                <CardListItem
+                  labelledBy="recovery-reinstall"
+                  actions={
+                    <Button
+                      variant="secondary"
+                      onClick={() => setReinstallExpanded(!reinstallExpanded)}
+                      aria-expanded={reinstallExpanded}
+                      aria-controls="recovery-reinstall-content"
+                    >
+                      {reinstallExpanded ? "Hide reinstall options" : "Reinstall..."}
+                    </Button>
+                  }
+                  expanded={
+                    <section id="recovery-reinstall-content" aria-label="Reinstall options" className="pf-v6-u-mt-lg" hidden={!reinstallExpanded}>
+                      <ReinstallPanel
+                        status={status}
+                        nightlyTags={nightlyTags}
+                        tagsLoading={tagsLoading}
+                        prerequisitesMet={prerequisitesMet}
+                        runOperator={runOperator}
+                      />
+                    </section>
+                  }
+                >
+                  <Title headingLevel="h3" size="md" id="recovery-reinstall">Reinstall the operator</Title>
+                  <Content component="p" className="pf-v6-u-text-color-subtle">
+                    Uninstalls the operator and installs it again from the target you choose: the GA release, an older
+                    build, or when Update and Re-deploy can&apos;t recover it. RHOAI can&apos;t be changed for 5-10 minutes;
+                    running workloads keep running.
+                  </Content>
+                </CardListItem>
+              </CardList>
             </CardBody>
           </Card>
         </PageSection>

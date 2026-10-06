@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Card, CardBody, CardExpandableContent, CardHeader, CardTitle, Content, Flex, FlexItem, Stack, StackItem, Title } from "@patternfly/react-core";
+import { Card, CardBody, CardExpandableContent, CardHeader, CardTitle, Content, Flex, FlexItem, Title } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
 import type { DashboardDevImage } from "../types";
 import { ImageRef } from "./ImageRef";
@@ -92,18 +92,18 @@ export const DashboardImages: React.FC<{ images: DashboardDevImage[]; defaultExp
       </CardHeader>
       <CardExpandableContent>
         <CardBody>
-          <Stack hasGutter>
-            <StackItem><Content component="p" className="pf-v6-u-text-color-subtle">Running: {summary}.</Content></StackItem>
-            <StackItem>
-              <Table aria-label="Dashboard container images" variant="compact">
+          <Content component="p" className="pf-v6-u-text-color-subtle">Running: {summary}.</Content>
+        </CardBody>
+        <CardBody className="pf-v6-u-px-0">
+              <Table aria-label="Dashboard container images" variant="compact" borders={false}>
                 <Thead><Tr><Th width={25}>Component</Th><Th width={45}>Running</Th><Th width={30}>Status</Th></Tr></Thead>
                 <Tbody>
-                  {images.map(image => {
+                  {images.map((image, rowIndex) => {
                     const running = runningLabel(image);
                     const status = statusOf(image);
                     const tag = imageTagOf(image.currentImage);
                     return (
-                      <Tr key={`${image.deployment}/${image.container}`}>
+                      <Tr key={`${image.deployment}/${image.container}`} isStriped={rowIndex % 2 === 1}>
                         <Td dataLabel="Component">
                           <strong>{componentName(image.container)}</strong>
                           <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{image.deployment}</div>
@@ -128,8 +128,6 @@ export const DashboardImages: React.FC<{ images: DashboardDevImage[]; defaultExp
                   })}
                 </Tbody>
               </Table>
-            </StackItem>
-          </Stack>
         </CardBody>
       </CardExpandableContent>
     </Card>

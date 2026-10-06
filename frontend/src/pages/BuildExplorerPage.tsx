@@ -40,7 +40,7 @@ import { ApiError, getBuildExplorerTags, toApiError } from "../services/api";
 import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageErrorState, PageLoading } from "../components/PageStates";
-import { RelativeTime } from "../components/RelativeTime";
+import { NotRecorded, RelativeTime } from "../components/RelativeTime";
 import { RowActions } from "../components/RowActions";
 import { TagLabel } from "../components/StatusLabel";
 import { ImageRef } from "../components/ImageRef";
@@ -316,8 +316,8 @@ export const BuildExplorerPage: React.FC = () => {
             <CardHeader>
               <CardTitle><Title headingLevel="h2" size="lg">Nightly builds</Title></CardTitle>
             </CardHeader>
-            <CardBody>
-              <Toolbar inset={{ default: "insetNone" }} clearAllFilters={() => { setVersionFilter("all"); setTypeFilter("all"); }}>
+            <CardBody className="pf-v6-u-px-0">
+              <Toolbar inset={{ default: "insetLg" }} clearAllFilters={() => { setVersionFilter("all"); setTypeFilter("all"); }}>
                 <ToolbarContent alignItems="center">
                   <ToolbarItem className="pf-v6-u-w-100 pf-v6-u-w-33-on-lg">
                     <SearchInput
@@ -379,7 +379,7 @@ export const BuildExplorerPage: React.FC = () => {
               </Toolbar>
 
               {submitted ? (
-                <Stack hasGutter>
+                <Stack hasGutter className="pf-v6-u-px-lg">
                   <StackItem>
                     <SearchResults
                       submitted={submitted}
@@ -396,7 +396,7 @@ export const BuildExplorerPage: React.FC = () => {
                   </StackItem>
                 </Stack>
               ) : (
-                <Table aria-label="Nightly builds" variant="compact" gridBreakPoint="grid-md">
+                <Table aria-label="Nightly builds" variant="compact" gridBreakPoint="grid-md" borders={false}>
                   <Thead>
                     <Tr>
                       <Th screenReaderText="Expand row" />
@@ -424,7 +424,7 @@ export const BuildExplorerPage: React.FC = () => {
                     ];
                     return (
                       <Tbody key={key} isExpanded={isExpanded}>
-                        <Tr>
+                        <Tr isStriped={rowIndex % 2 === 1}>
                           <Td expand={{ rowIndex, isExpanded, onToggle: toggle }} />
                           <Td dataLabel="Tag" id={`simple-node${rowIndex}`}>
                             <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
@@ -445,7 +445,7 @@ export const BuildExplorerPage: React.FC = () => {
                               <Skeleton width="4rem" screenreaderText="Loading build date" />
                             ) : tag.buildDate ? (
                               <RelativeTime date={tag.buildDate} />
-                            ) : <span className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">Unknown</span>}
+                            ) : <NotRecorded what="Build date not recorded" />}
                           </Td>
                           <Td dataLabel="Digest"><ImageRef image={tag.image} display={imageDigest(tag.image).replace("sha256:", "").slice(0, 12) || tag.image} /></Td>
                           <Td isActionCell><RowActions items={actions} rowName={tag.tag} /></Td>
@@ -518,11 +518,11 @@ const SearchResults: React.FC<{
       </StackItem>
       {matches.length > 0 && (
         <StackItem>
-          <Table aria-label={`Builds with a component built from ${short}`} variant="compact">
+          <Table aria-label={`Builds with a component built from ${short}`} variant="compact" borders={false}>
             <Thead><Tr><Th width={25}>Build</Th><Th>Components built from this commit</Th><Th screenReaderText="Actions" /></Tr></Thead>
             <Tbody>
-              {matches.map((m) => (
-                <Tr key={m.build.image}>
+              {matches.map((m, rowIndex) => (
+                <Tr key={m.build.image} isStriped={rowIndex % 2 === 1}>
                   <Td dataLabel="Build"><strong>{m.build.label}</strong></Td>
                   <Td dataLabel="Components">{m.images.map((i) => i.name).join(", ")}</Td>
                   <Td isActionCell>

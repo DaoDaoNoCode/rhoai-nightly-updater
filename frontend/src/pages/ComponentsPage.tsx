@@ -395,9 +395,16 @@ export const ComponentsPage: React.FC = () => {
                       </Alert>
                     </StackItem>
                   )}
-                  <StackItem>
-                    {notReady.length > 0 ? (
-                      <Table aria-label="Components that need attention" variant="compact">
+                  {notReady.length === 0 && (
+                    <StackItem>
+                      <Alert component="p" variant="success" isInline isPlain title="Every enabled component is ready" />
+                    </StackItem>
+                  )}
+                </Stack>
+              </CardBody>
+              {notReady.length > 0 && (
+                <CardBody className="pf-v6-u-px-0">
+                  <Table aria-label="Components that need attention" variant="compact" borders={false}>
                         <Thead>
                           <Tr>
                             <Th width={20}>Component</Th>
@@ -407,10 +414,10 @@ export const ComponentsPage: React.FC = () => {
                           </Tr>
                         </Thead>
                         <Tbody>
-                          {notReady.map((c) => {
+                          {notReady.map((c, rowIndex) => {
                             const res = c.fixAction ? fixResult[c.fixAction] : undefined;
                             return (
-                              <Tr key={c.name}>
+                              <Tr key={c.name} isStriped={rowIndex % 2 === 1}>
                                 <Td dataLabel="Component"><strong>{c.name}</strong></Td>
                                 <Td dataLabel="Status"><StatusLabel status={componentStatus(c.status)}>{c.status}</StatusLabel></Td>
                                 <Td dataLabel="Message">
@@ -443,12 +450,10 @@ export const ComponentsPage: React.FC = () => {
                           })}
                         </Tbody>
                       </Table>
-                    ) : (
-                      <Alert component="p" variant="success" isInline isPlain title="Every enabled component is ready" />
-                    )}
-                  </StackItem>
-                  {(ready.length > 0 || removed.length > 0) && (
-                    <StackItem>
+                </CardBody>
+              )}
+              {(ready.length > 0 || removed.length > 0) && (
+                <CardBody>
                       <ExpandableSection
                         toggleText={`Ready (${ready.length})${removed.length > 0 ? ` and removed (${removed.length})` : ""} components`}
                         isExpanded={othersExpanded}
@@ -469,10 +474,8 @@ export const ComponentsPage: React.FC = () => {
                           )}
                         </DescriptionList>
                       </ExpandableSection>
-                    </StackItem>
-                  )}
-                </Stack>
-              </CardBody>
+                </CardBody>
+              )}
             </Card>
           </PageSection>
         );
@@ -484,26 +487,23 @@ export const ComponentsPage: React.FC = () => {
             <CardHeader>
               <CardTitle><Title headingLevel="h2" size="lg">Deployments</Title></CardTitle>
             </CardHeader>
-            <CardBody>
-              <Stack hasGutter>
-                {(data.changedCount ?? 0) > 0 && data.snapshotTime && (
-                  <StackItem>
-                    <Content component="p" className="pf-v6-u-text-color-subtle">
-                      {data.changedCount} changed since the snapshot taken at the last install or update (<RelativeTime date={data.snapshotTime} size="inherit" />).
-                    </Content>
-                  </StackItem>
-                )}
-                <StackItem>
-                  <DeploymentsTable
-                    deployments={data.deployments}
-                    labelsLoading={labelsLoading}
-                    consoleURL={data.consoleURL}
-                    mutateBlocker={fixReason}
-                    onResult={onResult}
-                    onRefresh={handleRefresh}
-                  />
-                </StackItem>
-              </Stack>
+            {(data.changedCount ?? 0) > 0 && data.snapshotTime && (
+              <CardBody>
+                <Content component="p" className="pf-v6-u-text-color-subtle">
+                  {data.changedCount} changed since the snapshot taken at the last install or update (<RelativeTime date={data.snapshotTime} size="inherit" />).
+                </Content>
+              </CardBody>
+            )}
+            {/* Tables use PF's own cell inset, so their body has no inline padding: rows line up with the title. */}
+            <CardBody className="pf-v6-u-px-0">
+              <DeploymentsTable
+                deployments={data.deployments}
+                labelsLoading={labelsLoading}
+                consoleURL={data.consoleURL}
+                mutateBlocker={fixReason}
+                onResult={onResult}
+                onRefresh={handleRefresh}
+              />
             </CardBody>
           </Card>
         </PageSection>

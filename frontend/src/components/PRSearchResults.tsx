@@ -5,7 +5,7 @@ import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external
 import type { PRContainsBuild } from "../types";
 import type { PRSearchState } from "../hooks/usePRSearch";
 import type { BuildSide } from "./BuildCompare";
-import { RelativeTime } from "./RelativeTime";
+import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { RowActions } from "./RowActions";
 import { StatusLabel } from "./StatusLabel";
 
@@ -114,7 +114,7 @@ export const PRSearchResults: React.FC<{
       )}
       {search.results.length > 0 && (
         <StackItem>
-          <Table aria-label={`Builds and PR #${pr}`} variant="compact">
+          <Table aria-label={`Builds and PR #${pr}`} variant="compact" borders={false}>
             <Thead>
               <Tr>
                 <Th width={25}>Build</Th>
@@ -126,7 +126,7 @@ export const PRSearchResults: React.FC<{
               </Tr>
             </Thead>
             <Tbody>
-              {search.results.map(({ build, answer }) => {
+              {search.results.map(({ build, answer }, rowIndex) => {
                 const actions: IAction[] = [];
                 if (answer.compareURL) {
                   actions.push({
@@ -140,7 +140,7 @@ export const PRSearchResults: React.FC<{
                   actions.push({ title: "Compare with installed", onClick: () => onCompare({ image: build.image, label: build.label }) });
                 }
                 return (
-                  <Tr key={build.image}>
+                  <Tr key={build.image} isStriped={rowIndex % 2 === 1}>
                     <Td dataLabel="Build"><strong>{build.label}</strong></Td>
                     <Td dataLabel={`PR #${pr}`}>
                       <ResultLabel answer={answer} pr={pr} />
@@ -151,7 +151,7 @@ export const PRSearchResults: React.FC<{
                     <Td dataLabel="Dashboard commit">
                       {answer.commit && answer.commitRepo
                         ? <a href={`https://github.com/${answer.commitRepo}/commit/${answer.commit}`} target="_blank" rel="noopener noreferrer" title={`${answer.commitRepo}@${answer.commit}`}><code>{answer.commit.slice(0, 7)}</code></a>
-                        : <span className="pf-v6-u-text-color-subtle">Unknown</span>}
+                        : <NotRecorded what="No dashboard commit recorded" />}
                     </Td>
                     <Td isActionCell>{actions.length > 0 && <RowActions items={actions} rowName={build.label} />}</Td>
                   </Tr>

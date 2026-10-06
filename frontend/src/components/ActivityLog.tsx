@@ -6,16 +6,13 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
-  DataList,
-  DataListCell,
-  DataListItem,
-  DataListItemCells,
-  DataListItemRow,
   EmptyState,
   EmptyStateBody,
   Flex,
   FlexItem,
   Icon,
+  List,
+  ListItem,
   MenuToggle,
   Select,
   SelectList,
@@ -141,54 +138,50 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
           </EmptyState>
         ) : (
           <>
-            <DataList aria-label="Recent activity" isCompact gridBreakpoint="none">
+            <List isPlain isBordered aria-label="Recent activity">
               {shown.map((entry, i) => {
                 const category = activityCategory(entry);
                 // Operator changes show the build; other details are free text.
                 const detail = entry.build || (category === "operator" ? "" : entry.detail);
                 return (
-                  <DataListItem key={`${entry.timestamp}-${i}`} aria-labelledby={`activity-${i}`}>
-                    <DataListItemRow>
-                      <DataListItemCells
-                        dataListCells={[
-                          <DataListCell key="icon" isIcon>
-                            <Icon status={entry.success ? "success" : "danger"}>
-                              {entry.success ? <CheckCircleIcon aria-label="Succeeded" /> : <TimesCircleIcon aria-label="Failed" />}
-                            </Icon>
-                          </DataListCell>,
-                          <DataListCell key="main">
-                            <div id={`activity-${i}`}>
-                              <strong>{activityLabel(entry)}</strong>
-                              {!entry.success && !/failed$/i.test(activityLabel(entry)) && <span className="pf-v6-u-text-color-subtle"> (failed)</span>}
-                            </div>
-                            {detail && entry.build && (
-                              <div className="pf-v6-u-font-family-monospace pf-v6-u-font-size-xs">
-                                {entry.build.split(" · ").map((part, j) => (
-                                  <React.Fragment key={j}>
-                                    {j > 0 && " · "}
-                                    <span className="pf-v6-u-text-nowrap">{part}</span>
-                                  </React.Fragment>
-                                ))}
-                              </div>
-                            )}
-                            {detail && !entry.build && <div className="pf-v6-u-font-size-sm pf-v6-u-text-break-word">{detail}</div>}
-                            {!entry.success && entry.reason && (
-                              <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">
-                                <TruncatedText>{entry.reason}</TruncatedText>
-                              </div>
-                            )}
-                          </DataListCell>,
-                          <DataListCell key="who" isFilled={false} alignRight>
-                            <div className="pf-v6-u-font-size-sm pf-v6-u-text-nowrap">{entry.user}</div>
-                            <RelativeTime date={entry.timestamp} />
-                          </DataListCell>,
-                        ]}
-                      />
-                    </DataListItemRow>
-                  </DataListItem>
+                  <ListItem key={`${entry.timestamp}-${i}`} aria-labelledby={`activity-${i}`}>
+                    <Flex className="pf-v6-u-w-100" gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }} alignItems={{ default: "alignItemsFlexStart" }}>
+                      <FlexItem>
+                        <Icon status={entry.success ? "success" : "danger"}>
+                          {entry.success ? <CheckCircleIcon aria-label="Succeeded" /> : <TimesCircleIcon aria-label="Failed" />}
+                        </Icon>
+                      </FlexItem>
+                      <FlexItem flex={{ default: "flex_1" }}>
+                        <div id={`activity-${i}`} className="pf-v6-u-font-size-sm">
+                          <strong>{activityLabel(entry)}</strong>
+                          {!entry.success && !/failed$/i.test(activityLabel(entry)) && <span className="pf-v6-u-text-color-subtle"> (failed)</span>}
+                        </div>
+                        {detail && entry.build && (
+                          <div className="pf-v6-u-font-family-monospace pf-v6-u-font-size-xs">
+                            {entry.build.split(" · ").map((part, j) => (
+                              <React.Fragment key={j}>
+                                {j > 0 && " · "}
+                                <span className="pf-v6-u-text-nowrap">{part}</span>
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        )}
+                        {detail && !entry.build && <div className="pf-v6-u-font-size-sm pf-v6-u-text-break-word">{detail}</div>}
+                        {!entry.success && entry.reason && (
+                          <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">
+                            <TruncatedText>{entry.reason}</TruncatedText>
+                          </div>
+                        )}
+                      </FlexItem>
+                      <FlexItem className="pf-v6-u-text-align-end">
+                        <div className="pf-v6-u-font-size-sm pf-v6-u-text-nowrap">{entry.user}</div>
+                        <RelativeTime date={entry.timestamp} />
+                      </FlexItem>
+                    </Flex>
+                  </ListItem>
                 );
               })}
-            </DataList>
+            </List>
             {entries.length > PAGE_SIZE && (
               <Button variant="link" className="pf-v6-u-mt-sm" onClick={() => setExpanded(!expanded)}>
                 {expanded ? "Show fewer" : `Show all ${entries.length}`}

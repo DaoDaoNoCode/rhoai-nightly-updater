@@ -27,7 +27,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import TimesIcon from "@patternfly/react-icons/dist/esm/icons/times-icon";
 import { useFbcContent } from "../hooks/useFbcContent";
-import { RelativeTime } from "./RelativeTime";
+import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { TagLabel } from "./StatusLabel";
 import { compareBuilds, compareURL, imageDigest, shortBuildRef, type RepoChange } from "./buildDiff";
 
@@ -59,7 +59,7 @@ const ImageNames: React.FC<{ change: RepoChange }> = ({ change }) => {
   );
 };
 
-const Sha: React.FC<{ sha?: string }> = ({ sha }) => (sha ? <code title={sha}>{sha.slice(0, 7)}</code> : <span>-</span>);
+const Sha: React.FC<{ sha?: string }> = ({ sha }) => (sha ? <code title={sha}>{sha.slice(0, 7)}</code> : <NotRecorded what="No commit label" />);
 
 const SideText: React.FC<{ side: BuildSide }> = ({ side }) => (
   <>
@@ -137,22 +137,22 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
                 <Content component="p" className="pf-v6-u-text-color-subtle">Operator bundle: {a.data?.bundleName || "unknown"} &rarr; {b.data?.bundleName || "unknown"}</Content>
               )}
             </StackItem>
-            {result.repos.length > 0 && (
-              <StackItem>
-                <Toolbar inset={{ default: "insetNone" }}>
+            {result.repos.length === 0 && (
+              <StackItem><Content component="p">No image differs between the two builds.</Content></StackItem>
+            )}
+          </Stack>
+        )}
+      </CardBody>
+      {!same && !error && result && result.repos.length > 0 && (
+        <CardBody className="pf-v6-u-px-0">
+                <Toolbar inset={{ default: "insetLg" }}>
                   <ToolbarContent>
                     <ToolbarItem>
                       <SearchInput aria-label="Filter compared repositories" placeholder="Filter by repository or image" value={filter} onChange={(_e, v) => setFilter(v)} onClear={() => setFilter("")} />
                     </ToolbarItem>
                   </ToolbarContent>
                 </Toolbar>
-              </StackItem>
-            )}
-            <StackItem>
-              {result.repos.length === 0 ? (
-                <Content component="p">No image differs between the two builds.</Content>
-              ) : (
-                <Table aria-label="Repositories that differ" variant="compact">
+                <Table aria-label="Repositories that differ" variant="compact" borders={false}>
                   <Thead>
                     <Tr>
                       <Th>Repository</Th>
@@ -163,10 +163,10 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
                     </Tr>
                   </Thead>
                   <Tbody>
-                    {repos.map((r) => {
+                    {repos.map((r, rowIndex) => {
                       const url = compareURL(r);
                       return (
-                        <Tr key={`${r.gitURL}|${r.fromCommit}|${r.toCommit}|${r.kind}`}>
+                        <Tr key={`${r.gitURL}|${r.fromCommit}|${r.toCommit}|${r.kind}`} isStriped={rowIndex % 2 === 1}>
                           <Td dataLabel="Repository">
                             <span className="pf-v6-u-text-break-word">{r.repo}</span>
                             {r.kind === "rebuilt" && <>{" "}<TagLabel>Rebuilt, same commit</TagLabel></>}
@@ -187,21 +187,18 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
                     })}
                   </Tbody>
                 </Table>
-              )}
-            </StackItem>
-            {(result.added.length > 0 || result.removed.length > 0) && (
-              <StackItem>
+        </CardBody>
+      )}
+      {!same && !error && result && (result.added.length > 0 || result.removed.length > 0) && (
+        <CardBody>
                 <ExpandableSection toggleText={`Added and removed images (${result.added.length + result.removed.length})`}>
                   <List>
                     {result.added.map((i) => <ListItem key={`+${i.name}`}><TagLabel color="teal">Added</TagLabel> {i.name}</ListItem>)}
                     {result.removed.map((i) => <ListItem key={`-${i.name}`}><TagLabel>Removed</TagLabel> {i.name}</ListItem>)}
                   </List>
                 </ExpandableSection>
-              </StackItem>
-            )}
-          </Stack>
-        )}
-      </CardBody>
+        </CardBody>
+      )}
     </Card>
   );
 };

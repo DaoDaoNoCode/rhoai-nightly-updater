@@ -88,13 +88,22 @@ func checkPlatformModules(c *Client) checkOutput {
 					})
 				}
 			}
-			details = append(details, fmt.Sprintf("Platform %s phase %s", pl.Metadata.Name, nonEmpty(pl.Status.Phase, "unknown")))
+			// The phase is the Platform's own state, not this check's result:
+			// label it, and point to where a non-Ready phase is explained.
+			phase := nonEmpty(pl.Status.Phase, "unknown")
+			platform := fmt.Sprintf("Platform %s phase: %s", pl.Metadata.Name, phase)
+			if phase != "Ready" {
+				platform += " (the DataScienceCluster check shows why)"
+			}
+			details = append(details, platform)
 		}
 	}
 
+	// What this check is about (modules stuck in deletion) comes first.
+	var moduleDetails []string
 	stuck, err := stuckModuleCRs(c, time.Now())
 	if err != nil {
-		details = append(details, fmt.Sprintf("module CRs not checked: %v", err))
+		moduleDetails = append(moduleDetails, fmt.Sprintf("Module CRs not checked: %v", err))
 		if out.check.Status == "pass" {
 			out.check.Status = "warn"
 		}
@@ -104,9 +113,9 @@ func checkPlatformModules(c *Client) checkOutput {
 		out.problems = append(out.problems, stuckModuleProblem(c, m))
 	}
 	if len(stuck) == 0 && err == nil {
-		details = append(details, "no module is stuck in deletion")
+		moduleDetails = append(moduleDetails, "No module is stuck in deletion")
 	}
-	out.check.Detail = strings.Join(details, "; ")
+	out.check.Detail = strings.Join(append(moduleDetails, details...), "; ")
 	return out
 }
 

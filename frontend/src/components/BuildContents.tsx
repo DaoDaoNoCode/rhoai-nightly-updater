@@ -19,7 +19,7 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import type { RelatedImage } from "../types";
-import { RelativeTime } from "./RelativeTime";
+import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { TruncatedText } from "./LongText";
 import { useFbcContent } from "../hooks/useFbcContent";
 import { ImageRef } from "./ImageRef";
@@ -117,14 +117,14 @@ export const ComponentImagesTable: React.FC<{
                 commitURL ? (
                   <a href={commitURL} target="_blank" rel="noopener noreferrer" aria-label={`Commit ${ri.gitCommit} on GitHub`}><code>{shortSha}</code></a>
                 ) : <code>{shortSha}</code>
-              ) : labelsPending ? <Skeleton width="4rem" screenreaderText={`Loading commit of ${ri.name}`} /> : <Unknown />}
+              ) : labelsPending ? <Skeleton width="4rem" screenreaderText={`Loading commit of ${ri.name}`} /> : <NotRecorded />}
             </Td>
             <Td dataLabel="Built" modifier="nowrap">
               {ri.buildDate ? <RelativeTime date={ri.buildDate} />
-                : labelsPending ? <Skeleton width="3rem" screenreaderText={`Loading build date of ${ri.name}`} /> : <Unknown />}
+                : labelsPending ? <Skeleton width="3rem" screenreaderText={`Loading build date of ${ri.name}`} /> : <NotRecorded />}
             </Td>
             <Td dataLabel="Version">
-              {ri.version || (labelsPending ? <Skeleton width="3rem" screenreaderText={`Loading version of ${ri.name}`} /> : <Unknown />)}
+              {ri.version || (labelsPending ? <Skeleton width="3rem" screenreaderText={`Loading version of ${ri.name}`} /> : <NotRecorded />)}
             </Td>
           </Tr>
         );
@@ -168,7 +168,7 @@ export const BuildContents: React.FC<{ image: string; title: string; defaultCate
             <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "14ch" }}>
               <DescriptionListGroup>
                 <DescriptionListTerm>Operator bundle</DescriptionListTerm>
-                <DescriptionListDescription>{data.bundleName || <Unknown />}</DescriptionListDescription>
+                <DescriptionListDescription>{data.bundleName || <NotRecorded what="Not recorded in the catalog" />}</DescriptionListDescription>
               </DescriptionListGroup>
             </DescriptionList>
           </FlexItem>
@@ -194,4 +194,3 @@ export const BuildContents: React.FC<{ image: string; title: string; defaultCate
   );
 };
 
-const Unknown: React.FC = () => <span className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">Unknown</span>;

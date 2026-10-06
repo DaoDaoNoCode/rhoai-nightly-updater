@@ -1,5 +1,6 @@
 import React from "react";
 import { ClipboardCopy } from "@patternfly/react-core";
+import { imageDigest, imageTag } from "./buildDiff";
 
 interface ImageRefProps {
   /** Full value (image reference, commit, name); it is what gets copied. */
@@ -37,3 +38,22 @@ export const ImageRef: React.FC<ImageRefProps> = ({ image, what = "image referen
     {display ?? image}
   </ClipboardCopy>
 );
+
+/** registry/repo[:tag]@sha256:<64 hex>, as backend messages print it. */
+const DIGEST_REF = /([a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\/[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64})/g;
+
+/**
+ * Backend text with every digest-pinned image reference shown as
+ * "tag@shortdigest" with a copy button (the full reference is copied),
+ * so long references never wrap mid-token.
+ */
+export function withImageRefs(text: string): React.ReactNode {
+  const parts = text.split(DIGEST_REF);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) => {
+    if (i % 2 === 0) return part;
+    const tag = imageTag(part);
+    const digest = imageDigest(part).replace("sha256:", "").slice(0, 12);
+    return <ImageRef key={i} image={part} display={tag ? `${tag}@${digest}` : digest} />;
+  });
+}

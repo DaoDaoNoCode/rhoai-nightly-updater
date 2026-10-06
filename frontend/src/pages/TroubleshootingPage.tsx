@@ -32,6 +32,7 @@ import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../servic
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageHeader } from "../components/PageHeader";
+import { withImageRefs } from "../components/ImageRef";
 import { PageErrorState, PageLoading } from "../components/PageStates";
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
 import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabel";
@@ -237,16 +238,15 @@ export const TroubleshootingPage: React.FC = () => {
           <Stack hasGutter>
             <StackItem>
               {problems.length === 0 && failCount === 0 && warnCount === 0 ? (
-                <Alert component="p" variant="success" title={`All ${totalChecks} checks passed, no issues detected`} isInline />
+                <Alert component="p" variant="success" title={`All ${totalChecks} checks passed, no issues detected`} isInline>
+                  The scan only reads the cluster.
+                </Alert>
               ) : (
-                <Alert component="p" variant={summary.variant} title={summary.title} isInline />
+                <Alert component="p" variant={summary.variant} title={summary.title} isInline>
+                  {totalChecks > 0 && <>{passCount} of {totalChecks} health checks passed{failCount + warnCount > 0 ? ` (${failCount} failed, ${warnCount} with warnings)` : ""}. </>}
+                  The scan only reads the cluster: fixes run only after you confirm them, and commands are for you to read and run with <code>oc</code>.
+                </Alert>
               )}
-            </StackItem>
-            <StackItem>
-              <Content component="p" className="pf-v6-u-text-color-subtle">
-                {totalChecks > 0 && <>{passCount} of {totalChecks} health checks passed{failCount + warnCount > 0 ? ` (${failCount} failed, ${warnCount} with warnings)` : ""}. </>}
-                The scan only reads the cluster: fixes run only after you confirm them, and commands are for you to read and run with <code>oc</code>.
-              </Content>
             </StackItem>
 
             {fixResult && (
@@ -305,7 +305,7 @@ export const TroubleshootingPage: React.FC = () => {
                                         <DescriptionListDescription>
                                           <TruncatedText lines={3}>
                                             <List isPlain>
-                                              {problem.evidence.map((e, i) => <ListItem key={i} className="pf-v6-u-text-break-word">{e}</ListItem>)}
+                                              {problem.evidence.map((e, i) => <ListItem key={i} className="pf-v6-u-text-break-word">{withImageRefs(e)}</ListItem>)}
                                             </List>
                                           </TruncatedText>
                                         </DescriptionListDescription>
@@ -367,8 +367,8 @@ export const TroubleshootingPage: React.FC = () => {
             <StackItem>
               <Card>
                 <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Health checks ({totalChecks})</Title></CardTitle></CardHeader>
-                <CardBody>
-                  <Table aria-label="Health checks" variant="compact">
+                <CardBody className="pf-v6-u-px-0">
+                  <Table aria-label="Health checks" variant="compact" borders={false}>
                     <Thead>
                       <Tr>
                         <Th width={25}>Check</Th>
@@ -379,13 +379,13 @@ export const TroubleshootingPage: React.FC = () => {
                     <Tbody>
                       {[...checks]
                         .sort((a, b) => (CHECK_STATUS[a.status]?.order ?? 2) - (CHECK_STATUS[b.status]?.order ?? 2))
-                        .map((check) => {
+                        .map((check, rowIndex) => {
                           const st = CHECK_STATUS[check.status] ?? CHECK_STATUS.info;
                           return (
-                            <Tr key={check.name}>
+                            <Tr key={check.name} isStriped={rowIndex % 2 === 1}>
                               <Td dataLabel="Check"><strong>{check.name}</strong></Td>
                               <Td dataLabel="Result" modifier="fitContent"><StatusLabel status={st.kind}>{st.text}</StatusLabel></Td>
-                              <Td dataLabel="Detail" className="pf-v6-u-text-break-word"><TruncatedText>{check.detail}</TruncatedText></Td>
+                              <Td dataLabel="Detail"><TruncatedText>{withImageRefs(check.detail)}</TruncatedText></Td>
                             </Tr>
                           );
                         })}

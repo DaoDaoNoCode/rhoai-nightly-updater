@@ -9,11 +9,6 @@ import {
   CardHeader,
   CardTitle,
   Content,
-  DataList,
-  DataListCell,
-  DataListItem,
-  DataListItemCells,
-  DataListItemRow,
   EmptyState,
   EmptyStateBody,
   Flex,
@@ -57,6 +52,7 @@ import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
 import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
+import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TruncatedText } from "./LongText";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
@@ -151,9 +147,6 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
   // The label already says "Starting" / "Terminating": don't repeat it as the message.
   const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
   const items: React.ReactNode[] = [];
-  if (state.managedByTool === false && state.teardownBlockedReason) {
-    items.push(<HelperTextItem key="unmanaged">{state.teardownBlockedReason}</HelperTextItem>);
-  }
   if (showMessage) {
     items.push(<HelperTextItem key="message" variant={terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{state.message}</TruncatedText></span></HelperTextItem>);
   }
@@ -162,6 +155,11 @@ const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioR
   if (teardownBlocked) items.push(<HelperTextItem key="blocked" variant="warning">Tear down is blocked: {teardownBlocked}</HelperTextItem>);
   return items.length > 0 ? <HelperText className="pf-v6-u-mt-sm">{items}</HelperText> : null;
 };
+
+/** Why the tool leaves an object it did not create alone, appended to the row description. */
+function unmanagedNote(state: ResourceState | undefined): string {
+  return state?.managedByTool === false && state.teardownBlockedReason ? ` ${state.teardownBlockedReason}` : "";
+}
 
 /** Name, status and category tags of one resource row. */
 const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; extra?: React.ReactNode }> = ({ id, name, state, extra }) => (
@@ -407,9 +405,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   );
 
   const rowActions = (children: React.ReactNode) => (
-    <DataListCell key="actions" isFilled={false} alignRight>
+    <>
       <Flex gap={{ default: "gapSm" }} justifyContent={{ md: "justifyContentFlexEnd" }} flexWrap={{ default: "wrap" }}>{children}</Flex>
-    </DataListCell>
+    </>
   );
 
   return (
@@ -454,23 +452,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
             <Card>
               <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Storage</Title></CardTitle></CardHeader>
               <CardBody>
-                <DataList aria-label="Storage">
-                  <DataListItem aria-labelledby="minio-item">
-                    <DataListItemRow>
-                      <DataListItemCells
-                        dataListCells={[
-                          <DataListCell key="name">
-                            <RowTitle id="minio-item" name="MinIO object storage" state={minio} />
-                            <Content component="p" className="pf-v6-u-text-color-subtle">Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files.</Content>
-                            {minio && (
-                              <StatusDetails
-                                kind="minio"
-                                state={minio}
-                                teardownBlocked={minio.deployed && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
-                              />
-                            )}
-                          </DataListCell>,
-                          rowActions(
+                <CardList aria-label="Storage">
+                  <CardListItem labelledBy="minio-item" actions={rowActions(
                             <>
                               {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>Open console</ExternalLink></FlexItem>}
                               {minio && !minio.deployed && !isTerminating(minio) && (
@@ -492,12 +475,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                                 </FlexItem>
                               )}
                             </>,
-                          ),
-                        ]}
-                      />
-                    </DataListItemRow>
-                  </DataListItem>
-                </DataList>
+                  )}>
+                            <RowTitle id="minio-item" name="MinIO object storage" state={minio} />
+                            <Content component="p" className="pf-v6-u-text-color-subtle">Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files.{unmanagedNote(minio)}</Content>
+                            {minio && (
+                              <StatusDetails
+                                kind="minio"
+                                state={minio}
+                                teardownBlocked={minio.deployed && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
+                              />
+                            )}
+                  </CardListItem>
+                </CardList>
               </CardBody>
             </Card>
           </StackItem>
@@ -507,15 +496,27 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
             <Card>
               <CardHeader><CardTitle><Title headingLevel="h2" size="lg">MLflow</Title></CardTitle></CardHeader>
               <CardBody>
-                <DataList aria-label="MLflow">
-                  <DataListItem aria-labelledby="mlflow-item">
-                    <DataListItemRow>
-                      <DataListItemCells
-                        dataListCells={[
-                          <DataListCell key="name">
+                <CardList aria-label="MLflow">
+                  <CardListItem labelledBy="mlflow-item" actions={rowActions(
+                            <>
+                              {mlflow?.ready && mlflow.uiRoute && <FlexItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></FlexItem>}
+                              {mlflow && !mlflow.deployed && (
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
+                                    disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
+                                </FlexItem>
+                              )}
+                              {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
+                                <FlexItem>
+                                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
+                                    disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+                                </FlexItem>
+                              )}
+                            </>,
+                  )}>
                             <RowTitle id="mlflow-item" name="MLflow server" state={mlflow}
                               extra={mlflow?.prOverride ? <FlexItem><TagLabel color="blue">PR #{mlflow.prNumber ?? "?"}</TagLabel></FlexItem> : undefined} />
-                            <Content component="p" className="pf-v6-u-text-color-subtle">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.</Content>
+                            <Content component="p" className="pf-v6-u-text-color-subtle">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.{unmanagedNote(mlflow)}</Content>
                             {mlflow && <StatusDetails kind="mlflow" state={mlflow} />}
                             {mlflow?.deployed && (
                               <Form className="pf-v6-u-mt-md" onSubmit={(e) => e.preventDefault()}>
@@ -543,29 +544,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                                 </FormGroup>
                               </Form>
                             )}
-                          </DataListCell>,
-                          rowActions(
-                            <>
-                              {mlflow?.ready && mlflow.uiRoute && <FlexItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></FlexItem>}
-                              {mlflow && !mlflow.deployed && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
-                                    disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
-                                </FlexItem>
-                              )}
-                              {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
-                                    disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                                </FlexItem>
-                              )}
-                            </>,
-                          ),
-                        ]}
-                      />
-                    </DataListItemRow>
-                  </DataListItem>
-                </DataList>
+                  </CardListItem>
+                </CardList>
               </CardBody>
             </Card>
           </StackItem>
@@ -594,18 +574,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                         <EmptyStateBody>Add one to a data science project with the button above.</EmptyStateBody>
                       </EmptyState>
                     ) : (
-                      <DataList aria-label="Pipeline servers">
+                      <CardList aria-label="Pipeline servers">
                         {pipelineServers.map((ps) => (
-                          <DataListItem key={ps.namespace} aria-labelledby={`ps-${ps.namespace}`}>
-                            <DataListItemRow>
-                              <DataListItemCells
-                                dataListCells={[
-                                  <DataListCell key="name">
-                                    <RowTitle id={`ps-${ps.namespace}`} name={ps.namespace ?? ""} state={ps} />
-                                    {ps.name && <Content component="p" className="pf-v6-u-text-color-subtle">DataSciencePipelinesApplication <code>{ps.name}</code></Content>}
-                                    <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
-                                  </DataListCell>,
-                                  rowActions(
+                          <CardListItem key={ps.namespace} labelledBy={`ps-${ps.namespace}`} actions={rowActions(
                                     <>
                                       {ps.ready && ps.uiRoute && <FlexItem><ExternalLink href={ps.uiRoute}>Open pipelines</ExternalLink></FlexItem>}
                                       {ps.managedByTool !== false && !isTerminating(ps) && (
@@ -615,13 +586,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                                         </FlexItem>
                                       )}
                                     </>,
-                                  ),
-                                ]}
-                              />
-                            </DataListItemRow>
-                          </DataListItem>
+                          )}>
+                                    <RowTitle id={`ps-${ps.namespace}`} name={ps.namespace ?? ""} state={ps} />
+                                    {ps.name && <Content component="p" className="pf-v6-u-text-color-subtle">DataSciencePipelinesApplication <code>{ps.name}</code>.{unmanagedNote(ps)}</Content>}
+                                    <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
+                          </CardListItem>
                         ))}
-                      </DataList>
+                      </CardList>
                     )}
                   </StackItem>
                   {unmanagedProjects.size > 0 && (

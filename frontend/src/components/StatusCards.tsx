@@ -10,11 +10,6 @@ import {
   CardHeader,
   CardTitle,
   Content,
-  DataList,
-  DataListCell,
-  DataListItem,
-  DataListItemCells,
-  DataListItemRow,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -35,6 +30,7 @@ import { isOnNightly, tagLine } from "../build";
 import { operatorInstalled, prerequisitesMet as setupComplete } from "../utils";
 import { BuildSummary } from "./BuildSummary";
 import { PullSecretSetup } from "./PullSecretCard";
+import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
 
@@ -337,60 +333,44 @@ export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onSt
           </Content>
         </StackItem>
         <StackItem>
-          <DataList aria-label="Cluster setup">
-            <DataListItem aria-labelledby="setup-pull-secret">
-              <DataListItemRow>
-                <DataListItemCells
-                  dataListCells={[
-                    <DataListCell key="pull-secret">
-                      <PullSecretSetup pullSecret={status.pullSecret} onStatusRefresh={onStatusRefresh} titleId="setup-pull-secret" />
-                    </DataListCell>,
-                  ]}
-                />
-              </DataListItemRow>
-            </DataListItem>
-            <DataListItem aria-labelledby="setup-image-mirror">
-              <DataListItemRow>
-                <DataListItemCells
-                  dataListCells={[
-                    <DataListCell key="image-mirror">
-                      <Stack hasGutter>
-                        <StackItem>
-                          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                            <FlexItem><strong id="setup-image-mirror">Image mirror (IDMS)</strong></FlexItem>
-                            <FlexItem>
-                              {status.imageMirror.exists
-                                ? <StatusLabel status="success">Ready</StatusLabel>
-                                : <StatusLabel status="danger">Missing</StatusLabel>}
-                            </FlexItem>
-                          </Flex>
-                          <Content component="p" className="pf-v6-u-text-color-subtle">
-                            Redirects registry.redhat.io/rhoai image pulls to quay.io/rhoai, where nightly images are published.
-                          </Content>
-                        </StackItem>
-                        <StackItem>
-                          {status.imageMirror.exists ? (
-                            <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "8ch" }}>
-                              <DescriptionListGroup>
-                                <DescriptionListTerm>Name</DescriptionListTerm>
-                                <DescriptionListDescription>{status.imageMirror.name || "unknown"}</DescriptionListDescription>
-                              </DescriptionListGroup>
-                              <DescriptionListGroup>
-                                <DescriptionListTerm>Source</DescriptionListTerm>
-                                <DescriptionListDescription>{status.imageMirror.source || "registry.redhat.io/rhoai"}</DescriptionListDescription>
-                              </DescriptionListGroup>
-                            </DescriptionList>
-                          ) : (
-                            <Button variant="secondary" onClick={onShowInstructions}>How to create the image mirror</Button>
-                          )}
-                        </StackItem>
-                      </Stack>
-                    </DataListCell>,
-                  ]}
-                />
-              </DataListItemRow>
-            </DataListItem>
-          </DataList>
+          <CardList aria-label="Cluster setup">
+            <CardListItem labelledBy="setup-pull-secret">
+              <PullSecretSetup pullSecret={status.pullSecret} onStatusRefresh={onStatusRefresh} titleId="setup-pull-secret" />
+            </CardListItem>
+            <CardListItem labelledBy="setup-image-mirror">
+              <Stack hasGutter>
+                <StackItem>
+                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                    <FlexItem><strong id="setup-image-mirror">Image mirror (IDMS)</strong></FlexItem>
+                    <FlexItem>
+                      {status.imageMirror.exists
+                        ? <StatusLabel status="success">Ready</StatusLabel>
+                        : <StatusLabel status="danger">Missing</StatusLabel>}
+                    </FlexItem>
+                  </Flex>
+                  <Content component="p" className="pf-v6-u-text-color-subtle">
+                    Redirects registry.redhat.io/rhoai image pulls to quay.io/rhoai, where nightly images are published.
+                  </Content>
+                </StackItem>
+                <StackItem>
+                  {status.imageMirror.exists ? (
+                    <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "8ch" }}>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>Name</DescriptionListTerm>
+                        <DescriptionListDescription>{status.imageMirror.name || "unknown"}</DescriptionListDescription>
+                      </DescriptionListGroup>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>Source</DescriptionListTerm>
+                        <DescriptionListDescription>{status.imageMirror.source || "registry.redhat.io/rhoai"}</DescriptionListDescription>
+                      </DescriptionListGroup>
+                    </DescriptionList>
+                  ) : (
+                    <Button variant="secondary" onClick={onShowInstructions}>How to create the image mirror</Button>
+                  )}
+                </StackItem>
+              </Stack>
+            </CardListItem>
+          </CardList>
         </StackItem>
       </Stack>
     </CardBody>

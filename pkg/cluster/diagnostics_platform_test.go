@@ -39,6 +39,30 @@ func TestPlatformModules_AdminAckAndRunlevelTimeout(t *testing.T) {
 	}
 }
 
+// A passing check must not read like a failure: the module result comes
+// first, and a non-Ready Platform phase is labelled as the Platform's state.
+func TestPlatformModules_PassDetailLeadsWithTheModuleResult(t *testing.T) {
+	f, c := newFakeAPI(t)
+	serveComponentGroup(f)
+	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[{"name":"rays","kind":"Ray"}]}`)
+	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", http.StatusOK, `{"items":[]}`)
+	f.json("GET", platformsPath, http.StatusOK, `{"items":[{"metadata":{"name":"default"},"status":{"phase":"Not Ready"}}]}`)
+	out := checkPlatformModules(c)
+	want := "No module is stuck in deletion; Platform default phase: Not Ready (the DataScienceCluster check shows why)"
+	if out.check.Status != "pass" || out.check.Detail != want {
+		t.Fatalf("status %q, detail %q; want pass, %q", out.check.Status, out.check.Detail, want)
+	}
+
+	f2, c2 := newFakeAPI(t)
+	serveComponentGroup(f2)
+	f2.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", http.StatusOK, `{"resources":[]}`)
+	f2.json("GET", platformsPath, http.StatusOK, `{"items":[{"metadata":{"name":"default"},"status":{"phase":"Ready"}}]}`)
+	out = checkPlatformModules(c2)
+	if want := "No module is stuck in deletion; Platform default phase: Ready"; out.check.Detail != want {
+		t.Fatalf("detail %q, want %q", out.check.Detail, want)
+	}
+}
+
 func TestPlatformModules_StuckDashboardWithPausedOperator(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveComponentGroup(f)

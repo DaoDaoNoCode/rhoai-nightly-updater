@@ -39,7 +39,7 @@ import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { ImageRef } from "./ImageRef";
 import { RowActions } from "./RowActions";
-import { RelativeTime } from "./RelativeTime";
+import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { StatusLabel, TagLabel, type StatusKind } from "./StatusLabel";
 import {
   activePods,
@@ -198,7 +198,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
 
   return (
     <>
-      <Toolbar clearAllFilters={clearFilters} collapseListedFiltersBreakpoint="md" inset={{ default: "insetNone" }}>
+      <Toolbar clearAllFilters={clearFilters} collapseListedFiltersBreakpoint="md" inset={{ default: "insetLg" }}>
         <ToolbarContent alignItems="center">
           <ToolbarItem>
             <SearchInput
@@ -249,7 +249,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
         </ToolbarContent>
       </Toolbar>
 
-      <Table aria-label="Deployments" variant="compact" gridBreakPoint="grid-md">
+      <Table aria-label="Deployments" variant="compact" gridBreakPoint="grid-md" borders={false}>
         <Thead>
           <Tr>
             <Th screenReaderText="Expand row" />
@@ -315,7 +315,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
           }
           return (
             <Tbody key={key} isExpanded={isExpanded}>
-              <Tr>
+              <Tr isStriped={rowIndex % 2 === 1}>
                 <Td expand={{ rowIndex, isExpanded, onToggle: () => setExpanded((prev) => ({ ...prev, [key]: !prev[key] })) }} />
                 <Td dataLabel="Name" id={`simple-node${rowIndex}`}>
                   <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
@@ -348,17 +348,17 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
                       ) : <code>{shortSha}</code>}
                       {dep.commitDate && <div className="pf-v6-u-text-nowrap"><RelativeTime date={dep.commitDate} prefix="merged " /></div>}
                     </>
-                  ) : <span className="pf-v6-u-text-color-subtle">Unknown</span>}
+                  ) : <NotRecorded />}
                 </Td>
                 <Td dataLabel="Built" modifier="nowrap" visibility={WIDE_ONLY}>
                   {labelsLoading && !dep.buildDate ? (
                     <Skeleton width="4rem" screenreaderText="Loading build date" />
                   ) : dep.buildDate ? (
                     <RelativeTime date={dep.buildDate} />
-                  ) : <span className="pf-v6-u-text-color-subtle">Unknown</span>}
+                  ) : <NotRecorded />}
                 </Td>
                 <Td dataLabel="Version" visibility={WIDE_ONLY}>
-                  {labelsLoading && !dep.version ? <Skeleton width="3rem" screenreaderText="Loading version" /> : dep.version || <span className="pf-v6-u-text-color-subtle">Unknown</span>}
+                  {labelsLoading && !dep.version ? <Skeleton width="3rem" screenreaderText="Loading version" /> : dep.version || <NotRecorded />}
                 </Td>
                 <Td isActionCell>
                   {actions.length > 0 && <RowActions items={actions} rowName={dep.name} />}
