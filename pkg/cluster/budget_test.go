@@ -35,26 +35,39 @@ func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 		t.Fatal("the operation deadline in pkg/api/handlers.go no longer matches OperationDeadline")
 	}
 	mainSrc := read("../../main.go")
-	if !strings.Contains(mainSrc, "drainTimeout := cluster.ShutdownDrainTimeout()") {
-		t.Fatal("main.go no longer derives the drain from cluster.ShutdownDrainTimeout")
+	for _, want := range []string{
+		"drainTimeout := cluster.ShutdownDrainTimeout()",
+		"context.WithTimeout(context.Background(), cluster.MarkerFlushTimeout)",
+		"context.WithTimeout(context.Background(), cluster.HTTPShutdownTimeout)",
+	} {
+		if !strings.Contains(mainSrc, want) {
+			t.Fatalf("main.go no longer contains %q", want)
+		}
 	}
-	sm := regexp.MustCompile(`shutdownCtx, cancel := context.WithTimeout\(context.Background\(\), (\d+)\*time.Second\)`).FindStringSubmatch(mainSrc)
-	if sm == nil {
-		t.Fatal("HTTP shutdown timeout not found in main.go")
+	apiMarker := read("../api/operation_marker.go")
+	if !strings.Contains(apiMarker, "const markerWriteTimeout = 5 * time.Second") ||
+		!strings.Contains(apiMarker, "context.WithTimeout(context.Background(), cluster.MarkerClearTimeout)") {
+		t.Fatal("pkg/api/operation_marker.go no longer bounds the marker clear by cluster.MarkerClearTimeout with 5s writes")
 	}
-	shutdownSecs, _ := strconv.Atoi(sm[1])
-	shutdown := time.Duration(shutdownSecs) * time.Second
+	// The clear may first wait for a background retry's 5s write.
+	if MarkerClearTimeout < 2*5*time.Second || MarkerFlushTimeout < 2*5*time.Second {
+		t.Fatalf("marker clear %s / flush %s cannot cover a pending retry write plus its own write", MarkerClearTimeout, MarkerFlushTimeout)
+	}
 
 	if RecoveryTimeout != restoreCSVBudget+restoreApplyTimeout {
 		t.Fatalf("RecoveryTimeout %s is not the sum of its phases", RecoveryTimeout)
 	}
-	worst := OperationDeadline + RecoveryTimeout + postOperationBookkeeping
+	// After the deadline: the restore, then the activity entry and the
+	// Subscription record (all capped together by postOperationContext),
+	// then the marker clear.
+	worst := OperationDeadline + postDeadlineWork() + MarkerClearTimeout
 	if ShutdownDrainTimeout() < worst {
 		t.Fatalf("drain %s < worst case %s", ShutdownDrainTimeout(), worst)
 	}
-	const margin = 10 * time.Second // SIGKILL comes exactly at the grace period
-	if ShutdownDrainTimeout()+shutdown+margin > grace {
-		t.Fatalf("drain %s + shutdown %s + %s margin exceeds terminationGracePeriodSeconds %s", ShutdownDrainTimeout(), shutdown, margin, grace)
+	total := ShutdownDrainTimeout() + MarkerFlushTimeout + HTTPShutdownTimeout
+	if ShutdownMargin < 10*time.Second || total+ShutdownMargin > grace {
+		t.Fatalf("drain %s + marker flush %s + HTTP shutdown %s = %s, plus a %s margin, exceeds terminationGracePeriodSeconds %s",
+			ShutdownDrainTimeout(), MarkerFlushTimeout, HTTPShutdownTimeout, total, ShutdownMargin, grace)
 	}
 	if installDeadlineReserve <= 0 || installDeadlineReserve >= OperationDeadline {
 		t.Fatalf("installDeadlineReserve = %s", installDeadlineReserve)

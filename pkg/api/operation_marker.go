@@ -68,10 +68,15 @@ func (m *markerWriter) complete(c *cluster.Client, done *types.CompletedOperatio
 	if c == nil {
 		return
 	}
+	// The whole clear, including the wait for a background retry that holds
+	// the lock (its write is bounded by markerWriteTimeout), ends within
+	// cluster.MarkerClearTimeout: it is part of the shutdown drain budget.
+	ctx, cancel := context.WithTimeout(context.Background(), cluster.MarkerClearTimeout)
+	defer cancel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pending, m.client = done, c
-	if !m.writePendingLocked(context.Background()) {
+	if !m.writePendingLocked(ctx) {
 		m.retryLaterLocked()
 	}
 }

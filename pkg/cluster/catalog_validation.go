@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,7 +116,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 	name := verificationCatalogPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
 	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, name)
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := postOperationContext(c, 30*time.Second)
 		defer cancel()
 		if _, err := c.WithContext(ctx).delete(path); err != nil && !IsK8sError(err, 404) {
 			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)

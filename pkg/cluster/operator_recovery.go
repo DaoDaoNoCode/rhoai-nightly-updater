@@ -30,25 +30,84 @@ var (
 
 // Time budget of one cluster operation, from start to the end of its
 // bookkeeping. The pod's shutdown drain must cover all of it, and
-// terminationGracePeriodSeconds (deploy/template.yaml) must cover the drain
-// plus the HTTP server shutdown; budget_test.go checks the arithmetic.
+// terminationGracePeriodSeconds (deploy/template.yaml) must cover the drain,
+// the final marker flush and the HTTP server shutdown with a margin;
+// budget_test.go checks the arithmetic.
 //   - OperationDeadline: the context deadline pkg/api gives every mutation
 //     (withMutationAuth in pkg/api/handlers.go). Every step, including the
 //     Dashboard Dev revert, runs inside it; the install wait ends
 //     installDeadlineReserve before it.
-//   - RecoveryTimeout: the automatic restore after a failure, on its own
-//     contexts after the operation stopped.
-//   - postOperationBookkeeping: recording the Subscription (5s), clearing
-//     the operation marker (5s) and the activity entry.
+//   - RecoveryTimeout: the automatic restore after a failure, after the
+//     operation stopped.
+//   - postOperationBookkeeping: the activity entry, recording the
+//     Subscription, and clearing the operation marker (pkg/api).
+//
+// Everything the cluster package does after the operation's deadline (the
+// restore, cleanup and bookkeeping writes) runs on postOperationContext,
+// which ends at the deadline plus postDeadlineWork at the latest, however
+// many writes there are. Only the marker clear (MarkerClearTimeout) follows.
 const (
-	OperationDeadline        = 15 * time.Minute
-	postOperationBookkeeping = 15 * time.Second
+	OperationDeadline = 15 * time.Minute
+	// MarkerClearTimeout bounds clearing the operation marker when an
+	// operation ends (pkg/api markerWriter.complete): waiting for a
+	// background retry write that holds the lock (5s), then its own 5s write.
+	MarkerClearTimeout = 10 * time.Second
+	// MarkerFlushTimeout bounds main.go's last marker flush after the drain.
+	MarkerFlushTimeout = 10 * time.Second
+	// HTTPShutdownTimeout bounds main.go's http.Server.Shutdown after the
+	// drain; no mutation is running by then.
+	HTTPShutdownTimeout = 20 * time.Second
+	// ShutdownMargin is kept free below terminationGracePeriodSeconds:
+	// SIGKILL comes exactly at the grace period.
+	ShutdownMargin = 10 * time.Second
 )
+
+// Bounds of the bookkeeping writes. Variables so tests can shorten them.
+var (
+	// activityWriteTimeout bounds one RecordActivity call, its conflict
+	// retries included.
+	activityWriteTimeout = 5 * time.Second
+	// subscriptionRecordTimeout bounds recordLiveSubscription.
+	subscriptionRecordTimeout = 5 * time.Second
+)
+
+// postDeadlineWork is the longest the cluster package works after an
+// operation's deadline: the restore, then the activity entry and the
+// Subscription record.
+func postDeadlineWork() time.Duration {
+	return RecoveryTimeout + activityWriteTimeout + subscriptionRecordTimeout
+}
+
+// postOperationBookkeeping is the bookkeeping that follows the restore.
+func postOperationBookkeeping() time.Duration {
+	return activityWriteTimeout + subscriptionRecordTimeout + MarkerClearTimeout
+}
 
 // ShutdownDrainTimeout is how long a terminating pod waits for running
 // operations: the longest one can still take after SIGTERM.
 func ShutdownDrainTimeout() time.Duration {
-	return OperationDeadline + RecoveryTimeout + postOperationBookkeeping
+	return OperationDeadline + RecoveryTimeout + postOperationBookkeeping()
+}
+
+// postOperationContext returns a context for work that must still run when
+// the operation's own context has ended (the restore, cleanup and
+// bookkeeping writes). It keeps the values of c's context but not its
+// cancellation, and ends after timeout or at the operation's deadline plus
+// postDeadlineWork, whichever comes first. That shared end keeps all of
+// this work inside ShutdownDrainTimeout however many writes follow the
+// deadline. A context without a deadline gets only timeout.
+func postOperationContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
+	parent := context.Background()
+	end := time.Now().Add(timeout)
+	if c != nil && c.ctx != nil {
+		parent = context.WithoutCancel(c.ctx)
+		if d, ok := c.ctx.Deadline(); ok {
+			if hard := d.Add(postDeadlineWork()); hard.Before(end) {
+				end = hard
+			}
+		}
+	}
+	return context.WithDeadline(parent, end)
 }
 
 // operatorRecovery holds the desired state captured before an operation and
@@ -193,7 +252,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 
 	var failures, stillDeleting []string
 	if operatorTouched {
-		delCtx, cancelDel := context.WithTimeout(context.Background(), restoreCSVBudget)
+		delCtx, cancelDel := postOperationContext(c, restoreCSVBudget)
 		cd := c.WithContext(delCtx)
 		if _, err := cd.delete(subscriptionPath()); err != nil && !IsK8sError(err, 404) {
 			failures = append(failures, "delete the new Subscription: "+err.Error())
@@ -218,7 +277,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 			slog.Warn("CSV from the failed attempt is still being deleted", "csvs", stillDeleting)
 		}
 	}
-	applyCtx, cancelApply := context.WithTimeout(context.Background(), restoreApplyTimeout)
+	applyCtx, cancelApply := postOperationContext(c, restoreApplyTimeout)
 	defer cancelApply()
 	c = c.WithContext(applyCtx)
 	catalogPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)

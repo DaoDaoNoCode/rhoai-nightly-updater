@@ -149,11 +149,11 @@ func main() {
 	cancelDrain()
 	// A finished operation whose marker could not be cleared would be
 	// reported as interrupted by the next process: try once more.
-	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 10*time.Second)
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), cluster.MarkerFlushTimeout)
 	api.FlushOperationMarker(flushCtx)
 	cancelFlush()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cluster.HTTPShutdownTimeout)
 	defer cancel()
 
 	exitCode := 0
