@@ -205,7 +205,8 @@ async (page) => {
     for (let i = 0; i < 21; i += 2) {
       await page.clock.setFixedTime(new Date(t0 + (i + 2) * 12500));
       await advance(i === 20 ? 1 : 2);
-      await wait(350);
+      // The elapsed time re-renders once a second: wait for that tick.
+      await wait(1100);
       await frame(i === 20 ? 1500 : 280);
     }
     await wait(1200);
@@ -356,7 +357,8 @@ async (page) => {
       const storage = card("Storage");
       await crop("s3-running", storage, {
         notes: [
-          { at: label(storage, "Running"), n: 1, pos: "r" },
+          { at: label(storage, "Running") },
+          { at: label(storage, "SeaweedFS"), n: 1, pos: "r" },
           { at: storage.getByRole("link", { name: /Open admin UI/ }), n: 2, pos: "l" },
           { at: storage.getByText(/^Tear down is blocked/).locator("xpath=..").first(), n: 3, pos: "l" },
         ],
@@ -382,7 +384,8 @@ async (page) => {
       const inc = card("Storage");
       await crop("s3-incomplete", inc, {
         notes: [
-          { at: label(inc, "Incomplete"), n: 1, pos: "r" },
+          { at: label(inc, "Incomplete") },
+          { at: label(inc, "SeaweedFS"), n: 1, pos: "r" },
           { at: inc.getByText(/^Deployment seaweedfs is scaled to 0/).first(), n: 2, pos: "l" },
           { at: inc.getByRole("button", { name: "Repair" }), n: 3, pos: "l" },
         ],

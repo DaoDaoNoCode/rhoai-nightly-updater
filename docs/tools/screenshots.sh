@@ -108,10 +108,11 @@ for dir in "$RAW"/frames/*/; do
     -loop 0 "$IMAGES/$name.gif"
 done
 
-# Chromium's text rendering and the colour reduction move a few pixels from
-# run to run. An image that differs from the committed one by less than
-# 0.05% of its pixels (each by more than 3%) keeps its committed bytes, so a
-# run without a UI change leaves git clean.
+# Chromium's text rendering and the colour reduction shift a few pixels
+# slightly from run to run (by less than 10%). An image with no pixel that
+# differs from the committed one by more than 10% keeps its committed bytes,
+# so a run without a UI change leaves git clean. A real change, even one
+# full stop, moves pixels by far more. KEEP_ALL=1 keeps every new image.
 while IFS= read -r f; do
   git -C "$ROOT" show "HEAD:$f" >"$WORK/old" 2>/dev/null || continue
   new="$ROOT/$f"
@@ -123,9 +124,8 @@ while IFS= read -r f; do
     cp "$WORK/old" "$WORK/old.png"; cp "$new" "$WORK/new.png"
   fi
   [ "$(magick identify -format '%wx%h' "$WORK/old.png")" = "$(magick identify -format '%wx%h' "$WORK/new.png")" ] || continue
-  diff=$(magick compare -fuzz 3% -metric AE "$WORK/old.png" "$WORK/new.png" null: 2>&1 | cut -d' ' -f1 || true)
-  pixels=$(magick identify -format '%[fx:w*h]' "$WORK/old.png")
-  if awk "BEGIN{exit !(${diff:-1e9} < $pixels * 0.0005)}"; then cp "$WORK/old" "$new"; fi
+  diff=$(magick compare -fuzz 10% -metric AE "$WORK/old.png" "$WORK/new.png" null: 2>&1 | cut -d' ' -f1 || true)
+  if [ -z "${KEEP_ALL:-}" ] && awk "BEGIN{exit !(${diff:-1e9} < 1)}"; then cp "$WORK/old" "$new"; fi
 done < <(git -C "$ROOT" status --porcelain -- docs/images | awk '$1 == "M" {print $2}')
 
 # A contact sheet of the images that changed (GIFs: every frame), to look at

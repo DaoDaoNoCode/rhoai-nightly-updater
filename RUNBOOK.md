@@ -272,7 +272,7 @@ The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind
 
 <img src="docs/images/s3-incomplete.png" alt="S3 storage Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
 
-1. **Incomplete**: SeaweedFS does not serve through `minio-service` and `minio-ui`.
+1. **Incomplete**, on **SeaweedFS**: it does not serve through `minio-service` and `minio-ui`.
 2. Why, in one line (here: scaled to 0, for example by a manual rollback).
 3. **Repair** re-runs setup and keeps the stored data:
 
@@ -280,7 +280,7 @@ The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind
 
 <img src="docs/images/s3-running.png" alt="S3 storage Running; Tear down is blocked by a pipeline server" width="760">
 
-1. **Running**.
+1. **Running**, on **SeaweedFS**.
 2. **Open admin UI** (user `admin`).
 3. **Tear down** is disabled while a pipeline server uses the storage; the line names it.
 
