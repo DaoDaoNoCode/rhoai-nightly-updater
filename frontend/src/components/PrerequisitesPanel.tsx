@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
 import {
   Alert,
+  Button,
   ClipboardCopy,
+  ClipboardCopyButton,
+  CodeBlock,
+  CodeBlockAction,
+  CodeBlockCode,
   Content,
   ExpandableSection,
   List,
@@ -10,6 +15,7 @@ import {
   ModalVariant,
   ModalHeader,
   ModalBody,
+  ModalFooter,
   ProgressStepper,
   ProgressStep,
   Stack,
@@ -17,61 +23,81 @@ import {
 } from '@patternfly/react-core';
 import type { StatusResponse } from '../types';
 
+const MIRROR_COMMAND = `rosa create image-mirror --cluster=<your-cluster-name> \\
+  --source=registry.redhat.io/rhoai --mirrors=quay.io/rhoai`;
+
+const Command: React.FC<{ children: string; label: string }> = ({ children, label }) => (
+  <ClipboardCopy isReadOnly isCode hoverTip="Copy command" clickTip="Copied" textAriaLabel={label}>
+    {children}
+  </ClipboardCopy>
+);
+
+/** The multi-line command as a code block with a copy action, so its line break survives. */
+const MirrorCommand: React.FC = () => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <CodeBlock
+      actions={
+        <CodeBlockAction>
+          <ClipboardCopyButton
+            id="copy-image-mirror-command"
+            textId="image-mirror-command"
+            aria-label="Copy the image mirror command"
+            onClick={() => {
+              void navigator.clipboard?.writeText(MIRROR_COMMAND).then(() => setCopied(true)).catch(() => {});
+            }}
+            exitDelay={copied ? 1500 : 600}
+            onTooltipHidden={() => setCopied(false)}
+            variant="plain"
+          >
+            {copied ? "Copied" : "Copy command"}
+          </ClipboardCopyButton>
+        </CodeBlockAction>
+      }
+    >
+      <CodeBlockCode id="image-mirror-command">{MIRROR_COMMAND}</CodeBlockCode>
+    </CodeBlock>
+  );
+};
+
 const IDMSInstructions: React.FC = () => (
   <Stack hasGutter>
     <StackItem>
-      <List isPlain>
+      <List component="ol">
         <ListItem>
-          <Content component="p">
-            <strong>1.</strong> Authenticate with Kerberos:
-          </Content>
-          <ClipboardCopy isBlock isReadOnly>
-            {'kinit <username>@IPA.REDHAT.COM'}
-          </ClipboardCopy>
+          <Stack hasGutter>
+            <StackItem>Authenticate with Kerberos:</StackItem>
+            <StackItem><Command label="Kerberos command">{'kinit <username>@IPA.REDHAT.COM'}</Command></StackItem>
+          </Stack>
         </ListItem>
         <ListItem>
-          <Content component="p">
-            <strong>2.</strong> Get AWS credentials (opens a new shell):
-          </Content>
-          <ClipboardCopy isBlock isReadOnly>
-            rh-aws-saml-login
-          </ClipboardCopy>
-          <Content component="small">Select iaps-rhods-odh-dev when prompted. Continue in the new shell.</Content>
+          <Stack hasGutter>
+            <StackItem>Get AWS credentials (opens a new shell). Select iaps-rhods-odh-dev when prompted, then continue in the new shell:</StackItem>
+            <StackItem><Command label="AWS login command">rh-aws-saml-login</Command></StackItem>
+          </Stack>
         </ListItem>
         <ListItem>
-          <Content component="p">
-            <strong>3.</strong> Log in to ROSA CLI (inside the new shell):
-          </Content>
-          <ClipboardCopy isBlock isReadOnly>
-            rosa login --use-auth-code
-          </ClipboardCopy>
+          <Stack hasGutter>
+            <StackItem>Log in to the ROSA CLI (inside the new shell):</StackItem>
+            <StackItem><Command label="ROSA login command">rosa login --use-auth-code</Command></StackItem>
+          </Stack>
         </ListItem>
         <ListItem>
-          <Content component="p">
-            <strong>4.</strong> Verify login:
-          </Content>
-          <ClipboardCopy isBlock isReadOnly>
-            rosa whoami
-          </ClipboardCopy>
+          <Stack hasGutter>
+            <StackItem>Check the login:</StackItem>
+            <StackItem><Command label="ROSA whoami command">rosa whoami</Command></StackItem>
+          </Stack>
         </ListItem>
         <ListItem>
-          <Content component="p">
-            <strong>5.</strong> Create the image mirror:
-          </Content>
-          <ClipboardCopy isBlock isReadOnly>
-{`rosa create image-mirror --cluster=<your-cluster-name> \\
-  --source=registry.redhat.io/rhoai --mirrors=quay.io/rhoai`}
-          </ClipboardCopy>
+          <Stack hasGutter>
+            <StackItem>Create the image mirror:</StackItem>
+            <StackItem><MirrorCommand /></StackItem>
+          </Stack>
         </ListItem>
       </List>
     </StackItem>
     <StackItem>
-      <Alert component="p"
-        variant="info"
-        title="Requires OCM write access"
-        isInline
-        isPlain
-      >
+      <Alert component="p" variant="info" title="Requires OCM write access" isInline isPlain>
         Contact the cluster owner if you get a 403 error.
       </Alert>
     </StackItem>
@@ -104,7 +130,7 @@ export const SetupModal: React.FC<{
       isOpen={isOpen}
       onClose={onClose}
     >
-      <ModalHeader title="One-Time Cluster Setup" labelId="setup-modal-title" />
+      <ModalHeader title="One-time cluster setup" labelId="setup-modal-title" />
       <ModalBody>
         <Stack hasGutter>
           <StackItem>
@@ -123,7 +149,7 @@ export const SetupModal: React.FC<{
                 aria-label="Pull secret step"
                 description={pullSecretDescription}
               >
-                Pull Secret
+                Pull secret
               </ProgressStep>
               <ProgressStep
                 variant={idmsReady ? 'success' : 'danger'}
@@ -134,7 +160,7 @@ export const SetupModal: React.FC<{
                   ? 'Image mirror exists for registry.redhat.io/rhoai'
                   : 'Image mirror is missing for registry.redhat.io/rhoai'}
               >
-                Image Mirror (IDMS)
+                Image mirror (IDMS)
               </ProgressStep>
             </ProgressStepper>
           </StackItem>
@@ -151,10 +177,9 @@ export const SetupModal: React.FC<{
 
           <StackItem>
             <ExpandableSection
-              toggleText={idmsReady ? 'Image mirror instructions (complete)' : 'Configure Image Mirror'}
+              toggleText={idmsReady ? 'How the image mirror was created' : 'How to create the image mirror'}
               isExpanded={idmsExpanded}
               onToggle={(_e, val) => setIdmsExpanded(val)}
-              isIndented
             >
               <IDMSInstructions />
             </ExpandableSection>
@@ -173,6 +198,9 @@ export const SetupModal: React.FC<{
           )}
         </Stack>
       </ModalBody>
+      <ModalFooter>
+        <Button variant="primary" onClick={onClose}>Close</Button>
+      </ModalFooter>
     </Modal>
   );
 };

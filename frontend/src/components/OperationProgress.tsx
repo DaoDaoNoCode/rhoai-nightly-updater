@@ -5,16 +5,14 @@ import {
   AlertActionLink,
   Card,
   CardBody,
+  CardHeader,
+  CardTitle,
   Content,
-  Flex,
-  FlexItem,
-  Label,
   Spinner,
   Stack,
   StackItem,
+  Title,
 } from "@patternfly/react-core";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
 import { Link, useNavigate } from "react-router-dom";
 import { UpdatePipeline } from "./UpdatePipeline";
 import { ReconciliationProgress } from "./ReconciliationProgress";
@@ -84,22 +82,14 @@ export const OperationProgress: React.FC = () => {
 
   if (running && connecting) {
     return (
-      <Card isCompact>
+      <Card>
+        <CardHeader actions={{ actions: <Spinner size="md" aria-label={`${OPERATION_NAMES[run.kind]} starting`} />, hasNoOffset: true }}>
+          <CardTitle><Title headingLevel="h2" size="lg">{OPERATION_NAMES[run.kind]}: starting</Title></CardTitle>
+        </CardHeader>
         <CardBody>
-          <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
-            <FlexItem>
-              <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-                <FlexItem><Spinner size="md" aria-label={`${OPERATION_NAMES[run.kind]} starting`} /></FlexItem>
-                <FlexItem>
-                  <Content component="p" style={{ fontWeight: 600, margin: 0 }}>
-                    {OPERATION_NAMES[run.kind]}: starting...
-                  </Content>
-                  <Content component="small" className="rhoai-subtle">Steps appear as they run.</Content>
-                </FlexItem>
-              </Flex>
-            </FlexItem>
-            {connectingElapsed > 0 && <FlexItem><Content component="small">Elapsed: {connectingElapsed}s</Content></FlexItem>}
-          </Flex>
+          <Content component="p" className="pf-v6-u-text-color-subtle">
+            Steps appear as they run.{connectingElapsed > 0 ? ` ${connectingElapsed}s elapsed.` : ""}
+          </Content>
         </CardBody>
       </Card>
     );
@@ -157,21 +147,19 @@ export const OperationProgress: React.FC = () => {
 
       {reconcile.active && run && outcome && outcome.status !== "failed" && run.steps.length > 0 && (
         <StackItem>
-          <Card isCompact>
-            <CardBody>
-              {outcome.status === "detached" ? (
-                <Label color="orange" icon={<ExclamationTriangleIcon />} isCompact>
-                  {reconcile.awaitingServer
-                    ? <>Live progress stopped after {completedSteps} steps; waiting for the server to report the end of the operation</>
-                    : <>Live progress stopped after {completedSteps} steps; following the operator status instead</>}
-                </Label>
-              ) : (
-                <Label color="green" icon={<CheckCircleIcon />} isCompact>
-                  {OPERATION_NAMES[run.kind]} applied ({completedSteps} steps)
-                </Label>
-              )}
-            </CardBody>
-          </Card>
+          {outcome.status === "detached" ? (
+            <Alert
+              variant="warning"
+              isInline
+              isPlain
+              component="p"
+              title={reconcile.awaitingServer
+                ? `Live progress stopped after ${completedSteps} steps; waiting for the server to report the end of the operation`
+                : `Live progress stopped after ${completedSteps} steps; following the operator status instead`}
+            />
+          ) : (
+            <Alert variant="success" isInline isPlain component="p" title={`${OPERATION_NAMES[run.kind]} applied (${completedSteps} steps)`} />
+          )}
         </StackItem>
       )}
 

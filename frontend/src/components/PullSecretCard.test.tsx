@@ -1,13 +1,13 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { PullSecretCard } from "./PullSecretCard";
+import { PullSecretSetup } from "./PullSecretCard";
 import { renderWithApp, IDLE_OPERATION } from "../test/providers";
 import { useOperation } from "../state/AppState";
 import { streamUpdate } from "../services/api";
 import { sseResponse } from "../test/utils";
 
-const missing = { exists: false, valid: false, hasQuayAuth: false } as unknown as React.ComponentProps<typeof PullSecretCard>["pullSecret"];
+const missing = { exists: false, valid: false, hasQuayAuth: false } as unknown as React.ComponentProps<typeof PullSecretSetup>["pullSecret"];
 const token = btoa("user:password");
 
 const StartButton: React.FC = () => {
@@ -26,9 +26,9 @@ async function saveButton(): Promise<HTMLElement> {
   return screen.getByRole("button", { name: "Create secret" });
 }
 
-describe("PullSecretCard gating (R7 L6)", () => {
+describe("PullSecretSetup gating (R7 L6)", () => {
   it("is enabled when nothing blocks it", async () => {
-    renderWithApp(<PullSecretCard pullSecret={missing} />);
+    renderWithApp(<PullSecretSetup pullSecret={missing} />);
     const save = await saveButton();
     await waitFor(() => expect(save).not.toHaveAttribute("aria-disabled", "true"));
   });
@@ -36,7 +36,7 @@ describe("PullSecretCard gating (R7 L6)", () => {
   it("is disabled while this tab's own update stream runs, although GET /api/operation is not polled then", async () => {
     const sse = sseResponse();
     vi.stubGlobal("fetch", vi.fn(async () => sse.response));
-    renderWithApp(<><StartButton /><PullSecretCard pullSecret={missing} /></>, { operation: async () => IDLE_OPERATION });
+    renderWithApp(<><StartButton /><PullSecretSetup pullSecret={missing} /></>, { operation: async () => IDLE_OPERATION });
     const save = await saveButton();
     await waitFor(() => expect(save).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(screen.getByRole("button", { name: "start" }));
@@ -47,7 +47,7 @@ describe("PullSecretCard gating (R7 L6)", () => {
   });
 
   it("is disabled for a read-only user", async () => {
-    renderWithApp(<PullSecretCard pullSecret={missing} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
+    renderWithApp(<PullSecretSetup pullSecret={missing} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
     await saveButton();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create secret" })).toHaveAttribute("aria-disabled", "true"));
   });

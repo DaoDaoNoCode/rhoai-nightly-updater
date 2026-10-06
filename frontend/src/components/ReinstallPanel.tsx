@@ -14,9 +14,6 @@ import {
   FormGroup,
   HelperText,
   HelperTextItem,
-  Label,
-  List,
-  ListItem,
   MenuToggle,
   Modal,
   ModalBody,
@@ -39,6 +36,8 @@ import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
 import { compareTagToInstalled, compareVersions, parseImageRef, shortDigest } from "../build";
 import { TooltipButton } from "./TooltipButton";
+import { StatusLabel, TagLabel } from "./StatusLabel";
+import { StepsPreview } from "./StepsPreview";
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession, type OperatorRequest, type ReinstallTargetType } from "./OperatorActions";
 
 /** pkg/api customFBCImageRegex: only builds of the RHOAI FBC repository, with a tag and/or digest. */
@@ -53,10 +52,10 @@ export function isValidCustomImage(image: string): boolean {
 type Direction = "downgrade" | "upgrade" | "same" | "same-line" | "unknown";
 
 const DIRECTION_LABELS: Record<Direction, React.ReactNode> = {
-  downgrade: <Label isCompact color="red">Downgrade</Label>,
-  upgrade: <Label isCompact color="green">Newer</Label>,
-  same: <Label isCompact color="grey">Same version</Label>,
-  "same-line": <Label isCompact color="grey">Same release line</Label>,
+  downgrade: <StatusLabel status="warning">Downgrade</StatusLabel>,
+  upgrade: <TagLabel color="blue">Newer</TagLabel>,
+  same: <TagLabel>Same version</TagLabel>,
+  "same-line": <TagLabel>Same release line</TagLabel>,
   unknown: null,
 };
 
@@ -168,14 +167,6 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <Content component="p">
-          Uninstalls the operator and installs it again from the target you choose. Use it to move to the GA release, to an
-          older build, or when Update and Re-deploy can&apos;t recover the operator. RHOAI can&apos;t be changed for about
-          5-10 minutes; running workloads keep running.
-        </Content>
-      </StackItem>
-
-      <StackItem>
         <FormGroup role="radiogroup" fieldId="reinstall-target" label="Reinstall to" isStack>
           <Radio
             id="reinstall-stable"
@@ -267,7 +258,6 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                         onClick={() => setTagSelectOpen(!tagSelectOpen)}
                         isExpanded={tagSelectOpen}
                         isDisabled={running}
-                        style={{ minWidth: "14rem" }}
                       >
                         {tagsLoading ? <><Spinner size="sm" aria-label="Loading builds" /> Loading builds...</> : selectedTagInfo?.tag || "Select a build"}
                       </MenuToggle>
@@ -364,10 +354,10 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                   <DescriptionListTerm>Target</DescriptionListTerm>
                   <DescriptionListDescription>
                     <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
-                      <FlexItem style={{ overflowWrap: "anywhere" }}>{targetName}</FlexItem>
+                      <FlexItem className="pf-v6-u-text-break-word">{targetName}</FlexItem>
                       {DIRECTION_LABELS[direction] && <FlexItem>{DIRECTION_LABELS[direction]}</FlexItem>}
                     </Flex>
-                    {channelOverride.trim() && <span className="rhoai-subtle">Channel: {channelOverride.trim()}</span>}
+                    {channelOverride.trim() && <div className="pf-v6-u-text-color-subtle">Channel: {channelOverride.trim()}</div>}
                   </DescriptionListDescription>
                 </DescriptionListGroup>
               </DescriptionList>
@@ -400,12 +390,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
               </StackItem>
             )}
             <StackItem>
-              <Content component="p"><strong>What happens</strong></Content>
-              <List component="ol">
-                {steps.map((step) => (
-                  <ListItem key={step.id}>{step.label}<span className="rhoai-subtle">: {step.description}</span></ListItem>
-                ))}
-              </List>
+              <StepsPreview steps={steps} idPrefix="reinstall-step" />
             </StackItem>
             <StackItem>
               <Content component="p">

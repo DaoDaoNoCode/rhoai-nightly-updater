@@ -16,7 +16,6 @@ import {
   Masthead,
   MastheadMain,
   MastheadBrand,
-  MastheadLogo,
   MastheadContent,
   MastheadToggle,
   Nav,
@@ -101,12 +100,6 @@ const RouterNavLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttrib
 );
 RouterNavLink.displayName = "RouterNavLink";
 
-/** MastheadLogo as a router link to the Status page. */
-const HomeLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttributes<HTMLAnchorElement>>(
-  (props, ref) => <Link ref={ref} to="/" aria-label="RHOAI Nightly Updater home" {...props} />,
-);
-HomeLink.displayName = "HomeLink";
-
 /** /dashboard-dev?tab=resources was the Test resources tab; it now has its own page. */
 export const DashboardDevRoute: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -174,14 +167,15 @@ const AppLayout: React.FC = () => {
           </PageToggleButton>
         </MastheadToggle>
         <MastheadBrand>
-          <MastheadLogo component={HomeLink}>
-            <Flex component="span" alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
+          {/* A plain link, not MastheadLogo: its fixed 11.8rem box pushes the toolbar off small screens. */}
+          <Link to="/" aria-label="RHOAI Nightly Updater home">
+            <Flex component="span" display={{ default: "inlineFlex" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
               <Brand src={LOGO_SRC} alt="" heights={{ default: "32px" }} />
               <span className="pf-v6-u-display-none pf-v6-u-display-inline-on-sm pf-v6-u-font-size-lg pf-v6-u-font-weight-bold pf-v6-u-text-color-regular pf-v6-u-text-nowrap">
                 RHOAI Nightly Updater
               </span>
             </Flex>
-          </MastheadLogo>
+          </Link>
         </MastheadBrand>
       </MastheadMain>
       <MastheadContent>
@@ -206,7 +200,7 @@ const AppLayout: React.FC = () => {
                 <HelpButton />
               </ToolbarItem>
               {consoleURL && (
-                <ToolbarItem>
+                <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
                   <Dropdown
                     isOpen={appLauncherOpen}
                     onSelect={() => setAppLauncherOpen(false)}
@@ -249,8 +243,17 @@ const AppLayout: React.FC = () => {
                       </MenuToggle>
                     )}
                   >
+                    {consoleURL && (
+                      // The app launcher is hidden on small screens; its links move here.
+                      <DropdownGroup className="pf-v6-u-display-none-on-md" label="Applications" labelHeadingLevel="h2">
+                        <DropdownList>
+                          <DropdownItem key="console-mobile" to={consoleURL} isExternalLink>OpenShift console</DropdownItem>
+                          <DropdownItem key="rhoai-dashboard-mobile" to={rhoaiDashboardURL(consoleURL)} isExternalLink>RHOAI dashboard</DropdownItem>
+                        </DropdownList>
+                        <Divider component="li" />
+                      </DropdownGroup>
+                    )}
                     <DropdownGroup label={`Signed in as ${status.cluster.user}`} labelHeadingLevel="h2">
-                      <Divider component="li" />
                       <DropdownList>
                         <DropdownItem key="logout" onClick={() => { window.location.href = "/oauth/sign_in"; }}>
                           Log out

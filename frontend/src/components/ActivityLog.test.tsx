@@ -28,6 +28,12 @@ describe("ActivityLog", () => {
     expect(screen.getByText("(failed)")).toBeTruthy();
   });
 
+  it("says so when nothing is recorded yet, without a filter", () => {
+    render(<ActivityLog activity={[]} />);
+    expect(screen.getByText("No activity yet")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Activity type/ })).toBeNull();
+  });
+
   it("files quick resources under Test resources", () => {
     expect(activityCategory({ ...refused, action: "teardown-minio", category: undefined })).toBe("test-resources");
     expect(activityCategory({ ...refused, action: "deploy-dashboard-main", category: undefined })).toBe("dashboard-dev");
@@ -37,7 +43,8 @@ describe("ActivityLog", () => {
         defaultCategory="all"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /Test resources \(1\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Activity type: All" }));
+    fireEvent.click(screen.getByRole("option", { name: /Test resources/ }));
     expect(screen.getByText("MinIO set up")).toBeTruthy();
   });
 });

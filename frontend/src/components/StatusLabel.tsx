@@ -1,37 +1,43 @@
 import React from "react";
 import { Label, type LabelProps } from "@patternfly/react-core";
+import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
+import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
+import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
+import InfoCircleIcon from "@patternfly/react-icons/dist/esm/icons/info-circle-icon";
 import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 
 /**
- * The app's status vocabulary (one meaning per color):
- * - success: Running, Ready, Succeeded, Passed
- * - progress: Starting, Installing, Rolling out (blue, in-progress icon)
- * - info: informational states (blue, info icon)
- * - warning: Not ready, Terminating, Stale, Downgrade
- * - danger: Failed, Error, Missing
- * - neutral: Not installed, Not deployed, Removed (grey, no icon)
+ * The app's status vocabulary (one meaning per color, always with an icon):
+ * - success (green): Running, Ready, Succeeded, Passed
+ * - progress (blue, in-progress icon): Starting, Installing, Rolling out
+ * - info (blue): informational states
+ * - warning (orange): Not ready, Terminating, Stale, Downgrade
+ * - danger (red): Failed, Error, Missing
+ * - neutral (grey, no icon): Not installed, Not deployed, Removed
  */
 export type StatusKind = "success" | "progress" | "info" | "warning" | "danger" | "neutral";
+
+const STYLE: Record<StatusKind, { color: LabelProps["color"]; icon: React.ReactNode }> = {
+  success: { color: "green", icon: <CheckCircleIcon /> },
+  progress: { color: "blue", icon: <InProgressIcon /> },
+  info: { color: "blue", icon: <InfoCircleIcon /> },
+  warning: { color: "orange", icon: <ExclamationTriangleIcon /> },
+  danger: { color: "red", icon: <ExclamationCircleIcon /> },
+  neutral: { color: "grey", icon: undefined },
+};
 
 interface StatusLabelProps {
   status: StatusKind;
   children: React.ReactNode;
-  /** Replaces the default status icon (for example an upgrade arrow). */
+  /** Replaces the default status icon (for example an upgrade arrow or a spinner). */
   icon?: React.ReactNode;
-  /** Compact everywhere except where the label is the main subject of a card header. */
   isCompact?: boolean;
 }
 
-/**
- * A status as a PatternFly status label: the color and icon come from
- * `status`, so no separate icon goes next to it.
- */
+/** A status label: the color and icon come from `status`, so no separate icon goes next to it. */
 export const StatusLabel: React.FC<StatusLabelProps> = ({ status, children, icon, isCompact = true }) => {
-  if (status === "neutral") return <Label isCompact={isCompact} color="grey">{children}</Label>;
-  if (status === "progress") {
-    return <Label isCompact={isCompact} status="info" icon={icon ?? <InProgressIcon />}>{children}</Label>;
-  }
-  return <Label isCompact={isCompact} status={status} icon={icon}>{children}</Label>;
+  const style = STYLE[status];
+  return <Label isCompact={isCompact} color={style.color} icon={icon ?? style.icon}>{children}</Label>;
 };
 
 /**

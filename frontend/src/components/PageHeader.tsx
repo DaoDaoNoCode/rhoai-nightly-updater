@@ -53,10 +53,11 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
     <Stack hasGutter>
       <StackItem>
         <Flex
-          justifyContent={{ default: "justifyContentSpaceBetween" }}
+          direction={{ default: "column", md: "row" }}
+          justifyContent={{ md: "justifyContentSpaceBetween" }}
           alignItems={{ default: "alignItemsFlexStart" }}
-          gap={{ default: "gapMd" }}
-          flexWrap={{ default: "wrap", lg: "nowrap" }}
+          gap={{ default: "gapSm", md: "gapMd" }}
+          flexWrap={{ default: "nowrap" }}
         >
           <FlexItem flex={{ default: "flex_1" }}>
             <Flex direction={{ default: "column" }} gap={{ default: "gapXs" }}>

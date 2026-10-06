@@ -77,7 +77,9 @@ describe("InstalledBuildCard (A07-1)", () => {
       nightly: undefined,
     });
     renderCard(s, { prerequisitesMet: false });
-    expect(screen.getAllByText("Not installed", { selector: ".pf-v6-c-label__text" }).length).toBe(2);
+    // One "Not installed" label (the verdict); the operator row says it in words (UX-Status-4).
+    expect(screen.getAllByText("Not installed", { selector: ".pf-v6-c-label__text" }).length).toBe(1);
+    expect(screen.getByText("rhods-operator: not installed")).toBeInTheDocument();
     expect(screen.getByText(/the RHOAI operator is not installed/)).toBeInTheDocument();
     const install = screen.getByRole("button", { name: /Install latest nightly/ });
     expect(install).toHaveAttribute("aria-disabled", "true");

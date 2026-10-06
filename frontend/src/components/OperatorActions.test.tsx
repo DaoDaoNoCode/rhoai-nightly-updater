@@ -98,7 +98,9 @@ describe("Update confirmation (A07-1, A07-7)", () => {
     renderWithApp(<UpdateConfirmModal target={{ image: IMAGE, tag: "rhoai-3.6", digest: "sha256:" + "b".repeat(64), buildDate: "2026-10-05T21:47:53Z" }} status={nightlyStatus()} onConfirm={vi.fn()} onClose={vi.fn()} />);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("bbbbbbbbbbbb")).toBeInTheDocument();
-    const steps = within(dialog).getAllByRole("listitem").map((li) => li.textContent?.split(":")[0]);
+    // The steps are collapsed under "What happens (8 steps)", drawn like the progress view.
+    fireEvent.click(within(dialog).getByRole("button", { name: "What happens (8 steps)" }));
+    const steps = within(dialog).getAllByRole("listitem").map((li) => li.querySelector(".pf-v6-c-progress-stepper__step-title")?.textContent);
     expect(steps).toEqual([
       "Check prerequisites", "Save snapshot", "Replace the nightly catalog", "Wait for the catalog", "Detect the channel",
       "Remove the old operator version", "Create the Subscription", "Wait for the operator install",
