@@ -500,6 +500,85 @@ func TestGetMinIOStatus_ServingConfiguration(t *testing.T) {
 	}
 }
 
+// Interrupted setups recover with a re-run (Repair).
+func TestSetupMinIO_RecoversFromInterruptedSetup(t *testing.T) {
+	t.Run("ready only after the setup timed out", func(t *testing.T) {
+		fastMinIOTimings(t)
+		f, c := newResourceFake(t)
+		notReadyAfterApply(f)
+		if resp, _ := SetupMinIO(c); resp.Success || resp.ErrorCode != "timeout" {
+			t.Fatalf("setup = %+v", resp)
+		}
+		readyAfterApply(f) // the pod became ready later
+		st := getMinIOStatus(c)
+		if st.Ready || !st.TerminalError || !strings.Contains(st.RepairNeeded, "Service minio-service is missing") {
+			t.Fatalf("status after the timeout = %+v", st)
+		}
+		if resp, _ := SetupMinIO(c); !resp.Success {
+			t.Fatalf("repair = %+v", resp)
+		}
+		if st := getMinIOStatus(c); !st.Ready || st.RepairNeeded != "" {
+			t.Errorf("status after repair = %+v", st)
+		}
+	})
+	t.Run("failure after the Service switch", func(t *testing.T) {
+		bucketCalls := fastMinIOTimings(t)
+		f, c := newResourceFake(t)
+		readyAfterApply(f)
+		minioBucketCreator = func(*Client, string) error { *bucketCalls++; return fmt.Errorf("connection refused") }
+		if resp, _ := SetupMinIO(c); resp.Success || !strings.Contains(resp.Message, "bucket creation failed") {
+			t.Fatalf("setup = %+v", resp)
+		}
+		if st := getMinIOStatus(c); !st.Ready || st.RepairNeeded != "" {
+			t.Errorf("the Service was switched, so SeaweedFS serves: %+v", st)
+		}
+		minioBucketCreator = func(*Client, string) error { *bucketCalls++; return nil }
+		if resp, _ := SetupMinIO(c); !resp.Success {
+			t.Fatalf("repair = %+v", resp)
+		}
+	})
+	t.Run("failed migration: status while MinIO still serves", func(t *testing.T) {
+		fastMinIOTimings(t)
+		f, c := newResourceFake(t)
+		readyAfterApply(f)
+		managedMinIONamespace(f)
+		putMinIODeployment(f, toolFieldManager, 1)
+		putS3Deployment(f, 1)
+		putS3Serving(f)
+		f.putJSON(minioSvcPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"selector":{"app":"minio"},"ports":[{"name":"api","port":9000,"targetPort":9000},{"name":"ui","port":9090,"targetPort":9090}]}}`)
+		st := getMinIOStatus(c)
+		if st.Ready || !st.MigrationPending || !strings.Contains(st.RepairNeeded, "selects app=minio") {
+			t.Fatalf("status = %+v", st)
+		}
+		if resp, _ := SetupMinIO(c); !resp.Success || f.has(minioDeployPath) {
+			t.Fatalf("migration re-run = %+v", resp)
+		}
+		if st := getMinIOStatus(c); !st.Ready || st.MigrationPending || st.RepairNeeded != "" {
+			t.Errorf("status after the re-run = %+v", st)
+		}
+	})
+	t.Run("scaled to zero", func(t *testing.T) {
+		fastMinIOTimings(t)
+		f, c := newResourceFake(t)
+		readyAfterApply(f)
+		if resp, _ := SetupMinIO(c); !resp.Success {
+			t.Fatalf("setup = %+v", resp)
+		}
+		f.mu.Lock()
+		ensureMap(f.objects[fakeKey{gv: "apps/v1", ns: "minio", plural: "deployments", name: "seaweedfs"}], "spec")["replicas"] = 0
+		f.mu.Unlock()
+		if st := getMinIOStatus(c); st.Ready || !st.TerminalError || !strings.Contains(st.RepairNeeded, "scaled to 0") {
+			t.Fatalf("status = %+v", st)
+		}
+		if resp, _ := SetupMinIO(c); !resp.Success {
+			t.Fatalf("repair = %+v", resp)
+		}
+		if st := getMinIOStatus(c); !st.Ready || st.RepairNeeded != "" {
+			t.Errorf("status after repair = %+v", st)
+		}
+	})
+}
+
 // A SeaweedFS that runs another image than this version deploys says so.
 func TestGetMinIOStatus_ImageDrift(t *testing.T) {
 	t.Setenv("SEAWEEDFS_IMAGE", "")
