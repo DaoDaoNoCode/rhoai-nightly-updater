@@ -108,6 +108,20 @@ func parseObjectMeta(body []byte) (objectMeta, error) {
 	return obj.Metadata, nil
 }
 
+// readObjectMeta reads the metadata of the object at path. found is false on
+// 404; any other error is returned.
+func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err error) {
+	body, _, err := c.get(path)
+	if IsK8sError(err, 404) {
+		return objectMeta{}, false, nil
+	}
+	if err != nil {
+		return objectMeta{}, false, err
+	}
+	meta, err = parseObjectMeta(body)
+	return meta, err == nil, err
+}
+
 // deleteWithUID deletes path only if the object still has the given UID, so a
 // check-then-delete never removes an object recreated in between.
 func deleteWithUID(c *Client, path, uid string) (int, error) {

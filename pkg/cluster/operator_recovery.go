@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -120,9 +121,10 @@ type operatorRecovery struct {
 	catalogChanged bool
 	// subscriptionChanged: the Subscription was deleted or replaced.
 	subscriptionChanged bool
-	// csvRemoved: the previously installed CSV was deleted, so any RHOAI
-	// CSV now in the namespace belongs to this attempt.
-	csvRemoved bool
+	// csvRemoved: the operation deleted the previously installed CSV
+	// (removedCSVs names it), so OLM must reinstall the previous version.
+	csvRemoved  bool
+	removedCSVs []string
 	// keepNewInstall: OLM was still installing the new target when the
 	// operation stopped waiting; the new state is kept instead of undone.
 	keepNewInstall bool
@@ -156,6 +158,18 @@ func (r *operatorRecovery) noteAttemptCSV(name string) {
 		}
 	}
 	r.attemptCSVs = append(r.attemptCSVs, name)
+}
+
+// noteCSVRemoved records that the operation deleted the CSV name, which
+// existed before it.
+func (r *operatorRecovery) noteCSVRemoved(name string) {
+	if r == nil {
+		return
+	}
+	r.csvRemoved = true
+	if name != "" && !containsString(r.removedCSVs, name) {
+		r.removedCSVs = append(r.removedCSVs, name)
+	}
 }
 
 func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
@@ -251,25 +265,34 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	}
 
 	var failures, stillDeleting []string
+	subReplaced := false
 	if operatorTouched {
 		delCtx, cancelDel := postOperationContext(c, restoreCSVBudget)
 		cd := c.WithContext(delCtx)
-		if _, err := cd.delete(subscriptionPath()); err != nil && !IsK8sError(err, 404) {
+		// Delete the Subscription that is there now (the attempt's), guarded
+		// by the UID just read: one an administrator created in the
+		// meantime is reported, and neither deleted nor overwritten.
+		if err := deleteCurrentSubscription(cd); errors.Is(err, errReplacedMeanwhile) {
+			subReplaced = true
+			failures = append(failures, "the Subscription was replaced by someone else while the restore ran, so it was left unchanged")
+		} else if err != nil {
 			failures = append(failures, "delete the new Subscription: "+err.Error())
 		}
-		names, err := r.attemptCSVNames(cd)
+		csvs, err := r.attemptCSVsToRemove(cd)
 		if err != nil {
 			failures = append(failures, "list CSVs: "+err.Error())
 		}
-		for _, name := range names {
-			gone, err := deleteCSVAndWait(cd, name)
+		for _, csv := range csvs {
+			gone, err := deleteCSVByUIDAndWait(cd, csv)
 			switch {
+			case errors.Is(err, errReplacedMeanwhile):
+				failures = append(failures, "CSV "+csv.Name+" was replaced by another one while the restore ran, so it was left in place")
 			case err != nil && delCtx.Err() != nil:
-				stillDeleting = append(stillDeleting, name)
+				stillDeleting = append(stillDeleting, csv.Name)
 			case err != nil:
-				failures = append(failures, "delete CSV "+name+": "+err.Error())
+				failures = append(failures, "delete CSV "+csv.Name+": "+err.Error())
 			case !gone:
-				stillDeleting = append(stillDeleting, name)
+				stillDeleting = append(stillDeleting, csv.Name)
 			}
 		}
 		cancelDel()
@@ -294,7 +317,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 			}
 		}
 	}
-	if operatorTouched && r.subscription != nil {
+	if operatorTouched && r.subscription != nil && !subReplaced {
 		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 			"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS}, "spec": r.subscription["spec"]}
 		if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
@@ -386,44 +409,132 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 	return out, nil
 }
 
-// attemptCSVNames lists the RHOAI CSVs created by the failed attempt:
-//   - a CSV that did not exist before the operation (by name, or by UID
-//     when the name was reused), so a failed first install is cleaned up
-//     even though the operation deleted no CSV;
-//   - when the operation deleted the previous CSV (csvRemoved), every RHOAI
-//     CSV, since any CSV left belongs to this attempt (or is the deleted
-//     one, still finishing).
+// errReplacedMeanwhile: a UID-guarded delete found another object with the
+// same name (the API server answers 409 when a precondition UID does not
+// match), so nothing was deleted.
+var errReplacedMeanwhile = errors.New("replaced by another object")
+
+// attemptCSVsToRemove lists the RHOAI CSVs the restore deletes, each with the
+// UID its delete is conditioned on:
+//   - a CSV that did not exist before the operation, or whose name now has
+//     another UID: the attempt created it (also after a failed first
+//     install, when the operation deleted nothing);
+//   - a CSV the operation itself deleted that still exists with its old UID
+//     (its finalizer is still running): the restore waits for it, because
+//     OLM cannot reinstall a CSV with that name until it is gone.
 //
-// A CSV that existed before the operation and was not deleted by it is
-// never returned: the restored Subscription adopts it.
-func (r *operatorRecovery) attemptCSVNames(c *Client) ([]string, error) {
-	created := func(name, uid string) bool {
-		if r.csvRemoved {
-			return true
+// Every other CSV that existed before the operation is kept, also when the
+// operation deleted the previous CSV (for example a second CSV left in
+// Replacing or Pending): the restored Subscription adopts it.
+func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
+	remove := func(csv rhoaiCSV) bool {
+		if csv.UID == "" {
+			return false // nothing to guard the delete with
 		}
-		preUID, existed := r.preCSVs[name]
-		return !existed || (uid != "" && preUID != "" && uid != preUID)
+		preUID, existed := r.preCSVs[csv.Name]
+		switch {
+		case !existed || preUID != csv.UID:
+			return true
+		default:
+			return containsString(r.removedCSVs, csv.Name)
+		}
 	}
-	var names []string
-	add := func(name string) {
-		if !containsString(names, name) {
-			names = append(names, name)
+	var out []rhoaiCSV
+	add := func(csv rhoaiCSV) {
+		for _, o := range out {
+			if o.Name == csv.Name {
+				return
+			}
+		}
+		if remove(csv) {
+			out = append(out, csv)
 		}
 	}
 	current, err := listRHOAICSVs(c)
-	if err != nil {
-		// Fall back to the CSVs the attempt was seen installing.
-		for _, name := range r.attemptCSVs {
-			if created(name, "") {
-				add(name)
-			}
+	if err == nil {
+		for _, csv := range current {
+			add(csv)
 		}
-		return names, err
+		return out, nil
 	}
-	for _, csv := range current {
-		if created(csv.Name, csv.UID) {
-			add(csv.Name)
+	// Fall back to the CSVs the attempt was seen installing and the ones it
+	// deleted, read one by one for their UIDs.
+	for _, name := range append(append([]string{}, r.attemptCSVs...), r.removedCSVs...) {
+		body, _, getErr := c.get(csvPath(name))
+		if IsK8sError(getErr, 404) {
+			continue
+		}
+		if getErr != nil {
+			return out, err
+		}
+		var obj struct {
+			Metadata struct {
+				UID string `json:"uid"`
+			} `json:"metadata"`
+		}
+		if json.Unmarshal(body, &obj) != nil {
+			return out, err
+		}
+		add(rhoaiCSV{Name: name, UID: obj.Metadata.UID})
+	}
+	// Still an error: a CSV the attempt was never seen with may be missed.
+	return out, err
+}
+
+// deleteCSVByUIDAndWait deletes the CSV with the given UID and waits, up to
+// CSVDeletionTimeout, until no CSV with that UID exists. A CSV with the same
+// name but another UID is never deleted (errReplacedMeanwhile).
+func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
+	path := csvPath(csv.Name)
+	if _, err := deleteWithUID(c, path, csv.UID); err != nil {
+		switch {
+		case IsK8sError(err, 404):
+			return true, nil
+		case IsK8sError(err, 409):
+			return false, errReplacedMeanwhile
+		default:
+			return false, err
 		}
 	}
-	return names, nil
+	deadline := time.Now().Add(CSVDeletionTimeout)
+	for {
+		meta, found, err := readObjectMeta(c, path)
+		if err != nil {
+			return false, err
+		}
+		if !found || meta.UID != csv.UID {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		select {
+		case <-c.ctx.Done():
+			return false, c.ctx.Err()
+		case <-time.After(InstallPlanPollInterval):
+		}
+	}
+}
+
+// deleteCurrentSubscription deletes the operator Subscription that exists
+// now, guarded by the UID it was read with.
+func deleteCurrentSubscription(c *Client) error {
+	meta, found, err := readObjectMeta(c, subscriptionPath())
+	if err != nil || !found {
+		return err
+	}
+	if meta.UID == "" {
+		return fmt.Errorf("the Subscription has no UID to guard its deletion")
+	}
+	if _, err := deleteWithUID(c, subscriptionPath(), meta.UID); err != nil {
+		switch {
+		case IsK8sError(err, 404):
+			return nil
+		case IsK8sError(err, 409):
+			return errReplacedMeanwhile
+		default:
+			return err
+		}
+	}
+	return nil
 }

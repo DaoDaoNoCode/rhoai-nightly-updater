@@ -170,7 +170,7 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec": map[string]interface{}{
 			"source":  stableSource,
 			"channel": stableChannel,
@@ -715,7 +715,7 @@ func TestUpdate_FullRefreshFlow(t *testing.T) {
 	// Build Subscription response (points to nightly catalog, with installPlanRef for verify step)
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state":        "AtLatestKnown",
@@ -912,7 +912,7 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec": map[string]interface{}{
 			"source":  stableSource,
 			"channel": stableChannel,
@@ -966,7 +966,7 @@ func TestReinstall_NightlyCatalogAndChannel(t *testing.T) {
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1",
 		"kind":       "Subscription",
-		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata":   map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec": map[string]interface{}{
 			"source":  CatalogName,
 			"channel": "fast",
@@ -1106,7 +1106,7 @@ func buildRefreshMocks() (map[string]mockResponse, map[string]string) {
 
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status":   map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
@@ -1236,7 +1236,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status":   map[string]interface{}{"state": "AtLatestKnown", "currentCSV": "rhods-operator.v3.5.0", "installedCSV": "rhods-operator.v3.5.0"},
 	}
@@ -1487,7 +1487,7 @@ func buildUpdateStreamMocks(testImage string) (map[string]mockResponse, map[stri
 	// Subscription (with installPlanRef in status)
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state":        "AtLatestKnown",
@@ -1887,7 +1887,7 @@ func TestUpdateStream_BackwardCompat(t *testing.T) {
 	// Keep installPlanRef so verify_installplan step completes quickly
 	subResponse := map[string]interface{}{
 		"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS},
+		"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "uid": "uid-sub"},
 		"spec":     map[string]interface{}{"source": CatalogName, "channel": "fast"},
 		"status": map[string]interface{}{
 			"state":          "AtLatestKnown",

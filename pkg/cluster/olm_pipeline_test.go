@@ -603,10 +603,10 @@ func TestRestore_KeepsAPreExistingCSV(t *testing.T) {
 	// A CSV with the same name but a new UID was created by the attempt.
 	f.csvs["rhods-operator.3.6.0"]["metadata"].(map[string]interface{})["uid"] = "recreated"
 	f.mu.Unlock()
-	names, err := r.attemptCSVNames(c)
+	csvs, err := r.attemptCSVsToRemove(c)
 	f.mu.Lock()
-	if err != nil || fmt.Sprint(names) != "[rhods-operator.3.6.0]" {
-		t.Fatalf("attempt CSVs = %v, %v", names, err)
+	if err != nil || fmt.Sprint(csvs) != "[{rhods-operator.3.6.0 recreated}]" {
+		t.Fatalf("attempt CSVs = %v, %v", csvs, err)
 	}
 }
 

@@ -676,7 +676,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 		if _, err := c.delete(csvPath(currentCSV.Name)); err != nil && !IsK8sError(err, 404) {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
-		recovery.csvRemoved = true
+		recovery.noteCSVRemoved(currentCSV.Name)
 		gone, err := waitForCSVGone(c, currentCSV.Name)
 		if err != nil {
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the current CSV to be deleted", Logs: logs}, err
@@ -1157,7 +1157,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		if _, err := c.delete(csvPath(csv.Name)); err != nil && !IsK8sError(err, 404) {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
-		recovery.csvRemoved = true
+		recovery.noteCSVRemoved(csv.Name)
 		gone, err := waitForCSVGone(c, csv.Name)
 		if err != nil {
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the current CSV to be deleted", Logs: logs}, err
@@ -1645,7 +1645,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		if _, csvDelErr := c.delete(csvPath(csv.Name)); csvDelErr != nil && !IsK8sError(csvDelErr, 404) {
 			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
 		}
-		recovery.csvRemoved = true
+		recovery.noteCSVRemoved(csv.Name)
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "success", Message: fmt.Sprintf("CSV %s deleted", csv.Name)})
 	}
 
