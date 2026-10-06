@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   CardBody,
+  CardFooter,
   CardHeader,
   CardTitle,
   Content,
@@ -13,15 +14,16 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
-  Label,
   List,
   ListItem,
   Stack,
   StackItem,
+  Title,
 } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import type { DashboardOverride } from "../types";
-import { formatRelativeTime } from "../utils";
+import { RelativeTime } from "./RelativeTime";
+import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
 
 export function flavorName(flavor?: string): string {
@@ -35,9 +37,7 @@ export function sessionTitle(o: Pick<DashboardOverride, "mode" | "prNumber" | "s
   return o.operatorPaused ? "dashboard-operator paused" : "Custom dashboard images";
 }
 
-const When: React.FC<{ at?: string }> = ({ at }) => (at
-  ? <time dateTime={at} title={new Date(at).toLocaleString()}>{formatRelativeTime(at)}</time>
-  : <>unknown</>);
+const When: React.FC<{ at?: string }> = ({ at }) => (at ? <RelativeTime date={at} size="inherit" /> : <>unknown</>);
 
 /**
  * Titled alerts for the backend's override warnings (B4). The backend sends
@@ -101,23 +101,24 @@ export const DashboardSessionPanel: React.FC<DashboardSessionPanelProps> = ({ ov
   const alerts = overrideAlerts(o);
   const title = sessionTitle(o);
   return (
-    <Card style={{ borderInlineStart: "4px solid var(--pf-t--global--color--status--warning--default)" }}>
-      <CardHeader>
-        <CardTitle component="h2">
-          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-            <FlexItem>Dashboard Dev session active: {title}</FlexItem>
-            {o.flavor && <FlexItem><Label isCompact color="blue">{flavorName(o.flavor)}</Label></FlexItem>}
-            {o.operatorPaused && <FlexItem><Label isCompact color="orange">Operator paused</Label></FlexItem>}
-          </Flex>
-        </CardTitle>
-        <Content component="small">Everyone using this cluster sees this dashboard until someone reverts.</Content>
+    <Card>
+      <CardHeader
+        actions={{
+          actions: (
+            <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+              {o.flavor && <FlexItem><TagLabel color="blue">{flavorName(o.flavor)}</TagLabel></FlexItem>}
+              {o.operatorPaused && <FlexItem><StatusLabel status="warning">Operator paused</StatusLabel></FlexItem>}
+            </Flex>
+          ),
+          hasNoOffset: true,
+        }}
+      >
+        <CardTitle><Title headingLevel="h2" size="lg">Dashboard Dev session active: {title}</Title></CardTitle>
       </CardHeader>
       <CardBody>
         <Stack hasGutter>
           <StackItem>
-            <TooltipButton variant={o.dashboardDeleting ? "danger" : "primary"} onClick={onRevert} isLoading={reverting} disabledReason={revertDisabledReason}>
-              Revert to default
-            </TooltipButton>
+            <Content component="p" className="pf-v6-u-text-color-subtle">Everyone using this cluster sees this dashboard until someone reverts.</Content>
           </StackItem>
           {alerts.map((a) => (
             <StackItem key={a.title}>
@@ -169,26 +170,31 @@ export const DashboardSessionPanel: React.FC<DashboardSessionPanelProps> = ({ ov
               )}
             </DescriptionList>
           </StackItem>
-          <StackItem>
-            <Flex gap={{ default: "gapMd" }}>
-              {o.mode === "pr" && o.prNumber ? (
-                <FlexItem>
-                  <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${o.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
-                    PR #{o.prNumber} on GitHub
-                  </Button>
-                </FlexItem>
-              ) : null}
-              {dashboardURL && (
-                <FlexItem>
-                  <Button variant="link" isInline component="a" href={dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
-                    Open the dashboard
-                  </Button>
-                </FlexItem>
-              )}
-            </Flex>
-          </StackItem>
         </Stack>
       </CardBody>
+      <CardFooter>
+        <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+          <FlexItem>
+            <TooltipButton variant={o.dashboardDeleting ? "danger" : "primary"} onClick={onRevert} isLoading={reverting} disabledReason={revertDisabledReason}>
+              Revert to default
+            </TooltipButton>
+          </FlexItem>
+          {o.mode === "pr" && o.prNumber ? (
+            <FlexItem>
+              <Button variant="link" component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${o.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+                PR #{o.prNumber} on GitHub
+              </Button>
+            </FlexItem>
+          ) : null}
+          {dashboardURL && (
+            <FlexItem>
+              <Button variant="link" component="a" href={dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+                Open the dashboard
+              </Button>
+            </FlexItem>
+          )}
+        </Flex>
+      </CardFooter>
     </Card>
   );
 };

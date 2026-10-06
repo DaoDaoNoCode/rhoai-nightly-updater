@@ -2,21 +2,21 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom";
 import {
   Alert,
-  Bullseye,
   Button,
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
   Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
   Flex,
   FlexItem,
-  FormGroup,
-  FormHelperText,
-  HelperText,
-  HelperTextItem,
-  Label,
   MenuToggle,
   PageSection,
+  Popover,
   SearchInput,
   Select,
   SelectList,
@@ -26,18 +26,23 @@ import {
   Stack,
   StackItem,
   Title,
-  ToggleGroup,
-  ToggleGroupItem,
   Toolbar,
   ToolbarContent,
+  ToolbarGroup,
   ToolbarItem,
+  ToolbarToggleGroup,
 } from "@patternfly/react-core";
-import { Table, Thead, Tbody, Tr, Th, Td, ExpandableRowContent } from "@patternfly/react-table";
+import { Table, Thead, Tbody, Tr, Th, Td, ExpandableRowContent, type IAction } from "@patternfly/react-table";
+import FilterIcon from "@patternfly/react-icons/dist/esm/icons/filter-icon";
+import HelpIcon from "@patternfly/react-icons/dist/esm/icons/help-icon";
 import type { NightlyTag } from "../types";
 import { ApiError, getBuildExplorerTags, toApiError } from "../services/api";
-import { formatRelativeTime } from "../utils";
 import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
+import { PageErrorState, PageLoading } from "../components/PageStates";
+import { RelativeTime } from "../components/RelativeTime";
+import { RowActions } from "../components/RowActions";
+import { TagLabel } from "../components/StatusLabel";
 import { ImageRef } from "../components/ImageRef";
 import { BuildContents } from "../components/BuildContents";
 import { BuildCompare, type BuildSide } from "../components/BuildCompare";
@@ -76,52 +81,65 @@ function compareTagsDesc(
 
 const INSTALLED_LABEL = "Installed";
 
-/** The installed build and whether its stream has a newer build (status.nightly, B5). */
-const InstalledBuildCard: React.FC<{
+const TYPE_LABELS: Record<string, string> = { all: "All types", ea: "EA builds", ga: "GA builds" };
+
+/** Copy a value; the clipboard may be blocked, which is not an error worth showing. */
+function copy(text: string): void {
+  void navigator.clipboard?.writeText(text).catch(() => {});
+}
+
+/** The installed build, under the page description (B5: status.nightly). */
+const InstalledBuildDetails: React.FC<{
   installed: InstalledBuild | null;
   statusLoaded: boolean;
   latest?: { image: string; buildDate?: string };
   updateAvailable?: boolean;
-  onCompare: (to: BuildSide) => void;
-}> = ({ installed, statusLoaded, latest, updateAvailable, onCompare }) => {
-  if (!statusLoaded) {
-    return <Card isCompact><CardBody><Skeleton width="40%" screenreaderText="Loading the installed build" /></CardBody></Card>;
-  }
+}> = ({ installed, statusLoaded, latest, updateAvailable }) => {
+  if (!statusLoaded) return <Skeleton width="24rem" screenreaderText="Loading the installed build" />;
   if (!installed) {
     return (
-      <Alert component="p" variant="info" isInline title="The installed build is unknown">
+      <Content component="p" className="pf-v6-u-text-color-subtle">
         RHOAI on this cluster was not installed from a nightly build, so there is no installed build to mark or compare with.
-      </Alert>
+      </Content>
     );
   }
   return (
-    <Card isCompact>
-      <CardBody>
-        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-          <FlexItem style={{ minWidth: 0 }}>
-            <Title headingLevel="h2" size="md">
-              Installed build: <code>{shortBuildRef(installed.image)}</code>
-            </Title>
-            <Content component="small">
-              {installed.buildDate && <>Built <time dateTime={installed.buildDate} title={new Date(installed.buildDate).toLocaleString()}>{formatRelativeTime(installed.buildDate)}</time>. </>}
+    <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "14ch" }} aria-label="Installed build">
+      <DescriptionListGroup>
+        <DescriptionListTerm>Installed build</DescriptionListTerm>
+        <DescriptionListDescription>
+          <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
+            <FlexItem><strong>{installed.tag}</strong></FlexItem>
+            <FlexItem><ImageRef image={installed.image} display={installed.digest.replace("sha256:", "").slice(0, 12)} what="installed image reference" /></FlexItem>
+            {installed.buildDate && <FlexItem><RelativeTime date={installed.buildDate} prefix="built " size="inherit" /></FlexItem>}
+            <FlexItem className="pf-v6-u-text-color-subtle">
               {updateAvailable === true && latest
-                ? <>A newer {installed.tag} build exists{latest.buildDate ? <> (built {formatRelativeTime(latest.buildDate)})</> : null}.</>
+                ? <>A newer {installed.tag} build exists{latest.buildDate ? <> (built <RelativeTime date={latest.buildDate} size="inherit" />)</> : null}.</>
                 : updateAvailable === false ? <>This is the newest {installed.tag} build.</> : null}
-            </Content>
-            <div style={{ maxWidth: "36rem" }}><ImageRef image={installed.image} what="installed image reference" /></div>
-          </FlexItem>
-          {updateAvailable === true && latest && (
-            <FlexItem>
-              <Button variant="primary" onClick={() => onCompare({ image: latest.image, label: `Latest ${installed.tag}`, buildDate: latest.buildDate })}>
-                Compare with the latest {installed.tag}
-              </Button>
             </FlexItem>
-          )}
-        </Flex>
-      </CardBody>
-    </Card>
+          </Flex>
+        </DescriptionListDescription>
+      </DescriptionListGroup>
+    </DescriptionList>
   );
 };
+
+/** Syntax help for the build search, behind a help icon next to the field. */
+const SearchHelp: React.FC = () => (
+  <Popover
+    headerContent="What you can search for"
+    bodyContent={
+      <Stack hasGutter>
+        <StackItem><code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code> shows that build.</StackItem>
+        <StackItem>A commit SHA (7 to 40 characters) lists the builds with a component built from it.</StackItem>
+        <StackItem><code>#123</code> or <code>PR 123</code> checks which builds contain that merged opendatahub-io/odh-dashboard PR.</StackItem>
+        <StackItem>Commit and PR searches cover the installed build and the builds the filters list.</StackItem>
+      </Stack>
+    }
+  >
+    <Button variant="plain" aria-label="Search help" icon={<HelpIcon />} />
+  </Popover>
+);
 
 export const BuildExplorerPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -137,6 +155,7 @@ export const BuildExplorerPage: React.FC = () => {
   const [versionFilter, setVersionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [versionSelectOpen, setVersionSelectOpen] = useState(false);
+  const [typeSelectOpen, setTypeSelectOpen] = useState(false);
 
   const [searchText, setSearchText] = useState("");
   const [submitted, setSubmitted] = useState<{ kind: ReturnType<typeof classifySearch>["kind"]; value: string; nonce: number; builds: SearchBuild[] } | null>(null);
@@ -226,7 +245,7 @@ export const BuildExplorerPage: React.FC = () => {
     setSubmitted((prev) => ({ kind, value, nonce: (prev?.nonce ?? 0) + 1, builds }));
   }, [installed, filteredTags]);
 
-  // ?image=... from the Dashboard's "Preview contents" link.
+  // ?image=... from the Status page's "View build contents" link.
   const urlImageApplied = useRef(false);
   useEffect(() => {
     if (urlImageApplied.current) return;
@@ -247,179 +266,202 @@ export const BuildExplorerPage: React.FC = () => {
     // Move focus to the comparison so keyboard and screen-reader users land on it.
     requestAnimationFrame(() => compareRef.current?.focus());
   };
+  const clearSearch = () => {
+    setSearchText("");
+    setSubmitted(null);
+  };
+  /** True for the installed build, whatever its label in a result list. */
+  const isInstalledImage = (image: string) => !!installed && imageDigest(image) === installed.digest;
+  const updateAvailable = status?.nightly?.updateAvailable;
+  const latest = status?.nightly?.latest;
 
   return (
     <>
-      <PageHeader title="Build Explorer" lastRefreshed={lastRefreshed} loading={loading} onRefresh={fetchTags} />
+      <PageHeader
+        title="Build Explorer"
+        description="Nightly builds on Quay: what each one contains, which builds include a commit or PR, and how they differ from the installed build."
+        lastRefreshed={lastRefreshed}
+        loading={loading}
+        onRefresh={fetchTags}
+        actions={installed && updateAvailable === true && latest ? (
+          <Button variant="primary" onClick={() => openCompare({ image: latest.image, label: `Latest ${installed.tag}`, buildDate: latest.buildDate })}>
+            Compare with the latest {installed.tag}
+          </Button>
+        ) : undefined}
+        details={
+          <InstalledBuildDetails
+            installed={installed}
+            statusLoaded={!!status || !statusLoading}
+            latest={latest}
+            updateAvailable={updateAvailable}
+          />
+        }
+      />
 
-      {error && <LoadErrorAlert error={error} genericTitle="Could not load the nightly builds" onRetry={fetchTags} stale={tags.length > 0} />}
+      {error && tags.length > 0 && <LoadErrorAlert error={error} genericTitle="Could not load the nightly builds" onRetry={fetchTags} stale />}
+      {error && tags.length === 0 && <PageErrorState error={error} title="Can't load the nightly builds" onRetry={fetchTags} />}
+      {loading && !tags.length && !error && <PageLoading title="Loading the nightly builds from Quay" />}
 
-      <PageSection>
-        <Stack hasGutter>
-          <StackItem>
-            <InstalledBuildCard
-              installed={installed}
-              statusLoaded={!!status || !statusLoading}
-              latest={status?.nightly?.latest}
-              updateAvailable={status?.nightly?.updateAvailable}
-              onCompare={openCompare}
-            />
-          </StackItem>
-
-          {compareTo && installedSide && (
-            <StackItem>
-              <div ref={compareRef} tabIndex={-1} aria-label="Build comparison" role="region">
-                <BuildCompare from={installedSide} to={compareTo} onClose={() => setCompareTo(null)} />
-              </div>
-            </StackItem>
-          )}
-
-          <StackItem>
-            <Card isCompact>
-              <CardBody>
-                <FormGroup label="Find a build" fieldId="build-search">
-                  <SearchInput
-                    id="build-search"
-                    placeholder="Image reference, commit SHA, or PR number (#123)"
-                    value={searchText}
-                    onChange={(_e, val) => setSearchText(val)}
-                    onSearch={(_e, val) => submitSearch(val)}
-                    onClear={() => { setSearchText(""); setSubmitted(null); }}
-                    aria-label="Find a build by image reference, commit SHA or PR number"
-                    aria-describedby="build-search-help"
-                  />
-                  <FormHelperText>
-                    <HelperText id="build-search-help">
-                      <HelperTextItem>
-                        <code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code> shows that build. A commit SHA (7-40 characters) lists the builds with a component built from it.
-                        {" "}<code>#123</code> or <code>PR 123</code> checks which builds contain that merged opendatahub-io/odh-dashboard PR.
-                      </HelperTextItem>
-                    </HelperText>
-                  </FormHelperText>
-                </FormGroup>
-                <SearchResults
-                  submitted={submitted}
-                  commitSearch={commitSearch}
-                  prSearch={prSearch}
-                  canCompare={!!installedSide}
-                  onCompare={openCompare}
-                  onRetry={retrySearch}
-                />
-              </CardBody>
-            </Card>
-          </StackItem>
-        </Stack>
-      </PageSection>
-
-      {loading && !tags.length && !error && (
+      {compareTo && installedSide && (
         <PageSection>
-          <Bullseye>
-            <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-              <FlexItem><Spinner size="xl" aria-label="Loading tags" /></FlexItem>
-              <FlexItem><Content component="p">Fetching nightly build tags from Quay...</Content></FlexItem>
-            </Flex>
-          </Bullseye>
+          <div ref={compareRef} tabIndex={-1} aria-label="Build comparison" role="region">
+            <BuildCompare from={installedSide} to={compareTo} onClose={() => setCompareTo(null)} />
+          </div>
         </PageSection>
       )}
 
-      {tags.length > 0 && (
-        <PageSection>
+      {(tags.length > 0 || submitted) && (
+        <PageSection isFilled>
           <Card>
-            <CardTitle>
-              <Title headingLevel="h2" size="lg">Latest builds per tag</Title>
-            </CardTitle>
+            <CardHeader>
+              <CardTitle><Title headingLevel="h2" size="lg">Nightly builds</Title></CardTitle>
+            </CardHeader>
             <CardBody>
-              <Toolbar>
-                <ToolbarContent>
-                  <ToolbarItem>
-                    <Select
-                      isOpen={versionSelectOpen}
-                      onOpenChange={setVersionSelectOpen}
-                      onSelect={(_e, val) => { setVersionFilter(val as string); setVersionSelectOpen(false); }}
-                      selected={versionFilter}
-                      toggle={(toggleRef) => (
-                        <MenuToggle ref={toggleRef} onClick={() => setVersionSelectOpen(!versionSelectOpen)} isExpanded={versionSelectOpen} aria-label="Version filter">
-                          {versionFilter === "all" ? "All versions" : `v${versionFilter}.x`}
-                        </MenuToggle>
-                      )}
-                    >
-                      <SelectList aria-label="Version filter">
-                        <SelectOption value="all">All versions</SelectOption>
-                        {versionSeries.map((s) => <SelectOption key={s} value={s}>v{s}.x</SelectOption>)}
-                      </SelectList>
-                    </Select>
+              <Toolbar inset={{ default: "insetNone" }} clearAllFilters={() => { setVersionFilter("all"); setTypeFilter("all"); }}>
+                <ToolbarContent alignItems="center">
+                  <ToolbarItem className="pf-v6-u-w-100 pf-v6-u-w-33-on-lg">
+                    <SearchInput
+                      id="build-search"
+                      placeholder="Image, commit SHA or PR #"
+                      value={searchText}
+                      onChange={(_e, val) => setSearchText(val)}
+                      onSearch={(_e, val) => submitSearch(val)}
+                      onClear={clearSearch}
+                      aria-label="Find a build by image reference, commit SHA or PR number"
+                    />
                   </ToolbarItem>
-                  <ToolbarItem>
-                    <ToggleGroup aria-label="Type filter" isCompact>
-                      <ToggleGroupItem text="All" isSelected={typeFilter === "all"} onChange={() => setTypeFilter("all")} />
-                      <ToggleGroupItem text="EA" isSelected={typeFilter === "ea"} onChange={() => setTypeFilter("ea")} />
-                      <ToggleGroupItem text="GA" isSelected={typeFilter === "ga"} onChange={() => setTypeFilter("ga")} />
-                    </ToggleGroup>
-                  </ToolbarItem>
-                  <ToolbarItem alignSelf="center">
-                    <Content component="small">{filteredTags.length} of {tags.length} tags</Content>
+                  <ToolbarItem><SearchHelp /></ToolbarItem>
+                  <ToolbarToggleGroup toggleIcon={<FilterIcon />} breakpoint="md">
+                    <ToolbarGroup variant="filter-group">
+                      <ToolbarItem>
+                        <Select
+                          isOpen={versionSelectOpen}
+                          onOpenChange={setVersionSelectOpen}
+                          onSelect={(_e, val) => { setVersionFilter(val as string); setVersionSelectOpen(false); }}
+                          selected={versionFilter}
+                          toggle={(toggleRef) => (
+                            <MenuToggle ref={toggleRef} onClick={() => setVersionSelectOpen(!versionSelectOpen)} isExpanded={versionSelectOpen} aria-label="Version filter">
+                              {versionFilter === "all" ? "All versions" : `v${versionFilter}.x`}
+                            </MenuToggle>
+                          )}
+                        >
+                          <SelectList aria-label="Version filter">
+                            <SelectOption value="all">All versions</SelectOption>
+                            {versionSeries.map((v) => <SelectOption key={v} value={v}>v{v}.x</SelectOption>)}
+                          </SelectList>
+                        </Select>
+                      </ToolbarItem>
+                      <ToolbarItem>
+                        <Select
+                          isOpen={typeSelectOpen}
+                          onOpenChange={setTypeSelectOpen}
+                          onSelect={(_e, val) => { setTypeFilter(val as string); setTypeSelectOpen(false); }}
+                          selected={typeFilter}
+                          toggle={(toggleRef) => (
+                            <MenuToggle ref={toggleRef} onClick={() => setTypeSelectOpen(!typeSelectOpen)} isExpanded={typeSelectOpen} aria-label="Type filter">
+                              {TYPE_LABELS[typeFilter]}
+                            </MenuToggle>
+                          )}
+                        >
+                          <SelectList aria-label="Type filter">
+                            {Object.entries(TYPE_LABELS).map(([id, label]) => <SelectOption key={id} value={id}>{label}</SelectOption>)}
+                          </SelectList>
+                        </Select>
+                      </ToolbarItem>
+                    </ToolbarGroup>
+                  </ToolbarToggleGroup>
+                  <ToolbarItem variant="pagination" align={{ default: "alignEnd" }}>
+                    <span className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">
+                      {submitted ? "Search results" : <>{filteredTags.length} of {tags.length} tags</>}
+                    </span>
                   </ToolbarItem>
                 </ToolbarContent>
               </Toolbar>
-              <Table aria-label="Nightly builds" variant="compact">
-                <Thead>
-                  <Tr>
-                    <Th screenReaderText="Expand row" />
-                    <Th>Tag</Th>
-                    <Th>Type</Th>
-                    <Th>Built</Th>
-                    <Th>Digest</Th>
-                    <Th screenReaderText="Actions" />
-                  </Tr>
-                </Thead>
-                {filteredTags.map((tag, rowIndex) => {
-                  const key = tag.tag;
-                  const isExpanded = !!expandedRows[key];
-                  const parsed = parseTagVersion(tag.tag);
-                  const isEA = !!parsed && parsed.ea >= 0;
-                  const isInstalled = !!installed && imageDigest(tag.image) === installed.digest;
-                  const isNewerThanInstalled = !!installed && !isInstalled && status?.nightly?.updateAvailable === true && installed.tag === tag.tag;
-                  return (
-                    <Tbody key={key} isExpanded={isExpanded}>
-                      <Tr>
-                        <Td expand={{ rowIndex, isExpanded, onToggle: () => setExpandedRows((prev) => ({ ...prev, [key]: !prev[key] })) }} />
-                        <Td dataLabel="Tag" id={`simple-node${rowIndex}`} modifier="nowrap">
-                          <strong>{tag.tag}</strong>
-                          {isInstalled && <>{" "}<Label isCompact color="green">Installed</Label></>}
-                          {isNewerThanInstalled && <>{" "}<Label isCompact color="blue">Newer than installed</Label></>}
-                        </Td>
-                        <Td dataLabel="Type">
-                          <Label isCompact color={isEA ? "orange" : "grey"}>
-                            {isEA ? (tag.tag.endsWith("-ea") ? "EA" : `EA ${parsed?.ea}`) : "GA"}
-                          </Label>
-                        </Td>
-                        <Td dataLabel="Built">
-                          {datesLoading && !tag.buildDate ? (
-                            <Skeleton width="4rem" screenreaderText="Loading build date" />
-                          ) : tag.buildDate ? (
-                            <Content component="small"><time dateTime={tag.buildDate} title={new Date(tag.buildDate).toLocaleString()}>{formatRelativeTime(tag.buildDate)}</time></Content>
-                          ) : <Content component="small">-</Content>}
-                        </Td>
-                        <Td dataLabel="Digest"><ImageRef image={tag.image} display={imageDigest(tag.image).slice(0, 19) || tag.image} /></Td>
-                        <Td dataLabel="Actions" modifier="nowrap">
-                          {installedSide && !isInstalled && (
-                            <Button variant="secondary" size="sm" onClick={() => openCompare({ image: tag.image, label: tag.tag, buildDate: tag.buildDate })} aria-label={`Compare ${tag.tag} with the installed build`}>
-                              Compare with installed
-                            </Button>
-                          )}
-                        </Td>
-                      </Tr>
-                      <Tr isExpanded={isExpanded}>
-                        <Td colSpan={6}>
-                          <ExpandableRowContent>
-                            {isExpanded && <BuildContents image={tag.image} title={tag.tag} />}
-                          </ExpandableRowContent>
-                        </Td>
-                      </Tr>
-                    </Tbody>
-                  );
-                })}
-              </Table>
+
+              {submitted ? (
+                <Stack hasGutter>
+                  <StackItem>
+                    <SearchResults
+                      submitted={submitted}
+                      commitSearch={commitSearch}
+                      prSearch={prSearch}
+                      canCompare={!!installedSide}
+                      isInstalledImage={isInstalledImage}
+                      onCompare={openCompare}
+                      onRetry={retrySearch}
+                    />
+                  </StackItem>
+                  <StackItem>
+                    <Button variant="link" onClick={clearSearch}>Clear the search and show all builds</Button>
+                  </StackItem>
+                </Stack>
+              ) : (
+                <Table aria-label="Nightly builds" variant="compact" gridBreakPoint="grid-md">
+                  <Thead>
+                    <Tr>
+                      <Th screenReaderText="Expand row" />
+                      <Th width={30}>Tag</Th>
+                      <Th modifier="fitContent">Type</Th>
+                      <Th modifier="nowrap">Built</Th>
+                      <Th>Digest</Th>
+                      <Th screenReaderText="Actions" />
+                    </Tr>
+                  </Thead>
+                  {filteredTags.map((tag, rowIndex) => {
+                    const key = tag.tag;
+                    const isExpanded = !!expandedRows[key];
+                    const parsed = parseTagVersion(tag.tag);
+                    const isEA = !!parsed && parsed.ea >= 0;
+                    const isInstalled = isInstalledImage(tag.image);
+                    const isNewerThanInstalled = !!installed && !isInstalled && updateAvailable === true && installed.tag === tag.tag;
+                    const toggle = () => setExpandedRows((prev) => ({ ...prev, [key]: !prev[key] }));
+                    const actions: IAction[] = [
+                      ...(installedSide && !isInstalled
+                        ? [{ title: "Compare with installed", onClick: () => openCompare({ image: tag.image, label: tag.tag, buildDate: tag.buildDate }) }]
+                        : []),
+                      { title: isExpanded ? "Hide contents" : "View contents", onClick: toggle },
+                      { title: "Copy image reference", onClick: () => copy(tag.image) },
+                    ];
+                    return (
+                      <Tbody key={key} isExpanded={isExpanded}>
+                        <Tr>
+                          <Td expand={{ rowIndex, isExpanded, onToggle: toggle }} />
+                          <Td dataLabel="Tag" id={`simple-node${rowIndex}`}>
+                            <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                              <strong>{tag.tag}</strong>
+                              {isInstalled && <span><TagLabel color="blue">Installed</TagLabel></span>}
+                              {isNewerThanInstalled && <span><TagLabel color="teal">Newer than installed</TagLabel></span>}
+                            </Flex>
+                          </Td>
+                          <Td dataLabel="Type" modifier="fitContent">
+                            <span>
+                              <TagLabel color={isEA ? "purple" : "grey"}>
+                                {isEA ? (tag.tag.endsWith("-ea") ? "EA" : `EA ${parsed?.ea}`) : "GA"}
+                              </TagLabel>
+                            </span>
+                          </Td>
+                          <Td dataLabel="Built" modifier="nowrap">
+                            {datesLoading && !tag.buildDate ? (
+                              <Skeleton width="4rem" screenreaderText="Loading build date" />
+                            ) : tag.buildDate ? (
+                              <RelativeTime date={tag.buildDate} />
+                            ) : <span className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">Unknown</span>}
+                          </Td>
+                          <Td dataLabel="Digest"><ImageRef image={tag.image} display={imageDigest(tag.image).replace("sha256:", "").slice(0, 12) || tag.image} /></Td>
+                          <Td isActionCell><RowActions items={actions} rowName={tag.tag} /></Td>
+                        </Tr>
+                        <Tr isExpanded={isExpanded}>
+                          <Td colSpan={6}>
+                            <ExpandableRowContent>
+                              {isExpanded && <BuildContents image={tag.image} title={tag.tag} />}
+                            </ExpandableRowContent>
+                          </Td>
+                        </Tr>
+                      </Tbody>
+                    );
+                  })}
+                </Table>
+              )}
             </CardBody>
           </Card>
         </PageSection>
@@ -429,20 +471,16 @@ export const BuildExplorerPage: React.FC = () => {
 };
 
 const SearchResults: React.FC<{
-  submitted: { kind: string; value: string; nonce: number; builds: SearchBuild[] } | null;
+  submitted: { kind: string; value: string; nonce: number; builds: SearchBuild[] };
   commitSearch: ReturnType<typeof useCommitSearch>;
   prSearch: ReturnType<typeof usePRSearch>;
   canCompare: boolean;
+  isInstalledImage: (image: string) => boolean;
   onCompare: (to: BuildSide) => void;
   onRetry: () => void;
-}> = ({ submitted, commitSearch, prSearch, canCompare, onCompare, onRetry }) => {
-  if (!submitted) return null;
+}> = ({ submitted, commitSearch, prSearch, canCompare, isInstalledImage, onCompare, onRetry }) => {
   if (submitted.kind === "image") {
-    return (
-      <div style={{ marginTop: "var(--pf-t--global--spacer--md)" }}>
-        <BuildContents key={`${submitted.value}|${submitted.nonce}`} image={submitted.value} title="the searched build" />
-      </div>
-    );
+    return <BuildContents key={`${submitted.value}|${submitted.nonce}`} image={submitted.value} title="the searched build" />;
   }
   if (submitted.kind === "pr") {
     return (
@@ -451,8 +489,8 @@ const SearchResults: React.FC<{
         pr={submitted.value}
         search={prSearch}
         plannedTotal={submitted.builds.length}
-        installedLabel={INSTALLED_LABEL}
         canCompare={canCompare}
+        isInstalledImage={isInstalledImage}
         onCompare={onCompare}
         onRetry={onRetry}
       />
@@ -460,7 +498,7 @@ const SearchResults: React.FC<{
   }
   if (submitted.kind === "invalid") {
     return (
-      <Alert component="p" variant="warning" isInline isLiveRegion title="Not a build reference, commit SHA or PR number" style={{ marginTop: "var(--pf-t--global--spacer--md)" }}>
+      <Alert component="p" variant="warning" isInline isLiveRegion title="Not a build reference, commit SHA or PR number">
         Enter an image reference such as quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:..., a commit SHA of 7 to 40 hex characters, or a PR number such as #123.
       </Alert>
     );
@@ -471,38 +509,44 @@ const SearchResults: React.FC<{
   const total = commitSearch.total || submitted.builds.length;
   const running = commitSearch.running || commitSearch.total === 0;
   return (
-    <div style={{ marginTop: "var(--pf-t--global--spacer--md)" }}>
-      <Content component="p" aria-live="polite">
-        {running ? <><Spinner size="sm" aria-label="Searching builds" />{" "}Checked {checked} of {total} builds for commit <code>{short}</code>...</>
-          : <>Checked {total} builds: {matches.length === 0 ? "no build has a component built from" : `${matches.length} ${matches.length === 1 ? "build has" : "builds have"} a component built from`} commit <code>{short}</code>.</>}
-      </Content>
-      <Content component="small">
-        The search covers the installed build and the builds listed below (use the filters to narrow it). It matches the exact
-        commit a component was built from; later builds also contain that commit but are not listed.
-      </Content>
+    <Stack hasGutter>
+      <StackItem>
+        <Content component="p" aria-live="polite">
+          {running ? <><Spinner size="sm" aria-label="Searching builds" />{" "}Checked {checked} of {total} builds for commit <code>{short}</code>...</>
+            : <>Checked {total} builds: {matches.length === 0 ? "no build has a component built from" : `${matches.length} ${matches.length === 1 ? "build has" : "builds have"} a component built from`} commit <code>{short}</code>. Later builds also contain the commit but are not listed.</>}
+        </Content>
+      </StackItem>
       {matches.length > 0 && (
-        <Table aria-label={`Builds with a component built from ${short}`} variant="compact">
-          <Thead><Tr><Th>Build</Th><Th>Components built from this commit</Th><Th screenReaderText="Actions" /></Tr></Thead>
-          <Tbody>
-            {matches.map((m) => (
-              <Tr key={m.build.image}>
-                <Td dataLabel="Build"><strong>{m.build.label}</strong></Td>
-                <Td dataLabel="Components">{m.images.map((i) => i.name).join(", ")}</Td>
-                <Td dataLabel="Actions" modifier="nowrap">
-                  {canCompare && !m.build.label.startsWith(INSTALLED_LABEL) && (
-                    <Button variant="secondary" size="sm" onClick={() => onCompare({ image: m.build.image, label: m.build.label })}>Compare with installed</Button>
-                  )}
-                </Td>
-              </Tr>
-            ))}
-          </Tbody>
-        </Table>
+        <StackItem>
+          <Table aria-label={`Builds with a component built from ${short}`} variant="compact">
+            <Thead><Tr><Th width={25}>Build</Th><Th>Components built from this commit</Th><Th screenReaderText="Actions" /></Tr></Thead>
+            <Tbody>
+              {matches.map((m) => (
+                <Tr key={m.build.image}>
+                  <Td dataLabel="Build"><strong>{m.build.label}</strong></Td>
+                  <Td dataLabel="Components">{m.images.map((i) => i.name).join(", ")}</Td>
+                  <Td isActionCell>
+                    <RowActions
+                      rowName={m.build.label}
+                      items={[
+                        ...(canCompare && !isInstalledImage(m.build.image) ? [{ title: "Compare with installed", onClick: () => onCompare({ image: m.build.image, label: m.build.label }) }] : []),
+                        { title: "Copy image reference", onClick: () => copy(m.build.image) },
+                      ]}
+                    />
+                  </Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        </StackItem>
       )}
       {failures.length > 0 && !running && (
-        <Alert component="p" variant="warning" isInline isPlain title={`${failures.length} builds could not be read`}>
-          {failures.map((f) => `${f.build.label}: ${f.message}`).join("; ")}
-        </Alert>
+        <StackItem>
+          <Alert component="p" variant="warning" isInline isPlain title={`${failures.length} builds could not be read`}>
+            {failures.map((f) => `${f.build.label}: ${f.message}`).join("; ")}
+          </Alert>
+        </StackItem>
       )}
-    </div>
+    </Stack>
   );
 };

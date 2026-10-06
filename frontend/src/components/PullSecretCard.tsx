@@ -1,33 +1,28 @@
 import React, { useState } from "react";
 import {
+  ActionList,
+  ActionListItem,
   Alert,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   Content,
   Flex,
   FlexItem,
-  GridItem,
   HelperText,
   HelperTextItem,
-  Icon,
   InputGroup,
   InputGroupItem,
-  Label,
   Stack,
   StackItem,
   TextInput,
 } from "@patternfly/react-core";
 import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
-import KeyIcon from "@patternfly/react-icons/dist/esm/icons/key-icon";
 import type { OperationResponse, PullSecretInfo } from "../types";
 import { createPullSecret, testPullSecret, toApiError } from "../services/api";
 import { describeError } from "../errors";
 import { sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
+import { StatusLabel } from "./StatusLabel";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 import { errorResult } from "../outcomes";
 
@@ -42,9 +37,11 @@ export const isValidBase64Auth = (value: string): boolean => {
   }
 };
 
-interface PullSecretCardProps {
+interface PullSecretSetupProps {
   pullSecret: PullSecretInfo;
   onStatusRefresh?: () => void;
+  /** id of the row title, for the row's aria-labelledby. */
+  titleId?: string;
 }
 
 const CREDENTIALS_HELP = (
@@ -54,9 +51,11 @@ const CREDENTIALS_HELP = (
   </>
 );
 
-export const PullSecretCard: React.FC<PullSecretCardProps> = ({
+/** The pull secret row of the cluster setup: its state, Test with Quay, and the create or replace form. */
+export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   pullSecret,
   onStatusRefresh,
+  titleId = "pull-secret-title",
 }) => {
   // The unified gate (permissions, session, this tab's stream, the backend
   // lock). Saving the secret repairs an install, so OLM still installing
@@ -114,7 +113,7 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
   const form = (
     <Stack hasGutter>
       <StackItem>
-        <Content component="small">{CREDENTIALS_HELP}</Content>
+        <Content component="p" className="pf-v6-u-font-size-sm">{CREDENTIALS_HELP}</Content>
       </StackItem>
       <StackItem>
         <InputGroup>
@@ -136,9 +135,8 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
               variant="control"
               onClick={() => setShowSecret(!showSecret)}
               aria-label={showSecret ? "Hide token" : "Show token"}
-            >
-              {showSecret ? <EyeSlashIcon /> : <EyeIcon />}
-            </Button>
+              icon={showSecret ? <EyeSlashIcon /> : <EyeIcon />}
+            />
           </InputGroupItem>
         </InputGroup>
         <HelperText id="pull-secret-token-help">
@@ -150,7 +148,6 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
       <StackItem>
         <TooltipButton
           variant={pullSecret.exists ? "secondary" : "primary"}
-          size="sm"
           onClick={handleSave}
           isLoading={authLoading}
           isDisabled={authLoading}
@@ -163,96 +160,77 @@ export const PullSecretCard: React.FC<PullSecretCardProps> = ({
   );
 
   return (
-    <GridItem lg={6} md={6} sm={12}>
-      <Card isFullHeight isCompact>
-        <CardHeader>
-          <CardTitle>
-            <Flex
-              alignItems={{ default: "alignItemsCenter" }}
-              justifyContent={{ default: "justifyContentSpaceBetween" }}
-              flexWrap={{ default: "nowrap" }}
-            >
-              <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }} flexWrap={{ default: "nowrap" }}>
-                <FlexItem>
-                  <Icon><KeyIcon /></Icon>
-                </FlexItem>
-                <FlexItem>Pull secret</FlexItem>
-              </Flex>
-              <FlexItem>
-                {pullSecret.exists && pullSecret.valid
-                  ? <Label color="green" variant="outline" isCompact>Ready</Label>
-                  : pullSecret.exists
-                    ? <Label status="warning" variant="outline" isCompact>Invalid</Label>
-                    : <Label status="danger" variant="outline" isCompact>Missing</Label>}
-              </FlexItem>
-            </Flex>
-          </CardTitle>
-        </CardHeader>
-        <CardBody>
-          <Stack hasGutter>
+    <Stack hasGutter>
+      <StackItem>
+        <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+          <FlexItem><strong id={titleId}>Pull secret</strong></FlexItem>
+          <FlexItem>
+            {pullSecret.exists && pullSecret.valid
+              ? <StatusLabel status="success">Ready</StatusLabel>
+              : pullSecret.exists
+                ? <StatusLabel status="warning">Invalid</StatusLabel>
+                : <StatusLabel status="danger">Missing</StatusLabel>}
+          </FlexItem>
+        </Flex>
+        <Content component="p" className="pf-v6-u-text-color-subtle">Credentials the cluster uses to pull nightly images from quay.io/rhoai.</Content>
+      </StackItem>
+
+      {invalid && (
+        <StackItem>
+          <Alert variant="warning" isInline isPlain component="p" title="The cluster can't pull nightly images with this secret">
+            {sentence(pullSecret.detail || "The secret has no usable quay.io/rhoai entry")} Replace the token below.
+          </Alert>
+        </StackItem>
+      )}
+
+      {pullSecret.exists ? (
+        <>
+          <StackItem>
+            <ActionList>
+              <ActionListItem>
+                <Button variant="secondary" onClick={handleTest} isLoading={testLoading} isDisabled={testLoading}>
+                  Test with Quay
+                </Button>
+              </ActionListItem>
+              <ActionListItem>
+                <Button variant="link" onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
+                  {replaceOpen ? "Cancel replacing" : "Replace token"}
+                </Button>
+              </ActionListItem>
+            </ActionList>
+          </StackItem>
+          {testResult && (
             <StackItem>
-              <Content component="small">Credentials the cluster uses to pull nightly images from quay.io/rhoai.</Content>
+              <Alert
+                component="p"
+                variant={testResult.success ? "success" : "danger"}
+                title={testResult.success ? "Quay accepts the pull secret" : "Quay rejected the pull secret"}
+                isInline
+                isPlain
+                isLiveRegion
+              >
+                {testResult.message}
+              </Alert>
             </StackItem>
+          )}
+          {replaceOpen && <StackItem>{form}</StackItem>}
+        </>
+      ) : (
+        <StackItem>{form}</StackItem>
+      )}
 
-            {invalid && (
-              <StackItem>
-                <Alert variant="warning" isInline isPlain component="p" title="The cluster can't pull nightly images with this secret">
-                  {sentence(pullSecret.detail || "The secret has no usable quay.io/rhoai entry")} Replace the token below.
-                </Alert>
-              </StackItem>
-            )}
-
-            {pullSecret.exists ? (
-              <>
-                <StackItem>
-                  <Flex gap={{ default: "gapSm" }}>
-                    <FlexItem>
-                      <Button variant="secondary" size="sm" onClick={handleTest} isLoading={testLoading} isDisabled={testLoading}>
-                        Test with Quay
-                      </Button>
-                    </FlexItem>
-                    <FlexItem>
-                      <Button variant="link" size="sm" onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
-                        {replaceOpen ? "Cancel replacing" : "Replace token"}
-                      </Button>
-                    </FlexItem>
-                  </Flex>
-                </StackItem>
-                {testResult && (
-                  <StackItem>
-                    <Alert
-                      component="p"
-                      variant={testResult.success ? "success" : "danger"}
-                      title={testResult.success ? "Quay accepts the pull secret" : "Quay rejected the pull secret"}
-                      isInline
-                      isPlain
-                      isLiveRegion
-                    >
-                      {testResult.message}
-                    </Alert>
-                  </StackItem>
-                )}
-                {replaceOpen && <StackItem>{form}</StackItem>}
-              </>
-            ) : (
-              <StackItem>{form}</StackItem>
-            )}
-
-            {authResult && (
-              <StackItem>
-                <Alert
-                  component="p"
-                  variant={authResult.success ? "success" : "danger"}
-                  title={authResult.message}
-                  isInline
-                  isPlain
-                  isLiveRegion
-                />
-              </StackItem>
-            )}
-          </Stack>
-        </CardBody>
-      </Card>
-    </GridItem>
+      {authResult && (
+        <StackItem>
+          <Alert
+            component="p"
+            variant={authResult.success ? "success" : "danger"}
+            title={authResult.message}
+            isInline
+            isPlain
+            isLiveRegion
+          />
+        </StackItem>
+      )}
+    </Stack>
   );
 };

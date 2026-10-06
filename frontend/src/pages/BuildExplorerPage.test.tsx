@@ -10,6 +10,9 @@ vi.mock("../state/AppState", () => ({
   useClusterStatus: () => ({ status: statusRef.current, loading: false, error: null, lastRefreshed: null, refresh: async () => {} }),
 }));
 
+// The app-wide notices need the AppInfo provider; they are tested on their own.
+vi.mock("../components/GlobalBanners", () => ({ GlobalBanners: () => null }));
+
 const { BuildExplorerPage } = await import("./BuildExplorerPage");
 
 const FBC = "quay.io/rhoai/rhoai-fbc-fragment";
@@ -74,8 +77,9 @@ describe("Build Explorer installed build and compare (A08-5)", () => {
   it("names the installed build and marks the newer build of its stream", async () => {
     setup();
     renderPage();
-    expect(await screen.findByText(/Installed build:/)).toBeInTheDocument();
-    expect(screen.getByText("rhoai-3.6 @ 4444444")).toBeInTheDocument();
+    const installedBuild = (await screen.findByText("Installed build")).closest(".pf-v6-c-description-list__group") as HTMLElement;
+    expect(within(installedBuild).getByText("rhoai-3.6")).toBeInTheDocument();
+    expect(within(installedBuild).getByText("444444444444")).toBeInTheDocument();
     await screen.findByRole("grid", { name: "Nightly builds" });
     expect(within(tagRow("rhoai-3.6")).getByText("Newer than installed")).toBeInTheDocument();
     expect(within(tagRow("rhoai-3.5")).queryByText("Newer than installed")).not.toBeInTheDocument();
@@ -94,8 +98,8 @@ describe("Build Explorer installed build and compare (A08-5)", () => {
     setup();
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Compare with the latest rhoai-3.6" }));
-    expect(await screen.findByText("1 repositories with new commits")).toBeInTheDocument();
-    expect(screen.getByText("1 unchanged")).toBeInTheDocument();
+    expect(await screen.findByText(/1 repository with new commits/)).toBeInTheDocument();
+    expect(screen.getByText(/· 1 unchanged$/)).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Repositories that differ" });
     expect(within(table).getByText("red-hat-data-services/odh-dashboard")).toBeInTheDocument();
     expect(within(table).getByRole("link", { name: /Compare red-hat-data-services\/odh-dashboard/ }))
@@ -108,7 +112,7 @@ describe("Build Explorer installed build and compare (A08-5)", () => {
     statusRef.current = { subscription: { name: "rhods-operator", source: "redhat-operators", channel: "stable", state: "" }, catalogSource: { exists: false, name: "", image: "", state: "" } };
     setup();
     renderPage();
-    expect(await screen.findByText("The installed build is unknown")).toBeInTheDocument();
+    expect(await screen.findByText(/was not installed from a nightly build/)).toBeInTheDocument();
     await screen.findByRole("grid", { name: "Nightly builds" });
     expect(screen.queryByRole("button", { name: /Compare .* with the installed build/ })).not.toBeInTheDocument();
   });
@@ -179,11 +183,36 @@ describe("Build Explorer search", () => {
       ["rhoai-3.6-ea.2", "Does not contain"],
       ["rhoai-3.5", "Contains PR #9938"],
     ]);
-    expect(within(rows[1]).getByRole("link", { name: /GitHub comparison of PR #9938's merge commit with rhoai-3.6/ }))
-      .toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...a3b6b581b465f97f8701f220efadcf8787879dde`);
     expect(within(rows[1]).getByRole("link", { name: "a3b6b58" })).toHaveAttribute("href", "https://github.com/red-hat-data-services/odh-dashboard/commit/a3b6b581b465f97f8701f220efadcf8787879dde");
-    expect(within(rows[0]).queryByRole("button", { name: "Compare with installed" })).not.toBeInTheDocument();
-    expect(within(rows[1]).getByRole("button", { name: "Compare with installed" })).toBeInTheDocument();
+    // The row actions are in a menu: the installed build is never offered "Compare with installed".
+    fireEvent.click(within(rows[0]).getByRole("button", { name: /Actions for Installed/ }));
+    expect(screen.queryByRole("menuitem", { name: "Compare with installed" })).not.toBeInTheDocument();
+    fireEvent.click(within(rows[0]).getByRole("button", { name: /Actions for Installed/ }));
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Actions for rhoai-3.6" }));
+    expect(screen.getByRole("menuitem", { name: /GitHub comparison of PR #9938's merge commit with rhoai-3.6/ }))
+      .toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...a3b6b581b465f97f8701f220efadcf8787879dde`);
+    expect(screen.getByRole("menuitem", { name: "Compare with installed" })).toBeInTheDocument();
+  });
+
+  it("never offers to compare the installed build with itself when it is one of the listed tags", async () => {
+    // The installed build is the newest rhoai-3.6, so it is listed under its tag, not as "Installed (...)".
+    statusRef.current!.nightly = { installed: { image: LATEST, tag: "rhoai-3.6", digest: `sha256:${"0".repeat(64)}` }, updateAvailable: false };
+    setup({
+      "/api/build-explorer/contains": async (url: string) => {
+        const image = new URL(url, "http://x").searchParams.get("image")!;
+        return jsonResponse({ repo: "opendatahub-io/odh-dashboard", pr: 1, mergeCommit: "f".repeat(40), builds: [{ image, result: "contains" }] });
+      },
+    });
+    renderPage();
+    await screen.findByRole("grid", { name: "Nightly builds" });
+    const box = screen.getByRole("textbox", { name: /Find a build/ });
+    fireEvent.change(box, { target: { value: "#1" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText(/Checked 3 builds: 3 contain PR #1/)).toBeInTheDocument();
+    // No GitHub link and no compare: the installed row has no actions at all.
+    expect(screen.queryByRole("button", { name: "Actions for rhoai-3.6" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for rhoai-3.5" }));
+    expect(screen.getByRole("menuitem", { name: "Compare with installed" })).toBeInTheDocument();
   });
 
   it("a PR that is not merged stops after one request and says so", async () => {
@@ -241,15 +270,14 @@ describe("Build Explorer rows (A08-9, A08-12)", () => {
     expect(within(table).getByText("Loading commit of odh_dashboard_image")).toBeInTheDocument();
     labels.resolve();
     await waitFor(() => expect(within(table).getByText("eeeeeee")).toBeInTheDocument());
-    const all = screen.getByRole("button", { name: "All (1)" });
-    expect(all).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Core (1)" })).toHaveAttribute("aria-pressed", "true");
+    // Core is the default category; the select says so, with its count.
+    expect(screen.getByRole("button", { name: "Category for rhoai-3.5: Core" })).toHaveTextContent("1");
   });
 
   it("a Quay error is classified, never shown as a missing pull secret (A08-6)", async () => {
     stubApi({ "/api/build-explorer/tags": () => jsonResponse({ error: "Quay token request returned HTTP 401", errorCode: "registry_auth" }, 502) });
     renderPage();
-    expect(await screen.findByText("Quay rejected the pull secret")).toBeInTheDocument();
+    expect(await screen.findByText(/^Quay rejected the pull secret/)).toBeInTheDocument();
     expect(screen.queryByText(/Pull secret not configured/)).not.toBeInTheDocument();
   });
 });

@@ -2,7 +2,7 @@ import React from "react";
 import { ClipboardCopy } from "@patternfly/react-core";
 
 interface ImageRefProps {
-  /** Full image reference; it is what gets copied. */
+  /** Full value (image reference, commit, name); it is what gets copied. */
   image: string;
   /** What the value is, for the copy button's accessible name. */
   what?: string;
@@ -14,18 +14,20 @@ interface ImageRefProps {
    * copies the full reference.
    */
   display?: string;
+  /** Monospace (default true); false for human names such as component names. */
+  isCode?: boolean;
 }
 
 /**
- * An image reference with a copy button (A08-11). It needs no hover: the
- * copy button is a normal focusable button that copies the full reference,
- * and when the text is truncated the text itself takes focus and shows the
- * full value.
+ * The one way to show a copyable identifier (image, digest, commit,
+ * component image): PatternFly's inline-compact ClipboardCopy (A08-11). The
+ * copy button is a normal focusable button that copies the full value, and
+ * truncated text takes focus and shows the full value.
  */
-export const ImageRef: React.FC<ImageRefProps> = ({ image, what = "image reference", truncate = true, display }) => (
+export const ImageRef: React.FC<ImageRefProps> = ({ image, what = "image reference", truncate = true, display, isCode = true }) => (
   <ClipboardCopy
     variant="inline-compact"
-    isCode
+    isCode={isCode}
     hoverTip={`Copy ${what}`}
     clickTip="Copied"
     copyAriaLabel={`Copy ${what} ${image}`}

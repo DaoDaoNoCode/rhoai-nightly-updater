@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { PageSection, Title, Content } from "@patternfly/react-core";
+import { PageHeader } from "../components/PageHeader";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
@@ -15,13 +15,17 @@ export const TestResourcesPage: React.FC = () => {
   }, []);
   return (
     <>
-      <PageSection>
-        <Title headingLevel="h1" size="xl">Test resources</Title>
-        <Content component="p">Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster.</Content>
-      </PageSection>
-      <PageSection>
-        <QuickResourceCreator mutateBlocker={blocker} onResult={onResult} />
-      </PageSection>
+      <QuickResourceCreator
+        mutateBlocker={blocker}
+        onResult={onResult}
+        renderHeader={(header) => (
+          <PageHeader
+            title="Test resources"
+            description="Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster."
+            {...header}
+          />
+        )}
+      />
     </>
   );
 };

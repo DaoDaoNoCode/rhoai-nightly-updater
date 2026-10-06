@@ -12,6 +12,7 @@ import {
   EmptyStateActions,
   EmptyStateBody,
   EmptyStateFooter,
+  EmptyStateVariant,
   Modal,
   ModalBody,
   ModalFooter,
@@ -84,25 +85,23 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
   if (dscState === "no-crd") {
     const installing = !!operatorPhase && operatorPhase !== "Succeeded";
     return (
-      <PageSection>
-        <Card>
-          <CardBody>
-            <EmptyState headingLevel="h2" icon={CubesIcon} titleText={installing ? "RHOAI is still installing" : "RHOAI is not installed"}>
-              <EmptyStateBody>
-                {installing
-                  ? `The rhods-operator ${operatorVersion ?? ""} install is in phase ${operatorPhase}. The DataScienceCluster API appears when the install finishes; this page refreshes on its own.`
-                  : "This cluster has no DataScienceCluster API (datasciencecluster.opendatahub.io), so the RHOAI operator is not installed. Install a nightly build from the Dashboard first."}
-              </EmptyStateBody>
-              {!installing && (
-                <EmptyStateFooter>
-                  <EmptyStateActions>
-                    <Link to="/">Go to Status to install RHOAI</Link>
-                  </EmptyStateActions>
-                </EmptyStateFooter>
-              )}
-            </EmptyState>
-          </CardBody>
-        </Card>
+      <PageSection isFilled>
+        <EmptyState headingLevel="h2" icon={CubesIcon} titleText={installing ? "RHOAI is still installing" : "RHOAI is not installed"} variant={EmptyStateVariant.lg}>
+          <EmptyStateBody>
+            {installing
+              ? `The rhods-operator ${operatorVersion ?? ""} install is in phase ${operatorPhase}. The DataScienceCluster API appears when the install finishes; this page refreshes on its own.`
+              : "This cluster has no DataScienceCluster API (datasciencecluster.opendatahub.io), so the RHOAI operator is not installed. Install a nightly build from the Status page first."}
+          </EmptyStateBody>
+          {!installing && (
+            <EmptyStateFooter>
+              <EmptyStateActions>
+                <Button variant="primary" component={(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/" />}>
+                  Go to Status to install RHOAI
+                </Button>
+              </EmptyStateActions>
+            </EmptyStateFooter>
+          )}
+        </EmptyState>
       </PageSection>
     );
   }

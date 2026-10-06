@@ -13,9 +13,12 @@ import {
   ModalVariant,
   ModalHeader,
   ModalBody,
+  ModalFooter,
+  Title,
 } from "@patternfly/react-core";
 import QuestionCircleIcon from "@patternfly/react-icons/dist/esm/icons/question-circle-icon";
 import { useVersion } from "../state/AppInfo";
+import { useClusterStatus } from "../state/AppState";
 
 const GLOSSARY: [string, React.ReactNode][] = [
   ["FBC image", <>File-Based Catalog: a container image that lists operator bundles. Nightly RHOAI builds are published as <code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code>; the digest identifies one exact build.</>],
@@ -29,6 +32,7 @@ const GLOSSARY: [string, React.ReactNode][] = [
 export const HelpButton: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const version = useVersion();
+  const { status } = useClusterStatus();
 
   return (
     <>
@@ -72,7 +76,7 @@ export const HelpButton: React.FC = () => {
             <Content component={ContentVariants.h3}>Dashboard Dev</Content>
             <Content component={ContentVariants.p}>
               Deploys an odh-dashboard PR or main build into RHOAI by pausing dashboard-operator. While it is paused, the
-              dashboard does not follow RHOAI updates; a banner on every page says so. Update, Re-deploy and Reinstall
+              dashboard does not follow RHOAI updates; a notice on every page says so. Update, Re-deploy and Reinstall
               offer to revert it first.
             </Content>
 
@@ -101,15 +105,35 @@ export const HelpButton: React.FC = () => {
             ))}
           </DescriptionList>
 
-          {version && (
-            <Content component={ContentVariants.small} style={{ display: "block", marginTop: "var(--pf-t--global--spacer--lg)" }}>
-              Updater build {version.version}
-              {version.commit && version.commit !== "unknown" ? ` (commit ${version.commit.slice(0, 12)})` : ""}
-              {version.buildDate && version.buildDate !== "unknown" ? `, built ${version.buildDate}` : ""}.
-              {version.templateOutdated && <> The deployment template is out of date; an admin should run <code>make upgrade</code>.</>}
-            </Content>
-          )}
+          <Title headingLevel="h3" size="md" className="pf-v6-u-mt-lg pf-v6-u-mb-sm">About this installation</Title>
+          <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "12ch" }} aria-label="About this installation">
+            {status && (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Cluster</DescriptionListTerm>
+                <DescriptionListDescription>OpenShift {status.cluster.version}, signed in as {status.cluster.user}</DescriptionListDescription>
+              </DescriptionListGroup>
+            )}
+            {version && (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Updater build</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {version.version}
+                  {version.commit && version.commit !== "unknown" ? <> (commit <code>{version.commit.slice(0, 12)}</code>)</> : null}
+                  {version.buildDate && version.buildDate !== "unknown" ? `, built ${version.buildDate}` : ""}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+            )}
+            {version?.templateOutdated && (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Deployment</DescriptionListTerm>
+                <DescriptionListDescription>The deployment template is out of date; an admin should run <code>make upgrade</code>.</DescriptionListDescription>
+              </DescriptionListGroup>
+            )}
+          </DescriptionList>
         </ModalBody>
+        <ModalFooter>
+          <Button variant="primary" onClick={() => setIsOpen(false)}>Close</Button>
+        </ModalFooter>
       </Modal>
     </>
   );

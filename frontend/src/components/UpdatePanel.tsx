@@ -34,7 +34,8 @@ import {
   StackItem,
   TextInput,
   Form,
-  Label,
+  Icon,
+  Tooltip,
 } from "@patternfly/react-core";
 import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
 import ExclamationTriangleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon";
@@ -45,6 +46,8 @@ import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import { FBCContentModal } from "./FBCContentModal";
 import { TooltipButton } from "./TooltipButton";
 import { BuildSummary } from "./BuildSummary";
+import { TagLabel } from "./StatusLabel";
+import { StepsPreview } from "./StepsPreview";
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession } from "./OperatorActions";
 import { prerequisitesMet as prerequisitesReady } from "../utils";
 import type { LatestNightlyResponse, NightlyBuild, OperationResponse, StatusResponse } from "../types";
@@ -178,23 +181,15 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             )}
 
             <StackItem>
-              <Content component="p"><strong>What happens</strong></Content>
-              <List component="ol">
-                {UPDATE_PLAN.map((step) => (
-                  <ListItem key={step.id}>
-                    {step.label}
-                    <span className="rhoai-subtle">: {step.description}</span>
-                  </ListItem>
-                ))}
-              </List>
-            </StackItem>
-            <StackItem>
               <Content component="p">
                 It usually takes a few minutes. The operator keeps running until step {REMOVE_STEP_NUMBER}; your notebooks, model servers and
                 pipelines keep running throughout. If OLM reports a failure, the previous catalog and Subscription are
                 restored automatically. If OLM is still installing after 8 minutes, the new state is kept and the tool
                 keeps watching the operator status.
               </Content>
+            </StackItem>
+            <StackItem>
+              <StepsPreview steps={UPDATE_PLAN} idPrefix="update-step" />
             </StackItem>
             {status && prerequisitesReady(status) && (
               <StackItem>
@@ -253,10 +248,10 @@ interface Preflight {
 }
 
 const PREFLIGHT_ICONS: Record<Preflight["state"], React.ReactNode> = {
-  pass: <CheckCircleIcon color="var(--pf-t--global--icon--color--status--success--default)" aria-label="Ready" />,
-  fail: <TimesCircleIcon color="var(--pf-t--global--icon--color--status--danger--default)" aria-label="Blocking" />,
-  warn: <ExclamationTriangleIcon color="var(--pf-t--global--icon--color--status--warning--default)" aria-label="Warning" />,
-  info: <InfoCircleIcon color="var(--pf-t--global--icon--color--status--info--default)" aria-label="Note" />,
+  pass: <Icon status="success"><CheckCircleIcon aria-label="Ready" /></Icon>,
+  fail: <Icon status="danger"><TimesCircleIcon aria-label="Blocking" /></Icon>,
+  warn: <Icon status="warning"><ExclamationTriangleIcon aria-label="Warning" /></Icon>,
+  info: <Icon status="info"><InfoCircleIcon aria-label="Note" /></Icon>,
 };
 
 export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequestUpdate }) => {
@@ -402,7 +397,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
         <Form onSubmit={(e) => e.preventDefault()}>
           <FormGroup
             label="FBC image"
-            labelInfo={autoFilled ? <Label isCompact color="blue">Newest nightly</Label> : undefined}
+            labelInfo={autoFilled ? <TagLabel color="blue">Newest nightly</TagLabel> : undefined}
             fieldId="fbc-image"
           >
             <InputGroup>
@@ -422,28 +417,28 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
                 <TooltipButton
                   variant="control"
                   icon={<SyncAltIcon />}
+                  aria-label="Fetch latest"
                   onClick={handleFetchLatest}
                   isLoading={fetchingLatest}
                   isDisabled={fetchingLatest}
                   disabledReason={!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null}
                 >
-                  Fetch latest
+                  <span className="pf-v6-u-display-none pf-v6-u-display-inline-on-sm">Fetch latest</span>
                 </TooltipButton>
               </InputGroupItem>
+              {trimmed && (
+                <InputGroupItem>
+                  <Tooltip content="View build contents">
+                    <Button variant="control" icon={<SearchIcon />} aria-label="View build contents" onClick={() => setPreviewOpen(true)} />
+                  </Tooltip>
+                </InputGroupItem>
+              )}
             </InputGroup>
             <FormHelperText>
               <HelperText id="fbc-image-help">
                 <HelperTextItem>
                   Paste a build from <a href="https://redhat.enterprise.slack.com/archives/C07ANR2U56C" target="_blank" rel="noopener noreferrer">#rhoai-build-notifications</a>,
                   pick one in Build Explorer, or click Fetch latest.
-                  {trimmed && (
-                    <>
-                      {" "}
-                      <Button variant="link" isInline onClick={() => setPreviewOpen(true)} icon={<SearchIcon />}>
-                        What&apos;s in this build
-                      </Button>
-                    </>
-                  )}
                 </HelperTextItem>
               </HelperText>
             </FormHelperText>

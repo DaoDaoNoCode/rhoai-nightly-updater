@@ -1,26 +1,24 @@
 import React, { useState } from "react";
 import {
+  Alert,
   Button,
   Content,
-  Flex,
-  FlexItem,
+  EmptyState,
+  EmptyStateBody,
+  EmptyStateVariant,
   Modal,
   ModalBody,
   ModalFooter,
   ModalHeader,
   ModalVariant,
-  Skeleton,
   Spinner,
-  ToggleGroup,
-  ToggleGroupItem,
+  Stack,
+  StackItem,
 } from "@patternfly/react-core";
-import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
-import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import { Link } from "react-router-dom";
-import { formatRelativeTime } from "../utils";
 import { useFbcContent } from "../hooks/useFbcContent";
-import { CopyableText } from "./CopyableText";
-import { CATEGORY_LABELS } from "./BuildContents";
+import { CategorySelect, ComponentImagesTable } from "./BuildContents";
+import { TruncatedText } from "./LongText";
 
 interface FBCContentModalProps {
   image: string;
@@ -50,112 +48,52 @@ export const FBCContentModal: React.FC<FBCContentModalProps> = ({ image, isOpen,
       onClose={onClose}
     >
       <ModalHeader
-        title={data?.bundleName ? `Catalog: ${data.bundleName}` : "FBC Catalog Contents"}
+        title={data?.bundleName ? `Catalog: ${data.bundleName}` : "Build contents"}
         labelId="fbc-content-title"
         description={data?.tag ? `Tag: ${data.tag}` : undefined}
       />
       <ModalBody>
         <div aria-live="polite">
           {loading && (
-            <Flex direction={{ default: "column" }} alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }} style={{ padding: "2rem" }}>
-              <FlexItem>
-                <Spinner size="lg" aria-label="Loading catalog content" />
-              </FlexItem>
-              <FlexItem>
-                <Content component="p">Downloading and parsing FBC catalog image...</Content>
-              </FlexItem>
-              <FlexItem>
-                <Content component="small" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
-                  This may take a few seconds depending on image size
-                </Content>
-              </FlexItem>
-            </Flex>
+            <EmptyState headingLevel="h2" titleText="Reading the catalog" icon={Spinner} variant={EmptyStateVariant.sm}>
+              <EmptyStateBody>Downloading and parsing the FBC image; this takes a few seconds.</EmptyStateBody>
+            </EmptyState>
           )}
-
           {error && (
-            <Content component="p" role="alert" style={{ color: "var(--pf-t--global--color--status--danger--default)" }}>
-              {error.message}
-            </Content>
+            <Alert component="p" variant="danger" isInline title="Could not read the catalog">
+              <TruncatedText>{error.message}</TruncatedText>
+            </Alert>
           )}
         </div>
 
         {data && !loading && (
-          <>
+          <Stack hasGutter>
             {sortedCategories.length > 0 && (
-              <ToggleGroup aria-label="Component category" isCompact style={{ marginBottom: "1rem", flexWrap: "wrap" }}>
-                <ToggleGroupItem
-                  text={`All (${images.length})`}
-                  isSelected={category === null}
-                  onChange={() => setActiveCategory(null)}
+              <StackItem>
+                <CategorySelect
+                  label="Component category"
+                  categories={Object.fromEntries(sortedCategories.map((c) => [c, categories[c]]))}
+                  total={images.length}
+                  active={category ?? "all"}
+                  onSelect={(c) => setActiveCategory(c === "all" ? null : c)}
                 />
-                {sortedCategories.map(cat => (
-                  <ToggleGroupItem
-                    key={cat}
-                    text={`${CATEGORY_LABELS[cat] || cat} (${categories[cat]})`}
-                    isSelected={category === cat}
-                    onChange={() => setActiveCategory(cat)}
-                  />
-                ))}
-              </ToggleGroup>
+              </StackItem>
             )}
-
-            {filtered.length > 0 ? (
-              <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
-                <Table aria-label="Component images" variant="compact" borders={false}>
-                  <Thead>
-                    <Tr>
-                      <Th>Component</Th>
-                      <Th>Commit</Th>
-                      <Th>Built</Th>
-                      <Th>Version</Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {filtered.map((img, idx) => {
-                      const shortSha = img.gitCommit?.slice(0, 7);
-                      const commitURL = img.gitCommit && img.gitURL ? `${img.gitURL}/commit/${img.gitCommit}` : "";
-                      return (
-                        <Tr key={`${img.name}-${idx}`}>
-                          <Td dataLabel="Component">
-                            <Content component="small">
-                              <CopyableText text={img.name} value={img.image} what="image reference" />
-                            </Content>
-                          </Td>
-                          <Td dataLabel="Commit">
-                            {shortSha ? (
-                              <Button variant="link" isInline component="a" href={commitURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" size="sm">
-                                {shortSha}
-                              </Button>
-                            ) : labelsDone ? "-" : <Skeleton width="4rem" screenreaderText={`Loading commit of ${img.name}`} />}
-                          </Td>
-                          <Td dataLabel="Built">
-                            {img.buildDate ? (
-                              <Content component="small">
-                                <time dateTime={img.buildDate} title={new Date(img.buildDate).toLocaleString()}>{formatRelativeTime(img.buildDate)}</time>
-                              </Content>
-                            ) : labelsDone ? "-" : <Skeleton width="3rem" screenreaderText={`Loading build date of ${img.name}`} />}
-                          </Td>
-                          <Td dataLabel="Version">
-                            {img.version ? <Content component="small">{img.version}</Content> : labelsDone ? "-" : <Skeleton width="3rem" screenreaderText={`Loading version of ${img.name}`} />}
-                          </Td>
-                        </Tr>
-                      );
-                    })}
-                  </Tbody>
-                </Table>
-              </div>
-            ) : (
-              <Content component="p">No component images found in this catalog.</Content>
-            )}
-          </>
+            <StackItem>
+              {filtered.length > 0 ? (
+                <ComponentImagesTable label="Component images" images={filtered} labelsPending={!labelsDone} />
+              ) : (
+                <Content component="p">No component images found in this catalog.</Content>
+              )}
+            </StackItem>
+          </Stack>
         )}
       </ModalBody>
       <ModalFooter>
-        <Content component="small" style={{ flex: 1 }}>
-          Looking for another build?{" "}
-          <Link to="/builds" onClick={onClose}>Go to Build Explorer</Link>
-        </Content>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="primary" onClick={onClose}>Close</Button>
+        <Button variant="link" component={(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <Link {...props} to="/builds" />} onClick={onClose}>
+          Open Build Explorer
+        </Button>
       </ModalFooter>
     </Modal>
   );

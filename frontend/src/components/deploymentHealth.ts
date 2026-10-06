@@ -114,7 +114,7 @@ export function sortDeployments(deps: DeploymentInfo[], key: DeploymentSortKey, 
   });
 }
 
-export type StatusFilter = "all" | "attention" | "healthy";
+export type StatusFilter = "all" | "attention" | "healthy" | "changed";
 
 /** Text filter (name, namespace, image, version, commit) plus a status filter. */
 export function filterDeployments(deps: DeploymentInfo[], text: string, status: StatusFilter): DeploymentInfo[] {
@@ -123,6 +123,7 @@ export function filterDeployments(deps: DeploymentInfo[], text: string, status: 
     const kind = deploymentHealth(dep).kind;
     if (status === "attention" && kind !== "problem" && kind !== "progressing") return false;
     if (status === "healthy" && kind !== "healthy") return false;
+    if (status === "changed" && !dep.changeStatus) return false;
     if (!needle) return true;
     return [dep.name, dep.namespace, dep.image, dep.version, dep.gitCommit]
       .some((v) => !!v && v.toLowerCase().includes(needle));

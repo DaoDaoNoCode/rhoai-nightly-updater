@@ -127,9 +127,11 @@ describe("ActivityLog (A07-13)", () => {
   it("shows operator changes with their build first and filters by category", () => {
     renderWithApp(<ActivityLog activity={entries} />);
     expect(screen.getByText("Updated to nightly")).toBeInTheDocument();
-    expect(screen.getByText("rhoai-3.6 · 4eff06d60bd1")).toBeInTheDocument();
+    // Tag and digest wrap only at the separator, so they are separate nowrap spans.
+    expect(screen.getByText((_, el) => el?.tagName === "DIV" && el.textContent === "rhoai-3.6 · 4eff06d60bd1")).toBeInTheDocument();
     expect(screen.queryByText("Dashboard PR deployed")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Dashboard Dev (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Activity type: Operator" }));
+    fireEvent.click(screen.getByRole("option", { name: /Dashboard Dev\s*2/ }));
     expect(screen.getByText("Dashboard PR deployed")).toBeInTheDocument();
     expect(screen.getByText("(failed)")).toBeInTheDocument();
   });

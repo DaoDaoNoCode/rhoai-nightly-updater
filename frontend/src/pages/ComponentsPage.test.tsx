@@ -61,11 +61,13 @@ describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
     [502, "cluster_unavailable", "The cluster API returned an error"],
     [504, "timeout", "The request timed out"],
     [503, "rate_limited", "The cluster API is throttling requests"],
-    [500, "internal", "Could not load components"],
+    [500, "internal", "Can't load the components"],
   ])("HTTP %i %s is an error with Retry, never an empty state", async (status, errorCode, title) => {
     stubApi({ "/api/components": () => jsonResponse({ error: "Could not read components: boom", errorCode }, status) });
     renderPage();
-    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(await screen.findByText(new RegExp(`^${title}`))).toBeInTheDocument();
+    // The raw error is one click away (UX-Global-9).
+    fireEvent.click(screen.getByRole("button", { name: "Show the error" }));
     expect(screen.getByText(/Could not read components: boom/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(screen.queryByText(/not installed/i)).not.toBeInTheDocument();
@@ -93,14 +95,16 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
     expect(rowNames()).toEqual(["odh-observability", "agent-ops-ui", "gen-ai-ui"]);
     expect(screen.getByText("ContainerCreating for 2d")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Needs attention (1)" }));
-    expect(screen.getByRole("button", { name: "Needs attention (1)" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: /Filter deployments by status: All/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Needs attention\s*1/ }));
+    expect(screen.getByRole("button", { name: /Filter deployments by status: Needs attention/ })).toBeInTheDocument();
     expect(rowNames()).toEqual(["odh-observability"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "All (3)" }));
+    fireEvent.click(screen.getByRole("button", { name: /Filter deployments by status/ }));
+    fireEvent.click(screen.getByRole("option", { name: /All\s*3/ }));
     fireEvent.change(screen.getByRole("textbox", { name: /Filter deployments/ }), { target: { value: "gen-ai" } });
     expect(rowNames()).toEqual(["gen-ai-ui"]);
-    expect(screen.getByText("Showing 1 of 3")).toBeInTheDocument();
+    expect(screen.getByText("1 of 3")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: /Filter deployments/ }), { target: { value: "nothing-matches" } });
     expect(screen.getByText("No deployments match the filters")).toBeInTheDocument();
@@ -124,7 +128,7 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
     await screen.findByRole("grid", { name: "Deployments" });
     fireEvent.click(screen.getByRole("button", { name: /agent-ops-ui/ }));
     const image = deployments[0].image;
-    expect(screen.getByText(image)).toBeVisible();
+    expect(screen.getByRole("button", { name: `Copy image reference ${image}` }).closest(".pf-v6-c-clipboard-copy")).toHaveTextContent(image.slice(0, 20));
     expect(screen.getByRole("button", { name: `Copy image reference ${image}` })).toBeInTheDocument();
   });
 
@@ -141,9 +145,9 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
       "POST /api/assist-rollout": () => jsonResponse({ success: false, message: "Nothing to do: the rollout is no longer blocked.", logs: [], errorCode: "nothing_to_do" }, 422),
     });
     renderPage();
-    await screen.findByRole("button", { name: "Unblock rollout" });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Unblock rollout" })).not.toHaveAttribute("aria-disabled", "true"));
-    fireEvent.click(screen.getByRole("button", { name: "Unblock rollout" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for rhods-dashboard" }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Unblock rollout" })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unblock rollout" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Deployment redhat-ods-applications/rhods-dashboard")).toBeInTheDocument();
     expect(within(dialog).getByText("spec.strategy.rollingUpdate.maxUnavailable")).toBeInTheDocument();
@@ -159,10 +163,10 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
     ] });
     stubApi({ "/api/components": present([stuck]), "/api/user/permissions": { canMutate: false, user: "viewer" } });
     renderPage();
-    await screen.findByRole("button", { name: "Unblock rollout" });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Unblock rollout" })).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for x" }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Unblock rollout" })).toHaveAttribute("aria-disabled", "true"));
     await new Promise((r) => setTimeout(r, 50));
-    fireEvent.click(screen.getByRole("button", { name: "Unblock rollout" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unblock rollout" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

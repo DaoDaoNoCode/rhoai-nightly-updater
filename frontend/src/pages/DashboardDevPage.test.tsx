@@ -83,7 +83,7 @@ describe("Dashboard Dev session panel (A04-1)", () => {
       }, 404),
     });
     renderPage();
-    expect(await screen.findByText("The RHOAI Dashboard is not deployed")).toBeInTheDocument();
+    expect(await screen.findByText("The RHOAI dashboard is not deployed")).toBeInTheDocument();
     expect(screen.getByText("Dashboard deletion is blocked until you revert")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revert to default" })).toBeInTheDocument();
   });
@@ -95,7 +95,7 @@ describe("Dashboard Dev session panel (A04-1)", () => {
   ])("HTTP %i %s is an error, not 'not deployed' (A04-9)", async (status, errorCode, title) => {
     stubApi({ "/api/dashboard/state": () => jsonResponse({ error: "boom", errorCode }, status) });
     renderPage();
-    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(await screen.findByText(new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeInTheDocument();
     expect(screen.queryByText(/is not deployed/)).not.toBeInTheDocument();
   });
 

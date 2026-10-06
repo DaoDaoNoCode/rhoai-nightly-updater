@@ -1,21 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
-  Button,
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
   Content,
   Flex,
   FlexItem,
-  Label,
   List,
   ListItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalVariant,
   ProgressStepper,
   ProgressStep,
   Spinner,
@@ -23,8 +17,6 @@ import {
   StackItem,
   Title,
 } from "@patternfly/react-core";
-import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle-icon";
-import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import WrenchIcon from "@patternfly/react-icons/dist/esm/icons/wrench-icon";
 import { Link } from "react-router-dom";
 import type { StatusResponse, Problem, OperationResponse } from "../types";
@@ -33,6 +25,10 @@ import { formatElapsed } from "../utils";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { TooltipButton } from "./TooltipButton";
+import { ConfirmActionModal } from "./ConfirmActionModal";
+import { TechnicalDetails } from "./LongText";
+import { StatusLabel } from "./StatusLabel";
+import { PhaseLabel } from "./StatusCards";
 
 export type { ReconcileKind as OperationType } from "../operationSteps";
 import type { ReconcileKind as OperationType } from "../operationSteps";
@@ -138,11 +134,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
     <Alert component="p" variant={outcomeVariant(fixResult)} title={outcomeTitle(fixResult, "The fix could not run")} isInline isLiveRegion>
       {!fixResult.success && fixResult.message}
       {fixResult.errorCode === "conflict" && " The object changed since the diagnosis. Open Diagnostics to scan again."}
-      {fixResult.logs && fixResult.logs.length > 0 && (
-        <Content component="small" style={{ whiteSpace: "pre-wrap", marginTop: "0.25rem" }}>
-          {fixResult.logs.join("\n")}
-        </Content>
-      )}
+      {fixResult.logs && fixResult.logs.length > 0 && <TechnicalDetails text={fixResult.logs} />}
     </Alert>
   );
   const withResult = (body: React.ReactNode) => (resultAlert ? (
@@ -183,7 +175,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
           <StackItem>
             <List isPlain>
               {evidence.map((line, i) => (
-                <ListItem key={i}><Content component="small" style={{ overflowWrap: "anywhere" }}>{line}</Content></ListItem>
+                <ListItem key={i} className="pf-v6-u-text-break-word">{line}</ListItem>
               ))}
             </List>
           </StackItem>
@@ -202,18 +194,15 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
               isLoading={fixLoading}
               isDisabled={fixLoading}
               disabledReason={fixDisabledReason}
-              size="sm"
             >
               Apply fix...
             </TooltipButton>
           </StackItem>
         )}
         <StackItem>
-          <Content component="small">
-            <Link to="/diagnostics">
-              {problems.length > 1 ? `All diagnostics (${problems.length} problems)` : "All diagnostics"}
-            </Link>
-          </Content>
+          <Link to="/diagnostics">
+            {problems.length > 1 ? `All diagnostics (${problems.length} problems)` : "All diagnostics"}
+          </Link>
         </StackItem>
       </Stack>
     </Alert>,
@@ -371,19 +360,17 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
   // Compact summary when not active (recently completed)
   if (!active && isFinal) {
     return (
-      <Card isCompact>
+      <Card>
         <CardBody>
           <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
             <FlexItem>
               {displayPhase === "succeeded" ? (
-                <Label color="green" icon={<CheckCircleIcon />}>Operator running</Label>
+                <StatusLabel status="success">Operator running</StatusLabel>
               ) : (
-                <Label color="red" icon={<ExclamationCircleIcon />}>Operator install failed</Label>
+                <StatusLabel status="danger">Operator install failed</StatusLabel>
               )}
             </FlexItem>
-            <FlexItem>
-              <Content component="small">{csvName}</Content>
-            </FlexItem>
+            <FlexItem>{csvName}</FlexItem>
             {displayPhase === "failed" && (
               <FlexItem><Link to="/components">View pod details</Link></FlexItem>
             )}
@@ -395,42 +382,26 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
 
   // Full progress view when active
   return (
-    <Card isCompact>
-      <CardTitle>
-        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }}>
-          <FlexItem>
-            <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-              <FlexItem>
-                <Title headingLevel="h3" size="md">Waiting for the operator</Title>
-              </FlexItem>
-              {!isFinal && <FlexItem><Spinner size="sm" aria-label="Reconciling" /></FlexItem>}
-            </Flex>
-          </FlexItem>
-          <FlexItem>
+    <Card>
+      <CardHeader
+        actions={{
+          actions: (
             <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-              {elapsed && <FlexItem><Content component="small">Elapsed: {elapsed}</Content></FlexItem>}
+              {elapsed && <FlexItem className="pf-v6-u-text-color-subtle">{elapsed} elapsed</FlexItem>}
               <FlexItem><Link to="/components">View pods</Link></FlexItem>
             </Flex>
-          </FlexItem>
-        </Flex>
-      </CardTitle>
+          ),
+          hasNoOffset: true,
+        }}
+      >
+        <CardTitle><Title headingLevel="h2" size="lg">Waiting for the operator</Title></CardTitle>
+      </CardHeader>
       <CardBody>
         <Stack hasGutter>
           <StackItem>
             <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-              <FlexItem><Content component="small">CSV:</Content></FlexItem>
-              <FlexItem><Content component="small"><strong>{csvName || "Pending..."}</strong></Content></FlexItem>
-              <FlexItem>
-                {phase === "Succeeded" ? (
-                  <Label color="green" icon={<CheckCircleIcon />} isCompact>Succeeded</Label>
-                ) : phase === "Failed" ? (
-                  <Label color="red" icon={<ExclamationCircleIcon />} isCompact>Failed</Label>
-                ) : phase ? (
-                  <Label color="blue" icon={<Spinner size="sm" aria-label="In progress" />} isCompact>{phase}</Label>
-                ) : (
-                  <Label color="orange" isCompact>Waiting</Label>
-                )}
-              </FlexItem>
+              <FlexItem>CSV <strong>{csvName || "pending"}</strong></FlexItem>
+              <FlexItem>{phase ? <PhaseLabel phase={phase} /> : <StatusLabel status="neutral">Waiting</StatusLabel>}</FlexItem>
             </Flex>
           </StackItem>
           <StackItem>
@@ -470,60 +441,25 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
         </Stack>
       </CardBody>
 
-      {/* Fix Confirmation Modal */}
-      <Modal
-        aria-labelledby="confirm-fix-stuck-title"
-        variant={ModalVariant.small}
+      <ConfirmActionModal
         isOpen={fixConfirmProblem !== null}
-        onClose={() => setFixConfirmProblem(null)}
+        title={`Apply the fix for "${fixConfirmProblem?.title ?? ""}"?`}
+        changes={(fixConfirmProblem?.affectedObjects?.length ?? 0) > 0
+          ? fixConfirmProblem!.affectedObjects!.map((obj) => <code key={obj} className="pf-v6-u-text-break-word">{obj}</code>)
+          : [fixConfirmProblem?.confirmMessage || fixConfirmProblem?.fix || "Cluster objects involved in the problem."]}
+        confirmLabel="Apply fix"
+        isLoading={fixLoading}
+        confirmDisabled={!!fixDisabledReason}
+        onConfirm={handleFixConfirm}
+        onCancel={() => setFixConfirmProblem(null)}
       >
-        <ModalHeader
-          title={`Apply the fix for "${fixConfirmProblem?.title ?? ""}"?`}
-          labelId="confirm-fix-stuck-title"
-        />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p">
-                {fixConfirmProblem?.confirmMessage || fixConfirmProblem?.fix || "This changes cluster objects to resolve the problem."}
-              </Content>
-            </StackItem>
-            {(fixConfirmProblem?.affectedObjects?.length ?? 0) > 0 && (
-              <StackItem>
-                <Content component="p"><strong>Objects it may change</strong></Content>
-                <List>
-                  {fixConfirmProblem?.affectedObjects?.map((obj) => (
-                    <ListItem key={obj}><code style={{ overflowWrap: "anywhere" }}>{obj}</code></ListItem>
-                  ))}
-                </List>
-              </StackItem>
-            )}
-            <StackItem>
-              <Content component="small" className="rhoai-subtle">
-                The fix checks the problem again first and changes nothing if it is already gone.
-              </Content>
-            </StackItem>
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <TooltipButton
-            variant="primary"
-            onClick={handleFixConfirm}
-            isLoading={fixLoading}
-            isDisabled={fixLoading}
-            disabledReason={fixDisabledReason}
-          >
-            Apply fix
-          </TooltipButton>
-          <Button
-            variant="link"
-            onClick={() => setFixConfirmProblem(null)}
-            isDisabled={fixLoading}
-          >
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
+        {(fixConfirmProblem?.affectedObjects?.length ?? 0) > 0 && (fixConfirmProblem?.confirmMessage || fixConfirmProblem?.fix) && (
+          <Content component="p">{fixConfirmProblem?.confirmMessage || fixConfirmProblem?.fix}</Content>
+        )}
+        <Content component="p" className="pf-v6-u-text-color-subtle">
+          The fix checks the problem again first and changes nothing if it is already gone.
+        </Content>
+      </ConfirmActionModal>
     </Card>
   );
 };

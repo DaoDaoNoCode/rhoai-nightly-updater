@@ -11,11 +11,16 @@ import {
   CodeBlock,
   CodeBlockCode,
   Content,
-  Divider,
-  ExpandableSection,
+  DataList,
+  DataListCell,
+  DataListContent,
+  DataListItem,
+  DataListItemCells,
+  DataListItemRow,
+  EmptyState,
+  EmptyStateBody,
   Grid,
   GridItem,
-  Label,
   List,
   ListItem,
   Modal,
@@ -24,22 +29,22 @@ import {
   ModalHeader,
   ModalVariant,
   PageSection,
+  Skeleton,
   Stack,
   StackItem,
   Title,
 } from "@patternfly/react-core";
-import SyncAltIcon from "@patternfly/react-icons/dist/esm/icons/sync-alt-icon";
-import { useNavigate } from "react-router-dom";
 import type { LatestNightlyResponse, NightlyBuild, NightlyTag, OperationResponse } from "../types";
 import { createDSC, fetchLatestNightly, fetchNightlyTags, getDSCPreview, toApiError, trackFeature } from "../services/api";
 import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
-import { InstalledBuildCard, SetupCards, StatusLoading } from "../components/StatusCards";
-import { PullSecretCard } from "../components/PullSecretCard";
+import { ClusterSetupCard, InstalledBuildCard } from "../components/StatusCards";
 import { UpdateConfirmModal, UpdatePanel } from "../components/UpdatePanel";
 import { ReinstallPanel } from "../components/ReinstallPanel";
 import { SetupModal } from "../components/PrerequisitesPanel";
 import { ActivityLog } from "../components/ActivityLog";
-import { ErrorAlert } from "../components/ErrorAlert";
+import { PageErrorState, PageLoading } from "../components/PageStates";
+import { TechnicalDetails } from "../components/LongText";
+import { StepsPreview } from "../components/StepsPreview";
 import { PageHeader } from "../components/PageHeader";
 import { FBCContentModal } from "../components/FBCContentModal";
 import { OperationProgress, useHasOperationProgress } from "../components/OperationProgress";
@@ -62,7 +67,6 @@ export const StatusPage: React.FC = () => {
   const { override } = useDashboardOverride();
   const showProgress = useHasOperationProgress();
   const { runOperator, followUps } = useOperatorActions();
-  const navigate = useNavigate();
 
   const prerequisitesMet = checkPrereqs(status);
   const installed = operatorInstalled(status);
@@ -111,7 +115,6 @@ export const StatusPage: React.FC = () => {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [reinstallExpanded, setReinstallExpanded] = useState(false);
-  const [setupExpanded, setSetupExpanded] = useState(false);
   const updateFormRef = useRef<HTMLDivElement>(null);
 
   const chooseAnotherBuild = () => {
@@ -172,13 +175,6 @@ export const StatusPage: React.FC = () => {
     runOperator({ kind: "refresh", csvName: status?.csv.name }, override?.active ? { revertDashboardDev: true } : {});
   };
 
-  const pullSecretCard = status ? (
-    <PullSecretCard
-      pullSecret={status.pullSecret}
-      onStatusRefresh={refresh}
-    />
-  ) : null;
-
   const statusErrorIsSession = !!error && isSessionExpired(error);
   const staleDescription = error && status && !statusErrorIsSession ? describeError(error, "Could not refresh the status") : null;
 
@@ -192,64 +188,49 @@ export const StatusPage: React.FC = () => {
         onRefresh={refresh}
       />
 
-      {/* --- Status could not be loaded at all: one message, the cause, the next step --- */}
+      {/* --- Status could not be loaded at all: one back-end failure state --- */}
       {!status && error && !statusErrorIsSession && (
+        <PageErrorState error={error} title="Can't load the cluster status" onRetry={refresh} />
+      )}
+      {!status && !error && <PageLoading title="Loading the cluster status" />}
+
+      {/* --- A later poll failed, or some checks failed: keep the data and say what may be stale --- */}
+      {status && (staleDescription || (status.errors?.length ?? 0) > 0) && (
         <PageSection>
-          <ErrorAlert
-            inline
-            error={error}
-            genericTitle="Can't load the cluster status"
-            onRetry={refresh}
-            extraActions={<AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>}
-          />
-        </PageSection>
-      )}
-
-      {/* --- A later poll failed: keep the last good data and say it may be stale --- */}
-      {staleDescription && (
-        <PageSection padding={{ default: "noPadding" }} style={{ padding: "var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--lg) 0" }}>
-          <Alert
-            variant="warning"
-            isInline
-            component="p"
-            title={`Showing the status from ${lastRefreshed?.toLocaleTimeString() ?? "earlier"}: the latest refresh failed`}
-            actionLinks={<AlertActionLink onClick={refresh}>Retry</AlertActionLink>}
-          >
-            {staleDescription.title}: {staleDescription.body}{staleDescription.hint && <> {staleDescription.hint}</>}
-          </Alert>
-        </PageSection>
-      )}
-
-      {status?.errors && status.errors.length > 0 && (
-        <PageSection padding={{ default: "noPadding" }} style={{ padding: "var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--lg) 0" }}>
-          <Alert component="p" variant="warning" title="Some status checks failed; parts of this page may be incomplete" isInline>
-            <List>
-              {status.errors.map((err, i) => <ListItem key={i}>{err}</ListItem>)}
-            </List>
-          </Alert>
+          <Stack hasGutter>
+            {staleDescription && (
+              <Alert
+                variant="warning"
+                isInline
+                isExpandable
+                component="p"
+                title={`The latest refresh failed; showing the status from ${lastRefreshed?.toLocaleTimeString() ?? "earlier"}`}
+                actionLinks={<AlertActionLink onClick={refresh}>Retry</AlertActionLink>}
+              >
+                {staleDescription.title}: {staleDescription.body}{staleDescription.hint && <> {staleDescription.hint}</>}
+              </Alert>
+            )}
+            {(status.errors?.length ?? 0) > 0 && (
+              <Alert component="p" variant="warning" isExpandable title="Some status checks failed; parts of this page may be incomplete" isInline>
+                <List>
+                  {status.errors!.map((err, i) => <ListItem key={i} className="pf-v6-u-text-break-word">{err}</ListItem>)}
+                </List>
+              </Alert>
+            )}
+          </Stack>
         </PageSection>
       )}
 
       {/* --- One-time setup comes first while it is incomplete: nothing else works without it --- */}
       {status && !prerequisitesMet && (
-        <PageSection aria-labelledby="setup-title">
-          <Stack hasGutter>
-            <StackItem>
-              <Title headingLevel="h2" size="lg" id="setup-title">One-time cluster setup</Title>
-              <Content component="p" className="rhoai-subtle">Nightly builds come from quay.io/rhoai. The cluster needs these two before the first install.</Content>
-            </StackItem>
-            <StackItem>
-              <Grid hasGutter>
-                <SetupCards status={status} pullSecretCard={pullSecretCard} onShowInstructions={() => setSetupOpen(true)} />
-              </Grid>
-            </StackItem>
-          </Stack>
+        <PageSection>
+          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} />
         </PageSection>
       )}
 
       {/* --- Installed vs latest, with the primary action --- */}
-      <PageSection>
-        {status ? (
+      {status && (
+        <PageSection>
           <InstalledBuildCard
             status={status}
             latest={latest}
@@ -261,10 +242,8 @@ export const StatusPage: React.FC = () => {
             onPreview={setPreviewImage}
             onRedeploy={() => setRefreshConfirmOpen(true)}
           />
-        ) : !error ? (
-          <StatusLoading />
-        ) : null}
-      </PageSection>
+        </PageSection>
+      )}
 
       {showProgress && (
         <PageSection aria-label="Operation progress">
@@ -300,9 +279,7 @@ export const StatusPage: React.FC = () => {
                       actionClose={<AlertActionCloseButton onClose={() => setDscResult(null)} />}
                     >
                       {dscResult.success ? undefined : dscResult.message}
-                      {(dscResult.logs?.length ?? 0) > 0 && (
-                        <details><summary>Details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{dscResult.logs!.join("\n")}</pre></details>
-                      )}
+                      {(dscResult.logs?.length ?? 0) > 0 && <TechnicalDetails text={dscResult.logs!} />}
                     </Alert>
                   </StackItem>
                 )}
@@ -321,7 +298,7 @@ export const StatusPage: React.FC = () => {
                 </StackItem>
                 <StackItem>
                   {dscPreviewLoading ? (
-                    <Content component="p">Loading the defaults...</Content>
+                    <Skeleton height="12rem" screenreaderText="Loading the defaults" />
                   ) : dscPreviewError ? (
                     <Alert variant="danger" title="Could not load the DSC defaults" isInline component="p">{dscPreviewError}</Alert>
                   ) : (
@@ -348,27 +325,26 @@ export const StatusPage: React.FC = () => {
       {status && (
         <PageSection>
           <Grid hasGutter>
-            <GridItem lg={7} md={12}>
+            <GridItem lg={6} md={12}>
               <Card isFullHeight>
                 <CardHeader>
                   <CardTitle><Title headingLevel="h2" size="lg">Update to a specific build</Title></CardTitle>
                 </CardHeader>
                 <CardBody>
-                  <div ref={updateFormRef} style={{ scrollMarginTop: "var(--pf-t--global--spacer--lg)" }}>
-                    <UpdatePanel status={status} latest={latest} onRequestUpdate={setUpdateTarget} />
-                  </div>
+                  {prerequisitesMet ? (
+                    <div ref={updateFormRef}>
+                      <UpdatePanel status={status} latest={latest} onRequestUpdate={setUpdateTarget} />
+                    </div>
+                  ) : (
+                    <EmptyState headingLevel="h3" titleText="Finish the cluster setup first" variant="xs">
+                      <EmptyStateBody>Nightly builds can be installed once the pull secret and the image mirror are ready.</EmptyStateBody>
+                    </EmptyState>
+                  )}
                 </CardBody>
               </Card>
             </GridItem>
-            <GridItem lg={5} md={12}>
-              <Card isFullHeight>
-                <CardHeader>
-                  <CardTitle><Title headingLevel="h2" size="lg">Recent activity</Title></CardTitle>
-                </CardHeader>
-                <CardBody>
-                  <ActivityLog activity={status.activity} />
-                </CardBody>
-              </Card>
+            <GridItem lg={6} md={12}>
+              <ActivityLog activity={status.activity} />
             </GridItem>
           </Grid>
         </PageSection>
@@ -383,32 +359,58 @@ export const StatusPage: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardBody>
-              <Stack hasGutter>
-                <StackItem>
-                  <Title headingLevel="h3" size="md">Re-deploy the operator</Title>
-                  <Content component="p" className="rhoai-subtle">
-                    Deletes and recreates the Subscription and CSV from the same catalog and channel. Keeps the Subscription
-                    settings, DSC, DSCI and workloads. It does not fetch a newer build: use Update for that.
-                  </Content>
-                </StackItem>
-                <StackItem>
-                  <TooltipButton
-                    variant="secondary"
-                    icon={<SyncAltIcon />}
-                    onClick={() => setRefreshConfirmOpen(true)}
-                    isLoading={!!refreshRun && !refreshRun.outcome}
-                    disabledReason={blocker}
-                  >
-                    Re-deploy operator...
-                  </TooltipButton>
-                </StackItem>
-                <StackItem><Divider /></StackItem>
-                <StackItem>
-                  <ExpandableSection
-                    toggleContent={<Title headingLevel="h3" size="md">Reinstall the operator</Title>}
-                    isExpanded={reinstallExpanded}
-                    onToggle={(_e, expanded) => setReinstallExpanded(expanded)}
-                  >
+              <DataList aria-label="Recovery actions">
+                <DataListItem aria-labelledby="recovery-redeploy">
+                  <DataListItemRow>
+                    <DataListItemCells
+                      dataListCells={[
+                        <DataListCell key="text">
+                          <Title headingLevel="h3" size="md" id="recovery-redeploy">Re-deploy the operator</Title>
+                          <Content component="p" className="pf-v6-u-text-color-subtle">
+                            Deletes and recreates the Subscription and CSV from the same catalog and channel. Keeps the Subscription
+                            settings, DSC, DSCI and workloads. It does not fetch a newer build: use Update for that.
+                          </Content>
+                        </DataListCell>,
+                        <DataListCell key="action" isFilled={false} alignRight>
+                        <TooltipButton
+                          variant="secondary"
+                          onClick={() => setRefreshConfirmOpen(true)}
+                          isLoading={!!refreshRun && !refreshRun.outcome}
+                          disabledReason={blocker}
+                        >
+                          Re-deploy operator...
+                        </TooltipButton>
+                        </DataListCell>,
+                      ]}
+                    />
+                  </DataListItemRow>
+                </DataListItem>
+                <DataListItem aria-labelledby="recovery-reinstall" isExpanded={reinstallExpanded}>
+                  <DataListItemRow>
+                    <DataListItemCells
+                      dataListCells={[
+                        <DataListCell key="text">
+                          <Title headingLevel="h3" size="md" id="recovery-reinstall">Reinstall the operator</Title>
+                          <Content component="p" className="pf-v6-u-text-color-subtle">
+                            Uninstalls the operator and installs it again from the target you choose: the GA release, an older
+                            build, or when Update and Re-deploy can&apos;t recover it. RHOAI can&apos;t be changed for 5-10 minutes;
+                            running workloads keep running.
+                          </Content>
+                        </DataListCell>,
+                        <DataListCell key="action" isFilled={false} alignRight>
+                        <Button
+                          variant="secondary"
+                          onClick={() => setReinstallExpanded(!reinstallExpanded)}
+                          aria-expanded={reinstallExpanded}
+                          aria-controls="recovery-reinstall-content"
+                        >
+                          {reinstallExpanded ? "Hide reinstall options" : "Reinstall..."}
+                        </Button>
+                        </DataListCell>,
+                      ]}
+                    />
+                  </DataListItemRow>
+                  <DataListContent id="recovery-reinstall-content" aria-label="Reinstall options" isHidden={!reinstallExpanded}>
                     <ReinstallPanel
                       status={status}
                       nightlyTags={nightlyTags}
@@ -416,30 +418,17 @@ export const StatusPage: React.FC = () => {
                       prerequisitesMet={prerequisitesMet}
                       runOperator={runOperator}
                     />
-                  </ExpandableSection>
-                </StackItem>
-              </Stack>
+                  </DataListContent>
+                </DataListItem>
+              </DataList>
             </CardBody>
           </Card>
         </PageSection>
       )}
 
       {status && prerequisitesMet && (
-        <PageSection>
-          <ExpandableSection
-            toggleContent={
-              <span>
-                Cluster setup <Label isCompact color="green" variant="outline">Pull secret ready</Label>{" "}
-                <Label isCompact color="green" variant="outline">Image mirror ready</Label>
-              </span>
-            }
-            isExpanded={setupExpanded}
-            onToggle={(_e, expanded) => setSetupExpanded(expanded)}
-          >
-            <Grid hasGutter>
-              <SetupCards status={status} pullSecretCard={pullSecretCard} onShowInstructions={() => setSetupOpen(true)} />
-            </Grid>
-          </ExpandableSection>
+        <PageSection isFilled>
+          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} collapsible />
         </PageSection>
       )}
 
@@ -474,18 +463,13 @@ export const StatusPage: React.FC = () => {
               </StackItem>
             )}
             <StackItem>
-              <Content component="p"><strong>What happens</strong></Content>
-              <List component="ol">
-                {REFRESH_PLAN.map((step) => (
-                  <ListItem key={step.id}>{step.label}<span className="rhoai-subtle">: {step.description}</span></ListItem>
-                ))}
-              </List>
-            </StackItem>
-            <StackItem>
               <Content component="p">
                 The Subscription keeps its config and approval mode; DSC, DSCI and workloads are untouched. The operator is
                 unavailable for a few minutes while OLM installs it again. If that fails, the previous state is restored.
               </Content>
+            </StackItem>
+            <StackItem>
+              <StepsPreview steps={REFRESH_PLAN} idPrefix="refresh-step" />
             </StackItem>
           </Stack>
         </ModalBody>

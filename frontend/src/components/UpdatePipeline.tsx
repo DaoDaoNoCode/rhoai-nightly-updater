@@ -3,11 +3,11 @@ import {
   Alert,
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
   Content,
   Flex,
   FlexItem,
-  Label,
   ProgressStepper,
   ProgressStep,
   Spinner,
@@ -21,6 +21,7 @@ import MinusCircleIcon from "@patternfly/react-icons/dist/esm/icons/minus-circle
 import type { UpdateStep } from "../types";
 import { PIPELINE_TITLES, RESTORE_STEP, STEP_SETS, type OperationKind, type PipelineStepDef } from "../operationSteps";
 import { formatElapsed } from "../utils";
+import { TagLabel } from "./StatusLabel";
 
 export type { OperationKind as OperationType } from "../operationSteps";
 
@@ -137,46 +138,32 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
   if (!active && events.length > 0 && lastStepSucceeded && !anyFailed) {
     const totalMs = events.reduce((max, e) => Math.max(max, e.elapsedMs || 0), 0);
     return (
-      <Card isCompact>
-        <CardBody>
-          <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapMd" }}>
-            <FlexItem>
-              <Label color="green" icon={<CheckCircleIcon />}>{pipelineTitle} finished</Label>
-            </FlexItem>
-            <FlexItem>
-              <Content component="small">
-                {pipelineSteps.length} steps{totalMs > 0 ? ` in ${formatStepDuration(totalMs)}` : ""}
-              </Content>
-            </FlexItem>
-          </Flex>
-        </CardBody>
-      </Card>
+      <Alert
+        variant="success"
+        isInline
+        isPlain
+        component="p"
+        title={`${pipelineTitle} finished: ${pipelineSteps.length} steps${totalMs > 0 ? ` in ${formatStepDuration(totalMs)}` : ""}`}
+      />
     );
   }
 
   return (
-    <Card isCompact>
-      <CardTitle>
-        <Flex justifyContent={{ default: "justifyContentSpaceBetween" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
-          <FlexItem>
-            <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
-              <FlexItem>
-                <Title headingLevel="h3" size="md">{pipelineTitle}{active ? " in progress" : anyFailed ? " failed" : ""}</Title>
-              </FlexItem>
-              {startedBy && (
-                <FlexItem>
-                  <Label isCompact variant="outline">Started by {startedBy}</Label>
-                </FlexItem>
-              )}
-            </Flex>
-          </FlexItem>
-          <FlexItem>
-            {active && elapsed && <Content component="small">Elapsed: {elapsed}</Content>}
-          </FlexItem>
-        </Flex>
-      </CardTitle>
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <Title headingLevel="h2" size="lg">{pipelineTitle}{active ? " in progress" : anyFailed ? " failed" : ""}</Title>
+        </CardTitle>
+      </CardHeader>
       <CardBody>
         <Stack hasGutter>
+          {(startedBy || (active && elapsed)) && (
+            <StackItem>
+              <Content component="p" className="pf-v6-u-text-color-subtle">
+                {[startedBy ? `Started by ${startedBy}` : "", active && elapsed ? `${elapsed} elapsed` : ""].filter(Boolean).join(" · ")}
+              </Content>
+            </StackItem>
+          )}
           {error && (
             <StackItem>
               <Alert variant="danger" title="Connection error" isInline component="p">{error}</Alert>
@@ -202,12 +189,10 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
                     <Flex alignItems={{ default: "alignItemsCenter" }} gap={{ default: "gapSm" }}>
                       <FlexItem>{def.label}</FlexItem>
                       {duration >= 1000 && (
-                        <FlexItem>
-                          <Label isCompact color="grey">{formatStepDuration(duration)}</Label>
-                        </FlexItem>
+                        <FlexItem className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{formatStepDuration(duration)}</FlexItem>
                       )}
                       {event?.status === "skipped" && (
-                        <FlexItem><Label isCompact color="grey">skipped</Label></FlexItem>
+                        <FlexItem><TagLabel>Skipped</TagLabel></FlexItem>
                       )}
                     </Flex>
                   </ProgressStep>
@@ -227,7 +212,7 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
                   component="p"
                 >
                   {e.message}
-                  {e.errorCode && <> <Label isCompact color="red">{e.errorCode}</Label></>}
+                  {e.errorCode && <> (<code>{e.errorCode}</code>)</>}
                 </Alert>
               </StackItem>
             ))}
