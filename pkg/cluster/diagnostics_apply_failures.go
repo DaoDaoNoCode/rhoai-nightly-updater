@@ -133,6 +133,11 @@ func (f applyFailure) ocCommand(verb string, extra ...string) string {
 	return shellCommand(append(words, extra...)...)
 }
 
+// problemID is the ID of the problem reported for the object.
+func (f applyFailure) problemID() string {
+	return "operator-apply-failed-" + strings.ToLower(strings.Join([]string{f.Kind, f.Namespace, f.Name}, "-"))
+}
+
 // key identifies the object (not the failure): one problem per object.
 func (f applyFailure) key() string {
 	return strings.Join([]string{f.group(), f.Kind, f.Namespace, f.Name}, "|")
@@ -387,7 +392,7 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 		evidence = append(evidence, fmt.Sprintf("Failure deploying %s (%s): %s", f.object(), f.GroupVersion, truncate(d, 500)))
 	}
 	p := Problem{
-		ID:              "operator-apply-failed-" + strings.ToLower(strings.Join([]string{f.Kind, f.Namespace, f.Name}, "-")),
+		ID:              f.problemID(),
 		Severity:        severity,
 		AffectedObjects: []string{f.object()},
 		AutoFixable:     false,

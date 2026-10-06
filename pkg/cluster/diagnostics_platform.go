@@ -63,7 +63,21 @@ func checkPlatformModules(c *Client) checkOutput {
 				case "AdminAckRequired":
 					out.check.Status = "fail"
 					evidence := []string{fmt.Sprintf("Platform %s: ProvisioningProgress=False (AdminAckRequired): %s", pl.Metadata.Name, truncate(cond.Message, 400))}
-					evidence = append(evidence, pendingUpgradeAcks(c)...)
+					keys, values, keysErr := pendingUpgradeAckKeys(c)
+					cmd := upgradeAckCommand("<key>")
+					fix := "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>)."
+					switch {
+					case keysErr != nil:
+						evidence = append(evidence, fmt.Sprintf("ConfigMap %s/odh-upgrade-acks: %v", SubNS, keysErr))
+					case len(keys) > 0:
+						var cmds []string
+						for _, k := range keys {
+							evidence = append(evidence, fmt.Sprintf("Not acknowledged: %s=%q", k, values[k]))
+							cmds = append(cmds, upgradeAckCommand(k))
+						}
+						cmd = strings.Join(cmds, "\n")
+						fix = fmt.Sprintf("Read what each gate is about (the operator's release notes name it), then acknowledge %s with the commands below.", verb(len(keys), "it", "them"))
+					}
 					out.problems = append(out.problems, Problem{
 						ID:              "platform-admin-ack-required",
 						Severity:        "critical",
@@ -71,8 +85,8 @@ func checkPlatformModules(c *Client) checkOutput {
 						Description:     "Before provisioning a new version, the operator checks upgrade gates. An unacknowledged gate blocks all component provisioning until an administrator sets its key to \"true\" in ConfigMap odh-upgrade-acks. This is a deliberate manual step, not a bug.",
 						Evidence:        evidence,
 						AffectedObjects: []string{"ConfigMap " + SubNS + "/odh-upgrade-acks"},
-						Fix:             "Read what the gate is about, then acknowledge it in the OpenShift console or with the command below (replace <key>).",
-						TechnicalCmd:    "oc patch configmap odh-upgrade-acks -n " + SubNS + " --type merge -p '{\"data\":{\"<key>\":\"true\"}}'",
+						Fix:             fix,
+						TechnicalCmd:    cmd,
 					})
 				case "RunlevelTimeoutExceeded":
 					if out.check.Status == "pass" {
@@ -119,26 +133,34 @@ func checkPlatformModules(c *Client) checkOutput {
 	return out
 }
 
-// pendingUpgradeAcks lists the keys of odh-upgrade-acks that are not "true".
-func pendingUpgradeAcks(c *Client) []string {
+// pendingUpgradeAckKeys returns the keys of odh-upgrade-acks whose value is
+// not "true", sorted. The Platform and DataScienceCluster gate problems
+// turn each into its own acknowledgement command.
+func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 	body, _, err := c.get(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"))
 	if err != nil {
-		return []string{fmt.Sprintf("ConfigMap %s/odh-upgrade-acks: %v", SubNS, err)}
+		return nil, nil, err
 	}
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if json.Unmarshal(body, &cm) != nil {
-		return nil
+	if err := json.Unmarshal(body, &cm); err != nil {
+		return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
 	}
 	var keys []string
 	for k, v := range cm.Data {
 		if v != "true" {
-			keys = append(keys, fmt.Sprintf("Not acknowledged: %s=%q", k, v))
+			keys = append(keys, k)
 		}
 	}
 	sort.Strings(keys)
-	return keys
+	return keys, cm.Data, nil
+}
+
+// upgradeAckCommand acknowledges one upgrade gate.
+func upgradeAckCommand(key string) string {
+	patch, _ := json.Marshal(map[string]interface{}{"data": map[string]string{key: "true"}})
+	return shellCommand("oc", "patch", "configmap", "odh-upgrade-acks", "-n", SubNS, "--type", "merge", "-p", string(patch))
 }
 
 type stuckModule struct {
