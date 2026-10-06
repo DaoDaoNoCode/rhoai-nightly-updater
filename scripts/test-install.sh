@@ -6,6 +6,12 @@
 #   bash scripts/test-install.sh
 set -euo pipefail
 
+# Start from a clean environment: install.sh and release.sh read these
+# variables, and CI defines some of them (GitLab sets IMAGE globally), which
+# would override the values each test passes.
+unset ACTION ALLOW_MUTABLE_TAG ALLOW_TEMPLATE_MISMATCH APP_NAME DRY_RUN IMAGE \
+	NAMESPACE OAUTH_PROXY_IMAGE PLATFORM RELEASES_URL ROLLOUT_TIMEOUT TAG
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$(cd "$HERE/.." && pwd)
 WORK=$(mktemp -d)
