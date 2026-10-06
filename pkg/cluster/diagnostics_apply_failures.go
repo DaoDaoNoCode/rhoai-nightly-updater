@@ -39,6 +39,45 @@ const applyFailuresCheckName = "Objects the operator cannot update"
 
 var applyFailurePattern = regexp.MustCompile(`failure deploying resource ([^\s/:]*)/([^\s/:]+): apply failed ([^\s,]+), Kind=([A-Za-z0-9]+):`)
 
+// The parsed object is pasted into copy-paste commands, so it must look
+// like a Kubernetes object: anything else in a condition message is
+// ignored (Kubernetes object-name rules:
+// https://kubernetes.io/docs/concepts/overview/working-with-objects/names/).
+var (
+	dns1123Subdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+	dns1123Label     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	kindPattern      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
+	groupVersion     = regexp.MustCompile(`^[a-z0-9.-]+/[a-z0-9]+$|^v[0-9a-z]+$`)
+)
+
+// validObject reports whether the parsed object follows the Kubernetes
+// naming rules (an empty namespace is a cluster-scoped object).
+func (f applyFailure) validObject() bool {
+	return len(f.Name) <= 253 && dns1123Subdomain.MatchString(f.Name) &&
+		(f.Namespace == "" || (len(f.Namespace) <= 63 && dns1123Label.MatchString(f.Namespace))) &&
+		kindPattern.MatchString(f.Kind) && groupVersion.MatchString(f.GroupVersion)
+}
+
+// shellQuote quotes s for a POSIX shell unless it only has characters that
+// need no quoting.
+func shellQuote(s string) string {
+	if s != "" && safeShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+var safeShellWord = regexp.MustCompile(`^[A-Za-z0-9._/:=@%+,-]+$`)
+
+// shellCommand joins words into a command line, quoting each.
+func shellCommand(words ...string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = shellQuote(w)
+	}
+	return strings.Join(quoted, " ")
+}
+
 var (
 	invalidFieldPattern  = regexp.MustCompile(`([A-Za-z][\w.\[\]-]*): Invalid value: `)
 	controllerOwnerFound = regexp.MustCompile(`Found "true" in references for ([^\n;]+)`)
@@ -84,11 +123,14 @@ func (f applyFailure) resourceArg() string {
 	return strings.ToLower(f.Kind)
 }
 
-func (f applyFailure) nsFlag() string {
-	if f.Namespace == "" {
-		return ""
+// ocCommand is "oc <verb> <kind.group> <name> [-n <ns>] <extra...>",
+// every argument shell-quoted.
+func (f applyFailure) ocCommand(verb string, extra ...string) string {
+	words := []string{"oc", verb, f.resourceArg(), f.Name}
+	if f.Namespace != "" {
+		words = append(words, "-n", f.Namespace)
 	}
-	return " -n " + f.Namespace
+	return shellCommand(append(words, extra...)...)
 }
 
 func (f applyFailure) key() string {
@@ -108,6 +150,9 @@ func parseApplyFailures(msg string) []applyFailure {
 		f := applyFailure{
 			Namespace: msg[loc[2]:loc[3]], Name: msg[loc[4]:loc[5]], GroupVersion: msg[loc[6]:loc[7]], Kind: msg[loc[8]:loc[9]],
 			Detail: strings.TrimSpace(msg[loc[1]:end]),
+		}
+		if !f.validObject() {
+			continue
 		}
 		switch {
 		case strings.Contains(f.Detail, "Only one reference can have Controller set to true"):
@@ -287,9 +332,9 @@ func restartGuidance(r applyReporter) (who, cmd string) {
 		// The RHOAI operator's Deployment belongs to its CSV (OLM reverts
 		// edits to it), so its pod is deleted instead of a rollout restart.
 		return fmt.Sprintf("the RHOAI operator (%s/%s)", ns, name),
-			fmt.Sprintf("oc delete pod -n %s -l name=%s", ns, name)
+			shellCommand("oc", "delete", "pod", "-n", ns, "-l", "name="+name)
 	}
-	return fmt.Sprintf("%s/%s", ns, name), fmt.Sprintf("oc rollout restart deployment/%s -n %s", name, ns)
+	return fmt.Sprintf("%s/%s", ns, name), shellCommand("oc", "rollout", "restart", "deployment/"+name, "-n", ns)
 }
 
 func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) Problem {
@@ -315,7 +360,7 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 		AutoFixable:     false,
 	}
 	who, restart := restartGuidance(reporter)
-	deleteCmd := fmt.Sprintf("oc delete %s %s%s", f.resourceArg(), f.Name, f.nsFlag())
+	deleteCmd := f.ocCommand("delete")
 	impact := "The operator recreates it on its next reconcile."
 	if f.Kind == "Deployment" || f.Kind == "StatefulSet" || f.Kind == "DaemonSet" {
 		impact = fmt.Sprintf("Its pods stop until the operator recreates it; for a controller %s that is safe, because the operator recreates it with the current spec.", f.Kind)
@@ -354,11 +399,11 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 		crdRef := nonEmpty(crd, fmt.Sprintf("the CRD of %s in group %s", f.Kind, f.group()))
 		p.Fix = fmt.Sprintf("Re-apply %s from the installed operator version's bundle, then correct the listed fields of %s to the type that CRD expects. "+
 			"The right value needs judgement, so there is no automatic fix. Afterwards restart %s.", crdRef, f.object(), who)
-		cmds := []string{fmt.Sprintf("oc get %s %s%s -o yaml", f.resourceArg(), f.Name, f.nsFlag())}
+		cmds := []string{f.ocCommand("get", "-o", "yaml")}
 		if crd != "" {
-			cmds = append(cmds, fmt.Sprintf("oc get crd %s -o jsonpath='{.metadata.managedFields}'", crd))
+			cmds = append(cmds, shellCommand("oc", "get", "crd", crd, "-o", "jsonpath={.metadata.managedFields}"))
 		} else if g := f.group(); g != "" {
-			cmds = append(cmds, "oc api-resources --api-group="+g)
+			cmds = append(cmds, shellCommand("oc", "api-resources", "--api-group="+g))
 		}
 		p.Evidence = evidence
 		p.TechnicalCmd = strings.Join(cmds, "; ")

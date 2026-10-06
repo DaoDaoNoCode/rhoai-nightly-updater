@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -53,6 +54,70 @@ func TestParseApplyFailures(t *testing.T) {
 		if got := parseApplyFailures(msg); len(got) != 0 {
 			t.Errorf("%q: %+v", msg, got)
 		}
+	}
+}
+
+// Review fix 3: a condition message is not trusted. An object whose
+// namespace, name, kind or group/version breaks the Kubernetes rules is
+// ignored, so nothing from it reaches a copy-paste command.
+func TestParseApplyFailuresRejectsMalformedObjects(t *testing.T) {
+	tmpl := `failure deploying resource %s/%s: apply failed %s, Kind=%s: Deployment.apps "x" is invalid: spec.selector: Invalid value: {}: field is immutable`
+	for _, tc := range [][4]string{
+		{"redhat-ods-applications", "x;id;#", "apps/v1", "Deployment"},
+		{"redhat-ods-applications", "$(id)", "apps/v1", "Deployment"},
+		{"redhat-ods-applications", "`id`", "apps/v1", "Deployment"},
+		{"redhat-ods-applications", "a'b", "apps/v1", "Deployment"},
+		{"ns;rm", "x", "apps/v1", "Deployment"},
+		{"$(id)", "x", "apps/v1", "Deployment"},
+		{"UPPER", "x", "apps/v1", "Deployment"},
+		{"redhat-ods-applications", "Upper", "apps/v1", "Deployment"},
+		{"redhat-ods-applications", "x", "apps/v1;id", "Deployment"},
+		{"redhat-ods-applications", "x", "Apps/V1", "Deployment"},
+		{"redhat-ods-applications", "x", "apps/v1", "Deploy_ment"},
+		{"redhat-ods-applications", strings.Repeat("a", 254), "apps/v1", "Deployment"},
+	} {
+		msg := fmt.Sprintf(tmpl, tc[0], tc[1], tc[2], tc[3])
+		if got := parseApplyFailures(msg); len(got) != 0 {
+			t.Errorf("%v accepted: %+v", tc, got)
+		}
+	}
+	// Spaces and newlines do not even form a match.
+	for _, msg := range []string{
+		`failure deploying resource ns/a b: apply failed apps/v1, Kind=Deployment: field is immutable`,
+		"failure deploying resource ns/a\nb: apply failed apps/v1, Kind=Deployment: field is immutable",
+	} {
+		for _, f := range parseApplyFailures(msg) {
+			if strings.ContainsAny(f.Name, " \n") {
+				t.Errorf("%q: %+v", msg, f)
+			}
+		}
+	}
+	// A valid cluster-scoped and a valid core object still parse.
+	if got := parseApplyFailures(fmt.Sprintf(tmpl, "", "a.b-c", "v1", "Service")); len(got) != 1 {
+		t.Errorf("core object rejected: %+v", got)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"kuberay-operator":            "kuberay-operator",
+		"deployment.apps":             "deployment.apps",
+		"name=rhods-operator":         "name=rhods-operator",
+		"x;id;#":                      `'x;id;#'`,
+		"$(id)":                       `'$(id)'`,
+		"`id`":                        "'`id`'",
+		"a b":                         "'a b'",
+		"a\nb":                        "'a\nb'",
+		"it's":                        `'it'\''s'`,
+		"":                            "''",
+		"jsonpath={.metadata.labels}": "'jsonpath={.metadata.labels}'",
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+	if got := shellCommand("oc", "delete", "x;id"); got != "oc delete 'x;id'" {
+		t.Errorf("shellCommand = %s", got)
 	}
 }
 
