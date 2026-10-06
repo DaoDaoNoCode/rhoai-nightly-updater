@@ -127,6 +127,8 @@ export interface ComponentInfo {
   managementState: string;
   status: string;
   message?: string;
+  /** Short classified cause of a not-ready component; Diagnostics has the fix. */
+  cause?: string;
   fixAction?: string;
   fixTitle?: string;
   fixDescription?: string;
@@ -344,6 +346,8 @@ export interface Problem {
   technicalCmd?: string;
   /** "<Kind> <ns>/<name>" or "<Kind> <name>"; for auto-fixes, exactly what the fix may change. */
   affectedObjects?: string[] | null;
+  /** IDs of other problems in the same report that fix this one's cause. */
+  relatedProblems?: string[] | null;
 }
 
 export interface CheckResult {

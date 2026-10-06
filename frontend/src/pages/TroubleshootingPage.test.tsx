@@ -195,3 +195,32 @@ describe("Diagnostics (B2 contract)", () => {
     expect(text).toContain("(automatic fix available)");
   });
 });
+
+describe("Diagnostics related problems", () => {
+  const prereq: Problem = {
+    id: "prerequisite-missing-job-set", severity: "warning", title: "Prerequisite operator Job Set Operator is not installed",
+    description: "A module needs it.", fix: "Install it with the commands below.", autoFixable: false,
+    technicalCmd: "oc apply -f - <<'EOF'\nkind: Subscription\nEOF",
+  };
+  const dsc: Problem = {
+    id: "dsc-not-ready", severity: "warning", title: "DataScienceCluster default-dsc is not ready", description: "Conditions below.",
+    fix: "Fix the causes.", autoFixable: false, relatedProblems: ["prerequisite-missing-job-set", "not-in-report"],
+  };
+
+  it("links the problems that fix the cause and opens them", async () => {
+    stubApi({ "/api/diagnostics": result([dsc, prereq]) });
+    renderPage(<TroubleshootingPage />);
+    await screen.findByText(dsc.title);
+    expand(dsc.title);
+    const card = screen.getByText(dsc.title).closest(".pf-v6-c-card") as HTMLElement;
+    expect(within(card).getAllByRole("listitem").some((li) => li.textContent === "not-in-report")).toBe(false);
+    fireEvent.click(within(card).getByRole("button", { name: prereq.title }));
+    const target = screen.getAllByText(prereq.title).map((el) => el.closest(".pf-v6-c-card")).find((c) => c !== card) as HTMLElement;
+    await waitFor(() => expect(within(target).getByText(/Install it with the commands below/)).toBeInTheDocument());
+  });
+
+  it("the report names related problems", () => {
+    const text = buildDiagnosticReport(result([dsc, prereq]));
+    expect(text).toContain(`Related: ${prereq.title}`);
+  });
+});

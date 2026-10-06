@@ -81,6 +81,13 @@ export function hasAutoFix(problem: Problem): boolean {
   return !!problem.autoFixable && !!problem.autoFixAction;
 }
 
+/** The problems of the report that fix this problem's cause, in the order the backend gave. */
+export function relatedProblems(problem: Problem, all: Problem[]): Problem[] {
+  return (problem.relatedProblems ?? [])
+    .map((id) => all.find((p) => p.id === id))
+    .filter((p): p is Problem => !!p && p.id !== problem.id);
+}
+
 export function buildDiagnosticReport(data: DiagnosticResult): string {
   const lines: string[] = [];
   lines.push("=== Diagnostic Report ===");
@@ -109,6 +116,8 @@ export function buildDiagnosticReport(data: DiagnosticResult): string {
         lines.push(`  Objects: ${problem.affectedObjects.join(", ")}`);
       }
       lines.push(`  Fix: ${problem.fix ?? ""}${hasAutoFix(problem) ? " (automatic fix available)" : " (manual)"}`);
+      const related = relatedProblems(problem, reportProblems);
+      if (related.length > 0) lines.push(`  Related: ${related.map((r) => r.title).join("; ")}`);
       if (problem.technicalCmd) lines.push(`  Command: $ ${problem.technicalCmd}`);
     }
   } else {
@@ -182,6 +191,16 @@ export const TroubleshootingPage: React.FC = () => {
     onResult(result);
     // Re-scan to show the state after the fix (or after someone else's change).
     await runScan();
+  };
+
+  // Opens a related problem's card and moves focus to it.
+  const showProblem = (id: string) => {
+    setExpanded((prev) => ({ ...prev, [id]: true }));
+    window.requestAnimationFrame(() => {
+      const toggle = document.getElementById(`problem-${id}-toggle`);
+      toggle?.scrollIntoView({ block: "start" });
+      toggle?.focus();
+    });
   };
 
   const handleCopyReport = () => {
@@ -269,6 +288,7 @@ export const TroubleshootingPage: React.FC = () => {
                   {group.items.map((problem) => {
                     const auto = hasAutoFix(problem);
                     const objects = problem.affectedObjects ?? [];
+                    const related = relatedProblems(problem, problems);
                     const isOpen = !!expanded[problem.id];
                     const severity = SEVERITY[problem.severity] ?? SEVERITY.info;
                     const toggleId = `problem-${problem.id}-toggle`;
@@ -321,6 +341,20 @@ export const TroubleshootingPage: React.FC = () => {
                                       <DescriptionListTerm>Fix</DescriptionListTerm>
                                       <DescriptionListDescription>{problem.fix}{!auto && " This page does not change anything for this problem."}</DescriptionListDescription>
                                     </DescriptionListGroup>
+                                    {related.length > 0 && (
+                                      <DescriptionListGroup>
+                                        <DescriptionListTerm>Related</DescriptionListTerm>
+                                        <DescriptionListDescription>
+                                          <List isPlain>
+                                            {related.map((r) => (
+                                              <ListItem key={r.id}>
+                                                <Button variant="link" isInline className="pf-v6-u-text-align-left" onClick={() => showProblem(r.id)}>{r.title}</Button>
+                                              </ListItem>
+                                            ))}
+                                          </List>
+                                        </DescriptionListDescription>
+                                      </DescriptionListGroup>
+                                    )}
                                     {problem.technicalCmd && (
                                       <DescriptionListGroup>
                                         <DescriptionListTerm>Command</DescriptionListTerm>
