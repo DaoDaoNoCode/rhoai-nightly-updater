@@ -83,8 +83,11 @@ func TestLegacyRevertRestoresOriginalManagedAnnotation(t *testing.T) {
 		{name: "absent", initial: nil, deploys: 1},
 		{name: "absent-two-deploys", initial: nil, deploys: 2},
 		{name: "explicit-true", initial: map[string]string{"opendatahub.io/managed": "true"}, deploys: 2, want: "true", wantSet: true},
-		{name: "left-false-by-old-tool", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 1},
-		{name: "revert-without-deploy-record", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 0},
+		// R3: a "false" set before the PR deployment (by the user) survives.
+		{name: "user-set-false-is-preserved", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 2, want: "false", wantSet: true},
+		// Without a record the original is unknown: left unchanged.
+		{name: "revert-without-deploy-record", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 0, want: "false", wantSet: true},
+		{name: "corrupt-record", initial: map[string]string{"opendatahub.io/managed": "false", legacyOriginalManagedAnnotation: "{not json"}, deploys: 0, want: "false", wantSet: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allPRImagesPublished(t)
