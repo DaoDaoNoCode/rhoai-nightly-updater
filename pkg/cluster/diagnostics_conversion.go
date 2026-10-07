@@ -203,7 +203,7 @@ func checkConversionFailures(c *Client) checkOutput {
 	switch {
 	case len(out.problems) > 0:
 		out.check.Status = "fail"
-		details = append(details, fmt.Sprintf("the operator's conversion webhook fails for %s", strings.Join(failedKinds, ", ")))
+		details = append(details, fmt.Sprintf("The operator's conversion webhook fails for %s", strings.Join(failedKinds, ", ")))
 	case groups == 0:
 		details = append(details, "No RHOAI API group serves more than one version")
 	default:

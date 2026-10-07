@@ -9,6 +9,7 @@
     { "name": "Pull secret", "status": "pass", "detail": "Pull secret is configured and valid" },
     { "name": "Image mirror", "status": "pass", "detail": "Image mirror configured (rhoai-quay-mirror)" },
     { "name": "Stale webhooks", "status": "pass", "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it" },
+    { "name": "API versions", "status": "pass", "detail": "Every served version of 5 resources in 4 multi-version RHOAI API groups can be read" },
     { "name": "Node capacity", "status": "pass", "detail": "All 3 nodes are ready" },
     { "name": "DataScienceCluster", "status": "pass", "detail": "default-dsc is Ready; DSCInitialization default-dsci phase Ready" },
     { "name": "RHOAI pods", "status": "pass", "detail": "41 pods healthy in redhat-ods-applications, redhat-ods-monitoring" },

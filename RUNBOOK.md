@@ -20,6 +20,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
 | S3 storage on "MinIO (migration pending)", **Incomplete**, Tear down disabled | [§10](#10-test-resources) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
+| "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
 
 ---
 
@@ -65,7 +66,7 @@ What the app's notices mean:
 
 <img src="docs/images/banner-major-update.png" alt="Notice: v2.0.0 is available; a new major version requires a full redeploy" width="760">
 
-- **"vX.Y.Z is available"**: a newer release exists. "Requires a full redeploy" means a new major version: run its `install.sh` (or check it out and `make upgrade`). Dismissing hides it until an even newer release.
+- **"vX.Y.Z is available"**: a newer release exists. The notice shows that release's installer command (download, read, run) to copy; [UPGRADING](docs/UPGRADING.md#patch-and-minor-releases) explains it. "Requires a full redeploy" means a new major version: run its `install.sh` (or check it out and `make upgrade`). Dismissing hides it until an even newer release.
 
 <img src="docs/images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date" width="760">
 
@@ -621,6 +622,22 @@ oc get datasciencecluster -o jsonpath='{range .items[0].status.conditions[*]}{.t
 | Anything else | The condition with "cause not classified" and the operator's message as evidence | Fix what the message names, or set an unused component to Removed |
 
 Reproduce the cases safely on a test cluster: delete `JobSetOperator/cluster` (Trainer reports JobSet missing; the operand problem appears; re-create it from the Command), then restart nothing and watch the back-off problem appear once the operand is back.
+
+### 11.8 The operator cannot convert a CRD version
+
+Diagnostics → "API versions" reports `The operator cannot convert <Kind> to <version>` (for example DataScienceCluster v3, Platform v1alpha2). Unlike §11.2 the webhook's Service is up: the operator answers, but its image does not know the version, so every read at that version fails, `oc get` included when it is the preferred one. Seen on a RHOAI 3.6 nightly (2026-10-07) whose operator image was older than the CRDs its bundle installed: `conversion webhook for datasciencecluster.opendatahub.io/v2, Kind=DataScienceCluster failed: no kind "DataScienceCluster" is registered for version "datasciencecluster.opendatahub.io/v3"`. A list without `limit` answers HTTP 429 `storage is (re)initializing` with `Retry-After`, and `oc` retries that forever, so pass `--request-timeout`.
+
+What the tool does: it reads the next served version that works (here v2) and says so on the Components page; it never compares a DSC with defaults of another version, because v3 renamed components. When the bundle ships v3 defaults only, the Components page explains that instead of comparing.
+
+Check (read-only):
+
+```bash
+oc get --raw '/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters?limit=1' --request-timeout=20s   # fails
+oc get --raw '/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters?limit=1' --request-timeout=20s   # works
+oc logs -n redhat-ods-operator deploy/rhods-operator | grep conversion-webhook
+```
+
+Fix: update RHOAI to a newer nightly (Update on the Status page, or a build from Build Explorer), then run Diagnostics again. Do not switch the CRD to conversion strategy `None` (§11.2 step 3): the stored objects would be read in the wrong shape.
 
 ## 12. Activity log
 

@@ -283,10 +283,34 @@ export function healthyComponents() {
     snapshotTime: ago(60 * 26),
     changedCount: 3,
     consoleURL: CONSOLE_URL,
+    dscAPIVersion: "datasciencecluster.opendatahub.io/v2",
     dscCompatibility: {
       operatorVersion: "3.6.0", invalidFields: [], missingComponents: [], extraComponents: [], defaultsSource: "csv",
+      defaultsAPIVersion: "datasciencecluster.opendatahub.io/v2",
     },
   };
+}
+
+/**
+ * The operator's conversion webhook cannot convert the DSC to v3 (the
+ * preferred version), so it is read as v2, and the bundle ships v3 defaults
+ * only. Messages as pkg/cluster writes them (dsc_versions_test.go).
+ */
+export function conversionFallbackComponents() {
+  const c = healthyComponents();
+  c.dscVersionFallback = {
+    version: "v3",
+    used: "v2",
+    message: "storage is (re)initializing: failed to list datasciencecluster.opendatahub.io/v3, Kind=DataScienceCluster: conversion webhook for datasciencecluster.opendatahub.io/v2, Kind=DataScienceCluster failed: no kind \"DataScienceCluster\" is registered for version \"datasciencecluster.opendatahub.io/v3\" in scheme \"pkg/runtime/scheme.go:111\"",
+  };
+  c.dscCompatibility = {
+    invalidFields: [], missingComponents: [], extraComponents: [],
+    defaultsError: "This DataScienceCluster can only be read as v2: reading it as v3 fails because the operator's conversion webhook cannot convert it. " +
+      "Operator 3.6.0 has no DataScienceCluster v2 defaults (none in the alm-examples of rhods-operator.3.6.0 or branch rhoai-3.6 of rhods-operator); it ships them as v3 only. " +
+      "Component names differ between API versions, so the DataScienceCluster is not compared with defaults of another version. " +
+      "Diagnostics explains the conversion failure and how to fix it.",
+  };
+  return c;
 }
 
 /** The trainer needs the JobSet operator; ray's module operator lags. */

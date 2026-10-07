@@ -1,0 +1,122 @@
+{
+  "problems": [
+    {
+      "id": "conversion-failed-platforms.config.opendatahub.io",
+      "severity": "critical",
+      "title": "The operator cannot convert Platform to v1alpha2",
+      "description": "Reading Platform objects as v1alpha2 fails: the API server asks the operator's conversion webhook to convert them, and the webhook returns an error. Reading them as v1alpha1 works, so clients of that version keep working. v1alpha2 is the version the API server prefers, so `oc get platform` and every client that follows discovery fail too. Likely cause (an inference from the message): the conversion webhook served by the running operator does not know v1alpha2. That happens when a nightly's operator image is older than the CRDs its bundle installed.",
+      "evidence": [
+        "GET /apis/config.opendatahub.io/v1alpha2/platforms?limit=1: HTTP 500: conversion webhook for config.opendatahub.io/v1alpha1, Kind=Platform failed: no kind \"Platform\" is registered for version \"config.opendatahub.io/v1alpha2\" in scheme \"pkg/runtime/scheme.go:111\"",
+        "GET /apis/config.opendatahub.io/v1alpha1/platforms?limit=1: OK",
+        "Installed operator: rhods-operator.3.6.0, Deployment redhat-ods-operator/rhods-operator"
+      ],
+      "fix": "Update RHOAI to a newer nightly (Update on the Status page, or a build from Build Explorer), then run diagnostics again. Nothing needs to be changed by hand: this tool keeps reading the version that works, and does not change the CRD.",
+      "autoFixable": false,
+      "affectedObjects": [
+        "CustomResourceDefinition platforms.config.opendatahub.io"
+      ],
+      "learnMore": "A CRD that serves several versions stores each object in one of them and converts on every read in another, through the conversion webhook of the operator. The webhook can only convert to the versions compiled into the operator image. A newer operator build that knows the version fixes the reads; switching the CRD to conversion strategy None would change how the stored objects are read, so the tool does not do it.",
+      "technicalCmd": "oc get --raw '/apis/config.opendatahub.io/v1alpha2/platforms?limit=1' --request-timeout=20s\noc logs -n redhat-ods-operator deploy/rhods-operator | grep conversion-webhook"
+    },
+    {
+      "id": "conversion-failed-datascienceclusters.datasciencecluster.opendatahub.io",
+      "severity": "critical",
+      "title": "The operator cannot convert DataScienceCluster to v3",
+      "description": "Reading DataScienceCluster objects as v3 fails: the API server asks the operator's conversion webhook to convert them, and the webhook returns an error. Reading them as v2 works, so clients of that version keep working. v3 is the version the API server prefers, so `oc get datasciencecluster` and every client that follows discovery fail too. Likely cause (an inference from the message): the conversion webhook served by the running operator does not know v3. That happens when a nightly's operator image is older than the CRDs its bundle installed.",
+      "evidence": [
+        "GET /apis/datasciencecluster.opendatahub.io/v3/datascienceclusters?limit=1: HTTP 429: storage is (re)initializing: failed to list datasciencecluster.opendatahub.io/v3, Kind=DataScienceCluster: conversion webhook for datasciencecluster.opendatahub.io/v2, Kind=DataScienceCluster failed: no kind \"DataScienceCluster\" is registered for version \"datasciencecluster.opendatahub.io/v3\" in scheme \"pkg/runtime/scheme.go:111\"",
+        "GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters?limit=1: OK",
+        "Installed operator: rhods-operator.3.6.0, Deployment redhat-ods-operator/rhods-operator"
+      ],
+      "fix": "Update RHOAI to a newer nightly (Update on the Status page, or a build from Build Explorer), then run diagnostics again. Nothing needs to be changed by hand: this tool keeps reading the version that works, and does not change the CRD.",
+      "autoFixable": false,
+      "affectedObjects": [
+        "CustomResourceDefinition datascienceclusters.datasciencecluster.opendatahub.io"
+      ],
+      "learnMore": "A CRD that serves several versions stores each object in one of them and converts on every read in another, through the conversion webhook of the operator. The webhook can only convert to the versions compiled into the operator image. A newer operator build that knows the version fixes the reads; switching the CRD to conversion strategy None would change how the stored objects are read, so the tool does not do it.",
+      "technicalCmd": "oc get --raw '/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters?limit=1' --request-timeout=20s\noc logs -n redhat-ods-operator deploy/rhods-operator | grep conversion-webhook"
+    }
+  ],
+  "checks": [
+    {
+      "name": "Catalog health",
+      "status": "pass",
+      "detail": "Nightly catalog is healthy (quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:e84ba5c4ad1153f8b6e04754d5dfbe192b1be7e09d0606df3b370044d0715699)"
+    },
+    {
+      "name": "Operator pods",
+      "status": "pass",
+      "detail": "3 pods healthy in redhat-ods-operator"
+    },
+    {
+      "name": "Subscription health",
+      "status": "pass",
+      "detail": "Subscription active (channel: stable-3.x, source: rhoai-catalog-dev)"
+    },
+    {
+      "name": "Operator installed",
+      "status": "pass",
+      "detail": "rhods-operator.3.6.0 (Succeeded)"
+    },
+    {
+      "name": "Install plan",
+      "status": "pass",
+      "detail": "Latest install plan completed (install-7xk2p)"
+    },
+    {
+      "name": "Pull secret",
+      "status": "pass",
+      "detail": "Pull secret is configured and valid"
+    },
+    {
+      "name": "Image mirror",
+      "status": "pass",
+      "detail": "Image mirror configured (rhoai-quay-mirror)"
+    },
+    {
+      "name": "Stale webhooks",
+      "status": "pass",
+      "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it"
+    },
+    {
+      "name": "API versions",
+      "status": "fail",
+      "detail": "The operator's conversion webhook fails for Platform v1alpha2, DataScienceCluster v3; 2 reads not checked (this app may not list them)"
+    },
+    {
+      "name": "Node capacity",
+      "status": "pass",
+      "detail": "All 3 nodes are ready"
+    },
+    {
+      "name": "DataScienceCluster",
+      "status": "pass",
+      "detail": "default-dsc is Ready; DSCInitialization default-dsci phase Ready"
+    },
+    {
+      "name": "RHOAI pods",
+      "status": "pass",
+      "detail": "41 pods healthy in redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Certificates",
+      "status": "pass",
+      "detail": "2 Certificates Ready in redhat-ods-operator, redhat-ods-applications, redhat-ods-monitoring"
+    },
+    {
+      "name": "Platform modules",
+      "status": "pass",
+      "detail": "No module is stuck in deletion; Platform default phase: Ready"
+    },
+    {
+      "name": "Objects the operator cannot update",
+      "status": "pass",
+      "detail": "No apply failures reported (13 CRs checked)"
+    },
+    {
+      "name": "Operator-managed config",
+      "status": "pass",
+      "detail": "39 deployments under operator management"
+    }
+  ]
+}

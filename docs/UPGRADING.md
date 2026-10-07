@@ -17,6 +17,38 @@ The commands below use the default names; set yours first:
 NS=rhoai-nightly-updater APP=rhoai-nightly-updater
 ```
 
+## Patch and minor releases
+
+When the app shows "vX.Y.Z is available" without "requires a full redeploy",
+the release has the same template as yours. Run that release's installer:
+the notice shows the command to copy, for example
+
+```bash
+curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.1/install.sh
+less install.sh                                     # read it first
+bash install.sh --dry-run                           # optional: validate only
+bash install.sh
+```
+
+The notice links the release page of the app's `RELEASES_URL` (GitLab by
+default). If the download asks you to sign in, take `install.sh` from the
+release page in your browser, or from the GitHub release above, and check
+its SHA-256 against the release notes.
+
+What it does: it re-applies that release's template with its image pinned by
+digest (it refuses an image not built from the release's commit), keeps the
+cookie Secret so everyone stays signed in, lets a running cluster operation
+finish first (the UI is offline for up to ~17 minutes then), and prunes old
+ReplicaSets. The app's own state on the cluster (activity log, test
+resources, Dashboard Dev sessions) is not touched.
+
+Settings: the template's parameters come from the installer's options, not
+from the running Deployment. With the default names nothing needs to be
+passed. If you installed with another namespace or app name, pass
+`--namespace $NS --app-name $APP` again: without them `install.sh` installs a
+second copy under the default names. Likewise pass `--image-repo` (or
+`IMAGE`) and `RELEASES_URL` again if you set them.
+
 ## Upgrade paths at a glance
 
 ```mermaid

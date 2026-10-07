@@ -81,6 +81,11 @@
       "detail": "No RHOAI webhook or CRD conversion points to a Service that cannot serve it"
     },
     {
+      "name": "API versions",
+      "status": "pass",
+      "detail": "Every served version of 5 resources in 4 multi-version RHOAI API groups can be read"
+    },
+    {
       "name": "Node capacity",
       "status": "pass",
       "detail": "All 3 nodes are ready"

@@ -85,10 +85,18 @@ const scenarios = {
   },
   "major-update": (w) => {
     w.version = F.versionInfo({ version: "v1.0.0", commit: "5a0c7e3b9d1f4a6c8e2b0d4f6a8c1e3b5d7f9a2c", templateRevision: "3", expectedTemplateRevision: "3" });
-    w.updateCheck = { current: "v1.0.0", latest: "v2.0.0", updateAvailable: true, majorUpgrade: true, releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.0" };
+    w.updateCheck = {
+      current: "v1.0.0", latest: "v2.0.0", updateAvailable: true, majorUpgrade: true,
+      releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.0",
+      installerURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.0/downloads/install.sh",
+    };
   },
   "patch-update": (w) => {
-    w.updateCheck = { current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1" };
+    w.updateCheck = {
+      current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false,
+      releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1",
+      installerURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1/downloads/install.sh",
+    };
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
   "components-not-ready": (w) => { w.components = F.notReadyComponents(); },
@@ -99,10 +107,12 @@ const scenarios = {
   "s3-incomplete": (w) => { w.resources.minio = F.s3States.incomplete; w.gated = true; },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
 };
-for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates"]) {
+for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook"]) {
   scenarios[`diag-${name}`] = (w) => {
     w.diagnostics = F.diagnostics(name);
-    if (name !== "healthy") w.components = F.notReadyComponents();
+    // The operator cannot convert the DSC to v3: the Components page reads it as v2.
+    if (name === "conversion-webhook") w.components = F.conversionFallbackComponents();
+    else if (name !== "healthy") w.components = F.notReadyComponents();
     if (name === "module-backoff") w.gated = true;
   };
 }
