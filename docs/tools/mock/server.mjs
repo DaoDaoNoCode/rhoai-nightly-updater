@@ -88,14 +88,14 @@ const scenarios = {
     w.updateCheck = {
       current: "v1.0.0", latest: "v2.0.0", updateAvailable: true, majorUpgrade: true,
       releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.0",
-      installerURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.0/downloads/install.sh",
+      installerURL: "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.0/install.sh",
     };
   },
   "patch-update": (w) => {
     w.updateCheck = {
       current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false,
       releaseNotesURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1",
-      installerURL: "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases/v2.0.1/downloads/install.sh",
+      installerURL: "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.1/install.sh",
     };
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },

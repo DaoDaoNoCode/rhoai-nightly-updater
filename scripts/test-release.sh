@@ -354,6 +354,11 @@ expect_ok "gitlab-release" env PATH="$WORK/curlbin:$PATH" FAKE_RELEASE_BODY="$WO
 grep -qF '"url":"https://gitlab.example.com/g/app/-/jobs/12345/artifacts/raw/install.sh"' "$WORK/release.json" && pass || fail "gitlab-release: the installer link is not pinned to the job: $(cat "$WORK/release.json")"
 grep -qF "$sum" "$WORK/release.json" && pass || fail "gitlab-release: the installer checksum is missing"
 grep -qF 'releases/v2.0.0/downloads/install.sh' "$WORK/release.json" && pass || fail "gitlab-release: the permanent download URL is missing from the notes"
+# The canonical project is not public: its notes download from the GitHub mirror.
+expect_ok "gitlab-release (canonical project)" env PATH="$WORK/curlbin:$PATH" FAKE_RELEASE_BODY="$WORK/release.json" \
+	CI_API_V4_URL=https://gitlab.example.com/api/v4 CI_PROJECT_ID=7 CI_JOB_TOKEN=x CI_PROJECT_URL=https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater \
+	INSTALLER="install.sh" INSTALLER_JOB_ID=12345 sh -c "cd '$REPO' && cp '$WORK/install.sh' install.sh && $SH '$RELEASE' gitlab-release v2.0.0; rc=\$?; rm -f install.sh; exit \$rc"
+grep -qF 'curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.0/install.sh' "$WORK/release.json" && pass || fail "gitlab-release: the canonical project's notes do not download from the mirror: $(cat "$WORK/release.json")"
 expect_fail "gitlab-release needs the installer job" "INSTALLER_JOB_ID" env PATH="$WORK/curlbin:$PATH" FAKE_RELEASE_BODY="$WORK/release.json" \
 	CI_API_V4_URL=https://gitlab.example.com/api/v4 CI_PROJECT_ID=7 CI_JOB_TOKEN=x CI_PROJECT_URL=https://gitlab.example.com/g/app \
 	INSTALLER="$WORK/install.sh" $SH "$RELEASE" gitlab-release v2.0.0

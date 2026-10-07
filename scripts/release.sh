@@ -41,6 +41,10 @@
 # "origin github").
 set -eu
 
+# The canonical GitLab project and its public GitHub mirror (gitlab-release).
+CANONICAL_PROJECT_URL=https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater
+MIRROR_RELEASES_URL=https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases
+
 info() { printf '%s\n' "$*" >&2; }
 die() {
 	printf 'ERROR: %s\n' "$*" >&2
@@ -511,6 +515,14 @@ cmd_gitlab_release() {
 	# the checksum in the notes is of this same file. The Release also serves
 	# it under a permanent URL: <project>/-/releases/<tag>/downloads/install.sh
 	artifact_url="$CI_PROJECT_URL/-/jobs/$INSTALLER_JOB_ID/artifacts/raw/$INSTALLER"
+	# The notes' curl command needs an anonymous download. The canonical
+	# project is not public (its release assets redirect to the sign-in
+	# page), so its notes point at the public GitHub mirror's asset: the
+	# installer is generated from the tag alone, so it is the same file and
+	# the checksum below holds (v2.0.0: b08dd37d… from both CI systems).
+	if [ -z "${INSTALLER_URL:-}" ] && [ "$CI_PROJECT_URL" = "$CANONICAL_PROJECT_URL" ]; then
+		INSTALLER_URL=$MIRROR_RELEASES_URL/download/$version/install.sh
+	fi
 	INSTALLER_URL=${INSTALLER_URL:-$CI_PROJECT_URL/-/releases/$version/downloads/install.sh}
 	notes=$(cmd_notes "$version" HEAD)
 	rev=$(template_revision HEAD)

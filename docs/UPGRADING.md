@@ -30,10 +30,10 @@ bash install.sh --dry-run                           # optional: validate only
 bash install.sh
 ```
 
-The notice links the release page of the app's `RELEASES_URL` (GitLab by
-default). If the download asks you to sign in, take `install.sh` from the
-release page in your browser, or from the GitHub release above, and check
-its SHA-256 against the release notes.
+The notice links the release notes on the app's `RELEASES_URL` (GitLab by
+default) and downloads `install.sh` from the public GitHub release, because
+the GitLab project's release assets need a sign-in. Both releases carry the
+same `install.sh`: its SHA-256 is in the release notes.
 
 What it does: it re-applies that release's template with its image pinned by
 digest (it refuses an image not built from the release's commit), keeps the

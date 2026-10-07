@@ -23,6 +23,26 @@ func TestHighestRelease(t *testing.T) {
 	}
 }
 
+func TestInstallerReleasesURL(t *testing.T) {
+	cases := []struct{ name, override, releases, want string }{
+		{"canonical GitLab project: its public mirror", "", canonicalReleasesURL, mirrorReleasesURL},
+		{"canonical with a trailing slash", "", canonicalReleasesURL + "/", mirrorReleasesURL},
+		{"a fork's releases page", "", "https://gitlab.example.com/group/app/-/releases", "https://gitlab.example.com/group/app/-/releases"},
+		{"override wins", "https://github.com/example/app/releases", canonicalReleasesURL, "https://github.com/example/app/releases"},
+	}
+	for _, c := range cases {
+		t.Setenv("INSTALLER_RELEASES_URL", c.override)
+		if got := installerReleasesURL(c.releases); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	// Release notes stay on RELEASES_URL; only the download moves.
+	got := compareReleases("v2.0.0", "v2.0.1", canonicalReleasesURL, mirrorReleasesURL)
+	if got.ReleaseNotesURL != canonicalReleasesURL+"/v2.0.1" || got.InstallerURL != mirrorReleasesURL+"/download/v2.0.1/install.sh" {
+		t.Errorf("canonical project: %+v", got)
+	}
+}
+
 func TestCompareReleases(t *testing.T) {
 	const notes = "https://gitlab.example.com/group/app/-/releases/"
 	cases := []struct {
@@ -45,7 +65,7 @@ func TestCompareReleases(t *testing.T) {
 		{"no https notes", "v1.0.0", "v1.1.0", "http://example.com/releases", UpdateInfo{Current: "v1.0.0", Latest: "v1.1.0", UpdateAvailable: true}},
 	}
 	for _, c := range cases {
-		if got := compareReleases(c.running, c.latest, c.url); got != c.want {
+		if got := compareReleases(c.running, c.latest, c.url, c.url); got != c.want {
 			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
 		}
 	}

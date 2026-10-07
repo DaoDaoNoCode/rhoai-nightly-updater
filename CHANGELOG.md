@@ -20,8 +20,11 @@ only accepts a tag whose version is the top dated section. See
 
 ### Upgrade notes
 
-- Same template as v2.0.0 (revision 4): run the `install.sh` of v2.0.1, or
-  `git checkout v2.0.1 && make upgrade`. No RBAC change.
+- Upgrading from v2.0.0 or any earlier build: download and run the
+  `install.sh` of v2.0.1 (commands at the end of these notes; add
+  `--namespace` and `--app-name` if your install does not use the default
+  names). From a clone: `git checkout v2.0.1 && make upgrade`.
+- Same template as v2.0.0 (revision 4): no RBAC change, no full redeploy.
 
 ### Fixed
 
@@ -48,8 +51,9 @@ only accepts a tag whose version is the top dated section. See
   commands), as when a nightly's operator image is older than the CRDs of
   its bundle. See [RUNBOOK §11.8](RUNBOOK.md#118-the-operator-cannot-convert-a-crd-version).
 - The "vX.Y.Z is available" notice shows that release's installer as a
-  command to copy (GitHub and GitLab release pages), with the git route as
-  the alternative. See [docs/UPGRADING.md](docs/UPGRADING.md#patch-and-minor-releases).
+  command to copy, with the git route as the alternative. For this project
+  it downloads from the public GitHub mirror, because the GitLab project's
+  release assets need a sign-in; the GitLab release notes do the same. See [docs/UPGRADING.md](docs/UPGRADING.md#patch-and-minor-releases).
 
 ## [2.0.0] - 2026-10-06
 

@@ -82,13 +82,40 @@ type UpdateInfo struct {
 	MajorUpgrade    bool   `json:"majorUpgrade"`
 	ReleaseNotesURL string `json:"releaseNotesURL,omitempty"`
 	// InstallerURL is where Latest's install.sh is downloaded from, when
-	// RELEASES_URL is a GitHub or GitLab releases page.
+	// the installer's releases page (installerReleasesURL) is a GitHub or
+	// GitLab releases page.
 	InstallerURL string `json:"installerURL,omitempty"`
 }
 
+const (
+	// canonicalReleasesURL is the template's default RELEASES_URL.
+	canonicalReleasesURL = "https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases"
+	// mirrorReleasesURL is the public GitHub mirror of that project. Its
+	// release job attaches the same install.sh: the installer is generated
+	// from the tag alone (scripts/release.sh installer), so both CI systems
+	// build identical bytes (v2.0.0: SHA-256 b08dd37d… on both).
+	mirrorReleasesURL = "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases"
+)
+
+// installerReleasesURL is the releases page to download install.sh from.
+// INSTALLER_RELEASES_URL overrides it. The canonical GitLab project is not
+// public: anonymous downloads of its release assets redirect to the sign-in
+// page, so curl would save that page; its public mirror is used instead.
+// Any other releases page (a fork's) serves its own installer.
+func installerReleasesURL(releasesURL string) string {
+	if v := strings.TrimSpace(os.Getenv("INSTALLER_RELEASES_URL")); v != "" {
+		return v
+	}
+	if strings.TrimRight(releasesURL, "/") == canonicalReleasesURL {
+		return mirrorReleasesURL
+	}
+	return releasesURL
+}
+
 // compareReleases builds the answer for the running version and the highest
-// release found.
-func compareReleases(running, latest, releasesURL string) UpdateInfo {
+// release found: release notes on releasesURL, the installer on
+// installerReleases.
+func compareReleases(running, latest, releasesURL, installerReleases string) UpdateInfo {
 	cur, ok := parseRelease(running)
 	if !ok {
 		return UpdateInfo{}
@@ -103,9 +130,10 @@ func compareReleases(running, latest, releasesURL string) UpdateInfo {
 		info.UpdateAvailable = true
 		info.MajorUpgrade = lv[0] != cur[0]
 		if strings.HasPrefix(releasesURL, "https://") {
-			base := strings.TrimRight(releasesURL, "/")
-			info.ReleaseNotesURL = base + "/" + latest
-			info.InstallerURL = installerURL(base, latest)
+			info.ReleaseNotesURL = strings.TrimRight(releasesURL, "/") + "/" + latest
+		}
+		if strings.HasPrefix(installerReleases, "https://") {
+			info.InstallerURL = installerURL(strings.TrimRight(installerReleases, "/"), latest)
 		}
 	}
 	return info
@@ -178,9 +206,10 @@ func (c *updateChecker) latestRelease(repository string) string {
 
 // HandleUpdateCheck reports whether a newer release of the updater exists.
 func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	info := compareReleases(Version, "", "")
+	info := compareReleases(Version, "", "", "")
 	if repository := strings.TrimSpace(os.Getenv("IMAGE_REPOSITORY")); info.Current != "" && repository != "" {
-		info = compareReleases(Version, defaultUpdateChecker.latestRelease(repository), os.Getenv("RELEASES_URL"))
+		releases := os.Getenv("RELEASES_URL")
+		info = compareReleases(Version, defaultUpdateChecker.latestRelease(repository), releases, installerReleasesURL(releases))
 	}
 	writeJSON(w, info, "update-check")
 }
