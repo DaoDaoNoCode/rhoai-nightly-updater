@@ -64,6 +64,12 @@ describe("update available notice", () => {
     expect(screen.getByRole("button", { name: "Copy the v2.0.1 install command" })).toBeInTheDocument();
     expect(screen.getByText("git checkout v2.0.1 && make upgrade")).toBeInTheDocument();
     expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
+    // The installer takes its settings from its options, not from the running install.
+    expect(screen.getByText(/Pass the options this install was made with/)).toBeInTheDocument();
+    for (const option of ["--namespace", "--app-name", "--image-repo", "docs/UPGRADING.md"]) {
+      expect(screen.getByText(option)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/if this install does not use the default names/)).not.toBeInTheDocument();
     // A GitHub asset downloads anonymously: no sign-in hint.
     expect(screen.queryByText(/asks you to sign in/)).not.toBeInTheDocument();
   });
