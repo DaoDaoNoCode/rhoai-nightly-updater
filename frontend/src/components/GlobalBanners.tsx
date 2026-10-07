@@ -303,7 +303,7 @@ function useUpdateNotice(): Notice | null {
               {installer}
             </ClipboardCopy>
             Pass the options this install was made with (for example <code>--namespace</code>, <code>--app-name</code>,{" "}
-            <code>--image-repo</code>); see &quot;Patch and minor releases&quot; in <code>docs/UPGRADING.md</code>.
+            <code>--image-repo</code>); see {update.majorUpgrade ? "" : <>&quot;Patch and minor releases&quot; in </>}<code>docs/UPGRADING.md</code>.
             {/* A GitLab release asset of a non-public project redirects anonymous downloads to its sign-in page. */}
             {update.installerURL?.includes("/-/releases/") && <> If the download asks you to sign in, get <code>install.sh</code> from the release notes.</>}
             {" "}From a clone: {gitRoute}.

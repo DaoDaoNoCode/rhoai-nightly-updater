@@ -103,12 +103,12 @@ flowchart TD
 When a newer release exists, every page shows a notice. A new MAJOR version
 says it **requires a full redeploy**:
 
-<img src="images/banner-major-update.png" alt="Notice: v2.0.0 is available. This updater runs v1.0.0, and v2.0.0 is a new major version that requires a full redeploy" width="760">
+<img src="images/banner-major-update.png" alt="Notice: v2.0.0 is available. This updater runs v1.0.0, and v2.0.0 is a new major version that requires a full redeploy with the v2.0.0 installer command shown" width="760">
 
 A MINOR or PATCH release needs only that release's `install.sh` (or
 `make upgrade` from its checkout):
 
-<img src="images/banner-patch-update.png" alt="Notice: v2.0.1 is available; an admin upgrades with that release's install.sh or make upgrade" width="760">
+<img src="images/banner-patch-update.png" alt="Notice: v2.0.1 is available. An admin upgrades with the v2.0.1 installer, a curl, less and bash command to copy; pass the options the install was made with; from a clone, git checkout v2.0.1 and make upgrade" width="760">
 
 If the Deployment was created from an older template than the running image
 expects (typically an install on `:latest` that pulled a newer image), every
