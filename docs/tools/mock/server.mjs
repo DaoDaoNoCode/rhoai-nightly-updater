@@ -100,6 +100,11 @@ const scenarios = {
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
   "components-not-ready": (w) => { w.components = F.notReadyComponents(); },
+  // The page compared the DSC as v2; when the reset dialog opens, the defaults are v3 (the conversion recovered).
+  "components-reset-stale": (w) => {
+    w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };
+    w.previewAPIVersion = "datasciencecluster.opendatahub.io/v3";
+  },
   "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); },
   "s3-none": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.gated = true; },
   "s3-running": () => {},
@@ -240,8 +245,8 @@ const routes = {
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
   "GET /api/setup/dsc/preview": () => ({
-    yaml: "apiVersion: datasciencecluster.opendatahub.io/v2\nkind: DataScienceCluster\nmetadata:\n  name: default-dsc\nspec:\n  components:\n    aipipelines:\n      managementState: Managed\n    dashboard:\n      managementState: Managed\n    kserve:\n      managementState: Managed\n    workbenches:\n      managementState: Managed\n",
-    apiVersion: "datasciencecluster.opendatahub.io/v2",
+    yaml: `apiVersion: ${world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2"}\n` + "kind: DataScienceCluster\nmetadata:\n  name: default-dsc\nspec:\n  components:\n    aipipelines:\n      managementState: Managed\n    dashboard:\n      managementState: Managed\n    kserve:\n      managementState: Managed\n    workbenches:\n      managementState: Managed\n",
+    apiVersion: world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2",
     operatorVersion: "3.6.0", branch: "", sourceURL: "", source: "csv", sourceDescription: "alm-examples of rhods-operator.3.6.0",
   }),
   "POST /api/update": () => ({ success: true, message: "Dry run passed: the update would install rhods-operator from this build. Nothing was changed.", logs: ["OK: pull secret", "OK: image mirror", "OK: catalog image verified"] }),
