@@ -16,6 +16,41 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
+## [2.0.1] - 2026-10-07
+
+### Upgrade notes
+
+- Same template as v2.0.0 (revision 4): run the `install.sh` of v2.0.1, or
+  `git checkout v2.0.1 && make upgrade`. No RBAC change.
+
+### Fixed
+
+- RHOAI 3.6 nightlies serve DataScienceCluster v3: the Components page no
+  longer fails with "GitHub returned HTTP 404" for
+  `datasciencecluster_v1_datasciencecluster.yaml`. The DataScienceCluster,
+  DSCInitialization, Platform and Dashboard CR API versions come from API
+  discovery (preferred first, then newest first) instead of a fixed v2/v1
+  list; DSC defaults accept an alm-examples example of any version, and the
+  GitHub fallback tries the sample of each served version.
+- A DSC is only compared with (and reset to, or created from) defaults of
+  the version it is read at. When the operator's conversion webhook cannot
+  convert it to the preferred version, it is read at the next version that
+  works, the Components page says so, and a missing defaults version is
+  explained instead of showing a sample URL.
+- The Components page's "Edit in console" link uses the DSC's version
+  instead of v2.
+
+### Added
+
+- Diagnostics "API versions": reports a RHOAI CRD version that the
+  operator's conversion webhook cannot convert to (one problem per kind,
+  with the API server's message, the versions that work, and read-only
+  commands), as when a nightly's operator image is older than the CRDs of
+  its bundle. See [RUNBOOK §11.8](RUNBOOK.md#118-the-operator-cannot-convert-a-crd-version).
+- The "vX.Y.Z is available" notice shows that release's installer as a
+  command to copy (GitHub and GitLab release pages), with the git route as
+  the alternative. See [docs/UPGRADING.md](docs/UPGRADING.md#patch-and-minor-releases).
+
 ## [2.0.0] - 2026-10-06
 
 ### Upgrade notes
