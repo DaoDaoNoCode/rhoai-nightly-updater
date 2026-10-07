@@ -109,6 +109,7 @@ export const ComponentsPage: React.FC = () => {
   const [repairResult, setRepairResult] = useState<OperationResponse | null>(null);
   const [defaultsPreview, setDefaultsPreview] = useState("");
   const [previewVersion, setPreviewVersion] = useState("");
+  const [previewAPIVersion, setPreviewAPIVersion] = useState("");
   const [previewError, setPreviewError] = useState("");
 
   useEffect(() => {
@@ -116,8 +117,9 @@ export const ComponentsPage: React.FC = () => {
     let active = true;
     setDefaultsPreview("");
     setPreviewVersion("");
+    setPreviewAPIVersion("");
     setPreviewError("");
-    getDSCPreview().then(res => { if (active) { setDefaultsPreview(res.yaml); setPreviewVersion(res.operatorVersion); } })
+    getDSCPreview().then(res => { if (active) { setDefaultsPreview(res.yaml); setPreviewVersion(res.operatorVersion); setPreviewAPIVersion(res.apiVersion ?? ""); } })
       .catch(err => { if (active) setPreviewError(toApiError(err).message); });
     return () => { active = false; };
   }, [repairMode]);
@@ -134,7 +136,9 @@ export const ComponentsPage: React.FC = () => {
     let result: OperationResponse;
     try {
       // A failed repair is a 422 OperationResponse with errorCode and logs (N7).
-      result = await repairDSC(data.dscName, repairMode, repairMode === "reset-defaults" ? previewVersion
+      // The API version the user reviewed: the defaults shown for a reset, else the DSC the page compared.
+      const reviewedAPIVersion = repairMode === "reset-defaults" ? previewAPIVersion : data.dscAPIVersion;
+      result = await repairDSC(data.dscName, repairMode, reviewedAPIVersion, repairMode === "reset-defaults" ? previewVersion
         : repairMode === "remove-extra-components" ? data.dscCompatibility?.operatorVersion : undefined,
         repairMode === "remove-extra-components" ? data.dscCompatibility?.extraComponents : undefined);
     } catch (err) {

@@ -51,7 +51,7 @@ describe("parseErrorResponse", () => {
 describe("request()", () => {
   it("throws an ApiError with the backend errorCode", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "operator version changed", errorCode: "validation" }, 422)));
-    await expect(repairDSC("default-dsc", "reset-defaults", "3.6.0")).rejects.toMatchObject({
+    await expect(repairDSC("default-dsc", "reset-defaults", "datasciencecluster.opendatahub.io/v2", "3.6.0")).rejects.toMatchObject({
       name: "ApiError", status: 422, errorCode: "validation", message: "operator version changed",
     });
   });

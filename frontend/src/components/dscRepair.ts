@@ -3,7 +3,10 @@ import type { DSCCompatibility, DSCRemovalBlock } from "../types";
 export type DSCRepairMode = "remove-invalid" | "remove-extra-components" | "reset-defaults";
 
 export interface RepairPreview {
-  /** Enabled components the repair would set to Removed (reset) or whose entry it drops (remove extra). */
+  /**
+   * Enabled components the repair would set to Removed (reset) or whose entry it drops (remove extra). For
+   * DataScienceCluster v3 a reset lists parts as "<component>.<part>" (dashboard.standard).
+   */
   removals: string[];
   /** Removals that must not happen now. The backend refuses the whole repair while any is listed. */
   blocked: DSCRemovalBlock[];
@@ -20,5 +23,8 @@ export function repairPreview(compat: DSCCompatibility | undefined, mode: DSCRep
   if (!compat || mode === "remove-invalid") return { removals: [], blocked: [] };
   const blocks = compat.removalBlocks ?? [];
   const removals = mode === "reset-defaults" ? (compat.resetRemovals ?? []) : (compat.extraComponents ?? []);
-  return { removals, blocked: blocks.filter((b) => removals.includes(b.component)) };
+  // DataScienceCluster v3 reports parts as "<component>.<part>" (kserve.nim);
+  // dropping an extra component drops its parts too.
+  const covers = (removal: string, block: string) => block === removal || block.startsWith(`${removal}.`);
+  return { removals, blocked: blocks.filter((b) => removals.some((r) => covers(r, b.component))) };
 }

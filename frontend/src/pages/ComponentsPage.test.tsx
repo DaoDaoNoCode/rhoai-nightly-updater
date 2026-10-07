@@ -221,7 +221,7 @@ describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
   it("lists what a reset sets to Removed before the user confirms", async () => {
     const api = stubApi({
       "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: null } },
-      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
       "POST /api/components/dsc/repair": { success: true, message: "DSC reset. Components set to Removed: mcplifecycleoperator, trainer", logs: [] },
     });
     renderInApp(<ComponentsPage />);
@@ -234,6 +234,27 @@ describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
     await within(dialog).findByText(/kind: DataScienceCluster/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/components/dsc/repair"))).toHaveLength(1));
+    // Bound to the defaults the user reviewed (HIGH 2): the backend refuses if the DSC's version changed.
+    expect(api.bodies["POST /api/components/dsc/repair"][0]).toMatchObject({
+      mode: "reset-defaults", expectedOperatorVersion: "3.6.0", expectedAPIVersion: "datasciencecluster.opendatahub.io/v3",
+    });
+  });
+
+  it("remove-invalid sends the API version the page compared", async () => {
+    const api = stubApi({
+      "/api/components": {
+        ...present([dep("dashboard")]), dscAPIVersion: "datasciencecluster.opendatahub.io/v2",
+        dscCompatibility: { ...compat, extraComponents: [], resetRemovals: [], invalidFields: ["spec.components.dashboard.oldField"] },
+      },
+      "POST /api/components/dsc/repair": { success: true, message: "Removed invalid DSC fields: spec.components.dashboard.oldField", logs: [] },
+    });
+    renderInApp(<ComponentsPage />);
+    const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
+    await waitFor(() => expect(remove).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(remove);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(api.bodies["POST /api/components/dsc/repair"]).toHaveLength(1));
+    expect(api.bodies["POST /api/components/dsc/repair"][0]).toMatchObject({ mode: "remove-invalid", expectedAPIVersion: "datasciencecluster.opendatahub.io/v2" });
   });
 
   it("a blocked reset shows each blocked component and why, and offers no Confirm", async () => {

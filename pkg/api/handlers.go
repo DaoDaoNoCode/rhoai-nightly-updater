@@ -948,6 +948,7 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		Name                    string   `json:"name"`
 		Mode                    string   `json:"mode"`
 		ExpectedOperatorVersion string   `json:"expectedOperatorVersion"`
+		ExpectedAPIVersion      string   `json:"expectedAPIVersion"`
 		ExpectedExtraComponents []string `json:"expectedExtraComponents"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || (req.Mode != "remove-invalid" && req.Mode != "remove-extra-components" && req.Mode != "reset-defaults") {
@@ -955,7 +956,7 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		return
 	}
 	beginOperation(w, req.Name+" ("+req.Mode+")")
-	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedExtraComponents)
+	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedAPIVersion, req.ExpectedExtraComponents)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusUnprocessableEntity, "validation")
 		return
@@ -1477,8 +1478,10 @@ var HandleDSCPreview = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 		writeError(w, err.Error(), http.StatusBadGateway, "prerequisites")
 		return
 	}
+	apiVersion, _ := defaults.Spec["apiVersion"].(string)
 	writeJSON(w, map[string]string{
 		"yaml":              defaults.YAML,
+		"apiVersion":        apiVersion,
 		"operatorVersion":   defaults.Version,
 		"branch":            defaults.Branch,
 		"sourceURL":         defaults.SourceURL,

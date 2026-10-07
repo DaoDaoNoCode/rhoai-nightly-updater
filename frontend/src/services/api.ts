@@ -633,6 +633,8 @@ export function fixProblem(problemId: string): Promise<OperationResponse> {
 
 export interface DSCPreviewResponse {
   yaml: string;
+  /** The defaults' apiVersion: the version the DSC is read at, or the newest served one without a DSC. */
+  apiVersion?: string;
   operatorVersion: string;
   branch: string;
   sourceURL: string;
@@ -646,10 +648,14 @@ export async function createDSC(): Promise<OperationResponse> {
   return request<OperationResponse>('/api/setup/dsc', { method: 'POST' });
 }
 
-export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-components' | 'reset-defaults', expectedOperatorVersion?: string, expectedExtraComponents?: string[]): Promise<OperationResponse> {
+/**
+ * Repairs the DSC as previewed. expectedAPIVersion is the apiVersion the preview was computed at; the backend
+ * refuses (changing nothing) when the DSC is no longer read at exactly that version.
+ */
+export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-components' | 'reset-defaults', expectedAPIVersion: string | undefined, expectedOperatorVersion?: string, expectedExtraComponents?: string[]): Promise<OperationResponse> {
   return request('/api/components/dsc/repair', {
     method: 'POST',
-    body: JSON.stringify({ name, mode, expectedOperatorVersion, expectedExtraComponents }),
+    body: JSON.stringify({ name, mode, expectedAPIVersion, expectedOperatorVersion, expectedExtraComponents }),
   });
 }
 
