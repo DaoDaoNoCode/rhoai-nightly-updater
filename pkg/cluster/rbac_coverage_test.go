@@ -42,6 +42,15 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	"authz.go:LookupUserWithToken":          "users/~ read with the user's token",
 }
 
+// Best-effort reads of paths found by API discovery at run time, whose API
+// group and resource cannot be named in the template. A 403 is expected for
+// the resources the template does not grant, and is reported as not
+// checked; the RHOAI resources the app uses are granted by name and are
+// covered by the other call sites.
+var rbacBestEffortCalls = map[string]string{
+	"diagnostics_conversion.go:getDiscovered": "API versions check: one ?limit=1 list per resource and version of the multi-version *.opendatahub.io groups",
+}
+
 // API groups of resources whose group is only known at run time (for
 // example the MinIO objects whose apiVersion comes from the manifest).
 var knownResourceGroups = map[string]string{
@@ -693,6 +702,10 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 					seenExcluded[site] = true
 					return true
 				}
+				if _, bestEffort := rbacBestEffortCalls[site]; bestEffort {
+					seenExcluded[site] = true
+					return true
+				}
 				pos := p.fset.Position(call.Pos())
 				manifests := manifestNames(resolver{p: p, fn: fn})
 				for _, path := range (resolver{p: p, fn: fn}).resolve(pathArg) {
@@ -874,6 +887,11 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 	for site := range rbacCallsNotUsingTheSAToken {
 		if !seenExcluded[site] {
 			t.Errorf("rbacCallsNotUsingTheSAToken lists %s, but that function no longer makes API calls; remove the entry", site)
+		}
+	}
+	for site := range rbacBestEffortCalls {
+		if !seenExcluded[site] {
+			t.Errorf("rbacBestEffortCalls lists %s, but that function no longer makes API calls; remove the entry", site)
 		}
 	}
 	grants := templateGrants(t)

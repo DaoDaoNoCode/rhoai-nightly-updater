@@ -82,6 +82,7 @@ var diagnosticChecks = []diagnosticCheck{
 	{"Pull secret", checkPullSecretHealth},
 	{"Image mirror", checkImageMirror},
 	{"Stale webhooks", checkStaleWebhooks},
+	{conversionCheckName, checkConversionFailures},
 	{"Node capacity", checkNodeCapacity},
 	{"DataScienceCluster", checkDataScienceCluster},
 	{"RHOAI pods", checkRHOAIPods},
