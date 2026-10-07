@@ -297,7 +297,7 @@ The default repository, `quay.io/juntao_wang/rhoai-nightly-updater`, is a person
 | GitHub release (notes, `install.sh`, the image wait) | repository variable `IMAGE` |
 | `make` | `IMAGE=...` (or `.env`) |
 | `install.sh` | `--image-repo` or `IMAGE` |
-| The app's update check | template parameter `IMAGE_REPOSITORY` (`install.sh` and `make` pass the repository they install from); `RELEASES_URL` for the notes link |
+| The app's update check | template parameter `IMAGE_REPOSITORY` (`install.sh` and `make` pass the repository they install from); `RELEASES_URL` for the notes link; the container variable `INSTALLER_RELEASES_URL` for the installer download ([README: Configuration](README.md#configuration)) |
 
 To move for good:
 1. Copy the release tags to the new repository (`:vX.Y.Z`, `:vN`, `:latest`) so existing references keep resolving.
@@ -497,7 +497,7 @@ Then `make` commands will use your custom values.
 
 Make variables (`IMAGE`, `TAG`, `NAMESPACE`, `APP_NAME`, `RUNTIME`, `PLATFORM`, `OAUTH_PROXY_IMAGE`, `ROLLOUT_TIMEOUT`, `RELEASES_URL`, `DRY_RUN`, `ALLOW_TEMPLATE_MISMATCH`, `ALLOW_MUTABLE_TAG`) can be set on the command line or in `.env` (`make env` creates one). Run `make help` to list them.
 
-Runtime variables of the deployed container (`GITHUB_TOKEN`, `SEAWEEDFS_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
+Runtime variables of the deployed container (`GITHUB_TOKEN`, `INSTALLER_RELEASES_URL`, `SEAWEEDFS_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
 
 Local development only (`dev.sh` sets the first five):
 
