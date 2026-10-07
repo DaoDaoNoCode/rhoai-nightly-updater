@@ -250,7 +250,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 	}
 	for _, p := range failed {
 		if p.Preferred {
-			description += fmt.Sprintf(" %s is the version the API server prefers, so `oc get %s` and every client that follows discovery fail too.", p.Version, strings.ToLower(kind))
+			description += fmt.Sprintf(" %s is the version the API server prefers, so oc get %s and every client that follows discovery fail too.", p.Version, strings.ToLower(kind))
 			break
 		}
 	}

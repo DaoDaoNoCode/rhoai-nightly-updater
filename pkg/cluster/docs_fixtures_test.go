@@ -117,6 +117,6 @@ func TestWriteDocsFixtures(t *testing.T) {
 
 	// An operator whose conversion webhook knows neither DataScienceCluster
 	// v3 nor Platform v1alpha2 (a RHOAI 3.6 nightly, 2026-10-07).
-	_, cc := conversionWorld(t, 429, liveDSCv3Conversion429)
+	_, cc := conversionWorld(t, 500, liveDSCv3Conversion500)
 	write("conversion-webhook", checkConversionFailures(cc))
 }
