@@ -282,3 +282,68 @@ func TestRepairDSC_ResetBoundToThePreviewedRemovals(t *testing.T) {
 		}
 	})
 }
+
+// strictDashboardSchema serves a schema in which dashboard defines only
+// its parts standard and maasPortal (not free-form), and a DSC whose
+// dashboard also has a part the schema does not know.
+func strictDashboardSchema(f *fakeAPI) {
+	state := map[string]interface{}{"type": "object", "properties": map[string]interface{}{"managementState": map[string]interface{}{"type": "string"}}}
+	open := map[string]interface{}{"type": "object", "x-kubernetes-preserve-unknown-fields": true}
+	props := map[string]interface{}{
+		"dashboard": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"standard": state, "maasPortal": state}},
+	}
+	for _, k := range []string{"aiHub", "aigateway", "data", "kserve", "trainer", "workbenches"} {
+		props[k] = open
+	}
+	f.obj("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", map[string]interface{}{
+		"spec": map[string]interface{}{"versions": []interface{}{map[string]interface{}{"name": "v3", "served": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
+			"properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"components": map[string]interface{}{"type": "object", "properties": props}}}}}}}}},
+	})
+	withLegacy := strings.Replace(v3Components, `"dashboard":{`, `"dashboard":{"legacyPart":{"managementState":"Managed"},`, 1)
+	f.json("GET", myDSCv3Path, 200,
+		`{"apiVersion":"datasciencecluster.opendatahub.io/v3","kind":"DataScienceCluster","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":`+withLegacy+`}}`)
+}
+
+func TestSchemaComponents_ChecksEveryPathSegment(t *testing.T) {
+	state := map[string]interface{}{"type": "object"}
+	schema := map[string]interface{}{"properties": map[string]interface{}{"components": map[string]interface{}{"properties": map[string]interface{}{
+		"dashboard": map[string]interface{}{"properties": map[string]interface{}{"standard": state}},
+		"kserve":    map[string]interface{}{"x-kubernetes-preserve-unknown-fields": true},
+		"aigateway": map[string]interface{}{"additionalProperties": map[string]interface{}{"type": "object"}},
+		"data":      map[string]interface{}{"additionalProperties": false},
+		"trainer":   state,
+	}}}}
+	got := schemaComponents(schema, []string{"aigateway.anything", "dashboard", "dashboard.legacyPart", "dashboard.standard", "data.featureStore", "kserve.nim", "trainer", "unknown", "unknown.part"})
+	want := []string{"aigateway.anything", "dashboard", "dashboard.standard", "kserve.nim", "trainer"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRepairDSC_UnknownPartIsPrunedWithoutAGuard(t *testing.T) {
+	mockDSCSamples(t, func(*http.Request) (int, string) { t.Error("GitHub must not be used"); return 500, "" })
+	t.Run("remove-invalid drops dashboard.legacyPart without the dashboard guard", func(t *testing.T) {
+		f, c := v3RepairWorld(t, v3Components)
+		strictDashboardSchema(f)
+		f.json("PATCH", myDSCv3Path, 200, `{}`)
+		r, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v3", nil, nil)
+		if err != nil || !r.Success || !strings.Contains(r.Message, "spec.components.dashboard.legacyPart") || strings.Contains(r.Message, "set to Removed") {
+			t.Fatalf("%+v %v", r, err)
+		}
+		assertWrites(t, f, "PATCH "+myDSCv3Path)
+	})
+	t.Run("a known part is still guarded", func(t *testing.T) {
+		f, c := v3RepairWorld(t, strings.Replace(v3Components, `"standard":{"managementState":"Managed"}`, `"standard":{"managementState":"Removed"}`, 1))
+		strictDashboardSchema(f)
+		r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{"dashboard.legacyPart", "dashboard.standard"})
+		if err == nil {
+			t.Fatalf("legacyPart counted as a removal: %+v", r)
+		}
+		r, err = RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{"dashboard.standard"})
+		if err != nil || r.ErrorCode != "prerequisites" || !strings.Contains(r.Message, "dashboard.standard") || strings.Contains(r.Message, "legacyPart") {
+			t.Fatalf("%+v %v", r, err)
+		}
+		assertWrites(t, f)
+	})
+}

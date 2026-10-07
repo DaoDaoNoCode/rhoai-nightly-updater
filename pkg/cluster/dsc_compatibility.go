@@ -302,10 +302,13 @@ func (g *removalGuard) blockers(path string) []string {
 	return reasons
 }
 
-// schemaComponents keeps the paths whose component the installed DSC
-// schema defines under spec.components: a key the schema does not define
-// was never seen by the operator, so dropping it removes nothing. Without
-// a schema every path is kept.
+// schemaComponents keeps the management paths the installed DSC schema
+// defines under spec.components, segment by segment: a component (and a
+// part of it, components.properties[component].properties[part]) the
+// schema does not define was never seen by the operator, so dropping it
+// removes nothing. A free-form component (x-kubernetes-preserve-unknown-fields
+// or additionalProperties) keeps its parts. Without a schema every path is
+// kept.
 func schemaComponents(specSchema map[string]interface{}, names []string) []string {
 	properties, _ := specSchema["properties"].(map[string]interface{})
 	components, _ := properties["components"].(map[string]interface{})
@@ -315,12 +318,37 @@ func schemaComponents(specSchema map[string]interface{}, names []string) []strin
 	}
 	var out []string
 	for _, n := range names {
-		component, _, _ := strings.Cut(n, ".")
-		if _, ok := known[component]; ok {
-			out = append(out, n)
+		component, part, isPart := strings.Cut(n, ".")
+		componentSchema, ok := known[component].(map[string]interface{})
+		if !ok {
+			continue
 		}
+		if isPart && !schemaDefines(componentSchema, part) {
+			continue
+		}
+		out = append(out, n)
 	}
 	return out
+}
+
+// schemaDefines reports whether an object schema accepts the key: it names
+// it, or it is free-form.
+func schemaDefines(schema map[string]interface{}, key string) bool {
+	if props, _ := schema["properties"].(map[string]interface{}); props != nil {
+		if _, ok := props[key]; ok {
+			return true
+		}
+	}
+	if preserve, _ := schema["x-kubernetes-preserve-unknown-fields"].(bool); preserve {
+		return true
+	}
+	switch additional := schema["additionalProperties"].(type) {
+	case bool:
+		return additional
+	case map[string]interface{}:
+		return true
+	}
+	return false
 }
 
 // withoutComponents returns spec with the named components dropped.
