@@ -167,7 +167,7 @@ func TestRepairDSC_V3PartRemovalsArePreviewedAndGuarded(t *testing.T) {
 			}
 
 			// The repair itself refuses, changing nothing.
-			r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil)
+			r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, compat.ResetRemovals)
 			if err != nil || r.Success || r.ErrorCode != "prerequisites" || !strings.Contains(r.Message, tc.wantPath) || !strings.Contains(r.Message, tc.wantReason) {
 				t.Fatalf("repair %+v %v", r, err)
 			}
@@ -183,7 +183,7 @@ func TestRepairDSC_BoundToThePreviewedAPIVersion(t *testing.T) {
 	})
 	t.Run("same version: the repair runs", func(t *testing.T) {
 		f, c := v3RepairWorld(t, v3Components)
-		r, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v3", nil)
+		r, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v3", nil, nil)
 		if err != nil || !r.Success || r.Message != "No invalid DSC fields to remove" {
 			t.Fatalf("%+v %v", r, err)
 		}
@@ -191,7 +191,7 @@ func TestRepairDSC_BoundToThePreviewedAPIVersion(t *testing.T) {
 	})
 	t.Run("previewed v2, v3 reads again now (operator updated)", func(t *testing.T) {
 		f, c := v3RepairWorld(t, v3Components)
-		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil)
+		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
 		if err == nil || err.Error() != "the DataScienceCluster's API version changed since the preview (previewed v2, now v3); refresh and review the changes again. Nothing was changed" {
 			t.Fatalf("err %v", err)
 		}
@@ -202,7 +202,7 @@ func TestRepairDSC_BoundToThePreviewedAPIVersion(t *testing.T) {
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters/my-dsc", 500, liveDSCv3Conversion500)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc", 200,
 			`{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":{}}}`)
-		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil)
+		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{})
 		if err == nil || !strings.Contains(err.Error(), "(previewed v3, now v2)") {
 			t.Fatalf("err %v", err)
 		}
@@ -212,7 +212,7 @@ func TestRepairDSC_BoundToThePreviewedAPIVersion(t *testing.T) {
 		f, c := v3RepairWorld(t, v3Components)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters/my-dsc", 500, liveDSCv3Conversion500)
 		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc", 500, liveDSCv3Conversion500)
-		_, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v3", nil)
+		_, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v3", nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "now not readable") {
 			t.Fatalf("err %v", err)
 		}
@@ -221,13 +221,64 @@ func TestRepairDSC_BoundToThePreviewedAPIVersion(t *testing.T) {
 	t.Run("an old page that does not send the version is asked to refresh", func(t *testing.T) {
 		f, c := v3RepairWorld(t, v3Components)
 		for _, v := range []string{"", "v3", "other.io/v3"} {
-			_, err := RepairDSC(c, "my-dsc", "remove-invalid", "", v, nil)
+			_, err := RepairDSC(c, "my-dsc", "remove-invalid", "", v, nil, nil)
 			if err == nil || !strings.Contains(err.Error(), "refresh and review the changes again") {
 				t.Fatalf("%q: err %v", v, err)
 			}
 		}
 		if f.requestCount() != 0 {
 			t.Fatalf("read the cluster: %d requests", f.requestCount())
+		}
+	})
+}
+
+const myDSCv3Path = "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters/my-dsc"
+
+// A reset carries the removals its preview listed and runs only when it
+// would remove exactly those.
+func TestRepairDSC_ResetBoundToThePreviewedRemovals(t *testing.T) {
+	mockDSCSamples(t, func(*http.Request) (int, string) { t.Error("GitHub must not be used"); return 500, "" })
+	// The defaults switch trainer on and nothing off.
+	enableTrainer := strings.Replace(v3Components, `"trainer":{"managementState":"Removed"}`, `"trainer":{"managementState":"Managed"}`, 1)
+	t.Run("the same removals: the reset runs", func(t *testing.T) {
+		f, c := v3RepairWorld(t, enableTrainer)
+		f.json("PATCH", myDSCv3Path, 200, `{}`)
+		r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{})
+		if err != nil || !r.Success {
+			t.Fatalf("%+v %v", r, err)
+		}
+		assertWrites(t, f, "PATCH "+myDSCv3Path)
+	})
+	t.Run("the preview listed other removals: refused, nothing changed", func(t *testing.T) {
+		f, c := v3RepairWorld(t, enableTrainer)
+		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{"ray"})
+		if err == nil || err.Error() != "the components a reset would switch to Removed changed since the preview (previewed: ray; now: none); refresh and review the changes again. Nothing was changed" {
+			t.Fatalf("err %v", err)
+		}
+		assertWrites(t, f)
+	})
+	t.Run("the reset now removes a part the preview did not list", func(t *testing.T) {
+		f, c := v3RepairWorld(t, strings.Replace(v3Components, `"standard":{"managementState":"Managed"}`, `"standard":{"managementState":"Removed"}`, 1))
+		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{})
+		if err == nil || !strings.Contains(err.Error(), "(previewed: none; now: dashboard.standard)") {
+			t.Fatalf("err %v", err)
+		}
+		assertWrites(t, f)
+	})
+	t.Run("order does not matter", func(t *testing.T) {
+		f, c := v3RepairWorld(t, strings.Replace(v3Components, `"kserve":{"managementState":"Managed"`, `"kserve":{"managementState":"Removed"`, 1))
+		r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, []string{"kserve.nim", "kserve"})
+		// The removals match; the deletion guard refuses (the Kserve operator is down).
+		if err != nil || r.ErrorCode != "prerequisites" {
+			t.Fatalf("%+v %v", r, err)
+		}
+		assertWrites(t, f)
+	})
+	t.Run("an old page that does not send the removals is asked to refresh", func(t *testing.T) {
+		f, c := v3RepairWorld(t, enableTrainer)
+		_, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v3", nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "did not say which components the reset would switch to Removed") || f.requestCount() != 0 {
+			t.Fatalf("err %v, %d requests", err, f.requestCount())
 		}
 	})
 }

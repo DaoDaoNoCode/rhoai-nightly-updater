@@ -366,18 +366,34 @@ func errDSCVersionChanged(previewed, now string) error {
 		strings.TrimPrefix(previewed, dscGroup+"/"), nonEmpty(now, "not readable"))
 }
 
+// errResetRemovalsChanged: a reset would now remove other management paths
+// than the preview listed.
+func errResetRemovalsChanged(previewed []string, now []string) error {
+	if previewed == nil {
+		return fmt.Errorf("this page did not say which components the reset would switch to Removed (it was loaded before an update of this app); refresh and review the changes again. Nothing was changed")
+	}
+	return fmt.Errorf("the components a reset would switch to Removed changed since the preview (previewed: %s; now: %s); refresh and review the changes again. Nothing was changed",
+		nonEmpty(strings.Join(previewed, ", "), "none"), nonEmpty(strings.Join(now, ", "), "none"))
+}
+
 // RepairDSC repairs the named DSC in one of the modes the Components page
 // previews. expectedAPIVersion is the apiVersion the preview was computed
 // at ("datasciencecluster.opendatahub.io/v2"): the repair runs only when the
 // DSC is still read at exactly that version, so a conversion that starts
 // working after the preview (an operator update) cannot apply defaults of
-// another version than the ones reviewed.
-func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersion string, expectedExtraComponents []string) (*types.OperationResponse, error) {
+// another version than the ones reviewed. A reset also carries the
+// management paths the preview said it would switch to Removed
+// (expectedResetRemovals, never nil from a current page) and runs only
+// when it would remove exactly those.
+func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersion string, expectedExtraComponents, expectedResetRemovals []string) (*types.OperationResponse, error) {
 	if mode != "remove-invalid" && mode != "remove-extra-components" && mode != "reset-defaults" {
 		return nil, fmt.Errorf("invalid DSC repair mode")
 	}
 	if _, ok := dscAPIVersion(expectedAPIVersion); !ok {
 		return nil, errDSCVersionChanged("", "")
+	}
+	if mode == "reset-defaults" && expectedResetRemovals == nil {
+		return nil, errResetRemovalsChanged(nil, nil)
 	}
 	// Read the named resource again so the repair is computed from fresh
 	// values and schema, at the version the Components page reads it at.
@@ -455,6 +471,13 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 			pruneUnknownDSCFields(nextSpec, schema, "spec", &unknownDefaults)
 			if len(unknownDefaults) != 0 {
 				return nil, fmt.Errorf("version defaults contain fields unsupported by the installed CRD: %s", strings.Join(unknownDefaults, ", "))
+			}
+			// The same computation as the preview's ResetRemovals.
+			now := schemaComponents(schema, removedComponents(oldSpec, nextSpec, dscNestsComponents(apiVersion)))
+			previewed := append([]string{}, expectedResetRemovals...)
+			sort.Strings(previewed)
+			if strings.Join(previewed, "\n") != strings.Join(now, "\n") {
+				return nil, errResetRemovalsChanged(previewed, now)
 			}
 			detail = "Reset DSC spec to defaults from " + defaults.SourceDescription
 		}

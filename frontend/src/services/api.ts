@@ -634,7 +634,7 @@ export function fixProblem(problemId: string): Promise<OperationResponse> {
 export interface DSCPreviewResponse {
   yaml: string;
   /** The defaults' apiVersion: the version the DSC is read at, or the newest served one without a DSC. */
-  apiVersion?: string;
+  apiVersion: string;
   operatorVersion: string;
   branch: string;
   sourceURL: string;
@@ -649,13 +649,14 @@ export async function createDSC(): Promise<OperationResponse> {
 }
 
 /**
- * Repairs the DSC as previewed. expectedAPIVersion is the apiVersion the preview was computed at; the backend
- * refuses (changing nothing) when the DSC is no longer read at exactly that version.
+ * Repairs the DSC as previewed. expectedAPIVersion is the apiVersion the preview was computed at; a reset also
+ * sends the management paths it listed as switched to Removed (expectedResetRemovals, [] for none). The backend
+ * refuses, changing nothing, when either differs from what it would do now.
  */
-export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-components' | 'reset-defaults', expectedAPIVersion: string | undefined, expectedOperatorVersion?: string, expectedExtraComponents?: string[]): Promise<OperationResponse> {
+export function repairDSC(name: string, mode: 'remove-invalid' | 'remove-extra-components' | 'reset-defaults', expectedAPIVersion: string | undefined, expectedOperatorVersion?: string, expectedExtraComponents?: string[], expectedResetRemovals?: string[]): Promise<OperationResponse> {
   return request('/api/components/dsc/repair', {
     method: 'POST',
-    body: JSON.stringify({ name, mode, expectedAPIVersion, expectedOperatorVersion, expectedExtraComponents }),
+    body: JSON.stringify({ name, mode, expectedAPIVersion, expectedOperatorVersion, expectedExtraComponents, expectedResetRemovals }),
   });
 }
 

@@ -950,13 +950,15 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		ExpectedOperatorVersion string   `json:"expectedOperatorVersion"`
 		ExpectedAPIVersion      string   `json:"expectedAPIVersion"`
 		ExpectedExtraComponents []string `json:"expectedExtraComponents"`
+		// The paths the reset preview listed; [] when it listed none.
+		ExpectedResetRemovals []string `json:"expectedResetRemovals"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || (req.Mode != "remove-invalid" && req.Mode != "remove-extra-components" && req.Mode != "reset-defaults") {
 		writeError(w, "Provide a DSC name and mode: remove-invalid, remove-extra-components or reset-defaults", http.StatusBadRequest, "validation")
 		return
 	}
 	beginOperation(w, req.Name+" ("+req.Mode+")")
-	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedAPIVersion, req.ExpectedExtraComponents)
+	result, err := cluster.RepairDSC(c, req.Name, req.Mode, req.ExpectedOperatorVersion, req.ExpectedAPIVersion, req.ExpectedExtraComponents, req.ExpectedResetRemovals)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusUnprocessableEntity, "validation")
 		return

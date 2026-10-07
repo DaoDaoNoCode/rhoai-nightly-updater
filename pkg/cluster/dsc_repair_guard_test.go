@@ -97,7 +97,7 @@ func TestRepairDSC_RefusesRemovalsThatFailPreconditions(t *testing.T) {
 			var mu sync.Mutex
 			patched := false
 			c := dscRepairD3Server(t, dsc, &patched, &mu)
-			r, err := RepairDSC(c, "my-dsc", tc.mode, "3.6.0", "datasciencecluster.opendatahub.io/v2", tc.expected)
+			r, err := RepairDSC(c, "my-dsc", tc.mode, "3.6.0", "datasciencecluster.opendatahub.io/v2", tc.expected, []string{"mcplifecycleoperator"})
 			if err != nil || r.Success || r.ErrorCode != "prerequisites" ||
 				!strings.Contains(r.Message, "set mcplifecycleoperator to Removed") || !strings.Contains(r.Message, "mcpservers.mcp.x-k8s.io") {
 				t.Fatalf("result = %+v, %v", r, err)
@@ -143,7 +143,7 @@ func TestRepairDSC_RefusedComponents(t *testing.T) {
 	var mu sync.Mutex
 	patched := false
 	c := dscRepairD3Server(t, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Managed"}}}}`, &patched, &mu)
-	r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil)
+	r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{"dashboard"})
 	if err != nil || r.Success || !strings.Contains(r.Message, "dashboard") || !strings.Contains(r.Message, "dashboard-operator") {
 		t.Fatalf("result = %+v, %v", r, err)
 	}

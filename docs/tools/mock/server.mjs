@@ -241,6 +241,7 @@ const routes = {
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
   "GET /api/setup/dsc/preview": () => ({
     yaml: "apiVersion: datasciencecluster.opendatahub.io/v2\nkind: DataScienceCluster\nmetadata:\n  name: default-dsc\nspec:\n  components:\n    aipipelines:\n      managementState: Managed\n    dashboard:\n      managementState: Managed\n    kserve:\n      managementState: Managed\n    workbenches:\n      managementState: Managed\n",
+    apiVersion: "datasciencecluster.opendatahub.io/v2",
     operatorVersion: "3.6.0", branch: "", sourceURL: "", source: "csv", sourceDescription: "alm-examples of rhods-operator.3.6.0",
   }),
   "POST /api/update": () => ({ success: true, message: "Dry run passed: the update would install rhods-operator from this build. Nothing was changed.", logs: ["OK: pull secret", "OK: image mirror", "OK: catalog image verified"] }),

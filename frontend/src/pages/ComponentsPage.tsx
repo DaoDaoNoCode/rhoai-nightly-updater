@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  AlertActionLink,
   Button,
   Card,
   CardBody,
@@ -111,6 +112,8 @@ export const ComponentsPage: React.FC = () => {
   const [previewVersion, setPreviewVersion] = useState("");
   const [previewAPIVersion, setPreviewAPIVersion] = useState("");
   const [previewError, setPreviewError] = useState("");
+  // Bumped by "Refresh" in the reset dialog, to fetch the defaults preview again.
+  const [previewRequest, setPreviewRequest] = useState(0);
 
   useEffect(() => {
     if (repairMode !== "reset-defaults") return;
@@ -119,18 +122,25 @@ export const ComponentsPage: React.FC = () => {
     setPreviewVersion("");
     setPreviewAPIVersion("");
     setPreviewError("");
-    getDSCPreview().then(res => { if (active) { setDefaultsPreview(res.yaml); setPreviewVersion(res.operatorVersion); setPreviewAPIVersion(res.apiVersion ?? ""); } })
+    getDSCPreview().then(res => { if (active) { setDefaultsPreview(res.yaml); setPreviewVersion(res.operatorVersion); setPreviewAPIVersion(res.apiVersion); } })
       .catch(err => { if (active) setPreviewError(toApiError(err).message); });
     return () => { active = false; };
-  }, [repairMode]);
+  }, [repairMode, previewRequest]);
 
   const preview = repairMode ? repairPreview(data?.dscCompatibility, repairMode) : null;
   const repairBlocked = (preview?.blocked.length ?? 0) > 0;
+  // The reset dialog shows removals from the page's data and defaults fetched when it opened. They must describe
+  // the same DSC: a conversion that recovers (or an operator update) in between changes the version or operator.
+  const comparedAPIVersion = data?.dscCompatibility?.defaultsAPIVersion || data?.dscAPIVersion || "";
+  const comparedOperatorVersion = data?.dscCompatibility?.operatorVersion ?? "";
+  const resetStale = repairMode === "reset-defaults" && !!defaultsPreview &&
+    (previewAPIVersion !== comparedAPIVersion || previewVersion !== comparedOperatorVersion);
+  const shortVersion = (apiVersion: string) => apiVersion.split("/")[1] || apiVersion || "unknown";
   const resetBlocked = repairPreview(data?.dscCompatibility, "reset-defaults").blocked;
   const extraBlocked = repairPreview(data?.dscCompatibility, "remove-extra-components").blocked;
 
   const handleRepairDSC = async () => {
-    if (!repairMode || !data || repairBlocked) return;
+    if (!repairMode || !data || repairBlocked || resetStale) return;
     setRepairLoading(true);
     setRepairResult(null);
     let result: OperationResponse;
@@ -140,7 +150,8 @@ export const ComponentsPage: React.FC = () => {
       const reviewedAPIVersion = repairMode === "reset-defaults" ? previewAPIVersion : data.dscAPIVersion;
       result = await repairDSC(data.dscName, repairMode, reviewedAPIVersion, repairMode === "reset-defaults" ? previewVersion
         : repairMode === "remove-extra-components" ? data.dscCompatibility?.operatorVersion : undefined,
-        repairMode === "remove-extra-components" ? data.dscCompatibility?.extraComponents : undefined);
+        repairMode === "remove-extra-components" ? data.dscCompatibility?.extraComponents : undefined,
+        repairMode === "reset-defaults" ? preview?.removals ?? [] : undefined);
     } catch (err) {
       result = errorResult(err, "Could not repair the DataScienceCluster");
     }
@@ -562,6 +573,19 @@ export const ComponentsPage: React.FC = () => {
                 ))}</List>
               </Alert>
             </StackItem>}
+            {resetStale && <StackItem>
+              <Alert
+                component="p"
+                variant="warning"
+                isInline
+                title="The DataScienceCluster changed since this page loaded"
+                actionLinks={<AlertActionLink onClick={() => { handleRefresh(); setPreviewRequest((n) => n + 1); }}>Refresh</AlertActionLink>}
+              >
+                The defaults below are {shortVersion(previewAPIVersion)} for operator {previewVersion || "unknown"}, but the components
+                this reset would set to Removed were worked out for {shortVersion(comparedAPIVersion)} and operator{" "}
+                {comparedOperatorVersion || "unknown"}. Refresh to review the reset again.
+              </Alert>
+            </StackItem>}
             {preview && !repairBlocked && repairMode === "reset-defaults" && <StackItem>
               {preview.removals.length > 0
                 ? <Alert component="div" variant="warning" isInline title={`${preview.removals.length} enabled ${preview.removals.length === 1 ? "component" : "components"} will be set to Removed`}>
@@ -578,7 +602,7 @@ export const ComponentsPage: React.FC = () => {
             <Button variant="primary" onClick={() => setRepairMode(null)}>Close</Button>
           ) : (
             <>
-              <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={handleRepairDSC} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && !defaultsPreview)}>Confirm</Button>
+              <Button variant={repairMode === "reset-defaults" ? "danger" : "primary"} onClick={handleRepairDSC} isLoading={repairLoading} isDisabled={repairLoading || (repairMode === "reset-defaults" && (!defaultsPreview || resetStale))}>Confirm</Button>
               <Button variant="link" onClick={() => setRepairMode(null)} isDisabled={repairLoading}>Cancel</Button>
             </>
           )}

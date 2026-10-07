@@ -42,7 +42,7 @@ describe("ComponentsPage DSC states (A05-8, A08-6)", () => {
   it("no-dsc shows the create flow with the operator's defaults, not 'not installed'", async () => {
     const api = stubApi({
       "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded" },
-      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster\nmetadata:\n  name: default-dsc", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "", source: "csv", sourceDescription: "alm-examples of the installed CSV rhods-operator.3.6.0" },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster\nmetadata:\n  name: default-dsc", apiVersion: "datasciencecluster.opendatahub.io/v2", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "", source: "csv", sourceDescription: "alm-examples of the installed CSV rhods-operator.3.6.0" },
       "POST /api/setup/dsc": { success: true, message: "DataScienceCluster default-dsc created", logs: [] },
     });
     renderPage();
@@ -215,7 +215,7 @@ describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
   const block = { component: "mcplifecycleoperator", reasons: ["CRD(s) mcpservers.mcp.x-k8s.io convert their objects through a webhook Service of mcplifecycleoperator."] };
   const compat = {
     operatorVersion: "3.6.0", branch: "rhoai-3.6", invalidFields: [], missingComponents: [], extraComponents: ["legacycomponent"],
-    resetRemovals: ["mcplifecycleoperator", "trainer"],
+    resetRemovals: ["mcplifecycleoperator", "trainer"], defaultsAPIVersion: "datasciencecluster.opendatahub.io/v3",
   };
 
   it("lists what a reset sets to Removed before the user confirms", async () => {
@@ -237,7 +237,71 @@ describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
     // Bound to the defaults the user reviewed (HIGH 2): the backend refuses if the DSC's version changed.
     expect(api.bodies["POST /api/components/dsc/repair"][0]).toMatchObject({
       mode: "reset-defaults", expectedOperatorVersion: "3.6.0", expectedAPIVersion: "datasciencecluster.opendatahub.io/v3",
+      expectedResetRemovals: ["mcplifecycleoperator", "trainer"],
     });
+  });
+
+  it("a reset with no removals sends an empty list, not none", async () => {
+    const api = stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, resetRemovals: null, removalBlocks: null } },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
+      "POST /api/components/dsc/repair": { success: true, message: "Reset", logs: [] },
+    });
+    renderInApp(<ComponentsPage />);
+    const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
+    await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(reset);
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText(/kind: DataScienceCluster/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(api.bodies["POST /api/components/dsc/repair"]).toHaveLength(1));
+    expect(api.bodies["POST /api/components/dsc/repair"][0]).toMatchObject({ expectedResetRemovals: [] });
+  });
+
+  // HIGH (round 2): the page loaded while v3 could not be converted (removals worked out for v2); when the dialog
+  // opens the conversion works again and the defaults preview is v3. Confirming would pair a v3 reset with v2 removals.
+  it("conversion recovering between page load and dialog open: confirm disabled, a warning with Refresh", async () => {
+    const preview = { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" };
+    let components = {
+      ...present([dep("dashboard")]), dscAPIVersion: "datasciencecluster.opendatahub.io/v2",
+      dscCompatibility: { ...compat, defaultsAPIVersion: "datasciencecluster.opendatahub.io/v2", removalBlocks: null },
+    };
+    const api = stubApi({
+      "/api/components": () => jsonResponse(components),
+      "/api/setup/dsc/preview": () => jsonResponse(preview),
+      "POST /api/components/dsc/repair": { success: true, message: "Reset", logs: [] },
+    });
+    renderInApp(<ComponentsPage />);
+    const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
+    await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(reset);
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("The DataScienceCluster changed since this page loaded")).toBeInTheDocument();
+    expect(within(dialog).getByText(/The defaults below are v3 for operator 3.6.0, but the components this reset would set to Removed were worked out for v2/)).toBeInTheDocument();
+    const confirm = within(dialog).getByRole("button", { name: "Confirm" });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(api.bodies["POST /api/components/dsc/repair"]).toBeUndefined();
+
+    // Refresh reloads both: now both say v3, and the reset can be confirmed.
+    components = { ...components, dscAPIVersion: "datasciencecluster.opendatahub.io/v3", dscCompatibility: { ...compat, removalBlocks: null } };
+    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(within(dialog).queryByText("The DataScienceCluster changed since this page loaded")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeEnabled());
+  });
+
+  it("an operator change between page load and dialog open also disables confirm", async () => {
+    stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: null } },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.7.0", branch: "rhoai-3.7", sourceURL: "" },
+    });
+    renderInApp(<ComponentsPage />);
+    const reset = await screen.findByRole("button", { name: "Reset to version defaults" });
+    await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(reset);
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("The DataScienceCluster changed since this page loaded")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeDisabled();
   });
 
   it("remove-invalid sends the API version the page compared", async () => {
@@ -260,7 +324,7 @@ describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
   it("a blocked reset shows each blocked component and why, and offers no Confirm", async () => {
     const api = stubApi({
       "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { ...compat, removalBlocks: [block] } },
-      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v3", operatorVersion: "3.6.0", branch: "rhoai-3.6", sourceURL: "" },
     });
     renderInApp(<ComponentsPage />);
     expect(await screen.findByText(/Reset to version defaults is not possible now: it would remove mcplifecycleoperator/)).toBeInTheDocument();

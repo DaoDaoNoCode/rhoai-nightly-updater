@@ -240,7 +240,7 @@ func TestRepairDSCPrunesOrResetsWithExplicitDeletions(t *testing.T) {
 			}))
 			defer server.Close()
 			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
-			result, err := RepairDSC(c, "my-dsc", mode, "3.6.0", "datasciencecluster.opendatahub.io/v2", nil)
+			result, err := RepairDSC(c, "my-dsc", mode, "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
 			if err != nil || !result.Success {
 				t.Fatalf("repair: %+v %v", result, err)
 			}
@@ -289,7 +289,7 @@ func TestRepairDSCRefusesUnavailableSchemaOrChangedVersion(t *testing.T) {
 				namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""):                            csvListMock("3.6.0"),
 			})
 			defer cleanup()
-			if _, err := RepairDSC(c, "my-dsc", "reset-defaults", tc.expectedVersion, "datasciencecluster.opendatahub.io/v2", nil); err == nil {
+			if _, err := RepairDSC(c, "my-dsc", "reset-defaults", tc.expectedVersion, "datasciencecluster.opendatahub.io/v2", nil, []string{}); err == nil {
 				t.Fatal("unsafe reset accepted")
 			}
 			for _, rec := range *records {
