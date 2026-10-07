@@ -60,7 +60,7 @@ describe("update available notice", () => {
     });
     expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
     expect(screen.getByText(/An admin upgrades with the v2.0.1 installer/)).toBeInTheDocument();
-    expect(screen.getByText(`curl -fsSLO ${installerURL} && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(screen.getByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy the v2.0.1 install command" })).toBeInTheDocument();
     expect(screen.getByText("git checkout v2.0.1 && make upgrade")).toBeInTheDocument();
     expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
@@ -76,7 +76,7 @@ describe("update available notice", () => {
     });
     expect(await screen.findByText(/v3.0.0 is a new major version and requires a full redeploy/)).toBeInTheDocument();
     expect(screen.getByText(/An admin redeploys with the v3.0.0 installer/)).toBeInTheDocument();
-    expect(screen.getByText(`curl -fsSLO ${installerURL} && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(screen.getByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
     // A GitLab release asset may need a sign-in.
     expect(screen.getByText(/asks you to sign in/)).toBeInTheDocument();
   });

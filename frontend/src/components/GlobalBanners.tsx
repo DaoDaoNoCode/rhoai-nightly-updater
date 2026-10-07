@@ -270,7 +270,8 @@ function useUpdateNotice(): Notice | null {
   const latest = update.latest;
   const gitRoute = <code>git checkout {latest} &amp;&amp; make upgrade</code>;
   // The no-clone installer of exactly that release (scripts/install.sh, attached to every release).
-  const installer = update.installerURL ? `curl -fsSLO ${update.installerURL} && less install.sh && bash install.sh` : "";
+  // The backend only sends URLs without shell syntax; quote it anyway.
+  const installer = update.installerURL ? `curl -fsSLO '${update.installerURL}' && less install.sh && bash install.sh` : "";
   return {
     key: "update",
     priority: 10,

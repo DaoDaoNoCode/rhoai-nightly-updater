@@ -43,6 +43,41 @@ func TestInstallerReleasesURL(t *testing.T) {
 	}
 }
 
+// The installer URL is copied into a shell command, so anything that is not
+// a plain https URL is dropped (the notice then points to the release notes).
+func TestInstallerURLRejectsShellSyntax(t *testing.T) {
+	for _, releases := range []string{
+		"https://gitlab.example.com/$(id)/-/releases",
+		"https://gitlab.example.com/`id`/-/releases",
+		"https://gitlab.example.com/a;id/-/releases",
+		"https://gitlab.example.com/a'b/-/releases",
+		`https://gitlab.example.com/a"b/-/releases`,
+		"https://gitlab.example.com/a b/-/releases",
+		"https://gitlab.example.com/a%20b/-/releases",
+		"https://gitlab.example.com/a&&id/-/releases",
+		"https://gitlab.example.com/a|id/-/releases",
+		"https://gitlab.example.com/a<b>/-/releases",
+		`https://gitlab.example.com/a\b/-/releases`,
+		"https://user:pw@gitlab.example.com/g/-/releases",
+		"http://gitlab.example.com/g/-/releases",
+	} {
+		if got := installerURL(releases, "v2.0.1"); got != "" {
+			t.Errorf("%q: got %q", releases, got)
+		}
+		if got := compareReleases("v2.0.0", "v2.0.1", releases, releases); got.InstallerURL != "" {
+			t.Errorf("%q: compareReleases gave %q", releases, got.InstallerURL)
+		}
+	}
+	for releases, want := range map[string]string{
+		"https://gitlab.example.com:8443/group/sub-group/app_x/-/releases": "https://gitlab.example.com:8443/group/sub-group/app_x/-/releases/v2.0.1/downloads/install.sh",
+		"https://github.com/Owner.Name/app-x/releases":                     "https://github.com/Owner.Name/app-x/releases/download/v2.0.1/install.sh",
+	} {
+		if got := installerURL(releases, "v2.0.1"); got != want {
+			t.Errorf("%q: got %q, want %q", releases, got, want)
+		}
+	}
+}
+
 func TestCompareReleases(t *testing.T) {
 	const notes = "https://gitlab.example.com/group/app/-/releases/"
 	cases := []struct {

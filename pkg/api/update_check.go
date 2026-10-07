@@ -139,6 +139,13 @@ func compareReleases(running, latest, releasesURL, installerReleases string) Upd
 	return info
 }
 
+// safeInstallerURL is what an installer URL may look like. The URL ends up
+// in a shell command that admins copy (the update notice), so it allows no
+// shell syntax: https, a host with an optional port, and a path of
+// unreserved characters and slashes only. No "$", backticks, quotes,
+// spaces, ";", "&", "|", parentheses, "<", ">", backslashes or "%".
+var safeInstallerURL = regexp.MustCompile(`^https://[A-Za-z0-9._~-]+(:[0-9]{1,5})?/[A-Za-z0-9._~/-]*$`)
+
 // installerURL returns the download URL of tag's install.sh asset for a
 // releases page (RELEASES_URL), as the release jobs publish it: GitHub
 // release assets at <owner>/<repo>/releases/download/<tag>/<asset>
@@ -151,13 +158,17 @@ func installerURL(releasesURL, tag string) string {
 		return ""
 	}
 	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	var out string
 	switch {
 	case len(segs) >= 3 && segs[len(segs)-2] == "-" && segs[len(segs)-1] == "releases":
-		return releasesURL + "/" + tag + "/downloads/install.sh"
+		out = releasesURL + "/" + tag + "/downloads/install.sh"
 	case u.Host == "github.com" && len(segs) == 3 && segs[2] == "releases":
-		return releasesURL + "/download/" + tag + "/install.sh"
+		out = releasesURL + "/download/" + tag + "/install.sh"
 	}
-	return ""
+	if !safeInstallerURL.MatchString(out) {
+		return ""
+	}
+	return out
 }
 
 // updateChecker caches the highest release of one repository.
