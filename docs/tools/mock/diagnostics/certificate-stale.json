@@ -71,7 +71,7 @@
     {
       "name": "API versions",
       "status": "pass",
-      "detail": "Every served version of 5 resources in 4 multi-version RHOAI API groups can be read"
+      "detail": "Every served version of 3 resources in 4 multi-version RHOAI API groups converts its first object (a sample); 2 resources without objects, nothing to convert"
     },
     {
       "name": "Node capacity",

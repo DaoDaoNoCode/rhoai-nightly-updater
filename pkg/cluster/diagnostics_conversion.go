@@ -23,8 +23,11 @@ import (
 //
 // The check uses API discovery only (readable by every authenticated user)
 // and one `?limit=1` list per resource and served version of every
-// *.opendatahub.io group that serves more than one version. A list the app
-// may not make (403) is skipped: its RBAC covers the RHOAI resources it uses.
+// *.opendatahub.io group that serves more than one version. Each version is
+// checked on its first object, a sample: that is enough for the case this
+// targets, a webhook that does not know a version fails on any object. An
+// empty list calls no webhook, so it verifies nothing. A list the app may
+// not make (403) is skipped: its RBAC covers the RHOAI resources it uses.
 
 const conversionCheckName = "API versions"
 
@@ -36,7 +39,12 @@ type conversionProbe struct {
 	Group, Version, Resource, Kind string
 	Preferred                      bool
 	Err                            error // nil when the list worked
+	Items                          int   // objects returned (0 or 1)
 }
+
+// verified reports whether the probe exercised the conversion: it read an
+// object. An empty list converts nothing.
+func (p conversionProbe) verified() bool { return p.Err == nil && p.Items > 0 }
 
 func (p conversionProbe) path() string {
 	return "/apis/" + p.Group + "/" + p.Version + "/" + p.Resource
@@ -134,7 +142,19 @@ func probeConversions(c *Client) (probes []conversionProbe, groups int, errs []s
 		}
 	}
 	parallelFor(len(probes), conversionProbeParallelism, func(i int) {
-		_, probes[i].Err = getDiscovered(c, probes[i].path(), url.Values{"limit": {"1"}})
+		body, err := getDiscovered(c, probes[i].path(), url.Values{"limit": {"1"}})
+		if err != nil {
+			probes[i].Err = err
+			return
+		}
+		var list struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			probes[i].Err = fmt.Errorf("parse %s list: %w", probes[i].Resource, err)
+			return
+		}
+		probes[i].Items = len(list.Items)
 	})
 	return probes, len(gs), errs, nil
 }
@@ -174,6 +194,22 @@ func checkConversionFailures(c *Client) checkOutput {
 		}
 	}
 
+	// A kind is verified when every served version returned an object.
+	verifiedKinds, emptyKinds := 0, 0
+	for _, k := range kinds {
+		verified, empty := true, false
+		for _, p := range k.probes {
+			verified = verified && p.verified()
+			empty = empty || (p.Err == nil && p.Items == 0)
+		}
+		switch {
+		case verified:
+			verifiedKinds++
+		case empty:
+			emptyKinds++
+		}
+	}
+
 	var operator *installedOperator
 	failedKinds := []string{}
 	for _, k := range kinds {
@@ -206,9 +242,16 @@ func checkConversionFailures(c *Client) checkOutput {
 		details = append(details, fmt.Sprintf("The operator's conversion webhook fails for %s", strings.Join(failedKinds, ", ")))
 	case groups == 0:
 		details = append(details, "No RHOAI API group serves more than one version")
+	case verifiedKinds == 0:
+		out.check.Status = "warn"
+		details = append(details, fmt.Sprintf("Could not verify any conversion: no resource of the %s returned an object at every served version",
+			countNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
 	default:
-		details = append(details, fmt.Sprintf("Every served version of %s in %s can be read",
-			countNoun(len(kinds), "resource", "resources"), countNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
+		details = append(details, fmt.Sprintf("Every served version of %s in %s converts its first object (a sample)",
+			countNoun(verifiedKinds, "resource", "resources"), countNoun(groups, "multi-version RHOAI API group", "multi-version RHOAI API groups")))
+	}
+	if emptyKinds > 0 {
+		details = append(details, fmt.Sprintf("%s without objects, nothing to convert", countNoun(emptyKinds, "resource", "resources")))
 	}
 	if forbidden > 0 {
 		details = append(details, fmt.Sprintf("%s not checked (this app may not list %s)", countNoun(forbidden, "read", "reads"), verb(forbidden, "it", "them")))
@@ -260,6 +303,7 @@ func conversionProblem(group, resource, kind string, failed, working []conversio
 			unregistered = true
 		}
 	}
+	description += " Each served version is checked on its first object, a sample: a webhook that does not know a version fails on any object."
 	if unregistered {
 		description += fmt.Sprintf(" Likely cause (an inference from the message): the conversion webhook served by the running operator does not know %s. That happens when a nightly's operator image is older than the CRDs its bundle installed.", failedVersions)
 	} else {

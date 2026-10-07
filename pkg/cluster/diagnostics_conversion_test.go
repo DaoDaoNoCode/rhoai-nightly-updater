@@ -84,7 +84,7 @@ func TestConversionCheck_ReportsOneProblemPerKind(t *testing.T) {
 					t.Errorf("evidence misses %q:\n%s", want, evidence)
 				}
 			}
-			for _, want := range []string{"Reading them as v2 works", "the version the API server prefers", "an inference", "older than the CRDs its bundle installed"} {
+			for _, want := range []string{"Reading them as v2 works", "the version the API server prefers", "checked on its first object, a sample", "an inference", "older than the CRDs its bundle installed"} {
 				if !strings.Contains(dsc.Description, want) {
 					t.Errorf("description misses %q: %s", want, dsc.Description)
 				}
@@ -113,16 +113,46 @@ func TestConversionCheck_ReportsOneProblemPerKind(t *testing.T) {
 	}
 }
 
-func TestConversionCheck_PassesWhenEveryVersionReads(t *testing.T) {
-	f, c := conversionWorld(t, 200, `{"items":[]}`)
+const oneDSC = `{"items":[{"metadata":{"name":"default-dsc"}}]}`
+
+func TestConversionCheck_CountsOnlyVersionsThatReturnedAnObject(t *testing.T) {
+	// Mixed: DataScienceCluster returns its object at both versions
+	// (verified), Platform has none (an empty list converts nothing), and
+	// HardwareProfiles may not be listed (403).
+	f, c := conversionWorld(t, 200, oneDSC)
 	f.json("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 200, `{"items":[]}`)
+	f.json("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 200, `{"items":[]}`)
 	out := checkConversionFailures(c)
-	if out.check.Status != "pass" || len(out.problems) != 0 {
+	want := "Every served version of 1 resource in 3 multi-version RHOAI API groups converts its first object (a sample); " +
+		"1 resource without objects, nothing to convert; 2 reads not checked (this app may not list them)"
+	if out.check.Status != "pass" || len(out.problems) != 0 || out.check.Detail != want {
 		t.Fatalf("%+v %+v", out.check, out.problems)
 	}
-	if !strings.Contains(out.check.Detail, "Every served version of 3 resources in 3 multi-version RHOAI API groups can be read") {
-		t.Fatalf("detail %q", out.check.Detail)
-	}
+}
+
+func TestConversionCheck_NothingVerifiedWarns(t *testing.T) {
+	t.Run("every list empty", func(t *testing.T) {
+		f, c := conversionWorld(t, 200, `{"items":[]}`)
+		f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 200, `{"items":[]}`)
+		f.json("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 200, `{"items":[]}`)
+		f.json("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 200, `{"items":[]}`)
+		out := checkConversionFailures(c)
+		if out.check.Status != "warn" || len(out.problems) != 0 || !strings.HasPrefix(out.check.Detail, "Could not verify any conversion") ||
+			!strings.Contains(out.check.Detail, "2 resources without objects") {
+			t.Fatalf("%+v", out.check)
+		}
+	})
+	t.Run("every list forbidden", func(t *testing.T) {
+		f, c := conversionWorld(t, 403, `{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}`)
+		f.status("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 403, "Forbidden")
+		f.status("GET", "/apis/config.opendatahub.io/v1alpha2/platforms", 403, "Forbidden")
+		f.status("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 403, "Forbidden")
+		out := checkConversionFailures(c)
+		if out.check.Status != "warn" || len(out.problems) != 0 || !strings.HasPrefix(out.check.Detail, "Could not verify any conversion") ||
+			!strings.Contains(out.check.Detail, "6 reads not checked") || strings.Contains(out.check.Detail, "converts") {
+			t.Fatalf("%+v", out.check)
+		}
+	})
 }
 
 func TestConversionCheck_OtherErrorsWarn(t *testing.T) {
