@@ -39,9 +39,10 @@ func checkPlatformModules(c *Client) checkOutput {
 
 	// Platform provisioning gates (rhods-operator rhoai-3.6
 	// docs/upgrade-ordering.md "Admin ack gates", pkg/controller/provision).
-	body, _, err := c.get("/apis/config.opendatahub.io/v1alpha1/platforms")
+	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
+	body := r.Body
 	switch {
-	case IsK8sError(err, http.StatusNotFound):
+	case IsK8sError(err, http.StatusNotFound), err == nil && r.Version == "":
 		details = append(details, "no Platform API (operator older than 3.6 or not installed)")
 	case IsK8sError(err, http.StatusForbidden):
 		details = append(details, "Platform not checked: this app cannot read platforms (RBAC)")

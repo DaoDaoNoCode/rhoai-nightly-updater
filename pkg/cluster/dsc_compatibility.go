@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -83,8 +84,10 @@ func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, pat
 }
 
 // checkDSCCompatibilityFor compares a DSC with the installed schema and the
-// defaults of the already-read installed operator.
-func checkDSCCompatibilityFor(c *Client, dsc map[string]interface{}, op *installedOperator, opErr error) *types.DSCCompatibility {
+// defaults of the already-read installed operator, in the API version the
+// DSC was read at.
+func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, opErr error) *types.DSCCompatibility {
+	dsc := read.Object
 	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}, ExtraComponents: []string{}}
 	apiVersion, _ := dsc["apiVersion"].(string)
 	schema, err := dscSpecSchema(c, apiVersion)
@@ -98,11 +101,17 @@ func checkDSCCompatibilityFor(c *Client, dsc map[string]interface{}, op *install
 		result.DefaultsError = "Unable to load version-matched defaults: " + opErr.Error()
 		return result
 	}
-	defaults, err := defaultDSCSpecFor(c.ctx, op)
+	defaults, err := defaultDSCSpecFor(c.ctx, op, servedVersions(c, dscGroup, dscFallbackVersions), read.Version)
 	if err != nil {
-		result.DefaultsError = "Unable to load version-matched defaults: " + err.Error()
+		result.DefaultsError = defaultsErrorMessage(read, err)
 		return result
 	}
+	if defaults.Spec["apiVersion"] != apiVersion {
+		// defaultDSCSpecFor only returns the version asked for; never compare across versions.
+		result.DefaultsError = fmt.Sprintf("Unable to load version-matched defaults: the defaults are %v, the DataScienceCluster is %s", defaults.Spec["apiVersion"], apiVersion)
+		return result
+	}
+	result.DefaultsAPIVersion = apiVersion
 	result.OperatorVersion = defaults.Version
 	result.Branch = defaults.Branch
 	result.SourceURL = defaults.SourceURL
@@ -142,6 +151,28 @@ func checkDSCCompatibilityFor(c *Client, dsc map[string]interface{}, op *install
 		}
 	}
 	return result
+}
+
+// defaultsErrorMessage explains why the DSC has no defaults to compare
+// with. A missing version is spelled out with the reason the DSC was read
+// at that version, instead of a sample URL that returned 404.
+func defaultsErrorMessage(read dscRead, err error) string {
+	var missing *missingDefaultsError
+	if !errors.As(err, &missing) {
+		return "Unable to load version-matched defaults: " + err.Error()
+	}
+	var b strings.Builder
+	fallback := read.versionFallback()
+	if fallback != nil {
+		fmt.Fprintf(&b, "This DataScienceCluster can only be read as %s: reading it as %s fails because the operator's conversion webhook cannot convert it. ", fallback.Used, fallback.Version)
+	}
+	msg := missing.Error()
+	b.WriteString(strings.ToUpper(msg[:1]) + msg[1:] + ". ")
+	b.WriteString("Component names differ between API versions, so the DataScienceCluster is not compared with defaults of another version.")
+	if fallback != nil {
+		b.WriteString(" Diagnostics explains the conversion failure and how to fix it.")
+	}
+	return b.String()
 }
 
 // componentState returns spec.components[name].managementState.
@@ -230,18 +261,15 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string, expectedEx
 	if mode != "remove-invalid" && mode != "remove-extra-components" && mode != "reset-defaults" {
 		return nil, fmt.Errorf("invalid DSC repair mode")
 	}
-	// Read the named resource again so the repair is computed from fresh values and schema.
-	path := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/" + name
-	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
-		path = "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters/" + name
-		body, _, err = c.get(path)
-	}
+	// Read the named resource again so the repair is computed from fresh
+	// values and schema, at the version the Components page compared.
+	read, err := getServed(c, dscGroup, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters/"+name, dscFallbackVersions)
 	if err != nil {
 		return nil, err
 	}
+	path := fmt.Sprintf("/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters/", read.Version) + name
 	var dsc map[string]interface{}
-	if err := json.Unmarshal(body, &dsc); err != nil {
+	if err := json.Unmarshal(read.Body, &dsc); err != nil {
 		return nil, err
 	}
 	oldSpec, _ := dsc["spec"].(map[string]interface{})
@@ -254,7 +282,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion string, expectedEx
 	nextSpec, _ := pruneUnknownDSCFields(oldSpec, schema, "spec", &invalid).(map[string]interface{})
 	detail := "Removed invalid DSC fields: " + strings.Join(invalid, ", ")
 	if mode == "reset-defaults" || mode == "remove-extra-components" {
-		defaults, err := fetchDefaultDSCSpec(c)
+		defaults, err := fetchDefaultDSCSpec(c, read.Version)
 		if err != nil {
 			return nil, err
 		}

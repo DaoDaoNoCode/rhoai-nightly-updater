@@ -21,11 +21,12 @@ const dscSamplesBaseURL = "https://raw.githubusercontent.com/red-hat-data-servic
 var dscVersionPattern = regexp.MustCompile(`(?i)^(?:rhoai-|v)?([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[-.]([a-z]+)(?:\.?([0-9]+))?)?(?:[+.-].*)?$`)
 
 type dscDefaults struct {
-	Spec      map[string]interface{}
-	YAML      string
-	Version   string
-	Branch    string
-	SourceURL string // GitHub sample URL; empty when Source is "csv"
+	Spec       map[string]interface{}
+	YAML       string
+	Version    string // operator version
+	APIVersion string // DataScienceCluster API version of Spec, e.g. "v3"
+	Branch     string
+	SourceURL  string // GitHub sample URL; empty when Source is "csv"
 	// Source is "csv" (alm-examples of the installed CSV) or "github".
 	Source            string
 	SourceDescription string
@@ -57,12 +58,15 @@ func dscBranchForVersion(version string) (string, error) {
 	return branch, nil
 }
 
-// installedOperator is the installed RHOAI CSV as needed for DSC defaults.
+// installedOperator is the installed RHOAI CSV as needed for DSC defaults
+// and diagnostics.
 type installedOperator struct {
 	Name        string
 	Version     string
 	Phase       string
 	ALMExamples string // metadata.annotations["alm-examples"], may be empty
+	// Deployments are the operator Deployments the CSV installs (in SubNS).
+	Deployments []string
 }
 
 // csvForDefaults is the part of a CSV the DSC defaults read.
@@ -72,6 +76,13 @@ type csvForDefaults struct {
 	} `json:"metadata"`
 	Spec struct {
 		Version string `json:"version"`
+		Install struct {
+			Spec struct {
+				Deployments []struct {
+					Name string `json:"name"`
+				} `json:"deployments"`
+			} `json:"spec"`
+		} `json:"install"`
 	} `json:"spec"`
 	Status struct {
 		Phase string `json:"phase"`
@@ -87,7 +98,13 @@ func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
 	if err := json.Unmarshal(body, &csv); err != nil {
 		return nil, err
 	}
-	return &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"]}, nil
+	op := &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"]}
+	for _, d := range csv.Spec.Install.Spec.Deployments {
+		if d.Name != "" {
+			op.Deployments = append(op.Deployments, d.Name)
+		}
+	}
+	return op, nil
 }
 
 // getInstalledOperator reads the installed RHOAI CSV. The Subscription's
@@ -127,35 +144,44 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 	// Read the CSV itself for alm-examples; without it the GitHub sample is used.
 	if full, err := readCSVForDefaults(c, csv.Name); err == nil && full.Version == csv.Version {
 		op.ALMExamples = full.ALMExamples
+		op.Deployments = full.Deployments
 	}
 	return op, nil
 }
 
-// dscFromALMExamples returns the DataScienceCluster example that the
-// installed operator bundle ships in its CSV's alm-examples annotation. It is
-// the exact sample of the installed build (the GitHub branch can move ahead
-// of it) and needs no network access. ok is false when the CSV carries no
-// usable DataScienceCluster example.
-func dscFromALMExamples(almExamples string) (map[string]interface{}, string, bool) {
+// dscExample is a usable DataScienceCluster example of alm-examples.
+type dscExample struct {
+	Spec map[string]interface{}
+	YAML string
+}
+
+// dscExamplesFromALM returns the DataScienceCluster examples that the
+// installed operator bundle ships in its CSV's alm-examples annotation, by
+// API version ("v3"). They are the exact samples of the installed build
+// (the GitHub branch can move ahead of it) and need no network access.
+// Examples not named default-dsc or without components are left out.
+func dscExamplesFromALM(almExamples string) map[string]dscExample {
+	out := map[string]dscExample{}
 	if strings.TrimSpace(almExamples) == "" {
-		return nil, "", false
+		return out
 	}
 	var examples []map[string]interface{}
 	if err := json.Unmarshal([]byte(almExamples), &examples); err != nil {
-		return nil, "", false
+		return out
 	}
 	for _, example := range examples {
 		if example["kind"] != "DataScienceCluster" {
 			continue
 		}
 		apiVersion, _ := example["apiVersion"].(string)
-		meta, _ := example["metadata"].(map[string]interface{})
-		spec, _ := example["spec"].(map[string]interface{})
-		components, _ := spec["components"].(map[string]interface{})
-		if (apiVersion != "datasciencecluster.opendatahub.io/v2" && apiVersion != "datasciencecluster.opendatahub.io/v1") ||
-			meta["name"] != "default-dsc" || len(components) == 0 {
+		version, ok := dscAPIVersion(apiVersion)
+		if !ok || !isDefaultDSC(example, version) {
 			continue
 		}
+		if _, dup := out[version]; dup {
+			continue
+		}
+		meta, _ := example["metadata"].(map[string]interface{})
 		// Keep only what a user would write; never carry status or server fields.
 		cleanMeta := map[string]interface{}{"name": "default-dsc"}
 		if labels, ok := meta["labels"].(map[string]interface{}); ok && len(labels) > 0 {
@@ -165,40 +191,113 @@ func dscFromALMExamples(almExamples string) (map[string]interface{}, string, boo
 			"apiVersion": apiVersion,
 			"kind":       "DataScienceCluster",
 			"metadata":   cleanMeta,
-			"spec":       spec,
+			"spec":       example["spec"],
 		}
-		out, err := yaml.Marshal(clean)
+		text, err := yaml.Marshal(clean)
 		if err != nil {
-			return nil, "", false
+			continue
 		}
 		// Return a map decoded from the YAML so callers get their own copy.
 		var fresh map[string]interface{}
-		if err := yaml.Unmarshal(out, &fresh); err != nil {
-			return nil, "", false
+		if err := yaml.Unmarshal(text, &fresh); err != nil {
+			continue
 		}
-		return fresh, string(out), true
+		out[version] = dscExample{Spec: fresh, YAML: string(text)}
 	}
-	return nil, "", false
+	return out
 }
 
-func fetchDefaultDSCSpec(c *Client) (*dscDefaults, error) {
+// dscAPIVersion returns the version of a DataScienceCluster apiVersion
+// ("datasciencecluster.opendatahub.io/v3" gives "v3").
+func dscAPIVersion(apiVersion string) (string, bool) {
+	group, version, ok := strings.Cut(apiVersion, "/")
+	if !ok || group != dscGroup || !kubeVersionPattern.MatchString(version) {
+		return "", false
+	}
+	return version, true
+}
+
+// isDefaultDSC reports whether a parsed sample is the default
+// DataScienceCluster (default-dsc, with components) of the given version.
+func isDefaultDSC(sample map[string]interface{}, version string) bool {
+	meta, _ := sample["metadata"].(map[string]interface{})
+	spec, _ := sample["spec"].(map[string]interface{})
+	components, _ := spec["components"].(map[string]interface{})
+	return sample["kind"] == "DataScienceCluster" && sample["apiVersion"] == dscGroup+"/"+version &&
+		meta["name"] == "default-dsc" && len(components) > 0
+}
+
+// missingDefaultsError: the installed operator has no defaults in the API
+// version the DataScienceCluster was read at. Defaults of another version
+// are never used instead: component names differ between versions.
+type missingDefaultsError struct {
+	Want            string   // "v2"
+	Available       []string // the versions alm-examples has defaults for
+	OperatorVersion string
+	CSV             string // "" when alm-examples were not read (DSC_SAMPLE_REF)
+	Branch          string
+}
+
+func (e *missingDefaultsError) Error() string {
+	var where []string
+	if e.CSV != "" {
+		where = append(where, "the alm-examples of "+e.CSV)
+	}
+	where = append(where, "branch "+e.Branch+" of rhods-operator")
+	msg := fmt.Sprintf("operator %s has no DataScienceCluster %s defaults (none in %s)", e.OperatorVersion, e.Want, strings.Join(where, " or "))
+	if len(e.Available) > 0 {
+		msg += fmt.Sprintf("; it ships them as %s only", strings.Join(e.Available, ", "))
+	}
+	return msg
+}
+
+// fetchDefaultDSCSpec returns the installed operator's defaults in API
+// version want ("v3"), or with want "" in the newest served version that
+// has them.
+func fetchDefaultDSCSpec(c *Client, want string) (*dscDefaults, error) {
 	op, err := getInstalledOperator(c)
 	if err != nil {
 		return nil, err
 	}
-	return defaultDSCSpecFor(c.ctx, op)
+	return defaultDSCSpecFor(c.ctx, op, servedVersions(c, dscGroup, dscFallbackVersions), want)
+}
+
+// defaultsOrder is the API versions to look for defaults in: want alone,
+// else the served versions in order. When those are only the fallback
+// (discovery failed), every version alm-examples has is added and all are
+// tried newest first.
+func defaultsOrder(versions apiVersions, examples map[string]dscExample, want string) []string {
+	if want != "" {
+		return []string{want}
+	}
+	order := append([]string{}, versions.Versions...)
+	if versions.Discovered {
+		return order
+	}
+	for v := range examples {
+		if !containsString(order, v) {
+			order = append(order, v)
+		}
+	}
+	sortAPIVersions(order)
+	return order
 }
 
 // defaultDSCSpecFor prefers the installed CSV's alm-examples and falls back
-// to the sample on the matching rhods-operator branch. DSC_SAMPLE_REF forces
-// the GitHub sample from that ref.
-func defaultDSCSpecFor(ctx context.Context, op *installedOperator) (*dscDefaults, error) {
+// to the sample on the matching rhods-operator branch, in the API versions
+// of defaultsOrder. DSC_SAMPLE_REF forces the GitHub sample from that ref.
+func defaultDSCSpecFor(ctx context.Context, op *installedOperator, versions apiVersions, want string) (*dscDefaults, error) {
 	version := op.Version
 	branch, err := dscBranchForVersion(version)
 	override := strings.TrimSpace(os.Getenv("DSC_SAMPLE_REF"))
+	examples := map[string]dscExample{}
 	if override == "" {
-		if spec, text, ok := dscFromALMExamples(op.ALMExamples); ok {
-			return &dscDefaults{Spec: spec, YAML: text, Version: version, Branch: branch, Source: "csv",
+		examples = dscExamplesFromALM(op.ALMExamples)
+	}
+	order := defaultsOrder(versions, examples, want)
+	for _, v := range order {
+		if ex, ok := examples[v]; ok {
+			return &dscDefaults{Spec: ex.Spec, YAML: ex.YAML, Version: version, APIVersion: v, Branch: branch, Source: "csv",
 				SourceDescription: "alm-examples of the installed CSV " + op.Name}, nil
 		}
 	}
@@ -208,11 +307,12 @@ func defaultDSCSpecFor(ctx context.Context, op *installedOperator) (*dscDefaults
 	} else if err != nil {
 		return nil, err
 	}
-	// Older releases may only ship the v1 sample. Only fall back within the same branch.
-	for _, apiVersion := range []string{"v2", "v1"} {
+	// Only fall back within the same branch: a missing sample (404) moves
+	// on to the next version, any other failure stops.
+	for _, apiVersion := range order {
 		sourceURL := dscSamplesBaseURL + url.PathEscape(branch) + "/config/rhoai/samples/datasciencecluster_" + apiVersion + "_datasciencecluster.yaml"
-		body, status, err := fetchDSCSample(ctx, sourceURL)
-		if status == http.StatusNotFound && apiVersion == "v2" {
+		body, status, err := fetchDSCSample(ctx, sourceURL, apiVersion)
+		if status == http.StatusNotFound {
 			continue
 		}
 		if err != nil {
@@ -222,18 +322,28 @@ func defaultDSCSpecFor(ctx context.Context, op *installedOperator) (*dscDefaults
 		if err := yaml.Unmarshal([]byte(body), &spec); err != nil {
 			return nil, fmt.Errorf("invalid DSC sample: %w", err)
 		}
-		meta, _ := spec["metadata"].(map[string]interface{})
-		s, _ := spec["spec"].(map[string]interface{})
-		components, _ := s["components"].(map[string]interface{})
-		if spec["kind"] != "DataScienceCluster" || spec["apiVersion"] != "datasciencecluster.opendatahub.io/"+apiVersion || meta["name"] != "default-dsc" || len(components) == 0 {
+		if !isDefaultDSC(spec, apiVersion) {
 			return nil, fmt.Errorf("upstream sample is not a valid default DataScienceCluster")
 		}
-		return &dscDefaults{Spec: spec, YAML: body, Version: version, Branch: branch, SourceURL: sourceURL, Source: "github", SourceDescription: sourceURL}, nil
+		return &dscDefaults{Spec: spec, YAML: body, Version: version, APIVersion: apiVersion, Branch: branch, SourceURL: sourceURL, Source: "github", SourceDescription: sourceURL}, nil
 	}
-	return nil, fmt.Errorf("no DSC sample found for %s", branch)
+	if want != "" {
+		e := &missingDefaultsError{Want: want, OperatorVersion: version, Branch: branch}
+		if override == "" {
+			e.CSV = op.Name
+		}
+		for v := range examples {
+			e.Available = append(e.Available, v)
+		}
+		sortAPIVersions(e.Available)
+		return nil, e
+	}
+	return nil, fmt.Errorf("no DSC sample found for %s (DataScienceCluster %s)", branch, strings.Join(order, ", "))
 }
 
-func fetchDSCSample(ctx context.Context, sourceURL string) (string, int, error) {
+// fetchDSCSample downloads a GitHub sample of DataScienceCluster apiVersion
+// version. Only valid samples are cached.
+func fetchDSCSample(ctx context.Context, sourceURL, version string) (string, int, error) {
 	dscDefaultsCache.RLock()
 	entry, ok := dscDefaultsCache.entries[sourceURL]
 	dscDefaultsCache.RUnlock()
@@ -266,14 +376,7 @@ func fetchDSCSample(ctx context.Context, sourceURL string) (string, int, error) 
 	if err := yaml.Unmarshal(body, &sample); err != nil {
 		return "", resp.StatusCode, err
 	}
-	spec, _ := sample["spec"].(map[string]interface{})
-	components, _ := spec["components"].(map[string]interface{})
-	meta, _ := sample["metadata"].(map[string]interface{})
-	expectedAPI := "datasciencecluster.opendatahub.io/v2"
-	if strings.Contains(sourceURL, "datasciencecluster_v1_") {
-		expectedAPI = "datasciencecluster.opendatahub.io/v1"
-	}
-	if sample["kind"] != "DataScienceCluster" || sample["apiVersion"] != expectedAPI || meta["name"] != "default-dsc" || len(components) == 0 {
+	if !isDefaultDSC(sample, version) {
 		return "", resp.StatusCode, fmt.Errorf("invalid DSC sample")
 	}
 	dscDefaultsCache.Lock()
@@ -282,6 +385,17 @@ func fetchDSCSample(ctx context.Context, sourceURL string) (string, int, error) 
 	return string(body), resp.StatusCode, nil
 }
 
+// GetDefaultDSCYAML returns the defaults a "create" or "reset to defaults"
+// would use: in the API version the existing DataScienceCluster is read
+// at, or, without one, in the newest served version that has them.
 func GetDefaultDSCYAML(c *Client) (*dscDefaults, error) {
-	return fetchDefaultDSCSpec(c)
+	read, err := readFirstDSC(c)
+	if err != nil {
+		return nil, err
+	}
+	want := ""
+	if read.Object != nil {
+		want = read.Version
+	}
+	return fetchDefaultDSCSpec(c, want)
 }

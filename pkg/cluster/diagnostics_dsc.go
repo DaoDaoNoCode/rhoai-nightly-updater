@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -62,27 +61,25 @@ type dscObject struct {
 	} `json:"status"`
 }
 
-// listFirstServed lists a collection with the newest served version and
-// returns the items. pathFmt is the collection path with %s for the
-// version. apiFound is false when no version is served (no CRD).
-func listFirstServed(c *Client, pathFmt, resource string) (items []dscObject, apiFound bool, err error) {
-	for _, version := range []string{"v2", "v1"} {
-		body, _, err := c.get(fmt.Sprintf(pathFmt, version))
-		if IsK8sError(err, http.StatusNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, true, err
-		}
-		var list struct {
-			Items []dscObject `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			return nil, true, fmt.Errorf("parse %s: %w", resource, err)
-		}
-		return list.Items, true, nil
+// listFirstServed lists a collection of group at the newest served version
+// that works (listServed) and returns the items. pathFmt is the collection
+// path with %s for the version. apiFound is false when no version is
+// served (no CRD).
+func listFirstServed(c *Client, group, pathFmt, resource string, fallback []string) (items []dscObject, apiFound bool, err error) {
+	r, err := listServed(c, group, pathFmt, nil, fallback)
+	if err != nil {
+		return nil, true, err
 	}
-	return nil, false, nil
+	if r.Version == "" {
+		return nil, false, nil
+	}
+	var list struct {
+		Items []dscObject `json:"items"`
+	}
+	if err := json.Unmarshal(r.Body, &list); err != nil {
+		return nil, true, fmt.Errorf("parse %s: %w", resource, err)
+	}
+	return list.Items, true, nil
 }
 
 // conditionFailing: a non-Info condition that is not True (Degraded, the
@@ -451,7 +448,7 @@ func joinMentions(deps []*dependency) string {
 // analyzeCurrentDSC reads the DataScienceCluster and DSCInitialization and
 // analyses them (the restart fix checks again with it).
 func analyzeCurrentDSC(c *Client, now time.Time) (*dscAnalysis, error) {
-	dscs, apiFound, err := listFirstServed(c, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters", "datascienceclusters")
+	dscs, apiFound, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +461,7 @@ func analyzeCurrentDSC(c *Client, now time.Time) (*dscAnalysis, error) {
 // applicationsNamespace is the DSCInitialization's applications namespace
 // ("" when it cannot be read).
 func applicationsNamespace(c *Client) string {
-	dscis, _, err := listFirstServed(c, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations")
+	dscis, _, err := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
 	if err != nil || len(dscis) == 0 {
 		return ""
 	}
@@ -663,7 +660,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 	// The DSCI is read first: a DSCI in Error often explains why no DSC
 	// components deploy, so it is reported whatever the DSC state is, and
 	// its applications namespace locates the module operators.
-	dscis, dsciAPI, dsciErr := listFirstServed(c, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations")
+	dscis, dsciAPI, dsciErr := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
 	var dsciProblem *Problem
 	appNS := ""
 	if dsciErr == nil && dsciAPI && len(dscis) > 0 {
@@ -683,7 +680,7 @@ func checkDataScienceCluster(c *Client) checkOutput {
 		}
 	}
 
-	dscs, apiFound, err := listFirstServed(c, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters", "datascienceclusters")
+	dscs, apiFound, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
 	switch {
 	case err != nil:
 		warn(fmt.Sprintf("could not verify the DataScienceCluster: %v", err))

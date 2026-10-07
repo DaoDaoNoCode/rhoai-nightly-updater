@@ -21,33 +21,47 @@ const (
 	DSCStateNoCRD   = "no-crd" // operator not installed, or its CRDs not created yet
 )
 
-// readFirstDSC returns the first DataScienceCluster (v2, falling back to v1
-// for older RHOAI versions) and the DSC state.
-func readFirstDSC(c *Client) (map[string]interface{}, string, error) {
-	body, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters")
+// dscRead is the first DataScienceCluster as read.
+type dscRead struct {
+	Object map[string]interface{} // nil without a DSC
+	State  string                 // DSCStatePresent, DSCStateNoDSC or DSCStateNoCRD
+	// Version is the API version it was read at ("v3"); Skipped are the
+	// newer served versions that failed with a conversion webhook error.
+	Version string
+	Skipped []versionFailure
+}
+
+// readFirstDSC returns the first DataScienceCluster, read at the newest
+// served version that works (servedVersions; v2 then v1 when discovery is
+// unavailable), and the DSC state.
+func readFirstDSC(c *Client) (dscRead, error) {
+	r, err := listServed(c, dscGroup, dscListFmt, nil, dscFallbackVersions)
 	if err != nil {
-		v2Err := err
-		body, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters")
-		if err != nil {
-			if IsK8sError(err, 404) && IsK8sError(v2Err, 404) {
-				return nil, DSCStateNoCRD, nil
-			}
-			if IsK8sError(err, 404) {
-				err = v2Err // v1 is gone but v2 failed for another reason
-			}
-			return nil, "", fmt.Errorf("fetching DSC list: %w", err)
-		}
+		return dscRead{}, fmt.Errorf("fetching DSC list: %w", err)
+	}
+	if r.Version == "" {
+		return dscRead{State: DSCStateNoCRD}, nil
 	}
 	var list struct {
 		Items []map[string]interface{} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, "", fmt.Errorf("parsing DSC list: %w", err)
+	if err := json.Unmarshal(r.Body, &list); err != nil {
+		return dscRead{}, fmt.Errorf("parsing DSC list: %w", err)
 	}
-	if len(list.Items) == 0 {
-		return nil, DSCStateNoDSC, nil
+	out := dscRead{State: DSCStateNoDSC, Version: r.Version, Skipped: r.Skipped}
+	if len(list.Items) > 0 {
+		out.Object, out.State = list.Items[0], DSCStatePresent
 	}
-	return list.Items[0], DSCStatePresent, nil
+	return out, nil
+}
+
+// versionFallback reports a DSC read at an older version than the
+// preferred one, or nil.
+func (r dscRead) versionFallback() *types.DSCVersionFallback {
+	if len(r.Skipped) == 0 || r.Version == "" {
+		return nil
+	}
+	return &types.DSCVersionFallback{Version: r.Skipped[0].Version, Used: r.Version, Message: r.Skipped[0].Message}
 }
 
 // GetComponents returns DSC component statuses and deployment information.
@@ -87,17 +101,19 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 		installedOp, installedOpErr = getInstalledOperator(c)
 	})
 
-	dsc, state, err := readFirstDSC(c)
+	read, err := readFirstDSC(c)
 	if err != nil {
 		wg.Wait()
 		return nil, err
 	}
-	resp.DSCState = state
-	resp.DSCExists = dsc != nil
-	if dsc != nil {
+	resp.DSCState = read.State
+	resp.DSCExists = read.Object != nil
+	if read.Object != nil {
+		resp.DSCAPIVersion, _ = read.Object["apiVersion"].(string)
+		resp.DSCVersionFallback = read.versionFallback()
 		<-installedOpReadyCh
-		resp.DSCCompatibility = checkDSCCompatibilityFor(c, dsc, installedOp, installedOpErr)
-		addDSCComponents(resp, dsc)
+		resp.DSCCompatibility = checkDSCCompatibilityFor(c, read, installedOp, installedOpErr)
+		addDSCComponents(resp, read.Object)
 	}
 	wg.Wait()
 
@@ -178,6 +194,17 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 		}
 		mgmtState, _ := compMap["managementState"].(string)
 		if mgmtState == "" {
+			// DataScienceCluster v3 groups some components without a state
+			// of their own (dashboard: standard, maasPortal); the operator
+			// reports the group's state in status.components.
+			statusComponents, _ := dscStatus["components"].(map[string]interface{})
+			statusComp, _ := statusComponents[compName].(map[string]interface{})
+			mgmtState, _ = statusComp["managementState"].(string)
+		}
+		if mgmtState == "" {
+			mgmtState = groupManagementState(compMap)
+		}
+		if mgmtState == "" {
 			mgmtState = "Unknown"
 		}
 
@@ -257,6 +284,34 @@ func addDSCComponents(resp *types.ComponentsResponse, dsc map[string]interface{}
 	}
 	// Map iteration order is random; keep the response stable between polls.
 	sort.Slice(resp.Components, func(i, j int) bool { return resp.Components[i].Name < resp.Components[j].Name })
+}
+
+// groupManagementState summarizes the managementState of a grouped
+// component's parts: Managed when any part is Managed, Removed when every
+// part is Removed, "" otherwise (no parts, or other states).
+func groupManagementState(comp map[string]interface{}) string {
+	parts, removed := 0, 0
+	for _, v := range comp {
+		part, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		state, ok := part["managementState"].(string)
+		if !ok {
+			continue
+		}
+		parts++
+		switch state {
+		case "Managed":
+			return "Managed"
+		case "Removed":
+			removed++
+		}
+	}
+	if parts > 0 && removed == parts {
+		return "Removed"
+	}
+	return ""
 }
 
 // fetchImageLabelsForDeployments populates GitCommit/GitURL/CommitDate/BuildDate/Version
@@ -404,7 +459,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 
 	// Step 1: Check if a DSC already exists
 	logs = append(logs, "Checking for existing DataScienceCluster...")
-	_, state, err := readFirstDSC(c)
+	read, err := readFirstDSC(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -413,7 +468,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
-	switch state {
+	switch read.State {
 	case DSCStateNoCRD:
 		return &types.OperationResponse{
 			Success:   false,
@@ -432,7 +487,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 
 	// Step 2: Use the sample shipped with the installed operator version.
 	logs = append(logs, "Creating default DataScienceCluster...")
-	defaults, fetchErr := fetchDefaultDSCSpec(c)
+	defaults, fetchErr := fetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}

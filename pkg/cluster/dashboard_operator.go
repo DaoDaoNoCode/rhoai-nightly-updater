@@ -442,13 +442,14 @@ const (
 // dashboardCRDeleting reports whether any Dashboard CR has a deletionTimestamp.
 // A missing CRD means there is nothing to delete.
 func dashboardCRDeleting(c *Client) (bool, error) {
-	body, _, err := c.get(clusterPath("components.platform.opendatahub.io/v1alpha1", "dashboards", ""))
-	if IsK8sError(err, http.StatusNotFound) {
+	r, err := listServed(c, componentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
+	if IsK8sError(err, http.StatusNotFound) || (err == nil && r.Version == "") {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	body := r.Body
 	var list struct {
 		Items []struct {
 			Metadata struct {

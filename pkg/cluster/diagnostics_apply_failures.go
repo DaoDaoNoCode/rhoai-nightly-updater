@@ -270,7 +270,7 @@ func checkApplyFailures(c *Client) checkOutput {
 	var errs []string
 	scanned := 0
 
-	dscs, _, err := listFirstServed(c, "/apis/datasciencecluster.opendatahub.io/%s/datascienceclusters", "datascienceclusters")
+	dscs, _, err := listFirstServed(c, dscGroup, dscListFmt, "datascienceclusters", dscFallbackVersions)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("DataScienceCluster: %v", err))
 	}
@@ -279,21 +279,13 @@ func checkApplyFailures(c *Client) checkOutput {
 		collectApplyFailures(found, applyReporter{Kind: "DataScienceCluster", Name: d.Metadata.Name}, d.Status.Conditions)
 	}
 
-	body, _, err := c.get("/apis/config.opendatahub.io/v1alpha1/platforms")
-	switch {
-	case IsK8sError(err, http.StatusNotFound):
-	case err != nil:
+	platforms, _, err := listFirstServed(c, platformGroup, platformListFmt, "platforms", platformFallbackVersions)
+	if err != nil {
 		errs = append(errs, fmt.Sprintf("Platform: %v", err))
-	default:
-		var list struct {
-			Items []dscObject `json:"items"`
-		}
-		if json.Unmarshal(body, &list) == nil {
-			for _, p := range list.Items {
-				scanned++
-				collectApplyFailures(found, applyReporter{Kind: "Platform", Name: p.Metadata.Name, rank: 1}, p.Status.Conditions)
-			}
-		}
+	}
+	for _, p := range platforms {
+		scanned++
+		collectApplyFailures(found, applyReporter{Kind: "Platform", Name: p.Metadata.Name, rank: 1}, p.Status.Conditions)
 	}
 
 	// Module CRs, whatever kinds this operator version serves.

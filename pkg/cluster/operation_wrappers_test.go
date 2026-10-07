@@ -87,7 +87,9 @@ func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, ima
 
 func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCCompatibility {
 	op, err := getInstalledOperator(c)
-	return checkDSCCompatibilityFor(c, dsc, op, err)
+	apiVersion, _ := dsc["apiVersion"].(string)
+	version, _ := dscAPIVersion(apiVersion)
+	return checkDSCCompatibilityFor(c, dscRead{Object: dsc, State: DSCStatePresent, Version: version}, op, err)
 }
 
 // Len returns the number of stored entries, including expired ones not yet removed.

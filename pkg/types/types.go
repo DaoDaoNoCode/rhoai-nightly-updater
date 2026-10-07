@@ -289,6 +289,10 @@ type DSCCompatibility struct {
 	DefaultsError     string   `json:"defaultsError,omitempty"`
 	// DefaultsSource is "csv" (alm-examples of the installed CSV) or "github" (branch sample).
 	DefaultsSource string `json:"defaultsSource,omitempty"`
+	// DefaultsAPIVersion is the apiVersion of the defaults, always the one
+	// the DataScienceCluster was read at: component names differ between
+	// API versions, so other versions are never compared.
+	DefaultsAPIVersion string `json:"defaultsAPIVersion,omitempty"`
 	// ResetRemovals are the enabled components "reset-defaults" would set to
 	// Removed or drop.
 	ResetRemovals []string `json:"resetRemovals,omitempty"`
@@ -296,6 +300,15 @@ type DSCCompatibility struct {
 	// be removed now. "reset-defaults" refuses while any of ResetRemovals is
 	// listed, "remove-extra-components" while any enabled extra component is.
 	RemovalBlocks []DSCRemovalBlock `json:"removalBlocks,omitempty"`
+}
+
+// DSCVersionFallback says that the DataScienceCluster was read at an older
+// API version because the API server could not convert it to a newer served
+// one (the operator's conversion webhook failed).
+type DSCVersionFallback struct {
+	Version string `json:"version"` // the version that failed, e.g. "v3"
+	Used    string `json:"used"`    // the version it was read at, e.g. "v2"
+	Message string `json:"message"` // the API server's error message
 }
 
 // DSCRemovalBlock explains why a DSC component must not be set to Removed now.
@@ -319,9 +332,15 @@ type ComponentsResponse struct {
 	OperatorPhase   string `json:"operatorPhase,omitempty"`   // its CSV phase, e.g. "Succeeded"
 	DSCPhase        string `json:"dscPhase"`
 	DSCReason       string `json:"dscReason,omitempty"`
-	SnapshotTime    string `json:"snapshotTime,omitempty"`
-	ChangedCount    int    `json:"changedCount"`
-	ConsoleURL      string `json:"consoleURL,omitempty"`
+	// DSCAPIVersion is the apiVersion the DSC was read at, for example
+	// "datasciencecluster.opendatahub.io/v3".
+	DSCAPIVersion string `json:"dscAPIVersion,omitempty"`
+	// DSCVersionFallback is set when the DSC could not be read at the
+	// preferred version and was read at an older one.
+	DSCVersionFallback *DSCVersionFallback `json:"dscVersionFallback,omitempty"`
+	SnapshotTime       string              `json:"snapshotTime,omitempty"`
+	ChangedCount       int                 `json:"changedCount"`
+	ConsoleURL         string              `json:"consoleURL,omitempty"`
 }
 
 // ContainerInfo holds per-container status within a pod.

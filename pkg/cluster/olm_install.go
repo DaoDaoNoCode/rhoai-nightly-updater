@@ -799,9 +799,9 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 	if dscFound {
 		collect("DataScienceCluster", dsc)
 	}
-	if body, _, err := c.get(clusterPath("config.opendatahub.io/v1alpha1", "platforms", "default")); err == nil {
+	if r, err := getServed(c, platformGroup, "/apis/config.opendatahub.io/%s/platforms/default", platformFallbackVersions); err == nil {
 		var pl statusObject
-		if json.Unmarshal(body, &pl) == nil {
+		if json.Unmarshal(r.Body, &pl) == nil {
 			collect("Platform", pl)
 		}
 	}

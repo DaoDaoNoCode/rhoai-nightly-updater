@@ -713,23 +713,19 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 	return types.ImageMirrorInfo{Exists: false}, nil
 }
 
-// checkDSCExists returns true if at least one DataScienceCluster exists.
-// Tries v2 API first, falls back to v1 for older RHOAI versions.
-// 404 errors (CRD not installed) are not treated as errors — they return false.
+// checkDSCExists returns true if at least one DataScienceCluster exists,
+// listed at the newest served version that works (listServed). No served
+// version (CRD not installed) is not an error: it returns false.
 func checkDSCExists(c *Client) (bool, error) {
-	// Try v2 first. limit=1: only existence matters, not the (large) objects.
-	dscBody, _, err := c.get("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters?limit=1")
+	// limit=1: only existence matters, not the (large) objects.
+	r, err := listServed(c, dscGroup, dscListFmt, url.Values{"limit": {"1"}}, dscFallbackVersions)
 	if err != nil {
-		// Fall back to v1
-		dscBody, _, err = c.get("/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters?limit=1")
-		if err != nil {
-			// 404 means the CRD is not installed — this is not an error, just means no DSC
-			if IsK8sError(err, 404) {
-				return false, nil
-			}
-			return false, fmt.Errorf("request failed: %w", err)
-		}
+		return false, fmt.Errorf("request failed: %w", err)
 	}
+	if r.Version == "" {
+		return false, nil
+	}
+	dscBody := r.Body
 
 	var dscList struct {
 		Items []json.RawMessage `json:"items"`

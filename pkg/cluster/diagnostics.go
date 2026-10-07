@@ -1222,32 +1222,20 @@ func componentManagementState(dscJSON []byte, compName string) (string, bool) {
 }
 
 // dataScienceClusterPath returns the API path of the cluster's
-// DataScienceCluster (the same one the Components page shows), using the v2
-// API when it is served and v1 otherwise.
+// DataScienceCluster (the same one the Components page shows), at the
+// version it is read at there (readFirstDSC).
 func dataScienceClusterPath(c *Client) (string, error) {
-	for _, version := range []string{"v2", "v1"} {
-		listPath := "/apis/datasciencecluster.opendatahub.io/" + version + "/datascienceclusters"
-		body, _, err := c.get(listPath)
-		if IsK8sError(err, 404) {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		var list struct {
-			Items []struct {
-				Metadata struct {
-					Name string `json:"name"`
-				} `json:"metadata"`
-			} `json:"items"`
-		}
-		if err := json.Unmarshal(body, &list); err != nil {
-			return "", fmt.Errorf("parse DataScienceCluster list: %w", err)
-		}
-		if len(list.Items) == 0 || list.Items[0].Metadata.Name == "" {
-			return "", fmt.Errorf("no DataScienceCluster exists")
-		}
-		return listPath + "/" + list.Items[0].Metadata.Name, nil
+	read, err := readFirstDSC(c)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("the DataScienceCluster API is not installed")
+	if read.State == DSCStateNoCRD {
+		return "", fmt.Errorf("the DataScienceCluster API is not installed")
+	}
+	meta, _ := read.Object["metadata"].(map[string]interface{})
+	name, _ := meta["name"].(string)
+	if name == "" {
+		return "", fmt.Errorf("no DataScienceCluster exists")
+	}
+	return fmt.Sprintf(dscListFmt, read.Version) + "/" + name, nil
 }

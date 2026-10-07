@@ -193,7 +193,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 			var github int
 			mockDSCSamples(t, func(*http.Request) (int, string) { github++; return 200, testDSCSample })
 			t.Setenv("DSC_SAMPLE_REF", tc.override)
-			defaults, err := defaultDSCSpecFor(context.Background(), &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: tc.alm})
+			defaults, err := defaultDSCSpecFor(context.Background(), &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: tc.alm}, apiVersions{Versions: dscFallbackVersions}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -214,7 +214,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 				}
 				// Callers get their own copy.
 				comps["dashboard"] = nil
-				again, _ := defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: tc.alm})
+				again, _ := defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: tc.alm}, apiVersions{Versions: dscFallbackVersions}, "")
 				if again.Spec["spec"].(map[string]interface{})["components"].(map[string]interface{})["dashboard"] == nil {
 					t.Fatal("shared mutable defaults")
 				}
