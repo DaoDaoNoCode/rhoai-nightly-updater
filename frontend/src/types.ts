@@ -390,6 +390,8 @@ export interface StatusResponse {
 
 export interface DSCCompatibility {
   defaultsSource?: string;
+  /** apiVersion of the defaults: always the one the DSC was read at (pkg/types DSCCompatibility). */
+  defaultsAPIVersion?: string;
   /** Enabled components "reset-defaults" would set to Removed or drop (FXA). */
   resetRemovals?: string[] | null;
   /** Components a repair would remove that must not be removed now, with why (FXA). */
@@ -407,6 +409,20 @@ export interface ComponentsResponse {
   dscState?: string;
   operatorVersion?: string;
   operatorPhase?: string;
+  /** The apiVersion the DSC was read at, e.g. "datasciencecluster.opendatahub.io/v3". */
+  dscAPIVersion?: string;
+  /** Set when the DSC could only be read at an older version than the preferred one. */
+  dscVersionFallback?: DSCVersionFallback;
+}
+
+/** The DSC was read at an older API version because conversion to a newer one failed (pkg/types DSCVersionFallback). */
+export interface DSCVersionFallback {
+  /** The version that failed, e.g. "v3". */
+  version: string;
+  /** The version it was read at, e.g. "v2". */
+  used: string;
+  /** The API server's error message. */
+  message: string;
 }
 
 /** Who started a Dashboard Dev action and when (pkg/types DashboardDevAction). */
@@ -607,6 +623,8 @@ export interface UpdateCheck {
   /** latest has another MAJOR version: it needs its own deploy template (a full redeploy). */
   majorUpgrade: boolean;
   releaseNotesURL?: string;
+  /** Where latest's install.sh is downloaded from, when the releases host is known. */
+  installerURL?: string;
 }
 
 /** One build's answer in GET /api/build-explorer/contains. */

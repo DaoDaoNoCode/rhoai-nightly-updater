@@ -172,6 +172,9 @@ export const ComponentsPage: React.FC = () => {
   const noDSC = !!data && (dscState === "no-dsc" || dscState === "no-crd");
   const compat = data?.dscCompatibility;
   const drift = !!compat && (compat.invalidFields.length > 0 || compat.missingComponents.length > 0 || (compat.extraComponents?.length ?? 0) > 0);
+  const fallback = data?.dscVersionFallback;
+  // The console's resource reference for the version the DSC was read at.
+  const [dscGroup, dscVersion] = (data?.dscAPIVersion || "datasciencecluster.opendatahub.io/v2").split("/");
 
   return (
     <>
@@ -200,24 +203,39 @@ export const ComponentsPage: React.FC = () => {
         />
       )}
 
-      {data && !noDSC && compat && (compat.validationError || compat.defaultsError || drift || repairResult) && (
+      {data && !noDSC && (fallback || (compat && (compat.validationError || compat.defaultsError || drift || repairResult))) && (
         <PageSection>
           <Stack hasGutter>
-            {compat.validationError && (
+            {fallback && (
+              <StackItem>
+                <Alert
+                  component="p"
+                  variant="warning"
+                  title={`The DataScienceCluster is shown as ${fallback.used}: the operator cannot convert it to ${fallback.version}`}
+                  isInline
+                >
+                  Reading it as {fallback.version}, the version the cluster prefers, fails in the operator&apos;s conversion webhook, so this
+                  page shows the {fallback.used} view. Component names can differ between API versions.{" "}
+                  <Link to="/diagnostics">Diagnostics</Link> explains the cause and the fix.
+                  <TechnicalDetails text={fallback.message} toggleText="Show the API server's message" />
+                </Alert>
+              </StackItem>
+            )}
+            {compat?.validationError && (
               <StackItem>
                 <Alert component="p" variant="warning" title="DSC field validation is unavailable" isInline>
                   <TruncatedText>{compat.validationError}</TruncatedText>
                 </Alert>
               </StackItem>
             )}
-            {compat.defaultsError && (
+            {compat?.defaultsError && (
               <StackItem>
                 <Alert component="p" variant="warning" title="The DSC defaults are unavailable" isInline>
                   <TruncatedText>{compat.defaultsError}</TruncatedText>
                 </Alert>
               </StackItem>
             )}
-            {drift && (
+            {compat && drift && (
               <StackItem>
                 <Card>
                   <CardHeader>
@@ -377,7 +395,7 @@ export const ComponentsPage: React.FC = () => {
                             variant="link"
                             isInline
                             component="a"
-                            href={`${data.consoleURL}/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/${data.dscName}/yaml`}
+                            href={`${data.consoleURL}/k8s/cluster/${dscGroup}~${dscVersion}~DataScienceCluster/${data.dscName}/yaml`}
                             target="_blank"
                             rel="noopener noreferrer"
                             icon={<ExternalLinkAltIcon />}

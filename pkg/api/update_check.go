@@ -81,6 +81,9 @@ type UpdateInfo struct {
 	// deploy template (a full redeploy), not just a new image.
 	MajorUpgrade    bool   `json:"majorUpgrade"`
 	ReleaseNotesURL string `json:"releaseNotesURL,omitempty"`
+	// InstallerURL is where Latest's install.sh is downloaded from, when
+	// RELEASES_URL is a GitHub or GitLab releases page.
+	InstallerURL string `json:"installerURL,omitempty"`
 }
 
 // compareReleases builds the answer for the running version and the highest
@@ -100,10 +103,33 @@ func compareReleases(running, latest, releasesURL string) UpdateInfo {
 		info.UpdateAvailable = true
 		info.MajorUpgrade = lv[0] != cur[0]
 		if strings.HasPrefix(releasesURL, "https://") {
-			info.ReleaseNotesURL = strings.TrimRight(releasesURL, "/") + "/" + latest
+			base := strings.TrimRight(releasesURL, "/")
+			info.ReleaseNotesURL = base + "/" + latest
+			info.InstallerURL = installerURL(base, latest)
 		}
 	}
 	return info
+}
+
+// installerURL returns the download URL of tag's install.sh asset for a
+// releases page (RELEASES_URL), as the release jobs publish it: GitHub
+// release assets at <owner>/<repo>/releases/download/<tag>/<asset>
+// (.github/workflows/release.yml), GitLab release links at
+// <project>/-/releases/<tag>/downloads/<direct_asset_path>
+// (scripts/release.sh gitlab-release). "" for any other page.
+func installerURL(releasesURL, tag string) string {
+	u, err := url.Parse(releasesURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return ""
+	}
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	switch {
+	case len(segs) >= 3 && segs[len(segs)-2] == "-" && segs[len(segs)-1] == "releases":
+		return releasesURL + "/" + tag + "/downloads/install.sh"
+	case u.Host == "github.com" && len(segs) == 3 && segs[2] == "releases":
+		return releasesURL + "/download/" + tag + "/install.sh"
+	}
+	return ""
 }
 
 // updateChecker caches the highest release of one repository.

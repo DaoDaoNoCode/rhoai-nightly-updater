@@ -49,6 +49,34 @@ describe("update available notice", () => {
     expect(screen.getByRole("link", { name: "Release notes" })).toHaveAttribute("href", MAJOR.releaseNotesURL);
   });
 
+  it("offers the release's no-clone installer as a copyable command, with the git route second", async () => {
+    const installerURL = "https://github.com/example/app/releases/download/v2.0.1/install.sh";
+    renderWithApp(<GlobalBanners />, {
+      version: release("v2.0.0"),
+      update: async () => ({
+        current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false,
+        releaseNotesURL: "https://github.com/example/app/releases/v2.0.1", installerURL,
+      }),
+    });
+    expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
+    expect(screen.getByText(/An admin upgrades with the v2.0.1 installer/)).toBeInTheDocument();
+    expect(screen.getByText(`curl -fsSLO ${installerURL} && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy the v2.0.1 install command" })).toBeInTheDocument();
+    expect(screen.getByText("git checkout v2.0.1 && make upgrade")).toBeInTheDocument();
+    expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the full-redeploy wording for a major release with an installer", async () => {
+    const installerURL = "https://gitlab.example.com/group/app/-/releases/v3.0.0/downloads/install.sh";
+    renderWithApp(<GlobalBanners />, {
+      version: release("v2.0.1"),
+      update: async () => ({ current: "v2.0.1", latest: "v3.0.0", updateAvailable: true, majorUpgrade: true, installerURL }),
+    });
+    expect(await screen.findByText(/v3.0.0 is a new major version and requires a full redeploy/)).toBeInTheDocument();
+    expect(screen.getByText(/An admin redeploys with the v3.0.0 installer/)).toBeInTheDocument();
+    expect(screen.getByText(`curl -fsSLO ${installerURL} && less install.sh && bash install.sh`)).toBeInTheDocument();
+  });
+
   it("names the upgrade command for a minor release, without a redeploy warning", async () => {
     renderWithApp(<GlobalBanners />, {
       version: release("v2.0.0"),

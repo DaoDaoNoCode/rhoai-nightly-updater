@@ -34,8 +34,14 @@ func TestCompareReleases(t *testing.T) {
 		{"unknown latest", "v1.0.0", "", notes, UpdateInfo{Current: "v1.0.0"}},
 		{"up to date", "v2.0.0", "v2.0.0", notes, UpdateInfo{Current: "v2.0.0", Latest: "v2.0.0"}},
 		{"newer running", "v2.1.0", "v2.0.0", notes, UpdateInfo{Current: "v2.1.0", Latest: "v2.0.0"}},
-		{"patch", "v2.0.0", "v2.0.1", notes, UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.1"}},
-		{"major", "v1.0.0", "v2.0.0", notes, UpdateInfo{Current: "v1.0.0", Latest: "v2.0.0", UpdateAvailable: true, MajorUpgrade: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0"}},
+		{"patch", "v2.0.0", "v2.0.1", notes, UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.1",
+			InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.1/downloads/install.sh"}},
+		{"major", "v1.0.0", "v2.0.0", notes, UpdateInfo{Current: "v1.0.0", Latest: "v2.0.0", UpdateAvailable: true, MajorUpgrade: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0",
+			InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0/downloads/install.sh"}},
+		{"github releases", "v2.0.0", "v2.0.1", "https://github.com/example/app/releases", UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true,
+			ReleaseNotesURL: "https://github.com/example/app/releases/v2.0.1", InstallerURL: "https://github.com/example/app/releases/download/v2.0.1/install.sh"}},
+		{"other notes page", "v2.0.0", "v2.0.1", "https://docs.example.com/app/releases", UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true,
+			ReleaseNotesURL: "https://docs.example.com/app/releases/v2.0.1"}},
 		{"no https notes", "v1.0.0", "v1.1.0", "http://example.com/releases", UpdateInfo{Current: "v1.0.0", Latest: "v1.1.0", UpdateAvailable: true}},
 	}
 	for _, c := range cases {
@@ -293,7 +299,8 @@ func TestHandleUpdateCheck(t *testing.T) {
 	}
 
 	Version = "v1.0.0"
-	want := UpdateInfo{Current: "v1.0.0", Latest: "v2.0.0", UpdateAvailable: true, MajorUpgrade: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0"}
+	want := UpdateInfo{Current: "v1.0.0", Latest: "v2.0.0", UpdateAvailable: true, MajorUpgrade: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0",
+		InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0/downloads/install.sh"}
 	if got := get(); got != want {
 		t.Fatalf("v1.0.0: %+v", got)
 	}

@@ -5,6 +5,7 @@ import {
   AlertActionLink,
   AlertGroup,
   Button,
+  ClipboardCopy,
 } from "@patternfly/react-core";
 import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -267,7 +268,9 @@ function useUpdateNotice(): Notice | null {
   const [dismissed, setDismissed] = useState(() => readLocal(UPDATE_DISMISS_KEY));
   if (!update?.updateAvailable || !update.latest || dismissed === update.latest) return null;
   const latest = update.latest;
-  const command = <code>git checkout {latest} &amp;&amp; make upgrade</code>;
+  const gitRoute = <code>git checkout {latest} &amp;&amp; make upgrade</code>;
+  // The no-clone installer of exactly that release (scripts/install.sh, attached to every release).
+  const installer = update.installerURL ? `curl -fsSLO ${update.installerURL} && less install.sh && bash install.sh` : "";
   return {
     key: "update",
     priority: 10,
@@ -283,9 +286,30 @@ function useUpdateNotice(): Notice | null {
           : undefined}
       >
         This updater runs {update.current}.{" "}
-        {update.majorUpgrade
-          ? <>{latest} is a new major version and requires a full redeploy: {command}, or that release&apos;s <code>install.sh</code>.</>
-          : <>An admin upgrades with {command}, or that release&apos;s <code>install.sh</code>.</>}
+        {update.majorUpgrade && <>{latest} is a new major version and requires a full redeploy. </>}
+        {installer ? (
+          <>
+            An admin {update.majorUpgrade ? "redeploys" : "upgrades"} with the {latest} installer (needs <code>oc</code>, logged in as cluster-admin):
+            <ClipboardCopy
+              className="pf-v6-u-my-sm"
+              variant="inline-compact"
+              isBlock
+              isCode
+              hoverTip="Copy command"
+              clickTip="Copied"
+              copyAriaLabel={`Copy the ${latest} install command`}
+            >
+              {installer}
+            </ClipboardCopy>
+            Add <code>--namespace</code> and <code>--app-name</code> if this install does not use the default names. If the download asks
+            you to sign in, get <code>install.sh</code> from the release notes. From a clone: {gitRoute}.
+          </>
+        ) : (
+          <>
+            An admin {update.majorUpgrade ? "redeploys" : "upgrades"} with that release&apos;s <code>install.sh</code>
+            {update.releaseNotesURL ? " (in the release notes)" : ""}, or from a clone with {gitRoute}.
+          </>
+        )}
       </Alert>
     ),
   };

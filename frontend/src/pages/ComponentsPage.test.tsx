@@ -283,3 +283,47 @@ describe("ComponentsPage DSC repair preview (FXA R5-F1)", () => {
     expect(within(dialog).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
   });
 });
+
+describe("ComponentsPage DSC API versions", () => {
+  const unreadableV3 = (): ComponentsResponse => ({
+    ...present([dep("agent-ops-ui")]),
+    consoleURL: "https://console.example.com",
+    components: [
+      { name: "aiHub", managementState: "Managed", status: "Available" },
+      { name: "someFutureComponent", managementState: "Unknown", status: "Unknown" },
+    ],
+    dscAPIVersion: "datasciencecluster.opendatahub.io/v2",
+    dscVersionFallback: { version: "v3", used: "v2", message: "conversion webhook for datasciencecluster.opendatahub.io/v2, Kind=DataScienceCluster failed" },
+    dscCompatibility: {
+      invalidFields: [], missingComponents: [], extraComponents: [],
+      defaultsError: "This DataScienceCluster can only be read as v2: reading it as v3 fails because the operator's conversion webhook cannot convert it. Operator 3.6.0 has no DataScienceCluster v2 defaults; it ships them as v3 only.",
+    },
+  });
+
+  it("says the DSC is shown at an older version and why, with the defaults message instead of a URL", async () => {
+    stubApi({ "/api/components": unreadableV3() });
+    renderPage();
+    expect(await screen.findByText("The DataScienceCluster is shown as v2: the operator cannot convert it to v3")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/diagnostics");
+    expect(screen.getByText(/it ships them as v3 only/)).toBeInTheDocument();
+    expect(screen.queryByText(/raw\.githubusercontent|HTTP 404/)).not.toBeInTheDocument();
+    // No drift card: nothing was compared across versions.
+    expect(screen.queryByText(/differs from operator/)).not.toBeInTheDocument();
+  });
+
+  it("links the console to the version the DSC was read at, and shows unknown component keys as they are", async () => {
+    stubApi({ "/api/components": unreadableV3() });
+    renderPage();
+    const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
+    expect(edit).toHaveAttribute("href", "https://console.example.com/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/default-dsc/yaml");
+    expect(screen.getByText("someFutureComponent")).toBeInTheDocument();
+  });
+
+  it("uses v3 in the console link when the DSC is read as v3", async () => {
+    stubApi({ "/api/components": { ...unreadableV3(), dscAPIVersion: "datasciencecluster.opendatahub.io/v3", dscVersionFallback: undefined, dscCompatibility: undefined } });
+    renderPage();
+    const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
+    expect(edit.getAttribute("href")).toContain("datasciencecluster.opendatahub.io~v3~DataScienceCluster");
+    expect(screen.queryByText(/is shown as/)).not.toBeInTheDocument();
+  });
+});
