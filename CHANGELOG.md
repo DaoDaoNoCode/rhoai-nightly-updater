@@ -21,9 +21,11 @@ only accepts a tag whose version is the top dated section. See
 ### Upgrade notes
 
 - Upgrading from v2.0.0 or any earlier build: download and run the
-  `install.sh` of v2.0.1 (commands at the end of these notes; add
-  `--namespace` and `--app-name` if your install does not use the default
-  names). From a clone: `git checkout v2.0.1 && make upgrade`.
+  `install.sh` of v2.0.1 (commands at the end of these notes; pass the
+  options your install was made with, such as `--namespace`, `--app-name`
+  and `--image-repo`). From a clone: `git checkout v2.0.1 && make upgrade`.
+- Reload open app pages after upgrading: a DSC repair from a page loaded
+  before v2.0.1 is refused with a "refresh and review" message.
 - Same template as v2.0.0 (revision 4): no RBAC change, no full redeploy.
 
 ### Fixed
@@ -42,6 +44,14 @@ only accepts a tag whose version is the top dated section. See
   explained instead of showing a sample URL.
 - The Components page's "Edit in console" link uses the DSC's version
   instead of v2.
+- DataScienceCluster v3 nests parts under a component (`dashboard.standard`,
+  `kserve.nim`, `data.featureStore`). "Reset to version defaults" now lists
+  each part it would switch to Removed, including the enabled parts of a
+  component switched off, and both repairs refuse while the part's module
+  could hang in deletion, as for whole components.
+- A DSC repair runs only at the API version its preview was computed at; if
+  the DSC is read at another version by then (for example after an operator
+  update fixed the conversion), it asks to refresh and changes nothing.
 
 ### Added
 
@@ -49,9 +59,12 @@ only accepts a tag whose version is the top dated section. See
   operator's conversion webhook cannot convert to (one problem per kind,
   with the API server's message, the versions that work, and read-only
   commands), as when a nightly's operator image is older than the CRDs of
-  its bundle. See [RUNBOOK §11.8](RUNBOOK.md#118-the-operator-cannot-convert-a-crd-version).
+  its bundle. Each served version is checked on its first object; with no
+  object it could read, the check warns instead of passing. See
+  [RUNBOOK §11.8](RUNBOOK.md#118-the-operator-cannot-convert-a-crd-version).
 - The "vX.Y.Z is available" notice shows that release's installer as a
-  command to copy, with the git route as the alternative. For this project
+  command to copy (only for a plain https download URL, quoted), with the
+  git route as the alternative. For this project
   it downloads from the public GitHub mirror, because the GitLab project's
   release assets need a sign-in; the GitLab release notes do the same. See [docs/UPGRADING.md](docs/UPGRADING.md#patch-and-minor-releases).
 
