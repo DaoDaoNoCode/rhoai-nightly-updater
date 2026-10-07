@@ -52,6 +52,13 @@ only accepts a tag whose version is the top dated section. See
 - A DSC repair runs only at the API version its preview was computed at; if
   the DSC is read at another version by then (for example after an operator
   update fixed the conversion), it asks to refresh and changes nothing.
+  The reset dialog enables Confirm only when its defaults preview matches
+  the version and operator the page compared with (otherwise it says the
+  DataScienceCluster changed and offers Refresh), and a reset runs only if
+  it would switch to Removed exactly the components the dialog listed.
+- A part the installed CRD does not define (for example an old
+  `dashboard.legacyPart`) is pruned by "Remove invalid fields" without the
+  deletion checks of the component's module.
 
 ### Added
 
