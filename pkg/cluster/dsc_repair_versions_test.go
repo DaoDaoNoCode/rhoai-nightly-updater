@@ -321,6 +321,30 @@ func TestSchemaComponents_ChecksEveryPathSegment(t *testing.T) {
 	}
 }
 
+func TestSchemaComponents_FreeFormComponentsLevel(t *testing.T) {
+	state := map[string]interface{}{"type": "object"}
+	named := map[string]interface{}{"dashboard": map[string]interface{}{"properties": map[string]interface{}{"standard": state}}}
+	names := []string{"dashboard.legacyPart", "dashboard.standard", "legacycomponent", "legacycomponent.part"}
+	for _, c := range []struct {
+		name       string
+		components map[string]interface{}
+		want       []string
+	}{
+		// The API server keeps an unlisted component here, so dropping it removes something.
+		{"preserve-unknown-fields", map[string]interface{}{"properties": named, "x-kubernetes-preserve-unknown-fields": true},
+			[]string{"dashboard.standard", "legacycomponent", "legacycomponent.part"}},
+		{"additionalProperties schema", map[string]interface{}{"properties": named, "additionalProperties": state},
+			[]string{"dashboard.standard", "legacycomponent", "legacycomponent.part"}},
+		{"closed", map[string]interface{}{"properties": named, "additionalProperties": false},
+			[]string{"dashboard.standard"}},
+	} {
+		schema := map[string]interface{}{"properties": map[string]interface{}{"components": c.components}}
+		if got := schemaComponents(schema, names); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestRepairDSC_UnknownPartIsPrunedWithoutAGuard(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) { t.Error("GitHub must not be used"); return 500, "" })
 	t.Run("remove-invalid drops dashboard.legacyPart without the dashboard guard", func(t *testing.T) {

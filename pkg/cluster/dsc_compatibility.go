@@ -306,24 +306,25 @@ func (g *removalGuard) blockers(path string) []string {
 // defines under spec.components, segment by segment: a component (and a
 // part of it, components.properties[component].properties[part]) the
 // schema does not define was never seen by the operator, so dropping it
-// removes nothing. A free-form component (x-kubernetes-preserve-unknown-fields
-// or additionalProperties) keeps its parts. Without a schema every path is
-// kept.
+// removes nothing. Free-form levels (x-kubernetes-preserve-unknown-fields or
+// additionalProperties) keep what they hold: the API server stored it, so the
+// operator may act on it. Without a schema every path is kept.
 func schemaComponents(specSchema map[string]interface{}, names []string) []string {
 	properties, _ := specSchema["properties"].(map[string]interface{})
 	components, _ := properties["components"].(map[string]interface{})
-	known, _ := components["properties"].(map[string]interface{})
-	if known == nil {
+	if components == nil {
 		return names
 	}
+	known, _ := components["properties"].(map[string]interface{})
 	var out []string
 	for _, n := range names {
 		component, part, isPart := strings.Cut(n, ".")
-		componentSchema, ok := known[component].(map[string]interface{})
-		if !ok {
+		if !schemaDefines(components, component) {
 			continue
 		}
-		if isPart && !schemaDefines(componentSchema, part) {
+		// A component accepted only by a free-form components schema has no
+		// schema of its own, so its parts are kept too.
+		if componentSchema, ok := known[component].(map[string]interface{}); ok && isPart && !schemaDefines(componentSchema, part) {
 			continue
 		}
 		out = append(out, n)
