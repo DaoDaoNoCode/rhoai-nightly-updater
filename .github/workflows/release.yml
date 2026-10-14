@@ -48,7 +48,7 @@ jobs:
             sh scripts/release.sh notes "$TAG" HEAD > "$RUNNER_TEMP/notes.md"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.2"
       # GitLab CI publishes the image. Publish this release only once
       # IMAGE:<tag> exists and was built from the tag's commit (read
       # anonymously, at most 30 minutes); otherwise create a draft, so the

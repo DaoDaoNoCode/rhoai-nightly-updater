@@ -48,6 +48,12 @@ only accepts a tag whose version is the top dated section. See
   `catalogServes` (the catalog's head CSV, its build, and whether it is
   installed).
 
+### Security
+
+- Go 1.27.2 (CI, the image build and the GitHub workflows): fixes the
+  net/http, HTTP/2, crypto/tls and net/textproto advisories GO-2026-6603,
+  6605, 6607 to 6613 and 6617 that govulncheck reports with 1.27.1.
+
 ## [2.0.1] - 2026-10-07
 
 ### Upgrade notes

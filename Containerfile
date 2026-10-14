@@ -12,8 +12,8 @@ COPY frontend/ ./
 RUN npm run typecheck && npm run lint && npm test
 RUN NODE_OPTIONS="--max-old-space-size=2048" npm run build
 
-# golang:1.27.1-alpine
-FROM docker.io/library/golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS backend
+# golang:1.27.2-alpine
+FROM docker.io/library/golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS backend
 ARG GIT_SHA=unknown
 ARG VERSION=dev
 ARG BUILD_DATE=unknown

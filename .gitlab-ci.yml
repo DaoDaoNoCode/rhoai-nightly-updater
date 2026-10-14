@@ -32,7 +32,7 @@ variables:
   # registry).
   IMAGE: quay.io/juntao_wang/rhoai-nightly-updater
   # Images pinned by digest; keep in step with the Containerfile.
-  GO_IMAGE: docker.io/library/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190
+  GO_IMAGE: docker.io/library/golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
   NODE_IMAGE: docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
   GOLANGCI_IMAGE: docker.io/golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
   # Kaniko is archived upstream; it is kept pinned until a replacement
