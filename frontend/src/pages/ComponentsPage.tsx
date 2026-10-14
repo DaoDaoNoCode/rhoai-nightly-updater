@@ -31,6 +31,7 @@ import {
   Stack,
   StackItem,
   Title,
+  Tooltip,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
@@ -44,13 +45,15 @@ import { PageErrorState, PageLoading } from "../components/PageStates";
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
 import { RelativeTime } from "../components/RelativeTime";
 import { InlineItems } from "../components/InlineItems";
-import { StatusLabel, type StatusKind } from "../components/StatusLabel";
+import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabel";
 import { TechnicalDetails, TruncatedText, firstClause } from "../components/LongText";
 import { DeploymentsTable } from "../components/DeploymentsTable";
 import { DSCEmptyState } from "../components/DSCEmptyState";
 import { TooltipButton } from "../components/TooltipButton";
 import { useComponentsData } from "../hooks/useComponentsData";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { useClusterStatus } from "../state/AppState";
+import { gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason } from "../gitops";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
 /** The status of a DSC component as a status label kind. */
@@ -98,6 +101,8 @@ export const ComponentsPage: React.FC = () => {
   // so that install alone does not block them.
   const mutateReason = useMutationBlocker();
   const fixReason = useMutationBlocker({ ignoreReconcile: true });
+  const { status } = useClusterStatus();
+  const dscGitOpsReason = gitOpsDSCReason(status);
   const onResult = useClusterBusyHandler();
 
   // DSC component fix state
@@ -212,7 +217,7 @@ export const ComponentsPage: React.FC = () => {
           dscState={dscState}
           operatorVersion={data.operatorVersion}
           operatorPhase={data.operatorPhase}
-          mutateBlocker={mutateReason}
+          mutateBlocker={mutateReason ?? gitOpsCreateDSCReason(status)}
           onResult={onResult}
           onCreated={handleRefresh}
         />
@@ -322,20 +327,20 @@ export const ComponentsPage: React.FC = () => {
                         <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
                           {compat.invalidFields.length > 0 && (
                             <FlexItem>
-                              <TooltipButton variant="secondary" onClick={() => setRepairMode("remove-invalid")} isDisabled={repairLoading || !!compat.validationError} disabledReason={mutateReason}>
+                              <TooltipButton variant="secondary" onClick={() => setRepairMode("remove-invalid")} isDisabled={repairLoading || !!compat.validationError} disabledReason={mutateReason ?? dscGitOpsReason}>
                                 Remove invalid fields
                               </TooltipButton>
                             </FlexItem>
                           )}
                           {(compat.extraComponents?.length ?? 0) > 0 && (
                             <FlexItem>
-                              <TooltipButton variant="secondary" onClick={() => setRepairMode("remove-extra-components")} isDisabled={repairLoading || !!compat.defaultsError || !!compat.validationError} disabledReason={mutateReason}>
+                              <TooltipButton variant="secondary" onClick={() => setRepairMode("remove-extra-components")} isDisabled={repairLoading || !!compat.defaultsError || !!compat.validationError} disabledReason={mutateReason ?? dscGitOpsReason}>
                                 Remove extra components
                               </TooltipButton>
                             </FlexItem>
                           )}
                           <FlexItem>
-                            <TooltipButton variant="secondary" isDanger onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!compat.defaultsError || !!compat.validationError} disabledReason={mutateReason}>
+                            <TooltipButton variant="secondary" isDanger onClick={() => setRepairMode("reset-defaults")} isDisabled={repairLoading || !!compat.defaultsError || !!compat.validationError} disabledReason={mutateReason ?? dscGitOpsReason}>
                               Reset to version defaults
                             </TooltipButton>
                           </FlexItem>
@@ -394,6 +399,13 @@ export const ComponentsPage: React.FC = () => {
                       <Title headingLevel="h2" size="lg">DataScienceCluster {data.dscName && <code>{data.dscName}</code>}</Title>
                     </FlexItem>
                     <FlexItem><StatusLabel status={dscPhaseStatus(data.dscPhase)}>{data.dscPhase || "Unknown"}</StatusLabel></FlexItem>
+                    {status?.dscManagedBy && (
+                      <FlexItem>
+                        <Tooltip content={`Argo CD application "${status.dscManagedBy}" manages this DataScienceCluster, so the tool does not change it. Change it in Git.`}>
+                          <TagLabel color="purple">Argo CD: {status.dscManagedBy}</TagLabel>
+                        </Tooltip>
+                      </FlexItem>
+                    )}
                   </Flex>
                 </CardTitle>
               </CardHeader>
@@ -476,7 +488,7 @@ export const ComponentsPage: React.FC = () => {
                                       variant="secondary"
                                       isLoading={fixLoading === c.fixAction}
                                       isDisabled={fixLoading !== null}
-                                      disabledReason={fixReason}
+                                      disabledReason={fixReason ?? gitOpsFixReason(status, c.fixAction)}
                                       onClick={() => setFixConfirm({
                                         action: c.fixAction!,
                                         title: c.fixTitle!,

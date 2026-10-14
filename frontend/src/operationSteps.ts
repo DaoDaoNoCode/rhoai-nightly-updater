@@ -34,6 +34,27 @@ const UPDATE_STEPS: PipelineStepDef[] = [
   { id: "verify_installplan", label: "Wait for the operator install", description: "OLM installs the new CSV; this usually takes a few minutes (the tool waits up to 8)" },
 ];
 
+/**
+ * Update when Argo CD manages the catalog or Subscription (pkg/cluster
+ * updateUnderGitOps): the same step ids, but the catalog stays as Git sets
+ * it and nothing Argo CD manages is deleted for longer than one request.
+ */
+export const GITOPS_UPDATE_STEPS: PipelineStepDef[] = UPDATE_STEPS.map((step) => {
+  const description: Record<string, string> = {
+    validate_prerequisites: "Pull secret, image mirror and OperatorGroup; verify that the catalog's image has the channel Git sets; refuse an older build",
+    apply_catalog_source: "Leave the nightly CatalogSource as Git sets it; the Subscription stays",
+    wait_catalog_ready: "Wait until the catalog lists this build (OLM may still be replacing the catalog pod after a change in Git). Stops if the image changes meanwhile",
+    detect_channel: "Keep the channel Git sets",
+    delete_csv: "Delete the old CSV and InstallPlan so OLM installs the build the catalog serves",
+    apply_subscription: "Delete and at once recreate the Subscription with Git's settings and Argo CD's tracking",
+  };
+  const label: Record<string, string> = {
+    apply_catalog_source: "Keep the nightly catalog",
+    apply_subscription: "Recreate the Subscription",
+  };
+  return description[step.id] ? { ...step, label: label[step.id] ?? step.label, description: description[step.id] } : step;
+});
+
 const REINSTALL_COMMON_STEPS: PipelineStepDef[] = [
   { id: "save_snapshot", label: "Save snapshot", description: "Record the current deployments to show what changed afterwards" },
   { id: "delete_catalog_source", label: "Remove the nightly catalog", description: "Delete the nightly CatalogSource, if there is one" },

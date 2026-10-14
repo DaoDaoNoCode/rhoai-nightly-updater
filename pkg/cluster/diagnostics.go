@@ -1161,6 +1161,11 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read the DataScienceCluster: %v", err), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
+	if meta, err := parseObjectMeta(body); err == nil {
+		if app := argoApplication(meta.Annotations, "DataScienceCluster", "", meta.Name); app != "" {
+			return &types.OperationResponse{Success: false, Message: gitOpsRefusal("The DataScienceCluster", app, "removing "+compName) + fmt.Sprintf(" Set %s to Removed in Git.", compName), ErrorCode: ErrorCodeGitOpsManaged}, nil
+		}
+	}
 	state, present := componentManagementState(body, compName)
 	if !present {
 		return nothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil

@@ -438,6 +438,9 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 	if err := json.Unmarshal(read.Body, &dsc); err != nil {
 		return nil, err
 	}
+	if app := argoApplicationOf(dsc, "DataScienceCluster"); app != "" {
+		return &types.OperationResponse{Success: false, Message: gitOpsRefusal("DataScienceCluster "+name, app, "this change"), ErrorCode: ErrorCodeGitOpsManaged}, nil
+	}
 	oldSpec, _ := dsc["spec"].(map[string]interface{})
 	apiVersion, _ := dsc["apiVersion"].(string)
 	schema, err := dscSpecSchema(c, apiVersion)

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { ComponentsPage } from "./ComponentsPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
-import { renderPage as renderInApp } from "../test/providers";
+import { nightlyStatus, renderPage as renderInApp } from "../test/providers";
 import type { ComponentsResponse, DeploymentInfo } from "../types";
 
 function dep(name: string, over: Partial<DeploymentInfo> = {}): DeploymentInfo {
@@ -410,5 +410,17 @@ describe("ComponentsPage DSC API versions", () => {
     const edit = await screen.findByRole("link", { name: "Edit default-dsc in the OpenShift console" });
     expect(edit.getAttribute("href")).toContain("datasciencecluster.opendatahub.io~v3~DataScienceCluster");
     expect(screen.queryByText(/is shown as/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ComponentsPage under Argo CD", () => {
+  it("turns off the DSC repairs when Argo CD manages the DSC", async () => {
+    stubApi({
+      "/api/components": { ...present([dep("dashboard")]), dscCompatibility: { operatorVersion: "3.6.0", branch: "rhoai-3.6", invalidFields: ["spec.components.foo"], missingComponents: [] } },
+    });
+    renderInApp(<ComponentsPage />, "/", { status: async () => nightlyStatus({ dscManagedBy: "rhai-on-openshift" }) });
+    const remove = await screen.findByRole("button", { name: "Remove invalid fields" });
+    await waitFor(() => expect(remove).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByText("Argo CD: rhai-on-openshift")).toBeInTheDocument();
   });
 });

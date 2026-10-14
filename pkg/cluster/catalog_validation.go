@@ -77,6 +77,30 @@ type catalogTarget struct {
 	// (PackageManifest currentCSVDesc.customresourcedefinitions.owned);
 	// nil when the catalog does not say.
 	OwnedCRDs map[string][]string
+	// Fingerprint identifies the head bundle's build (headFingerprint); ""
+	// when the catalog does not say.
+	Fingerprint string
+}
+
+// headFingerprint identifies the build of a PackageManifest channel's head
+// CSV: its operator image and creation time (currentCSVDesc annotations
+// containerImage and createdAt). Two nightly builds of the same version have
+// the same CSV name but differ here. "" when neither annotation is set.
+func headFingerprint(entry map[string]interface{}) string {
+	desc, _ := entry["currentCSVDesc"].(map[string]interface{})
+	ann, _ := desc["annotations"].(map[string]interface{})
+	image, _ := ann["containerImage"].(string)
+	created, _ := ann["createdAt"].(string)
+	return buildFingerprint(image, created)
+}
+
+// buildFingerprint is headFingerprint for a CSV's containerImage and
+// createdAt annotations; "" when neither is set.
+func buildFingerprint(image, created string) string {
+	if image == "" && created == "" {
+		return ""
+	}
+	return image + " " + created
 }
 
 // ownedCRDVersions reads currentCSVDesc.customresourcedefinitions.owned of
@@ -161,7 +185,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 			} else if override != "" {
 				if entry := findChannel(channels, override); entry != nil {
 					head, _ := entry["currentCSV"].(string)
-					return catalogTarget{Channel: override, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry)}, nil
+					return catalogTarget{Channel: override, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
 				}
 				lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(channelNames(channels), ", "))
 			} else if ch, err := detectBestChannel(channels, image); err != nil {
@@ -169,7 +193,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 			} else if ch != "" {
 				entry := findChannel(channels, ch)
 				head, _ := entry["currentCSV"].(string)
-				return catalogTarget{Channel: ch, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry)}, nil
+				return catalogTarget{Channel: ch, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
 			} else {
 				lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 			}

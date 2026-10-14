@@ -51,6 +51,8 @@ import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
 import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
 import { STEP_SETS } from "../operationSteps";
+import { gitOpsOperatorReason, operatorGitOpsApp } from "../gitops";
+import { GitOpsNotice } from "../components/GitOpsNotice";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
 
@@ -216,6 +218,13 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
+      {/* --- Argo CD manages part of RHOAI: say what the tool still does --- */}
+      {status && (operatorGitOpsApp(status) || status.dscManagedBy) && (
+        <PageSection>
+          <GitOpsNotice status={status} />
+        </PageSection>
+      )}
+
       {/* --- One-time setup comes first while it is incomplete: nothing else works without it --- */}
       {status && !prerequisitesMet && (
         <PageSection>
@@ -246,7 +255,16 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
-      {status && status.csv.phase === "Succeeded" && status.dscExists === false && (
+      {status && status.csv.phase === "Succeeded" && status.dscExists === false && operatorGitOpsApp(status) && (
+        <PageSection>
+          <Alert variant="info" isInline component="p" title="No DataScienceCluster yet">
+            Argo CD application &quot;{operatorGitOpsApp(status)}&quot; manages RHOAI here and creates the DataScienceCluster from Git on its
+            next sync. Define it there; one made by hand would be overwritten.
+          </Alert>
+        </PageSection>
+      )}
+
+      {status && status.csv.phase === "Succeeded" && status.dscExists === false && !operatorGitOpsApp(status) && (
         <PageSection>
           <Card>
             <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Create the DataScienceCluster</Title></CardTitle></CardHeader>
@@ -323,7 +341,7 @@ export const StatusPage: React.FC = () => {
             <GridItem lg={6} md={12}>
               <Card isFullHeight>
                 <CardHeader>
-                  <CardTitle><Title headingLevel="h2" size="lg">Update to a specific build</Title></CardTitle>
+                  <CardTitle><Title headingLevel="h2" size="lg">{operatorGitOpsApp(status) ? "Install the build the catalog serves" : "Update to a specific build"}</Title></CardTitle>
                 </CardHeader>
                 <CardBody>
                   {prerequisitesMet ? (
@@ -362,7 +380,7 @@ export const StatusPage: React.FC = () => {
                       variant="secondary"
                       onClick={() => setRefreshConfirmOpen(true)}
                       isLoading={!!refreshRun && !refreshRun.outcome}
-                      disabledReason={blocker}
+                      disabledReason={blocker ?? gitOpsOperatorReason(status, "Re-deploy")}
                     >
                       Re-deploy operator...
                     </TooltipButton>
@@ -377,14 +395,15 @@ export const StatusPage: React.FC = () => {
                 <CardListItem
                   labelledBy="recovery-reinstall"
                   actions={
-                    <Button
+                    <TooltipButton
                       variant="secondary"
                       onClick={() => setReinstallExpanded(!reinstallExpanded)}
                       aria-expanded={reinstallExpanded}
                       aria-controls="recovery-reinstall-content"
+                      disabledReason={gitOpsOperatorReason(status, "Reinstall")}
                     >
                       {reinstallExpanded ? "Hide reinstall options" : "Reinstall..."}
-                    </Button>
+                    </TooltipButton>
                   }
                   expanded={
                     <section id="recovery-reinstall-content" aria-label="Reinstall options" className="pf-v6-u-mt-lg" hidden={!reinstallExpanded}>

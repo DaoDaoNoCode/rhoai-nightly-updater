@@ -537,19 +537,31 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), "prerequisites")
 	}
 
+	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, currentCSV, &logs)
+	if gitOpsErr != nil {
+		return fail("Cannot check whether Argo CD manages the operator: "+gitOpsErr.Error()+". Nothing was changed.", errorCodeFromK8sErr(gitOpsErr))
+	}
+	if gitOpsProblem != "" {
+		return fail(gitOpsProblem, ErrorCodeGitOpsManaged)
+	}
+
 	// Verify the exact image in a fresh catalog before switching the active
 	// catalog or removing any installed resources. The channel head it
 	// reports is the bundle OLM will install, so the downgrade check uses it.
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Verifying the selected catalog image..."})
-	target, preflightErr := preflightReinstallCatalog(c, image, "")
+	target, preflightErr := preflightReinstallCatalog(c, image, channelOverride)
 	if preflightErr != nil {
 		if c.ctx.Err() != nil {
 			return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image", Logs: logs}, c.ctx.Err()
 		}
+		hint := ""
+		if channelOverride != "" {
+			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: pick a build that has that channel, or change it in Git.", gitOps.subscriptionApp, channelOverride)
+		}
 		if isCatalogImagePullError(preflightErr) {
 			return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed.", "catalog_image_pull")
 		}
-		return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed.", "validation")
+		return fail("Replacement catalog validation failed: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
 	}
 	logs = append(logs, fmt.Sprintf("OK: Catalog image verified (channel %s, head %s)", target.Channel, target.HeadCSV))
 	blocked, note := downgradeCheck(currentCSV, extractTagFromRef(image), target.HeadCSV)
@@ -591,6 +603,10 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	recovery = captured
 	if note := captured.recordedNote(); note != "" {
 		logs = append(logs, note)
+	}
+
+	if gitOps.active() {
+		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail)
 	}
 
 	// --- Step 3: apply_catalog_source ---
@@ -695,35 +711,97 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription..."})
 	newSub := buildSubscription(recovery.subscriptionBase(), CatalogName, nightlyChannel)
 	recovery.subscriptionChanged = true
-	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, func(attempt int, err error, willRetry bool, _ time.Duration) {
+	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, &logs, emit, fail); r != nil || err != nil {
+		return r, err
+	}
+	return verifyUpdateInstall(c, target, recovery, &logs, emit)
+}
+
+// applyUpdateSubscription is Update's apply_subscription step: it applies sub
+// with retries. It returns a nil response when the Subscription was applied.
+func applyUpdateSubscription(c *Client, sub map[string]interface{}, channel string, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
+	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), sub, func(attempt int, err error, willRetry bool, _ time.Duration) {
 		if willRetry {
 			slog.Warn("failed to apply Subscription, retrying", "attempt", attempt, "error", err)
-			logs = append(logs, fmt.Sprintf("  Warning: Subscription apply attempt %d failed: %v — retrying", attempt, err))
+			*logs = append(*logs, fmt.Sprintf("  Warning: Subscription apply attempt %d failed: %v — retrying", attempt, err))
 		}
 	})
 	if cancelErr != nil {
-		return &types.OperationResponse{Success: false, Message: "Operation stopped during Subscription apply retry", Logs: logs}, cancelErr
+		return &types.OperationResponse{Success: false, Message: "Operation stopped during Subscription apply retry", Logs: *logs}, cancelErr
 	}
 	if subApplyErr != nil {
 		return fail(fmt.Sprintf("Failed to apply Subscription after 3 attempts: %v", subApplyErr), errorCodeFromK8sErr(subApplyErr))
 	}
-	logs = append(logs, fmt.Sprintf("OK: Subscription applied (channel=%s, installPlanApproval=%v)", nightlyChannel, newSub["spec"].(map[string]interface{})["installPlanApproval"]))
-	emit(UpdateStepEvent{Step: "apply_subscription", Status: "success", Message: "Subscription applied", Detail: nightlyChannel})
+	*logs = append(*logs, fmt.Sprintf("OK: Subscription applied (channel=%s, installPlanApproval=%v)", channel, sub["spec"].(map[string]interface{})["installPlanApproval"]))
+	emit(UpdateStepEvent{Step: "apply_subscription", Status: "success", Message: "Subscription applied", Detail: channel})
+	return nil, nil
+}
 
+// readCSVMetaRetrying reads the metadata of an installed CSV, retrying a
+// transient API error a few times: the read decides whether the install
+// is reported as the verified build.
+func readCSVMetaRetrying(c *Client, csv string) (meta objectMeta, found bool, err error) {
+	for attempt := 0; ; attempt++ {
+		meta, found, err = readObjectMeta(c, csvPath(csv))
+		if err == nil || attempt == 2 || c.ctx.Err() != nil {
+			return meta, found, err
+		}
+		select {
+		case <-c.ctx.Done():
+			return meta, found, err
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// verifyUpdateInstall is Update's last step: it waits for OLM to install
+// target's head CSV and builds the result.
+func verifyUpdateInstall(c *Client, target catalogTarget, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
-	logs = append(logs, "Waiting for OLM to install the operator...")
-	outcome := waitForOperatorInstall(c, "verify_installplan", emit, &logs, recovery, target.HeadCSV)
+	*logs = append(*logs, "Waiting for OLM to install the operator...")
+	outcome := waitForOperatorInstall(c, "verify_installplan", emit, logs, recovery, target.HeadCSV)
 	if !outcome.succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
-		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: logs, ErrorCode: outcome.errorCode}, nil
+		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: *logs, ErrorCode: outcome.errorCode}, nil
+	}
+	// Nightly builds of one version share the CSV name: the installed CSV
+	// must be the build the verification catalog listed, not another one
+	// the catalog may have switched to meanwhile.
+	if target.Fingerprint != "" {
+		meta, found, err := readCSVMetaRetrying(c, outcome.csv)
+		switch {
+		case err != nil || !found:
+			// Not a failure of the install: OLM reported Succeeded. The
+			// Status page compares the same annotations on every load.
+			reason := "it was not found"
+			if err != nil {
+				reason = err.Error()
+			}
+			note := fmt.Sprintf("The build of %s could not be confirmed (%s); the Status page shows whether the operator runs the build the catalog serves.", outcome.csv, reason)
+			*logs = append(*logs, "Warning: "+note)
+			outcome.note = strings.TrimSpace(outcome.note + " " + note)
+		default:
+			if got := buildFingerprint(meta.Annotations["containerImage"], meta.Annotations["createdAt"]); got != target.Fingerprint {
+				recovery.keepNewInstall = true // a Succeeded operator is not torn down
+				what := fmt.Sprintf("operator image %s, built %s", nonEmpty(meta.Annotations["containerImage"], "unknown"), nonEmpty(meta.Annotations["createdAt"], "unknown"))
+				if got == "" {
+					what = "it carries no build annotations"
+				}
+				msg := fmt.Sprintf("OLM installed %s, but it is not the build that was verified (%s; expected %s). The catalog may have changed meanwhile; run Update again to install the build it serves now.",
+					outcome.csv, what, target.Fingerprint)
+				*logs = append(*logs, msg)
+				emit(UpdateStepEvent{Step: "verify_installplan", Status: "failed", Message: "Another build was installed", Detail: msg})
+				return &types.OperationResponse{Success: false, Message: msg, Logs: *logs, ErrorCode: "install_mismatch"}, nil
+			}
+		}
 	}
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "success", Message: fmt.Sprintf("Operator installed: %s", outcome.csv), Detail: outcome.csv})
-	logs = append(logs, "Update complete. The operator now reconciles the DataScienceCluster; component rollouts can take a few more minutes.")
+	*logs = append(*logs, "Update complete. The operator now reconciles the DataScienceCluster; component rollouts can take a few more minutes.")
 	return &types.OperationResponse{
 		Success: true,
 		Message: strings.TrimSpace(fmt.Sprintf("RHOAI nightly update complete: %s is installed. %s", outcome.csv, outcome.note)),
-		Logs:    logs,
+		Logs:    *logs,
 	}, nil
 }
 
@@ -835,6 +913,17 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	if dryRunCSVErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Cannot identify installed CSV: " + dryRunCSVErr.Error(), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
+	// Under Argo CD only the catalog's own image can be installed: refuse
+	// before reading any catalog content.
+	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, dryRunCSV, &logs)
+	if gitOpsErr != nil {
+		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + gitOpsErr.Error(), Logs: logs, ErrorCode: errorCodeFromK8sErr(gitOpsErr)}, nil
+	}
+	if gitOpsProblem != "" {
+		logs = append(logs, "[DRY-RUN] FAILED: "+gitOpsProblem)
+		return &types.OperationResponse{Success: false, Message: gitOpsProblem, Logs: logs, ErrorCode: ErrorCodeGitOpsManaged}, nil
+	}
+
 	bundle, bundleErr := lookupTargetBundle(c, image)
 	if bundleErr != nil {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Could not read the operator bundle from the catalog image: %v", bundleErr))
@@ -858,9 +947,13 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		}, nil
 	}
 	// Server-side dry run: attempt CatalogSource apply with ?dryRun=All
+	// (not under Argo CD: the catalog is never written then).
 	catalogSpec := buildCatalogSourceSpec(image)
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	_, _, csDryErr := c.dryRunApply(csPath, catalogSpec)
+	var csDryErr error
+	if !gitOps.active() {
+		_, _, csDryErr = c.dryRunApply(csPath, catalogSpec)
+	}
 	if csDryErr != nil {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] FAILED: CatalogSource apply rejected by API server: %v", csDryErr))
 		return &types.OperationResponse{
@@ -870,7 +963,9 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			ErrorCode: errorCodeOr(csDryErr, "validation"),
 		}, nil
 	}
-	if cs.Exists && cs.Image == image {
+	if gitOps.active() {
+		logs = append(logs, "OK: CatalogSource left as Git sets it (not validated: it is not written)")
+	} else if cs.Exists && cs.Image == image {
 		logs = append(logs, "OK: CatalogSource already points to this image — no change needed (validated)")
 	} else if cs.Exists {
 		logs = append(logs, "OK: CatalogSource apply validated (would update image)")
@@ -887,9 +982,16 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 			ErrorCode: errorCodeFromK8sErr(err),
 		}, nil
 	}
-	if sub.State == "Not Installed" || sub.Source == "" {
+	switch {
+	case gitOps.active():
+		channel := nonEmpty(channelOverride, "the one the build publishes")
+		if channelOverride != "" {
+			channel += " (kept from Git)"
+		}
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would leave the CatalogSource as Git sets it and wait until the catalog serves the build. Then, after the old CSV is gone, would delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", channel))
+	case sub.State == "Not Installed" || sub.Source == "":
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create Subscription pointing to %s", CatalogName))
-	} else {
+	default:
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would delete and recreate Subscription (%s/%s -> %s), keeping its config and approval mode", sub.Source, sub.Channel, CatalogName))
 	}
 	if dryRunCSV.Name != "" {
@@ -958,6 +1060,12 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	if isNightly && image == "" {
 		recordActivity = false
 		return fail("An FBC image is required", "validation")
+	}
+	if g, err := readOperatorGitOps(c); err != nil {
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+	} else if msg := g.refusal("Reinstall", "the Subscription and the catalog for several minutes"); msg != "" {
+		recordActivity = false
+		return fail(msg+" Update works with Argo CD: it installs the build the catalog serves and keeps the channel Git sets.", ErrorCodeGitOpsManaged)
 	}
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Reinstall")
 	if guardErr != nil {
@@ -1539,6 +1647,13 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 
 	// --- Step 1: verify_csv ---
 	emit(UpdateStepEvent{Step: "verify_csv", Status: "running", Message: "Verifying operator is installed..."})
+
+	if g, err := readOperatorGitOps(c); err != nil {
+		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+	} else if msg := g.refusal("Re-deploy", "the Subscription until the old CSV is gone"); msg != "" {
+		recordActivity = false
+		return fail(msg+" To re-deploy the installed build, run Update: it installs the build the catalog serves again.", ErrorCodeGitOpsManaged)
+	}
 
 	csv, err := getCSV(c)
 	if err != nil {

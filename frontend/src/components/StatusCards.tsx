@@ -9,6 +9,7 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
+  ClipboardCopy,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -33,6 +34,7 @@ import { PullSecretSetup } from "./PullSecretCard";
 import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
+import { gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp } from "../gitops";
 
 /** CSV phases of an install OLM is still working on. */
 const INSTALLING_PHASES = new Set(["Installing", "Replacing", "Pending", "InstallReady"]);
@@ -97,6 +99,15 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
     : null;
   const target: NightlyBuild | null = nightly?.latest ?? latestOverall;
   const updateAvailable = nightly?.updateAvailable;
+  // Under Argo CD, Git sets the catalog image: the only build to install is
+  // the one the catalog serves, and a newer nightly in Quay is a change to
+  // make in Git.
+  const gitOpsApp = operatorGitOpsApp(status);
+  const gitOpsState = gitOpsInstallState(status);
+  const catalogBuild: NightlyBuild | null = gitOpsApp ? nightly?.installed ?? null : null;
+  const serves = status.catalogServes;
+  const previewBuild = catalogBuild ?? target;
+  const csvMissing = !csv.name || csv.phase === "Not Found";
   const setupReason = !prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null;
   const actionReason = blocker ?? setupReason;
   // An operator version is installed but its Subscription is gone (for
@@ -112,6 +123,13 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   else if (csv.phase === "Failed") verdict = <StatusLabel status="danger">Operator failed</StatusLabel>;
   else if (subscriptionMissing) verdict = <StatusLabel status="warning">No Subscription</StatusLabel>;
   else if (!onNightly) verdict = <TagLabel color="purple">Stable release</TagLabel>;
+  else if (gitOpsApp && gitOpsState === "updating") verdict = <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>Catalog updating</StatusLabel>;
+  else if (gitOpsApp && gitOpsState === "installing") verdict = <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>OLM installing</StatusLabel>;
+  else if (gitOpsApp && gitOpsState === "pending") verdict = <StatusLabel status="info" icon={<ArrowCircleUpIcon />}>Install pending</StatusLabel>;
+  else if (gitOpsApp && csvInstalling) verdict = <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>Installing</StatusLabel>;
+  else if (gitOpsApp && gitOpsState === "installed" && csv.phase === "Succeeded") verdict = <StatusLabel status="success">Matches Git</StatusLabel>;
+  else if (gitOpsApp && gitOpsState === "installed") verdict = <StatusLabel status="warning">Operator not ready</StatusLabel>;
+  else if (gitOpsApp) verdict = <StatusLabel status="warning">Not checked</StatusLabel>;
   else if (updateAvailable === true) verdict = <StatusLabel status="info" icon={<ArrowCircleUpIcon />}>Update available</StatusLabel>;
   else if (csvInstalling) verdict = <StatusLabel status="progress" icon={<Spinner size="sm" aria-hidden="true" />}>Installing</StatusLabel>;
   else if (updateAvailable === false && csv.phase === "Succeeded") verdict = <StatusLabel status="success">Up to date</StatusLabel>;
@@ -126,7 +144,28 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
     ? latestOverall?.tag : undefined;
 
   let primary: React.ReactNode = null;
-  if (!installed) {
+  if (gitOpsApp && installed && onNightly) {
+    primary = catalogBuild ? (
+      <TooltipButton
+        variant={gitOpsState === "pending" || csv.phase === "Failed" ? "primary" : "secondary"}
+        onClick={() => onUpdate(catalogBuild)}
+        disabledReason={actionReason ?? gitOpsInstallWaitReason(gitOpsState)}
+      >
+        {gitOpsState === "installed" ? "Install from the catalog again" : "Install the build the catalog serves"}
+      </TooltipButton>
+    ) : null;
+  } else if (!installed && gitOpsApp) {
+    // Nothing installed yet, but Git already names the build: install that one.
+    primary = (
+      <TooltipButton
+        variant="primary"
+        onClick={() => catalogBuild && onUpdate(catalogBuild)}
+        disabledReason={actionReason ?? gitOpsInstallWaitReason(gitOpsState) ?? (catalogBuild ? null : "The nightly catalog has no image in Git.")}
+      >
+        Install the build the catalog serves
+      </TooltipButton>
+    );
+  } else if (!installed) {
     // Before the setup the newest build can't be read yet; show the action anyway, with the reason.
     primary = (
       <TooltipButton
@@ -159,7 +198,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
 
   const subtle = (text: React.ReactNode) => <span className="pf-v6-u-text-color-subtle">{text}</span>;
   const latestRow = (() => {
-    if (onNightly && updateAvailable === false) return subtle(`Same as installed. You have the newest ${nightly?.installed?.tag ?? ""} build.`);
+    if (onNightly && updateAvailable === false) return subtle(`Same as ${gitOpsApp ? "in Git" : "installed"}. You have the newest ${nightly?.installed?.tag ?? ""} build.`);
     if (target) return <BuildSummary build={target} />;
     if (nightly?.error) return subtle(nightly.error);
     if (latestLoading) return <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}><Spinner size="sm" aria-label="Checking Quay" />{subtle("Checking Quay...")}</Flex>;
@@ -189,6 +228,18 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 <DescriptionListDescription>
                   {!installed ? (
                     <span>Nothing yet: the RHOAI operator is not installed.</span>
+                  ) : gitOpsApp && csvMissing ? (
+                    <span>Nothing yet: {gitOpsState === "installing" ? "OLM is installing the build Git set." : "no operator version is installed."}</span>
+                  ) : gitOpsApp && onNightly && gitOpsState === "updating" ? (
+                    <span>
+                      <strong>{csv.name}</strong>
+                      {subtle(" (the catalog is still switching to the image Git set)")}
+                    </span>
+                  ) : gitOpsApp && onNightly && gitOpsState === "pending" ? (
+                    <span>
+                      <strong>{csv.name}</strong>
+                      {subtle(" (not the build the catalog serves)")}
+                    </span>
                   ) : onNightly && nightly?.installed ? (
                     <BuildSummary build={nightly.installed} />
                   ) : onNightly ? (
@@ -206,6 +257,19 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                   )}
                 </DescriptionListDescription>
               </DescriptionListGroup>
+              {gitOpsApp && (onNightly || !installed) && catalogBuild && (
+                <DescriptionListGroup>
+                  <DescriptionListTerm>In Git</DescriptionListTerm>
+                  <DescriptionListDescription>
+                    <Stack>
+                      <StackItem><BuildSummary build={catalogBuild} /></StackItem>
+                      <StackItem>
+                        {subtle(`Catalog image set by Argo CD application "${gitOpsApp}"${serves?.csv ? `; serves ${serves.csv}` : ""}`)}
+                      </StackItem>
+                    </Stack>
+                  </DescriptionListDescription>
+                </DescriptionListGroup>
+              )}
               <DescriptionListGroup>
                 <DescriptionListTerm>{onNightly ? "Latest" : "Latest nightly"}</DescriptionListTerm>
                 <DescriptionListDescription>{latestRow}</DescriptionListDescription>
@@ -257,8 +321,26 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 isPlain
                 component="p"
                 title={`A newer release line is available: ${newerLine}`}
-                actionLinks={<AlertActionLink onClick={onChooseBuild}>Choose it below</AlertActionLink>}
-              />
+                actionLinks={gitOpsApp ? undefined : <AlertActionLink onClick={onChooseBuild}>Choose it below</AlertActionLink>}
+              >
+                {gitOpsApp ? "To move to it, change the catalog image in Git." : undefined}
+              </Alert>
+            </StackItem>
+          )}
+
+          {gitOpsApp && onNightly && updateAvailable === true && target && (
+            <StackItem>
+              <Alert variant="info" isInline component="p" title={`A newer ${target.tag ?? ""} nightly exists; Git does not use it yet`.replace("  ", " ")}>
+                <Stack hasGutter>
+                  <StackItem>
+                    Argo CD application &quot;{gitOpsApp}&quot; sets the catalog image in Git. To move to this build, change the image there to
+                    the reference below, then install the build the catalog serves once Argo CD has synced it.
+                  </StackItem>
+                  <StackItem>
+                    <ClipboardCopy isReadOnly hoverTip="Copy" clickTip="Copied" variant="inline-compact">{target.image}</ClipboardCopy>
+                  </StackItem>
+                </Stack>
+              </Alert>
             </StackItem>
           )}
 
@@ -271,7 +353,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 title="The operator is Failed"
                 actionLinks={
                   <>
-                    <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>
+                    {!operatorGitOpsApp(status) && <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>}
                     <AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>
                     {safeConsoleURL && (
                       <AlertActionLink
@@ -288,8 +370,10 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                   </>
                 }
               >
-                Recommended: update to {onNightly && updateAvailable === false ? "another" : "the latest"} nightly; a new build
-                is the usual fix for a broken one. Update removes the failed version first.
+                {gitOpsApp
+                  ? "Recommended: install the build the catalog serves again, which removes the failed version first. If that build is the broken one, change the catalog image in Git to a newer nightly first."
+                  : <>Recommended: update to {onNightly && updateAvailable === false ? "another" : "the latest"} nightly; a new build
+                is the usual fix for a broken one. Update removes the failed version first.</>}
               </Alert>
             </StackItem>
           )}
@@ -311,8 +395,12 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
           {status.subscription.source && csv.phase === "Not Found" && (
             <StackItem>
               <Alert variant="warning" isInline component="p" title="Subscribed, but no operator version is installed">
-                OLM has not installed a CSV for the Subscription ({status.subscription.state || "no state"}). Update or Reinstall
-                creates a fresh install; Diagnostics shows why OLM is stuck.
+                OLM has not installed a CSV for the Subscription ({status.subscription.state || "no state"}).
+                {gitOpsState === "installing"
+                  ? ` OLM is installing the build Git set${status.installPlan ? ` (InstallPlan ${status.installPlan.name} is ${status.installPlan.phase})` : ""}; wait for it to finish. Diagnostics shows why if it is stuck.`
+                  : gitOpsApp
+                    ? " Installing the build the catalog serves recreates the Subscription, which usually unblocks OLM; Diagnostics shows why it is stuck."
+                    : " Update or Reinstall creates a fresh install; Diagnostics shows why OLM is stuck."}
               </Alert>
             </StackItem>
           )}
@@ -321,14 +409,14 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
       <CardFooter>
         <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapMd" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
           {primary && <FlexItem>{primary}</FlexItem>}
-          {prerequisitesMet && (
+          {prerequisitesMet && !gitOpsApp && (
             <FlexItem>
               <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
             </FlexItem>
           )}
-          {target && (
+          {previewBuild && (
             <FlexItem>
-              <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(target.image)}>
+              <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(previewBuild.image)}>
                 View build contents
               </Button>
             </FlexItem>

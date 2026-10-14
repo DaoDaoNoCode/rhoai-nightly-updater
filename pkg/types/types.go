@@ -90,9 +90,17 @@ type StatusResponse struct {
 	StableChannelPinned  bool              `json:"stableChannelPinned,omitempty"`
 	StableDiscoveryError string            `json:"stableDiscoveryError,omitempty"`
 	DSCExists            bool              `json:"dscExists"`
-	Nightly              *NightlyStatus    `json:"nightly,omitempty"`
-	Activity             []ActivityEntry   `json:"activity,omitempty"`
-	Errors               []string          `json:"errors,omitempty"`
+	// DSCManagedBy is the Argo CD application that tracks the
+	// DataScienceCluster.
+	DSCManagedBy string         `json:"dscManagedBy,omitempty"`
+	Nightly      *NightlyStatus `json:"nightly,omitempty"`
+	// CatalogServes is the operator build the nightly catalog serves on the
+	// Subscription's channel, compared with the installed operator. Only set
+	// while Argo CD manages the catalog or the Subscription: Git then picks
+	// the catalog image, which can run ahead of the installed operator.
+	CatalogServes *CatalogServes  `json:"catalogServes,omitempty"`
+	Activity      []ActivityEntry `json:"activity,omitempty"`
+	Errors        []string        `json:"errors,omitempty"`
 }
 
 // ClusterInfo holds the OpenShift cluster server URL, version, and current user.
@@ -108,6 +116,8 @@ type SubscriptionInfo struct {
 	Source  string `json:"source"`
 	Channel string `json:"channel"`
 	State   string `json:"state"`
+	// ManagedBy is the Argo CD application that tracks the Subscription.
+	ManagedBy string `json:"managedBy,omitempty"`
 }
 
 // CSVInfo describes the ClusterServiceVersion for the installed RHOAI operator.
@@ -123,6 +133,8 @@ type CatalogSourceInfo struct {
 	Name   string `json:"name"`
 	Image  string `json:"image"`
 	State  string `json:"state"`
+	// ManagedBy is the Argo CD application that tracks the CatalogSource.
+	ManagedBy string `json:"managedBy,omitempty"`
 }
 
 // PullSecretInfo reports whether the additional-pull-secret exists and is valid.
@@ -226,6 +238,24 @@ type NightlyStatus struct {
 	UpdateAvailable *bool  `json:"updateAvailable,omitempty"`
 	CheckedAt       string `json:"checkedAt,omitempty"` // when Latest was read from Quay (RFC3339)
 	Error           string `json:"error,omitempty"`     // why Latest is missing
+}
+
+// CatalogServes describes the head of the nightly catalog's channel, read
+// from its PackageManifest.
+type CatalogServes struct {
+	Channel       string `json:"channel"`
+	CSV           string `json:"csv"`                     // currentCSV of the channel
+	OperatorImage string `json:"operatorImage,omitempty"` // containerImage annotation of that CSV
+	Built         string `json:"built,omitempty"`         // createdAt annotation of that CSV
+	// Installed reports whether the installed operator is this build (same
+	// CSV name, operator image and build time). Two nightly builds of the
+	// same version have the same CSV name, and OLM does not install the
+	// newer one by itself. Absent when the installed CSV does not say.
+	Installed *bool `json:"installed,omitempty"`
+	// Updating is true while OLM replaces the catalog's registry pod after
+	// its image changed: the head above is still the previous build's, so
+	// Installed is absent.
+	Updating bool `json:"updating,omitempty"`
 }
 
 // NightlyTag pairs a version tag with its full image reference.

@@ -364,6 +364,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	if operatorTouched && r.subscription != nil && !subReplaced {
 		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 			"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS}, "spec": r.subscription["spec"]}
+		keepArgoTracking(r.subscription, obj)
 		if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
 			failures = append(failures, "Subscription: "+err.Error())
 		}
@@ -394,6 +395,10 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		message = "The previous catalog and Subscription were restored; the installed operator was not changed."
 	case r.subscription == nil:
 		message = "There was no previous Subscription, so the Subscription and CSV created by this attempt were removed and the catalog was restored to its previous state."
+	case argoApplicationOf(r.subscription, "Subscription") != "":
+		// Git's catalog serves one build: the restore makes OLM install it
+		// again, which is the build that just failed.
+		message = "The Subscription was recreated with Git's settings; OLM installs the build the catalog serves again. To go back to another build, change the catalog image in Git."
 	default:
 		message = "The previous catalog and Subscription were restored; OLM will reinstall the previous operator version. Watch the operator status before retrying."
 		if spec, _ := r.subscription["spec"].(map[string]interface{}); r.csvRemoved && spec["installPlanApproval"] == "Manual" {
@@ -569,10 +574,16 @@ func deleteCurrentSubscription(c *Client) error {
 	if err != nil || !found {
 		return err
 	}
-	if meta.UID == "" {
+	return deleteSubscriptionWithUID(c, meta.UID)
+}
+
+// deleteSubscriptionWithUID deletes the operator Subscription only while it
+// is the object with that UID; errReplacedMeanwhile when it is another one.
+func deleteSubscriptionWithUID(c *Client, uid string) error {
+	if uid == "" {
 		return fmt.Errorf("the Subscription has no UID to guard its deletion")
 	}
-	if _, err := deleteWithUID(c, subscriptionPath(), meta.UID); err != nil {
+	if _, err := deleteWithUID(c, subscriptionPath(), uid); err != nil {
 		switch {
 		case IsK8sError(err, 404):
 			return nil

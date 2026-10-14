@@ -39,6 +39,8 @@ import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabe
 import { TechnicalDetails, TruncatedText } from "../components/LongText";
 import { TooltipButton } from "../components/TooltipButton";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { useClusterStatus } from "../state/AppState";
+import { gitOpsFixReason } from "../gitops";
 
 type ScanState = "idle" | "loading" | "done" | "error";
 
@@ -147,6 +149,7 @@ export const TroubleshootingPage: React.FC = () => {
   // Permissions, session and the operation lock. An operator install in
   // progress alone does not block a fix: that may be what is stuck.
   const fixReason = useMutationBlocker({ ignoreReconcile: true });
+  const { status } = useClusterStatus();
   const onResult = useClusterBusyHandler();
   const mountedRef = useRef(true);
 
@@ -375,7 +378,7 @@ export const TroubleshootingPage: React.FC = () => {
                                       onClick={() => setConfirmFix(problem)}
                                       isDisabled={fixingId !== null}
                                       isLoading={fixingId === problem.autoFixAction}
-                                      disabledReason={fixReason}
+                                      disabledReason={fixReason ?? gitOpsFixReason(status, problem.autoFixAction ?? "")}
                                     >
                                       {fixingId === problem.autoFixAction ? "Fixing..." : "Fix"}
                                     </TooltipButton>

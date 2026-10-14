@@ -16,6 +16,38 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
+## [2.1.0] - unreleased
+
+### Added
+
+- Clusters where Argo CD (OpenShift GitOps) manages RHOAI. The tool notices
+  Argo CD's tracking annotation on the nightly CatalogSource, the operator
+  Subscription and the DataScienceCluster, and works with Git as the source
+  of truth (RUNBOOK §13; no change to the Argo CD Application is needed):
+  - Git picks the build: the catalog image stays as Git sets it. The Status
+    page shows the build Git set, whether the operator runs it (**Install
+    pending** when Git moved to a build of the same version, which OLM does
+    not install by itself), and a newer nightly in Quay as the image to put
+    in Git.
+  - Update becomes *Install the build the catalog serves*: it keeps the
+    channel Git sets, deletes the old CSV, and deletes the Subscription only
+    right before recreating it with Argo CD's tracking and labels, so Argo
+    CD does not recreate it from Git in between (a self-heal sync that
+    follows finds it unchanged). Any other image is refused before anything
+    changes.
+  - Re-deploy, Reinstall and *Create the DataScienceCluster* are off while
+    Argo CD manages the operator, and DSC repairs and Diagnostics' *disable
+    component* while it manages the DSC: Argo CD would undo them.
+    Diagnostics' prerequisite-operator guidance says to add the operator in
+    Git instead.
+  - Update checks, after OLM reports success, that the installed CSV is the
+    build it verified (`containerImage` and `createdAt` annotations), and
+    reports `install_mismatch` otherwise instead of success.
+- `GET /api/status` reports `subscription.managedBy`,
+  `catalogSource.managedBy`, `dscManagedBy` and, under Argo CD,
+  `catalogServes` (the catalog's head CSV, its build, and whether it is
+  installed).
+
 ## [2.0.1] - 2026-10-07
 
 ### Upgrade notes

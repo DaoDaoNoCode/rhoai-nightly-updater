@@ -34,8 +34,39 @@ export interface StatusResponse {
   activity?: ActivityEntry[];
   errors?: string[];
   dscExists: boolean;
+  /** The Argo CD application that tracks the DataScienceCluster. */
+  dscManagedBy?: string;
   /** Installed vs latest nightly; only while the Subscription uses the nightly catalog. */
   nightly?: NightlyStatus;
+  /**
+   * What the nightly catalog serves on the Subscription's channel, compared
+   * with the installed operator. Only while Argo CD manages the catalog or
+   * the Subscription: Git then picks the catalog image, which can run ahead
+   * of the installed operator (pkg/types CatalogServes).
+   */
+  catalogServes?: CatalogServes;
+  installPlan?: InstallPlanInfo;
+}
+
+export interface CatalogServes {
+  channel: string;
+  /** currentCSV of the channel. */
+  csv: string;
+  operatorImage?: string;
+  /** createdAt of that build (RFC3339). */
+  built?: string;
+  /** Whether the installed operator is this build; absent when unknown. */
+  installed?: boolean;
+  /** OLM is replacing the catalog pod after an image change; `installed` is absent meanwhile. */
+  updating?: boolean;
+}
+
+/** The latest OLM InstallPlan of the operator (pkg/types InstallPlanInfo). */
+export interface InstallPlanInfo {
+  name: string;
+  /** Planning, Installing, Complete, Failed */
+  phase: string;
+  approved: boolean;
 }
 
 /** One nightly FBC catalog build (pkg/types NightlyBuild). */
@@ -69,6 +100,8 @@ export interface SubscriptionInfo {
   source: string;
   channel: string;
   state: string;
+  /** The Argo CD application that tracks the Subscription. */
+  managedBy?: string;
 }
 
 export interface CSVInfo {
@@ -82,6 +115,8 @@ export interface CatalogSourceInfo {
   name: string;
   image: string;
   state: string;
+  /** The Argo CD application that tracks the CatalogSource. */
+  managedBy?: string;
 }
 
 export interface PullSecretInfo {

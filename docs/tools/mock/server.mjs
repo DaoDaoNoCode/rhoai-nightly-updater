@@ -105,6 +105,54 @@ const scenarios = {
     w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };
     w.previewAPIVersion = "datasciencecluster.opendatahub.io/v3";
   },
+  // Argo CD manages the catalog, the Subscription and the DSC (RUNBOOK §13):
+  // Git moved the catalog to a build the operator does not run yet.
+  gitops: (w) => {
+    w.status = F.updateAvailableStatus();
+    w.status.subscription = { ...w.status.subscription, channel: "beta", managedBy: "rhoai" };
+    w.status.catalogSource = { ...w.status.catalogSource, managedBy: "rhoai" };
+    w.status.csv = { ...w.status.csv, name: "rhods-operator.3.6.0-ea.1", version: "3.6.0-ea.1" };
+    w.status.catalogServes = { channel: "beta", csv: "rhods-operator.3.6.0-ea.1", operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:3f9e7b1c5d2a8e406b1f9c3d7a2e5b8f0c6d4a193f9e7b1c5d2a8e406b1f9c3d", built: "2026-10-05T21:47:53Z", installed: false };
+    w.status.dscManagedBy = "rhoai";
+  },
+  // Same, once the operator runs the build Git set; Quay has a newer one.
+  "gitops-synced": (w) => {
+    scenarios.gitops(w);
+    w.status.catalogServes = { ...w.status.catalogServes, installed: true };
+  },
+  // The operator Git set is Failed: the fix is to install it again, or change Git.
+  "gitops-failed": (w) => {
+    scenarios["gitops-synced"](w);
+    w.status.csv = { ...w.status.csv, phase: "Failed" };
+  },
+  // Argo CD created the catalog and the Subscription, nothing installed yet (OLM stuck or first sync).
+  "gitops-first-install": (w) => {
+    scenarios.gitops(w);
+    w.status.csv = { name: "", version: "", phase: "Not Found" };
+    w.status.subscription = { ...w.status.subscription, state: "UpgradePending" };
+    delete w.status.installPlan;
+    w.status.catalogServes = { ...w.status.catalogServes, installed: undefined };
+  },
+  // Git just moved the image: OLM is still replacing the catalog pod.
+  "gitops-updating": (w) => {
+    scenarios["gitops-synced"](w);
+    w.status.catalogServes = { ...w.status.catalogServes, installed: undefined, updating: true };
+  },
+  // Argo CD created the Subscription; OLM is running the first InstallPlan.
+  "gitops-installing": (w) => {
+    scenarios["gitops-first-install"](w);
+    w.status.installPlan = { name: "install-7xk2p", phase: "Installing", approved: true };
+  },
+  // The GitOps install, step by step (gated like update-flow).
+  "gitops-update-flow": (w) => {
+    scenarios.gitops(w);
+    w.gated = true;
+    // Once installed, the operator runs the build Git set.
+    w.afterUpdate = () => { const done = {}; scenarios["gitops-synced"](done); return done.status; };
+  },
+  // Components and Diagnostics while Argo CD manages the DSC.
+  "gitops-components": (w) => { scenarios["gitops-synced"](w); w.components = F.notReadyComponents(); w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] }; },
+  "gitops-diag": (w) => { scenarios["gitops-synced"](w); w.diagnostics = F.diagnostics("upgrade-gates"); w.components = F.notReadyComponents(); },
   "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); },
   "s3-none": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.gated = true; },
   "s3-running": () => {},
@@ -187,7 +235,8 @@ async function updateStream(req, res) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const start = Date.now();
   let n = 0;
-  for (const step of F.updateSteps(image)) {
+  const gitOps = !!(world.status?.catalogSource?.managedBy || world.status?.subscription?.managedBy);
+  for (const step of (gitOps ? F.gitOpsUpdateSteps : F.updateSteps)(image)) {
     n += 1;
     await nextStep();
     if (res.destroyed) return;

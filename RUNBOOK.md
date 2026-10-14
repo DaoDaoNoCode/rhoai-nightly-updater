@@ -21,6 +21,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | S3 storage on "MinIO (migration pending)", **Incomplete**, Tear down disabled | [§10](#10-test-resources) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
 | "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
+| "Argo CD manages ...", **Install pending**, **OLM installing**, `gitops_managed`, `install_mismatch`, "sets the image of CatalogSource ... in Git" | [§13](#13-clusters-managed-by-argo-cd) |
 
 ---
 
@@ -642,6 +643,44 @@ Fix: update RHOAI to a newer nightly (Update on the Status page, or a build from
 ## 12. Activity log
 
 ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, JSON). If it is corrupted, the app logs a parse warning and starts a fresh list on the next write. To reset it (MANUAL ADMIN STEP): `oc delete cm rhoai-nightly-updater-activity -n $NS`.
+
+## 13. Clusters managed by Argo CD
+
+On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for example with the [odh-gitops](https://github.com/opendatahub-io/odh-gitops) chart, Argo CD keeps the CatalogSource, the Subscription and the DataScienceCluster as Git describes them. With `selfHeal`, it [syncs as soon as the cluster drifts from Git](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/), and it recreates what is deleted. Git is the source of truth, and the tool works with that: it notices Argo CD by its tracking annotation `argocd.argoproj.io/tracking-id` ([resource tracking](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/)), shows a notice on the Status page, and only does what Argo CD keeps. **No change to the Argo CD Application is needed**: the tool keeps every field Git sets.
+
+**Git picks the build; the tool installs it.** The catalog image in Git decides which nightly the cluster runs. OLM installs a new catalog's head CSV by itself only when that CSV *replaces* the installed one ([update graph](https://olm.operatorframework.io/docs/concepts/olm-architecture/operator-catalog/creating-an-update-graph/)). Nightly builds of the same version share the CSV name (for example `rhods-operator.3.6.0-ea.1`) with no `replaces` or `skipRange` between them, so after Git moves the catalog to a newer build of the same version the operator stays on the old one. The Status page then shows **Install pending**, the build Git set (*In Git*) and the installed CSV; *Install the build the catalog serves* removes the installed CSV and recreates the Subscription, so OLM installs the catalog's head.
+
+| Action | With Argo CD |
+|---|---|
+| Update | Installs the build the catalog serves: the catalog stays as Git sets it, the channel the Subscription has in Git is kept, and the Subscription is recreated with Argo CD's tracking ([what it changes](docs/CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator)). Any other image is refused: change the image in Git. The catalog's image must have the Subscription's channel |
+| A newer nightly in Quay | The Status page shows it with the image reference to put in Git; nothing happens on the cluster until Git changes |
+| Re-deploy, Reinstall | Off: they delete the Subscription for minutes. Update installs the catalog's build again instead |
+| DSC repairs, Diagnostics *disable component* | Off when Argo CD manages the DSC: change the DSC in Git |
+| Dashboard Dev, test resources, other Diagnostics fixes | Unchanged: they touch objects Argo CD does not manage |
+
+The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/last-applied-configuration` among them) and the labels onto the recreated Subscription. Argo CD may notice the recreation and run one automated self-heal sync of the Subscription; it finds it unchanged.
+
+**"Argo CD application ... sets the image of CatalogSource ... in Git".** Update was asked for another image (an old page, a script). Only the build the catalog serves can be installed; change the image in Git, wait for Argo CD to sync, then run Update.
+
+**"The CatalogSource image was changed to ... while Update waited".** Argo CD synced a new image from Git between the start of Update and the catalog serving the build. Update stopped before it touched the operator. Run it again once the catalog serves the new build (the Status page shows *Install pending*).
+
+**First install.** When Argo CD has just created the catalog and the Subscription, OLM installs the head by itself; the Status page shows *OLM installing* and the install button waits (Update refuses while the Subscription's InstallPlan is not Complete or Failed). Once OLM is done, or if its InstallPlan failed, *Install the build the catalog serves* recreates the Subscription. *Create the DataScienceCluster* is off: the Application renders it from Git on its next sync.
+
+**Failed install.** If the build the catalog serves does not come up, the restore puts the previous Subscription back (with Argo CD's tracking) and OLM installs the catalog's build again, which is the one that failed: change the catalog image in Git to go back. If the tool dies between deleting and recreating the Subscription, Argo CD's self-heal recreates it from Git within seconds and OLM installs the head, so nothing is lost.
+
+**"The Subscription changed while Update ran ..."** (`conflict`): Argo CD synced a new source, channel or `startingCSV` pin from Git after the old CSV was deleted. The Subscription is recreated with Git's current settings and OLM installs that channel's build; check the Status page, then run Update if it shows *Install pending*.
+
+**"OLM installed ..., but it is not the build that was verified"** (`install_mismatch`): the catalog switched to another build (a Git change) between the check and the install. The running operator is kept; run Update again to install what the catalog serves now.
+
+**"The catalog did not serve ... within ..."** after a change in Git: OLM replaces the catalog pod when the image changes; check the pod in `openshift-marketplace` (`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`) and [§4](#4-catalogsource-not-ready) for pull problems.
+
+**Checking what Argo CD tracks.** Which Application renders the catalog and the Subscription, and its sync policy:
+
+```bash
+oc get applications.argoproj.io -A -o json | jq -r '.items[] | select(any(.status.resources[]?; .kind=="CatalogSource" and .name=="rhoai-catalog-dev")) | "\(.metadata.namespace)/\(.metadata.name): syncPolicy=\(.spec.syncPolicy // {} | tostring)"'
+```
+
+**Installing the updater next to Argo CD.** Install it with the release's `install.sh` as usual. Its objects carry no tracking annotation, so Argo CD [never prunes them](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
 
 ## Reference: objects of the updater itself
 

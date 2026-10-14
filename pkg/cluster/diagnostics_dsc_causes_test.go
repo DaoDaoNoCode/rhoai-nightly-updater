@@ -174,6 +174,24 @@ func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T)
 	assertWrites(t, w.f)
 }
 
+// Under Argo CD the install guidance says to add the operator in Git first;
+// the commands stay for reference.
+func TestDSCCheck_MissingPrerequisiteUnderGitOps(t *testing.T) {
+	w := newDSCWorld(t, liveMissingPrereqs())
+	w.f.obj("GET", subscriptionPath(), map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS, "annotations": trackingID("Subscription", SubNS, SubName)}})
+	w.f.obj("GET", namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), map[string]interface{}{"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS, "annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}})
+	out := checkDataScienceCluster(w.c)
+	js, ok := problemsByID(out)["prerequisite-missing-job-set"]
+	if !ok {
+		t.Fatalf("problems = %v", ids(out))
+	}
+	if !strings.Contains(js.Fix, `Argo CD application "`+testArgoApp+`" manages RHOAI here: add Job Set Operator to Git`) ||
+		!strings.Contains(js.Fix, "the tool does not install operators") || !strings.Contains(js.TechnicalCmd, "name: openshift-jobset-operator") {
+		t.Fatalf("job-set fix = %q\ncmd = %q", js.Fix, js.TechnicalCmd)
+	}
+	assertWrites(t, w.f)
+}
+
 func TestDSCCheck_ReadyWithOptionalPrerequisiteOnly(t *testing.T) {
 	w := newDSCWorld(t, []dcond{
 		{"type": "Ready", "status": "True"},

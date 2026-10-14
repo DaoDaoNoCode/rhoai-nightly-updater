@@ -56,6 +56,20 @@ Common to Update, Re-deploy and Reinstall:
 | 4 | Subscription `rhods-operator` | create once: channel detected from the new catalog. `installPlanApproval`, `config` and other fields are kept; `startingCSV` is dropped |
 | 5 | — | wait up to 8 min for the CSV to reach `Succeeded` |
 
+### Update when Argo CD manages the operator
+When CatalogSource `rhoai-catalog-dev` or Subscription `rhods-operator` has Argo CD's tracking annotation (`argocd.argoproj.io/tracking-id`), Git is the source of truth: Argo CD puts back what differs from Git and recreates them as soon as they are deleted. Update then installs the build the catalog serves, writes nothing Argo CD manages, and deletes nothing it manages for longer than one request (see [RUNBOOK §13](../RUNBOOK.md#13-clusters-managed-by-argo-cd)):
+
+| # | Object (ns) | Change |
+|---|---|---|
+| — | — | refuses, with *Nothing was changed*, when the image is not the catalog's current `spec.image` (Git picks the build), the catalog does not exist, the managed Subscription's source is not `rhoai-catalog-dev`, the catalog's image has no channel of the Subscription's name, or nothing is installed yet and OLM is still working on the Subscription's InstallPlan (the first install Argo CD started) |
+| 1 | CatalogSource `rhoai-catalog-dev` (`openshift-marketplace`) | nothing: left as Git sets it |
+| 2 | — | wait until a registry pod runs the image and is Ready, the catalog is READY, and its PackageManifest lists the verified build (head CSV, operator image and creation time); OLM may still be replacing the pod after a change in Git. Then re-read the catalog: if the image changed meanwhile (Argo CD syncing a new one from Git), or Git pins `startingCSV` to another build, Update stops before step 3 |
+| 3 | InstallPlan of the current CSV, then the current CSV | delete (the CSV by UID) |
+| 4 | Subscription `rhods-operator` | re-read; if Argo CD manages it and its source, channel or `startingCSV` pin changed meanwhile, stop (`conflict`): the restore below recreates it from Git's current spec. Else delete (by the UID just read), then at once SSA from the live spec with the **same channel** and settings (and `startingCSV` when Git pins it; an unmanaged Subscription takes the build's channel, as in any Update), plus its annotations (Argo CD's tracking and last-applied among them) and labels (a self-heal sync that follows finds it unchanged) |
+| 5 | — | wait up to 8 min for the CSV to reach `Succeeded`, then check that its `containerImage` and `createdAt` annotations are the verified build's (`install_mismatch` otherwise, also when it has none; the running operator is kept). When the CSV cannot be read, the result says the build was not confirmed |
+
+The restore after a failure re-applies the previous Subscription with those annotations; the catalog still serves Git's build, so OLM installs that build again. Re-deploy and Reinstall refuse while Argo CD manages the catalog or the Subscription, and so does *Create the DataScienceCluster* (Git creates it).
+
 ### Re-deploy the same version
 Delete the Subscription, delete the CSV, wait for it to go, recreate the Subscription with the same source and channel. With Manual approval `startingCSV` is pinned to the installed CSV. With Automatic approval it refuses if the channel head is no longer the installed CSV.
 
@@ -78,7 +92,7 @@ Downgrades need the confirmation checkbox. The DSC, DSCI and operands are not de
 | Action | Change |
 |---|---|
 | Preview and create DataScienceCluster | `POST` a DSC (defaults from the installed CSV's `alm-examples`, or `DSC_SAMPLE_REF`). Only when none exists |
-| Remove invalid fields / remove extra components / reset to version defaults | Merge-patch of the DSC spec, after a preview. A removal that fails the disable-component preconditions is refused |
+| Remove invalid fields / remove extra components / reset to version defaults | Merge-patch of the DSC spec, after a preview. A removal that fails the disable-component preconditions is refused, and so is any repair of a DSC Argo CD manages |
 
 ## 6. Diagnostics automatic fixes
 
@@ -88,7 +102,7 @@ Downgrades need the confirmation checkbox. The DSC, DSCI and operands are not de
 | `delete-stale-installplans` | delete InstallPlans in `redhat-ods-operator` | phase `Failed` only. A plan the Subscription references is deleted only while the Subscription is `UpgradePending` |
 | `assist-rollout` | strategic-merge-patch `spec.strategy.rollingUpdate.maxUnavailable: 1` on one Deployment in `redhat-ods-operator`/`redhat-ods-applications`; the original value is saved in annotation `rhoai-nightly-updater.opendatahub.io/assist-rollout` | RollingUpdate with effective maxUnavailable 0; new pods Unschedulable only for cpu/memory/pod count; ≥2 replicas and 2 ready pods; the field is not owned by an operator's server-side apply. No pods are deleted |
 | `restore-rollout-strategy` | puts the saved maxUnavailable back and removes the annotation | the assist annotation is present |
-| `disable-component:<name>` | DSC `spec.components.<name>.managementState: Removed` | only `llamastackoperator`, `feastoperator`, `trustyai`, `ray`, `kueue`, `sparkoperator`, `trainer`, `trainingoperator`; present and not already Removed; no blockers that would leave it stuck in deletion |
+| `disable-component:<name>` | DSC `spec.components.<name>.managementState: Removed` | only `llamastackoperator`, `feastoperator`, `trustyai`, `ray`, `kueue`, `sparkoperator`, `trainer`, `trainingoperator`; present and not already Removed; no blockers that would leave it stuck in deletion; the DSC is not managed by Argo CD |
 | `restart-module-operator:<module>` | merge-patch (uid + resourceVersion) of the module operator Deployment's pod-template annotation `kubectl.kubernetes.io/restartedAt` (what `oc rollout restart` does); Kubernetes rolls the pods | the module still reports a prerequisite that is now installed (and whose singleton operand was read and exists), or scans at least 5 minutes apart keep seeing its module CR lag the same generation; the Deployment is the known operator of that module or the only Platform-owned one for it; ≥1 available pod; not the RHOAI operator (OLM owns it); no `failurePolicy: Fail` webhook served by its pods would go unserved (Recreate, or maxUnavailable ≥ available pods) |
 
 Removed fixes (refused if an old page sends them): `recreate-subscription`, `fix-maas-gateway-annotation`, `restart-operator`. Every other finding is guidance only. Prerequisite operators (JobSet, cert-manager, LeaderWorkerSet, …) are never installed by the tool: Diagnostics prints the commands.

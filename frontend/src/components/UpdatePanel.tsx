@@ -62,8 +62,9 @@ import {
 import { describeError, describeQuayError, describeQuayText } from "../errors";
 import { useOperation } from "../state/AppState";
 import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
-import { STEP_SETS } from "../operationSteps";
-import { buildFromImage, compareTagToInstalled, parseImageRef } from "../build";
+import { GITOPS_UPDATE_STEPS, STEP_SETS } from "../operationSteps";
+import { gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp } from "../gitops";
+import { buildFromImage, compareTagToInstalled, formatBuildDate, parseImageRef } from "../build";
 
 // ---------------------------------------------------------------------------
 // Shared confirmation dialog (hero "Update to latest" and the form below)
@@ -83,6 +84,8 @@ interface UpdateConfirmModalProps {
 
 function installedDescription(status: StatusResponse | null): React.ReactNode {
   if (!status || status.csv.phase === "Not Found" || !status.csv.name) return "Not installed";
+  // Under Argo CD the catalog image is Git's choice; the operator may still run an older build.
+  if (gitOpsInstallState(status) === "pending") return <>{status.csv.name} <span className="pf-v6-u-text-color-subtle">(not the build the catalog serves)</span></>;
   if (status.nightly?.installed) return <BuildSummary build={status.nightly.installed} />;
   const source = status.subscription.source ? ` from ${status.subscription.source} / ${status.subscription.channel}` : "";
   return `${status.csv.name}${source}`;
@@ -103,7 +106,11 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
 
   const isFirstInstall = !status?.csv.phase || status.csv.phase === "Not Found";
   const csvFailed = status?.csv.phase === "Failed";
-  const sameAsInstalled = !!(target && status?.catalogSource.image && status.catalogSource.image === target.image);
+  const gitOpsApp = operatorGitOpsApp(status);
+  const gitOpsState = gitOpsInstallState(status);
+  // Under Argo CD the target is always the catalog's image; it is only the
+  // installed build when the operator is known to run what the catalog serves.
+  const sameAsInstalled = !!(target && status?.catalogSource.image && status.catalogSource.image === target.image) && (gitOpsState === null || gitOpsState === "installed");
   const dashboardActive = !!override?.active;
 
   const handleVerifyNodes = async () => {
@@ -122,10 +129,10 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
     }
   };
 
-  const title = isFirstInstall ? "Install this RHOAI nightly?" : "Update RHOAI to this build?";
+  const title = isFirstInstall ? "Install this RHOAI nightly?" : gitOpsApp ? "Install the build the catalog serves?" : "Update RHOAI to this build?";
   const confirmLabel = dashboardActive
-    ? `Revert Dashboard Dev and ${isFirstInstall ? "install" : "update"}`
-    : isFirstInstall ? "Install" : "Update";
+    ? `Revert Dashboard Dev and ${isFirstInstall || gitOpsApp ? "install" : "update"}`
+    : isFirstInstall || gitOpsApp ? "Install" : "Update";
 
   return (
     <Modal
@@ -160,7 +167,9 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             {sameAsInstalled && (
               <StackItem>
                 <Alert variant="info" isInline isPlain component="p" title="This is the build that is already installed.">
-                  The update installs it again from a fresh catalog. To re-deploy without changing the catalog, use Re-deploy operator.
+                  {gitOpsApp
+                    ? "Installing it again removes the current operator version and lets OLM install it from the same catalog (a re-deploy)."
+                    : "The update installs it again from a fresh catalog. To re-deploy without changing the catalog, use Re-deploy operator."}
                 </Alert>
               </StackItem>
             )}
@@ -168,6 +177,17 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
               <StackItem>
                 <Alert variant="info" isInline isPlain component="p" title="The installed operator is Failed.">
                   Updating removes the failed version and installs this build, which is the usual fix for a broken nightly.
+                </Alert>
+              </StackItem>
+            )}
+            {gitOpsApp && (
+              <StackItem>
+                <Alert variant="info" isInline component="p" title={`Argo CD application "${gitOpsApp}" manages the operator`}>
+                  The catalog image stays as Git sets it. Update installs the build the catalog serves
+                  {status?.catalogServes?.csv ? ` (${status.catalogServes.csv})` : ""}
+                  {status?.subscription.managedBy && status.subscription.channel ? ` and keeps the channel Git sets (${status.subscription.channel})` : ""}.
+                  The Subscription is deleted and at once recreated with Argo CD&apos;s tracking, so Argo CD does not recreate it
+                  from Git in between. If the image changes in Git meanwhile, Update stops before it changes the operator.
                 </Alert>
               </StackItem>
             )}
@@ -189,7 +209,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
               </Content>
             </StackItem>
             <StackItem>
-              <StepsPreview steps={UPDATE_PLAN} idPrefix="update-step" />
+              <StepsPreview steps={gitOpsApp ? GITOPS_UPDATE_STEPS : UPDATE_PLAN} idPrefix="update-step" />
             </StackItem>
             {status && prerequisitesReady(status) && (
               <StackItem>
@@ -273,17 +293,22 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
 
   const prerequisitesMet = prerequisitesReady(status);
   const isFirstInstall = !status?.csv.phase || status.csv.phase === "Not Found";
-  const trimmed = image.trim();
+  // Under Argo CD, Git sets the catalog image and Update installs the build
+  // the catalog serves: the image is not a choice here.
+  const gitOpsApp = operatorGitOpsApp(status);
+  const gitOpsState = gitOpsInstallState(status);
+  const gitImage = gitOpsApp ? status?.catalogSource.image ?? "" : null;
+  const trimmed = (gitImage ?? image).trim();
   const ref = trimmed ? parseImageRef(trimmed) : null;
 
   // Prefill with the newest nightly once it is known (the user can replace it).
   const autoFillDone = useRef(false);
   useEffect(() => {
-    if (autoFillDone.current || !latest?.image || image) return;
+    if (autoFillDone.current || !latest?.image || image || gitImage !== null) return;
     autoFillDone.current = true;
     setImage(latest.image);
     setAutoFilled(true);
-  }, [latest, image]);
+  }, [latest, image, gitImage]);
 
   // A build of an older release line is always refused by the backend
   // (downgradeCheck); same-line builds are checked there from the bundle.
@@ -309,16 +334,28 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
     if (phase === "Failed") items.push({ label: "The operator is Failed; updating to a newer build is the usual fix", state: "warn" });
     else if (phase && phase !== "Succeeded" && phase !== "Not Found") items.push({ label: `The operator is ${phase}; updating replaces that install`, state: "warn" });
     else if (phase === "Succeeded") items.push({ label: `Operator ${status.csv.version || status.csv.name} is healthy`, state: "pass" });
+    if (gitOpsState === "pending") {
+      const serves = status.catalogServes;
+      const built = formatBuildDate(serves?.built);
+      items.push({ label: `The catalog serves ${serves?.csv ?? "another build"}${built ? ` (built ${built})` : ""}, which is not installed`, state: "info" });
+    } else if (gitOpsState === "installed") {
+      items.push({ label: "The operator already runs the build the catalog serves; installing again re-deploys it", state: "info" });
+    } else if (gitOpsState === "updating") {
+      items.push({ label: "OLM is replacing the catalog pod after the image changed in Git", state: "warn" });
+    } else if (gitOpsState === "installing") {
+      items.push({ label: `OLM is installing the build Git set${status.installPlan ? ` (InstallPlan ${status.installPlan.name} is ${status.installPlan.phase})` : ""}`, state: "warn" });
+    }
     if (override?.active) items.push({ label: "A Dashboard Dev session is active; the update will offer to revert it", state: "info" });
     // The backend's view (any tab, any user), not only this tab's state.
     const busy = operation.server.inProgress || operation.running || operation.state.reconcile.active;
     items.push(busy && blocker ? { label: blocker, state: "fail" } : { label: "No other operation is running", state: "pass" });
     return items;
-  }, [status, override, blocker, operation.server.inProgress, operation.running, operation.state.reconcile.active]);
+  }, [status, override, blocker, gitOpsState, operation.server.inProgress, operation.running, operation.state.reconcile.active]);
 
   const disabledReason = blocker
     ?? (!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null)
-    ?? (!trimmed ? "Enter an FBC image, or click Fetch latest." : null)
+    ?? (!trimmed ? (gitImage !== null ? "The nightly catalog has no image in Git." : "Enter an FBC image, or click Fetch latest.") : null)
+    ?? gitOpsInstallWaitReason(gitOpsState)
     ?? (olderLine ? `This build (${ref?.tag}) is from an older release line than the installed ${status?.csv.version}. Update can't go back; use Reinstall.` : null);
 
   // Warn when someone else changed the operator in the last 10 minutes.
@@ -397,35 +434,38 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
         <Form onSubmit={(e) => e.preventDefault()}>
           <FormGroup
             label="FBC image"
-            labelInfo={autoFilled ? <TagLabel color="blue">Newest nightly</TagLabel> : undefined}
+            labelInfo={gitImage !== null ? <TagLabel color="purple">From Git</TagLabel> : autoFilled ? <TagLabel color="blue">Newest nightly</TagLabel> : undefined}
             fieldId="fbc-image"
           >
             <InputGroup>
               <InputGroupItem isFill>
                 <TextInput
                   id="fbc-image"
-                  value={image}
+                  value={gitImage ?? image}
                   onChange={(_e, val) => {
                     setImage(val);
                     setAutoFilled(false);
                   }}
+                  readOnlyVariant={gitImage !== null ? "default" : undefined}
                   placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
                   aria-describedby="fbc-image-help"
                 />
               </InputGroupItem>
-              <InputGroupItem>
-                <TooltipButton
-                  variant="control"
-                  icon={<SyncAltIcon />}
-                  aria-label="Fetch latest"
-                  onClick={handleFetchLatest}
-                  isLoading={fetchingLatest}
-                  isDisabled={fetchingLatest}
-                  disabledReason={!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null}
-                >
-                  <span className="pf-v6-u-display-none pf-v6-u-display-inline-on-sm">Fetch latest</span>
-                </TooltipButton>
-              </InputGroupItem>
+              {gitImage === null && (
+                <InputGroupItem>
+                  <TooltipButton
+                    variant="control"
+                    icon={<SyncAltIcon />}
+                    aria-label="Fetch latest"
+                    onClick={handleFetchLatest}
+                    isLoading={fetchingLatest}
+                    isDisabled={fetchingLatest}
+                    disabledReason={!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null}
+                  >
+                    <span className="pf-v6-u-display-none pf-v6-u-display-inline-on-sm">Fetch latest</span>
+                  </TooltipButton>
+                </InputGroupItem>
+              )}
               {trimmed && (
                 <InputGroupItem>
                   <Tooltip content="View build contents">
@@ -437,8 +477,10 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
             <FormHelperText>
               <HelperText id="fbc-image-help">
                 <HelperTextItem>
-                  Paste a build from <a href="https://redhat.enterprise.slack.com/archives/C07ANR2U56C" target="_blank" rel="noopener noreferrer">#rhoai-build-notifications</a>,
-                  pick one in Build Explorer, or click Fetch latest.
+                  {gitImage !== null
+                    ? <>Argo CD application &quot;{gitOpsApp}&quot; sets this image in Git. To install another build, change it there first.</>
+                    : <>Paste a build from <a href="https://redhat.enterprise.slack.com/archives/C07ANR2U56C" target="_blank" rel="noopener noreferrer">#rhoai-build-notifications</a>,
+                  pick one in Build Explorer, or click Fetch latest.</>}
                 </HelperTextItem>
               </HelperText>
             </FormHelperText>
@@ -467,7 +509,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
                 onClick={requestUpdate}
                 disabledReason={disabledReason}
               >
-                {isFirstInstall ? "Install this build" : "Update to this build"}
+                {gitImage !== null ? (gitOpsState === "installed" ? "Install from the catalog again" : "Install the build the catalog serves") : isFirstInstall ? "Install this build" : "Update to this build"}
               </TooltipButton>
             </FlexItem>
             <FlexItem>

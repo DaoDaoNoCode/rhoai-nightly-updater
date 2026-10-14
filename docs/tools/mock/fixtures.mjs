@@ -455,6 +455,30 @@ export function diagnostics(name) {
 
 // --- Update progress (UpdateStep events, as the backend streams them) ------
 
+/** The GitOps install (Argo CD manages the operator), step by step. */
+export function gitOpsUpdateSteps(image) {
+  return [
+    ["validate_prerequisites", "running", "Checking prerequisites..."],
+    ["validate_prerequisites", "running", "Verifying the selected catalog image..."],
+    ["validate_prerequisites", "success", "Prerequisites validated"],
+    ["save_snapshot", "running", "Saving deployment snapshot..."],
+    ["save_snapshot", "success", "Snapshot saved"],
+    ["apply_catalog_source", "success", "CatalogSource left as Git sets it", image],
+    ["wait_catalog_ready", "running", "Waiting for the catalog to serve the build..."],
+    ["wait_catalog_ready", "success", "CatalogSource serves the build"],
+    ["detect_channel", "success", "Channel: beta", "beta"],
+    ["delete_csv", "running", "Deleting old CSV and InstallPlan..."],
+    ["delete_csv", "success", "Old CSV and InstallPlan deleted"],
+    ["apply_subscription", "running", "Recreating the Subscription..."],
+    ["apply_subscription", "success", "Subscription applied", "beta"],
+    ["verify_installplan", "running", "Waiting for OLM to install the operator..."],
+    ["verify_installplan", "running", "InstallPlan install-9fj2k: Installing"],
+    ["verify_installplan", "running", "CSV rhods-operator.3.6.0-ea.1: Installing (InstallWaiting)"],
+    ["verify_installplan", "success", "Operator installed: rhods-operator.3.6.0-ea.1", "rhods-operator.3.6.0-ea.1"],
+    ["operation_complete", "success", "RHOAI nightly update complete: rhods-operator.3.6.0-ea.1 is installed."],
+  ].map(([step, status, message, detail]) => ({ step, status, message, ...(detail ? { detail } : {}) }));
+}
+
 /** The update pipeline of a successful update, step by step. */
 export function updateSteps(image) {
   return [

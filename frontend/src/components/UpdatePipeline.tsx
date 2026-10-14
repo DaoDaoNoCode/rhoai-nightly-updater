@@ -18,7 +18,7 @@ import CheckCircleIcon from "@patternfly/react-icons/dist/esm/icons/check-circle
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import MinusCircleIcon from "@patternfly/react-icons/dist/esm/icons/minus-circle-icon";
 import type { UpdateStep } from "../types";
-import { PIPELINE_TITLES, RESTORE_STEP, STEP_SETS, type OperationKind, type PipelineStepDef } from "../operationSteps";
+import { GITOPS_UPDATE_STEPS, PIPELINE_TITLES, RESTORE_STEP, STEP_SETS, type OperationKind, type PipelineStepDef } from "../operationSteps";
 import { formatElapsed } from "../utils";
 import { TagLabel } from "./StatusLabel";
 import { InlineItems } from "./InlineItems";
@@ -34,6 +34,8 @@ export interface UpdatePipelineProps {
   operationType?: OperationKind;
   /** Who started it, when it is not this tab's own run. */
   startedBy?: string;
+  /** Argo CD manages the operator: an Update runs its GitOps steps. */
+  gitOps?: boolean;
 }
 
 function formatStepDuration(ms: number): string {
@@ -90,8 +92,8 @@ function stepDuration(defs: PipelineStepDef[], index: number, events: UpdateStep
 }
 
 /** The pipeline's steps, plus the restore step once the backend runs it. */
-export function pipelineStepsFor(kind: OperationKind, events: UpdateStep[]): PipelineStepDef[] {
-  const defs = STEP_SETS[kind];
+export function pipelineStepsFor(kind: OperationKind, events: UpdateStep[], gitOps = false): PipelineStepDef[] {
+  const defs = kind === "update" && gitOps ? GITOPS_UPDATE_STEPS : STEP_SETS[kind];
   return events.some((e) => e.step === RESTORE_STEP.id) ? [...defs, RESTORE_STEP] : defs;
 }
 
@@ -106,8 +108,9 @@ export const UpdatePipeline: React.FC<UpdatePipelineProps> = ({
   error,
   operationType = "update",
   startedBy,
+  gitOps = false,
 }) => {
-  const pipelineSteps = pipelineStepsFor(operationType, events);
+  const pipelineSteps = pipelineStepsFor(operationType, events, gitOps);
   const pipelineTitle = PIPELINE_TITLES[operationType];
 
   // Tick the elapsed timer while the pipeline is active.

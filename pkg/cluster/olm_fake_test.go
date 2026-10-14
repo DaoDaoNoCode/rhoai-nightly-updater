@@ -40,6 +40,13 @@ type fakeOLM struct {
 	verifyState  string // state of verification catalogs, "" = READY
 	mainChannels *string
 	rejectDryRun bool
+	// gitOpsPods: the nightly catalog's registry pod list follows its
+	// image, as OLM replaces the pod (catalogPods is ignored for it).
+	gitOpsPods bool
+	catalogRV  int // resourceVersion of the nightly catalog
+	// csvAnnotations go on every CSV the fake creates (the bundle's
+	// containerImage and createdAt, which identify a nightly build).
+	csvAnnotations map[string]interface{}
 
 	onSubscribe func(f *fakeOLM, spec map[string]interface{})
 	onApprove   func(f *fakeOLM, ip string)
@@ -87,8 +94,16 @@ func (f *fakeOLM) installed(csv string, spec map[string]interface{}) *fakeOLM {
 
 func (f *fakeOLM) addCSV(name, phase string) {
 	f.csvSeq++
+	meta := map[string]interface{}{"name": name, "uid": fmt.Sprintf("uid-%s-%d", name, f.csvSeq)}
+	if f.csvAnnotations != nil {
+		ann := map[string]interface{}{}
+		for k, v := range f.csvAnnotations {
+			ann[k] = v
+		}
+		meta["annotations"] = ann
+	}
 	f.csvs[name] = map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name, "uid": fmt.Sprintf("uid-%s-%d", name, f.csvSeq)},
+		"metadata": meta,
 		"spec":     map[string]interface{}{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, SubName+".")},
 		"status":   map[string]interface{}{"phase": phase},
 	}
@@ -184,6 +199,12 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			channels = f.stableChans
 		}
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":%q},"status":{"packageName":%q,"catalogSource":%q,"catalogSourceNamespace":%q,"defaultChannel":"stable-3.x","channels":%s}}]}`, SubName, SubName, source, CatalogNS, channels)
+	case strings.HasSuffix(p, "/namespaces/"+CatalogNS+"/pods") && f.gitOpsPods && r.URL.Query().Get("labelSelector") == "olm.catalogSource="+CatalogName:
+		image := ""
+		if f.catalog != nil {
+			image, _ = f.catalog["spec"].(map[string]interface{})["image"].(string)
+		}
+		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-catalog-dev-abc"},"spec":{"containers":[{"image":%q}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, image)
 	case strings.HasSuffix(p, "/namespaces/"+CatalogNS+"/pods"):
 		_, _ = io.WriteString(w, f.catalogPods)
 	case strings.HasSuffix(p, "/subscriptions/"+SubName):
@@ -299,7 +320,21 @@ func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name stri
 			return
 		}
 		if !verify {
+			// An apply keeps annotations another manager set (Argo CD's
+			// tracking annotation).
+			old, _ := f.catalog["metadata"].(map[string]interface{})
+			if ann := old["annotations"]; ann != nil {
+				meta, _ := body["metadata"].(map[string]interface{})
+				if meta == nil {
+					meta = map[string]interface{}{}
+					body["metadata"] = meta
+				}
+				if meta["annotations"] == nil {
+					meta["annotations"] = ann
+				}
+			}
 			f.catalog = body
+			f.catalogRV++
 		}
 		_, _ = io.WriteString(w, `{}`)
 	default:
@@ -308,12 +343,20 @@ func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name stri
 			return
 		}
 		image, state := "", "READY"
+		meta := map[string]interface{}{"name": name}
 		if !verify {
 			image, _ = f.catalog["spec"].(map[string]interface{})["image"].(string)
+			if m, _ := f.catalog["metadata"].(map[string]interface{}); m != nil {
+				for k, v := range m {
+					meta[k] = v
+				}
+			}
+			meta["resourceVersion"] = fmt.Sprint(f.catalogRV)
 		} else if f.verifyState != "" {
 			state = f.verifyState
 		}
-		_, _ = fmt.Fprintf(w, `{"spec":{"image":%q},"status":{"connectionState":{"lastObservedState":%q}}}`, image, state)
+		writeJSON(w, map[string]interface{}{"metadata": meta, "spec": map[string]interface{}{"image": image},
+			"status": map[string]interface{}{"connectionState": map[string]interface{}{"lastObservedState": state}}})
 	}
 }
 
@@ -342,7 +385,14 @@ func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body
 			f.csvSeq++
 			uid = fmt.Sprintf("uid-sub-%d", f.csvSeq)
 		}
-		f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName, "uid": uid}, "spec": spec, "status": map[string]interface{}{}}
+		meta := map[string]interface{}{"name": SubName, "uid": uid}
+		bodyMeta, _ := body["metadata"].(map[string]interface{})
+		for _, k := range []string{"annotations", "labels"} {
+			if bodyMeta[k] != nil {
+				meta[k] = bodyMeta[k]
+			}
+		}
+		f.sub = map[string]interface{}{"metadata": meta, "spec": spec, "status": map[string]interface{}{}}
 		if f.onSubscribe != nil {
 			f.onSubscribe(f, spec)
 		}

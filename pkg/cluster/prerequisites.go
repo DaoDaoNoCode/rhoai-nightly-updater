@@ -917,6 +917,9 @@ func prerequisiteProblem(c *Client, d *dependency) Problem {
 			break
 		}
 		evidence = append(evidence, plan.evidence...)
+		if g, err := readOperatorGitOps(c); err == nil && g.active() {
+			fixes = append(fixes, fmt.Sprintf("Argo CD application %q manages RHOAI here: add %s to Git (with the odh-gitops chart, enable it under dependencies in the values) rather than applying the objects below by hand, which Argo CD would not know about; they are listed for reference.", nonEmpty(g.subscriptionApp, g.catalogApp), name))
+		}
 		fixes = append(fixes, fmt.Sprintf("Install %s with the commands below (as a cluster administrator; the tool does not install operators). %s", name, strings.Join(plan.notes, " ")))
 		p.TechnicalCmd = plan.script
 	}

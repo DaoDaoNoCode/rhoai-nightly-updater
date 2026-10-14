@@ -157,7 +157,7 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	})
 
 	run(func() {
-		exists, err := checkDSCExists(c)
+		exists, managedBy, err := checkDSCExists(c)
 		mu.Lock()
 		if err != nil {
 			// Transient API errors (429, 503) happen during operator reinstall.
@@ -166,6 +166,7 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 			status.DSCExists = true
 		} else {
 			status.DSCExists = exists
+			status.DSCManagedBy = managedBy
 		}
 		mu.Unlock()
 	})
@@ -192,6 +193,12 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	// Cached per installed catalog image; only the first poll after an image
 	// change waits for Quay (bounded by nightlyStatusTimeout).
 	status.Nightly = getNightlyStatus(c.ctx, quayAuth, status.Subscription, status.CatalogSource)
+	// Under Argo CD the catalog image is Git's choice and can run ahead of
+	// the installed operator (a same-version build OLM does not install by
+	// itself), so say what the catalog serves.
+	if status.CatalogSource.ManagedBy != "" || status.Subscription.ManagedBy != "" {
+		status.CatalogServes = readCatalogServes(c, status.Subscription, status.CatalogSource, status.CSV)
+	}
 
 	if len(errs) > 0 {
 		status.Errors = errs
@@ -297,7 +304,8 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
 	}
 	var sub struct {
-		Spec struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
 			Source  string `json:"source"`
 			Channel string `json:"channel"`
 		} `json:"spec"`
@@ -319,10 +327,11 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 	}
 	return subscriptionDetails{
 		info: types.SubscriptionInfo{
-			Name:    SubName,
-			Source:  sub.Spec.Source,
-			Channel: sub.Spec.Channel,
-			State:   state,
+			Name:      SubName,
+			Source:    sub.Spec.Source,
+			Channel:   sub.Spec.Channel,
+			State:     state,
+			ManagedBy: argoApplication(sub.Metadata.Annotations, "Subscription", SubNS, SubName),
 		},
 		installedCSV: installed,
 		found:        true,
@@ -447,7 +456,8 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, fmt.Errorf("request failed: %w", err)
 	}
 	var result struct {
-		Spec struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
 			Image string `json:"image"`
 		} `json:"spec"`
 		Status struct {
@@ -466,10 +476,11 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 	}
 
 	return types.CatalogSourceInfo{
-		Exists: true,
-		Name:   CatalogName,
-		Image:  result.Spec.Image,
-		State:  state,
+		Exists:    true,
+		Name:      CatalogName,
+		Image:     result.Spec.Image,
+		State:     state,
+		ManagedBy: argoApplication(result.Metadata.Annotations, "CatalogSource", CatalogNS, CatalogName),
 	}, nil
 }
 
@@ -714,24 +725,28 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 }
 
 // checkDSCExists returns true if at least one DataScienceCluster exists,
-// listed at the newest served version that works (listServed). No served
-// version (CRD not installed) is not an error: it returns false.
-func checkDSCExists(c *Client) (bool, error) {
+// listed at the newest served version that works (listServed), and the Argo
+// CD application that tracks it. No served version (CRD not installed) is not
+// an error: it returns false.
+func checkDSCExists(c *Client) (exists bool, managedBy string, err error) {
 	// limit=1: only existence matters, not the (large) objects.
 	r, err := listServed(c, dscGroup, dscListFmt, url.Values{"limit": {"1"}}, dscFallbackVersions)
 	if err != nil {
-		return false, fmt.Errorf("request failed: %w", err)
+		return false, "", fmt.Errorf("request failed: %w", err)
 	}
 	if r.Version == "" {
-		return false, nil
+		return false, "", nil
 	}
-	dscBody := r.Body
-
 	var dscList struct {
-		Items []json.RawMessage `json:"items"`
+		Items []struct {
+			Metadata objectMeta `json:"metadata"`
+		} `json:"items"`
 	}
-	if err := json.Unmarshal(dscBody, &dscList); err != nil {
-		return false, fmt.Errorf("unmarshal: %w", err)
+	if err := json.Unmarshal(r.Body, &dscList); err != nil {
+		return false, "", fmt.Errorf("unmarshal: %w", err)
 	}
-	return len(dscList.Items) > 0, nil
+	if len(dscList.Items) == 0 {
+		return false, "", nil
+	}
+	return true, argoApplication(dscList.Items[0].Metadata.Annotations, "DataScienceCluster", "", dscList.Items[0].Metadata.Name), nil
 }
