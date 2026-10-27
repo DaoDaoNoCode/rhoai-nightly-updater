@@ -316,3 +316,30 @@ func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T
 		}
 	}
 }
+
+// Someone replaces the Subscription right before Update deletes it: the
+// UID-guarded delete leaves the replacement alone, and so does the restore
+// (it would otherwise read the replacement's UID and delete it).
+func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T) {
+	f := gitOpsFake(t)
+	subPath := subscriptionPath()
+	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodDelete && r.URL.Path == subPath && f.sub != nil {
+			f.sub["metadata"].(map[string]interface{})["uid"] = "uid-sub-replacement"
+		}
+		return false
+	}
+	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != "conflict" || !strings.Contains(result.Message, "replaced by someone else") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	f.mu.Lock()
+	var uid interface{}
+	if f.sub != nil {
+		uid = f.sub["metadata"].(map[string]interface{})["uid"]
+	}
+	f.mu.Unlock()
+	if uid != "uid-sub-replacement" {
+		t.Fatalf("Subscription uid = %v, want the replacement's; writes: %v", uid, f.writes())
+	}
+}

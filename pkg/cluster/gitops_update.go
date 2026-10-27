@@ -289,6 +289,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		liveMeta, _ := live["metadata"].(map[string]interface{})
 		liveUID, _ := liveMeta["uid"].(string)
 		if err := deleteSubscriptionWithUID(c, liveUID); errors.Is(err, errReplacedMeanwhile) {
+			recovery.subscriptionReplaced = true
 			return fail("The Subscription was replaced by someone else while Update ran, so it was left unchanged. Check it before running Update again.", "conflict")
 		} else if err != nil {
 			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))

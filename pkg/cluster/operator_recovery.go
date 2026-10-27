@@ -160,6 +160,11 @@ type operatorRecovery struct {
 	catalogRestore func(r *operatorRecovery, c *Client) []string
 	// subscriptionChanged: the Subscription was deleted or replaced.
 	subscriptionChanged bool
+	// subscriptionReplaced: the operation found another Subscription in
+	// place of the one it was about to delete (a UID-guarded delete
+	// conflicted). The restore leaves that one alone: it neither deletes
+	// nor overwrites it.
+	subscriptionReplaced bool
 	// csvRemoved: the operation deleted the previously installed CSV
 	// (removedCSVs names it), so OLM must reinstall the previous version.
 	csvRemoved  bool
@@ -340,18 +345,24 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	}
 
 	var failures, stillDeleting []string
-	subReplaced := false
+	subReplaced := r.subscriptionReplaced
+	if subReplaced {
+		failures = append(failures, "the Subscription was replaced by someone else while the operation ran, so it was left unchanged")
+	}
 	if operatorTouched {
 		delCtx, cancelDel := postOperationContext(c, restoreCSVBudget)
 		cd := c.WithContext(delCtx)
 		// Delete the Subscription that is there now (the attempt's), guarded
 		// by the UID just read: one an administrator created in the
-		// meantime is reported, and neither deleted nor overwritten.
-		if err := deleteCurrentSubscription(cd); errors.Is(err, errReplacedMeanwhile) {
-			subReplaced = true
-			failures = append(failures, "the Subscription was replaced by someone else while the restore ran, so it was left unchanged")
-		} else if err != nil {
-			failures = append(failures, "delete the new Subscription: "+err.Error())
+		// meantime is reported, and neither deleted nor overwritten. One
+		// the operation already found replaced is not even read.
+		if !subReplaced {
+			if err := deleteCurrentSubscription(cd); errors.Is(err, errReplacedMeanwhile) {
+				subReplaced = true
+				failures = append(failures, "the Subscription was replaced by someone else while the restore ran, so it was left unchanged")
+			} else if err != nil {
+				failures = append(failures, "delete the new Subscription: "+err.Error())
+			}
 		}
 		csvs, err := r.attemptCSVsToRemove(cd)
 		if err != nil {

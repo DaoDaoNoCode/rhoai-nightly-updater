@@ -83,6 +83,13 @@ only accepts a tag whose version is the top dated section. See
   variable `GITOPS_ADMISSION_POLICY` are read only in the gitops profile,
   and an install without `PROFILE` runs the full profile.
 
+### Fixed
+
+- Update under Argo CD: when someone replaced the operator Subscription
+  just before Update deleted it, Update left the replacement alone, but its
+  automatic restore then deleted the replacement and re-applied the old
+  Subscription. The restore now leaves it alone too and reports it.
+
 ## [2.1.0] - 2026-10-14
 
 ### Added
