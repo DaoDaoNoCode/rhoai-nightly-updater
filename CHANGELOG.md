@@ -46,6 +46,12 @@ only accepts a tag whose version is the top dated section. See
   release (`version` X.Y.Z, `appVersion` vX.Y.Z), and the release notes name
   the chart.
 
+### Security
+
+- Go 1.27.3 (CI, the image build and the GitHub workflows): fixes the
+  crypto/x509 advisory GO-2026-6809 (distrust compromised intermediate
+  certificates) that govulncheck reports with 1.27.2.
+
 ## [2.1.0] - 2026-10-14
 
 ### Added

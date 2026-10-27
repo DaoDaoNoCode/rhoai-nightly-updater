@@ -6,7 +6,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 ### Required Versions
 
-- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.2)
+- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.3)
 - **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
 - **TypeScript**: 5.x
 
@@ -210,7 +210,7 @@ make build             # Build using podman or docker (auto-detected)
      - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test`
      - Builds production bundle: `npm run build` → `frontend/dist/`
      - Uses `NODE_OPTIONS="--max-old-space-size=2048"` to handle large bundles
-   - **Stage 2 (backend)**: `golang:1.27.2-alpine`
+   - **Stage 2 (backend)**: `golang:1.27.3-alpine`
      - Downloads Go modules: `go mod download`
      - Vets and tests: `go vet ./... && go test ./...`
      - Builds a static binary with the version, commit and build date linked in
