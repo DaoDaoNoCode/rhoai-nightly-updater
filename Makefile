@@ -50,8 +50,9 @@ build:  ## Build the image as :<commit> (and :TAG for your own test tag; NO_CACH
 		-t $(IMAGE):$(GIT_SHA) -f Containerfile .
 	$(if $(EXTRA_TAG),$(RUNTIME) tag $(IMAGE):$(GIT_SHA) $(IMAGE):$(EXTRA_TAG),@true)
 
+# No commas in the $(if ...) texts below: make splits its arguments on them.
 push:  ## Push :<commit> (and :TAG for your own test tag); CI publishes releases, :main and :latest
-	@$(if $(and $(PUBLISHED_TAG),$(if $(TAG_DEFAULTED),,1)),echo "Not pushing :$(TAG): CI publishes :latest, :main and release tags. Pushing only :$(GIT_SHA).",true)
+	@$(if $(and $(PUBLISHED_TAG),$(if $(TAG_DEFAULTED),,1)),echo "Not pushing :$(TAG): CI publishes :latest and :main and the release tags. Pushing only :$(GIT_SHA).",true)
 	$(RUNTIME) push $(IMAGE):$(GIT_SHA)
 	$(if $(EXTRA_TAG),$(RUNTIME) push $(IMAGE):$(EXTRA_TAG),@true)
 

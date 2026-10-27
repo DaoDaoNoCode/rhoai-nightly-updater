@@ -27,6 +27,7 @@ RUN go mod download
 COPY main.go ./
 COPY pkg/ ./pkg/
 COPY deploy/template.yaml ./deploy/template.yaml
+COPY deploy/rbac-gitops.yaml ./deploy/rbac-gitops.yaml
 RUN go vet ./... && go test ./...
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} go build -trimpath \
     -ldflags "-s -w \

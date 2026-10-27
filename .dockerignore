@@ -4,6 +4,7 @@ frontend/dist/
 *.md
 deploy/
 !deploy/template.yaml
+!deploy/rbac-gitops.yaml
 .env
 .env.*
 nightly-updater/
