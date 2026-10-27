@@ -816,8 +816,17 @@ type templateObject struct {
 // system:authenticated by the basic-users ClusterRoleBinding) allows "get"
 // on users named "~" (checked on the live cluster with
 // `oc auth can-i get users/~ --as=system:serviceaccount:...`).
+//
+// Kubernetes's system:basic-user ClusterRole, bound to system:authenticated,
+// allows create on selfsubjectaccessreviews
+// (plugin/pkg/auth/authorizer/rbac/bootstrappolicy/policy.go, basicUserRules
+// and the system:basic-user ClusterRoleBinding): the gitops profile's
+// Secret-access check (checkServiceAccountSecretAccess) uses it.
 var builtInGrants = []grant{{
 	rule:   rbacRule{APIGroups: []string{"", "user.openshift.io"}, Resources: []string{"users"}, ResourceNames: []string{"~"}, Verbs: []string{"get"}},
+	source: "built-in basic-user",
+}, {
+	rule:   rbacRule{APIGroups: []string{"authorization.k8s.io"}, Resources: []string{"selfsubjectaccessreviews"}, Verbs: []string{"create"}},
 	source: "built-in basic-user",
 }}
 

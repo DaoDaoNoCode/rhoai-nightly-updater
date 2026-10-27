@@ -86,7 +86,7 @@ func pruneUnknownDSCFields(value interface{}, schema map[string]interface{}, pat
 // checkDSCCompatibilityFor compares a DSC with the installed schema and the
 // defaults of the already-read installed operator, in the API version the
 // DSC was read at.
-func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, opErr error) *types.DSCCompatibility {
+func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, opErr error, fetchSample dscSampleFetcher) *types.DSCCompatibility {
 	dsc := read.Object
 	result := &types.DSCCompatibility{InvalidFields: []string{}, MissingComponents: []string{}, ExtraComponents: []string{}}
 	apiVersion, _ := dsc["apiVersion"].(string)
@@ -101,7 +101,7 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 		result.DefaultsError = "Unable to load version-matched defaults: " + opErr.Error()
 		return result
 	}
-	defaults, err := defaultDSCSpecFor(c.ctx, op, servedVersions(c, dscGroup, dscFallbackVersions), read.Version)
+	defaults, err := defaultDSCSpecFrom(c.ctx, op, servedVersions(c, dscGroup, dscFallbackVersions), read.Version, fetchSample)
 	if err != nil {
 		result.DefaultsError = defaultsErrorMessage(read, err)
 		return result

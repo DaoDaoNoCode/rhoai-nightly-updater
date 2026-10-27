@@ -109,7 +109,7 @@ export const AdminRequiredState: React.FC = () => (
     <EmptyState headingLevel="h1" titleText="Cluster-admin required" icon={LockIcon} variant={EmptyStateVariant.lg}>
       <EmptyStateBody>
         This updater runs the gitops profile, where only cluster-admins can see what it reads from the cluster and install the build
-        the Git-managed catalog serves. Ask a cluster-admin, or check the cluster through Argo CD and the OpenShift console.
+        the managed catalog serves. Ask a cluster-admin, or check the cluster through Argo CD, ACM and the OpenShift console.
       </EmptyStateBody>
       <EmptyStateFooter>
         <EmptyStateActions>

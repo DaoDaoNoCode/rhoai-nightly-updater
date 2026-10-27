@@ -65,6 +65,9 @@ type installedOperator struct {
 	Version     string
 	Phase       string
 	ALMExamples string // metadata.annotations["alm-examples"], may be empty
+	// ContainerImage and CreatedAt are the bundle's containerImage and
+	// createdAt annotations: the operator build, as the catalog lists it.
+	ContainerImage, CreatedAt string
 	// Deployments are the operator Deployments the CSV installs (in SubNS).
 	Deployments []string
 }
@@ -98,7 +101,8 @@ func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
 	if err := json.Unmarshal(body, &csv); err != nil {
 		return nil, err
 	}
-	op := &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"]}
+	op := &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"],
+		ContainerImage: csv.Metadata.Annotations["containerImage"], CreatedAt: csv.Metadata.Annotations["createdAt"]}
 	for _, d := range csv.Spec.Install.Spec.Deployments {
 		if d.Name != "" {
 			op.Deployments = append(op.Deployments, d.Name)
@@ -145,6 +149,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 	if full, err := readCSVForDefaults(c, csv.Name); err == nil && full.Version == csv.Version {
 		op.ALMExamples = full.ALMExamples
 		op.Deployments = full.Deployments
+		op.ContainerImage, op.CreatedAt = full.ContainerImage, full.CreatedAt
 	}
 	return op, nil
 }
@@ -287,9 +292,23 @@ func defaultsOrder(versions apiVersions, examples map[string]dscExample, want st
 // to the sample on the matching rhods-operator branch, in the API versions
 // of defaultsOrder. DSC_SAMPLE_REF forces the GitHub sample from that ref.
 func defaultDSCSpecFor(ctx context.Context, op *installedOperator, versions apiVersions, want string) (*dscDefaults, error) {
+	return defaultDSCSpecFrom(ctx, op, versions, want, fetchDSCSample)
+}
+
+// dscSampleFetcher downloads a DataScienceCluster sample (fetchDSCSample).
+type dscSampleFetcher func(ctx context.Context, sourceURL, version string) (string, int, error)
+
+// defaultDSCSpecFrom is defaultDSCSpecFor with the GitHub fallback given as
+// fetchSample. With fetchSample nil (the gitops profile, which contacts no
+// host but the API server) only the installed CSV's alm-examples are used,
+// and DSC_SAMPLE_REF is ignored.
+func defaultDSCSpecFrom(ctx context.Context, op *installedOperator, versions apiVersions, want string, fetchSample dscSampleFetcher) (*dscDefaults, error) {
 	version := op.Version
 	branch, err := dscBranchForVersion(version)
 	override := strings.TrimSpace(os.Getenv("DSC_SAMPLE_REF"))
+	if fetchSample == nil {
+		override = ""
+	}
 	examples := map[string]dscExample{}
 	if override == "" {
 		examples = dscExamplesFromALM(op.ALMExamples)
@@ -301,6 +320,10 @@ func defaultDSCSpecFor(ctx context.Context, op *installedOperator, versions apiV
 				SourceDescription: "alm-examples of the installed CSV " + op.Name}, nil
 		}
 	}
+	if fetchSample == nil {
+		return nil, fmt.Errorf("operator %s has no DataScienceCluster %s defaults in the alm-examples of %s; the gitops profile does not read the GitHub sample",
+			version, nonEmpty(want, strings.Join(order, ", ")), nonEmpty(op.Name, "its CSV"))
+	}
 	// An explicit ref can accommodate future naming conventions without a code change.
 	if override != "" {
 		branch = override
@@ -311,7 +334,7 @@ func defaultDSCSpecFor(ctx context.Context, op *installedOperator, versions apiV
 	// on to the next version, any other failure stops.
 	for _, apiVersion := range order {
 		sourceURL := dscSamplesBaseURL + url.PathEscape(branch) + "/config/rhoai/samples/datasciencecluster_" + apiVersion + "_datasciencecluster.yaml"
-		body, status, err := fetchDSCSample(ctx, sourceURL, apiVersion)
+		body, status, err := fetchSample(ctx, sourceURL, apiVersion)
 		if status == http.StatusNotFound {
 			continue
 		}

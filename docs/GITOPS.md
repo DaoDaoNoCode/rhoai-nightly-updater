@@ -9,8 +9,8 @@ rollbacks) stays with `install.sh` ([QUICKSTART](QUICKSTART.md),
 undoes what `install.sh` changes, and `install.sh` would change what Git says.
 
 The chart exists from v2.2.0 on. By default it deploys the updater with the
-**gitops profile**, which only installs the build the Git-managed catalog
-serves and gets only the RBAC that needs; `profile: full` deploys every
+**gitops profile**, which only installs the build the managed catalog (Argo CD
+or an ACM policy applies it from Git) serves and gets only the RBAC that needs; `profile: full` deploys every
 feature with the Template's RBAC ([section 11](#11-profiles)).
 
 ## 1. What the chart is
@@ -72,7 +72,7 @@ dialog.
 | `parameters.OAUTH_PROXY_IMAGE` | none, required | The oauth-proxy image by digest; its tag is the cluster's OCP minor version: `registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.<minor>@sha256:<digest>`. The Template's own default (a tag) is for `install.sh` and is not used |
 | `parameters.NAMESPACE` | the release namespace | Must be the Application's destination namespace ([section 5](#5-the-namespace)) |
 | `parameters.APP_NAME` | `rhoai-nightly-updater` | The name of the app's objects; cluster-scoped names are `<APP_NAME>-<NAMESPACE>` |
-| `parameters.PULL_SECRET_NAMESPACE`, `parameters.MARKETPLACE_NAMESPACE` | `kube-system`, `openshift-marketplace` | Where the app gets a Role for the pull secret and the CatalogSources |
+| `parameters.PULL_SECRET_NAMESPACE`, `parameters.MARKETPLACE_NAMESPACE` | `kube-system`, `openshift-marketplace` | Where the app gets a Role for the pull secret (full profile only) and the CatalogSources |
 | `parameters.IMAGE_REPOSITORY`, `parameters.RELEASES_URL` | the Template's | The update check and its release-notes link ([README: Configuration](../README.md#configuration)) |
 | `parameters.INSTALL_METHOD` | `gitops` | Leave it: it words the app's notices for Git |
 | `gitops.subscriptionEnvAllowlist` | `["DISABLE_DSC_CONFIG"]` | `profile: gitops` only: the environment variables the RHOAI Subscription's `spec.config.env` may set; any other `spec.config` field is refused ([section 11](#the-admission-policy)). `parameters.SUBSCRIPTION_ENV_ALLOWLIST` itself fails the render |
@@ -243,8 +243,9 @@ another. The chart does not create the namespace (`install.sh` used
 `syncOptions`, as in [section 9](#9-examples).
 
 The Roles in `kube-system` and `openshift-marketplace` (the pull secret and
-the CatalogSources) are in those namespaces, as with `install.sh`. With
-`profile: gitops` there is one more Role, in `redhat-ods-operator` (the
+the CatalogSources) are in those namespaces, as with `install.sh`; with
+`profile: gitops` the Role in `kube-system` has no rules (that profile reads
+no Secret), and there is one more Role, in `redhat-ods-operator` (the
 operator's namespace): it must exist when Argo CD applies it. Sync the
 updater after RHOAI, or give the Application a `retry` policy as in
 [section 9](#9-examples): Argo CD does not retry a failed automated sync for
@@ -526,9 +527,20 @@ only in Git; do not run `install.sh` or `make upgrade` on it.
 With `profile: gitops` (the default) the chart renders its RBAC objects
 under the names `install.sh` used, so the first sync applies the gitops
 profile's rules over the full ones; nothing of the full RBAC needs to stay.
-Check after the first sync that it did, for example that
-`oc get clusterrole <APP_NAME>-<NAMESPACE> -o yaml` grants no `create`,
-`patch` or `delete`. Whatever RBAC the ServiceAccount still holds, the
+That includes the Role `install.sh` created in `kube-system` (`get` and
+`patch` on Secret `additional-pull-secret`): the chart renders it with no
+rules, because Argo CD only changes objects it renders, and a Role it does
+not render would keep its grant. Check after the first sync that it did:
+
+```bash
+oc get clusterrole <APP_NAME>-<NAMESPACE> -o yaml   # no create, patch or delete
+oc auth can-i get secret/additional-pull-secret -n kube-system \
+  --as=system:serviceaccount:<NAMESPACE>:<APP_NAME>  # no
+```
+
+Diagnostics checks the second one for you (*ServiceAccount Secret access*,
+with a SelfSubjectAccessReview, which needs no RBAC of its own), and also
+reports any other binding that lets the ServiceAccount read Secrets. Whatever RBAC the ServiceAccount still holds, the
 admission policy keeps it from writing other Subscriptions, other catalogs
 or OperatorGroups ([section 11](#11-profiles)).
 
@@ -547,7 +559,7 @@ profile from `GET /api/version` and hides what the profile refuses.
 | Profile | For | What the updater does | RBAC |
 |---|---|---|---|
 | `full` (default of the Template, `install.sh` and `make`) | the dashboard team's development clusters | everything: Update, Reinstall, Re-deploy, the cluster setup, Build Explorer, Dashboard Dev, Test resources, DataScienceCluster changes, Diagnostics fixes | the Template's (`deploy/template.yaml`) |
-| `gitops` (default of the chart) | clusters where Argo CD manages RHOAI, including clusters that serve tenants | Update's Argo CD path only: install the build the catalog Git manages serves (or the same build again), plus its dry run and the Status, Components and Diagnostics reads | `deploy/rbac-gitops.yaml` (with the chart) |
+| `gitops` (default of the chart) | clusters where Argo CD (or, for the catalog, an ACM policy) manages RHOAI from Git, including clusters that serve tenants | Update's Argo CD path only: install the build the catalog Git manages serves (or the same build again), plus its dry run and the Status, Components and Diagnostics reads | `deploy/rbac-gitops.yaml` (with the chart) |
 
 The chart defaults to `gitops` because it is the Argo CD install: on such a
 cluster Git is the source of truth, Argo CD undoes most changes the full
@@ -585,8 +597,31 @@ Update in the gitops profile is Update's Argo CD path
 ([CLUSTER_CHANGES](CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator))
 with these differences:
 
-- It refuses (`profile_gitops`) unless Argo CD manages CatalogSource
-  `rhoai-catalog-dev` (its `argocd.argoproj.io/tracking-id` names it).
+- It refuses (`profile_gitops`) unless Argo CD or an ACM policy manages
+  CatalogSource `rhoai-catalog-dev`:
+  - Argo CD: its `argocd.argoproj.io/tracking-id` names the catalog.
+  - ACM: an enforced ConfigurationPolicy applies the catalog, so the
+    catalog's `managedFields` show manager `config-policy-controller`
+    owning `f:spec`. An entry that owns only `f:status` does not count.
+    The updater reads this from the same GET of the catalog; it never reads
+    Policies or ConfigurationPolicies.
+
+  Argo CD wins when both manage the catalog. Messages name the manager:
+  `Argo CD application "<name>"` or `an ACM policy
+  (config-policy-controller)`. The full profile treats an ACM-managed
+  catalog the same way: it never replaces it and takes Update's Argo CD
+  path. Limit: a `managedFields` entry outlives a policy removed with
+  `pruneObjectBehavior: None` (the default), so the catalog then still
+  counts as managed. That is the safe direction: the updater still refuses
+  to replace the catalog, and only installs what the catalog serves.
+- It reads no Secret, so not `kube-system/additional-pull-secret` either.
+  Update logs that the cluster's own pull secrets are used (the global
+  `openshift-config/pull-secret`, and any pull secret the catalog names,
+  which Git or ACM manage); it does not read or check them. The catalog
+  must serve the build before anything is deleted (below), which proves
+  the catalog image pulls. A missing credential for the bundle or operator
+  images fails the install, and Update restores as after any failed
+  install. The Status page shows the pull secret as *Not used*.
 - It **never writes a CatalogSource**. The full profile checks the build in a
   temporary verification catalog first; the gitops profile cannot, because
   OLM sets a CatalogSource's `spec.image` from its
@@ -622,6 +657,28 @@ with these differences:
 - It runs only while the admission policy and its binding are in place
   ([below](#the-admission-policy)).
 
+### No registry access
+
+The gitops profile never contacts Quay, another registry or GitHub: it
+holds no registry credential, and every page's build information comes from
+the cluster. Its routes have their own entry points
+(`GetStatusGitOps`, `GetComponentsGitOps`, `DiagnoseClusterGitOps`,
+`HandleUpdateCheckGitOps`, and Update and its dry run), and
+`pkg/cluster/gitops_offline_test.go` fails when anything reachable from
+the profile's routes sends a request to another host than the API server
+(on the reference graph of the RBAC test below).
+
+| Page or action | Build information, and where it comes from |
+|---|---|
+| Status, *Installed* and *In Git* | the catalog image's tag and digest (CatalogSource `spec.image`); the build the catalog serves (head CSV of the channel, its `containerImage` and `createdAt`) from its PackageManifest |
+| Status, *Latest* | not looked up: "Git picks the build. A newer nightly arrives as a change in Git (for example a Renovate or Dependabot pull request); the gitops profile does not check Quay." (the ACM policy instead of Git when a policy manages the catalog) |
+| Status, pull secret | not read: *Not used* |
+| Components | the Deployments, pods, DSC and component CRs; the operator build from the installed CSV's `containerImage` and `createdAt`; no image labels (commit, build date, version per image), which only the registry has; DSC defaults from the CSV's `alm-examples` only, not the GitHub sample |
+| Diagnostics | every check but *Pull secret*, plus *ServiceAccount Secret access*: SelfSubjectAccessReviews that fail when the ServiceAccount can still read Secrets (left by `install.sh`, or a binding added by hand) |
+| Update dry run | the version check uses the head the catalog serves (PackageManifest); while the catalog does not serve the image yet it compares the release tag, and says so |
+| Update | the build from the catalog's PackageManifest (below); no pull secret |
+| The updater's own releases | not checked (`GET /api/update-check` answers `pinnedInGit`): the chart pins the release in Git, so a newer one arrives as a change there |
+
 ### Its RBAC
 
 `deploy/rbac-gitops.yaml` holds exactly what the gitops profile's routes
@@ -637,11 +694,11 @@ OperatorGroup or namespace write, or an InstallPlan create, is reachable.
 |---|---|---|
 | cluster-wide (ClusterRole) | reads only: `get`/`list` of what Status, Components and Diagnostics read (cluster version, console, IDMS, nodes, events, namespaces, pods, services, endpointslices, deployments, replicasets, webhook configurations, CRDs, DSC, DSCI, Platform, module CRs, CSVs, OperatorGroups, prerequisite operands named `cluster`, certificates), `get` namespace `redhat-ods-operator`, and `get` of the admission policy and binding `<APP_NAME>-<NAMESPACE>-gitops` | the reads; Update's checks; the policy check |
 | `redhat-ods-operator` (Role) | Subscription `rhods-operator` `get`/`patch`/`delete`, Subscriptions `create`; CSVs `delete`; InstallPlans `get`/`list`/`patch`/`delete`; ConfigMap `odh-upgrade-acks` `get` | Update deletes the old InstallPlan and CSV, deletes and at once recreates the Subscription, approves the InstallPlan it caused under Manual approval, restores on failure |
+| `kube-system` (Role) | none: an empty Role, with its binding, under the name `install.sh` used | a moved install loses `install.sh`'s grant on `additional-pull-secret` on the first sync ([section 10](#10-moving-an-install-from-installsh-to-argo-cd)) |
 | `openshift-marketplace` (Role) | CatalogSources `get`; PackageManifests `list` | reading the catalog Git manages and what it serves |
-| `kube-system` (Role) | Secret `additional-pull-secret` `get` | the pull-secret check of Status and Update, and the Quay lookups |
 | `<NAMESPACE>` (Role) | the app's three ConfigMaps | activity log, snapshot, operation lock and marker |
 
-No Secret is created or patched, no Deployment, namespace, CatalogSource or
+No Secret is read, created or patched, no Deployment, namespace, CatalogSource or
 OperatorGroup is written, no webhook configuration is deleted.
 
 ### The admission policy

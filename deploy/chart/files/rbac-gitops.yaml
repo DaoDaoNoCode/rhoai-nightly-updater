@@ -238,8 +238,14 @@ objects:
         name: ${APP_NAME}
         namespace: ${NAMESPACE}
 
-  # The cluster pull secret: read only (Status shows whether it can pull
-  # from quay.io/rhoai, Update checks it, and the Quay lookups use it)
+  # The gitops profile reads no Secret (not even additional-pull-secret) and
+  # contacts no registry; the cluster's own pull secrets are used
+  # (docs/GITOPS.md, section 11). The Role install.sh's Template creates in
+  # ${PULL_SECRET_NAMESPACE} (get and patch on additional-pull-secret) has
+  # this name, so it is rendered here with no rules: Argo CD adopts it on the
+  # first sync of an install moved from install.sh and empties it, instead of
+  # leaving the grant in place. An empty Role grants nothing; its binding is
+  # kept so Argo CD owns, and on removal prunes, both objects.
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: Role
     metadata:
@@ -247,11 +253,7 @@ objects:
       namespace: ${PULL_SECRET_NAMESPACE}
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
-    rules:
-      - apiGroups: [""]
-        resources: ["secrets"]
-        resourceNames: ["additional-pull-secret"]
-        verbs: ["get"]
+    rules: []
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: RoleBinding
     metadata:

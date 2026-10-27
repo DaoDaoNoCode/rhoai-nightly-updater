@@ -89,7 +89,7 @@ func checkDSCCompatibility(c *Client, dsc map[string]interface{}) *types.DSCComp
 	op, err := getInstalledOperator(c)
 	apiVersion, _ := dsc["apiVersion"].(string)
 	version, _ := dscAPIVersion(apiVersion)
-	return checkDSCCompatibilityFor(c, dscRead{Object: dsc, State: DSCStatePresent, Version: version}, op, err)
+	return checkDSCCompatibilityFor(c, dscRead{Object: dsc, State: DSCStatePresent, Version: version}, op, err, fetchDSCSample)
 }
 
 // Len returns the number of stored entries, including expired ones not yet removed.

@@ -653,7 +653,7 @@ On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for examp
 | Action | With Argo CD |
 |---|---|
 | Update | Installs the build the catalog serves: the catalog stays as Git sets it, the channel the Subscription has in Git is kept, and the Subscription is recreated with Argo CD's tracking ([what it changes](docs/CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator)). Any other image is refused: change the image in Git. The catalog's image must have the Subscription's channel |
-| A newer nightly in Quay | The Status page shows it with the image reference to put in Git; nothing happens on the cluster until Git changes |
+| A newer nightly in Quay | The Status page shows it with the image reference to put in Git; nothing happens on the cluster until Git changes. The gitops profile does not look it up (it contacts no registry): its *Latest* row says that a newer nightly arrives as a change in Git ([GITOPS.md §11](docs/GITOPS.md#no-registry-access)) |
 | Re-deploy, Reinstall | Off: they delete the Subscription for minutes. Update installs the catalog's build again instead |
 | DSC repairs, Diagnostics *disable component* | Off when Argo CD manages the DSC: change the DSC in Git |
 | Dashboard Dev, test resources, other Diagnostics fixes | Unchanged: they touch objects Argo CD does not manage |
@@ -679,6 +679,14 @@ The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/l
 ```bash
 oc get applications.argoproj.io -A -o json | jq -r '.items[] | select(any(.status.resources[]?; .kind=="CatalogSource" and .name=="rhoai-catalog-dev")) | "\(.metadata.namespace)/\(.metadata.name): syncPolicy=\(.spec.syncPolicy // {} | tostring)"'
 ```
+
+**A catalog an ACM policy enforces.** On some clusters an ACM ConfigurationPolicy (`remediationAction: enforce`), not Argo CD, applies CatalogSource `rhoai-catalog-dev`; a hub Argo CD application may apply the Policy, but the catalog on the cluster has no Argo CD annotation. The tool recognises it by its `managedFields`: manager `config-policy-controller` owns `f:spec`. It then treats the catalog as above: the image stays as the policy sets it, Update installs the build the catalog serves, Re-deploy and Reinstall are off, and messages name `an ACM policy (config-policy-controller)` instead of an Argo CD application. To move to another build, change the image in the policy. The Subscription can still be Argo CD's; messages about it name its application. Check the managers with:
+
+```bash
+oc get catalogsource rhoai-catalog-dev -n openshift-marketplace --show-managed-fields -o json | jq -r '.metadata.managedFields[] | "\(.manager) \(.operation) \(.fieldsV1 | keys)"'
+```
+
+The entry stays after the policy is removed (with `pruneObjectBehavior: None`), so the tool still treats the catalog as managed until another manager takes over its spec.
 
 **Installing the updater next to Argo CD.** Install it with the release's `install.sh` as usual. Its objects carry no tracking annotation, so Argo CD [never prunes them](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
 

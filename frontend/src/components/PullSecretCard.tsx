@@ -66,6 +66,9 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   const disabledReason = useMutationBlocker({ ignoreReconcile: true });
   const onBusy = useClusterBusyHandler();
   const invalid = pullSecret.exists && !pullSecret.valid;
+  // readOnly is the gitops profile, which does not use the secret
+  // (utils.ts, pullSecretNotUsed).
+  const notUsed = readOnly;
   const [authValue, setAuthValue] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authResult, setAuthResult] = useState<OperationResponse | null>(null);
@@ -168,17 +171,23 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
         <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
           <FlexItem><strong id={titleId}>Pull secret</strong></FlexItem>
           <FlexItem>
-            {pullSecret.exists && pullSecret.valid
+            {notUsed
+              ? <StatusLabel status="neutral">Not used</StatusLabel>
+              : pullSecret.exists && pullSecret.valid
               ? <StatusLabel status="success">Ready</StatusLabel>
               : pullSecret.exists
                 ? <StatusLabel status="warning">Invalid</StatusLabel>
                 : <StatusLabel status="danger">Missing</StatusLabel>}
           </FlexItem>
         </Flex>
-        <Content component="p" className="pf-v6-u-text-color-subtle">Credentials the cluster uses to pull nightly images from quay.io/rhoai.</Content>
+        <Content component="p" className="pf-v6-u-text-color-subtle">
+          {notUsed
+            ? "The gitops profile does not use additional-pull-secret: the cluster's pull secret is used. Git or ACM manage it here; the updater does not read or check it."
+            : "Credentials the cluster uses to pull nightly images from quay.io/rhoai."}
+        </Content>
       </StackItem>
 
-      {invalid && (
+      {invalid && !notUsed && (
         <StackItem>
           <Alert variant="warning" isInline isPlain component="p" title="The cluster can't pull nightly images with this secret">
             {sentence(pullSecret.detail || "The secret has no usable quay.io/rhoai entry")} {readOnly ? "Replace it in Git." : "Replace the token below."}

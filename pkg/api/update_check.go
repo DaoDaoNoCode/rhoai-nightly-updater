@@ -85,6 +85,9 @@ type UpdateInfo struct {
 	// the installer's releases page (installerReleasesURL) is a GitHub or
 	// GitLab releases page.
 	InstallerURL string `json:"installerURL,omitempty"`
+	// PinnedInGit: the gitops profile does not check the registry; the
+	// chart pins the release in Git (HandleUpdateCheckGitOps).
+	PinnedInGit bool `json:"pinnedInGit,omitempty"`
 }
 
 const (
@@ -222,6 +225,17 @@ func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		releases := os.Getenv("RELEASES_URL")
 		info = compareReleases(Version, defaultUpdateChecker.latestRelease(repository), releases, installerReleasesURL(releases))
 	}
+	writeJSON(w, info, "update-check")
+}
+
+// HandleUpdateCheckGitOps is HandleUpdateCheck in the gitops profile: no
+// registry is read. The chart pins the updater's release in Git, so a newer
+// release arrives as a change there (a new targetRevision and image digest),
+// not as a banner: the answer names the running release only, with
+// pinnedInGit set.
+func HandleUpdateCheckGitOps(w http.ResponseWriter, r *http.Request) {
+	info := compareReleases(Version, "", "", "")
+	info.PinnedInGit = true
 	writeJSON(w, info, "update-check")
 }
 

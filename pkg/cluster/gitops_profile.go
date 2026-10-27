@@ -31,6 +31,10 @@ const ErrorCodeProfileGitOps = "profile_gitops"
 //   - it never ends a Dashboard Dev session (that patches Deployments); it
 //     refuses while one is active.
 //
+//   - it reads no Secret and contacts no registry: the cluster's own pull
+//     secrets are used (gitOpsProfileNoPullSecret), and the build comes
+//     from the catalog's PackageManifest;
+//
 //   - it never writes a CatalogSource: instead of a temporary verification
 //     catalog it reads the build from the catalog Git manages
 //     (liveCatalogTarget);
@@ -78,21 +82,10 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 			"The gitops profile cannot end the session: end it with the full profile, or scale Deployment dashboard-operator in redhat-ods-applications back up. Nothing was changed.", errorCodeDashboardDevActive)
 	}
 
-	ps, err := getPullSecret(c)
-	if err != nil {
-		return fail(fmt.Sprintf("Failed to check pull secret: %v", err), errorCodeFromK8sErr(err))
-	}
-	if !ps.Exists {
-		return fail("additional-pull-secret not found in kube-system. The gitops profile does not set it up: create it in Git or with the full profile. Nothing was changed.", "prerequisites")
-	}
-	if !ps.Valid {
-		if !strings.HasPrefix(ps.Detail, "Could not verify credentials with Quay") {
-			return fail(fmt.Sprintf("The pull secret cannot pull from quay.io/rhoai: %s. Fix it first. Nothing was changed.", ps.Detail), "prerequisites")
-		}
-		logs = append(logs, "Warning: "+ps.Detail)
-	} else {
-		logs = append(logs, "OK: additional-pull-secret exists and Quay accepts its credentials")
-	}
+	// No pull secret read: the profile reads no Secret and contacts no
+	// registry (gitOpsProfileNoPullSecret).
+	logs = append(logs, gitOpsProfileNoPullSecret)
+	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: gitOpsProfileNoPullSecret})
 
 	idms, err := getIDMS(c)
 	if err != nil {
@@ -234,17 +227,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if active, err := DashboardDevActive(c); err == nil && active {
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run while it is (the gitops profile cannot end it).")
 	}
-	ps, err := getPullSecret(c)
-	switch {
-	case err != nil:
-		return fail(fmt.Sprintf("Failed to check pull secret: %v", err), errorCodeFromK8sErr(err))
-	case !ps.Exists:
-		return fail("additional-pull-secret not found in kube-system. The gitops profile does not set it up: create it in Git or with the full profile.", "prerequisites")
-	case !ps.Valid:
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Pull secret is not usable: %s", ps.Detail))
-	default:
-		logs = append(logs, "OK: Pull secret is valid")
-	}
+	logs = append(logs, gitOpsProfileNoPullSecret)
 	idms, err := getIDMS(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), errorCodeFromK8sErr(err))
@@ -279,9 +262,14 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		}
 		logs = append(logs, "OK: The admission policy allows recreating the Subscription and restoring it")
 	}
-	bundle, bundleErr := lookupTargetBundle(c, image)
-	if bundleErr != nil {
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Could not read the operator bundle from the catalog image: %v", bundleErr))
+	// The build comes from the catalog itself (its PackageManifest), as in
+	// Update (liveCatalogTarget), not from the image in the registry.
+	bundle := ""
+	if target, problem, _ := liveCatalogTargetOnce(c, image, channelOverride); problem == "" {
+		bundle = target.HeadCSV
+		logs = append(logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
+	} else {
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Note: the catalog does not serve this build yet (%s), so the version check uses the release tag; Update waits for the catalog and checks the version it serves", problem))
 	}
 	blocked, note := downgradeCheck(currentCSV, extractTagFromRef(image), bundle)
 	if note != "" {
@@ -306,6 +294,20 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that CatalogSource " + CatalogName +
 	" serves when Argo CD or an ACM policy manages that catalog, and neither does here (no " + argoTrackingAnnotation + " annotation names it, and " +
 	acmPolicyManager + " does not own its spec). Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile. Nothing was changed."
+
+// gitOpsProfileNoPullSecret is what Update and its dry run say in the gitops
+// profile, which never reads kube-system/additional-pull-secret (or any
+// Secret) and never contacts a registry, so it could not check the
+// credential with Quay either. It does not need it: on the clusters it runs on, the Quay credentials
+// are in the cluster's global pull secret (openshift-config/pull-secret), and
+// may also be a pull secret the CatalogSource names, which Git or ACM manage.
+// The updater does not read those (the profile reads as few Secrets as
+// possible), and does not have to: before anything is deleted the catalog
+// must be READY and serving the build from a registry pod that runs its image
+// (liveCatalogTarget), which proves the catalog image pulls; a missing
+// credential for the bundle or operator images fails the install, which
+// Update reports and recovers from like any failed install (the restore).
+const gitOpsProfileNoPullSecret = "Pull secret: not read. The gitops profile pulls with the cluster's own pull secrets, which Git or ACM manage here, and does not check them"
 
 // checkOperatorNamespaceAndGroup is ensureOperatorNamespaceAndGroup without
 // the creating half: in the gitops profile Git creates the operator
@@ -349,50 +351,12 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 	var pull pullFailureWatch
 	last := ""
 	for {
-		problem := ""
-		cs, err := getCatalogSource(c)
+		target, problem, changedTo := liveCatalogTargetOnce(c, image, override)
 		switch {
-		case err != nil:
-			problem = "cannot read the CatalogSource: " + err.Error()
-		case !cs.Exists:
-			problem = "CatalogSource " + CatalogName + " does not exist"
-		case cs.Image != image:
-			return catalogTarget{}, &errCatalogImageChanged{by: changedBy, image: cs.Image}
-		case cs.State != "READY":
-			problem = "catalog state " + nonEmpty(cs.State, "unknown")
-		default:
-			ready, stale, ok := readCatalogPods(c, image)
-			switch {
-			case !ok:
-				problem = "cannot read the catalog pods"
-			case !ready || stale > 0:
-				problem = "OLM is replacing the catalog pod"
-			default:
-				channels, err := catalogChannels(c, CatalogName)
-				switch {
-				case err != nil:
-					problem = err.Error()
-				case len(channels) == 0:
-					problem = "the catalog does not list the " + SubName + " package yet"
-				default:
-					channel := override
-					if channel == "" {
-						channel, err = detectBestChannel(channels, image)
-					}
-					entry := findChannel(channels, channel)
-					head, _ := entry["currentCSV"].(string)
-					switch {
-					case err != nil:
-						problem = err.Error()
-					case entry == nil:
-						problem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", channel, strings.Join(channelNames(channels), ", "))
-					case head == "":
-						problem = fmt.Sprintf("channel %q has no head", channel)
-					default:
-						return catalogTarget{Channel: channel, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
-					}
-				}
-			}
+		case changedTo != "":
+			return catalogTarget{}, &errCatalogImageChanged{by: changedBy, image: changedTo}
+		case problem == "":
+			return target, nil
 		}
 		if problem != last {
 			last = problem
@@ -411,4 +375,50 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 		case <-time.After(CatalogPollInterval):
 		}
 	}
+}
+
+// liveCatalogTargetOnce is one poll of liveCatalogTarget: the target when
+// the catalog serves image now, else why not (problem), or the catalog's
+// other image (changedTo). The gitops dry run reads it once.
+func liveCatalogTargetOnce(c *Client, image, override string) (target catalogTarget, problem, changedTo string) {
+	cs, err := getCatalogSource(c)
+	switch {
+	case err != nil:
+		return catalogTarget{}, "cannot read the CatalogSource: " + err.Error(), ""
+	case !cs.Exists:
+		return catalogTarget{}, "CatalogSource " + CatalogName + " does not exist", ""
+	case cs.Image != image:
+		return catalogTarget{}, "the CatalogSource image is " + cs.Image, cs.Image
+	case cs.State != "READY":
+		return catalogTarget{}, "catalog state " + nonEmpty(cs.State, "unknown"), ""
+	}
+	ready, stale, ok := readCatalogPods(c, image)
+	switch {
+	case !ok:
+		return catalogTarget{}, "cannot read the catalog pods", ""
+	case !ready || stale > 0:
+		return catalogTarget{}, "OLM is replacing the catalog pod", ""
+	}
+	channels, err := catalogChannels(c, CatalogName)
+	switch {
+	case err != nil:
+		return catalogTarget{}, err.Error(), ""
+	case len(channels) == 0:
+		return catalogTarget{}, "the catalog does not list the " + SubName + " package yet", ""
+	}
+	channel := override
+	if channel == "" {
+		channel, err = detectBestChannel(channels, image)
+	}
+	entry := findChannel(channels, channel)
+	head, _ := entry["currentCSV"].(string)
+	switch {
+	case err != nil:
+		return catalogTarget{}, err.Error(), ""
+	case entry == nil:
+		return catalogTarget{}, fmt.Sprintf("channel %q is not in the catalog (available: %s)", channel, strings.Join(channelNames(channels), ", ")), ""
+	case head == "":
+		return catalogTarget{}, fmt.Sprintf("channel %q has no head", channel), ""
+	}
+	return catalogTarget{Channel: channel, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, "", ""
 }

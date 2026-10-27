@@ -7,7 +7,8 @@ import { UpdateConfirmModal, UpdatePanel } from "./components/UpdatePanel";
 import { pipelineStepsFor } from "./components/UpdatePipeline";
 import { STEP_SETS } from "./operationSteps";
 import { StatusPage } from "./pages/StatusPage";
-import { ComponentsPage } from "./pages/ComponentsPage";
+import { ComponentsPage, IMAGE_LABELS_OFF } from "./pages/ComponentsPage";
+import { HelpButton } from "./components/HelpModal";
 import { nightlyStatus, renderPage, renderWithApp } from "./test/providers";
 import { stubApi } from "./test/apiStub";
 
@@ -252,5 +253,57 @@ describe("A catalog an ACM policy manages", () => {
     expect(screen.getByText("From the ACM policy")).toBeInTheDocument();
     expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets this image/)).toBeInTheDocument();
     expect(screen.queryByText("Update is off for this catalog")).not.toBeInTheDocument();
+  });
+});
+
+// The gitops profile never contacts Quay or any other registry: every line
+// of build information comes from the cluster, and "Latest" says where a
+// newer build comes from instead of looking it up.
+describe("The gitops profile reads no registry", () => {
+  const gitOpsStatus = nightlyStatus({ ...synced, nightly: { installed: synced.nightly!.installed }, pullSecret: { exists: false, valid: false } });
+
+  function renderGitOpsCard(status: typeof managed) {
+    renderWithApp(
+      <InstalledBuildCard status={status} latest={null} latestLoading={false} blocker={null} prerequisitesMet onUpdate={vi.fn()} onChooseBuild={vi.fn()} onRedeploy={vi.fn()} />,
+      { version: gitOpsVersion },
+    );
+  }
+
+  it("says that Git or the ACM policy picks the build, without a Quay lookup or error", async () => {
+    renderGitOpsCard(nightlyStatus({ ...gitOpsStatus, nightly: { ...gitOpsStatus.nightly, error: "Could not read the latest rhoai-3.6 build from Quay: manifest HEAD returned 401" } }));
+    expect(await screen.findByText(/^Git picks the build\. A newer nightly arrives as a change in Git \(for example a Renovate or Dependabot pull request\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/401/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not read the latest/)).not.toBeInTheDocument();
+    cleanup();
+    renderGitOpsCard(nightlyStatus({ ...gitOpsStatus, catalogSource: acmCatalog }));
+    expect(await screen.findByText(/^The ACM policy picks the build\. A newer nightly arrives as a change to the policy in Git/)).toBeInTheDocument();
+    cleanup();
+    // The full profile keeps its Quay lookup.
+    renderCard(nightlyStatus({ ...gitOpsStatus, nightly: { ...gitOpsStatus.nightly, error: "Could not read the latest rhoai-3.6 build from Quay: x" } }));
+    expect(screen.getByText(/Could not read the latest rhoai-3.6 build from Quay/)).toBeInTheDocument();
+  });
+
+  it("says in the help dialog that the updater's releases come through Git", async () => {
+    renderWithApp(<HelpButton />, { version: gitOpsVersion, update: async () => ({ current: "v2.2.0", updateAvailable: false, majorUpgrade: false, pinnedInGit: true }) });
+    await waitFor(() => expect(screen.getByRole("button", { name: /help/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /help/i }));
+    expect(await screen.findByText(/The chart pins the updater's release in Git/)).toBeInTheDocument();
+    cleanup();
+    renderWithApp(<HelpButton />);
+    fireEvent.click(screen.getByRole("button", { name: /help/i }));
+    await screen.findByText("Updater build");
+    expect(screen.queryByText(/The chart pins the updater's release in Git/)).not.toBeInTheDocument();
+  });
+
+  it("shows the operator build from the CSV, and why the images have no labels", async () => {
+    stubApi({
+      "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded",
+        imageLabelsOff: true, operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc", operatorBuilt: "2026-10-08T04:00:00Z" },
+      "/api/components?labels=true": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.6.0", operatorPhase: "Succeeded",
+        imageLabelsOff: true, operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc", operatorBuilt: "2026-10-08T04:00:00Z" },
+    });
+    renderPage(<ComponentsPage />, "/components", { status: async () => gitOpsStatus, version: gitOpsVersion });
+    expect(await screen.findByText(new RegExp(IMAGE_LABELS_OFF.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
+    expect(screen.getByText("registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc")).toBeInTheDocument();
   });
 });

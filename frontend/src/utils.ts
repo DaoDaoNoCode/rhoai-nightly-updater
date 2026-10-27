@@ -5,8 +5,24 @@ export function isReleaseVersion(version: string | undefined): version is string
   return !!version && /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version);
 }
 
-export function prerequisitesMet(status: StatusResponse | null): boolean {
-  return !!(status?.pullSecret.exists && status?.pullSecret.valid && status?.imageMirror.exists);
+/**
+ * The gitops profile does not use additional-pull-secret: it reads no Secret
+ * and contacts no registry, and the cluster's own pull secrets (which Git or
+ * ACM manage) are used (pkg/cluster/gitops_profile.go,
+ * gitOpsProfileNoPullSecret). The backend does not read it there, so the
+ * status says nothing about it.
+ */
+export function pullSecretNotUsed(status: StatusResponse | null, gitOpsProfile: boolean): boolean {
+  return gitOpsProfile && !!status;
+}
+
+/** The pull secret is ready, or not used (the gitops profile without one). */
+export function pullSecretReady(status: StatusResponse | null, gitOpsProfile = false): boolean {
+  return !!(status?.pullSecret.exists && status.pullSecret.valid) || pullSecretNotUsed(status, gitOpsProfile);
+}
+
+export function prerequisitesMet(status: StatusResponse | null, gitOpsProfile = false): boolean {
+  return pullSecretReady(status, gitOpsProfile) && !!status?.imageMirror.exists;
 }
 
 export function operatorInstalled(status: StatusResponse | null): boolean {

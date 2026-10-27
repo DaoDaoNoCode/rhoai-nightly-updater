@@ -80,7 +80,7 @@ func withGitOpsAdmin(next http.HandlerFunc) http.HandlerFunc {
 // 403 profile_gitops, before authentication and before any ServiceAccount
 // call.
 func refusedInGitOpsProfile(feature string) http.HandlerFunc {
-	msg := fmt.Sprintf("%s is off: this updater runs the gitops profile, where Argo CD manages RHOAI and the updater only installs the build the Git-managed catalog serves (docs/GITOPS.md).", feature)
+	msg := fmt.Sprintf("%s is off: this updater runs the gitops profile, where Argo CD or an ACM policy manages RHOAI from Git and the updater only installs the build the managed catalog serves (docs/GITOPS.md).", feature)
 	return func(w http.ResponseWriter, r *http.Request) {
 		RecordRequest()
 		slog.Debug("refused by the gitops profile", "path", r.URL.Path)

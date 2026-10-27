@@ -593,8 +593,20 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleStatus returns the current cluster and operator status.
-var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	status, err := cluster.GetStatus(c)
+var HandleStatus = withAuth(statusHandler(cluster.GetStatus))
+
+// HandleStatusGitOps is HandleStatus in the gitops profile: it reads no
+// Secret and contacts no registry (cluster.GetStatusGitOps).
+var HandleStatusGitOps = withAuth(statusHandler(cluster.GetStatusGitOps))
+
+func statusHandler(get func(*cluster.Client) (*types.StatusResponse, error)) func(*cluster.Client, http.ResponseWriter, *http.Request) {
+	return func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+		status, err := get(c)
+		writeStatus(w, status, err)
+	}
+}
+
+func writeStatus(w http.ResponseWriter, status *types.StatusResponse, err error) {
 	if err != nil {
 		slog.Error("status error", "error", err)
 		code, errorCode := cluster.HTTPStatusForError(err)
@@ -602,7 +614,7 @@ var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *ht
 		return
 	}
 	writeJSON(w, status, "status")
-})
+}
 
 // HandleUpdate validates a nightly catalog update with a server-side dry
 // run. Real updates go through HandleUpdateStream, which reports progress.
@@ -1025,15 +1037,26 @@ var HandleActivity = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *
 // HandleComponents returns DSC component statuses and deployments.
 var HandleComponents = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	includeLabels := r.URL.Query().Get("labels") == "true"
-	components, err := cluster.GetComponents(c, includeLabels)
-	if err != nil {
-		slog.Error("components error", "error", err)
-		code, errorCode := cluster.HTTPStatusForError(err)
-		writeError(w, fmt.Sprintf("Could not read components: %v", err), code, errorCode)
-		return
-	}
-	writeJSON(w, components, "components")
+	writeComponents(w)(cluster.GetComponents(c, includeLabels))
 })
+
+// HandleComponentsGitOps is HandleComponents in the gitops profile: no image
+// labels, no GitHub DSC sample (cluster.GetComponentsGitOps).
+var HandleComponentsGitOps = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	writeComponents(w)(cluster.GetComponentsGitOps(c))
+})
+
+func writeComponents(w http.ResponseWriter) func(*types.ComponentsResponse, error) {
+	return func(components *types.ComponentsResponse, err error) {
+		if err != nil {
+			slog.Error("components error", "error", err)
+			code, errorCode := cluster.HTTPStatusForError(err)
+			writeError(w, fmt.Sprintf("Could not read components: %v", err), code, errorCode)
+			return
+		}
+		writeJSON(w, components, "components")
+	}
+}
 
 var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
@@ -1524,17 +1547,24 @@ var HandleMLflowRevert = withMutationAuth(func(c *cluster.Client, w http.Respons
 })
 
 // HandleDiagnostics runs cluster health checks and returns a diagnostic report.
-var HandleDiagnostics = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	slog.Info("request", "op", "diagnostics")
+var HandleDiagnostics = withAuth(diagnosticsHandler(cluster.RunDiagnostics))
 
-	result, err := cluster.RunDiagnostics(c)
-	if err != nil {
-		slog.Error("diagnostics failed", "error", err)
-		writeError(w, "diagnostics failed", http.StatusInternalServerError)
-		return
+// HandleDiagnosticsGitOps is HandleDiagnostics in the gitops profile:
+// without the pull-secret check (cluster.DiagnoseClusterGitOps).
+var HandleDiagnosticsGitOps = withAuth(diagnosticsHandler(cluster.DiagnoseClusterGitOps))
+
+func diagnosticsHandler(run func(*cluster.Client) (*cluster.DiagnosticsResponse, error)) func(*cluster.Client, http.ResponseWriter, *http.Request) {
+	return func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+		slog.Info("request", "op", "diagnostics")
+		result, err := run(c)
+		if err != nil {
+			slog.Error("diagnostics failed", "error", err)
+			writeError(w, "diagnostics failed", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, result, "diagnostics")
 	}
-	writeJSON(w, result, "diagnostics")
-})
+}
 
 // HandleDiagnosticsFix attempts to auto-fix a specific problem identified by diagnostics.
 var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {

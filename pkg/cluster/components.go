@@ -69,7 +69,28 @@ func (r dscRead) versionFallback() *types.DSCVersionFallback {
 // through DSCExists/DSCState rather than an error. Labels already in the cache
 // are always added; includeLabels also fetches missing ones from Quay (slower).
 func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, error) {
-	resp := &types.ComponentsResponse{Components: []types.ComponentInfo{}}
+	return getComponents(c, componentRegistryReads{labels: fetchImageLabelsForDeployments, dscSample: fetchDSCSample}, includeLabels)
+}
+
+// componentRegistryReads are the reads of GetComponents that the gitops
+// profile leaves out: the images' OCI labels (from Quay, and commit dates
+// from GitHub) and the GitHub DSC sample. nil fields are skipped.
+type componentRegistryReads struct {
+	labels    func(c *Client, deployments []types.DeploymentInfo, fetch bool)
+	dscSample dscSampleFetcher
+}
+
+// GetComponentsGitOps is GetComponents in the gitops profile, which
+// contacts no host but the API server (docs/GITOPS.md, section 11): no
+// image labels (ImageLabelsOff), and the DSC defaults from the installed
+// CSV's alm-examples only. The operator build comes from the installed CSV
+// as in both profiles (OperatorImage, OperatorBuilt).
+func GetComponentsGitOps(c *Client) (*types.ComponentsResponse, error) {
+	return getComponents(c, componentRegistryReads{}, false)
+}
+
+func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) (*types.ComponentsResponse, error) {
+	resp := &types.ComponentsResponse{Components: []types.ComponentInfo{}, ImageLabelsOff: reads.labels == nil}
 
 	// Every read below is independent of the DSC, so they run while it is read.
 	var wg sync.WaitGroup
@@ -112,7 +133,7 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 		resp.DSCAPIVersion, _ = read.Object["apiVersion"].(string)
 		resp.DSCVersionFallback = read.versionFallback()
 		<-installedOpReadyCh
-		resp.DSCCompatibility = checkDSCCompatibilityFor(c, read, installedOp, installedOpErr)
+		resp.DSCCompatibility = checkDSCCompatibilityFor(c, read, installedOp, installedOpErr, reads.dscSample)
 		addDSCComponents(resp, read.Object)
 	}
 	wg.Wait()
@@ -120,6 +141,8 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 	if installedOp != nil {
 		resp.OperatorVersion = installedOp.Version
 		resp.OperatorPhase = installedOp.Phase
+		resp.OperatorImage = installedOp.ContainerImage
+		resp.OperatorBuilt = installedOp.CreatedAt
 	}
 	if appErr == nil {
 		resp.Deployments = append(resp.Deployments, appDeps...)
@@ -139,7 +162,9 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 		resp.ChangedCount = CompareDeployments(resp.Deployments, snapshot)
 	}
 
-	fetchImageLabelsForDeployments(c, resp.Deployments, includeLabels)
+	if reads.labels != nil {
+		reads.labels(c, resp.Deployments, includeLabels)
+	}
 	return resp, nil
 }
 

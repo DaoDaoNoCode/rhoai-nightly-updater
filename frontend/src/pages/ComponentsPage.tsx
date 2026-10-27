@@ -58,6 +58,10 @@ import { useClusterStatus } from "../state/AppState";
 import { gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason } from "../gitops";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 
+/** Why the Deployments table has no commits, build dates or versions in the gitops profile. */
+export const IMAGE_LABELS_OFF =
+  "Commits, build dates and versions of the images come from their labels in the registry, which the gitops profile does not read.";
+
 /** The status of a DSC component as a status label kind. */
 function componentStatus(status: string): StatusKind {
   switch (status) {
@@ -557,6 +561,19 @@ export const ComponentsPage: React.FC = () => {
               <CardBody>
                 <Content component="p" className="pf-v6-u-text-color-subtle">
                   {data.changedCount} changed since the snapshot taken at the last install or update (<RelativeTime date={data.snapshotTime} size="inherit" />).
+                </Content>
+              </CardBody>
+            )}
+            {data.imageLabelsOff && (
+              <CardBody>
+                <Content component="p" className="pf-v6-u-text-color-subtle">
+                  {IMAGE_LABELS_OFF}
+                  {data.operatorImage && (
+                    <>
+                      {" "}Operator build, from the installed CSV: <code className="pf-v6-u-text-break-word">{data.operatorImage}</code>
+                      {data.operatorBuilt ? <>, built <RelativeTime date={data.operatorBuilt} size="inherit" /></> : null}.
+                    </>
+                  )}
                 </Content>
               </CardBody>
             )}

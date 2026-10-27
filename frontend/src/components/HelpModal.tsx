@@ -18,6 +18,7 @@ import {
 } from "@patternfly/react-core";
 import QuestionCircleIcon from "@patternfly/react-icons/dist/esm/icons/question-circle-icon";
 import { useUpdateCheck, useVersion } from "../state/AppInfo";
+import { GITOPS_PROFILE_UPDATER_RELEASES, isGitOpsProfile } from "../profile";
 import { useClusterStatus } from "../state/AppState";
 
 const GLOSSARY: [string, React.ReactNode][] = [
@@ -124,6 +125,12 @@ export const HelpButton: React.FC = () => {
                   {version.commit && version.commit !== "unknown" ? <> (commit <code>{version.commit.slice(0, 12)}</code>)</> : null}
                   {version.buildDate && version.buildDate !== "unknown" ? `, built ${version.buildDate}` : ""}
                 </DescriptionListDescription>
+              </DescriptionListGroup>
+            )}
+            {(update?.pinnedInGit || isGitOpsProfile(version)) && (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Updater releases</DescriptionListTerm>
+                <DescriptionListDescription>{GITOPS_PROFILE_UPDATER_RELEASES}</DescriptionListDescription>
               </DescriptionListGroup>
             )}
             {update?.updateAvailable && update.latest && (

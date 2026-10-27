@@ -22,6 +22,7 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 import type { StatusResponse } from '../types';
+import { pullSecretNotUsed } from '../utils';
 
 const MIRROR_COMMAND = `rosa create image-mirror --cluster=<your-cluster-name> \\
   --source=registry.redhat.io/rhoai --mirrors=quay.io/rhoai`;
@@ -113,15 +114,20 @@ export const SetupModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   status: StatusResponse | null;
-}> = ({ isOpen, onClose, status }) => {
-  const pullSecretReady = (status?.pullSecret.exists && status?.pullSecret.valid) ?? false;
+  /** The gitops profile: a missing pull secret is not used there. */
+  gitOpsProfile?: boolean;
+}> = ({ isOpen, onClose, status, gitOpsProfile = false }) => {
+  const notUsed = pullSecretNotUsed(status, gitOpsProfile);
+  const pullSecretReady = !!(status?.pullSecret.exists && status?.pullSecret.valid) || notUsed;
   const pullSecretInvalid = !!status?.pullSecret.exists && !status.pullSecret.valid;
   const idmsReady = status?.imageMirror.exists ?? false;
-  const pullSecretDescription = pullSecretReady
-    ? 'additional-pull-secret in kube-system can pull from quay.io/rhoai'
-    : pullSecretInvalid
-      ? `additional-pull-secret exists but is invalid${status?.pullSecret.detail ? `: ${status.pullSecret.detail}` : ''}`
-      : 'additional-pull-secret is missing from kube-system';
+  const pullSecretDescription = notUsed
+    ? "Not used: the gitops profile uses the cluster's pull secret, which Git or ACM manage"
+    : pullSecretReady
+      ? 'additional-pull-secret in kube-system can pull from quay.io/rhoai'
+      : pullSecretInvalid
+        ? `additional-pull-secret exists but is invalid${status?.pullSecret.detail ? `: ${status.pullSecret.detail}` : ''}`
+        : 'additional-pull-secret is missing from kube-system';
   const [idmsExpanded, setIdmsExpanded] = useState(!idmsReady);
 
   return (
@@ -144,7 +150,7 @@ export const SetupModal: React.FC<{
           <StackItem>
             <ProgressStepper isVertical>
               <ProgressStep
-                variant={pullSecretReady ? 'success' : pullSecretInvalid ? 'warning' : 'danger'}
+                variant={notUsed ? 'info' : pullSecretReady ? 'success' : pullSecretInvalid ? 'warning' : 'danger'}
                 id="step-pull-secret"
                 titleId="step-pull-secret-title"
                 aria-label="Pull secret step"
@@ -168,7 +174,9 @@ export const SetupModal: React.FC<{
 
           <StackItem>
             <Content component="p">
-              {pullSecretReady
+              {notUsed
+                ? "The gitops profile pulls with the cluster's own pull secrets, so additional-pull-secret is not needed."
+                : pullSecretReady
                 ? 'The pull secret is ready. You can test or replace it from the Pull secret card on the Status page.'
                 : pullSecretInvalid
                   ? 'Replace the token from the Pull secret card on the Status page.'

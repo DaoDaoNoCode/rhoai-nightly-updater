@@ -49,7 +49,7 @@ import { BuildSummary } from "./BuildSummary";
 import { TagLabel } from "./StatusLabel";
 import { StepsPreview } from "./StepsPreview";
 import { REVERT_DASHBOARD_EXPLANATION, describeDashboardSession } from "./OperatorActions";
-import { prerequisitesMet as prerequisitesReady } from "../utils";
+import { prerequisitesMet as prerequisitesReady, pullSecretNotUsed } from "../utils";
 import type { LatestNightlyResponse, NightlyBuild, OperationResponse, StatusResponse } from "../types";
 import {
   updateOperator,
@@ -307,7 +307,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
   const fetchLatestAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => fetchLatestAbortRef.current?.abort(), []);
 
-  const prerequisitesMet = prerequisitesReady(status);
+  const prerequisitesMet = prerequisitesReady(status, gitOpsProfile);
   const isFirstInstall = !status?.csv.phase || status.csv.phase === "Not Found";
   // Under Argo CD (or an ACM policy), Git sets the catalog image and Update
   // installs the build the catalog serves: the image is not a choice here.
@@ -334,7 +334,10 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
   const preflights = useMemo<Preflight[]>(() => {
     if (!status) return [];
     const items: Preflight[] = [
-      {
+      pullSecretNotUsed(status, gitOpsProfile) ? {
+        label: "Pull secret: the cluster's own pull secrets are used (the gitops profile does not read or check them)",
+        state: "info",
+      } : {
         label: status.pullSecret.exists && status.pullSecret.valid
           ? "Pull secret can read quay.io/rhoai"
           : status.pullSecret.exists
@@ -367,7 +370,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
     const busy = operation.server.inProgress || operation.running || operation.state.reconcile.active;
     items.push(busy && blocker ? { label: blocker, state: "fail" } : { label: "No other operation is running", state: "pass" });
     return items;
-  }, [status, override, blocker, gitOpsState, operation.server.inProgress, operation.running, operation.state.reconcile.active]);
+  }, [status, override, blocker, gitOpsState, gitOpsProfile, operation.server.inProgress, operation.running, operation.state.reconcile.active]);
 
   const disabledReason = blocker
     ?? (!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null)

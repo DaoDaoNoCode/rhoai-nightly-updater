@@ -71,7 +71,7 @@ export const StatusPage: React.FC = () => {
   const gitOpsProfile = useGitOpsProfile();
   const policyProblem = gitOpsPolicyProblem(useVersion());
 
-  const prerequisitesMet = checkPrereqs(status);
+  const prerequisitesMet = checkPrereqs(status, gitOpsProfile);
   const installed = operatorInstalled(status);
 
   // --- Newest nightly overall (for the hero when not on nightly, and to prefill the form) ---
@@ -456,7 +456,7 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
-      {status && <SetupModal isOpen={setupOpen} onClose={() => setSetupOpen(false)} status={status} />}
+      {status && <SetupModal isOpen={setupOpen} onClose={() => setSetupOpen(false)} status={status} gitOpsProfile={gitOpsProfile} />}
 
       <UpdateConfirmModal target={updateTarget} status={status} onConfirm={confirmUpdate} onClose={() => setUpdateTarget(null)} />
 

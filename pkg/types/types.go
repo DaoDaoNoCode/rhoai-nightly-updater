@@ -363,8 +363,15 @@ type ComponentsResponse struct {
 	DSCState        string `json:"dscState"`
 	OperatorVersion string `json:"operatorVersion,omitempty"` // installed rhods-operator CSV version
 	OperatorPhase   string `json:"operatorPhase,omitempty"`   // its CSV phase, e.g. "Succeeded"
-	DSCPhase        string `json:"dscPhase"`
-	DSCReason       string `json:"dscReason,omitempty"`
+	// OperatorImage and OperatorBuilt are the installed CSV's containerImage
+	// and createdAt annotations: the operator build, read from the cluster.
+	OperatorImage string `json:"operatorImage,omitempty"`
+	OperatorBuilt string `json:"operatorBuilt,omitempty"`
+	// ImageLabelsOff: the per-image build details (commit, build date,
+	// version) are not read, because the gitops profile contacts no registry.
+	ImageLabelsOff bool   `json:"imageLabelsOff,omitempty"`
+	DSCPhase       string `json:"dscPhase"`
+	DSCReason      string `json:"dscReason,omitempty"`
 	// DSCAPIVersion is the apiVersion the DSC was read at, for example
 	// "datasciencecluster.opendatahub.io/v3".
 	DSCAPIVersion string `json:"dscAPIVersion,omitempty"`

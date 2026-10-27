@@ -456,6 +456,9 @@ func TestGitOpsRBACGrantsNothingTheProfileDoesNotReach(t *testing.T) {
 func TestGitOpsRBACHasNoClusterWideWrites(t *testing.T) {
 	writes := map[string]bool{"create": true, "update": true, "patch": true, "delete": true, "deletecollection": true, "*": true, "escalate": true, "bind": true, "impersonate": true}
 	for _, g := range templateGrantsFrom(t, rbacGitOpsRel) {
+		if g.source == "built-in basic-user" {
+			continue // every identity has it; it reads, it does not write (builtInGrants)
+		}
 		for _, v := range g.rule.Verbs {
 			if g.namespace == "" && writes[v] {
 				t.Errorf("%s: %s on %v/%v is cluster-wide", g.source, v, g.rule.APIGroups, g.rule.Resources)
@@ -466,11 +469,10 @@ func TestGitOpsRBACHasNoClusterWideWrites(t *testing.T) {
 				t.Errorf("%s: resources * in %v", g.source, g.rule.APIGroups)
 			}
 			switch res {
-			case "secrets":
-				for _, v := range g.rule.Verbs {
-					if v != "get" || len(g.rule.ResourceNames) == 0 {
-						t.Errorf("%s: %s secrets %v; only get by name is allowed", g.source, v, g.rule.ResourceNames)
-					}
+			case "secrets", "*":
+				// The gitops profile reads no Secret (docs/GITOPS.md, section 11).
+				if res == "secrets" || g.rule.APIGroups[0] == "" {
+					t.Errorf("%s: %v on %s; the gitops profile grants no access to Secrets", g.source, g.rule.Verbs, res)
 				}
 			case "validatingwebhookconfigurations", "mutatingwebhookconfigurations", "deployments", "operatorgroups", "namespaces":
 				for _, v := range g.rule.Verbs {

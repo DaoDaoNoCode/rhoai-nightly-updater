@@ -371,3 +371,28 @@ func TestHandleUpdateCheck(t *testing.T) {
 		t.Fatalf("no repository configured: %+v", got)
 	}
 }
+
+// The gitops profile's update check reads no registry: the chart pins the
+// release in Git.
+func TestHandleUpdateCheckGitOps(t *testing.T) {
+	oldVersion, oldChecker := Version, defaultUpdateChecker
+	t.Cleanup(func() { Version, defaultUpdateChecker = oldVersion, oldChecker })
+	defaultUpdateChecker = &updateChecker{
+		now: time.Now,
+		fetch: func(context.Context, string) ([]string, error) {
+			t.Error("the gitops profile read the registry")
+			return []string{"v9.0.0"}, nil
+		},
+	}
+	t.Setenv("IMAGE_REPOSITORY", "quay.io/example/app")
+	Version = "v1.0.0"
+	w := httptest.NewRecorder()
+	HandleUpdateCheckGitOps(w, httptest.NewRequest("GET", "/api/update-check", nil))
+	var info UpdateInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	if info != (UpdateInfo{Current: "v1.0.0", PinnedInGit: true}) {
+		t.Fatalf("got %+v", info)
+	}
+}

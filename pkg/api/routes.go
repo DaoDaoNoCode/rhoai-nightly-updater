@@ -69,13 +69,16 @@ var routes = []Route{
 //     call, bounded labels), so the profile's use shows in /metrics.
 //   - The dry run (POST /api/update) runs the profile's own read-only dry
 //     run (HandleUpdateGitOps); the Update card offers it.
+//   - Status, Components, Diagnostics and the update check have their own
+//     handlers, which read no Secret and contact no host but the API server
+//     (pkg/cluster/gitops_offline_test.go).
 var gitOpsRoutes = map[string]http.HandlerFunc{
-	"GET /api/status":           withGitOpsAdmin(HandleStatus),
+	"GET /api/status":           withGitOpsAdmin(HandleStatusGitOps),
 	"GET /api/operation":        withGitOpsAdmin(HandleOperation),
 	"GET /api/activity":         withGitOpsAdmin(HandleActivity),
-	"GET /api/update-check":     withGitOpsAdmin(HandleUpdateCheck),
-	"GET /api/components":       withGitOpsAdmin(HandleComponents),
-	"GET /api/diagnostics":      withGitOpsAdmin(HandleDiagnostics),
+	"GET /api/update-check":     withGitOpsAdmin(HandleUpdateCheckGitOps),
+	"GET /api/components":       withGitOpsAdmin(HandleComponentsGitOps),
+	"GET /api/diagnostics":      withGitOpsAdmin(HandleDiagnosticsGitOps),
 	"GET /api/user/permissions": HandleUserPermissions,
 	"POST /api/update/stream":   HandleUpdateStreamGitOps,
 	"POST /api/update":          HandleUpdateGitOps,

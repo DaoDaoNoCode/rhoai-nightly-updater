@@ -328,7 +328,7 @@ async function api(req, res, u) {
   const key = `${req.method} ${u.pathname}`;
   if (world.profile === "gitops") {
     if (!GITOPS_PROFILE_ROUTES.has(key)) {
-      return json(res, 403, { error: "This feature is off: this updater runs the gitops profile, where Argo CD manages RHOAI and the updater only installs the build the Git-managed catalog serves (docs/GITOPS.md).", errorCode: "profile_gitops" });
+      return json(res, 403, { error: "This feature is off: this updater runs the gitops profile, where Argo CD or an ACM policy manages RHOAI from Git and the updater only installs the build the managed catalog serves (docs/GITOPS.md).", errorCode: "profile_gitops" });
     }
     if (world.canMutate === false && req.method === "GET" && !["/api/user/permissions", "/api/version"].includes(u.pathname)) {
       return json(res, 403, { error: "This updater runs the gitops profile, where only cluster-admins can see what it reads from the cluster.", errorCode: "forbidden" });

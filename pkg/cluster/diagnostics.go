@@ -92,6 +92,31 @@ var diagnosticChecks = []diagnosticCheck{
 	{"Operator-managed config", checkManagedConfig},
 }
 
+// gitOpsDiagnosticChecks are diagnosticChecks without "Pull secret", which
+// reads a Secret and checks it with Quay: the gitops profile does neither
+// (docs/GITOPS.md, section 11). It adds one check of its own: that the
+// ServiceAccount cannot read Secrets (checkServiceAccountSecretAccess). Listed again rather than filtered, so the
+// gitops profile does not reference that check at all
+// (gitops_offline_test.go); a test keeps the two lists in step.
+var gitOpsDiagnosticChecks = []diagnosticCheck{
+	{"Catalog health", checkCatalogHealth},
+	{"Operator pods", checkOperatorPods},
+	{"Subscription health", checkSubscriptionHealth},
+	{"Operator installed", checkCSVHealth},
+	{"Install plan", checkInstallPlanHealth},
+	{"Image mirror", checkImageMirror},
+	{"Stale webhooks", checkStaleWebhooks},
+	{conversionCheckName, checkConversionFailures},
+	{"Node capacity", checkNodeCapacity},
+	{"DataScienceCluster", checkDataScienceCluster},
+	{"RHOAI pods", checkRHOAIPods},
+	{"Certificates", checkCertificates},
+	{"Platform modules", checkPlatformModules},
+	{applyFailuresCheckName, checkApplyFailures},
+	{"Operator-managed config", checkManagedConfig},
+	{secretAccessCheckName, checkServiceAccountSecretAccess},
+}
+
 var (
 	// diagnosticsCheckTimeout bounds each check so one slow API call cannot
 	// hold up the whole report.
@@ -109,10 +134,20 @@ var (
 // a list of problems with suggested fixes and a set of health check results.
 // Checks run concurrently, each with its own timeout.
 func DiagnoseCluster(c *Client) (*DiagnosticsResponse, error) {
-	outputs := make([]checkOutput, len(diagnosticChecks))
+	return diagnose(c, diagnosticChecks)
+}
+
+// DiagnoseClusterGitOps is DiagnoseCluster in the gitops profile:
+// gitOpsDiagnosticChecks, which read no Secret and contact no registry.
+func DiagnoseClusterGitOps(c *Client) (*DiagnosticsResponse, error) {
+	return diagnose(c, gitOpsDiagnosticChecks)
+}
+
+func diagnose(c *Client, checks []diagnosticCheck) (*DiagnosticsResponse, error) {
+	outputs := make([]checkOutput, len(checks))
 	sem := make(chan struct{}, diagnosticsParallelism)
 	var wg sync.WaitGroup
-	for i, chk := range diagnosticChecks {
+	for i, chk := range checks {
 		wg.Add(1)
 		go func(i int, chk diagnosticCheck) {
 			defer wg.Done()

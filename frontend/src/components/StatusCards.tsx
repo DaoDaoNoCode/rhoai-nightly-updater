@@ -28,7 +28,7 @@ import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import { useNavigate } from "react-router-dom";
 import type { LatestNightlyResponse, NightlyBuild, StatusResponse } from "../types";
 import { isOnNightly, tagLine } from "../build";
-import { operatorInstalled, prerequisitesMet as setupComplete } from "../utils";
+import { operatorInstalled, prerequisitesMet as setupComplete, pullSecretReady } from "../utils";
 import { BuildSummary } from "./BuildSummary";
 import { PullSecretSetup } from "./PullSecretCard";
 import { CardList, CardListItem } from "./CardList";
@@ -36,6 +36,7 @@ import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
 import { catalogImageSetter, catalogManagedByACM, gitOpsInstallState, gitOpsInstallWaitReason, operatorManaged } from "../gitops";
 import { useGitOpsProfile } from "../state/AppInfo";
+import { gitOpsProfileLatestLine } from "../profile";
 
 /** CSV phases of an install OLM is still working on. */
 const INSTALLING_PHASES = new Set(["Installing", "Replacing", "Pending", "InstallReady"]);
@@ -201,6 +202,8 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
 
   const subtle = (text: React.ReactNode) => <span className="pf-v6-u-text-color-subtle">{text}</span>;
   const latestRow = (() => {
+    // The gitops profile never contacts Quay: Git (or the ACM policy) picks the build.
+    if (gitOpsProfile) return subtle(gitOpsProfileLatestLine(catalogManagedByACM(status)));
     if (onNightly && updateAvailable === false) return subtle(`Same as ${gitOpsApp ? "in Git" : "installed"}. You have the newest ${nightly?.installed?.tag ?? ""} build.`);
     if (target) return <BuildSummary build={target} />;
     if (nightly?.error) return subtle(nightly.error);
@@ -461,8 +464,9 @@ interface ClusterSetupCardProps {
  */
 export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onStatusRefresh, onShowInstructions, collapsible = false, readOnly = false }) => {
   const [expanded, setExpanded] = useState(false);
-  const ready = setupComplete(status);
-  const done = (status.pullSecret.exists && status.pullSecret.valid ? 1 : 0) + (status.imageMirror.exists ? 1 : 0);
+  // readOnly is the gitops profile, where a missing pull secret is not used.
+  const ready = setupComplete(status, readOnly);
+  const done = (pullSecretReady(status, readOnly) ? 1 : 0) + (status.imageMirror.exists ? 1 : 0);
   const titleId = collapsible ? "cluster-setup-title" : "setup-title";
   const body = (
     <CardBody>

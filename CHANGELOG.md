@@ -83,6 +83,33 @@ only accepts a tag whose version is the top dated section. See
   unchanged, the new Template parameter `SUBSCRIPTION_ENV_ALLOWLIST` and
   variable `GITOPS_ADMISSION_POLICY` are read only in the gitops profile,
   and an install without `PROFILE` runs the full profile.
+- A nightly catalog that an ACM policy enforces counts as managed, as one
+  Argo CD tracks does: `config-policy-controller` owns its `f:spec` in
+  `managedFields` (read from the same GET; no new RBAC). Both profiles leave
+  it as the policy sets it and install the build it serves; the gitops
+  profile runs on it; messages and the Status page name the policy.
+  `GET /api/status` reports `catalogSource.managedByACM`.
+
+### Changed
+
+- The gitops profile never contacts Quay, another registry or GitHub, and
+  reads no Secret: every page's build information comes from the cluster
+  ([docs/GITOPS.md](docs/GITOPS.md#no-registry-access)). The dry run's
+  version check uses the head the catalog serves (PackageManifest); the
+  Status page's *Latest* row says a newer nightly arrives as a change in
+  Git (no Quay lookup, no 401); Components shows the operator build from
+  the installed CSV and no image labels, and takes DSC defaults from the
+  CSV's `alm-examples` only; Diagnostics has no pull-secret check; the
+  updater's own release check is off (`pinnedInGit`; the chart pins it in
+  Git). Update and its dry run no longer read
+  `kube-system/additional-pull-secret`: they say the cluster's own pull
+  secrets are used, and the Status page shows the secret as *Not used*.
+  `deploy/rbac-gitops.yaml` renders its Role in `kube-system` with no rules,
+  under the name `install.sh` used, so moving an install to Argo CD removes
+  `install.sh`'s Secret grant; Diagnostics reports (with
+  SelfSubjectAccessReviews) when the ServiceAccount can still read Secrets. A test on the
+  profile's reference graph fails when anything it reaches sends a request
+  to another host than the API server. The full profile is unchanged.
 
 ### Fixed
 

@@ -446,6 +446,11 @@ export interface ComponentsResponse {
   dscState?: string;
   operatorVersion?: string;
   operatorPhase?: string;
+  /** The installed CSV's containerImage and createdAt annotations: the operator build, from the cluster. */
+  operatorImage?: string;
+  operatorBuilt?: string;
+  /** The gitops profile: image labels (commit, build date, version) are not read, since it contacts no registry. */
+  imageLabelsOff?: boolean;
   /** The apiVersion the DSC was read at, e.g. "datasciencecluster.opendatahub.io/v3". */
   dscAPIVersion?: string;
   /** Set when the DSC could only be read at an older version than the preferred one. */
@@ -668,6 +673,8 @@ export interface UpdateCheck {
   releaseNotesURL?: string;
   /** Where latest's install.sh is downloaded from, when the releases host is known. */
   installerURL?: string;
+  /** The gitops profile: no registry check; the chart pins the release in Git. */
+  pinnedInGit?: boolean;
 }
 
 /** One build's answer in GET /api/build-explorer/contains. */

@@ -31,9 +31,41 @@ func getStableSource() string {
 	return "redhat-operators"
 }
 
+// statusRegistryReads are the reads of GetStatus that the gitops profile
+// leaves out: the pull secret (a Secret, checked with Quay) and the newest
+// nightly of the installed stream (from Quay). nil fields are skipped.
+type statusRegistryReads struct {
+	pullSecret func(c *Client) (types.PullSecretInfo, string, error)
+	nightly    func(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus
+}
+
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
 // All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
+	return getStatus(c, statusRegistryReads{pullSecret: readPullSecret, nightly: getNightlyStatus})
+}
+
+// GetStatusGitOps is GetStatus in the gitops profile, which reads no Secret
+// and contacts no registry (docs/GITOPS.md, section 11): the pull secret is
+// not read, and the nightly build is the catalog image's reference only;
+// what the catalog serves comes from its PackageManifest (CatalogServes).
+// pkg/cluster/gitops_offline_test.go checks that nothing it reaches sends a
+// request to another host than the API server.
+func GetStatusGitOps(c *Client) (*types.StatusResponse, error) {
+	return getStatus(c, statusRegistryReads{})
+}
+
+// gitOpsNightlyStatus is the installed nightly build without Quay: the
+// catalog image's tag and digest. Latest stays empty: in the gitops profile
+// Git or an ACM policy picks the build.
+func gitOpsNightlyStatus(sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus {
+	if !cs.Exists || cs.Image == "" || sub.Source != CatalogName {
+		return nil
+	}
+	return &types.NightlyStatus{Installed: nightlyBuildFromImage(cs.Image)}
+}
+
+func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, error) {
 	status := &types.StatusResponse{}
 	var mu sync.Mutex
 	var errs []string
@@ -116,7 +148,10 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	})
 
 	run(func() {
-		if ps, auth, err := readPullSecret(c); err != nil {
+		if reads.pullSecret == nil {
+			return
+		}
+		if ps, auth, err := reads.pullSecret(c); err != nil {
 			addErr(fmt.Sprintf("pull secret: %v", err))
 		} else {
 			mu.Lock()
@@ -192,7 +227,11 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 
 	// Cached per installed catalog image; only the first poll after an image
 	// change waits for Quay (bounded by nightlyStatusTimeout).
-	status.Nightly = getNightlyStatus(c.ctx, quayAuth, status.Subscription, status.CatalogSource)
+	if reads.nightly != nil {
+		status.Nightly = reads.nightly(c.ctx, quayAuth, status.Subscription, status.CatalogSource)
+	} else {
+		status.Nightly = gitOpsNightlyStatus(status.Subscription, status.CatalogSource)
+	}
 	// Under Argo CD (or an ACM policy) the catalog image is Git's choice and
 	// can run ahead of the installed operator (a same-version build OLM does
 	// not install by itself), so say what the catalog serves.
