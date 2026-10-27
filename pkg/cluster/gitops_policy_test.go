@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -240,38 +238,97 @@ func TestSubscriptionEnvAllowlist(t *testing.T) {
 	}
 }
 
+const testGitOpsPolicyName = "rhoai-nightly-updater-ns1-gitops"
+
+// useGitOpsPolicy sets up what main and the Template set up in a pod of the
+// gitops profile: the embedded deploy/rbac-gitops.yaml, the namespace ns1
+// and the policy's name.
+func useGitOpsPolicy(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile(rbacGitOpsRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := gitOpsPolicyTemplate
+	SetGitOpsPolicyTemplate(data)
+	t.Cleanup(func() { SetGitOpsPolicyTemplate(prev) })
+	t.Setenv("NAMESPACE", "ns1")
+	t.Setenv(GitOpsAdmissionPolicyEnv, testGitOpsPolicyName)
+}
+
+// livePolicy returns the policy and binding of deploy/rbac-gitops.yaml as
+// the API server returns them, with the defaults it fills in (as an
+// OpenShift 4.21 cluster returns its policies).
+func livePolicy(t *testing.T) (policy, binding map[string]interface{}) {
+	t.Helper()
+	p, b, err := expectedGitOpsAdmission(testGitOpsPolicyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := p["matchConstraints"].(map[string]interface{})
+	mc["namespaceSelector"] = map[string]interface{}{}
+	mc["objectSelector"] = map[string]interface{}{}
+	for _, r := range mc["resourceRules"].([]interface{}) {
+		r.(map[string]interface{})["scope"] = "*"
+	}
+	return map[string]interface{}{"metadata": map[string]interface{}{"name": testGitOpsPolicyName, "uid": "u1"}, "spec": p},
+		map[string]interface{}{"metadata": map[string]interface{}{"name": testGitOpsPolicyName, "uid": "u2"}, "spec": b}
+}
+
+// servesGitOpsPolicy makes f a cluster with the gitops profile's policy in
+// place, for a pod set up by useGitOpsPolicy.
+func servesGitOpsPolicy(t *testing.T, f *fakeOLM) *fakeOLM {
+	t.Helper()
+	useGitOpsPolicy(t)
+	policy, binding := livePolicy(t)
+	f.admission = map[string]map[string]interface{}{
+		clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName):       policy,
+		clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName): binding,
+	}
+	return f
+}
+
+// The policy and binding must be exactly this release's: each way of
+// weakening them, or a policy rendered with another allowlist, is refused.
 func TestCheckGitOpsAdmissionPolicy(t *testing.T) {
-	const name = "rhoai-nightly-updater-ns1-gitops"
-	t.Setenv(GitOpsAdmissionPolicyEnv, name)
+	spec := func(o map[string]interface{}) map[string]interface{} { return o["spec"].(map[string]interface{}) }
 	for _, tc := range []struct {
-		desc, policy, binding, want string
+		desc   string
+		change func(policy, binding map[string]interface{})
+		want   string
 	}{
-		{"in place", `{"spec":{"failurePolicy":"Fail"}}`, `{"spec":{"policyName":"` + name + `","validationActions":["Deny"]}}`, ""},
-		{"failurePolicy unset (Fail)", `{"spec":{}}`, `{"spec":{"policyName":"` + name + `","validationActions":["Deny","Audit"]}}`, ""},
-		{"no policy", "", `{"spec":{"policyName":"` + name + `","validationActions":["Deny"]}}`, "read ValidatingAdmissionPolicy"},
-		{"Ignore", `{"spec":{"failurePolicy":"Ignore"}}`, `{"spec":{"policyName":"` + name + `","validationActions":["Deny"]}}`, "failurePolicy Ignore"},
-		{"no binding", `{"spec":{}}`, "", "read ValidatingAdmissionPolicyBinding"},
-		{"warn only", `{"spec":{}}`, `{"spec":{"policyName":"` + name + `","validationActions":["Warn"]}}`, "without Deny"},
-		{"binds another", `{"spec":{}}`, `{"spec":{"policyName":"other","validationActions":["Deny"]}}`, "binds \"other\""},
+		{"in place", func(_, _ map[string]interface{}) {}, ""},
+		{"failurePolicy unset (Fail)", func(p, _ map[string]interface{}) { delete(spec(p), "failurePolicy") }, ""},
+		{"no policy", func(p, _ map[string]interface{}) { p["gone"] = true }, "read ValidatingAdmissionPolicy"},
+		{"no binding", func(_, b map[string]interface{}) { b["gone"] = true }, "read ValidatingAdmissionPolicyBinding"},
+		{"failurePolicy Ignore", func(p, _ map[string]interface{}) { spec(p)["failurePolicy"] = "Ignore" }, "spec.failurePolicy"},
+		{"warn only", func(_, b map[string]interface{}) { spec(b)["validationActions"] = []interface{}{"Warn"} }, "spec.validationActions"},
+		{"binds another", func(_, b map[string]interface{}) { spec(b)["policyName"] = "other" }, "spec.policyName"},
+		{"binding narrowed to other namespaces", func(_, b map[string]interface{}) {
+			spec(b)["matchResources"] = map[string]interface{}{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"x": "y"}}}
+		}, "spec.matchResources"},
+		{"policy narrowed to other namespaces", func(p, _ map[string]interface{}) {
+			spec(p)["matchConstraints"].(map[string]interface{})["namespaceSelector"] = map[string]interface{}{"matchLabels": map[string]interface{}{"x": "y"}}
+		}, "spec.matchConstraints"},
+		{"a match condition that skips everything", func(p, _ map[string]interface{}) {
+			spec(p)["matchConditions"] = append(spec(p)["matchConditions"].([]interface{}), map[string]interface{}{"name": "never", "expression": "false"})
+		}, "spec.matchConditions"},
+		{"a validation removed", func(p, _ map[string]interface{}) {
+			spec(p)["validations"] = spec(p)["validations"].([]interface{})[1:]
+		}, "spec.validations"},
+		{"another allowlist (a rollout in progress)", func(p, _ map[string]interface{}) {
+			spec(p)["variables"] = []interface{}{map[string]interface{}{"name": "allowedEnv", "expression": "'DISABLE_DSC_CONFIG,RELATED_IMAGE_X'.split(',')"}}
+		}, "spec.variables"},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			f := newFakeOLM(t)
-			f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
-				var body string
-				switch r.URL.Path {
-				case clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", name):
-					body = tc.policy
-				case clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", name):
-					body = tc.binding
-				default:
-					return false
+			f := servesGitOpsPolicy(t, newFakeOLM(t))
+			pPath := clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)
+			bPath := clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", testGitOpsPolicyName)
+			tc.change(f.admission[pPath], f.admission[bPath])
+			for _, p := range []string{pPath, bPath} {
+				if f.admission[p]["gone"] != nil {
+					delete(f.admission, p)
 				}
-				if body == "" {
-					notFound(w)
-				} else {
-					_, _ = io.WriteString(w, body)
-				}
-				return true
 			}
 			err := CheckGitOpsAdmissionPolicy(f.client(context.Background()))
 			switch {
@@ -282,8 +339,55 @@ func TestCheckGitOpsAdmissionPolicy(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv(GitOpsAdmissionPolicyEnv, "")
-	if err := CheckGitOpsAdmissionPolicy(newFakeOLM(t).client(context.Background())); err == nil {
-		t.Fatal("no policy name: want an error")
+	t.Run("this pod's allowlist differs from the policy's", func(t *testing.T) {
+		f := servesGitOpsPolicy(t, newFakeOLM(t))
+		t.Setenv(SubscriptionEnvAllowlistEnv, "DISABLE_DSC_CONFIG,OTHER")
+		if err := CheckGitOpsAdmissionPolicy(f.client(context.Background())); err == nil || !strings.Contains(err.Error(), "spec.variables") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("no policy name", func(t *testing.T) {
+		useGitOpsPolicy(t)
+		t.Setenv(GitOpsAdmissionPolicyEnv, "")
+		if err := CheckGitOpsAdmissionPolicy(newFakeOLM(t).client(context.Background())); err == nil {
+			t.Fatal("want an error")
+		}
+	})
+	t.Run("a name of another namespace", func(t *testing.T) {
+		useGitOpsPolicy(t)
+		t.Setenv(GitOpsAdmissionPolicyEnv, "rhoai-nightly-updater-ns2-gitops")
+		if err := CheckGitOpsAdmissionPolicy(newFakeOLM(t).client(context.Background())); err == nil || !strings.Contains(err.Error(), "not <APP_NAME>-ns1-gitops") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("a build without the policy file", func(t *testing.T) {
+		useGitOpsPolicy(t)
+		SetGitOpsPolicyTemplate(nil)
+		if err := CheckGitOpsAdmissionPolicy(newFakeOLM(t).client(context.Background())); err == nil || !strings.Contains(err.Error(), "no deploy/rbac-gitops.yaml") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+// The rendered policy is the chart's: every parameter is substituted, and
+// the allowlist and ServiceAccount are this pod's.
+func TestExpectedGitOpsAdmission(t *testing.T) {
+	useGitOpsPolicy(t)
+	t.Setenv(SubscriptionEnvAllowlistEnv, "A,B")
+	policy, binding, err := expectedGitOpsAdmission(testGitOpsPolicyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := fmt.Sprint(policy, binding)
+	if strings.Contains(text, "${") {
+		t.Fatalf("unsubstituted parameter in %s", text)
+	}
+	for _, want := range []string{"'A,B'.split(',')", "system:serviceaccount:ns1:rhoai-nightly-updater", "sourceNamespace == '" + CatalogNS + "'", "request.namespace == '" + SubNS + "'"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("rendered policy lacks %q", want)
+		}
+	}
+	if binding["policyName"] != testGitOpsPolicyName {
+		t.Errorf("binding = %v", binding)
 	}
 }

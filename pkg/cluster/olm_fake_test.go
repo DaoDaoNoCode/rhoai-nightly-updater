@@ -52,6 +52,8 @@ type fakeOLM struct {
 	onApprove   func(f *fakeOLM, ip string)
 	// intercept runs first (under the lock) and may answer the request itself.
 	intercept func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool
+	// admission: the objects served at these paths (servesGitOpsPolicy).
+	admission map[string]map[string]interface{}
 
 	requests []fakeRequest
 }
@@ -170,6 +172,10 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		f.failDelete[p] = n - 1
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","message":"denied","code":403}`)
+		return
+	}
+	if obj, ok := f.admission[p]; ok && r.Method == http.MethodGet {
+		writeJSON(w, obj)
 		return
 	}
 	last := p[strings.LastIndex(p, "/")+1:]

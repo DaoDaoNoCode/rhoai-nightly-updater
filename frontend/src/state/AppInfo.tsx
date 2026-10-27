@@ -11,7 +11,7 @@ import {
   toApiError,
   type ApiError,
 } from "../services/api";
-import { DASHBOARD_OVERRIDE_POLL_MS, PERMISSION_RETRY_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
+import { DASHBOARD_OVERRIDE_POLL_MS, GITOPS_POLICY_POLL_MS, PERMISSION_RETRY_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
 import { usePolling } from "../hooks/usePolling";
 import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
@@ -192,7 +192,7 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     permPoller.reset({ runNow: true });
   }, [permPoller]);
 
-  // --- Version (once) ---------------------------------------------------------
+  // --- Version (once; the gitops profile polls it, below) ---------------------
   const [version, setVersion] = useState<VersionInfo | null>(null);
   // The profile decides which routes exist, so calls the gitops profile
   // refuses wait until the version answered (or failed: an older backend).
@@ -206,6 +206,18 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
     return () => controller.abort();
   }, []);
   const gitOpsProfile = isGitOpsProfile(version);
+  // In the gitops profile the version also carries the admission policy's
+  // state, which changes while the page is open (Argo CD restores or
+  // changes the policy): read it again, so Update turns back on, or off,
+  // without a reload. A failed read keeps the last answer.
+  const refreshVersion = useCallback(async () => {
+    try {
+      setVersion(await fetchers.current.fetchVersion());
+    } catch {
+      /* keep the last answer */
+    }
+  }, []);
+  usePolling(refreshVersion, { delay: GITOPS_POLICY_POLL_MS, enabled: gitOpsProfile });
 
   // --- Update check (releases only; again on window focus, at most every 6 h) --
   const [update, setUpdate] = useState<UpdateCheck | null>(null);

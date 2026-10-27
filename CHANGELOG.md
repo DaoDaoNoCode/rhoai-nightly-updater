@@ -71,8 +71,9 @@ only accepts a tag whose version is the top dated section. See
   profile Update reads the build from the catalog Git manages instead of a
   temporary verification catalog, checks before deleting anything that the
   policy allows the Subscription it creates and the one it would restore,
-  and runs only while the policy and its binding exist (checked at
-  startup, every minute and before each Update; 503
+  and runs only while the policy and its binding are exactly this
+  release's, rendered with the pod's settings (checked at startup, every
+  minute, before each Update and before its first deletion; 503
   `admission_policy_missing` otherwise). The gitops profile needs OpenShift
   4.17 or later. `profile: full` renders as before. Tests derive the RBAC
   from a call graph of the gitops routes, prove no catalog write is

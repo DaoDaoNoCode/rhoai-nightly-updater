@@ -693,10 +693,19 @@ and OLM documentation or source for every field and variable it uses.
 tested on a cluster.
 
 **Is it enforcing?** The app reads the policy and its binding by name at
-startup, every minute, and before every Update (they must exist, the policy
-with `failurePolicy: Fail`, the binding naming it with `validationActions`
-holding `Deny`). Without them Update answers 503 `admission_policy_missing`
-and the Status page says so; reads keep working. What this cannot cover:
+startup, every minute, before every Update and again right before Update's
+first deletion. Both must be exactly this release's: the image embeds
+`deploy/rbac-gitops.yaml` and renders it with the pod's namespace, name and
+allowlist, ignoring only the fields the API server fills in (empty
+selectors, `matchPolicy: Equivalent`, a rule's `scope: "*"`). So a binding
+narrowed with `matchResources`, an added match condition, a dropped
+validation, `failurePolicy: Ignore` or `validationActions` without `Deny`
+all turn Update off, and so does an allowlist other than the pod's: Argo CD
+applies a changed policy (sync wave -1) before it replaces the pod, and an
+Update still running in the old pod stops before it deletes a Subscription
+it could not create again. Without a matching policy Update answers 503
+`admission_policy_missing` and the Status page says so (the page reads the
+state again every minute); reads keep working. What this cannot cover:
 - the seconds between Argo CD creating the Deployment and the policy (sync
   waves order the apply, they do not wait for the API server to load the
   policy), and between a check and the requests that follow it: someone

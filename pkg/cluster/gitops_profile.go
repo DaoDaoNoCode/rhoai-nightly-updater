@@ -186,7 +186,26 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if note := captured.recordedNote(); note != "" {
 		logs = append(logs, note)
 	}
-	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsSubscriptionsProblem)
+	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c))
+}
+
+// gitOpsWriteProblem is Update's check before each deletion in the gitops
+// profile: the Subscriptions it would write pass this pod's copy of the
+// policy (gitOpsSubscriptionsProblem), and the policy on the cluster is
+// still that copy. Argo CD applies a changed policy (wave -1) before it
+// replaces this pod, and this pod may still be running an Update then: with
+// an allowlist that dropped a variable, it would delete a Subscription it
+// could not create again.
+func gitOpsWriteProblem(c *Client) func(newSub, restoreSub map[string]interface{}) string {
+	return func(newSub, restoreSub map[string]interface{}) string {
+		if msg := gitOpsSubscriptionsProblem(newSub, restoreSub); msg != "" {
+			return msg
+		}
+		if err := CheckGitOpsAdmissionPolicy(c); err != nil {
+			return "The admission policy on the cluster is not the one this pod checks Subscriptions with: " + err.Error() + ". Argo CD may be rolling out a change; run Update again once it has replaced this pod."
+		}
+		return ""
+	}
 }
 
 // UpdateDryRunGitOpsProfile is Update's dry run in the gitops profile: the

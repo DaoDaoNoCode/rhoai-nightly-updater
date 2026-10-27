@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The gitops profile's admission policy (deploy/rbac-gitops.yaml) bounds
@@ -155,50 +159,229 @@ func gitOpsAdmissionPolicyName() string {
 	return os.Getenv(GitOpsAdmissionPolicyEnv)
 }
 
+// gitOpsPolicyTemplate is deploy/rbac-gitops.yaml, which main embeds and
+// hands over with SetGitOpsPolicyTemplate: the admission policy and binding
+// of this release.
+var gitOpsPolicyTemplate []byte
+
+// SetGitOpsPolicyTemplate sets the deploy/rbac-gitops.yaml that
+// CheckGitOpsAdmissionPolicy compares the cluster's policy with.
+func SetGitOpsPolicyTemplate(data []byte) {
+	gitOpsPolicyTemplate = data
+}
+
+// expectedGitOpsAdmission renders the ValidatingAdmissionPolicy and binding
+// of deploy/rbac-gitops.yaml as the chart does, with this pod's values:
+// NAMESPACE is the pod's namespace, APP_NAME the rest of the policy's name
+// (<APP_NAME>-<NAMESPACE>-gitops), SUBSCRIPTION_ENV_ALLOWLIST this pod's
+// allowlist, OPERATOR_NAMESPACE and MARKETPLACE_NAMESPACE the namespaces the
+// code writes to. Other parameters keep their defaults. It returns both
+// specs.
+func expectedGitOpsAdmission(name string) (policy, binding map[string]interface{}, err error) {
+	if len(gitOpsPolicyTemplate) == 0 {
+		return nil, nil, fmt.Errorf("this build has no deploy/rbac-gitops.yaml to compare the policy with")
+	}
+	ns := getActivityNamespace()
+	app, ok := strings.CutSuffix(name, "-"+ns+"-gitops")
+	if !ok || app == "" {
+		return nil, nil, fmt.Errorf("%s is %q, not <APP_NAME>-%s-gitops", GitOpsAdmissionPolicyEnv, name, ns)
+	}
+	var tmpl struct {
+		Parameters []struct {
+			Name  string `yaml:"name"`
+			Value string `yaml:"value"`
+		} `yaml:"parameters"`
+		Objects []map[string]interface{} `yaml:"objects"`
+	}
+	if err := yaml.Unmarshal(gitOpsPolicyTemplate, &tmpl); err != nil {
+		return nil, nil, fmt.Errorf("parse deploy/rbac-gitops.yaml: %w", err)
+	}
+	values := map[string]string{}
+	for _, p := range tmpl.Parameters {
+		values[p.Name] = p.Value
+	}
+	values["NAMESPACE"] = ns
+	values["APP_NAME"] = app
+	values["OPERATOR_NAMESPACE"] = SubNS
+	values["MARKETPLACE_NAMESPACE"] = CatalogNS
+	values["SUBSCRIPTION_ENV_ALLOWLIST"] = strings.Join(subscriptionEnvAllowlist(), ",")
+	for _, o := range tmpl.Objects {
+		kind, _ := o["kind"].(string)
+		if kind != "ValidatingAdmissionPolicy" && kind != "ValidatingAdmissionPolicyBinding" {
+			continue
+		}
+		rendered, err := substituteParameters(o["spec"], values)
+		if err != nil {
+			return nil, nil, fmt.Errorf("render the %s of deploy/rbac-gitops.yaml: %w", kind, err)
+		}
+		spec, err := asJSONObject(rendered)
+		if err != nil {
+			return nil, nil, fmt.Errorf("render the %s of deploy/rbac-gitops.yaml: %w", kind, err)
+		}
+		if kind == "ValidatingAdmissionPolicy" {
+			policy = spec
+		} else {
+			binding = spec
+		}
+	}
+	if policy == nil || binding == nil {
+		return nil, nil, fmt.Errorf("deploy/rbac-gitops.yaml has no ValidatingAdmissionPolicy and binding")
+	}
+	return policy, binding, nil
+}
+
+// substituteParameters replaces ${NAME} in every string of v, as `oc
+// process` does for string parameters; an unknown parameter is an error.
+func substituteParameters(v interface{}, values map[string]string) (interface{}, error) {
+	switch t := v.(type) {
+	case string:
+		var err error
+		out := templateParamRef.ReplaceAllStringFunc(t, func(ref string) string {
+			name := ref[2 : len(ref)-1]
+			val, ok := values[name]
+			if !ok && err == nil {
+				err = fmt.Errorf("unknown parameter %s", ref)
+			}
+			return val
+		})
+		return out, err
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(t))
+		for k, e := range t {
+			r, err := substituteParameters(e, values)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = r
+		}
+		return out, nil
+	case []interface{}:
+		out := make([]interface{}, len(t))
+		for i, e := range t {
+			r, err := substituteParameters(e, values)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = r
+		}
+		return out, nil
+	}
+	return v, nil
+}
+
+var templateParamRef = regexp.MustCompile(`\$\{[A-Za-z0-9_]+\}`)
+
+// asJSONObject returns v as the API server would serialise it: a JSON
+// object decoded into maps, slices, strings, float64s and bools.
+func asJSONObject(v interface{}) (map[string]interface{}, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// withoutAdmissionDefaults removes, in place, the fields the API server
+// fills in when they are not set, where they hold that default: in
+// matchConstraints (a policy) and matchResources (a binding) namespaceSelector
+// {}, objectSelector {}, matchPolicy Equivalent and each rule's scope "*",
+// and a policy's failurePolicy Fail (SetDefaults_MatchResources,
+// SetDefaults_Rule and SetDefaults_ValidatingAdmissionPolicySpec in
+// k8s.io/kubernetes pkg/apis/admissionregistration/v1/defaults.go; the same
+// fields an OpenShift 4.21 hub returns for its policies).
+func withoutAdmissionDefaults(spec map[string]interface{}) map[string]interface{} {
+	if spec["failurePolicy"] == "Fail" {
+		delete(spec, "failurePolicy")
+	}
+	for _, key := range []string{"matchConstraints", "matchResources"} {
+		m, _ := spec[key].(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		for _, sel := range []string{"namespaceSelector", "objectSelector"} {
+			if s, ok := m[sel].(map[string]interface{}); ok && len(s) == 0 {
+				delete(m, sel)
+			}
+		}
+		if m["matchPolicy"] == "Equivalent" {
+			delete(m, "matchPolicy")
+		}
+		for _, rules := range []string{"resourceRules", "excludeResourceRules"} {
+			list, _ := m[rules].([]interface{})
+			for _, r := range list {
+				if rule, _ := r.(map[string]interface{}); rule != nil && rule["scope"] == "*" {
+					delete(rule, "scope")
+				}
+			}
+		}
+	}
+	return spec
+}
+
+// differingKeys lists the top-level keys whose values differ between a and
+// b, sorted.
+func differingKeys(a, b map[string]interface{}) []string {
+	var keys []string
+	for k := range a {
+		if !reflect.DeepEqual(a[k], b[k]) {
+			keys = append(keys, "spec."+k)
+		}
+	}
+	for k := range b {
+		if _, ok := a[k]; !ok {
+			keys = append(keys, "spec."+k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // CheckGitOpsAdmissionPolicy returns nil when the gitops profile's admission
-// policy is in place: the ValidatingAdmissionPolicy exists with
-// failurePolicy Fail (unset means Fail), and its binding exists, names it
-// and has validationActions Deny. It reads both by name. It cannot prove
-// that the API server enforces them (a policy that does not compile denies
-// by failurePolicy Fail); it proves that nobody removed or weakened them.
+// policy and its binding are on the cluster exactly as this release defines
+// them (deploy/rbac-gitops.yaml, rendered with this pod's values; fields the
+// API server defaults are ignored). So a binding narrowed to other
+// namespaces, a policy that skips more requests, a weaker failurePolicy or
+// a policy with another allowlist than this pod's are all refused: the last
+// happens while Argo CD rolls out a changed allowlist, which it applies
+// (wave -1) before it replaces this pod. It reads both by name. It cannot
+// prove that the API server enforces them (a policy that does not compile
+// denies by failurePolicy Fail); it proves that nobody removed or changed
+// them.
 func CheckGitOpsAdmissionPolicy(c *Client) error {
 	name := gitOpsAdmissionPolicyName()
 	if name == "" {
 		return fmt.Errorf("%s is not set, so the admission policy cannot be checked", GitOpsAdmissionPolicyEnv)
 	}
-	var policy struct {
-		Spec struct {
-			FailurePolicy string `json:"failurePolicy"`
-		} `json:"spec"`
-	}
-	body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", name))
+	wantPolicy, wantBinding, err := expectedGitOpsAdmission(name)
 	if err != nil {
-		return fmt.Errorf("read ValidatingAdmissionPolicy %s: %w", name, err)
+		return err
 	}
-	if err := json.Unmarshal(body, &policy); err != nil {
-		return fmt.Errorf("parse ValidatingAdmissionPolicy %s: %w", name, err)
-	}
-	if fp := policy.Spec.FailurePolicy; fp != "" && fp != "Fail" {
-		return fmt.Errorf("ValidatingAdmissionPolicy %s has failurePolicy %s, not Fail", name, fp)
-	}
-	var binding struct {
-		Spec struct {
-			PolicyName        string   `json:"policyName"`
-			ValidationActions []string `json:"validationActions"`
-		} `json:"spec"`
-	}
-	body, _, err = c.get(clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicybindings", name))
-	if err != nil {
-		return fmt.Errorf("read ValidatingAdmissionPolicyBinding %s: %w", name, err)
-	}
-	if err := json.Unmarshal(body, &binding); err != nil {
-		return fmt.Errorf("parse ValidatingAdmissionPolicyBinding %s: %w", name, err)
-	}
-	if binding.Spec.PolicyName != name {
-		return fmt.Errorf("ValidatingAdmissionPolicyBinding %s binds %q, not the policy %s", name, binding.Spec.PolicyName, name)
-	}
-	if !containsString(binding.Spec.ValidationActions, "Deny") {
-		return fmt.Errorf("ValidatingAdmissionPolicyBinding %s has validationActions %v, without Deny", name, binding.Spec.ValidationActions)
+	for _, o := range []struct {
+		kind, resource string
+		want           map[string]interface{}
+	}{
+		{"ValidatingAdmissionPolicy", "validatingadmissionpolicies", wantPolicy},
+		{"ValidatingAdmissionPolicyBinding", "validatingadmissionpolicybindings", wantBinding},
+	} {
+		body, _, err := c.get(clusterPath("admissionregistration.k8s.io/v1", o.resource, name))
+		if err != nil {
+			return fmt.Errorf("read %s %s: %w", o.kind, name, err)
+		}
+		var live struct {
+			Spec map[string]interface{} `json:"spec"`
+		}
+		if err := json.Unmarshal(body, &live); err != nil {
+			return fmt.Errorf("parse %s %s: %w", o.kind, name, err)
+		}
+		got := withoutAdmissionDefaults(live.Spec)
+		want := withoutAdmissionDefaults(o.want)
+		if diff := differingKeys(want, got); len(diff) > 0 {
+			return fmt.Errorf("%s %s differs from this release's (deploy/rbac-gitops.yaml) in %s", o.kind, name, strings.Join(diff, ", "))
+		}
 	}
 	return nil
 }

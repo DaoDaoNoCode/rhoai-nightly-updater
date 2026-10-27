@@ -137,7 +137,8 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 //
 // policy, when set (the gitops profile), checks the Subscription Update would
 // create and the one the restore would re-apply against the profile's
-// admission policy (gitOpsSubscriptionsProblem): before the first deletion,
+// admission policy, and that policy against the cluster's
+// (gitOpsWriteProblem): before the first deletion,
 // and again on the live Subscription before it is deleted.
 func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV types.CSVInfo, g operatorGitOps,
 	recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
@@ -254,11 +255,12 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	}
 	if found && policy != nil {
 		// Git changed the Subscription after the check above to settings the
-		// profile may not write: deleting it now could not be undone, and
-		// the restore would delete it too, so both are skipped.
+		// profile may not write, or the policy changed: deleting it now
+		// could not be undone, and the restore would delete it too, so both
+		// are skipped.
 		if msg := policy(buildSubscription(live, CatalogName, target.Channel), live); msg != "" {
 			recovery.keepNewInstall = true
-			return fail("The Subscription changed while Update ran. "+msg+" The old CSV was already deleted and the Subscription was left as Git sets it, so OLM does not install the operator again until the Subscription is fixed in Git (Argo CD then syncs it) or recreated.", ErrorCodeProfileGitOps)
+			return fail("Update stopped before it recreated the Subscription. "+msg+" The old CSV was already deleted and the Subscription was left as Git sets it, so OLM does not install the operator again until the Subscription is fixed in Git (Argo CD then syncs it) or recreated.", ErrorCodeProfileGitOps)
 		}
 	}
 	if found {

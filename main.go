@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"log/slog"
 	"net"
@@ -17,6 +18,13 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/middleware"
 )
+
+// gitOpsPolicy is the gitops profile's RBAC and admission policy, which
+// the updater compares with the cluster's before every Update
+// (cluster.CheckGitOpsAdmissionPolicy).
+//
+//go:embed deploy/rbac-gitops.yaml
+var gitOpsPolicy []byte
 
 func main() {
 	var logLevel slog.Level
@@ -39,6 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 	api.SetProfile(profile)
+	cluster.SetGitOpsPolicyTemplate(gitOpsPolicy)
 	api.LogStartupVersion()
 
 	port := os.Getenv("PORT")

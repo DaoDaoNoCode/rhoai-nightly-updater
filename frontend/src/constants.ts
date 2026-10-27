@@ -38,6 +38,12 @@ export const RESOURCE_SETTLE_MAX_MS = 10 * 60_000;
 export const OPERATION_POLL_BUSY_MS = 3_000;
 export const OPERATION_POLL_IDLE_MS = 15_000;
 
+/**
+ * Gitops profile: how often /api/version is read again for the admission
+ * policy's state, which the server re-checks every minute
+ * (pkg/api/gitops_policy.go, gitOpsPolicyInterval) (ms).
+ */
+export const GITOPS_POLICY_POLL_MS = 60_000;
 /** Dashboard Dev session check for the global "dashboard-operator paused" banner (ms). */
 export const DASHBOARD_OVERRIDE_POLL_MS = 120_000;
 /** The backend caches the update check for 6 hours; a focused tab asks again after that. */

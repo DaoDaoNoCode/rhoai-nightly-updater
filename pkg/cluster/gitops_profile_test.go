@@ -27,7 +27,7 @@ func gitOpsProfileWriteAllowed(w string) bool {
 // catalog serves, exactly as Update's Argo CD path does, and writes
 // nothing else.
 func TestUpdateGitOpsProfile_InstallsWhatTheCatalogServes(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	emit, events := eventsRecorder()
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || !result.Success {
@@ -63,12 +63,12 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 	for name, setup := range map[string]func() *fakeOLM{
 		"nothing managed": func() *fakeOLM { return newFakeOLM(t).installed("rhods-operator.3.6.0", nil) },
 		"subscription only": func() *fakeOLM {
-			f := gitOpsFake(t)
+			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog["metadata"] = map[string]interface{}{}
 			return f
 		},
 		"no catalog": func() *fakeOLM {
-			f := gitOpsFake(t)
+			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog = nil
 			return f
 		},
@@ -108,7 +108,7 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := gitOpsFake(t)
+			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			setup(f)
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != "prerequisites" || !strings.Contains(result.Message, "Nothing was changed") {
@@ -124,7 +124,7 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 // A paused dashboard-operator is a refusal: ending the session patches
 // Deployments, which the profile cannot do.
 func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != errorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") {
@@ -137,7 +137,7 @@ func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 
 // Git picks the build, as in Update's Argo CD path.
 func TestUpdateGitOpsProfile_RefusesAnotherImage(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -153,7 +153,7 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 	t.Cleanup(func() { lookupTargetBundle = orig })
 	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
 
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	result, err := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage)
 	if err != nil || !result.Success || !strings.Contains(strings.Join(result.Logs, "\n"), "left as Git sets it") {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -183,7 +183,7 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 // A failed install restores the previous Subscription, as Update does;
 // the restore writes only what the profile may write.
 func TestUpdateGitOpsProfile_RestoreStaysInsideTheProfile(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	f.onSubscribe = func(f *fakeOLM, _ map[string]interface{}) {
 		f.installPlans["install-new"] = map[string]interface{}{"spec": map[string]interface{}{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]interface{}{"phase": "Failed"}}
 		f.sub["status"] = map[string]interface{}{"installPlanRef": map[string]interface{}{"name": "install-new"}, "state": "UpgradePending"}
@@ -241,7 +241,7 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := gitOpsFake(t)
+			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			setup(f)
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
@@ -258,7 +258,7 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 // the new Subscription takes the build's channel from the catalog Git
 // manages.
 func TestUpdateGitOpsProfile_CatalogOnlyManaged(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	f.sub["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
@@ -275,7 +275,7 @@ func TestUpdateGitOpsProfile_CatalogOnlyManaged(t *testing.T) {
 // first check, before anything is deleted: the check on the live
 // Subscription right before the first deletion stops Update.
 func TestUpdateGitOpsProfile_SubscriptionChangesBeforeTheDeletions(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	changed := false
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		// foreignSubscriptionRefusal lists the InstallPlans after the
@@ -299,7 +299,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesBeforeTheDeletions(t *testing.T)
 // as Git sets it (deleting it could not be undone) and the restore does not
 // run, since it would delete and re-apply that Subscription.
 func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/clusterserviceversions/") {
 			gitOpsSubscriptionConfig(f, relatedImageConfig())
@@ -321,7 +321,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T
 // UID-guarded delete leaves the replacement alone, and so does the restore
 // (it would otherwise read the replacement's UID and delete it).
 func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T) {
-	f := gitOpsFake(t)
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	subPath := subscriptionPath()
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && r.URL.Path == subPath && f.sub != nil {
@@ -341,5 +341,28 @@ func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T)
 	f.mu.Unlock()
 	if uid != "uid-sub-replacement" {
 		t.Fatalf("Subscription uid = %v, want the replacement's; writes: %v", uid, f.writes())
+	}
+}
+
+// Argo CD applies a changed policy (wave -1) before it replaces the pod, so
+// a running Update can meet a policy with another allowlist than its own:
+// it stops before it deletes anything.
+func TestUpdateGitOpsProfile_PolicyChangesWhileUpdateRuns(t *testing.T) {
+	f := servesGitOpsPolicy(t, gitOpsFake(t))
+	changed := false
+	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+		if !changed && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/installplans") {
+			changed = true
+			p := f.admission[clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)]
+			p["spec"].(map[string]interface{})["variables"] = []interface{}{map[string]interface{}{"name": "allowedEnv", "expression": "'OTHER'.split(',')"}}
+		}
+		return false
+	}
+	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Argo CD may be rolling out") || !strings.Contains(result.Message, "Nothing was changed") || !changed {
+		t.Fatalf("result=%+v err=%v changed=%v", result, err, changed)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
 	}
 }
