@@ -672,7 +672,7 @@ The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/l
 
 **"OLM installed ..., but it is not the build that was verified"** (`install_mismatch`): the catalog switched to another build (a Git change) between the check and the install. The running operator is kept; run Update again to install what the catalog serves now.
 
-**"The catalog did not serve ... within ..."** after a change in Git: OLM replaces the catalog pod when the image changes; check the pod in `openshift-marketplace` (`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`) and [§4](#4-catalogsource-not-ready) for pull problems.
+**"The catalog did not serve ... within ..."** after a change in Git: OLM replaces the catalog pod when the image changes; check the pod in `openshift-marketplace` (`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`) and [§6](#6-update--reinstall-failed) (`catalog_image_pull`) for pull problems.
 
 **Checking what Argo CD tracks.** Which Application renders the catalog and the Subscription, and its sync policy:
 
