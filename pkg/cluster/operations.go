@@ -606,7 +606,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	}
 
 	if gitOps.active() {
-		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail)
+		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil)
 	}
 
 	// --- Step 3: apply_catalog_source ---
@@ -621,7 +621,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 
 	logs = append(logs, fmt.Sprintf("Applying CatalogSource %s...", CatalogName))
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	recovery.catalogChanged = true
+	recovery.noteCatalogChanged()
 	// Recreate this source so READY and PackageManifest cannot describe its
 	// previous image. The verified temporary catalog remains separate.
 	if _, deleteErr := c.delete(csPath); deleteErr != nil && !IsK8sError(deleteErr, 404) {
@@ -1257,7 +1257,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		logs = append(logs, "OK: nightly CatalogSource already absent")
 		emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "skipped", Message: "Nightly CatalogSource already absent"})
 	} else {
-		recovery.catalogChanged = true
+		recovery.noteCatalogChanged()
 		logs = append(logs, "OK: nightly CatalogSource deleted")
 		emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "success", Message: "Nightly CatalogSource deleted"})
 	}
@@ -1379,7 +1379,7 @@ func reinstallNightlySteps(c *Client, image, channel, approveCSV string, recover
 	// --- Step 9: create_catalog_source ---
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
 	csApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	recovery.catalogChanged = true
+	recovery.noteCatalogChanged()
 	if _, _, err := c.apply(csApplyPath, buildCatalogSourceSpec(image)); err != nil {
 		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), errorCodeFromK8sErr(err))
 	}

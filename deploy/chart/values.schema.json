@@ -50,12 +50,27 @@
           "description": "Release notes are linked as <RELEASES_URL>/<tag>.",
           "type": "string"
         },
+        "SUBSCRIPTION_ENV_ALLOWLIST": {
+          "description": "Set by the chart from gitops.subscriptionEnvAllowlist; leave it unset.",
+          "type": "string",
+          "maxLength": 0
+        },
+        "PROFILE": {
+          "description": "Set by the chart from the value profile; leave it unset.",
+          "type": "string",
+          "enum": ["", "full", "gitops"]
+        },
         "INSTALL_METHOD": {
           "description": "Set to gitops by the chart; leave it unset.",
           "type": "string",
           "enum": ["", "gitops"]
         }
       }
+    },
+    "profile": {
+      "description": "gitops (Update's Argo CD path and the reads, with deploy/rbac-gitops.yaml) or full (every feature, with the Template's RBAC).",
+      "type": "string",
+      "enum": ["gitops", "full"]
     },
     "allowTemplateMismatch": {
       "description": "Turn off the tag-consistency check, which refuses an IMAGE whose tag names another release than this chart's. It compares the tag only; it does not verify the digest.",
@@ -65,7 +80,7 @@
       "description": "The hooks that replace install.sh's imperative steps.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["cliImage", "sessionSecret", "consoleLink"],
+      "required": ["cliImage", "sessionSecret", "consoleLink", "subscriptionEnvAllowlist"],
       "properties": {
         "cliImage": {
           "description": "The image of the hook Jobs (they run oc), pinned by digest.",
@@ -80,6 +95,12 @@
           "properties": {
             "enabled": { "type": "boolean" }
           }
+        },
+        "subscriptionEnvAllowlist": {
+          "description": "profile gitops: the environment variables the rhods-operator Subscription's spec.config.env may set; nothing else in spec.config is allowed.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "uniqueItems": true
         },
         "consoleLink": {
           "description": "A PostSync hook Job that applies ConsoleLink <APP_NAME>-<NAMESPACE>.",

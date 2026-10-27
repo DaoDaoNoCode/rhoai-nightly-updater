@@ -48,6 +48,23 @@ parameters: {}
   # Set to gitops by the chart: the app's upgrade notices then say to change
   # Git instead of running install.sh. Leave it unset.
   # INSTALL_METHOD: gitops
+  #
+  # Set by the chart from profile (below). Leave it unset.
+  # PROFILE: gitops
+  #
+  # Set by the chart from gitops.subscriptionEnvAllowlist. Leave it unset.
+  # SUBSCRIPTION_ENV_ALLOWLIST: DISABLE_DSC_CONFIG
+
+# What the updater may do on the cluster (docs/GITOPS.md, "Profiles"):
+#   gitops (the default): for clusters where Argo CD manages RHOAI. The
+#     updater only installs the build the Git-managed catalog serves
+#     (Update), and shows Status, Components and Diagnostics to
+#     cluster-admins; everything else is off. The chart then renders
+#     deploy/rbac-gitops.yaml (exactly the RBAC that needs, and an admission
+#     policy that bounds it; OpenShift 4.17 or later) instead of the
+#     Template's RBAC.
+#   full: every feature, with the Template's RBAC, as install.sh deploys it.
+profile: gitops
 
 # Turn off the tag-consistency check: deploy an IMAGE whose tag names
 # another release than this chart's (like install.sh's
@@ -79,3 +96,14 @@ gitops:
     # menu (ConsoleLink <APP_NAME>-<NAMESPACE>, linking to the Route's host).
     # Argo CD does not prune it; `install.sh uninstall` removes it.
     enabled: true
+
+  # profile gitops only: the environment variables the rhods-operator
+  # Subscription's spec.config.env may set. OLM puts them on the operator's
+  # Deployment, so a RELATED_IMAGE_* variable would change the images the
+  # operator deploys: the admission policy refuses any other variable and
+  # every other spec.config field, and Update refuses before it deletes
+  # anything when Git's Subscription would break that. The default is what
+  # the AI Grid GitOps chart sets (odh-gitops rhai-on-openshift-chart). Names
+  # only, [A-Za-z_][A-Za-z0-9_]*.
+  subscriptionEnvAllowlist:
+    - DISABLE_DSC_CONFIG

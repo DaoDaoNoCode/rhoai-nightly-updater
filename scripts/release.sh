@@ -153,6 +153,11 @@ chart_check() {
 	git cat-file -e "$1:deploy/chart/Chart.yaml" 2>/dev/null || return 0
 	[ "$(git rev-parse --verify --quiet "$1:deploy/chart/files/template.yaml" || true)" = "$(git rev-parse --verify --quiet "$1:deploy/template.yaml")" ] ||
 		die "deploy/chart/files/template.yaml at $1 is not a copy of deploy/template.yaml. Run 'make chart' and commit the copy."
+	# The gitops profile's RBAC and admission policy (from v2.2.0 on).
+	if git cat-file -e "$1:deploy/rbac-gitops.yaml" 2>/dev/null; then
+		[ "$(git rev-parse --verify --quiet "$1:deploy/chart/files/rbac-gitops.yaml" || true)" = "$(git rev-parse --verify --quiet "$1:deploy/rbac-gitops.yaml")" ] ||
+			die "deploy/chart/files/rbac-gitops.yaml at $1 is not a copy of deploy/rbac-gitops.yaml. Run 'make chart' and commit the copy."
+	fi
 	cv=$(chart_field "$1" version)
 	av=$(chart_field "$1" appVersion)
 	[ "$cv" = "$2" ] && [ "$av" = "v$2" ] ||

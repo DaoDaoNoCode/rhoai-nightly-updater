@@ -38,7 +38,9 @@ import { ConfirmActionModal } from "../components/ConfirmActionModal";
 import { StatusLabel, TagLabel, type StatusKind } from "../components/StatusLabel";
 import { TechnicalDetails, TruncatedText } from "../components/LongText";
 import { TooltipButton } from "../components/TooltipButton";
-import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { useClusterBusyHandler, useGitOpsProfile, useMutationBlocker } from "../state/AppInfo";
+import { gitOpsProfileReason } from "../profile";
+import { GitOpsProfileNotice } from "../components/GitOpsNotice";
 import { useClusterStatus } from "../state/AppState";
 import { gitOpsFixReason } from "../gitops";
 
@@ -148,7 +150,10 @@ export const TroubleshootingPage: React.FC = () => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Permissions, session and the operation lock. An operator install in
   // progress alone does not block a fix: that may be what is stuck.
-  const fixReason = useMutationBlocker({ ignoreReconcile: true });
+  const gitOpsProfile = useGitOpsProfile();
+  const fixBlocker = useMutationBlocker({ ignoreReconcile: true });
+  // The gitops profile has no fixes (403 profile_gitops); the findings stay.
+  const fixReason = fixBlocker ?? (gitOpsProfile ? gitOpsProfileReason("Applying fixes") : null);
   const { status } = useClusterStatus();
   const onResult = useClusterBusyHandler();
   const mountedRef = useRef(true);
@@ -246,6 +251,12 @@ export const TroubleshootingPage: React.FC = () => {
           </ActionListItem>
         )}
       />
+
+      {gitOpsProfile && (
+        <PageSection>
+          <GitOpsProfileNotice />
+        </PageSection>
+      )}
 
       {scanState === "loading" && !data && <PageLoading title="Scanning the cluster health" />}
 

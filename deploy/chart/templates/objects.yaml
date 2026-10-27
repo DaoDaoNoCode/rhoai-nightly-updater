@@ -3,6 +3,15 @@ Every object of the OpenShift Template, with each ${NAME} replaced by its
 parameter, as `oc process` does for install.sh. The Template stays the one
 source of truth for these objects; nothing here names one of them.
 
+With profile gitops (the default; docs/GITOPS.md, "Profiles") the
+Template's RBAC objects (ClusterRole, ClusterRoleBinding, Role, RoleBinding)
+are left out and the objects of deploy/rbac-gitops.yaml are rendered
+instead: the RBAC the gitops profile's routes need and nothing more, and
+the ValidatingAdmissionPolicy that bounds what the ServiceAccount may write.
+The policy and its binding go in sync wave -1, before the Deployment (wave
+0), so it holds before the updater runs
+(https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/).
+
 Each object is substituted in its JSON form, with the value JSON-escaped,
 so a value can only ever change the string it is placed in. A placeholder
 left over (a parameter the Template does not declare) fails the render, and
@@ -10,16 +19,39 @@ so does the non-string form ${{NAME}}, which the Template does not use.
 */ -}}
 {{- $t := include "rnu.template" . | fromJson -}}
 {{- $params := include "rnu.params" . | fromJson -}}
-{{- if contains "${{" (toJson $t.objects) -}}
-{{- fail "deploy/template.yaml uses a ${{NAME}} (non-string) parameter, which this chart does not substitute; add it to deploy/chart/templates/objects.yaml" -}}
+{{- $gitops := eq (.Values.profile | default "gitops") "gitops" -}}
+{{- $rbacKinds := list "ClusterRole" "ClusterRoleBinding" "Role" "RoleBinding" -}}
+{{- $objects := list -}}
+{{- range $t.objects -}}
+{{- if not (and $gitops (has .kind $rbacKinds)) -}}
+{{- $objects = append $objects . -}}
 {{- end -}}
-{{- range $i, $obj := $t.objects }}
+{{- end -}}
+{{- if $gitops -}}
+{{- $g := include "rnu.gitopsTemplate" . | fromJson -}}
+{{- range $g.parameters -}}
+{{- if not (hasKey $params .name) -}}
+{{- $_ := set $params .name (toString (.value | default "")) -}}
+{{- end -}}
+{{- end -}}
+{{- range $g.objects -}}
+{{- if has .kind (list "ValidatingAdmissionPolicy" "ValidatingAdmissionPolicyBinding") -}}
+{{- $meta := .metadata -}}
+{{- $_ := set $meta "annotations" (merge (dict "argocd.argoproj.io/sync-wave" "-1") ($meta.annotations | default dict)) -}}
+{{- end -}}
+{{- $objects = append $objects . -}}
+{{- end -}}
+{{- end -}}
+{{- if contains "${{" (toJson $objects) -}}
+{{- fail "deploy/template.yaml or deploy/rbac-gitops.yaml uses a ${{NAME}} (non-string) parameter, which this chart does not substitute; add it to deploy/chart/templates/objects.yaml" -}}
+{{- end -}}
+{{- range $i, $obj := $objects }}
 {{- $json := toJson $obj -}}
 {{- range $name, $value := $params -}}
 {{- $json = replace (printf "${%s}" $name) (toJson $value | trimPrefix "\"" | trimSuffix "\"") $json -}}
 {{- end -}}
 {{- if contains "${" $json -}}
-{{- fail (printf "object %d of deploy/template.yaml (%s %s) has placeholders that are not parameters: %s" $i $obj.kind $obj.metadata.name (regexFindAll "\\$\\{[^}]*\\}" $json -1 | uniq | join ", ")) -}}
+{{- fail (printf "object %d of the chart's templates (%s %s) has placeholders that are not parameters: %s" $i $obj.kind $obj.metadata.name (regexFindAll "\\$\\{[^}]*\\}" $json -1 | uniq | join ", ")) -}}
 {{- end }}
 ---
 {{ $json | fromJson | toYaml }}

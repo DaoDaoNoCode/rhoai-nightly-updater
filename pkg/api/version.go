@@ -58,6 +58,15 @@ type VersionInfo struct {
 	// Helm chart; the UI then words its upgrade notices for Git. Omitted
 	// for install.sh and make.
 	InstallMethod string `json:"installMethod,omitempty"`
+	// Profile is what the updater may do here (PROFILE): "full", or
+	// "gitops", where every route but Update and a few reads answers 403
+	// profile_gitops. The UI hides what the profile refuses.
+	Profile Profile `json:"profile"`
+	// AdmissionPolicy is, in the gitops profile, "enforced" when its
+	// admission policy and binding were found at the last check, else the
+	// problem (Update is off then); "" before the first check and in the
+	// full profile.
+	AdmissionPolicy string `json:"admissionPolicy,omitempty"`
 }
 
 func currentVersion() VersionInfo {
@@ -71,6 +80,8 @@ func currentVersion() VersionInfo {
 		ExpectedTemplateRevision: ExpectedTemplateRevision,
 		TemplateOutdated:         runningInCluster() && rev != ExpectedTemplateRevision,
 		InstallMethod:            installMethod(),
+		Profile:                  activeProfile,
+		AdmissionPolicy:          gitOpsPolicyStatus(),
 	}
 }
 
@@ -89,7 +100,7 @@ func HandleVersion(w http.ResponseWriter, r *http.Request) {
 // older than this build expects.
 func LogStartupVersion() {
 	v := currentVersion()
-	slog.Info("build", "version", v.Version, "commit", v.Commit, "buildDate", v.BuildDate, "go", v.GoVersion, "templateRevision", v.TemplateRevision)
+	slog.Info("build", "version", v.Version, "commit", v.Commit, "buildDate", v.BuildDate, "go", v.GoVersion, "templateRevision", v.TemplateRevision, "profile", string(v.Profile))
 	if v.TemplateOutdated {
 		how := "re-apply it with `make upgrade`"
 		if v.InstallMethod == InstallMethodGitOps {

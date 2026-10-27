@@ -51,7 +51,9 @@ import { DeploymentsTable } from "../components/DeploymentsTable";
 import { DSCEmptyState } from "../components/DSCEmptyState";
 import { TooltipButton } from "../components/TooltipButton";
 import { useComponentsData } from "../hooks/useComponentsData";
-import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { useClusterBusyHandler, useGitOpsProfile, useMutationBlocker } from "../state/AppInfo";
+import { gitOpsProfileReason } from "../profile";
+import { GitOpsProfileNotice } from "../components/GitOpsNotice";
 import { useClusterStatus } from "../state/AppState";
 import { gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason } from "../gitops";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
@@ -99,8 +101,12 @@ export const ComponentsPage: React.FC = () => {
   // One source for every cluster change: permissions, session and the
   // operation lock. Fixes repair what may be stuck in an operator install,
   // so that install alone does not block them.
-  const mutateReason = useMutationBlocker();
-  const fixReason = useMutationBlocker({ ignoreReconcile: true });
+  // In the gitops profile the backend refuses every change from this page.
+  const gitOpsProfile = useGitOpsProfile();
+  const blocker = useMutationBlocker();
+  const fixBlocker = useMutationBlocker({ ignoreReconcile: true });
+  const mutateReason = blocker ?? (gitOpsProfile ? gitOpsProfileReason("Changing the DataScienceCluster") : null);
+  const fixReason = fixBlocker ?? (gitOpsProfile ? gitOpsProfileReason("Applying fixes") : null);
   const { status } = useClusterStatus();
   const dscGitOpsReason = gitOpsDSCReason(status);
   const onResult = useClusterBusyHandler();
@@ -205,6 +211,12 @@ export const ComponentsPage: React.FC = () => {
         loading={loading}
         onRefresh={handleRefresh}
       />
+
+      {gitOpsProfile && (
+        <PageSection>
+          <GitOpsProfileNotice />
+        </PageSection>
+      )}
 
       {error && data && (
         <LoadErrorAlert error={error} genericTitle="Could not load components" onRetry={handleRefresh} stale />

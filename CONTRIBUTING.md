@@ -152,10 +152,10 @@ Runs the Node test runner over `frontend/tests/*.test.cjs`, then Vitest (`npm ru
 ```bash
 make test-scripts      # scripts/test-release.sh and scripts/test-install.sh (offline, fake oc/curl/crane)
 make test-chart        # scripts/test-chart.sh: helm lint and helm template of deploy/chart (offline)
-make check-chart       # only: the chart's copy of deploy/template.yaml is current
+make check-chart       # only: the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml are current
 ```
 
-The Helm chart (`deploy/chart`, [docs/GITOPS.md](docs/GITOPS.md)) renders a copy of `deploy/template.yaml`, because Helm reads only files inside the chart. After any template change run `make chart` and commit the copy with it; `make check-chart`, `make test-chart`, CI and the release guard fail otherwise. `scripts/test-chart.sh` checks that every Template object renders exactly once with its parameters replaced, that the schema lists exactly the Template's parameters, that unknown keys, missing or tag-only images fail, and that the ConsoleLink hook applies the same object as `install.sh`.
+The Helm chart (`deploy/chart`, [docs/GITOPS.md](docs/GITOPS.md)) renders copies of `deploy/template.yaml` and `deploy/rbac-gitops.yaml` (the gitops profile's RBAC and admission policy), because Helm reads only files inside the chart. After any change to either run `make chart` and commit the copies with it; `make check-chart`, `make test-chart`, CI and the release guard fail otherwise. A new API route is off in the gitops profile until it is added to `gitOpsRoutes` in `pkg/api/routes.go` (or listed in `gitOpsRefused`; `TestEveryRouteHasAGitOpsProfileDecision` fails for a route in neither); adding it there can widen what the profile reaches, and `pkg/cluster/rbac_gitops_test.go` then names the rules `deploy/rbac-gitops.yaml` must gain. `scripts/test-chart.sh` checks that every Template object renders exactly once with its parameters replaced, that the schema lists exactly the Template's parameters, that unknown keys, missing or tag-only images fail, and that the ConsoleLink hook applies the same object as `install.sh`.
 
 ## Documentation images
 

@@ -153,6 +153,22 @@ const scenarios = {
   // Components and Diagnostics while Argo CD manages the DSC.
   "gitops-components": (w) => { scenarios["gitops-synced"](w); w.components = F.notReadyComponents(); w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] }; },
   "gitops-diag": (w) => { scenarios["gitops-synced"](w); w.diagnostics = F.diagnostics("upgrade-gates"); w.components = F.notReadyComponents(); },
+  // The updater's gitops profile (PROFILE=gitops, docs/GITOPS.md "Profiles"):
+  // the backend refuses every route but Update and the reads with 403
+  // profile_gitops, and only cluster-admins may read.
+  "gitops-profile": (w) => { scenarios.gitops(w); w.profile = "gitops"; },
+  "gitops-profile-synced": (w) => { scenarios["gitops-synced"](w); w.profile = "gitops"; },
+  "gitops-profile-components": (w) => { scenarios["gitops-components"](w); w.profile = "gitops"; },
+  "gitops-profile-diag": (w) => { scenarios["gitops-diag"](w); w.profile = "gitops"; },
+  // The profile on a cluster whose catalog Argo CD does not manage: Update refuses.
+  "gitops-profile-unmanaged": (w) => { w.status = F.updateAvailableStatus(); w.profile = "gitops"; },
+  // The profile's admission policy is gone (Update is off until Argo CD syncs it).
+  "gitops-profile-no-policy": (w) => {
+    scenarios.gitops(w); w.profile = "gitops";
+    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again (docs/GITOPS.md, section 11).";
+  },
+  // A signed-in user who is not a cluster-admin.
+  "gitops-profile-reader": (w) => { scenarios.gitops(w); w.profile = "gitops"; w.canMutate = false; },
   "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); },
   "s3-none": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.gated = true; },
   "s3-running": () => {},
@@ -277,9 +293,9 @@ const minioSetup = () => {
 const routes = {
   "GET /api/status": () => world.status,
   "GET /api/operation": () => world.operation,
-  "GET /api/version": () => world.version,
+  "GET /api/version": () => ({ ...world.version, profile: world.profile || "full", ...(world.profile === "gitops" ? { admissionPolicy: world.admissionPolicy || "enforced" } : {}) }),
   "GET /api/update-check": () => world.updateCheck,
-  "GET /api/user/permissions": () => ({ canMutate: true, user: F.USER }),
+  "GET /api/user/permissions": () => ({ canMutate: world.canMutate !== false, user: F.USER }),
   "GET /api/latest-nightly": () => F.latestNightly(),
   "GET /api/nightly-tags": () => F.nightlyTags(true),
   "GET /api/build-explorer/tags": (u) => F.nightlyTags(u.searchParams.get("includeDates") !== "false"),
@@ -301,8 +317,23 @@ const routes = {
   "POST /api/update": () => ({ success: true, message: "Dry run passed: the update would install rhods-operator from this build. Nothing was changed.", logs: ["OK: pull secret", "OK: image mirror", "OK: catalog image verified"] }),
 };
 
+// What the gitops profile serves (pkg/api gitOpsRoutes); every other route
+// answers 403 profile_gitops, and its reads need cluster-admin.
+const GITOPS_PROFILE_ROUTES = new Set([
+  "GET /api/status", "GET /api/operation", "GET /api/activity", "GET /api/update-check", "GET /api/components",
+  "GET /api/diagnostics", "GET /api/user/permissions", "POST /api/update", "POST /api/update/stream", "POST /api/pageview", "GET /api/version",
+]);
+
 async function api(req, res, u) {
   const key = `${req.method} ${u.pathname}`;
+  if (world.profile === "gitops") {
+    if (!GITOPS_PROFILE_ROUTES.has(key)) {
+      return json(res, 403, { error: "This feature is off: this updater runs the gitops profile, where Argo CD manages RHOAI and the updater only installs the build the Git-managed catalog serves (docs/GITOPS.md).", errorCode: "profile_gitops" });
+    }
+    if (world.canMutate === false && req.method === "GET" && !["/api/user/permissions", "/api/version"].includes(u.pathname)) {
+      return json(res, 403, { error: "This updater runs the gitops profile, where only cluster-admins can see what it reads from the cluster.", errorCode: "forbidden" });
+    }
+  }
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/minio/setup") return mutation(res, "setup-minio", "Set up S3 storage", minioSetup);

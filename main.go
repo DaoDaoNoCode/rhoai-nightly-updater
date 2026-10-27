@@ -31,6 +31,14 @@ func main() {
 		logLevel = slog.LevelInfo
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	// PROFILE decides which routes exist (docs/GITOPS.md, "Profiles"); an
+	// unknown value stops the updater rather than running every feature.
+	profile, err := api.ParseProfile(os.Getenv("PROFILE"))
+	if err != nil {
+		slog.Error("invalid PROFILE", "error", err)
+		os.Exit(1)
+	}
+	api.SetProfile(profile)
 	api.LogStartupVersion()
 
 	port := os.Getenv("PORT")
@@ -52,6 +60,9 @@ func main() {
 	mux := http.NewServeMux()
 	registerProbes(mux)
 	api.Register(mux)
+	// The gitops profile updates only while its admission policy is in
+	// place; this checks it now and every minute (no-op in full).
+	api.StartGitOpsPolicyWatch(context.Background())
 	mux.HandleFunc("/api/", middleware.APINotFound)
 	mux.Handle("/", middleware.StaticFiles(absStaticDir))
 

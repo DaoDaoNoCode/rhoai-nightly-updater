@@ -11,10 +11,12 @@ import {
 } from "@patternfly/react-core";
 import ExclamationCircleIcon from "@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon";
 import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
+import BanIcon from "@patternfly/react-icons/dist/esm/icons/ban-icon";
 import { useNavigate } from "react-router-dom";
 import { describeLoadError } from "../outcomes";
 import { SIGN_IN_URL } from "./ErrorAlert";
 import { TechnicalDetails } from "./LongText";
+import { gitOpsProfileReason } from "../profile";
 
 /** First load of a page, or of a large part of it: PatternFly's loading empty state. */
 export const PageLoading: React.FC<{ title: string; inSection?: boolean }> = ({ title, inSection = true }) => {
@@ -73,6 +75,43 @@ export const SessionExpiredState: React.FC = () => (
         <EmptyStateActions>
           <Button variant="primary" component="a" href={SIGN_IN_URL}>Sign in again</Button>
         </EmptyStateActions>
+        <EmptyStateActions>
+          <Button variant="link" onClick={() => window.location.reload()}>Reload page</Button>
+        </EmptyStateActions>
+      </EmptyStateFooter>
+    </EmptyState>
+  </PageSection>
+);
+
+/**
+ * A page the gitops profile does not have (docs/GITOPS.md, "Profiles"):
+ * what is missing and why, and the way back to Status.
+ */
+export const ProfileOffState: React.FC<{ feature: string }> = ({ feature }) => {
+  const navigate = useNavigate();
+  return (
+    <PageSection isFilled>
+      <EmptyState headingLevel="h1" titleText={`${feature} is not available here`} icon={BanIcon} variant={EmptyStateVariant.lg}>
+        <EmptyStateBody>{gitOpsProfileReason(feature)} Change the cluster in Git instead.</EmptyStateBody>
+        <EmptyStateFooter>
+          <EmptyStateActions>
+            <Button variant="primary" onClick={() => navigate("/")}>Go to Status</Button>
+          </EmptyStateActions>
+        </EmptyStateFooter>
+      </EmptyState>
+    </PageSection>
+  );
+};
+
+/** The whole page for a signed-in user who is not a cluster-admin, in the gitops profile. */
+export const AdminRequiredState: React.FC = () => (
+  <PageSection isFilled>
+    <EmptyState headingLevel="h1" titleText="Cluster-admin required" icon={LockIcon} variant={EmptyStateVariant.lg}>
+      <EmptyStateBody>
+        This updater runs the gitops profile, where only cluster-admins can see what it reads from the cluster and install the build
+        the Git-managed catalog serves. Ask a cluster-admin, or check the cluster through Argo CD and the OpenShift console.
+      </EmptyStateBody>
+      <EmptyStateFooter>
         <EmptyStateActions>
           <Button variant="link" onClick={() => window.location.reload()}>Reload page</Button>
         </EmptyStateActions>

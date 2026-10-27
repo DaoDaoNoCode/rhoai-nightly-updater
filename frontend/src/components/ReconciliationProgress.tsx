@@ -22,7 +22,8 @@ import { Link } from "react-router-dom";
 import type { StatusResponse, Problem, OperationResponse } from "../types";
 import { getDiagnostics, fixProblem } from "../services/api";
 import { formatElapsed } from "../utils";
-import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { useClusterBusyHandler, useGitOpsProfile, useMutationBlocker } from "../state/AppInfo";
+import { gitOpsProfileReason } from "../profile";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
@@ -233,7 +234,9 @@ export const ReconciliationProgress: React.FC<ReconciliationProgressProps> = ({
 
   // A fix is a cluster change: it needs the permission and a free lock. The
   // reconcile in progress itself is not a reason (that is what is stuck).
-  const fixDisabledReason = useMutationBlocker({ ignoreReconcile: true });
+  const gitOpsProfile = useGitOpsProfile();
+  const fixBlocker = useMutationBlocker({ ignoreReconcile: true });
+  const fixDisabledReason = fixBlocker ?? (gitOpsProfile ? gitOpsProfileReason("Applying fixes") : null);
   const onResult = useClusterBusyHandler();
 
   // Reset when a new reconciliation starts (keyed on startTime changing)

@@ -49,10 +49,11 @@ import { describeError } from "../errors";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
-import { useClusterBusyHandler, useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
+import { useClusterBusyHandler, useDashboardOverride, useGitOpsProfile, useMutationBlocker, useProfile, useVersion } from "../state/AppInfo";
+import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { STEP_SETS } from "../operationSteps";
 import { gitOpsOperatorReason, operatorGitOpsApp } from "../gitops";
-import { GitOpsNotice } from "../components/GitOpsNotice";
+import { GitOpsNotice, GitOpsProfileNotice } from "../components/GitOpsNotice";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
 
@@ -64,6 +65,11 @@ export const StatusPage: React.FC = () => {
   const { override } = useDashboardOverride();
   const showProgress = useHasOperationProgress();
   const { runOperator, followUps } = useOperatorActions();
+  // The gitops profile refuses the Quay lookups, Re-deploy, Reinstall, the
+  // setup and DSC creation; calls wait until the profile is known.
+  const profile = useProfile();
+  const gitOpsProfile = useGitOpsProfile();
+  const policyProblem = gitOpsPolicyProblem(useVersion());
 
   const prerequisitesMet = checkPrereqs(status);
   const installed = operatorInstalled(status);
@@ -72,7 +78,7 @@ export const StatusPage: React.FC = () => {
   const [latest, setLatest] = useState<LatestNightlyResponse | null>(null);
   const [latestLoading, setLatestLoading] = useState(false);
   useEffect(() => {
-    if (!prerequisitesMet) return;
+    if (!prerequisitesMet || profile !== "full") return;
     const controller = new AbortController();
     setLatestLoading(true);
     fetchLatestNightly(controller.signal)
@@ -80,13 +86,13 @@ export const StatusPage: React.FC = () => {
       .catch((e) => { if (!controller.signal.aborted) setLatest({ tag: "", image: "", error: toApiError(e).message }); })
       .finally(() => { if (!controller.signal.aborted) setLatestLoading(false); });
     return () => controller.abort();
-  }, [prerequisitesMet]);
+  }, [prerequisitesMet, profile]);
 
   // --- Nightly tags for Reinstall ---
   const [nightlyTags, setNightlyTags] = useState<NightlyTag[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
   const loadTags = useCallback(async () => {
-    if (!prerequisitesMet || !installed) return;
+    if (!prerequisitesMet || !installed || profile !== "full") return;
     setTagsLoading(true);
     try {
       const res = await fetchNightlyTags();
@@ -96,7 +102,7 @@ export const StatusPage: React.FC = () => {
     } finally {
       setTagsLoading(false);
     }
-  }, [prerequisitesMet, installed]);
+  }, [prerequisitesMet, installed, profile]);
   useEffect(() => { loadTags(); }, [loadTags]);
 
   useEffect(() => {
@@ -218,6 +224,12 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
+      {gitOpsProfile && (
+        <PageSection>
+          <GitOpsProfileNotice />
+        </PageSection>
+      )}
+
       {/* --- Argo CD manages part of RHOAI: say what the tool still does --- */}
       {status && (operatorGitOpsApp(status) || status.dscManagedBy) && (
         <PageSection>
@@ -228,7 +240,7 @@ export const StatusPage: React.FC = () => {
       {/* --- One-time setup comes first while it is incomplete: nothing else works without it --- */}
       {status && !prerequisitesMet && (
         <PageSection>
-          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} />
+          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} readOnly={gitOpsProfile} />
         </PageSection>
       )}
 
@@ -239,11 +251,11 @@ export const StatusPage: React.FC = () => {
             status={status}
             latest={latest}
             latestLoading={latestLoading}
-            blocker={blocker}
+            blocker={blocker ?? policyProblem ?? (gitOpsProfile && !operatorGitOpsApp(status) ? GITOPS_PROFILE_UNMANAGED_CATALOG : null)}
             prerequisitesMet={prerequisitesMet}
             onUpdate={setUpdateTarget}
             onChooseBuild={chooseAnotherBuild}
-            onPreview={setPreviewImage}
+            onPreview={gitOpsProfile ? undefined : setPreviewImage}
             onRedeploy={() => setRefreshConfirmOpen(true)}
           />
         </PageSection>
@@ -264,7 +276,15 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
-      {status && status.csv.phase === "Succeeded" && status.dscExists === false && !operatorGitOpsApp(status) && (
+      {status && status.csv.phase === "Succeeded" && status.dscExists === false && !operatorGitOpsApp(status) && gitOpsProfile && (
+        <PageSection>
+          <Alert variant="info" isInline component="p" title="No DataScienceCluster yet">
+            The gitops profile does not create the DataScienceCluster: define it in Git.
+          </Alert>
+        </PageSection>
+      )}
+
+      {status && status.csv.phase === "Succeeded" && status.dscExists === false && !operatorGitOpsApp(status) && !gitOpsProfile && (
         <PageSection>
           <Card>
             <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Create the DataScienceCluster</Title></CardTitle></CardHeader>
@@ -363,7 +383,7 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
-      {status && installed && (
+      {status && installed && !gitOpsProfile && (
         <PageSection>
           <Card>
             <CardHeader>
@@ -432,7 +452,7 @@ export const StatusPage: React.FC = () => {
 
       {status && prerequisitesMet && (
         <PageSection isFilled>
-          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} collapsible />
+          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} collapsible readOnly={gitOpsProfile} />
         </PageSection>
       )}
 

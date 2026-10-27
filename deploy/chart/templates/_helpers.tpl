@@ -12,6 +12,20 @@ when it differs). Helm can only read files inside the chart, hence the copy.
 {{- end -}}
 
 {{- /*
+The gitops profile's RBAC and admission policy: files/rbac-gitops.yaml, a
+copy of deploy/rbac-gitops.yaml (`make chart`, `make check-chart`), an
+OpenShift Template whose parameters are deploy/template.yaml's plus
+OPERATOR_NAMESPACE.
+*/ -}}
+{{- define "rnu.gitopsTemplate" -}}
+{{- $t := .Files.Get "files/rbac-gitops.yaml" | fromYaml -}}
+{{- if or (not $t) (hasKey $t "Error") (not $t.objects) (not $t.parameters) -}}
+{{- fail "files/rbac-gitops.yaml is missing or is not an OpenShift Template; run `make chart`" -}}
+{{- end -}}
+{{- toJson $t -}}
+{{- end -}}
+
+{{- /*
 The Template's parameters, as JSON, the way `oc process` would see them
 from install.sh: the Template's defaults, then the chart's own (NAMESPACE is
 the release namespace, which Argo CD sets to the destination namespace;
@@ -43,7 +57,28 @@ Nothing at render time can tell which commit a digest was built from
 {{- if hasKey $params "INSTALL_METHOD" -}}
 {{- $_ := set $params "INSTALL_METHOD" "gitops" -}}
 {{- end -}}
+{{- if not (has (.Values.profile | default "gitops") (list "gitops" "full")) -}}
+{{- fail (printf "profile must be gitops or full, not %v (docs/GITOPS.md, Profiles)" .Values.profile) -}}
+{{- end -}}
+{{- if hasKey $params "PROFILE" -}}
+{{- $_ := set $params "PROFILE" (.Values.profile | default "gitops") -}}
+{{- end -}}
+{{- if hasKey $params "SUBSCRIPTION_ENV_ALLOWLIST" -}}
+{{- $allow := .Values.gitops.subscriptionEnvAllowlist | default list -}}
+{{- range $allow -}}
+{{- if not (regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" (toString .)) -}}
+{{- fail (printf "gitops.subscriptionEnvAllowlist: %q is not an environment variable name ([A-Za-z_][A-Za-z0-9_]*)" (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $params "SUBSCRIPTION_ENV_ALLOWLIST" (join "," $allow) -}}
+{{- end -}}
 {{- range $name, $value := .Values.parameters -}}
+{{- if eq $name "PROFILE" -}}
+{{- fail "parameters.PROFILE is set by the chart: set the value profile (gitops or full) instead, which also chooses the RBAC" -}}
+{{- end -}}
+{{- if eq $name "SUBSCRIPTION_ENV_ALLOWLIST" -}}
+{{- fail "parameters.SUBSCRIPTION_ENV_ALLOWLIST is set by the chart: set gitops.subscriptionEnvAllowlist instead, which also goes into the admission policy" -}}
+{{- end -}}
 {{- if not (hasKey $params $name) -}}
 {{- fail (printf "parameters.%s is not a parameter of deploy/template.yaml; its parameters are %s" $name (keys $params | sortAlpha | join ", ")) -}}
 {{- end -}}

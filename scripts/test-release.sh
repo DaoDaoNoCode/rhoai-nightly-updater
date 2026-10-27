@@ -157,6 +157,11 @@ expect_fail "chart: template not copied" "Run 'make chart'" incharts check v0.2.
 expect_fail "chart: copy missing" "is not a copy of deploy/template.yaml" incharts check v0.2.0
 (cd "$WORK/chart" && chart 0.2.0 v0.2.0 && commit_all fixed)
 expect_ok "chart: fixed" incharts check v0.2.0
+# The gitops profile's RBAC is copied into the chart too, once it exists.
+(cd "$WORK/chart" && printf 'kind: Template\n' >deploy/rbac-gitops.yaml && commit_all rbac-not-copied)
+expect_fail "chart: rbac-gitops.yaml not copied" "deploy/chart/files/rbac-gitops.yaml at" incharts check v0.2.0
+(cd "$WORK/chart" && cp deploy/rbac-gitops.yaml deploy/chart/files/rbac-gitops.yaml && commit_all rbac-copied)
+expect_ok "chart: rbac-gitops.yaml copied" incharts check v0.2.0
 notes=$(incharts notes v0.2.0)
 printf '%s\n' "$notes" | grep -qF 'the Helm chart `deploy/chart` of this tag' && pass || fail "notes: no chart line: $notes"
 

@@ -8,7 +8,10 @@ rollbacks) stays with `install.sh` ([QUICKSTART](QUICKSTART.md),
 [UPGRADING](UPGRADING.md)). Use one of the two per install, not both: Argo CD
 undoes what `install.sh` changes, and `install.sh` would change what Git says.
 
-The chart exists from v2.2.0 on.
+The chart exists from v2.2.0 on. By default it deploys the updater with the
+**gitops profile**, which only installs the build the Git-managed catalog
+serves and gets only the RBAC that needs; `profile: full` deploys every
+feature with the Template's RBAC ([section 11](#11-profiles)).
 
 ## 1. What the chart is
 
@@ -19,7 +22,10 @@ and one chart template, `templates/objects.yaml`, renders every object of it:
 it takes the Template's parameter defaults, overlays `parameters` from the
 values, and replaces each `${NAME}` the way `oc process` does. Nothing in the
 chart names one of those objects, so a template change cannot be forgotten in
-the chart. `make chart` writes the copy; `make check-chart`,
+the chart. With `profile: gitops` the Template's RBAC objects are left out
+and the objects of a second copied file, `deploy/rbac-gitops.yaml`
+(`files/rbac-gitops.yaml`), are rendered instead ([section 11](#11-profiles)).
+`make chart` writes both copies; `make check-chart`,
 `scripts/test-chart.sh`, CI and the release guard fail when it differs.
 
 The render fails, instead of applying something half-done, when:
@@ -69,6 +75,8 @@ dialog.
 | `parameters.PULL_SECRET_NAMESPACE`, `parameters.MARKETPLACE_NAMESPACE` | `kube-system`, `openshift-marketplace` | Where the app gets a Role for the pull secret and the CatalogSources |
 | `parameters.IMAGE_REPOSITORY`, `parameters.RELEASES_URL` | the Template's | The update check and its release-notes link ([README: Configuration](../README.md#configuration)) |
 | `parameters.INSTALL_METHOD` | `gitops` | Leave it: it words the app's notices for Git |
+| `gitops.subscriptionEnvAllowlist` | `["DISABLE_DSC_CONFIG"]` | `profile: gitops` only: the environment variables the RHOAI Subscription's `spec.config.env` may set; any other `spec.config` field is refused ([section 11](#the-admission-policy)). `parameters.SUBSCRIPTION_ENV_ALLOWLIST` itself fails the render |
+| `profile` | `gitops` | What the updater may do and the RBAC it gets: `gitops` or `full` ([section 11](#11-profiles)). The chart sets the Template parameter `PROFILE` from it; `parameters.PROFILE` itself fails the render |
 | `allowTemplateMismatch` | `false` | Turn off the tag-consistency check, so an `IMAGE` whose tag names another release renders (like `install.sh`'s `ALLOW_TEMPLATE_MISMATCH=1`). With it on, the digest is still not verified |
 | `gitops.cliImage` | `registry.redhat.io/openshift4/ose-cli-rhel9:v4.17@sha256:b39fdb5a...` | The image of both hook Jobs, by digest. They only get, create and apply single objects, so any recent `oc` works; the tag follows the oauth-proxy convention. The rhel9 repository starts at v4.16; on OCP 4.15 use `registry.redhat.io/openshift4/ose-cli:v4.15@sha256:<digest>` |
 | `gitops.sessionSecret.enabled` | `true` | The session Secret hook. With `false`, create Secret `<APP_NAME>-proxy` (key `session_secret`) before the first sync: the Deployment mounts it and does not start without it |
@@ -235,7 +243,13 @@ another. The chart does not create the namespace (`install.sh` used
 `syncOptions`, as in [section 9](#9-examples).
 
 The Roles in `kube-system` and `openshift-marketplace` (the pull secret and
-the CatalogSources) are in those namespaces, as with `install.sh`.
+the CatalogSources) are in those namespaces, as with `install.sh`. With
+`profile: gitops` there is one more Role, in `redhat-ods-operator` (the
+operator's namespace): it must exist when Argo CD applies it. Sync the
+updater after RHOAI, or give the Application a `retry` policy as in
+[section 9](#9-examples): Argo CD does not retry a failed automated sync for
+the same commit unless `retry` is set
+([Argo CD: Automated Sync Policy](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/)).
 
 ## 6. Upgrading and rolling back
 
@@ -277,11 +291,13 @@ What happens to the app's objects depends on how the Application goes
   ApplicationSet with `preserveResourcesOnDeletion: true`. The app keeps
   running, unmanaged; remove it with `install.sh uninstall` as below.
 
-A cascading deletion removes everything the Template creates: the
+A cascading deletion removes everything the chart rendered: the
 Deployment, Service, Route, NetworkPolicy, ServiceMonitor, PrometheusRule,
 the ServiceAccount, the ClusterRole and ClusterRoleBinding
 `<APP_NAME>-<NAMESPACE>`, and the Roles in `<NAMESPACE>`, `kube-system` and
-`openshift-marketplace`.
+`openshift-marketplace`; with `profile: gitops` also the Role in
+`redhat-ods-operator` and the ValidatingAdmissionPolicy and its binding
+`<APP_NAME>-<NAMESPACE>-gitops`.
 
 What stays even then:
 - the namespace, when `CreateNamespace=true` created it: Argo CD creates it
@@ -299,6 +315,9 @@ by the instance label, then the namespace, or by hand:
 
 ```bash
 oc delete consolelink,clusterrole,clusterrolebinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
+# profile gitops only (install.sh uninstall does not know these):
+oc delete validatingadmissionpolicy,validatingadmissionpolicybinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
+oc delete role,rolebinding -n redhat-ods-operator -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
 oc delete project <NAMESPACE>
 ```
 
@@ -311,8 +330,14 @@ test resources) stay, as with `install.sh uninstall`.
   creates a ClusterRole, Roles in `kube-system` and `openshift-marketplace`,
   and their bindings, and Kubernetes lets a client grant only permissions it
   holds itself (or with `escalate`/`bind`). The hooks add a ClusterRole for
-  ConsoleLinks. This is the same requirement as `install.sh`'s
-  cluster-admin check. When Argo CD reaches a managed cluster through a
+  ConsoleLinks, and with `profile: gitops` a ValidatingAdmissionPolicy and
+  its binding. This is the same requirement as `install.sh`'s
+  cluster-admin check.
+- **OpenShift 4.17 or later for `profile: gitops`**: its admission policy is
+  `admissionregistration.k8s.io/v1`, stable since Kubernetes 1.30
+  ([Kubernetes: Validating Admission Policy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)),
+  which OpenShift 4.17 uses (its release notes). On an older cluster the
+  sync fails on that object; use `profile: full` there. When Argo CD reaches a managed cluster through a
   proxy identity, check that admission on that cluster allows a
   NetworkPolicy and Roles in those namespaces.
 - **Annotation-based resource tracking**, `application.resourceTrackingMethod:
@@ -392,6 +417,14 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+    # profile gitops has a Role in redhat-ods-operator: retry until RHOAI
+    # created that namespace (section 5).
+    retry:
+      limit: -1
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
 ```
 
 `apps/rhoai-nightly-updater/values.yaml` in the GitOps repository:
@@ -459,6 +492,12 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+        retry:
+          limit: -1
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m
 ```
 
 `apps/rhoai-nightly-updater/values-<cluster>.yaml`, for a cluster on another
@@ -484,7 +523,192 @@ finds Secret `<APP_NAME>-proxy` and keeps it, so nobody is signed out, and
 the ConsoleLink hook takes over the link. From then on, change the install
 only in Git; do not run `install.sh` or `make upgrade` on it.
 
+With `profile: gitops` (the default) the chart renders its RBAC objects
+under the names `install.sh` used, so the first sync applies the gitops
+profile's rules over the full ones; nothing of the full RBAC needs to stay.
+Check after the first sync that it did, for example that
+`oc get clusterrole <APP_NAME>-<NAMESPACE> -o yaml` grants no `create`,
+`patch` or `delete`. Whatever RBAC the ServiceAccount still holds, the
+admission policy keeps it from writing other Subscriptions, other catalogs
+or OperatorGroups ([section 11](#11-profiles)).
+
 An install from before v1.0.0 (an image on `:latest`, a `COOKIE_SECRET`
 environment value, objects named `<APP_NAME>`) needs the cleanup only
 `install.sh` does: upgrade it with `install.sh` first
 ([UPGRADING](UPGRADING.md)), then move it.
+
+## 11. Profiles
+
+The updater runs one of two profiles, set by the environment variable
+`PROFILE` (the Template parameter of the same name; the chart sets it from
+its `profile` value). Any other value stops it at startup. The UI reads the
+profile from `GET /api/version` and hides what the profile refuses.
+
+| Profile | For | What the updater does | RBAC |
+|---|---|---|---|
+| `full` (default of the Template, `install.sh` and `make`) | the dashboard team's development clusters | everything: Update, Reinstall, Re-deploy, the cluster setup, Build Explorer, Dashboard Dev, Test resources, DataScienceCluster changes, Diagnostics fixes | the Template's (`deploy/template.yaml`) |
+| `gitops` (default of the chart) | clusters where Argo CD manages RHOAI, including clusters that serve tenants | Update's Argo CD path only: install the build the catalog Git manages serves (or the same build again), plus its dry run and the Status, Components and Diagnostics reads | `deploy/rbac-gitops.yaml` (with the chart) |
+
+The chart defaults to `gitops` because it is the Argo CD install: on such a
+cluster Git is the source of truth, Argo CD undoes most changes the full
+profile would make, and the full profile's RBAC lets the ServiceAccount do
+far more than installing a build (create Secrets and patch Deployments in
+any namespace, create Subscriptions and write CatalogSources, which
+installs any operator, delete admission webhooks). Choose `profile: full`
+only for a development cluster where the updater should do everything, as
+with `install.sh`.
+
+### What the gitops profile allows
+
+| Route | Why |
+|---|---|
+| `GET /api/status`, `/api/operation`, `/api/activity`, `/api/update-check` | the Status page |
+| `GET /api/components` | the Components page (read only) |
+| `GET /api/diagnostics` | the Diagnostics page (findings only, no fixes) |
+| `POST /api/update/stream`, `POST /api/update` (dry run) | Update, through `UpdateStreamGitOpsProfile` and `UpdateDryRunGitOpsProfile` (`pkg/cluster/gitops_profile.go`) |
+| `GET /api/user/permissions` | tells the UI whether the user is a cluster-admin; it makes no ServiceAccount call |
+| `POST /api/pageview` | counts page views in memory for `/metrics`; no cluster call, bounded labels |
+
+Every other route answers **403** with `errorCode` **`profile_gitops`**,
+before authentication and before any API call (`pkg/api/routes.go`,
+`gitOpsRefused`; a test fails for a route that is in neither list). The
+reads need the same cluster-admin check as every change (a
+SelfSubjectAccessReview with the user's own token for `*` on `*`): on a
+cluster that serves tenants many people can sign in, and what the
+ServiceAccount reads, such as pods and events in every namespace, is not
+theirs to see. Other users get 403 `forbidden` and the UI shows
+"Cluster-admin required".
+
+### How Update works there
+
+Update in the gitops profile is Update's Argo CD path
+([CLUSTER_CHANGES](CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator))
+with these differences:
+
+- It refuses (`profile_gitops`) unless Argo CD manages CatalogSource
+  `rhoai-catalog-dev` (its `argocd.argoproj.io/tracking-id` names it).
+- It **never writes a CatalogSource**. The full profile checks the build in a
+  temporary verification catalog first; the gitops profile cannot, because
+  OLM sets a CatalogSource's `spec.image` from its
+  `olm.catalogImageTemplate` annotation (operator-lifecycle-manager
+  `pkg/controller/operators/catalogtemplate/operator.go`), and an admission
+  policy cannot read annotations, so any catalog the ServiceAccount could
+  create could run any image. Instead Update waits until the catalog Git
+  manages serves the image (its `spec.image` is the image, a registry pod
+  runs it and is Ready, no pod runs another image, the catalog is `READY`)
+  and reads the channel's head and build from that catalog's
+  PackageManifest. Right after the catalog pod was replaced, the
+  PackageManifest can still list the previous build for a short while; OLM
+  installs from the registry pod, so Update then reports `install_mismatch`
+  (the installed CSV is not the build it read) and keeps the operator: run
+  it again.
+- Before it deletes anything it checks that the admission policy below
+  allows the Subscription it will create **and** the Subscription the
+  restore would put back after a failure, using the same rule as the policy
+  (`gitOpsSubscriptionProblem`, kept in step with the policy's CEL by
+  `pkg/cluster/gitops_policy_test.go`). A Subscription from another catalog
+  (for example `redhat-operators` while Argo CD manages only the catalog),
+  in another `sourceNamespace`, or with a `spec.config` the policy refuses
+  is a refusal with *Nothing was changed*: fix the Subscription in Git, or
+  extend `gitops.subscriptionEnvAllowlist`. It checks the live Subscription
+  again right before the first deletion, and once more right before it
+  deletes the Subscription. If Git changed the Subscription to something
+  the policy refuses in that last window (after the old CSV was deleted),
+  Update leaves the Subscription as Git sets it and does not run the
+  restore; OLM then installs nothing until the Subscription is fixed in Git.
+- It never creates the operator namespace or OperatorGroup (Git does; a
+  missing or unusable one is a refusal) and never ends a Dashboard Dev
+  session (it refuses while one is active).
+- It runs only while the admission policy and its binding are in place
+  ([below](#the-admission-policy)).
+
+### Its RBAC
+
+`deploy/rbac-gitops.yaml` holds exactly what the gitops profile's routes
+can request with the ServiceAccount. `pkg/cluster/rbac_gitops_test.go`
+type-checks `main.go`, `pkg/api` and `pkg/cluster`, builds a reference graph
+from the gitops routes (`api.gitOpsRoutes`) and the startup code, derives
+the API requests of every function it reaches, and fails when the file
+misses one or grants one no reached function makes. It also fails if the
+graph misses a function that calls the API at all, and if any CatalogSource,
+OperatorGroup or namespace write, or an InstallPlan create, is reachable.
+
+| Where | Rules | Used by |
+|---|---|---|
+| cluster-wide (ClusterRole) | reads only: `get`/`list` of what Status, Components and Diagnostics read (cluster version, console, IDMS, nodes, events, namespaces, pods, services, endpointslices, deployments, replicasets, webhook configurations, CRDs, DSC, DSCI, Platform, module CRs, CSVs, OperatorGroups, prerequisite operands named `cluster`, certificates), `get` namespace `redhat-ods-operator`, and `get` of the admission policy and binding `<APP_NAME>-<NAMESPACE>-gitops` | the reads; Update's checks; the policy check |
+| `redhat-ods-operator` (Role) | Subscription `rhods-operator` `get`/`patch`/`delete`, Subscriptions `create`; CSVs `delete`; InstallPlans `get`/`list`/`patch`/`delete`; ConfigMap `odh-upgrade-acks` `get` | Update deletes the old InstallPlan and CSV, deletes and at once recreates the Subscription, approves the InstallPlan it caused under Manual approval, restores on failure |
+| `openshift-marketplace` (Role) | CatalogSources `get`; PackageManifests `list` | reading the catalog Git manages and what it serves |
+| `kube-system` (Role) | Secret `additional-pull-secret` `get` | the pull-secret check of Status and Update, and the Quay lookups |
+| `<NAMESPACE>` (Role) | the app's three ConfigMaps | activity log, snapshot, operation lock and marker |
+
+No Secret is created or patched, no Deployment, namespace, CatalogSource or
+OperatorGroup is written, no webhook configuration is deleted.
+
+### The admission policy
+
+RBAC cannot limit `create` by name
+([Kubernetes RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources))
+nor look into a Subscription's spec, so the gitops profile also ships a
+ValidatingAdmissionPolicy and binding, `<APP_NAME>-<NAMESPACE>-gitops`
+(sync wave -1, before the Deployment). For requests of the updater's
+ServiceAccount only
+(`request.userInfo.username == 'system:serviceaccount:<NAMESPACE>:<APP_NAME>'`):
+
+- **Subscriptions**: only `rhods-operator` in `redhat-ods-operator`, for
+  package `rhods-operator` from CatalogSource `rhoai-catalog-dev` in
+  `openshift-marketplace`, with no `spec.config` or a `spec.config` that
+  holds only `env`, each entry only `name` and `value`, the name in
+  `gitops.subscriptionEnvAllowlist`. OLM applies every `SubscriptionConfig`
+  field (`env`, `envFrom`, `volumes`, `volumeMounts`, `resources`,
+  `nodeSelector`, `tolerations`, `affinity`, `selector`, `annotations`;
+  operator-framework/api `pkg/operators/v1alpha1/subscription_types.go`) to
+  the operator's Deployment, so a `RELATED_IMAGE_*` variable or a volume
+  would change what the operator runs.
+- **CatalogSources and OperatorGroups**: no create, update or delete.
+- **InstallPlans** (in `redhat-ods-operator`): no create; an update may only
+  approve (`spec.approved` from `false` to `true`, every other spec field
+  unchanged) a plan whose CSVs are all `rhods-operator.*`; a delete only of
+  such a plan.
+- **ClusterServiceVersions**: only deleting a `rhods-operator.*` CSV in
+  `redhat-ods-operator`.
+
+**`gitops.subscriptionEnvAllowlist`** defaults to `["DISABLE_DSC_CONFIG"]`:
+the one variable the AI Grid GitOps chart puts on the RHOAI Subscription
+(`charts/rhai-on-openshift-chart/templates/operator/operator.yaml` in
+opendatahub-io/odh-gitops, branch `feature-ai-grid`, which
+kahowell/ai-grid-tenant's ApplicationSet uses, and in pierDipi/odh-gitops;
+ai-grid-tenant sets no further `operator.rhoai.olm.config`). The chart
+renders it into the policy and into the app (`SUBSCRIPTION_ENV_ALLOWLIST`),
+so both check the same list. If Git adds a variable, for example a
+`RELATED_IMAGE_*` override the chart documents, Update refuses until the
+allowlist names it: decide that in Git, knowingly.
+
+The policy holds whatever RBAC the ServiceAccount has, for example RBAC left
+from a full-profile install. `deploy/rbac-gitops.yaml` cites the Kubernetes
+and OLM documentation or source for every field and variable it uses.
+`pkg/cluster/gitops_policy_test.go` evaluates the policy's CEL with cel-go
+(the library the API server uses) on every case of
+`pkg/cluster/testdata/gitops-policy-cases.json`, next to the Go rule, and
+`scripts/test-chart.sh` checks how it renders. Its enforcement can only be
+tested on a cluster.
+
+**Is it enforcing?** The app reads the policy and its binding by name at
+startup, every minute, and before every Update (they must exist, the policy
+with `failurePolicy: Fail`, the binding naming it with `validationActions`
+holding `Deny`). Without them Update answers 503 `admission_policy_missing`
+and the Status page says so; reads keep working. What this cannot cover:
+- the seconds between Argo CD creating the Deployment and the policy (sync
+  waves order the apply, they do not wait for the API server to load the
+  policy), and between a check and the requests that follow it: someone
+  who can delete the policy can also act on the cluster directly;
+- that the API server enforces what exists: a policy that exists but does
+  not compile still denies, because `failurePolicy` is `Fail`.
+
+### Choosing the full profile
+
+Set `profile: full` in the values. The chart then renders the Template
+exactly as before (its RBAC, no admission policy), and the updater offers
+every feature, including the verification catalog. Moving back to `gitops`
+applies its RBAC over the full one (same object names; check it as in
+[section 10](#10-moving-an-install-from-installsh-to-argo-cd)) and adds the
+policy.

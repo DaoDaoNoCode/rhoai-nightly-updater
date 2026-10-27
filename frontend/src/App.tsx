@@ -52,12 +52,13 @@ import {
 import { trackPageView } from "./services/api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HelpButton } from "./components/HelpModal";
-import { PageLoading, SessionExpiredState } from "./components/PageStates";
+import { AdminRequiredState, PageLoading, ProfileOffState, SessionExpiredState } from "./components/PageStates";
 import { StatusLabel } from "./components/StatusLabel";
 import { NAV_ITEMS } from "./constants";
 import { LOGO_SRC } from "./logo";
 import { AppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
-import { AppInfoProvider, useSessionExpired, useVersion } from "./state/AppInfo";
+import { AppInfoProvider, useGitOpsProfile, usePermissions, useSessionExpired, useVersion } from "./state/AppInfo";
+import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 
@@ -139,6 +140,12 @@ const AppLayout: React.FC = () => {
   const sessionExpired = useSessionExpired();
   const runningVersion = useVersion()?.version;
   const reconciling = operationState.reconcile.active;
+  // The gitops profile has only some pages, and only for cluster-admins.
+  const gitOpsProfile = useGitOpsProfile();
+  const { status: permissionStatus } = usePermissions();
+  const adminRequired = gitOpsProfile && permissionStatus === "denied";
+  const navItems = NAV_ITEMS.filter((item) => !gitOpsProfile || GITOPS_PROFILE_PAGES.has(item.path));
+  const offInProfile = (feature: string, element: React.ReactElement) => (gitOpsProfile ? <ProfileOffState feature={feature} /> : element);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
   const [isDark, setIsDark] = useState(initialDarkMode);
@@ -271,6 +278,10 @@ const AppLayout: React.FC = () => {
                     </DropdownGroup>
                   </Dropdown>
                 </ToolbarItem>
+              ) : adminRequired ? (
+                <ToolbarItem>
+                  <StatusLabel status="warning">No access</StatusLabel>
+                </ToolbarItem>
               ) : sessionExpired ? (
                 <ToolbarItem>
                   <StatusLabel status="danger">Signed out</StatusLabel>
@@ -296,7 +307,7 @@ const AppLayout: React.FC = () => {
       <PageSidebarBody>
         <Nav aria-label="Global">
           <NavList>
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <NavItem
                 key={item.path}
                 itemId={item.path}
@@ -325,14 +336,16 @@ const AppLayout: React.FC = () => {
       {sessionExpired ? (
         // Nothing on any page works until the user signs in again (UX-Global-16).
         <SessionExpiredState />
+      ) : adminRequired ? (
+        <AdminRequiredState />
       ) : (
         <Suspense fallback={<PageLoading title="Loading page" />}>
           <Routes>
             <Route path="/" element={<StatusPage />} />
             <Route path="/components" element={<ComponentsPage />} />
-            <Route path="/builds" element={<BuildExplorerPage />} />
-            <Route path="/dashboard-dev" element={<DashboardDevRoute />} />
-            <Route path="/test-resources" element={<TestResourcesPage />} />
+            <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
+            <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", <DashboardDevRoute />)} />
+            <Route path="/test-resources" element={offInProfile("Test resources", <TestResourcesPage />)} />
             <Route path="/diagnostics" element={<TroubleshootingPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

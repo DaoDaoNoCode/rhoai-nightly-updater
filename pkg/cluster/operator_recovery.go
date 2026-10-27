@@ -150,8 +150,14 @@ type operatorRecovery struct {
 	subscription map[string]interface{}
 	catalog      map[string]interface{}
 
-	// catalogChanged: the nightly CatalogSource was replaced or deleted.
+	// catalogChanged: the nightly CatalogSource was replaced or deleted
+	// (noteCatalogChanged, which also sets catalogRestore).
 	catalogChanged bool
+	// catalogRestore puts the previous nightly catalog back. It is a field,
+	// set only by the operations that change the catalog, so the gitops
+	// profile's Update, which never does, does not reach a CatalogSource
+	// write through the restore (pkg/cluster/rbac_gitops_test.go).
+	catalogRestore func(r *operatorRecovery, c *Client) []string
 	// subscriptionChanged: the Subscription was deleted or replaced.
 	subscriptionChanged bool
 	// csvRemoved: the operation deleted the previously installed CSV
@@ -172,6 +178,31 @@ type operatorRecovery struct {
 	// UID. A CSV not in it (or with another UID) was created by the attempt,
 	// even when the operation deleted nothing (a first install).
 	preCSVs map[string]string
+}
+
+// noteCatalogChanged records that the operation replaced or deleted the
+// nightly catalog, so a failure restores it.
+func (r *operatorRecovery) noteCatalogChanged() {
+	r.catalogChanged = true
+	r.catalogRestore = (*operatorRecovery).restoreNightlyCatalog
+}
+
+// restoreNightlyCatalog re-applies the catalog captured before the
+// operation, or deletes the one it created. It returns the failures.
+func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
+	catalogPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	if r.catalog != nil {
+		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
+			"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS}, "spec": r.catalog["spec"]}
+		if _, _, err := c.apply(catalogPath, obj); err != nil {
+			return []string{"CatalogSource: " + err.Error()}
+		}
+		return nil
+	}
+	if _, err := c.delete(catalogPath); err != nil && !IsK8sError(err, 404) {
+		return []string{"remove the new CatalogSource: " + err.Error()}
+	}
+	return nil
 }
 
 func (r *operatorRecovery) installPlanName() string {
@@ -347,19 +378,8 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	applyCtx, cancelApply := postOperationContext(c, restoreApplyTimeout)
 	defer cancelApply()
 	c = c.WithContext(applyCtx)
-	catalogPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	if r.catalogChanged {
-		if r.catalog != nil {
-			obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-				"metadata": map[string]interface{}{"name": CatalogName, "namespace": CatalogNS}, "spec": r.catalog["spec"]}
-			if _, _, err := c.apply(catalogPath, obj); err != nil {
-				failures = append(failures, "CatalogSource: "+err.Error())
-			}
-		} else {
-			if _, err := c.delete(catalogPath); err != nil && !IsK8sError(err, 404) {
-				failures = append(failures, "remove the new CatalogSource: "+err.Error())
-			}
-		}
+	if r.catalogChanged && r.catalogRestore != nil {
+		failures = append(failures, r.catalogRestore(r, c)...)
 	}
 	if operatorTouched && r.subscription != nil && !subReplaced {
 		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",

@@ -35,6 +35,7 @@ import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
 import { gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp } from "../gitops";
+import { useGitOpsProfile } from "../state/AppInfo";
 
 /** CSV phases of an install OLM is still working on. */
 const INSTALLING_PHASES = new Set(["Installing", "Replacing", "Pending", "InstallReady"]);
@@ -66,7 +67,8 @@ interface InstalledBuildCardProps {
   prerequisitesMet: boolean;
   onUpdate: (target: NightlyBuild) => void;
   onChooseBuild: () => void;
-  onPreview: (image: string) => void;
+  /** Absent where Build Explorer is off (the gitops profile). */
+  onPreview?: (image: string) => void;
   onRedeploy: () => void;
 }
 
@@ -87,6 +89,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   onRedeploy,
 }) => {
   const navigate = useNavigate();
+  const gitOpsProfile = useGitOpsProfile();
   const installed = operatorInstalled(status);
   const onNightly = isOnNightly(status);
   const nightly = status.nightly;
@@ -353,7 +356,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 title="The operator is Failed"
                 actionLinks={
                   <>
-                    {!operatorGitOpsApp(status) && <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>}
+                    {!operatorGitOpsApp(status) && !gitOpsProfile && <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>}
                     <AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>
                     {safeConsoleURL && (
                       <AlertActionLink
@@ -409,12 +412,12 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
       <CardFooter>
         <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapMd" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
           {primary && <FlexItem>{primary}</FlexItem>}
-          {prerequisitesMet && !gitOpsApp && (
+          {prerequisitesMet && !gitOpsApp && !gitOpsProfile && (
             <FlexItem>
               <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
             </FlexItem>
           )}
-          {previewBuild && (
+          {previewBuild && onPreview && (
             <FlexItem>
               <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(previewBuild.image)}>
                 View build contents
@@ -438,6 +441,8 @@ interface ClusterSetupCardProps {
   onShowInstructions: () => void;
   /** Once the setup is done it is a collapsed card at the end of the page. */
   collapsible?: boolean;
+  /** Show the state only (the gitops profile, which does not set the cluster up). */
+  readOnly?: boolean;
 }
 
 /**
@@ -445,7 +450,7 @@ interface ClusterSetupCardProps {
  * one card. While either is missing it is open and comes first; once both
  * are ready it is an expandable card that shows "Ready".
  */
-export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onStatusRefresh, onShowInstructions, collapsible = false }) => {
+export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onStatusRefresh, onShowInstructions, collapsible = false, readOnly = false }) => {
   const [expanded, setExpanded] = useState(false);
   const ready = setupComplete(status);
   const done = (status.pullSecret.exists && status.pullSecret.valid ? 1 : 0) + (status.imageMirror.exists ? 1 : 0);
@@ -456,12 +461,13 @@ export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onSt
         <StackItem>
           <Content component="p" className="pf-v6-u-text-color-subtle">
             Nightly builds come from quay.io/rhoai. The cluster needs these two once, before the first install.
+            {readOnly && " In the gitops profile the updater only shows them: set them up in Git."}
           </Content>
         </StackItem>
         <StackItem>
           <CardList aria-label="Cluster setup">
             <CardListItem labelledBy="setup-pull-secret">
-              <PullSecretSetup pullSecret={status.pullSecret} onStatusRefresh={onStatusRefresh} titleId="setup-pull-secret" />
+              <PullSecretSetup pullSecret={status.pullSecret} onStatusRefresh={onStatusRefresh} titleId="setup-pull-secret" readOnly={readOnly} />
             </CardListItem>
             <CardListItem labelledBy="setup-image-mirror">
               <Stack hasGutter>

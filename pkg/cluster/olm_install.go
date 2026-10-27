@@ -101,8 +101,10 @@ func buildSubscription(previous map[string]interface{}, source, channel string) 
 // and left alone. With dryRun nothing is created.
 func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, problem string, errorCode string) {
 	nsPath := "/api/v1/namespaces/" + SubNS
-	_, _, err := c.get(nsPath)
-	nsMissing := IsK8sError(err, 404)
+	nsMissing, groups, problem, errorCode := readOperatorNamespaceAndGroups(c)
+	if problem != "" {
+		return logs, problem, errorCode
+	}
 	switch {
 	case nsMissing && dryRun:
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create namespace %s", SubNS))
@@ -113,52 +115,15 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 		}
 		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", SubNS))
-	case err != nil:
-		return logs, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
-	}
-
-	var groups []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Spec struct {
-			TargetNamespaces []string    `json:"targetNamespaces"`
-			Selector         interface{} `json:"selector"`
-		} `json:"spec"`
-	}
-	if !nsMissing {
-		body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
-		if err != nil && !IsK8sError(err, 404) {
-			return logs, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
-		}
-		if err == nil {
-			var list struct {
-				Items json.RawMessage `json:"items"`
-			}
-			if err := json.Unmarshal(body, &list); err != nil {
-				return logs, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
-			}
-			if len(list.Items) > 0 {
-				if err := json.Unmarshal(list.Items, &groups); err != nil {
-					return logs, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
-				}
-			}
-		}
 	}
 
 	switch {
-	case len(groups) > 1:
-		var names []string
-		for _, g := range groups {
-			names = append(names, g.Metadata.Name)
+	case len(groups) > 0:
+		ok, problem := operatorGroupsUsable(groups)
+		if problem != "" {
+			return logs, problem, "prerequisites"
 		}
-		return logs, fmt.Sprintf("Namespace %s has %d OperatorGroups (%s). OLM fails the RHOAI CSV with TooManyOperatorGroups; delete all but one global OperatorGroup and retry. Nothing was changed.", SubNS, len(groups), strings.Join(names, ", ")), "prerequisites"
-	case len(groups) == 1:
-		g := groups[0]
-		if len(g.Spec.TargetNamespaces) > 0 || g.Spec.Selector != nil {
-			return logs, fmt.Sprintf("OperatorGroup %s in %s targets specific namespaces, but RHOAI supports only the AllNamespaces install mode. Remove spec.targetNamespaces and spec.selector from it and retry. Nothing was changed.", g.Metadata.Name, SubNS), "prerequisites"
-		}
-		logs = append(logs, fmt.Sprintf("OK: OperatorGroup %s exists in %s", g.Metadata.Name, SubNS))
+		logs = append(logs, ok)
 	case dryRun:
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create OperatorGroup in %s", SubNS))
 	default:
@@ -175,6 +140,66 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", SubNS))
 	}
 	return logs, "", ""
+}
+
+// rhoaiOperatorGroup is what the OperatorGroup checks read of one OperatorGroup.
+type rhoaiOperatorGroup struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		TargetNamespaces []string    `json:"targetNamespaces"`
+		Selector         interface{} `json:"selector"`
+	} `json:"spec"`
+}
+
+// readOperatorNamespaceAndGroups reads whether the operator namespace exists
+// and its OperatorGroups (none when the namespace is missing). It only
+// reads; problem is set when either could not be read.
+func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOperatorGroup, problem string, errorCode string) {
+	_, _, err := c.get("/api/v1/namespaces/" + SubNS)
+	switch {
+	case IsK8sError(err, 404):
+		return true, nil, "", ""
+	case err != nil:
+		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+	}
+	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
+	if err != nil && !IsK8sError(err, 404) {
+		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
+	}
+	if err == nil {
+		var list struct {
+			Items json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return false, nil, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
+		}
+		if len(list.Items) > 0 {
+			if err := json.Unmarshal(list.Items, &groups); err != nil {
+				return false, nil, fmt.Sprintf("Failed to parse OperatorGroups in %s: %v", SubNS, err), "validation"
+			}
+		}
+	}
+	return false, groups, "", ""
+}
+
+// operatorGroupsUsable checks one or more existing OperatorGroups: exactly
+// one, and global. It returns the log line when they are usable, else the
+// problem.
+func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
+	if len(groups) > 1 {
+		var names []string
+		for _, g := range groups {
+			names = append(names, g.Metadata.Name)
+		}
+		return "", fmt.Sprintf("Namespace %s has %d OperatorGroups (%s). OLM fails the RHOAI CSV with TooManyOperatorGroups; delete all but one global OperatorGroup and retry. Nothing was changed.", SubNS, len(groups), strings.Join(names, ", "))
+	}
+	g := groups[0]
+	if len(g.Spec.TargetNamespaces) > 0 || g.Spec.Selector != nil {
+		return "", fmt.Sprintf("OperatorGroup %s in %s targets specific namespaces, but RHOAI supports only the AllNamespaces install mode. Remove spec.targetNamespaces and spec.selector from it and retry. Nothing was changed.", g.Metadata.Name, SubNS)
+	}
+	return fmt.Sprintf("OK: OperatorGroup %s exists in %s", g.Metadata.Name, SubNS), ""
 }
 
 // waitForCSVGone waits, up to CSVDeletionTimeout, until a deleted CSV no

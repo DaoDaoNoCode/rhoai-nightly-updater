@@ -45,12 +45,43 @@ only accepts a tag whose version is the top dated section. See
 - The release guard also checks that `deploy/chart/Chart.yaml` names the
   release (`version` X.Y.Z, `appVersion` vX.Y.Z), and the release notes name
   the chart.
-
-### Security
-
-- Go 1.27.3 (CI, the image build and the GitHub workflows): fixes the
-  crypto/x509 advisory GO-2026-6809 (distrust compromised intermediate
-  certificates) that govulncheck reports with 1.27.2.
+- Profiles ([docs/GITOPS.md, section 11](docs/GITOPS.md#11-profiles)):
+  setting `PROFILE` (Template parameter, empty = `full`) picks what the
+  updater may do; any other value than `full` or `gitops` stops it at
+  startup, and `GET /api/version` reports it as `profile`. `full` is every
+  feature, unchanged. `gitops`, for clusters where Argo CD manages RHOAI,
+  allows only Update (its Argo CD path: install the build the Git-managed
+  catalog serves; refused unless Argo CD manages CatalogSource
+  `rhoai-catalog-dev`), its dry run, and the Status, Components and
+  Diagnostics reads, which then need cluster-admin like every change. Every
+  other route answers 403 `profile_gitops` before any API call; the UI hides
+  those pages and actions and says why. In that profile Update never creates
+  the operator namespace or OperatorGroup and never ends a Dashboard Dev
+  session; it refuses instead.
+- The chart's `profile` value, `gitops` by default: it renders the
+  Template's objects without its RBAC plus `deploy/rbac-gitops.yaml`, the
+  RBAC the gitops profile reaches and nothing more (cluster-wide reads only;
+  no Secret, Deployment, namespace, webhook, CatalogSource or OperatorGroup
+  writes), and a ValidatingAdmissionPolicy that lets the updater's
+  ServiceAccount write only Subscription `rhods-operator` from
+  `rhoai-catalog-dev` with at most the environment variables of
+  `gitops.subscriptionEnvAllowlist` (default `DISABLE_DSC_CONFIG`) in
+  `spec.config`, approve or delete only rhods-operator InstallPlans, delete
+  only rhods-operator CSVs, and no CatalogSource or OperatorGroup. In that
+  profile Update reads the build from the catalog Git manages instead of a
+  temporary verification catalog, checks before deleting anything that the
+  policy allows the Subscription it creates and the one it would restore,
+  and runs only while the policy and its binding exist (checked at
+  startup, every minute and before each Update; 503
+  `admission_policy_missing` otherwise). The gitops profile needs OpenShift
+  4.17 or later. `profile: full` renders as before. Tests derive the RBAC
+  from a call graph of the gitops routes, prove no catalog write is
+  reachable, and evaluate the policy's CEL with cel-go (a new test-only
+  dependency, `github.com/google/cel-go`) on shared cases next to the Go
+  rule. `TEMPLATE_REVISION` stays 4: the full profile's template RBAC is
+  unchanged, the new Template parameter `SUBSCRIPTION_ENV_ALLOWLIST` and
+  variable `GITOPS_ADMISSION_POLICY` are read only in the gitops profile,
+  and an install without `PROFILE` runs the full profile.
 
 ## [2.1.0] - 2026-10-14
 

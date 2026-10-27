@@ -31,6 +31,8 @@ finish() {
 # only); `make chart` writes it.
 cmp -s "$SRC/deploy/template.yaml" "$CHART/files/template.yaml" && pass ||
 	fail "deploy/chart/files/template.yaml differs from deploy/template.yaml; run 'make chart'"
+cmp -s "$SRC/deploy/rbac-gitops.yaml" "$CHART/files/rbac-gitops.yaml" && pass ||
+	fail "deploy/chart/files/rbac-gitops.yaml differs from deploy/rbac-gitops.yaml; run 'make chart'"
 
 # The chart's version is the release it belongs to: the top CHANGELOG section
 # (dated or not; scripts/release.sh check enforces it at the tag).
@@ -60,11 +62,19 @@ INSPECT="$WORK/inspect"
 mkdir -p "$INSPECT/templates"
 printf 'apiVersion: v2\nname: inspect\nversion: 0.0.0\n' >"$INSPECT/Chart.yaml"
 cp "$SRC/deploy/template.yaml" "$INSPECT/template.yaml"
+cp "$SRC/deploy/rbac-gitops.yaml" "$INSPECT/rbac-gitops.yaml"
 cp "$CHART/values.schema.json" "$INSPECT/schema.json"
 cat >"$INSPECT/templates/list.yaml" <<'EOF'
 {{- $t := .Files.Get "template.yaml" | fromYaml }}
 {{- range $t.objects }}
 # object {{ .kind }}/{{ .metadata.name }}/{{ .metadata.namespace | default "" }}
+{{- end }}
+{{- $g := .Files.Get "rbac-gitops.yaml" | fromYaml }}
+{{- range $g.objects }}
+# gitops-object {{ .kind }}/{{ .metadata.name }}/{{ .metadata.namespace | default "" }}
+{{- end }}
+{{- range $g.parameters }}
+# gitops-parameter {{ .name }} {{ .value | default "" }}
 {{- end }}
 {{- range $t.parameters }}
 # parameter {{ .name }} {{ if .required }}required{{ else }}optional{{ end }} {{ .value | default "" }}
@@ -81,16 +91,27 @@ template_params=$(sed -n 's/^# parameter \([^ ]*\).*/\1/p' <<<"$INFO" | sort)
 expect_eq "values.schema.json lists exactly the Template's parameters" "$template_params" "$(sed -n 's/^# schema //p' <<<"$INFO" | sort)"
 expect_eq "the Template's required parameters" "IMAGE" "$(sed -n 's/^# parameter \([^ ]*\) required.*/\1/p' <<<"$INFO")"
 default_of() { sed -n "s/^# parameter $1 [a-z]* //p" <<<"$INFO"; }
+gitops_objects=$(sed -n 's/^# gitops-object //p' <<<"$INFO")
+grep -q '^ValidatingAdmissionPolicy/' <<<"$gitops_objects" && grep -q '^ValidatingAdmissionPolicyBinding/' <<<"$gitops_objects" && pass ||
+	fail "inspect: deploy/rbac-gitops.yaml lists no admission policy: $gitops_objects"
+expect_eq "rbac-gitops.yaml: OPERATOR_NAMESPACE" "redhat-ods-operator" "$(sed -n 's/^# gitops-parameter OPERATOR_NAMESPACE //p' <<<"$INFO")"
+expect_eq "the Template's PROFILE defaults to full (empty)" "" "$(default_of PROFILE)"
 
-# expected_objects NAMESPACE APP_NAME [SESSION CONSOLELINK]: Kind/name/namespace
-# of every object a render should have, sorted: the Template's with its
-# placeholders replaced, then the hooks that are on (1, the default).
+# expected_objects NAMESPACE APP_NAME [SESSION CONSOLELINK [PROFILE]]:
+# Kind/name/namespace of every object a render should have, sorted: the
+# Template's with its placeholders replaced (without its RBAC objects in the
+# gitops profile, the default, which adds deploy/rbac-gitops.yaml's), then
+# the hooks that are on (1, the default).
 expected_objects() {
-	local ns=$1 app=$2 session=${3:-1} link=${4:-1}
+	local ns=$1 app=$2 session=${3:-1} link=${4:-1} profile=${5:-gitops} objects=$template_objects
+	if [ "$profile" = gitops ]; then
+		objects=$(grep -vE '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding)/' <<<"$template_objects"; printf '%s\n' "$gitops_objects")
+	fi
 	{
 		sed -e "s/\${NAMESPACE}/$ns/g" -e "s/\${APP_NAME}/$app/g" \
 			-e "s/\${PULL_SECRET_NAMESPACE}/$(default_of PULL_SECRET_NAMESPACE)/g" \
-			-e "s/\${MARKETPLACE_NAMESPACE}/$(default_of MARKETPLACE_NAMESPACE)/g" <<<"$template_objects"
+			-e "s/\${OPERATOR_NAMESPACE}/redhat-ods-operator/g" \
+			-e "s/\${MARKETPLACE_NAMESPACE}/$(default_of MARKETPLACE_NAMESPACE)/g" <<<"$objects"
 		if [ "$session" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-session-secret/$ns" "Role/$app-session-secret/$ns" \
 				"RoleBinding/$app-session-secret/$ns" "Job/$app-session-secret/$ns"
@@ -167,6 +188,65 @@ grep -A1 -x '        - name: INSTALL_METHOD' "$OUT" | grep -qx '          value:
 grep -A1 -x '        - name: IMAGE_REPOSITORY' "$OUT" | grep -qx "          value: $(default_of IMAGE_REPOSITORY)" && pass || fail "required values only: IMAGE_REPOSITORY is not the Template's default"
 # Every image of the render is pinned by digest, the hooks' included.
 expect_eq "every image by digest" "" "$(grep -E '^ *image: ' "$OUT" | grep -vE '@sha256:[0-9a-f]{64}"?$' || true)"
+
+# --- Profiles -------------------------------------------------------------------
+
+# doc NAME: the rendered document of that kind/name from $OUT.
+doc() { awk -v want="$1" '/^---/ { if (keep) exit; buf = ""; next } { buf = buf $0 "\n" } /^kind: / { k = $2 } /^  name: / && k "/" $2 == want { keep = 1 } END { if (keep) printf "%s", buf }' "$OUT"; }
+# The default, profile gitops: PROFILE=gitops, the gitops RBAC (reads only
+# cluster-wide, no Secret writes), the admission policy before the
+# Deployment, bound to the app's ServiceAccount.
+expect_render "profile gitops (default)" --namespace ns1 "${BASE[@]}"
+grep -A1 -x '        - name: PROFILE' "$OUT" | grep -qx '          value: gitops' && pass || fail "profile gitops: PROFILE is not gitops"
+expect_eq "profile gitops: the objects" "$(expected_objects ns1 rhoai-nightly-updater)" "$(objects)"
+cluster_role=$(doc ClusterRole/rhoai-nightly-updater-ns1)
+[ -n "$cluster_role" ] && pass || fail "profile gitops: no ClusterRole"
+expect_eq "profile gitops: cluster-wide verbs are reads" "" "$(grep -A3 'verbs:' <<<"$cluster_role" | grep -E '^ *- (create|patch|update|delete|deletecollection|"\*")$' || true)"
+grep -qE '^ *- secrets$' <<<"$cluster_role" && fail "profile gitops: the ClusterRole names secrets" || pass
+policy=$(doc ValidatingAdmissionPolicy/rhoai-nightly-updater-ns1-gitops)
+grep -qx 'apiVersion: admissionregistration.k8s.io/v1' <<<"$policy" && pass || fail "profile gitops: the policy is not admissionregistration.k8s.io/v1"
+grep -qF "request.userInfo.username == 'system:serviceaccount:ns1:rhoai-nightly-updater'" <<<"$policy" && pass || fail "profile gitops: the policy does not match the app's ServiceAccount: $policy"
+grep -qx '  failurePolicy: Fail' <<<"$policy" && pass || fail "profile gitops: failurePolicy is not Fail"
+grep -qF 'argocd.argoproj.io/sync-wave: "-1"' <<<"$policy" && pass || fail "profile gitops: the policy is not in wave -1"
+# (toYaml folds long expressions; join the lines first.)
+policy_text=$(tr '\n' ' ' <<<"$policy" | tr -s ' ')
+grep -qF "request.namespace == 'redhat-ods-operator'" <<<"$policy_text" && grep -qF "object.spec.sourceNamespace == 'openshift-marketplace'" <<<"$policy_text" && pass ||
+	fail "profile gitops: the namespaces were not substituted into the policy"
+binding=$(doc ValidatingAdmissionPolicyBinding/rhoai-nightly-updater-ns1-gitops)
+grep -qx '  policyName: rhoai-nightly-updater-ns1-gitops' <<<"$binding" && grep -A1 -x '  validationActions:' <<<"$binding" | grep -qx '  - Deny' && pass ||
+	fail "profile gitops: the binding: $binding"
+grep -qF 'argocd.argoproj.io/sync-wave: "-1"' <<<"$binding" && pass || fail "profile gitops: the binding is not in wave -1"
+
+# The app checks the policy by the name the policy has, and the
+# Subscription env allowlist reaches both the app and the policy.
+grep -A1 -x '        - name: GITOPS_ADMISSION_POLICY' "$OUT" | grep -qx '          value: rhoai-nightly-updater-ns1-gitops' && pass || fail "profile gitops: GITOPS_ADMISSION_POLICY is not the policy's name"
+grep -A1 -x '        - name: SUBSCRIPTION_ENV_ALLOWLIST' "$OUT" | grep -qx '          value: DISABLE_DSC_CONFIG' && pass || fail "profile gitops: the default allowlist is not DISABLE_DSC_CONFIG"
+# (toYaml single-quotes the expression and doubles its own quotes.)
+grep -qF "'''DISABLE_DSC_CONFIG''.split('','')'" <<<"$policy_text" && pass || fail "profile gitops: the policy does not read the allowlist: $policy_text"
+grep -qF "request.resource.resource != 'catalogsources'" <<<"$policy_text" && pass || fail "profile gitops: the policy does not deny CatalogSource writes"
+expect_eq "profile gitops: no CatalogSource write verb anywhere" "" "$(grep -B1 -A4 -E '^ *- catalogsources$' "$OUT" | grep -E '^ *- (create|patch|update|delete)$' || true)"
+expect_render "profile gitops: two allowed variables" --namespace ns1 "${BASE[@]}" --set 'gitops.subscriptionEnvAllowlist={DISABLE_DSC_CONFIG,FOO_BAR}'
+grep -A1 -x '        - name: SUBSCRIPTION_ENV_ALLOWLIST' "$OUT" | grep -qx '          value: DISABLE_DSC_CONFIG,FOO_BAR' && pass || fail "profile gitops: the allowlist is not joined with commas"
+expect_render_fail "an allowlist entry that is not a name (schema)" "subscriptionEnvAllowlist" --namespace ns1 "${BASE[@]}" --set "gitops.subscriptionEnvAllowlist={A','B}"
+expect_render_fail "an allowlist entry that is not a name (template)" "is not an environment variable name" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set "gitops.subscriptionEnvAllowlist={x'y}"
+expect_render_fail "parameters.SUBSCRIPTION_ENV_ALLOWLIST (template)" "parameters.SUBSCRIPTION_ENV_ALLOWLIST is set by the chart" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set parameters.SUBSCRIPTION_ENV_ALLOWLIST=X
+
+# profile full: the Template as install.sh applies it, RBAC included, no
+# admission policy.
+expect_render "profile full" --namespace ns1 "${BASE[@]}" --set profile=full
+expect_eq "profile full: the objects" "$(expected_objects ns1 rhoai-nightly-updater 1 1 full)" "$(objects)"
+grep -A1 -x '        - name: PROFILE' "$OUT" | grep -qx '          value: full' && pass || fail "profile full: PROFILE is not full"
+grep -q 'ValidatingAdmissionPolicy' "$OUT" && fail "profile full: an admission policy is rendered" || pass
+grep -qE '^ *- secrets$' <<<"$(doc ClusterRole/rhoai-nightly-updater-ns1)" && pass || fail "profile full: not the Template's ClusterRole"
+# The full profile renders the Template's objects exactly as before.
+helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --set profile=full --show-only templates/objects.yaml >"$WORK/full.yaml" 2>&1 || true
+expect_eq "profile full: the Template's RBAC objects" "$(grep -cE '^kind: (ClusterRole|ClusterRoleBinding|Role|RoleBinding)$' "$WORK/full.yaml")" \
+	"$(grep -cE '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding)/' <<<"$template_objects")"
+
+expect_render_fail "an unknown profile (schema)" "profile" --namespace ns1 "${BASE[@]}" --set profile=readonly
+expect_render_fail "an unknown profile (template)" "profile must be gitops or full" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set profile=readonly
+expect_render_fail "parameters.PROFILE (template)" "parameters.PROFILE is set by the chart" --namespace ns1 "${BASE[@]}" --set parameters.PROFILE=full
+expect_render_fail "parameters.PROFILE outside the enum (schema)" "PROFILE" --namespace ns1 "${BASE[@]}" --set parameters.PROFILE=x
 
 # NAMESPACE follows the release namespace (the Argo CD destination);
 # APP_NAME renames every object.

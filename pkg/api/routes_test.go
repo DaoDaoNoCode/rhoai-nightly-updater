@@ -114,7 +114,7 @@ func TestEveryMutationHandlerBeginsItsOperation(t *testing.T) {
 				t.Errorf("%s does not call lockCluster", name)
 			}
 			want := "beginOperation"
-			if name == "HandleUpdate" {
+			if name == "HandleUpdate" || name == "HandleUpdateGitOps" {
 				want = "setOperationTarget"
 			}
 			if !calls[want] {

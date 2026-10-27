@@ -667,23 +667,8 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		}
 	}()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
-	var req types.UpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
-		return
-	}
-	if req.Image == "" {
-		writeError(w, "image is required", http.StatusBadRequest, "validation")
-		return
-	}
-	if !imageRegex.MatchString(req.Image) {
-		writeError(w, fmt.Sprintf("invalid image format: %s", req.Image), http.StatusBadRequest, "validation")
-		return
-	}
-	if !isAllowedImage(req.Image) {
-		writeError(w, fmt.Sprintf("image registry not allowed: %s (must be quay.io/rhoai/ or registry.redhat.io/rhoai/)", req.Image), http.StatusBadRequest, "validation")
+	req, ok := decodeUpdateStreamRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -714,6 +699,118 @@ var HandleUpdateStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 
 	RecordUpdate(result.Success)
 })
+
+// HandleUpdateGitOps is POST /api/update (the dry run) in the gitops profile:
+// the profile's own dry run (cluster.UpdateDryRunGitOpsProfile), which only
+// reads. Like HandleUpdate it refuses anything but a dry run.
+var HandleUpdateGitOps = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.UpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if req.Image == "" || !imageRegex.MatchString(req.Image) || !isAllowedImage(req.Image) {
+		writeError(w, "provide a valid FBC image from quay.io/rhoai/ or registry.redhat.io/rhoai/", http.StatusBadRequest, "validation")
+		return
+	}
+	if !req.DryRun {
+		writeError(w, "this endpoint only runs dry runs; use POST /api/update/stream to update", http.StatusBadRequest, "validation")
+		return
+	}
+	w.Header().Set("X-Skip-Rate-Limit", "true")
+	setOperationTarget(w, req.Image)
+	slog.Info("mutation", "op", "update", "image", req.Image, "dryRun", true, "profile", string(ProfileGitOps))
+	result, err := runUpdateDryRunGitOps(c, req.Image)
+	if err != nil {
+		slog.Error("update dry run failed", "error", err)
+		writeError(w, "update failed", http.StatusInternalServerError)
+		return
+	}
+	writeOperationResult(w, result, "update")
+})
+
+// HandleUpdateStreamGitOps is POST /api/update/stream in the gitops profile
+// (gitOpsRoutes): Update's Argo CD path only
+// (cluster.UpdateStreamGitOpsProfile). It takes no confirmations: ending a
+// Dashboard Dev session (revertDashboardDev) is not part of the profile, so
+// an active session is a refusal there. It runs only while the profile's
+// admission policy is in place (refuseWithoutGitOpsPolicy).
+var HandleUpdateStreamGitOps = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if refuseWithoutGitOpsPolicy(c, w) {
+		return
+	}
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in gitops update-stream handler", "error", rec)
+		}
+	}()
+
+	req, ok := decodeUpdateStreamRequest(w, r)
+	if !ok {
+		return
+	}
+
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	defer sseWriter.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	beginOperation(w, req.Image)
+	slog.Info("mutation", "op", "update-stream", "image", req.Image, "profile", string(ProfileGitOps))
+
+	result, updateErr := runUpdateStreamGitOps(c, req.Image, forwardSteps(sseWriter))
+
+	sendOperationResult(sseWriter, result, updateErr)
+
+	if updateErr != nil {
+		slog.Error("update-stream failed", "error", updateErr)
+		RecordUpdate(false)
+		return
+	}
+
+	RecordUpdate(result.Success)
+})
+
+// decodeUpdateStreamRequest reads and validates an Update request body. It
+// answers 400 and returns false when the request must not proceed.
+func decodeUpdateStreamRequest(w http.ResponseWriter, r *http.Request) (types.UpdateRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+
+	var req types.UpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return req, false
+	}
+	if req.Image == "" {
+		writeError(w, "image is required", http.StatusBadRequest, "validation")
+		return req, false
+	}
+	if !imageRegex.MatchString(req.Image) {
+		writeError(w, fmt.Sprintf("invalid image format: %s", req.Image), http.StatusBadRequest, "validation")
+		return req, false
+	}
+	if !isAllowedImage(req.Image) {
+		writeError(w, fmt.Sprintf("image registry not allowed: %s (must be quay.io/rhoai/ or registry.redhat.io/rhoai/)", req.Image), http.StatusBadRequest, "validation")
+		return req, false
+	}
+	return req, true
+}
 
 // HandleTestPullSecret tests whether the pull secret is valid.
 var HandleTestPullSecret = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {

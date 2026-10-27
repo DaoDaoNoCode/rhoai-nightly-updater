@@ -61,7 +61,8 @@ import {
 } from "../services/api";
 import { describeError, describeQuayError, describeQuayText } from "../errors";
 import { useOperation } from "../state/AppState";
-import { useDashboardOverride, useMutationBlocker } from "../state/AppInfo";
+import { useDashboardOverride, useGitOpsProfile, useMutationBlocker, useVersion } from "../state/AppInfo";
+import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { GITOPS_UPDATE_STEPS, STEP_SETS } from "../operationSteps";
 import { gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp } from "../gitops";
 import { buildFromImage, compareTagToInstalled, formatBuildDate, parseImageRef } from "../build";
@@ -99,6 +100,7 @@ function installedDescription(status: StatusResponse | null): React.ReactNode {
 export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, status, onConfirm, onClose }) => {
   const { override } = useDashboardOverride();
   const blocker = useMutationBlocker();
+  const gitOpsProfile = useGitOpsProfile();
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<OperationResponse | null>(null);
   const verifyAbort = useRef<AbortController | null>(null);
@@ -211,7 +213,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             <StackItem>
               <StepsPreview steps={gitOpsApp ? GITOPS_UPDATE_STEPS : UPDATE_PLAN} idPrefix="update-step" />
             </StackItem>
-            {status && prerequisitesReady(status) && (
+            {status && prerequisitesReady(status) && !gitOpsProfile && (
               <StackItem>
                 <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
                   <FlexItem><Content component="small">Just set up the pull secret or image mirror?</Content></FlexItem>
@@ -276,8 +278,11 @@ const PREFLIGHT_ICONS: Record<Preflight["state"], React.ReactNode> = {
 
 export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequestUpdate }) => {
   const operation = useOperation();
-  const blocker = useMutationBlocker();
+  // The gitops profile updates only while its admission policy is in place.
+  const policyProblem = gitOpsPolicyProblem(useVersion());
+  const blocker = useMutationBlocker() ?? policyProblem;
   const { override } = useDashboardOverride();
+  const gitOpsProfile = useGitOpsProfile();
 
   const [image, setImage] = useState("");
   const [dryRunning, setDryRunning] = useState(false);
@@ -421,6 +426,15 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
   };
 
 
+  // The gitops profile only installs what an Argo CD managed catalog serves.
+  if (gitOpsProfile && !gitOpsApp) {
+    return (
+      <Alert variant="info" isInline isPlain component="p" title="Update is off for this catalog">
+        {GITOPS_PROFILE_UNMANAGED_CATALOG}
+      </Alert>
+    );
+  }
+
   return (
     <Stack hasGutter>
       {recentUpdateByOther && (
@@ -466,7 +480,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
                   </TooltipButton>
                 </InputGroupItem>
               )}
-              {trimmed && (
+              {trimmed && !gitOpsProfile && (
                 <InputGroupItem>
                   <Tooltip content="View build contents">
                     <Button variant="control" icon={<SearchIcon />} aria-label="View build contents" onClick={() => setPreviewOpen(true)} />

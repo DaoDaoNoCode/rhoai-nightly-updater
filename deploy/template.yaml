@@ -43,6 +43,21 @@ parameters:
   # of running install.sh.
   - name: INSTALL_METHOD
     value: ""
+  # What the updater may do (docs/GITOPS.md, "Profiles"): empty or "full"
+  # for every feature; "gitops" where Argo CD manages RHOAI: only Update's
+  # Argo CD path and the Status, Components and Diagnostics reads (for
+  # cluster-admins). The gitops profile's reduced RBAC is
+  # deploy/rbac-gitops.yaml, which the Helm chart renders instead of this
+  # Template's RBAC; with this Template the RBAC stays the full one. Any
+  # other value stops the updater at startup.
+  - name: PROFILE
+    value: ""
+  # The gitops profile only: the comma-separated names of the environment
+  # variables a Subscription's spec.config may set (its admission policy
+  # and Update check the same list; docs/GITOPS.md, section 11). The Helm
+  # chart sets it from gitops.subscriptionEnvAllowlist.
+  - name: SUBSCRIPTION_ENV_ALLOWLIST
+    value: DISABLE_DSC_CONFIG
 objects:
 
   - apiVersion: v1
@@ -472,6 +487,16 @@ objects:
                   value: ${RELEASES_URL}
                 - name: INSTALL_METHOD
                   value: ${INSTALL_METHOD}
+                - name: PROFILE
+                  value: ${PROFILE}
+                # The gitops profile only: Update runs while this
+                # ValidatingAdmissionPolicy and its binding (both named so
+                # by deploy/rbac-gitops.yaml) are in place, and checks the
+                # Subscription against the same allowlist.
+                - name: GITOPS_ADMISSION_POLICY
+                  value: ${APP_NAME}-${NAMESPACE}-gitops
+                - name: SUBSCRIPTION_ENV_ALLOWLIST
+                  value: ${SUBSCRIPTION_ENV_ALLOWLIST}
               ports:
                 - containerPort: 9090
                   name: metrics

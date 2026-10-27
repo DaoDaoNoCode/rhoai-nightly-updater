@@ -471,4 +471,7 @@ var (
 	runUpdateStream    = cluster.UpdateStreamWithOptions
 	runReinstallStream = cluster.ReinstallStreamWithOptions
 	runRefreshStream   = cluster.RefreshOperatorStreamWithOptions
+	// Update in the gitops profile (HandleUpdateStreamGitOps).
+	runUpdateStreamGitOps = cluster.UpdateStreamGitOpsProfile
+	runUpdateDryRunGitOps = cluster.UpdateDryRunGitOpsProfile
 )

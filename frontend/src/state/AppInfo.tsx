@@ -17,6 +17,7 @@ import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } fro
 import { isRunning } from "./operation";
 import { useClusterStatus, useOperation } from "./AppState";
 import { formatElapsed, isReleaseVersion } from "../utils";
+import { isGitOpsProfile } from "../profile";
 
 // ---------------------------------------------------------------------------
 // Permissions
@@ -81,6 +82,8 @@ export function overrideFromDashboardResponse(result: DashboardState | ApiError)
 interface AppInfoValue {
   permissions: PermissionsValue;
   version: VersionInfo | null;
+  /** The backend's profile; null until /api/version answered (or failed: an older backend, "full"). */
+  profile: "full" | "gitops" | null;
   /** Only for a running release; null until known. */
   update: UpdateCheck | null;
   dashboard: DashboardOverrideValue;
@@ -101,6 +104,19 @@ export function usePermissions(): PermissionsValue {
 
 export function useVersion(): VersionInfo | null {
   return useAppInfo().version;
+}
+
+/**
+ * The backend's profile, null while unknown. Calls that the gitops profile
+ * refuses wait for "full".
+ */
+export function useProfile(): "full" | "gitops" | null {
+  return useAppInfo().profile;
+}
+
+/** True when the backend runs the gitops profile (docs/GITOPS.md, "Profiles"). */
+export function useGitOpsProfile(): boolean {
+  return isGitOpsProfile(useAppInfo().version);
 }
 
 export function useUpdateCheck(): UpdateCheck | null {
@@ -178,13 +194,18 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
 
   // --- Version (once) ---------------------------------------------------------
   const [version, setVersion] = useState<VersionInfo | null>(null);
+  // The profile decides which routes exist, so calls the gitops profile
+  // refuses wait until the version answered (or failed: an older backend).
+  const [versionSettled, setVersionSettled] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     fetchers.current.fetchVersion(controller.signal)
       .then((v) => { if (!controller.signal.aborted) setVersion(v); })
-      .catch(() => { /* an older backend has no /api/version */ });
+      .catch(() => { /* an older backend has no /api/version */ })
+      .finally(() => { if (!controller.signal.aborted) setVersionSettled(true); });
     return () => controller.abort();
   }, []);
+  const gitOpsProfile = isGitOpsProfile(version);
 
   // --- Update check (releases only; again on window focus, at most every 6 h) --
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
@@ -235,7 +256,8 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       setOverrideLoaded(true);
     }
   }, []);
-  const overridePoller = usePolling(loadOverride, { delay: DASHBOARD_OVERRIDE_POLL_MS, runImmediately: true });
+  // Dashboard Dev does not exist in the gitops profile (403 profile_gitops).
+  const overridePoller = usePolling(loadOverride, { delay: DASHBOARD_OVERRIDE_POLL_MS, runImmediately: true, enabled: versionSettled && !gitOpsProfile });
   const refreshOverride = useCallback(() => overridePoller.reset({ runNow: true }), [overridePoller]);
   useEffect(() => () => overrideController.current?.abort(), []);
 
@@ -255,10 +277,11 @@ export const AppInfoProvider: React.FC<React.PropsWithChildren<AppInfoProviderPr
       retry: retryPermissions,
     },
     version,
+    profile: !versionSettled ? null : gitOpsProfile ? "gitops" : "full",
     update,
     dashboard: { override, loaded: overrideLoaded, refresh: refreshOverride },
     sessionExpired,
-  }), [permStatus, sessionExpired, permError, retryPermissions, version, update, override, overrideLoaded, refreshOverride]);
+  }), [permStatus, sessionExpired, permError, retryPermissions, version, versionSettled, gitOpsProfile, update, override, overrideLoaded, refreshOverride]);
 
   return <AppInfoContext.Provider value={value}>{children}</AppInfoContext.Provider>;
 };

@@ -42,6 +42,8 @@ interface PullSecretSetupProps {
   onStatusRefresh?: () => void;
   /** id of the row title, for the row's aria-labelledby. */
   titleId?: string;
+  /** State only, no test or replace (the gitops profile). */
+  readOnly?: boolean;
 }
 
 const CREDENTIALS_HELP = (
@@ -56,6 +58,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   pullSecret,
   onStatusRefresh,
   titleId = "pull-secret-title",
+  readOnly = false,
 }) => {
   // The unified gate (permissions, session, this tab's stream, the backend
   // lock). Saving the secret repairs an install, so OLM still installing
@@ -178,12 +181,12 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
       {invalid && (
         <StackItem>
           <Alert variant="warning" isInline isPlain component="p" title="The cluster can't pull nightly images with this secret">
-            {sentence(pullSecret.detail || "The secret has no usable quay.io/rhoai entry")} Replace the token below.
+            {sentence(pullSecret.detail || "The secret has no usable quay.io/rhoai entry")} {readOnly ? "Replace it in Git." : "Replace the token below."}
           </Alert>
         </StackItem>
       )}
 
-      {pullSecret.exists ? (
+      {readOnly ? null : pullSecret.exists ? (
         <>
           <StackItem>
             <ActionList>

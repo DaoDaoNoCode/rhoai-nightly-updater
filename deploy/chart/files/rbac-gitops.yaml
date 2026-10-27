@@ -1,0 +1,436 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: rhoai-nightly-updater-gitops
+  annotations:
+    description: >-
+      The RBAC and admission policy of the updater's gitops profile
+      (PROFILE=gitops, docs/GITOPS.md "Profiles"). The Helm chart renders
+      these objects instead of the RBAC objects of deploy/template.yaml when
+      profile is gitops. Requires OpenShift 4.17 or later (Kubernetes 1.30,
+      admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy).
+# Parameters with the same names and defaults as deploy/template.yaml
+# (checked by pkg/cluster/rbac_gitops_test.go), plus OPERATOR_NAMESPACE.
+parameters:
+  - name: NAMESPACE
+    value: rhoai-nightly-updater
+  - name: APP_NAME
+    value: rhoai-nightly-updater
+  - name: PULL_SECRET_NAMESPACE
+    value: kube-system
+  - name: MARKETPLACE_NAMESPACE
+    value: openshift-marketplace
+  # The RHOAI operator's namespace (cluster.SubNS in the code, which does
+  # not read this parameter). A parameter because `oc process` drops a
+  # hard-coded metadata.namespace (pkg/cluster/rbac_coverage_test.go).
+  - name: OPERATOR_NAMESPACE
+    value: redhat-ods-operator
+  # The comma-separated names of the environment variables a Subscription's
+  # spec.config may set (also a deploy/template.yaml parameter, which passes
+  # it to the app's own check). Names only: [A-Za-z_][A-Za-z0-9_]*, as the
+  # chart checks; the policy reads it with split(',').
+  - name: SUBSCRIPTION_ENV_ALLOWLIST
+    value: DISABLE_DSC_CONFIG
+objects:
+
+  # RBAC: exactly the requests the gitops profile's routes can make with the
+  # ServiceAccount (pkg/api gitOpsRoutes: the Status, Components and
+  # Diagnostics reads and Update's Argo CD path, including its verification
+  # catalog and its restore). pkg/cluster/rbac_gitops_test.go derives them
+  # from the code's call graph and fails when a rule is missing or unused.
+  # The objects have the names of deploy/template.yaml's RBAC objects, so
+  # moving an install to the gitops profile replaces those rules in place.
+  #
+  # Cluster-wide: reads only. Status, Components and Diagnostics read the
+  # operator, its operands and the modules' namespaces, and every namespace
+  # for the pods, events and webhook owners Diagnostics checks.
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      # Cluster information (Status) and capacity (Diagnostics)
+      - apiGroups: ["config.openshift.io"]
+        resources: ["clusterversions"]
+        resourceNames: ["version"]
+        verbs: ["get"]
+      - apiGroups: ["config.openshift.io"]
+        resources: ["consoles"]
+        resourceNames: ["cluster"]
+        verbs: ["get"]
+      - apiGroups: ["config.openshift.io"]
+        resources: ["imagedigestmirrorsets"]
+        verbs: ["list"]
+      - apiGroups: [""]
+        resources: ["nodes", "events", "namespaces", "pods"]
+        verbs: ["list"]
+      # Update checks that the operator namespace exists (it never creates it)
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        resourceNames: ["redhat-ods-operator"]
+        verbs: ["get"]
+      # Webhook and CRD-conversion backing Services and their endpoints
+      # (Diagnostics' stale-webhook check), module operator Services
+      - apiGroups: [""]
+        resources: ["services"]
+        verbs: ["get"]
+      - apiGroups: ["discovery.k8s.io"]
+        resources: ["endpointslices"]
+        verbs: ["list"]
+      # Deployments and rollouts of the operator and the modules (read only)
+      - apiGroups: ["apps"]
+        resources: ["deployments"]
+        verbs: ["get", "list"]
+      - apiGroups: ["apps"]
+        resources: ["replicasets"]
+        verbs: ["list"]
+      - apiGroups: ["admissionregistration.k8s.io"]
+        resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+        verbs: ["list"]
+      - apiGroups: ["apiextensions.k8s.io"]
+        resources: ["customresourcedefinitions"]
+        verbs: ["list"]
+      - apiGroups: ["apiextensions.k8s.io"]
+        resources: ["customresourcedefinitions"]
+        resourceNames: ["datascienceclusters.datasciencecluster.opendatahub.io"]
+        verbs: ["get"]
+      - apiGroups: ["datasciencecluster.opendatahub.io"]
+        resources: ["datascienceclusters"]
+        verbs: ["get", "list"]
+      - apiGroups: ["dscinitialization.opendatahub.io"]
+        resources: ["dscinitializations"]
+        verbs: ["list"]
+      - apiGroups: ["config.opendatahub.io"]
+        resources: ["platforms"]
+        verbs: ["list"]
+      - apiGroups: ["config.opendatahub.io"]
+        resources: ["platforms"]
+        resourceNames: ["default"]
+        verbs: ["get"]
+      # Module CRs (the kinds change with the operator version; see
+      # deploy/template.yaml): read only here
+      - apiGroups: ["components.platform.opendatahub.io"]
+        resources: ["*"]
+        verbs: ["list"]
+      # Prerequisite operators: their CSVs and OperatorGroups in any
+      # namespace, and their singleton operand <Kind>/cluster
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["clusterserviceversions"]
+        verbs: ["get", "list"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["operatorgroups"]
+        verbs: ["list"]
+      - apiGroups: ["operator.openshift.io"]
+        resources: ["*"]
+        resourceNames: ["cluster"]
+        verbs: ["get"]
+      - apiGroups: ["cert-manager.io"]
+        resources: ["certificates"]
+        verbs: ["list"]
+      # Update runs only while the admission policy below and its binding
+      # are in place (cluster.CheckGitOpsAdmissionPolicy): read by name
+      - apiGroups: ["admissionregistration.k8s.io"]
+        resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+        resourceNames: ["${APP_NAME}-${NAMESPACE}-gitops"]
+        verbs: ["get"]
+
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # The RHOAI operator: what Update's Argo CD path changes. It deletes the
+  # old InstallPlan and CSV, deletes the Subscription and creates it again
+  # at once, approves the InstallPlan it caused under Manual approval, and on
+  # failure deletes what the attempt installed and re-applies the previous
+  # Subscription. The admission policy below limits the Subscription it may
+  # write to rhods-operator from the nightly catalog.
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${OPERATOR_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions"]
+        resourceNames: ["rhods-operator"]
+        verbs: ["get", "patch", "delete"]
+      # "create" cannot be limited by name
+      # (https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources)
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions"]
+        verbs: ["create"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["clusterserviceversions"]
+        verbs: ["delete"]
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["installplans"]
+        verbs: ["get", "list", "patch", "delete"]
+      # Upgrade gates the operator waits on
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["odh-upgrade-acks"]
+        verbs: ["get"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${OPERATOR_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # The app's own state: activity log, deployment snapshot, running
+  # operation (the same Role as deploy/template.yaml's)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+    rules:
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["rhoai-nightly-updater-activity", "rhoai-nightly-updater-snapshot", "rhoai-nightly-updater-operation"]
+        verbs: ["get"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["rhoai-nightly-updater-activity"]
+        verbs: ["update"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["rhoai-nightly-updater-snapshot", "rhoai-nightly-updater-operation"]
+        verbs: ["patch"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # The cluster pull secret: read only (Status shows whether it can pull
+  # from quay.io/rhoai, Update checks it, and the Quay lookups use it)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${PULL_SECRET_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["additional-pull-secret"]
+        verbs: ["get"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${PULL_SECRET_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # Catalogs (openshift-marketplace): read only. The gitops profile never
+  # writes a CatalogSource: Update reads the build the catalog Git manages
+  # serves from that catalog itself, without the full profile's temporary
+  # verification catalog.
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${MARKETPLACE_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["catalogsources"]
+        verbs: ["get"]
+      - apiGroups: ["packages.operators.coreos.com"]
+        resources: ["packagemanifests"]
+        verbs: ["list"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${MARKETPLACE_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # Admission policy: what the updater's ServiceAccount may write to OLM's
+  # objects, whatever RBAC it holds (also RBAC left over from a full-profile
+  # install, or granted later by someone else). The app checks at startup,
+  # every minute and before every Update that the policy and its binding
+  # exist (cluster.CheckGitOpsAdmissionPolicy) and refuses Update otherwise.
+  # Enforcement itself can only be tested on a cluster; scripts/test-chart.sh
+  # checks the render, and pkg/cluster/gitops_policy_test.go evaluates these
+  # expressions with cel-go on the cases of
+  # pkg/cluster/testdata/gitops-policy-cases.json, next to the Go predicate
+  # Update checks first (gitOpsSubscriptionProblem).
+  #   - Subscriptions: only rhods-operator in the operator namespace, for
+  #     package rhods-operator from rhoai-catalog-dev in the marketplace
+  #     namespace, with no spec.config or only spec.config.env whose entries
+  #     have only name and value and a name in SUBSCRIPTION_ENV_ALLOWLIST.
+  #     OLM applies every SubscriptionConfig field (env, envFrom, volumes,
+  #     volumeMounts, resources, nodeSelector, tolerations, affinity,
+  #     selector, annotations) to the operator's Deployment
+  #     (operator-framework/api pkg/operators/v1alpha1/subscription_types.go),
+  #     so RELATED_IMAGE_* variables or volumes would change what the
+  #     operator runs.
+  #   - CatalogSources and OperatorGroups: no write at all. OLM rewrites a
+  #     CatalogSource's spec.image from its olm.catalogImageTemplate
+  #     annotation (operator-lifecycle-manager
+  #     pkg/controller/operators/catalogtemplate/operator.go), and a policy
+  #     cannot read annotations, so no catalog write can be bounded here.
+  #   - InstallPlans in the operator namespace: no create; an update only
+  #     approves (spec.approved false to true, no other spec field changes)
+  #     a plan for rhods-operator CSVs only; a delete only of such a plan.
+  #   - ClusterServiceVersions: only deleting a rhods-operator.* CSV in the
+  #     operator namespace.
+  # Sources:
+  #   - Kubernetes "Validating Admission Policy"
+  #     (https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/):
+  #     stable since v1.30; matchConstraints.resourceRules; matchConditions
+  #     (any condition false: the policy is skipped); variables; the CEL
+  #     variables object (null for DELETE), oldObject (null for CREATE) and
+  #     request; failurePolicy (default Fail); the binding's
+  #     validationActions [Deny].
+  #   - API reference, ValidatingAdmissionPolicy v1
+  #     (https://kubernetes.io/docs/reference/kubernetes-api/policy-resources/validating-admission-policy-v1/):
+  #     of an object's metadata only apiVersion, kind, metadata.name and
+  #     metadata.generateName are accessible, so the policy uses names and
+  #     spec fields, never labels or annotations; ValidatingAdmissionPolicyBinding
+  #     v1: without matchResources the binding validates everything the
+  #     policy matches. A subresource such as installplans/status is matched
+  #     only when listed (Rule.Resources in k8s.io/api admissionregistration/v1
+  #     types.go).
+  #   - request is the AdmissionRequest
+  #     (https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#request):
+  #     name, namespace, operation, resource.resource, userInfo.username. A
+  #     PATCH, server-side apply included, is admitted as UPDATE, or as CREATE
+  #     when it creates the object (applyAdmission in k8s.io/apiserver
+  #     pkg/endpoints/handlers/patch.go, release-1.30).
+  #   - object and oldObject are the request's objects as unstructured maps
+  #     (objectToResolveVal in k8s.io/apiserver
+  #     pkg/admission/plugin/cel/filter.go, release-1.30), so all() over a map
+  #     ranges over its keys (cel-spec doc/langdef.md, Macros); has() tests a
+  #     field (https://kubernetes.io/docs/reference/using-api/cel/).
+  #   - split is the strings extension the Kubernetes CEL environment adds
+  #     (ext.Strings in k8s.io/apiserver pkg/cel/environment/base.go,
+  #     release-1.30; listed in the Kubernetes CEL documentation).
+  #   - A ServiceAccount's username is
+  #     system:serviceaccount:<namespace>:<name>
+  #     (https://kubernetes.io/docs/reference/access-authn-authz/authentication/#service-account-tokens).
+  #   - Subscription spec.name, spec.source and spec.sourceNamespace are
+  #     required (operator-framework/api
+  #     crds/operators.coreos.com_subscriptions.yaml); InstallPlan
+  #     spec.approved and spec.clusterServiceVersionNames
+  #     (pkg/operators/v1alpha1/installplan_types.go).
+  - apiVersion: admissionregistration.k8s.io/v1
+    kind: ValidatingAdmissionPolicy
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}-gitops
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    spec:
+      failurePolicy: Fail
+      matchConstraints:
+        matchPolicy: Equivalent
+        resourceRules:
+          - apiGroups: ["operators.coreos.com"]
+            apiVersions: ["*"]
+            operations: ["CREATE", "UPDATE", "DELETE"]
+            resources: ["subscriptions", "catalogsources", "operatorgroups", "installplans", "clusterserviceversions"]
+      matchConditions:
+        - name: updater-service-account
+          expression: "request.userInfo.username == 'system:serviceaccount:${NAMESPACE}:${APP_NAME}'"
+      variables:
+        - name: allowedEnv
+          expression: "'${SUBSCRIPTION_ENV_ALLOWLIST}'.split(',')"
+      validations:
+        - expression: "request.resource.resource != 'operatorgroups'"
+          message: "The RHOAI Nightly Updater (gitops profile) may not change OperatorGroups; define them in Git."
+        - expression: "request.resource.resource != 'catalogsources'"
+          message: "The RHOAI Nightly Updater (gitops profile) may not change CatalogSources; the nightly catalog is Git's."
+        - expression: >-
+            request.resource.resource != 'subscriptions' ||
+            (request.namespace == '${OPERATOR_NAMESPACE}' && request.name == 'rhods-operator' &&
+            (request.operation == 'DELETE' ||
+            (has(object.spec) && has(object.spec.name) && object.spec.name == 'rhods-operator' &&
+            has(object.spec.source) && object.spec.source == 'rhoai-catalog-dev' &&
+            has(object.spec.sourceNamespace) && object.spec.sourceNamespace == '${MARKETPLACE_NAMESPACE}' &&
+            (!has(object.spec.config) || object.spec.config == null ||
+            (object.spec.config.all(k, k == 'env') &&
+            (!has(object.spec.config.env) || object.spec.config.env == null ||
+            object.spec.config.env.all(e, e.all(k, k == 'name' || k == 'value') && has(e.name) && e.name in variables.allowedEnv)))))))
+          message: "The RHOAI Nightly Updater (gitops profile) may only write Subscription rhods-operator in ${OPERATOR_NAMESPACE}, for package rhods-operator from CatalogSource rhoai-catalog-dev in ${MARKETPLACE_NAMESPACE}, with spec.config holding at most env entries named in ${SUBSCRIPTION_ENV_ALLOWLIST}."
+        - expression: >-
+            request.resource.resource != 'installplans' ||
+            (request.namespace == '${OPERATOR_NAMESPACE}' && request.operation != 'CREATE' &&
+            has(oldObject.spec) && has(oldObject.spec.clusterServiceVersionNames) &&
+            size(oldObject.spec.clusterServiceVersionNames) > 0 &&
+            oldObject.spec.clusterServiceVersionNames.all(n, n.startsWith('rhods-operator.')) &&
+            (request.operation == 'DELETE' ||
+            (has(object.spec) && has(oldObject.spec.approved) && oldObject.spec.approved == false &&
+            has(object.spec.approved) && object.spec.approved == true &&
+            object.spec.all(k, k == 'approved' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+            oldObject.spec.all(k, k == 'approved' || k in object.spec))))
+          message: "The RHOAI Nightly Updater (gitops profile) may only approve, or delete, InstallPlans of rhods-operator CSVs in ${OPERATOR_NAMESPACE}."
+        - expression: >-
+            request.resource.resource != 'clusterserviceversions' ||
+            (request.operation == 'DELETE' && request.namespace == '${OPERATOR_NAMESPACE}' && request.name.startsWith('rhods-operator.'))
+          message: "The RHOAI Nightly Updater (gitops profile) may only delete rhods-operator CSVs in ${OPERATOR_NAMESPACE}."
+  - apiVersion: admissionregistration.k8s.io/v1
+    kind: ValidatingAdmissionPolicyBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}-gitops
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    spec:
+      policyName: ${APP_NAME}-${NAMESPACE}-gitops
+      validationActions: [Deny]

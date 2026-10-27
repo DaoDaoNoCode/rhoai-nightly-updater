@@ -134,8 +134,14 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 // InstallPlan (nothingToUpdate in OLM's catalog operator). This is also why a
 // nightly build of the same version as the installed one never installs by
 // itself: the resolver only follows replaces/skipRange of the installed CSV.
+//
+// policy, when set (the gitops profile), checks the Subscription Update would
+// create and the one the restore would re-apply against the profile's
+// admission policy (gitOpsSubscriptionsProblem): before the first deletion,
+// and again on the live Subscription before it is deleted.
 func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV types.CSVInfo, g operatorGitOps,
 	recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
+	policy func(newSub, restoreSub map[string]interface{}) string,
 ) (*types.OperationResponse, error) {
 	stopped := func(msg string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.ctx.Err()
@@ -183,6 +189,28 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 		}
 	}
 
+	// The policy holds for the Subscription as Git sets it now: nothing is
+	// deleted that could not be written back.
+	if policy != nil {
+		live, found, err := readSubscriptionObject(c)
+		if err != nil {
+			return fail("Cannot re-read the Subscription: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
+		}
+		base := recovery.subscriptionBase()
+		if found {
+			base = live
+		}
+		preview := buildSubscription(base, CatalogName, target.Channel)
+		if msg := policy(preview, recovery.subscription); msg != "" {
+			return fail(msg+" Nothing was changed.", ErrorCodeProfileGitOps)
+		}
+		if found {
+			if msg := policy(preview, live); msg != "" {
+				return fail(msg+" Nothing was changed.", ErrorCodeProfileGitOps)
+			}
+		}
+	}
+
 	// --- Step 6: delete_csv ---
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
@@ -223,6 +251,15 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	live, found, err := readSubscriptionObject(c)
 	if err != nil {
 		return fail("Cannot re-read the Subscription: "+err.Error(), errorCodeFromK8sErr(err))
+	}
+	if found && policy != nil {
+		// Git changed the Subscription after the check above to settings the
+		// profile may not write: deleting it now could not be undone, and
+		// the restore would delete it too, so both are skipped.
+		if msg := policy(buildSubscription(live, CatalogName, target.Channel), live); msg != "" {
+			recovery.keepNewInstall = true
+			return fail("The Subscription changed while Update ran. "+msg+" The old CSV was already deleted and the Subscription was left as Git sets it, so OLM does not install the operator again until the Subscription is fixed in Git (Argo CD then syncs it) or recreated.", ErrorCodeProfileGitOps)
+		}
 	}
 	if found {
 		liveSpec, _ := live["spec"].(map[string]interface{})

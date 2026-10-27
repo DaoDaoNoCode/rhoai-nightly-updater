@@ -51,6 +51,19 @@ var rbacBestEffortCalls = map[string]string{
 	"diagnostics_conversion.go:getDiscovered": "API versions check: one ?limit=1 list per resource and version of the multi-version *.opendatahub.io groups",
 }
 
+// Calls only the gitops profile makes (api.StartGitOpsPolicyWatch and
+// HandleUpdateStreamGitOps; the watch returns at once in the full profile).
+// deploy/template.yaml need not grant them; rbac_gitops_test.go checks them
+// against deploy/rbac-gitops.yaml.
+var rbacGitOpsOnlyCalls = map[string]string{
+	"gitops_policy.go:CheckGitOpsAdmissionPolicy": "reads the gitops profile's admission policy and binding",
+}
+
+// gitOpsPolicyNameMarker is the policy name the Template passes in
+// GITOPS_ADMISSION_POLICY (${APP_NAME}-${NAMESPACE}-gitops), with APP_NAME
+// at its default, as templateGrantsFrom normalises resourceNames.
+const gitOpsPolicyNameMarker = "rhoai-nightly-updater-" + appNSMarker + "-gitops"
+
 // API groups of resources whose group is only known at run time (for
 // example the MinIO objects whose apiVersion comes from the manifest).
 var knownResourceGroups = map[string]string{
@@ -112,6 +125,9 @@ func selectorName(e ast.Expr) string {
 type rbacRequest struct {
 	Verb, Group, Resource, Namespace, Name string
 	Site                                   string
+	// Func is the function that makes the call, as "file:line" of its
+	// declaration (funcPos).
+	Func string
 }
 
 func (r rbacRequest) key() string {
@@ -125,6 +141,19 @@ type sourcePkg struct {
 	lits   map[string]*ast.CompositeLit
 	funcs  map[string]*ast.FuncDecl
 	fileOf map[*ast.FuncDecl]string
+	// only, when set, limits the scan to these functions (funcPos keys):
+	// their API calls, and the call sites a parameter is resolved from.
+	only map[string]bool
+}
+
+// funcPos identifies a function declaration of the package: "file:line".
+func (p *sourcePkg) funcPos(fn *ast.FuncDecl) string {
+	return fmt.Sprintf("%s:%d", p.fileOf[fn], p.fset.Position(fn.Pos()).Line)
+}
+
+// scans reports whether the scan covers fn.
+func (p *sourcePkg) scans(fn *ast.FuncDecl) bool {
+	return p.only == nil || p.only[p.funcPos(fn)]
 }
 
 func loadClusterSource(t *testing.T) *sourcePkg {
@@ -244,6 +273,8 @@ func (r resolver) resolveCall(x *ast.CallExpr) []string {
 			return out
 		case "getActivityNamespace":
 			return []string{appNSMarker}
+		case "gitOpsAdmissionPolicyName":
+			return []string{gitOpsPolicyNameMarker}
 		}
 		if _, ok := r.p.funcs[fun.Name]; ok {
 			return r.resolveCallResult(x, 0)
@@ -334,7 +365,7 @@ func (r resolver) resolveIdent(id *ast.Ident) []string {
 	// A function parameter: resolve the argument at every call site.
 	if idx := paramIndex(r.fn, id.Name); idx >= 0 {
 		for caller := range r.p.fileOf {
-			if caller.Body == nil {
+			if caller.Body == nil || !r.p.scans(caller) {
 				continue
 			}
 			ast.Inspect(caller.Body, func(n ast.Node) bool {
@@ -659,7 +690,16 @@ func manifestNames(r resolver) map[string][]string {
 // serviceAccountRequests scans the package for Client calls.
 func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 	t.Helper()
+	return serviceAccountRequestsIn(t, nil)
+}
+
+// serviceAccountRequestsIn scans the functions in only (funcPos keys; nil
+// for every function) for Client calls. A parameter that makes up a path is
+// resolved from the call sites in those functions only.
+func serviceAccountRequestsIn(t *testing.T, only map[string]bool) ([]rbacRequest, map[string]bool) {
+	t.Helper()
 	p := loadClusterSource(t)
+	p.only = only
 	var reqs []rbacRequest
 	seenExcluded := map[string]bool{}
 	var problems []string
@@ -671,9 +711,10 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 	for _, file := range names {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || file == "client.go" {
+			if !ok || fn.Body == nil || file == "client.go" || !p.scans(fn) {
 				continue
 			}
+			fnPos := p.funcPos(fn)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -706,6 +747,10 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 					seenExcluded[site] = true
 					return true
 				}
+				if _, gitOpsOnly := rbacGitOpsOnlyCalls[site]; gitOpsOnly && only == nil {
+					seenExcluded[site] = true
+					return true
+				}
 				pos := p.fset.Position(call.Pos())
 				manifests := manifestNames(resolver{p: p, fn: fn})
 				for _, path := range (resolver{p: p, fn: fn}).resolve(pathArg) {
@@ -715,6 +760,7 @@ func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 						continue
 					}
 					for _, r := range rs {
+						r.Func = fnPos
 						// A name taken from an object manifest built in the
 						// same function is one of that manifest's names.
 						if names := manifests[r.Resource]; r.Name == anyNS && len(names) > 0 {
@@ -784,7 +830,14 @@ type grant struct {
 
 func templateGrants(t *testing.T) []grant {
 	t.Helper()
-	data, err := os.ReadFile(templateRel)
+	return templateGrantsFrom(t, templateRel)
+}
+
+// templateGrantsFrom reads the rules an OpenShift Template binds to the
+// updater's ServiceAccount (deploy/template.yaml, deploy/rbac-gitops.yaml).
+func templateGrantsFrom(t *testing.T, path string) []grant {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,6 +891,11 @@ func templateGrants(t *testing.T) []grant {
 			scope = bindingNS
 		}
 		for _, rule := range role.Rules {
+			names := make([]string, len(rule.ResourceNames))
+			for i, n := range rule.ResourceNames {
+				names[i] = norm(n)
+			}
+			rule.ResourceNames = names
 			grants = append(grants, grant{rule: rule, namespace: scope, source: fmt.Sprintf("%s %s via %s %s", role.Kind, role.Metadata.Name, b.Kind, b.Metadata.Name)})
 		}
 	}
@@ -892,6 +950,11 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 	for site := range rbacBestEffortCalls {
 		if !seenExcluded[site] {
 			t.Errorf("rbacBestEffortCalls lists %s, but that function no longer makes API calls; remove the entry", site)
+		}
+	}
+	for site := range rbacGitOpsOnlyCalls {
+		if !seenExcluded[site] {
+			t.Errorf("rbacGitOpsOnlyCalls lists %s, but that function no longer makes API calls; remove the entry", site)
 		}
 	}
 	grants := templateGrants(t)

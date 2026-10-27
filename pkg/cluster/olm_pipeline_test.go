@@ -840,7 +840,8 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]interface{}{"channel": "fast"})
 	c := f.client(context.Background())
 	r, _ := captureOperatorRecovery(c)
-	r.subscriptionChanged, r.csvRemoved, r.catalogChanged = true, true, true
+	r.subscriptionChanged, r.csvRemoved = true, true
+	r.noteCatalogChanged()
 	f.mu.Lock()
 	delete(f.csvs, "rhods-operator.3.6.0")
 	f.addCSV("rhods-operator.3.6.1", "Failed")

@@ -55,9 +55,89 @@ var routes = []Route{
 	{"POST /api/pageview", HandlePageView},
 }
 
-// Register adds the API endpoints to mux.
+// gitOpsRoutes is the gitops profile's allowlist: the routes the Status,
+// Components and Diagnostics pages need to show the cluster, and Update.
+// Every read needs cluster-admin (withGitOpsAdmin); Update streams through
+// HandleUpdateStreamGitOps, which runs only Update's Argo CD path. The
+// RBAC these handlers need is deploy/rbac-gitops.yaml, derived from them by
+// pkg/cluster/rbac_coverage_test.go.
+//
+//   - GET /api/user/permissions makes no ServiceAccount call (the check
+//     runs with the user's token), so it stays open: it is how the UI
+//     learns that the user is not a cluster-admin.
+//   - POST /api/pageview only counts page views in memory (no cluster
+//     call, bounded labels), so the profile's use shows in /metrics.
+//   - The dry run (POST /api/update) runs the profile's own read-only dry
+//     run (HandleUpdateGitOps); the Update card offers it.
+var gitOpsRoutes = map[string]http.HandlerFunc{
+	"GET /api/status":           withGitOpsAdmin(HandleStatus),
+	"GET /api/operation":        withGitOpsAdmin(HandleOperation),
+	"GET /api/activity":         withGitOpsAdmin(HandleActivity),
+	"GET /api/update-check":     withGitOpsAdmin(HandleUpdateCheck),
+	"GET /api/components":       withGitOpsAdmin(HandleComponents),
+	"GET /api/diagnostics":      withGitOpsAdmin(HandleDiagnostics),
+	"GET /api/user/permissions": HandleUserPermissions,
+	"POST /api/update/stream":   HandleUpdateStreamGitOps,
+	"POST /api/update":          HandleUpdateGitOps,
+	"POST /api/pageview":        HandlePageView,
+}
+
+// gitOpsRefused lists every other route with the feature the 403 names.
+// TestEveryRouteHasAGitOpsProfileDecision fails for a route in neither
+// table, so a new route is off in the gitops profile until it is added
+// to gitOpsRoutes on purpose.
+var gitOpsRefused = map[string]string{
+	"POST /api/rollback/stream":                    "Reinstall",
+	"POST /api/components/dsc/repair":              "Repairing the DataScienceCluster",
+	"POST /api/refresh/stream":                     "Re-deploy",
+	"POST /api/assist-rollout":                     "Rollout assist",
+	"GET /api/latest-nightly":                      "Looking up nightly builds on Quay",
+	"GET /api/nightly-tags":                        "Looking up nightly builds on Quay",
+	"GET /api/test-pull-secret":                    "Testing the pull secret",
+	"POST /api/setup/pull-secret":                  "Setting up the pull secret",
+	"GET /api/verify-nodes":                        "Checking the nodes",
+	"GET /api/debug":                               "Debug information",
+	"GET /api/build-explorer/tags":                 "Build Explorer",
+	"GET /api/build-explorer/content":              "Build Explorer",
+	"GET /api/build-explorer/contains":             "Build Explorer",
+	"GET /api/dashboard/state":                     "Dashboard Dev",
+	"POST /api/dashboard/deploy-pr":                "Dashboard Dev",
+	"POST /api/dashboard/deploy-main":              "Dashboard Dev",
+	"POST /api/dashboard/revert":                   "Dashboard Dev",
+	"GET /api/resources/status":                    "Test resources",
+	"GET /api/resources/projects":                  "Test resources",
+	"POST /api/resources/minio/setup":              "Test resources",
+	"POST /api/resources/minio/teardown":           "Test resources",
+	"POST /api/resources/pipeline-server/setup":    "Test resources",
+	"POST /api/resources/pipeline-server/teardown": "Test resources",
+	"POST /api/resources/mlflow/setup":             "Test resources",
+	"POST /api/resources/mlflow/teardown":          "Test resources",
+	"POST /api/resources/mlflow/deploy-pr":         "Test resources",
+	"POST /api/resources/mlflow/revert":            "Test resources",
+	"POST /api/diagnostics/fix":                    "Diagnostics fixes",
+	"GET /api/setup/dsc/preview":                   "Creating the DataScienceCluster",
+	"POST /api/setup/dsc":                          "Creating the DataScienceCluster",
+}
+
+// Register adds the API endpoints of the active profile to mux. In the
+// gitops profile a route of gitOpsRoutes gets its handler there and every
+// other route answers 403 profile_gitops.
 func Register(mux *http.ServeMux) {
 	for _, r := range routes {
-		mux.HandleFunc(r.Pattern, r.Handler)
+		mux.HandleFunc(r.Pattern, handlerFor(activeProfile, r))
 	}
+}
+
+func handlerFor(p Profile, r Route) http.HandlerFunc {
+	if p != ProfileGitOps {
+		return r.Handler
+	}
+	if h, ok := gitOpsRoutes[r.Pattern]; ok {
+		return h
+	}
+	feature, ok := gitOpsRefused[r.Pattern]
+	if !ok {
+		feature = "This feature"
+	}
+	return refusedInGitOpsProfile(feature)
 }

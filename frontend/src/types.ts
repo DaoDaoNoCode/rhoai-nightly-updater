@@ -649,6 +649,10 @@ export interface VersionInfo {
   templateOutdated: boolean;
   /** "gitops": Argo CD installed it from the Helm chart, so upgrades are made in Git. Absent for install.sh and make. */
   installMethod?: "gitops";
+  /** What the updater may do here (PROFILE). "gitops": only Update and the Status, Components and Diagnostics reads; absent from older backends (full). */
+  profile?: "full" | "gitops";
+  /** gitops profile: "enforced" when its admission policy was found at the last check, else why Update is off; absent before the first check. */
+  admissionPolicy?: string;
 }
 
 /** GET /api/update-check: the newest release in the updater's image repository. */

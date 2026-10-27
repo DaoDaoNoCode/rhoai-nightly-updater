@@ -92,15 +92,20 @@ release:  ## Tag a release: VERSION=vX.Y.Z (checks main, CHANGELOG and the templ
 undeploy:  ## Remove the app, its cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
 	@$(INSTALL) uninstall
 
-# The Helm chart for Argo CD (docs/GITOPS.md) renders a copy of
-# deploy/template.yaml: Helm reads only files inside the chart. Commit the
-# copy with every template change; check-chart and CI fail when it differs.
-chart:  ## Copy deploy/template.yaml into the Helm chart (deploy/chart/files/template.yaml)
-	cp deploy/template.yaml deploy/chart/files/template.yaml
+# The Helm chart for Argo CD (docs/GITOPS.md) renders copies of
+# deploy/template.yaml and deploy/rbac-gitops.yaml (the gitops profile's
+# RBAC and admission policy): Helm reads only files inside the chart. Commit
+# the copies with every change; check-chart and CI fail when they differ.
+CHART_COPIES := template.yaml rbac-gitops.yaml
 
-check-chart:  ## Fail when the Helm chart's copy of deploy/template.yaml differs (run make chart)
-	@cmp -s deploy/template.yaml deploy/chart/files/template.yaml || \
-		{ echo "deploy/chart/files/template.yaml differs from deploy/template.yaml; run 'make chart'"; exit 1; }
+chart:  ## Copy deploy/template.yaml and deploy/rbac-gitops.yaml into the Helm chart (deploy/chart/files/)
+	@for f in $(CHART_COPIES); do cp deploy/$$f deploy/chart/files/$$f; done
+
+check-chart:  ## Fail when the Helm chart's copies of deploy/template.yaml or deploy/rbac-gitops.yaml differ (run make chart)
+	@for f in $(CHART_COPIES); do \
+		cmp -s deploy/$$f deploy/chart/files/$$f || \
+			{ echo "deploy/chart/files/$$f differs from deploy/$$f; run 'make chart'"; exit 1; }; \
+	done
 
 dev:  ## Start local dev server (Go backend + React frontend)
 	./dev.sh
