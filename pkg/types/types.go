@@ -135,6 +135,9 @@ type CatalogSourceInfo struct {
 	State  string `json:"state"`
 	// ManagedBy is the Argo CD application that tracks the CatalogSource.
 	ManagedBy string `json:"managedBy,omitempty"`
+	// ManagedByACM: no Argo CD application tracks the CatalogSource, and an
+	// ACM policy enforces its spec (config-policy-controller owns f:spec).
+	ManagedByACM bool `json:"managedByACM,omitempty"`
 }
 
 // PullSecretInfo reports whether the additional-pull-secret exists and is valid.

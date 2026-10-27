@@ -470,8 +470,10 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	}
 	if g, err := readOperatorGitOps(c); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Cannot check whether Argo CD manages the operator: " + err.Error(), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
-	} else if g.active() {
-		app := nonEmpty(g.subscriptionApp, g.catalogApp)
+	} else if app := nonEmpty(g.subscriptionApp, g.catalogApp); app != "" {
+		// Argo CD only: an Argo CD application that installs the operator
+		// (the odh-gitops chart) renders the DSC too. An ACM policy that
+		// enforces the catalog says nothing about the DSC.
 		return &types.OperationResponse{Success: false, ErrorCode: ErrorCodeGitOpsManaged, Logs: logs,
 			Message: fmt.Sprintf("Argo CD application %q manages the RHOAI operator here and creates the DataScienceCluster from Git; one made by hand would be adopted and overwritten on its next sync. Define the DataScienceCluster in Git instead. Nothing was changed.", app)}, nil
 	}

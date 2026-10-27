@@ -64,7 +64,7 @@ import { useOperation } from "../state/AppState";
 import { useDashboardOverride, useGitOpsProfile, useMutationBlocker, useVersion } from "../state/AppInfo";
 import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { GITOPS_UPDATE_STEPS, STEP_SETS } from "../operationSteps";
-import { gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp } from "../gitops";
+import { catalogImageSetter, catalogManaged, catalogManagedByACM, catalogSpecFrom, gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp, operatorManaged } from "../gitops";
 import { buildFromImage, compareTagToInstalled, formatBuildDate, parseImageRef } from "../build";
 
 // ---------------------------------------------------------------------------
@@ -109,6 +109,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
   const isFirstInstall = !status?.csv.phase || status.csv.phase === "Not Found";
   const csvFailed = status?.csv.phase === "Failed";
   const gitOpsApp = operatorGitOpsApp(status);
+  const managed = operatorManaged(status);
   const gitOpsState = gitOpsInstallState(status);
   // Under Argo CD the target is always the catalog's image; it is only the
   // installed build when the operator is known to run what the catalog serves.
@@ -131,10 +132,11 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
     }
   };
 
-  const title = isFirstInstall ? "Install this RHOAI nightly?" : gitOpsApp ? "Install the build the catalog serves?" : "Update RHOAI to this build?";
+  const title = isFirstInstall ? "Install this RHOAI nightly?" : managed ? "Install the build the catalog serves?" : "Update RHOAI to this build?";
   const confirmLabel = dashboardActive
-    ? `Revert Dashboard Dev and ${isFirstInstall || gitOpsApp ? "install" : "update"}`
-    : isFirstInstall || gitOpsApp ? "Install" : "Update";
+    ? `Revert Dashboard Dev and ${isFirstInstall || managed ? "install" : "update"}`
+    : isFirstInstall || managed ? "Install" : "Update";
+  const from = catalogSpecFrom(status);
 
   return (
     <Modal
@@ -169,7 +171,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             {sameAsInstalled && (
               <StackItem>
                 <Alert variant="info" isInline isPlain component="p" title="This is the build that is already installed.">
-                  {gitOpsApp
+                  {managed
                     ? "Installing it again removes the current operator version and lets OLM install it from the same catalog (a re-deploy)."
                     : "The update installs it again from a fresh catalog. To re-deploy without changing the catalog, use Re-deploy operator."}
                 </Alert>
@@ -185,11 +187,20 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
             {gitOpsApp && (
               <StackItem>
                 <Alert variant="info" isInline component="p" title={`Argo CD application "${gitOpsApp}" manages the operator`}>
-                  The catalog image stays as Git sets it. Update installs the build the catalog serves
+                  The catalog image stays as {from} sets it. Update installs the build the catalog serves
                   {status?.catalogServes?.csv ? ` (${status.catalogServes.csv})` : ""}
                   {status?.subscription.managedBy && status.subscription.channel ? ` and keeps the channel Git sets (${status.subscription.channel})` : ""}.
                   The Subscription is deleted and at once recreated with Argo CD&apos;s tracking, so Argo CD does not recreate it
-                  from Git in between. If the image changes in Git meanwhile, Update stops before it changes the operator.
+                  from Git in between. If the image changes in {from} meanwhile, Update stops before it changes the operator.
+                </Alert>
+              </StackItem>
+            )}
+            {!gitOpsApp && managed && (
+              <StackItem>
+                <Alert variant="info" isInline component="p" title="An ACM policy (config-policy-controller) manages the nightly catalog">
+                  The catalog image stays as the policy sets it. Update installs the build the catalog serves
+                  {status?.catalogServes?.csv ? ` (${status.catalogServes.csv})` : ""}. If the image changes meanwhile, Update stops
+                  before it changes the operator.
                 </Alert>
               </StackItem>
             )}
@@ -211,7 +222,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
               </Content>
             </StackItem>
             <StackItem>
-              <StepsPreview steps={gitOpsApp ? GITOPS_UPDATE_STEPS : UPDATE_PLAN} idPrefix="update-step" />
+              <StepsPreview steps={managed ? GITOPS_UPDATE_STEPS : UPDATE_PLAN} idPrefix="update-step" />
             </StackItem>
             {status && prerequisitesReady(status) && !gitOpsProfile && (
               <StackItem>
@@ -298,11 +309,12 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
 
   const prerequisitesMet = prerequisitesReady(status);
   const isFirstInstall = !status?.csv.phase || status.csv.phase === "Not Found";
-  // Under Argo CD, Git sets the catalog image and Update installs the build
-  // the catalog serves: the image is not a choice here.
-  const gitOpsApp = operatorGitOpsApp(status);
+  // Under Argo CD (or an ACM policy), Git sets the catalog image and Update
+  // installs the build the catalog serves: the image is not a choice here.
+  const imageSetter = catalogImageSetter(status);
+  const fromACM = catalogManagedByACM(status);
   const gitOpsState = gitOpsInstallState(status);
-  const gitImage = gitOpsApp ? status?.catalogSource.image ?? "" : null;
+  const gitImage = operatorManaged(status) ? status?.catalogSource.image ?? "" : null;
   const trimmed = (gitImage ?? image).trim();
   const ref = trimmed ? parseImageRef(trimmed) : null;
 
@@ -426,8 +438,8 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
   };
 
 
-  // The gitops profile only installs what an Argo CD managed catalog serves.
-  if (gitOpsProfile && !gitOpsApp) {
+  // The gitops profile only installs what a catalog Argo CD or an ACM policy manages serves.
+  if (gitOpsProfile && !catalogManaged(status)) {
     return (
       <Alert variant="info" isInline isPlain component="p" title="Update is off for this catalog">
         {GITOPS_PROFILE_UNMANAGED_CATALOG}
@@ -448,7 +460,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
         <Form onSubmit={(e) => e.preventDefault()}>
           <FormGroup
             label="FBC image"
-            labelInfo={gitImage !== null ? <TagLabel color="purple">From Git</TagLabel> : autoFilled ? <TagLabel color="blue">Newest nightly</TagLabel> : undefined}
+            labelInfo={gitImage !== null ? <TagLabel color="purple">{fromACM ? "From the ACM policy" : "From Git"}</TagLabel> : autoFilled ? <TagLabel color="blue">Newest nightly</TagLabel> : undefined}
             fieldId="fbc-image"
           >
             <InputGroup>
@@ -492,7 +504,9 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
               <HelperText id="fbc-image-help">
                 <HelperTextItem>
                   {gitImage !== null
-                    ? <>Argo CD application &quot;{gitOpsApp}&quot; sets this image in Git. To install another build, change it there first.</>
+                    ? fromACM
+                      ? <>An ACM policy (config-policy-controller) sets this image. To install another build, change it in the policy first.</>
+                      : <>{imageSetter} sets this image in Git. To install another build, change it there first.</>
                     : <>Paste a build from <a href="https://redhat.enterprise.slack.com/archives/C07ANR2U56C" target="_blank" rel="noopener noreferrer">#rhoai-build-notifications</a>,
                   pick one in Build Explorer, or click Fetch latest.</>}
                 </HelperTextItem>

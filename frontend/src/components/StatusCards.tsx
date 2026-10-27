@@ -34,7 +34,7 @@ import { PullSecretSetup } from "./PullSecretCard";
 import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
-import { gitOpsInstallState, gitOpsInstallWaitReason, operatorGitOpsApp } from "../gitops";
+import { catalogImageSetter, catalogManagedByACM, gitOpsInstallState, gitOpsInstallWaitReason, operatorManaged } from "../gitops";
 import { useGitOpsProfile } from "../state/AppInfo";
 
 /** CSV phases of an install OLM is still working on. */
@@ -105,7 +105,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
   // Under Argo CD, Git sets the catalog image: the only build to install is
   // the one the catalog serves, and a newer nightly in Quay is a change to
   // make in Git.
-  const gitOpsApp = operatorGitOpsApp(status);
+  const gitOpsApp = operatorManaged(status);
   const gitOpsState = gitOpsInstallState(status);
   const catalogBuild: NightlyBuild | null = gitOpsApp ? nightly?.installed ?? null : null;
   const serves = status.catalogServes;
@@ -267,7 +267,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                     <Stack>
                       <StackItem><BuildSummary build={catalogBuild} /></StackItem>
                       <StackItem>
-                        {subtle(`Catalog image set by Argo CD application "${gitOpsApp}"${serves?.csv ? `; serves ${serves.csv}` : ""}`)}
+                        {subtle(`Catalog image set by ${catalogImageSetter(status)}${serves?.csv ? `; serves ${serves.csv}` : ""}`)}
                       </StackItem>
                     </Stack>
                   </DescriptionListDescription>
@@ -336,8 +336,17 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
               <Alert variant="info" isInline component="p" title={`A newer ${target.tag ?? ""} nightly exists; Git does not use it yet`.replace("  ", " ")}>
                 <Stack hasGutter>
                   <StackItem>
-                    Argo CD application &quot;{gitOpsApp}&quot; sets the catalog image in Git. To move to this build, change the image there to
-                    the reference below, then install the build the catalog serves once Argo CD has synced it.
+                    {catalogManagedByACM(status) ? (
+                      <>
+                        An ACM policy (config-policy-controller) sets the catalog image. To move to this build, change the image in the
+                        policy to the reference below, then install the build the catalog serves once the policy has applied it.
+                      </>
+                    ) : (
+                      <>
+                        {catalogImageSetter(status)} sets the catalog image in Git. To move to this build, change the image there to
+                        the reference below, then install the build the catalog serves once Argo CD has synced it.
+                      </>
+                    )}
                   </StackItem>
                   <StackItem>
                     <ClipboardCopy isReadOnly hoverTip="Copy" clickTip="Copied" variant="inline-compact">{target.image}</ClipboardCopy>
@@ -356,7 +365,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                 title="The operator is Failed"
                 actionLinks={
                   <>
-                    {!operatorGitOpsApp(status) && !gitOpsProfile && <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>}
+                    {!gitOpsApp && !gitOpsProfile && <AlertActionLink onClick={onRedeploy}>Re-deploy the same version</AlertActionLink>}
                     <AlertActionLink onClick={() => navigate("/diagnostics")}>Open Diagnostics</AlertActionLink>
                     {safeConsoleURL && (
                       <AlertActionLink

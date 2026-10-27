@@ -964,7 +964,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		}, nil
 	}
 	if gitOps.active() {
-		logs = append(logs, "OK: CatalogSource left as Git sets it (not validated: it is not written)")
+		logs = append(logs, "OK: CatalogSource left as "+gitOps.catalogSpecFrom()+" sets it (not validated: it is not written)")
 	} else if cs.Exists && cs.Image == image {
 		logs = append(logs, "OK: CatalogSource already points to this image — no change needed (validated)")
 	} else if cs.Exists {
@@ -988,7 +988,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 		if channelOverride != "" {
 			channel += " (kept from Git)"
 		}
-		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would leave the CatalogSource as Git sets it and wait until the catalog serves the build. Then, after the old CSV is gone, would delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", channel))
+		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would leave the CatalogSource as %s sets it and wait until the catalog serves the build. Then, after the old CSV is gone, would delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", gitOps.catalogSpecFrom(), channel))
 	case sub.State == "Not Installed" || sub.Source == "":
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] Would create Subscription pointing to %s", CatalogName))
 	default:

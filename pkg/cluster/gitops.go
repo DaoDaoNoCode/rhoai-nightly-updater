@@ -111,20 +111,110 @@ func gitOpsRefusal(object, app, action string) string {
 	return fmt.Sprintf("%s is managed by Argo CD application %q, which would undo %s. Make the change in that application's Git repository instead. Nothing was changed.", object, app, action)
 }
 
-// operatorGitOps is how Argo CD manages the operator's catalog and
+// acmPolicyManager is the field manager the API server records for ACM's
+// configuration policy controller, which applies an enforced
+// ConfigurationPolicy (remediationAction: enforce) on a managed cluster. It
+// creates and updates the objects without a fieldManager
+// (open-cluster-management-io/config-policy-controller
+// controllers/configurationpolicy_controller.go: res.Update(ctx,
+// obj.existingObj, metav1.UpdateOptions{FieldValidation: ...})), so the API
+// server takes the manager from the User-Agent up to its first "/"
+// (kubernetes staging/src/k8s.io/apiserver/pkg/endpoints/handlers/create.go,
+// managerOrUserAgent), which client-go starts with the binary's name
+// (staging/src/k8s.io/client-go/rest/config.go, DefaultKubernetesUserAgent):
+// /usr/local/bin/config-policy-controller in the controller's image
+// (build/Dockerfile). Seen on a live cluster where a policy enforces the
+// nightly CatalogSource: its managedFields are exactly
+// config-policy-controller (Update, f:spec) and catalog (Update, f:status),
+// and it has no Argo CD annotation.
+const acmPolicyManager = "config-policy-controller"
+
+// acmCatalogManager names that manager in messages.
+const acmCatalogManager = "an ACM policy (" + acmPolicyManager + ")"
+
+// acmEnforcesSpec reports whether an ACM policy enforces the object's spec:
+// config-policy-controller owns f:spec in its managedFields. The policies
+// themselves are not read: their copies on a managed cluster can hold
+// rendered hub templates, and the managedFields entry is on the object
+// anyway, in the same GET.
+//
+// Known limit: the entry outlives the policy that wrote it (a policy removed
+// with pruneObjectBehavior None, the default, leaves the object and its
+// managedFields as they are, until another manager takes over those fields). The updater then still treats the catalog as
+// managed, which is the safe direction: it refuses to replace the catalog,
+// and the gitops profile only installs what the catalog serves.
+func acmEnforcesSpec(meta objectMeta) bool {
+	return meta.ownsField(acmPolicyManager, "f:spec")
+}
+
+// operatorGitOps is how Argo CD or ACM manages the operator's catalog and
 // Subscription, read before an operator operation.
 type operatorGitOps struct {
-	catalogApp      string // application tracking CatalogSource rhoai-catalog-dev
-	subscriptionApp string // application tracking the rhods-operator Subscription
+	catalogApp string // Argo CD application tracking CatalogSource rhoai-catalog-dev
+	// catalogACM: no Argo CD application tracks the catalog, and an ACM
+	// policy enforces its spec (acmEnforcesSpec). Argo CD wins when both do.
+	catalogACM      bool
+	subscriptionApp string // Argo CD application tracking the rhods-operator Subscription
 }
 
 func (g operatorGitOps) active() bool {
-	return g.catalogApp != "" || g.subscriptionApp != ""
+	return g.catalogManaged() || g.subscriptionApp != ""
+}
+
+// catalogManaged reports whether Argo CD or an ACM policy sets the nightly
+// catalog, so the catalog's image is not the updater's to change.
+func (g operatorGitOps) catalogManaged() bool {
+	return g.catalogApp != "" || g.catalogACM
+}
+
+// catalogManager names who manages the nightly catalog, for messages:
+// `Argo CD application "x"`, "an ACM policy (config-policy-controller)",
+// or "" when neither does.
+func (g operatorGitOps) catalogManager() string {
+	switch {
+	case g.catalogApp != "":
+		return fmt.Sprintf("Argo CD application %q", g.catalogApp)
+	case g.catalogACM:
+		return acmCatalogManager
+	}
+	return ""
+}
+
+// catalogSpecFrom names where the catalog's spec comes from, for "left as
+// ... sets it": the ACM policy, else Git.
+func (g operatorGitOps) catalogSpecFrom() string {
+	if g.catalogApp == "" && g.catalogACM {
+		return "the ACM policy"
+	}
+	return "Git"
+}
+
+// catalogChanger says who most likely changed the catalog image while
+// Update waited (errCatalogImageChanged).
+func (g operatorGitOps) catalogChanger() string {
+	switch {
+	case g.catalogApp != "":
+		return fmt.Sprintf("Argo CD application %q syncing a change from Git", g.catalogApp)
+	case g.catalogACM:
+		return acmCatalogManager + " enforcing a change"
+	case g.subscriptionApp != "":
+		return fmt.Sprintf("Argo CD application %q syncing a change from Git", g.subscriptionApp)
+	}
+	return "another client"
+}
+
+// sentenceStart returns s with its first letter in upper case.
+func sentenceStart(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // readOperatorGitOps reads which Argo CD applications track the nightly
-// CatalogSource and the operator Subscription. A missing object is not
-// tracked.
+// CatalogSource and the operator Subscription, and whether an ACM policy
+// enforces the catalog (from the managedFields of the same GET). A missing
+// object is not managed.
 func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 	var g operatorGitOps
 	for _, r := range []struct {
@@ -140,18 +230,25 @@ func readOperatorGitOps(c *Client) (operatorGitOps, error) {
 		}
 		if found {
 			*r.app = argoApplication(meta.Annotations, r.kind, r.ns, r.name)
+			if r.kind == "CatalogSource" {
+				g.catalogACM = g.catalogApp == "" && acmEnforcesSpec(meta)
+			}
 		}
 	}
 	return g, nil
 }
 
 // refusal explains why an operation is refused while Argo CD manages the
-// catalog or Subscription; "" when it does not. deletes says what the
-// operation deletes, and for how long.
+// catalog or Subscription, or an ACM policy the catalog; "" when neither
+// does. deletes says what the operation deletes, and for how long.
 func (g operatorGitOps) refusal(operation, deletes string) string {
 	object, app := "The operator Subscription", g.subscriptionApp
 	if app == "" {
 		object, app = "CatalogSource "+CatalogName, g.catalogApp
+	}
+	if app == "" && g.catalogACM {
+		return fmt.Sprintf("%s is managed by %s, which puts back what differs from the policy. %s deletes %s, so %s is not available here. Nothing was changed.",
+			object, acmCatalogManager, operation, deletes, operation)
 	}
 	if app == "" {
 		return ""
@@ -218,12 +315,13 @@ func readCatalogServes(c *Client, sub types.SubscriptionInfo, cs types.CatalogSo
 
 // errCatalogImageChanged: the CatalogSource image changed while the tool
 // waited for the catalog to serve the build, which happens when Argo CD syncs
-// a new image from Git meanwhile.
-type errCatalogImageChanged struct{ app, image string }
+// a new image from Git, or an ACM policy enforces one, meanwhile. by is
+// operatorGitOps.catalogChanger.
+type errCatalogImageChanged struct{ by, image string }
 
 func (e *errCatalogImageChanged) Error() string {
-	return fmt.Sprintf("the CatalogSource image was changed to %s while Update waited, most likely by Argo CD application %q syncing a change from Git. "+
-		"Run Update again to install the build the catalog serves now", e.image, e.app)
+	return fmt.Sprintf("the CatalogSource image was changed to %s while Update waited, most likely by %s. "+
+		"Run Update again to install the build the catalog serves now", e.image, e.by)
 }
 
 // catalogServing is what the nightly catalog serves, as one poll reads it.
@@ -337,9 +435,9 @@ func readCatalogServing(c *Client, image string, target catalogTarget) catalogSe
 // verification catalog. A catalog whose image Argo CD changed in place
 // reports READY and its old channels until OLM has replaced the pod, so READY
 // alone proves nothing. It returns false on timeout; the error is the context
-// error, a *catalogImagePullError, or an *errCatalogImageChanged when the
-// image changed meanwhile.
-func waitForCatalogServing(c *Client, image string, target catalogTarget, argoApp string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
+// error, a *catalogImagePullError, or an *errCatalogImageChanged (by
+// changedBy) when the image changed meanwhile.
+func waitForCatalogServing(c *Client, image string, target catalogTarget, changedBy string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
 	deadline := time.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	var pull pullFailureWatch
 	last := ""
@@ -351,7 +449,7 @@ func waitForCatalogServing(c *Client, image string, target catalogTarget, argoAp
 		}
 		s := readCatalogServing(c, image, target)
 		if s.image != "" && s.image != image {
-			return false, &errCatalogImageChanged{app: nonEmpty(argoApp, "unknown"), image: s.image}
+			return false, &errCatalogImageChanged{by: changedBy, image: s.image}
 		}
 		if s.servesTarget(image, target) {
 			return true, nil

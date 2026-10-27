@@ -193,10 +193,10 @@ func GetStatus(c *Client) (*types.StatusResponse, error) {
 	// Cached per installed catalog image; only the first poll after an image
 	// change waits for Quay (bounded by nightlyStatusTimeout).
 	status.Nightly = getNightlyStatus(c.ctx, quayAuth, status.Subscription, status.CatalogSource)
-	// Under Argo CD the catalog image is Git's choice and can run ahead of
-	// the installed operator (a same-version build OLM does not install by
-	// itself), so say what the catalog serves.
-	if status.CatalogSource.ManagedBy != "" || status.Subscription.ManagedBy != "" {
+	// Under Argo CD (or an ACM policy) the catalog image is Git's choice and
+	// can run ahead of the installed operator (a same-version build OLM does
+	// not install by itself), so say what the catalog serves.
+	if status.CatalogSource.ManagedBy != "" || status.CatalogSource.ManagedByACM || status.Subscription.ManagedBy != "" {
 		status.CatalogServes = readCatalogServes(c, status.Subscription, status.CatalogSource, status.CSV)
 	}
 
@@ -475,12 +475,14 @@ func getCatalogSource(c *Client) (types.CatalogSourceInfo, error) {
 		state = *s
 	}
 
+	managedBy := argoApplication(result.Metadata.Annotations, "CatalogSource", CatalogNS, CatalogName)
 	return types.CatalogSourceInfo{
-		Exists:    true,
-		Name:      CatalogName,
-		Image:     result.Spec.Image,
-		State:     state,
-		ManagedBy: argoApplication(result.Metadata.Annotations, "CatalogSource", CatalogNS, CatalogName),
+		Exists:       true,
+		Name:         CatalogName,
+		Image:        result.Spec.Image,
+		State:        state,
+		ManagedBy:    managedBy,
+		ManagedByACM: managedBy == "" && acmEnforcesSpec(result.Metadata),
 	}, nil
 }
 

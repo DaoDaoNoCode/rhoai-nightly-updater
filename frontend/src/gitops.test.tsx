@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason, gitOpsInstallState, gitOpsInstallWaitReason, gitOpsOperatorReason, operatorGitOpsApp } from "./gitops";
+import { catalogImageSetter, catalogManaged, gitOpsCreateDSCReason, gitOpsDSCReason, gitOpsFixReason, gitOpsInstallState, gitOpsInstallWaitReason, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "./gitops";
 import { GitOpsNotice } from "./components/GitOpsNotice";
 import { InstalledBuildCard } from "./components/StatusCards";
 import { UpdateConfirmModal, UpdatePanel } from "./components/UpdatePanel";
@@ -199,5 +199,58 @@ describe("UpdatePanel under Argo CD", () => {
     expect(screen.getByText(/The catalog image stays as Git sets it\. Update installs the build the catalog serves \(rhods-operator.3.6.0-ea.1\) and keeps the channel Git sets \(beta\)/)).toBeInTheDocument();
     expect(screen.queryByText(/already installed/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Install" })).toBeInTheDocument();
+  });
+});
+
+// An ACM ConfigurationPolicy enforces the catalog (no Argo CD tracking on
+// it); Argo CD manages the Subscription, or nothing does.
+const acmCatalog = { ...managed.catalogSource, managedBy: undefined, managedByACM: true };
+const acmWithArgoSub = nightlyStatus({ ...managed, catalogSource: acmCatalog, dscManagedBy: undefined });
+const acmOnly = nightlyStatus({ ...acmWithArgoSub, subscription: { ...managed.subscription, managedBy: undefined } });
+const gitOpsVersion = async () => ({ version: "dev", commit: "x", buildDate: "x", templateOutdated: false, profile: "gitops" as const, admissionPolicy: "enforced" });
+
+describe("A catalog an ACM policy manages", () => {
+  it("counts as managed and is named as the policy", () => {
+    for (const s of [acmWithArgoSub, acmOnly]) {
+      expect(operatorManaged(s)).toBe(true);
+      expect(catalogManaged(s)).toBe(true);
+      expect(catalogImageSetter(s)).toBe("an ACM policy (config-policy-controller)");
+      expect(gitOpsInstallState(s)).toBe("pending");
+    }
+    expect(gitOpsOperatorReason(acmOnly, "Reinstall")).toMatch(/^An ACM policy \(config-policy-controller\) manages the nightly catalog .* Reinstall is off/);
+    // Only Argo CD renders the DSC from Git.
+    expect(gitOpsCreateDSCReason(acmOnly)).toBeNull();
+    // Argo CD on the catalog wins over an ACM entry, and nothing is managed without either.
+    expect(catalogImageSetter(nightlyStatus({ ...managed, catalogSource: { ...managed.catalogSource, managedByACM: true } }))).toBe('Argo CD application "rhai-on-openshift"');
+    expect(operatorManaged(base)).toBe(false);
+    // Argo CD on the Subscription alone does not let the gitops profile run.
+    expect(catalogManaged(nightlyStatus({ ...managed, catalogSource: { ...managed.catalogSource, managedBy: undefined } }))).toBe(false);
+  });
+
+  it("says so in the notice", () => {
+    render(<GitOpsNotice status={acmWithArgoSub} />);
+    expect(screen.getByText("Argo CD manages the operator Subscription, and an ACM policy manages the nightly catalog")).toBeInTheDocument();
+    expect(screen.getByText(/The ACM policy picks the nightly build/)).toBeInTheDocument();
+    cleanup();
+    render(<GitOpsNotice status={acmOnly} />);
+    expect(screen.getByText("An ACM policy manages the nightly catalog")).toBeInTheDocument();
+    expect(screen.getByText(/Re-deploy and Reinstall are off while the policy manages the catalog/)).toBeInTheDocument();
+    expect(screen.queryByText(/Argo CD/)).not.toBeInTheDocument();
+  });
+
+  it("shows the policy as the source of the catalog image", () => {
+    renderCard(acmWithArgoSub);
+    expect(screen.getByText(/Catalog image set by an ACM policy \(config-policy-controller\); serves rhods-operator.3.6.0-ea.1/)).toBeInTheDocument();
+    cleanup();
+    renderCard(nightlyStatus({ ...acmOnly, catalogServes: { ...acmOnly.catalogServes!, installed: true } }));
+    expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets the catalog image\. To move to this build, change the image in the policy/)).toBeInTheDocument();
+  });
+
+  it("fixes the image to the policy's, also in the gitops profile", async () => {
+    renderWithApp(<UpdatePanel status={acmOnly} latest={null} onRequestUpdate={vi.fn()} />, { version: gitOpsVersion });
+    await waitFor(() => expect((screen.getByLabelText("FBC image") as HTMLInputElement).value).toBe(GIT_IMAGE));
+    expect(screen.getByText("From the ACM policy")).toBeInTheDocument();
+    expect(screen.getByText(/An ACM policy \(config-policy-controller\) sets this image/)).toBeInTheDocument();
+    expect(screen.queryByText("Update is off for this catalog")).not.toBeInTheDocument();
   });
 });

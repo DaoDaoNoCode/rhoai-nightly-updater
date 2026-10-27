@@ -19,7 +19,7 @@ import { ReconciliationProgress } from "./ReconciliationProgress";
 import { BuildSummary } from "./BuildSummary";
 import { OPERATION_NAMES, STEP_SETS, type ReconcileKind } from "../operationSteps";
 import { describeOutcomeError } from "../errors";
-import { operatorGitOpsApp } from "../gitops";
+import { operatorManaged } from "../gitops";
 
 /** Backend refusals that guarantee nothing changed on the cluster (pkg/cluster operations). */
 const NOTHING_CHANGED_CODES = new Set(["dashboard_dev_active", "downgrade_requires_confirmation", "validation", "prerequisites", "catalog_image_pull", "cluster_busy", "lock_unavailable", "gitops_managed"]);
@@ -60,7 +60,7 @@ export function useHasOperationProgress(): boolean {
 export const OperationProgress: React.FC = () => {
   const { state, dismissFinished } = useOperation();
   const { status } = useClusterStatus();
-  const gitOps = !!operatorGitOpsApp(status);
+  const gitOps = operatorManaged(status);
   const navigate = useNavigate();
   const { run, reconcile } = state;
   const running = isRunning(run);

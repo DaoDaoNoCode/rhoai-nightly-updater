@@ -9,11 +9,12 @@ import (
 )
 
 // updateGitOpsPlan reads whether Argo CD manages the nightly CatalogSource or
-// the operator Subscription, and how Update must work with it. Git is then
-// the source of truth for the catalog image and the Subscription:
+// the operator Subscription, or an ACM policy the catalog, and how Update
+// must work with it. Git (or the policy, for the catalog) is then the source
+// of truth for the catalog image and the Subscription:
 //   - image must be the one the catalog has (Git's choice); Update installs
 //     the build the catalog serves and never changes the catalog, which
-//     Argo CD would put back (problem otherwise);
+//     Argo CD or ACM would put back (problem otherwise);
 //   - a managed Subscription keeps its channel (channelOverride), because
 //     Argo CD would put Git's channel back, and must already install from the
 //     nightly catalog (problem otherwise);
@@ -26,24 +27,30 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 	if err != nil || !g.active() {
 		return g, "", "", err
 	}
-	app := nonEmpty(g.catalogApp, g.subscriptionApp)
+	manager := nonEmpty(g.catalogManager(), fmt.Sprintf("Argo CD application %q", g.subscriptionApp))
 	cs, err := getCatalogSource(c)
 	if err != nil {
 		return g, "", "", err
 	}
 	switch {
 	case !cs.Exists:
-		return g, "", fmt.Sprintf("Argo CD application %q manages the operator, but CatalogSource %s does not exist, so there is no build to install. Create the catalog in Git first. Nothing was changed.", app, CatalogName), nil
+		return g, "", fmt.Sprintf("%s manages the operator, but CatalogSource %s does not exist, so there is no build to install. Create the catalog in Git first. Nothing was changed.", sentenceStart(manager), CatalogName), nil
 	case cs.Image != image && g.catalogApp != "":
 		return g, "", fmt.Sprintf("Argo CD application %q sets the image of CatalogSource %s in Git, and it is %s now. Update installs the build that catalog serves; to run %s, change the image in Git, then run Update once the catalog serves it. Nothing was changed.",
-			app, CatalogName, cs.Image, image), nil
+			g.catalogApp, CatalogName, cs.Image, image), nil
+	case cs.Image != image && g.catalogACM:
+		return g, "", fmt.Sprintf("%s sets the image of CatalogSource %s, and it is %s now. Update installs the build that catalog serves; to run %s, change the image in the policy, then run Update once the catalog serves it. Nothing was changed.",
+			sentenceStart(acmCatalogManager), CatalogName, cs.Image, image), nil
 	case cs.Image != image:
 		return g, "", fmt.Sprintf("Argo CD application %q manages the Subscription, so Update only installs the build CatalogSource %s serves, and its image is %s now. To run %s, change the catalog image first. Nothing was changed.",
-			app, CatalogName, cs.Image, image), nil
+			g.subscriptionApp, CatalogName, cs.Image, image), nil
 	}
-	if g.catalogApp != "" {
+	switch {
+	case g.catalogApp != "":
 		*logs = append(*logs, fmt.Sprintf("Argo CD application %q sets the catalog image in Git: Update installs the build the catalog serves and leaves the catalog as it is", g.catalogApp))
-	} else {
+	case g.catalogACM:
+		*logs = append(*logs, sentenceStart(acmCatalogManager)+" sets the catalog image: Update installs the build the catalog serves and leaves the catalog as it is")
+	default:
 		*logs = append(*logs, fmt.Sprintf("Argo CD application %q manages the Subscription: Update installs the build the catalog serves and leaves the catalog as it is", g.subscriptionApp))
 	}
 	if g.subscriptionApp != "" {
@@ -116,8 +123,9 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 }
 
 // updateUnderGitOps runs the changing steps of Update when Argo CD manages
-// the catalog or the Subscription. The catalog already has the image Git
-// chose (updateGitOpsPlan), so it is left alone; Argo CD recreates a managed
+// the catalog or the Subscription, or an ACM policy the catalog. The catalog
+// already has the image Git chose (updateGitOpsPlan), so it is left alone;
+// Argo CD recreates a managed
 // object as soon as it is deleted (automated sync with self-heal), so
 // nothing it manages is deleted for longer than one request:
 //  1. wait until the catalog serves the verified build (OLM may still be
@@ -147,16 +155,17 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	stopped := func(msg string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.ctx.Err()
 	}
-	app := nonEmpty(g.catalogApp, g.subscriptionApp)
+	changedBy := g.catalogChanger()
 
 	// --- Step 3: apply_catalog_source (nothing to write) ---
-	*logs = append(*logs, "OK: CatalogSource left as Git sets it")
-	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: "CatalogSource left as Git sets it", Detail: image})
+	leftAs := "CatalogSource left as " + g.catalogSpecFrom() + " sets it"
+	*logs = append(*logs, "OK: "+leftAs)
+	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: leftAs, Detail: image})
 
 	// --- Steps 4 and 5: wait_catalog_ready, detect_channel ---
 	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build..."})
 	*logs = append(*logs, "Waiting for the catalog to serve the build...")
-	serving, err := waitForCatalogServing(c, image, target, app, emit, logs)
+	serving, err := waitForCatalogServing(c, image, target, changedBy, emit, logs)
 	var changed *errCatalogImageChanged
 	switch {
 	case errors.As(err, &changed):
@@ -177,7 +186,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	if cs, err := getCatalogSource(c); err != nil {
 		return fail("Cannot re-read the CatalogSource: "+err.Error(), errorCodeFromK8sErr(err))
 	} else if cs.Image != image {
-		return fail("Update stopped: "+(&errCatalogImageChanged{app: app, image: cs.Image}).Error()+". The operator was not changed.", ErrorCodeGitOpsManaged)
+		return fail("Update stopped: "+(&errCatalogImageChanged{by: changedBy, image: cs.Image}).Error()+". The operator was not changed.", ErrorCodeGitOpsManaged)
 	}
 	// A managed Subscription keeps Git's startingCSV pin; an unmanaged one
 	// is rewritten as in any Update (buildSubscription drops the pin).

@@ -34,6 +34,6 @@ export function gitOpsPolicyProblem(version: VersionInfo | null | undefined): st
   return state && state !== "enforced" ? state : null;
 }
 
-/** Why Update cannot run in the gitops profile when Argo CD does not manage the nightly catalog. */
+/** Why Update cannot run in the gitops profile when neither Argo CD nor an ACM policy manages the nightly catalog. */
 export const GITOPS_PROFILE_UNMANAGED_CATALOG =
-  "This updater runs the gitops profile, which only installs the build an Argo CD managed catalog serves, and Argo CD does not manage the nightly catalog (rhoai-catalog-dev) here. Manage the catalog in Git, or deploy the updater with the full profile.";
+  "This updater runs the gitops profile, which only installs the build the nightly catalog (rhoai-catalog-dev) serves when Argo CD or an ACM policy manages that catalog, and neither does here. Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile.";

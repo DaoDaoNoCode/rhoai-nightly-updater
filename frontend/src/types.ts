@@ -117,6 +117,8 @@ export interface CatalogSourceInfo {
   state: string;
   /** The Argo CD application that tracks the CatalogSource. */
   managedBy?: string;
+  /** No Argo CD application tracks the catalog, and an ACM policy enforces its spec. */
+  managedByACM?: boolean;
 }
 
 export interface PullSecretInfo {

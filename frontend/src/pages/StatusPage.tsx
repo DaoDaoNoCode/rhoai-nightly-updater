@@ -52,7 +52,7 @@ import { useClusterStatus, useOperation } from "../state/AppState";
 import { useClusterBusyHandler, useDashboardOverride, useGitOpsProfile, useMutationBlocker, useProfile, useVersion } from "../state/AppInfo";
 import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { STEP_SETS } from "../operationSteps";
-import { gitOpsOperatorReason, operatorGitOpsApp } from "../gitops";
+import { catalogManaged, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "../gitops";
 import { GitOpsNotice, GitOpsProfileNotice } from "../components/GitOpsNotice";
 
 const REFRESH_PLAN = STEP_SETS.refresh;
@@ -230,8 +230,8 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
-      {/* --- Argo CD manages part of RHOAI: say what the tool still does --- */}
-      {status && (operatorGitOpsApp(status) || status.dscManagedBy) && (
+      {/* --- Argo CD (or an ACM policy) manages part of RHOAI: say what the tool still does --- */}
+      {status && (operatorManaged(status) || status.dscManagedBy) && (
         <PageSection>
           <GitOpsNotice status={status} />
         </PageSection>
@@ -251,7 +251,7 @@ export const StatusPage: React.FC = () => {
             status={status}
             latest={latest}
             latestLoading={latestLoading}
-            blocker={blocker ?? policyProblem ?? (gitOpsProfile && !operatorGitOpsApp(status) ? GITOPS_PROFILE_UNMANAGED_CATALOG : null)}
+            blocker={blocker ?? policyProblem ?? (gitOpsProfile && !catalogManaged(status) ? GITOPS_PROFILE_UNMANAGED_CATALOG : null)}
             prerequisitesMet={prerequisitesMet}
             onUpdate={setUpdateTarget}
             onChooseBuild={chooseAnotherBuild}
@@ -361,7 +361,7 @@ export const StatusPage: React.FC = () => {
             <GridItem lg={6} md={12}>
               <Card isFullHeight>
                 <CardHeader>
-                  <CardTitle><Title headingLevel="h2" size="lg">{operatorGitOpsApp(status) ? "Install the build the catalog serves" : "Update to a specific build"}</Title></CardTitle>
+                  <CardTitle><Title headingLevel="h2" size="lg">{operatorManaged(status) ? "Install the build the catalog serves" : "Update to a specific build"}</Title></CardTitle>
                 </CardHeader>
                 <CardBody>
                   {prerequisitesMet ? (

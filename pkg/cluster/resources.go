@@ -51,6 +51,9 @@ type objectMeta struct {
 		Operation   string `json:"operation"`
 		Time        string `json:"time"`
 		Subresource string `json:"subresource"`
+		// FieldsV1 is the set of fields the manager owns; only its
+		// top-level keys ("f:spec", "f:status", ...) are read.
+		FieldsV1 map[string]json.RawMessage `json:"fieldsV1"`
 	} `json:"managedFields"`
 	OwnerReferences []struct {
 		Kind string `json:"kind"`
@@ -87,6 +90,17 @@ func (m objectMeta) createdBy(manager, operation string) bool {
 // object with server-side apply.
 func (m objectMeta) createdByToolApply() bool {
 	return m.createdBy(toolFieldManager, "Apply")
+}
+
+// ownsField reports whether manager owns the top-level field (a fieldsV1
+// key such as "f:spec") through the object itself, not a subresource.
+func (m objectMeta) ownsField(manager, field string) bool {
+	for _, f := range m.ManagedFields {
+		if _, owns := f.FieldsV1[field]; owns && f.Manager == manager && f.Subresource == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m objectMeta) ownedBy(uid string) bool {

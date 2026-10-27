@@ -11,6 +11,42 @@ export function operatorGitOpsApp(status: StatusResponse | null | undefined): st
   return status?.subscription.managedBy || status?.catalogSource.managedBy || undefined;
 }
 
+// An ACM ConfigurationPolicy can enforce the nightly catalog instead of Argo
+// CD: the backend reports catalogSource.managedByACM when ACM's
+// config-policy-controller owns the catalog's spec and no Argo CD
+// application tracks it (pkg/cluster/gitops.go, acmEnforcesSpec). The tool
+// then treats the catalog as managed, as under Argo CD.
+
+/** The ACM manager of the nightly catalog, as messages name it. */
+export const ACM_CATALOG_MANAGER = "an ACM policy (config-policy-controller)";
+
+/** True when an ACM policy, and no Argo CD application, manages the nightly catalog. */
+export function catalogManagedByACM(status: StatusResponse | null | undefined): boolean {
+  return !!status?.catalogSource.managedByACM && !status.catalogSource.managedBy;
+}
+
+/** True when Argo CD or an ACM policy manages the nightly catalog (the gitops profile needs this). */
+export function catalogManaged(status: StatusResponse | null | undefined): boolean {
+  return !!status?.catalogSource.managedBy || catalogManagedByACM(status);
+}
+
+/** True when Argo CD manages the operator's Subscription or nightly catalog, or an ACM policy the catalog. */
+export function operatorManaged(status: StatusResponse | null | undefined): boolean {
+  return !!operatorGitOpsApp(status) || catalogManagedByACM(status);
+}
+
+/** Where the catalog image comes from, for "as ... sets it": the ACM policy, else Git. */
+export function catalogSpecFrom(status: StatusResponse | null | undefined): "the ACM policy" | "Git" {
+  return catalogManagedByACM(status) ? "the ACM policy" : "Git";
+}
+
+/** Who sets the catalog image, for messages: `Argo CD application "x"` or the ACM policy. */
+export function catalogImageSetter(status: StatusResponse | null | undefined): string | undefined {
+  if (catalogManagedByACM(status)) return ACM_CATALOG_MANAGER;
+  const app = operatorGitOpsApp(status);
+  return app ? `Argo CD application "${app}"` : undefined;
+}
+
 export type GitOpsInstallState = "pending" | "installed" | "updating" | "installing" | "unknown";
 
 /**
@@ -27,7 +63,7 @@ export type GitOpsInstallState = "pending" | "installed" | "updating" | "install
  * - "unknown": the catalog did not say.
  */
 export function gitOpsInstallState(status: StatusResponse | null | undefined): GitOpsInstallState | null {
-  if (!operatorGitOpsApp(status)) return null;
+  if (!operatorManaged(status)) return null;
   if (status?.catalogServes?.updating) return "updating";
   if (status?.catalogSource.image && (!status.csv.name || status.csv.phase === "Not Found")) {
     const phase = status.installPlan?.phase;
@@ -49,11 +85,16 @@ export function gitOpsInstallWaitReason(state: GitOpsInstallState | null): strin
   }
 }
 
-/** Why Re-deploy or Reinstall is off while Argo CD manages the operator, or null. */
+/** Why Re-deploy or Reinstall is off while Argo CD manages the operator, or an ACM policy the catalog, or null. */
 export function gitOpsOperatorReason(status: StatusResponse | null | undefined, action: "Re-deploy" | "Reinstall"): string | null {
   const app = operatorGitOpsApp(status);
-  if (!app) return null;
-  return `Argo CD application "${app}" manages the operator. ${action} deletes the Subscription for minutes, and Argo CD would recreate it from Git meanwhile. Use Update, which installs the build the catalog serves.`;
+  if (app) {
+    return `Argo CD application "${app}" manages the operator. ${action} deletes the Subscription for minutes, and Argo CD would recreate it from Git meanwhile. Use Update, which installs the build the catalog serves.`;
+  }
+  if (catalogManagedByACM(status)) {
+    return `An ACM policy (config-policy-controller) manages the nightly catalog and puts back what differs from the policy, so ${action} is off. Use Update, which installs the build the catalog serves.`;
+  }
+  return null;
 }
 
 /** Why a DataScienceCluster change is off while Argo CD manages the DSC, or null. */

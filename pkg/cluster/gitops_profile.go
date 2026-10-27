@@ -21,8 +21,9 @@ const ErrorCodeProfileGitOps = "profile_gitops"
 // Git manages serves, with the steps and checks Update uses there, and
 // nothing that the profile's RBAC (deploy/rbac-gitops.yaml) leaves out:
 //
-//   - it refuses unless Argo CD manages CatalogSource rhoai-catalog-dev, so
-//     the path that writes that catalog never runs;
+//   - it refuses unless Argo CD or an ACM policy manages CatalogSource
+//     rhoai-catalog-dev (readOperatorGitOps), so the path that writes that
+//     catalog never runs;
 //
 //   - it never creates the operator namespace or OperatorGroup (Git does)
 //     and refuses when they are missing or unusable;
@@ -55,7 +56,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 
 	logs = append(logs, fmt.Sprintf("Target image: %s", image))
-	logs = append(logs, "Profile: gitops (Update installs the build the Argo CD managed catalog serves; nothing else is changed)")
+	logs = append(logs, "Profile: gitops (Update installs the build the managed catalog serves; nothing else is changed)")
 
 	// --- Step 1: validate_prerequisites ---
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites..."})
@@ -63,9 +64,10 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
 	}
-	if g.catalogApp == "" {
+	if !g.catalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, ErrorCodeProfileGitOps)
 	}
+	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
 
 	active, err := DashboardDevActive(c)
 	if err != nil {
@@ -119,8 +121,8 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if gitOpsProblem != "" {
 		return fail(gitOpsProblem, ErrorCodeGitOpsManaged)
 	}
-	if gitOps.catalogApp == "" {
-		// Argo CD stopped tracking the catalog since the first read.
+	if !gitOps.catalogManaged() {
+		// Argo CD and ACM stopped managing the catalog since the first read.
 		return fail(gitOpsProfileUnmanagedCatalog, ErrorCodeProfileGitOps)
 	}
 
@@ -129,9 +131,10 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	// olm.catalogImageTemplate annotation, which an admission policy cannot
 	// see; operator-lifecycle-manager
 	// pkg/controller/operators/catalogtemplate/operator.go). The build is
-	// read from the catalog Git manages once it serves the image.
-	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Waiting for the catalog Git manages to serve the build..."})
-	target, preflightErr := liveCatalogTarget(c, image, channelOverride, gitOps.catalogApp, emit, &logs)
+	// read from the managed catalog once it serves the image.
+	from := gitOps.catalogSpecFrom()
+	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Waiting for the catalog " + from + " manages to serve the build..."})
+	target, preflightErr := liveCatalogTarget(c, image, channelOverride, gitOps.catalogChanger(), emit, &logs)
 	if preflightErr != nil {
 		var changed *errCatalogImageChanged
 		switch {
@@ -146,7 +149,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 		if channelOverride != "" {
 			hint = fmt.Sprintf(" Argo CD application %q sets the Subscription's channel %s in Git, so Update keeps it: the catalog must publish that channel.", gitOps.subscriptionApp, channelOverride)
 		}
-		return fail("The catalog Git manages does not serve a usable build: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
+		return fail("The catalog "+from+" manages does not serve a usable build: "+preflightErr.Error()+". Nothing was changed."+hint, "validation")
 	}
 	logs = append(logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
 	blocked, note := downgradeCheck(currentCSV, extractTagFromRef(image), target.HeadCSV)
@@ -224,9 +227,10 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), errorCodeFromK8sErr(err))
 	}
-	if g.catalogApp == "" {
+	if !g.catalogManaged() {
 		return fail(gitOpsProfileUnmanagedCatalog, ErrorCodeProfileGitOps)
 	}
+	logs = append(logs, fmt.Sprintf("OK: %s manages CatalogSource %s", sentenceStart(g.catalogManager()), CatalogName))
 	if active, err := DashboardDevActive(c); err == nil && active {
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run while it is (the gitops profile cannot end it).")
 	}
@@ -258,7 +262,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if err != nil {
 		return fail("Cannot identify installed CSV: "+err.Error(), "prerequisites")
 	}
-	_, channelOverride, problem, err := updateGitOpsPlan(c, image, currentCSV, &logs)
+	planned, channelOverride, problem, err := updateGitOpsPlan(c, image, currentCSV, &logs)
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error(), errorCodeFromK8sErr(err))
 	}
@@ -290,17 +294,18 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	if channelOverride != "" {
 		channel += " (kept from Git)"
 	}
-	logs = append(logs, "OK: CatalogSource left as Git sets it",
-		fmt.Sprintf("[DRY-RUN] Would wait until the catalog Git manages serves the build, delete the old CSV and InstallPlan, then delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", channel))
+	from := planned.catalogSpecFrom()
+	logs = append(logs, "OK: CatalogSource left as "+from+" sets it",
+		fmt.Sprintf("[DRY-RUN] Would wait until the catalog %s manages serves the build, delete the old CSV and InstallPlan, then delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", from, channel))
 	return &types.OperationResponse{Success: true, Message: "Dry run complete. No changes were made.", Logs: logs}, nil
 }
 
-// gitOpsProfileUnmanagedCatalog is the refusal when Argo CD does not manage
-// the nightly catalog: Update would then replace the catalog itself, which
-// the gitops profile never does.
-const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that the Argo CD managed CatalogSource " +
-	CatalogName + " serves, but Argo CD does not manage that CatalogSource here (no " + argoTrackingAnnotation + " annotation naming it). " +
-	"Manage the catalog in Git, or deploy the updater with the full profile. Nothing was changed."
+// gitOpsProfileUnmanagedCatalog is the refusal when neither Argo CD nor an
+// ACM policy manages the nightly catalog: Update would then replace the
+// catalog itself, which the gitops profile never does.
+const gitOpsProfileUnmanagedCatalog = "This updater runs the gitops profile, which only installs the build that CatalogSource " + CatalogName +
+	" serves when Argo CD or an ACM policy manages that catalog, and neither does here (no " + argoTrackingAnnotation + " annotation names it, and " +
+	acmPolicyManager + " does not own its spec). Manage the catalog with Argo CD or an ACM policy, or deploy the updater with the full profile. Nothing was changed."
 
 // checkOperatorNamespaceAndGroup is ensureOperatorNamespaceAndGroup without
 // the creating half: in the gitops profile Git creates the operator
@@ -324,13 +329,14 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 }
 
 // liveCatalogTarget is the gitops profile's replacement for the
-// verification catalog: it waits until the catalog Git manages serves image
-// (its spec.image is image, a registry pod runs it and is Ready, no pod runs
-// another image, the catalog is READY: the same conditions
-// waitForCatalogServing uses), then reads the channel's head and build from
-// that catalog's PackageManifest. The channel is override (Git's) or the
-// one the image's release publishes. A change of the catalog image meanwhile
-// returns an *errCatalogImageChanged; a failing pull a *catalogImagePullError.
+// verification catalog: it waits until the catalog Git or an ACM policy
+// manages serves image (its spec.image is image, a registry pod runs it and
+// is Ready, no pod runs another image, the catalog is READY: the same
+// conditions waitForCatalogServing uses), then reads the channel's head and
+// build from that catalog's PackageManifest. The channel is override (Git's)
+// or the one the image's release publishes. A change of the catalog image
+// meanwhile returns an *errCatalogImageChanged (by changedBy); a failing
+// pull a *catalogImagePullError.
 //
 // Unlike a fresh verification catalog, the PackageManifest of a catalog
 // whose pod was just replaced may still list the previous build for a short
@@ -338,7 +344,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // itself, so then another build than the one read here is installed, and
 // verifyUpdateInstall reports install_mismatch (the operator is kept) when
 // the installed CSV's build annotations differ.
-func liveCatalogTarget(c *Client, image, override, app string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
+func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
 	deadline := time.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	var pull pullFailureWatch
 	last := ""
@@ -351,7 +357,7 @@ func liveCatalogTarget(c *Client, image, override, app string, emit func(UpdateS
 		case !cs.Exists:
 			problem = "CatalogSource " + CatalogName + " does not exist"
 		case cs.Image != image:
-			return catalogTarget{}, &errCatalogImageChanged{app: nonEmpty(app, "unknown"), image: cs.Image}
+			return catalogTarget{}, &errCatalogImageChanged{by: changedBy, image: cs.Image}
 		case cs.State != "READY":
 			problem = "catalog state " + nonEmpty(cs.State, "unknown")
 		default:
