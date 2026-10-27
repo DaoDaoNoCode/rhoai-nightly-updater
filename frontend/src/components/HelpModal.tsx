@@ -146,7 +146,11 @@ export const HelpButton: React.FC = () => {
             {version?.templateOutdated && (
               <DescriptionListGroup>
                 <DescriptionListTerm>Deployment</DescriptionListTerm>
-                <DescriptionListDescription>The deployment template is out of date; an admin should run <code>make upgrade</code>.</DescriptionListDescription>
+                <DescriptionListDescription>
+                  {version.installMethod === "gitops"
+                    ? <>The deployment template is out of date; an admin should set the chart&apos;s <code>targetRevision</code> in the GitOps repository to the release of the image (<code>docs/GITOPS.md</code>).</>
+                    : <>The deployment template is out of date; an admin should run <code>make upgrade</code>.</>}
+                </DescriptionListDescription>
               </DescriptionListGroup>
             )}
           </DescriptionList>

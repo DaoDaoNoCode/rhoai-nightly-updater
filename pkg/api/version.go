@@ -28,6 +28,20 @@ func templateRevision() string {
 	return os.Getenv("TEMPLATE_REVISION")
 }
 
+// InstallMethodGitOps is the INSTALL_METHOD the Helm chart (deploy/chart)
+// sets: Argo CD applies the template, so upgrades are made in Git.
+const InstallMethodGitOps = "gitops"
+
+// installMethod reads how the updater was installed: InstallMethodGitOps,
+// or "" for install.sh and make (the template's default) and any other
+// value.
+func installMethod() string {
+	if os.Getenv("INSTALL_METHOD") == InstallMethodGitOps {
+		return InstallMethodGitOps
+	}
+	return ""
+}
+
 // VersionInfo describes the running build and whether the Deployment that
 // runs it was created from the template this build expects.
 type VersionInfo struct {
@@ -40,6 +54,10 @@ type VersionInfo struct {
 	// TemplateOutdated is true for in-cluster installs whose Deployment was
 	// not re-applied from the current template (run `make upgrade`).
 	TemplateOutdated bool `json:"templateOutdated"`
+	// InstallMethod is "gitops" when Argo CD installed the updater from the
+	// Helm chart; the UI then words its upgrade notices for Git. Omitted
+	// for install.sh and make.
+	InstallMethod string `json:"installMethod,omitempty"`
 }
 
 func currentVersion() VersionInfo {
@@ -52,6 +70,7 @@ func currentVersion() VersionInfo {
 		TemplateRevision:         rev,
 		ExpectedTemplateRevision: ExpectedTemplateRevision,
 		TemplateOutdated:         runningInCluster() && rev != ExpectedTemplateRevision,
+		InstallMethod:            installMethod(),
 	}
 }
 
@@ -72,7 +91,11 @@ func LogStartupVersion() {
 	v := currentVersion()
 	slog.Info("build", "version", v.Version, "commit", v.Commit, "buildDate", v.BuildDate, "go", v.GoVersion, "templateRevision", v.TemplateRevision)
 	if v.TemplateOutdated {
-		slog.Warn("the Deployment was created from an older deploy/template.yaml; re-apply it with `make upgrade`",
+		how := "re-apply it with `make upgrade`"
+		if v.InstallMethod == InstallMethodGitOps {
+			how = "sync it from the chart of this build's release (docs/GITOPS.md)"
+		}
+		slog.Warn("the Deployment was created from an older deploy/template.yaml; "+how,
 			"templateRevision", v.TemplateRevision, "expected", v.ExpectedTemplateRevision)
 	}
 }

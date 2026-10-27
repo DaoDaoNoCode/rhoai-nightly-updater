@@ -37,6 +37,12 @@ parameters:
   # Release notes are linked as <RELEASES_URL>/<tag>.
   - name: RELEASES_URL
     value: https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases
+  # How the updater is installed, for the wording of its upgrade notices:
+  # empty for install.sh and make, "gitops" when Argo CD renders the Helm
+  # chart (deploy/chart sets it), so the notices say to change Git instead
+  # of running install.sh.
+  - name: INSTALL_METHOD
+    value: ""
 objects:
 
   - apiVersion: v1
@@ -464,6 +470,8 @@ objects:
                   value: ${IMAGE_REPOSITORY}
                 - name: RELEASES_URL
                   value: ${RELEASES_URL}
+                - name: INSTALL_METHOD
+                  value: ${INSTALL_METHOD}
               ports:
                 - containerPort: 9090
                   name: metrics

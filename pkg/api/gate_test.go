@@ -576,3 +576,25 @@ func TestVersionEndpoint(t *testing.T) {
 		t.Fatalf("version: %s", w.Body.String())
 	}
 }
+
+// The Helm chart sets INSTALL_METHOD=gitops; install.sh leaves it empty.
+// Only "gitops" is reported, and nothing is sent otherwise.
+func TestVersionInstallMethod(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{
+		{"gitops", "gitops"},
+		{"", ""},
+		{"GitOps", ""},
+		{"helm", ""},
+	} {
+		t.Setenv("INSTALL_METHOD", tc.env)
+		w := httptest.NewRecorder()
+		HandleVersion(w, httptest.NewRequest("GET", "/api/version", nil))
+		var v VersionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.InstallMethod != tc.want {
+			t.Errorf("INSTALL_METHOD=%q: installMethod %q, want %q (%s)", tc.env, v.InstallMethod, tc.want, w.Body.String())
+		}
+		if tc.want == "" && strings.Contains(w.Body.String(), "installMethod") {
+			t.Errorf("INSTALL_METHOD=%q: installMethod should be omitted: %s", tc.env, w.Body.String())
+		}
+	}
+}

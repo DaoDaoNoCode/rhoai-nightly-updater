@@ -647,6 +647,8 @@ export interface VersionInfo {
   expectedTemplateRevision?: string;
   /** The Deployment predates the template this build expects (run make upgrade). */
   templateOutdated: boolean;
+  /** "gitops": Argo CD installed it from the Helm chart, so upgrades are made in Git. Absent for install.sh and make. */
+  installMethod?: "gitops";
 }
 
 /** GET /api/update-check: the newest release in the updater's image repository. */

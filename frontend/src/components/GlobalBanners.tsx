@@ -248,8 +248,18 @@ function useTemplateNotice(): Notice | null {
       >
         Build {version.version} expects deployment template revision {version.expectedTemplateRevision || "?"}, but this
         Deployment was created from {version.templateRevision ? `revision ${version.templateRevision}` : "an older template"}.
-        Re-apply it from a checkout of the running release with <code>make upgrade</code>, or with that release&apos;s{" "}
-        <code>install.sh</code>. See <code>docs/UPGRADING.md</code>.
+        {version.installMethod === "gitops" ? (
+          <>
+            {" "}Argo CD installed it from the Helm chart: in the GitOps repository, set the chart&apos;s{" "}
+            <code>targetRevision</code> to the release of the image in <code>parameters.IMAGE</code>. See{" "}
+            <code>docs/GITOPS.md</code>.
+          </>
+        ) : (
+          <>
+            {" "}Re-apply it from a checkout of the running release with <code>make upgrade</code>, or with that release&apos;s{" "}
+            <code>install.sh</code>. See <code>docs/UPGRADING.md</code>.
+          </>
+        )}
       </Alert>
     ),
   };
@@ -265,6 +275,7 @@ function writeLocal(key: string, value: string): void {
 /** A newer updater release; dismissing hides it until an even newer one appears. */
 function useUpdateNotice(): Notice | null {
   const update = useUpdateCheck();
+  const gitops = useVersion()?.installMethod === "gitops";
   const [dismissed, setDismissed] = useState(() => readLocal(UPDATE_DISMISS_KEY));
   if (!update?.updateAvailable || !update.latest || dismissed === update.latest) return null;
   const latest = update.latest;
@@ -288,7 +299,15 @@ function useUpdateNotice(): Notice | null {
       >
         This updater runs {update.current}.{" "}
         {update.majorUpgrade && <>{latest} is a new major version and requires a full redeploy. </>}
-        {installer ? (
+        {gitops ? (
+          // Argo CD applies the chart: install.sh would be undone by the next sync.
+          <>
+            Argo CD installed this updater from the Helm chart, so an admin upgrades in Git: in one commit, set the
+            chart&apos;s <code>targetRevision</code> to <code>{latest}</code> and <code>parameters.IMAGE</code> to the{" "}
+            {latest} image by digest; Argo CD applies both{update.majorUpgrade ? ", including the new template" : ""}.
+            Do not run <code>install.sh</code> on this install. See <code>docs/GITOPS.md</code>.
+          </>
+        ) : installer ? (
           <>
             An admin {update.majorUpgrade ? "redeploys" : "upgrades"} with the {latest} installer (needs <code>oc</code>, logged in as cluster-admin):
             <ClipboardCopy

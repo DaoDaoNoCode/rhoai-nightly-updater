@@ -138,6 +138,51 @@ describe("update available notice", () => {
     expect(await screen.findByText("v2.0.0 is available")).toBeInTheDocument();
   });
 
+  describe("on a GitOps install (the Helm chart sets INSTALL_METHOD=gitops)", () => {
+    const gitops = (version: string, extra: Partial<VersionInfo> = {}): (() => Promise<VersionInfo>) =>
+      async () => ({ ...(await release(version)()), installMethod: "gitops", ...extra });
+
+    it("says to upgrade in Git, without the installer command", async () => {
+      const installerURL = "https://github.com/example/app/releases/download/v2.0.1/install.sh";
+      renderWithApp(<GlobalBanners />, {
+        version: gitops("v2.0.0"),
+        update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL }),
+      });
+      expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
+      expect(screen.getByText(/an admin upgrades in Git/)).toBeInTheDocument();
+      for (const text of ["targetRevision", "parameters.IMAGE", "docs/GITOPS.md"]) {
+        expect(screen.getByText(text)).toBeInTheDocument();
+      }
+      expect(screen.getByText(/Do not run/)).toBeInTheDocument();
+      expect(screen.queryByText(/curl -fsSLO/)).not.toBeInTheDocument();
+      expect(screen.queryByText("git checkout v2.0.1 && make upgrade")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Copy the v2.0.1 install command/ })).not.toBeInTheDocument();
+    });
+
+    it("keeps the full-redeploy warning for a new major version", async () => {
+      renderWithApp(<GlobalBanners />, { version: gitops("v1.0.0"), update: async () => MAJOR });
+      expect(await screen.findByText(/requires a full redeploy/)).toBeInTheDocument();
+      expect(screen.getByText(/including the new template/)).toBeInTheDocument();
+      expect(screen.queryByText("git checkout v2.0.0 && make upgrade")).not.toBeInTheDocument();
+    });
+
+    it("words the template-outdated notice and the help dialog for Git", async () => {
+      const outdated = gitops("v1.0.0", { templateRevision: "3", expectedTemplateRevision: "4", templateOutdated: true });
+      const { unmount } = renderWithApp(<GlobalBanners />, { version: outdated });
+      expect(await screen.findByText(/this updater's deployment is out of date/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /Info alert details/ }));
+      expect(screen.getByText(/Argo CD installed it from the Helm chart/)).toBeInTheDocument();
+      expect(screen.queryByText("make upgrade")).not.toBeInTheDocument();
+      unmount();
+
+      renderWithApp(<><HelpButton /><Probe /></>, { version: outdated, update: async () => ({ updateAvailable: false, majorUpgrade: false }) });
+      await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|-"));
+      fireEvent.click(screen.getByRole("button", { name: /help/i }));
+      expect(await screen.findByText(/in the GitOps repository to the release of the image/)).toBeInTheDocument();
+      expect(screen.queryByText("make upgrade")).not.toBeInTheDocument();
+    });
+  });
+
   it("lists the newer release in the help dialog", async () => {
     renderWithApp(<><HelpButton /><Probe /></>, { version: release("v1.0.0"), update: async () => MAJOR });
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("v1.0.0|v2.0.0"));
