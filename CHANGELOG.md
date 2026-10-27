@@ -92,6 +92,11 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- The chart deploys only on clusters that run RHOAI: with `profile: gitops`
+  its RBAC has a Role in RHOAI's operator namespace, so a sync fails where
+  that namespace does not exist. docs/GITOPS.md (sections 5 and 9) and the
+  chart's values say so, and how an ApplicationSet selects only such
+  clusters.
 - The gitops profile never contacts Quay, another registry or GitHub, and
   reads no Secret: every page's build information comes from the cluster
   ([docs/GITOPS.md](docs/GITOPS.md#no-registry-access)). The dry run's

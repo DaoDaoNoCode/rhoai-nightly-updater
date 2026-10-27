@@ -64,6 +64,10 @@ parameters: {}
 #     policy that bounds it; OpenShift 4.17 or later) instead of the
 #     Template's RBAC.
 #   full: every feature, with the Template's RBAC, as install.sh deploys it.
+# Deploy the chart only on a cluster that runs RHOAI: with gitops its RBAC
+# has a Role in RHOAI's operator namespace (redhat-ods-operator), and the sync
+# fails until that namespace exists. An ApplicationSet for a fleet must
+# select only the clusters that run RHOAI (docs/GITOPS.md, sections 5 and 9).
 profile: gitops
 
 # Turn off the tag-consistency check: deploy an IMAGE whose tag names

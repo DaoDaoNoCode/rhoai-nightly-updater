@@ -252,6 +252,13 @@ updater after RHOAI, or give the Application a `retry` policy as in
 the same commit unless `retry` is set
 ([Argo CD: Automated Sync Policy](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/)).
 
+So the chart deploys only on a cluster that runs RHOAI: with
+`profile: gitops` it needs RHOAI's operator namespace. On a cluster without
+RHOAI, for example an ACM hub that does not run it, the Role cannot be
+created and every retry of the sync fails. Do not target such a cluster;
+an ApplicationSet for a fleet must select only the clusters that run RHOAI
+([section 9](#an-applicationset-for-every-cluster)).
+
 ## 6. Upgrading and rolling back
 
 An upgrade is one commit: the chart's `targetRevision` to the new release
@@ -500,6 +507,18 @@ spec:
             factor: 2
             maxDuration: 10m
 ```
+
+Select only clusters that run RHOAI ([section 5](#5-the-namespace)): the
+simplest way is the selector of the ApplicationSet that installs RHOAI. In
+ai-grid-tenant that is `apps/rhoai/hub/01-applicationset.yaml`, whose
+`clusters` generator selects
+`apps.open-cluster-management.io/acm-cluster: "true"`, the label ACM's
+GitOpsCluster integration puts on the Argo CD cluster Secret of every
+cluster it places (`local-cluster`, the hub, included); RHOAI runs on all of
+them there, so use the same `matchLabels` here. Where RHOAI goes only to
+some of them, label those cluster Secrets (or the ManagedClusters the
+GitOpsCluster's Placement selects) and select that label in both
+ApplicationSets.
 
 `apps/rhoai-nightly-updater/values-<cluster>.yaml`, for a cluster on another
 OCP minor version:
