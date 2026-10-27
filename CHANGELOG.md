@@ -18,6 +18,18 @@ only accepts a tag whose version is the top dated section. See
 
 ## [2.2.1] - unreleased
 
+### Fixed
+
+- docs/GITOPS.md said Renovate's `helm-values` manager does not read the
+  chart's image values and sketched a regex manager for them, which would
+  track each image twice: the manager reads any string under a key ending in
+  `image` (`parameters.IMAGE`, `parameters.OAUTH_PROXY_IMAGE`,
+  `gitops.cliImage`). Section 3 now shows ai-grid-tenant's setup: the
+  `helm-values` manager for the images (with a pattern for
+  `values-<cluster>.yaml`), a regex manager only for the chart's
+  `targetRevision` by GitHub releases, one group for the chart and its
+  image, and digest-only updates for the oauth-proxy and CLI images.
+
 ## [2.2.0] - 2026-10-27
 
 ### Added

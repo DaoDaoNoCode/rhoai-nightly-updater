@@ -115,42 +115,54 @@ skopeo inspect --raw docker://registry.redhat.io/openshift4/ose-cli-rhel9:v4.17 
 The Red Hat Ecosystem Catalog (catalog.redhat.com, the image's "Get this
 image" tab) also shows the manifest list digest of each tag.
 
-**Renovate keeps the digests current.** Its `helm-values` manager does not
-see these values (they are single strings under `parameters`), so add a
-regex manager. A sketch for a repository laid out as in
-[section 9](#9-examples); check the dependency names in Renovate's log before
-relying on the grouping:
+**Renovate keeps the images current.** Its `helm-values` manager, which is on
+by default, already reads them: it takes any string under a key that ends in
+`image` (in any case) as an image reference (`matchesHelmValuesInlineImage`
+in Renovate's
+[`lib/modules/manager/helm-values/util.ts`](https://github.com/renovatebot/renovate/blob/ec10d676db3337626244323caed7835ef72fcdc1/lib/modules/manager/helm-values/util.ts)).
+So `parameters.IMAGE`, `parameters.OAUTH_PROXY_IMAGE` and `gitops.cliImage` in
+a values file are dependencies with their tag and digest, and an update
+changes both. Do not add a regex manager for them: Renovate would track each
+image twice. The manager's default file pattern, `(^|/)values\.ya?ml$`,
+matches `values.yaml` but not `values-<cluster>.yaml`; a pattern for those
+adds to the default, it does not replace it.
+
+What no manager reads by default is the chart's `targetRevision`. A regex
+manager reads it from the ApplicationSet and looks it up in this repository's
+GitHub releases. A GitHub release is published only once its image is on
+quay.io (until then it is a draft, and Renovate skips drafts), so Renovate
+does not offer a chart whose image is missing. Renovate's `argocd` manager
+would look it up in the git tags instead, which exist before the image does,
+and it reads only the files you give it a pattern for. The configuration for
+a repository laid out as in [section 9](#9-examples), as in ai-grid-tenant's
+`renovate.json` (kahowell/ai-grid-tenant#67) with two additions: the pattern
+for `values-<cluster>.yaml` and the CLI image in the digests-only rule:
 
 ```json
 {
+  "helm-values": {
+    "managerFilePatterns": ["/(^|/)values-[^/]+\\.ya?ml$/"]
+  },
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["/(^|/)apps/rhoai-nightly-updater/values[^/]*\\.ya?ml$/"],
+      "description": "The rhoai-nightly-updater chart's release tag",
+      "managerFilePatterns": ["/(^|/)apps/rhoai-nightly-updater/hub/[^/]+\\.ya?ml$/"],
       "matchStrings": [
-        "(?:IMAGE|OAUTH_PROXY_IMAGE|cliImage): *(?<depName>[^\\s:@]+):(?<currentValue>[^\\s@]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
+        "repoURL: https://github\\.com/(?<depName>DaoDaoNoCode/rhoai-nightly-updater)\\.git\\s+targetRevision: (?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ],
-      "datasourceTemplate": "docker"
+      "datasourceTemplate": "github-releases"
     }
   ],
-  "argocd": {
-    "managerFilePatterns": ["/(^|/)apps/rhoai-nightly-updater/.+\\.ya?ml$/"]
-  },
   "packageRules": [
     {
-      "description": "The chart and its image are one release: update them together",
-      "matchDepNames": [
-        "quay.io/juntao_wang/rhoai-nightly-updater",
-        "https://github.com/DaoDaoNoCode/rhoai-nightly-updater.git"
-      ],
+      "description": "The updater chart only renders its own release's image: update both together",
+      "matchDepNames": ["DaoDaoNoCode/rhoai-nightly-updater", "quay.io/juntao_wang/rhoai-nightly-updater"],
       "groupName": "rhoai-nightly-updater"
     },
     {
-      "description": "The oauth-proxy and CLI tags follow the cluster's OCP version: digests only",
-      "matchDepNames": [
-        "registry.redhat.io/openshift4/ose-oauth-proxy-rhel9",
-        "registry.redhat.io/openshift4/ose-cli-rhel9"
-      ],
+      "description": "The oauth-proxy and CLI tags follow the cluster's OCP minor version: digests only",
+      "matchDepNames": ["registry.redhat.io/openshift4/ose-oauth-proxy-rhel9", "registry.redhat.io/openshift4/ose-cli-rhel9"],
       "matchUpdateTypes": ["major", "minor", "patch"],
       "enabled": false
     }
@@ -158,9 +170,26 @@ relying on the grouping:
 }
 ```
 
-Renovate needs credentials for `registry.redhat.io` (a `hostRules` entry) to
-read its digests. The chart and the image must move together; when only the
-digest of the same release changes, nothing else needs to.
+- The regex needs `targetRevision` on the line after `repoURL`, as in both
+  examples of section 9. If the Application or ApplicationSet lives
+  somewhere else, change the regex manager's `managerFilePatterns`.
+- The first rule puts the chart and its image in one pull request. The chart
+  renders only its own release's image
+  ([below](#checking-that-the-image-matches-the-chart)), so a pull request
+  that changes only one of them fails the render. One can appear when
+  Renovate runs after the image is pushed but before the release is
+  published; Renovate adds the chart on its next run. Merge the pull request
+  only once it changes both.
+- The oauth-proxy tag is the cluster's OCP minor version, so the second rule
+  keeps it and lets only the digest change; a `values-<cluster>.yaml` keeps
+  its own minor version. The CLI image is in the rule for when you set
+  `gitops.cliImage`; the chart's default is not in your repository.
+- `registry.redhat.io` needs a login: give Renovate credentials for it (a
+  `hostRules` entry with a Red Hat registry service account), or its lookups
+  for the oauth-proxy and CLI images fail. The updater's image is public on
+  quay.io. The chart's lookup goes to GitHub's API, which Renovate on GitHub
+  reaches with its own token; elsewhere it needs a github.com token
+  (`RENOVATE_GITHUB_COM_TOKEN`).
 
 ### Checking that the image matches the chart
 
