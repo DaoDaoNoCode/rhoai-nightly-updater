@@ -126,8 +126,8 @@ objects() {
 		/^kind: / { kind = $2 }
 		/^metadata:/ { meta = 1; next }
 		/^[^ #]/ { meta = 0 }
-		meta && /^  name: / { name = $2 }
-		meta && /^  namespace: / { ns = $2 }
+		meta && /^  name: / { name = $2; gsub(/"/, "", name) }
+		meta && /^  namespace: / { ns = $2; gsub(/"/, "", ns) }
 		END { flush() }' "$OUT" | sort
 }
 
@@ -166,7 +166,7 @@ grep -qx "        image: $PROXY" "$OUT" && pass || fail "required values only: t
 grep -A1 -x '        - name: INSTALL_METHOD' "$OUT" | grep -qx '          value: gitops' && pass || fail "required values only: INSTALL_METHOD is not gitops"
 grep -A1 -x '        - name: IMAGE_REPOSITORY' "$OUT" | grep -qx "          value: $(default_of IMAGE_REPOSITORY)" && pass || fail "required values only: IMAGE_REPOSITORY is not the Template's default"
 # Every image of the render is pinned by digest, the hooks' included.
-expect_eq "every image by digest" "" "$(grep -E '^ *image: ' "$OUT" | grep -vE '@sha256:[0-9a-f]{64}$' || true)"
+expect_eq "every image by digest" "" "$(grep -E '^ *image: ' "$OUT" | grep -vE '@sha256:[0-9a-f]{64}"?$' || true)"
 
 # NAMESPACE follows the release namespace (the Argo CD destination);
 # APP_NAME renames every object.
@@ -204,6 +204,51 @@ EOF
 expect_eq "a value with quotes and a newline: read back" '# RELEASES_URL="https://example.com/a\"b\\c\nd: e}"' \
 	"$(helm template readback "$READBACK" | grep '^# RELEASES_URL=')"
 
+# Names that YAML would read as a number or a boolean stay strings
+# everywhere: Kubernetes refuses a label, annotation or env value that is
+# not a string. Helm parses every rendered document back and lists each
+# leaf as "kind path type"; with such names, the leaves that are not strings
+# must be exactly those of a default render (ports, replicas, ...), and no
+# name, namespace, label, annotation, selector, env value, image, command
+# or resource name may be one of them.
+LEAVES="$WORK/leaves"
+mkdir -p "$LEAVES/templates"
+printf 'apiVersion: v2\nname: leaves\nversion: 0.0.0\n' >"$LEAVES/Chart.yaml"
+cat >"$LEAVES/templates/leaves.yaml" <<'EOF'
+{{- define "walk" }}
+{{- $kind := index . 0 }}{{- $path := index . 1 }}{{- $v := index . 2 }}
+{{- if kindIs "map" $v }}
+{{- range $key, $val := $v }}{{ include "walk" (list $kind (printf "%s.%s" $path $key) $val) }}{{ end }}
+{{- else if kindIs "slice" $v }}
+{{- range $i, $val := $v }}{{ include "walk" (list $kind (printf "%s.%d" $path $i) $val) }}{{ end }}
+{{- else }}
+# {{ $kind }} {{ $path }} {{ kindOf $v }}
+{{- end }}
+{{- end }}
+{{- range $file, $_ := .Files.Glob "docs/*" }}
+{{- $d := $.Files.Get $file | fromYaml }}
+{{- include "walk" (list $d.kind "" $d) }}
+{{- end }}
+EOF
+# leaves NAMESPACE APP_NAME: the non-string leaves of a render, counted.
+leaves() {
+	rm -rf "$LEAVES/docs"
+	mkdir -p "$LEAVES/docs"
+	helm template rnu "$CHART" --namespace "$1" "${BASE[@]}" --set-string "parameters.APP_NAME=$2" >"$OUT" 2>&1 ||
+		{ fail "leaves $1 $2: render failed: $(cat "$OUT")"; return 0; }
+	awk -v dir="$LEAVES/docs" '/^---/ { n++; next } { print > (dir "/" sprintf("%03d", n) ".yaml") }' "$OUT"
+	helm template leaves "$LEAVES" | sed -n 's/^# //p' | grep -v ' string$' | sort | uniq -c
+}
+baseline=$(leaves rhoai-nightly-updater rhoai-nightly-updater)
+grep -q 'containerPort' <<<"$baseline" && pass || fail "leaves: the walk found no ports: $baseline"
+for pair in "0x1 123" "456 true" "true 0x1" "1e3 12"; do
+	read -r ns app <<<"$pair"
+	got=$(leaves "$ns" "$app")
+	expect_eq "namespace $ns, app name $app: the same non-string fields as a default render" "$baseline" "$got"
+	expect_eq "namespace $ns, app name $app: names, labels, annotations, env values are strings" "" \
+		"$(grep -E '\.(name|namespace|serviceAccountName|image)$|labels\.|annotations\.|matchLabels\.|selector\.|\.env\.[0-9]+\.value|command\.|args\.|resourceNames\.|subjects\.' <<<"$got" || true)"
+done
+
 # --- What fails -----------------------------------------------------------------
 
 P=(--set "parameters.OAUTH_PROXY_IMAGE=$PROXY")
@@ -237,6 +282,9 @@ expect_render_fail "IMAGE by tag (message)" "parameters.IMAGE must be pinned by 
 	--set "parameters.IMAGE=quay.io/example/app:$VERSION"
 expect_render_fail "IMAGE of another release" "holds the template of $VERSION" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:v0.0.1@$DIGEST"
 expect_render "IMAGE of another release with allowTemplateMismatch" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:v0.0.1@$DIGEST" --set allowTemplateMismatch=true
+# The tag-consistency check reads the tag only: without a release tag there
+# is nothing to compare, so these render (docs/GITOPS.md says how to check
+# a digest's commit).
 expect_render "IMAGE by digest only" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app@$DIGEST"
 expect_render "IMAGE of a main build" --namespace ns1 "${P[@]}" --set "parameters.IMAGE=quay.io/example/app:main@$DIGEST"
 expect_render_fail "allowMutableTag is gone" "allowMutableTag" --namespace ns1 "${BASE[@]}" --set allowMutableTag=true
@@ -267,8 +315,8 @@ fi
 # --- The hooks ------------------------------------------------------------------
 
 expect_render "session Secret hook" --namespace ns1 "${BASE[@]}" --show-only templates/session-secret.yaml
-grep -c 'argocd.argoproj.io/hook: Sync' "$OUT" | grep -qx 4 && pass || fail "session Secret: not four Sync hooks"
-grep -B1 -A1 'argocd.argoproj.io/hook: Sync' "$OUT" | grep -c 'sync-wave: "-2"' | grep -qx 3 && pass || fail "session Secret: the RBAC is not wave -2"
+grep -c 'argocd.argoproj.io/hook: "Sync"' "$OUT" | grep -qx 4 && pass || fail "session Secret: not four Sync hooks"
+grep -B1 -A1 'argocd.argoproj.io/hook: "Sync"' "$OUT" | grep -c 'sync-wave: "-2"' | grep -qx 3 && pass || fail "session Secret: the RBAC is not wave -2"
 grep -qF 'argocd.argoproj.io/sync-wave: "-1"' "$OUT" && pass || fail "session Secret: the Job is not wave -1"
 expect_eq "session Secret: delete policy" 4 "$(grep -c 'hook-delete-policy: BeforeHookCreation,HookSucceeded' "$OUT")"
 grep -qF 'resourceNames: ["rhoai-nightly-updater-proxy"]' "$OUT" && pass || fail "session Secret: the Role is not limited to the Secret's name"
@@ -286,10 +334,10 @@ done
 grep -q '^ *app: ' "$OUT" && fail "session Secret: the Job pod has the app label the Service selects" || pass
 
 expect_render "ConsoleLink hook" --namespace ns1 "${BASE[@]}" --set parameters.APP_NAME=upd --show-only templates/consolelink.yaml
-expect_eq "ConsoleLink: six PostSync hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: PostSync' "$OUT")"
+expect_eq "ConsoleLink: six PostSync hooks" 6 "$(grep -c 'argocd.argoproj.io/hook: "PostSync"' "$OUT")"
 grep -qF 'resourceNames: ["upd-ns1"]' "$OUT" && pass || fail "ConsoleLink: the ClusterRole is not limited to the link's name"
 grep -qF 'resourceNames: ["upd"]' "$OUT" && pass || fail "ConsoleLink: the Role is not limited to the Route's name"
-grep -qF 'app.kubernetes.io/instance: upd-ns1' "$OUT" && pass || fail "ConsoleLink: the RBAC lacks install.sh's instance label"
+grep -qF 'app.kubernetes.io/instance: "upd-ns1"' "$OUT" && pass || fail "ConsoleLink: the RBAC lacks install.sh's instance label"
 grep -qF 'value: "upd-ns1"' "$OUT" && pass || fail "ConsoleLink: the link is not named <APP_NAME>-<NAMESPACE>"
 grep -qF 'oc apply --server-side' "$OUT" && pass || fail "ConsoleLink: not server-side apply"
 # The link is install.sh's: the same printf lines, from apiVersion to text.
@@ -297,5 +345,117 @@ link_lines() { sed -n "/'apiVersion: console.openshift.io\/v1'/,/'  text: /p" "$
 install_link=$(link_lines "$SRC/scripts/install.sh")
 [ "$(wc -l <<<"$install_link")" -ge 10 ] && pass || fail "ConsoleLink: cannot find install.sh's ConsoleLink"
 expect_eq "ConsoleLink: the same object as install.sh's" "$install_link" "$(link_lines "$CHART/templates/consolelink.yaml")"
+
+# --- The hook scripts, run against a fake oc --------------------------------------
+
+# hook_script TEMPLATE: the shell script of that hook Job, as rendered. The
+# session Secret's memory volume (/secret) becomes a directory of the test.
+hook_script() {
+	helm template rnu "$CHART" --namespace ns1 "${BASE[@]}" --show-only "templates/$1" 2>&1 |
+		awk '/^            - \|$/ { f = 1; next } f && /^          [a-z]/ { exit } f' | sed -e 's/^              //' -e "s|/secret/|$WORK/secretvol/|g"
+}
+SESSION_SH="$WORK/session-secret.sh"
+LINK_SH="$WORK/consolelink.sh"
+hook_script session-secret.yaml >"$SESSION_SH"
+hook_script consolelink.yaml >"$LINK_SH"
+bash -n "$SESSION_SH" && bash -n "$LINK_SH" && pass || fail "hook scripts: not valid bash"
+grep -q 'oc create secret' "$SESSION_SH" && grep -q 'oc apply --server-side' "$LINK_SH" && pass || fail "hook scripts: not extracted"
+
+FAKEBIN="$WORK/fakebin"
+mkdir -p "$FAKEBIN" "$WORK/secretvol"
+cat >"$FAKEBIN/oc" <<'FAKE'
+#!/usr/bin/env bash
+# Fake oc: FAKE_* choose the answers; every call is logged.
+printf 'oc %s\n' "$*" >>"$FAKE_LOG"
+case "$1 $2" in
+"get secret")
+	case "${FAKE_SECRET:-missing}" in
+	exists) echo "secret/$3" ;;
+	forbidden) echo "Error from server (Forbidden): secrets \"$3\" is forbidden" >&2; exit 1 ;;
+	*) echo "Error from server (NotFound): secrets \"$3\" not found" >&2; exit 1 ;;
+	esac ;;
+"create secret")
+	for a in "$@"; do case "$a" in --from-file=session_secret=*) cp "${a#--from-file=session_secret=}" "$FAKE_LOG.value" ;; esac; done
+	case "${FAKE_CREATE:-ok}" in
+	ok) echo "secret/$4" ;;
+	exists) echo "Error from server (AlreadyExists): secrets \"$4\" already exists" >&2; exit 1 ;;
+	*) echo "Error from server (Forbidden): secrets is forbidden" >&2; exit 1 ;;
+	esac ;;
+"get route")
+	n=$(($(cat "$FAKE_LOG.routes" 2>/dev/null || echo 0) + 1))
+	echo "$n" >"$FAKE_LOG.routes"
+	if [ "${FAKE_HOST_AFTER:-1}" != never ] && [ "$n" -ge "${FAKE_HOST_AFTER:-1}" ]; then printf 'app.example.com'; fi ;;
+"apply --server-side")
+	cat >"$FAKE_LOG.applied"
+	[ "${FAKE_APPLY:-ok}" = ok ] || { echo "Error from server (Forbidden): consolelinks is forbidden" >&2; exit 1; } ;;
+*) echo "fake oc: unexpected: $*" >&2; exit 2 ;;
+esac
+FAKE
+printf '#!/bin/sh\nexit 0\n' >"$FAKEBIN/sleep"
+chmod +x "$FAKEBIN/oc" "$FAKEBIN/sleep"
+HOOKLOG="$WORK/hook.log"
+HOOKOUT="$WORK/hook.out"
+
+# run_hook SCRIPT [VAR=value ...]: the script with the fake oc and a no-op
+# sleep; stdout and stderr in $HOOKOUT, its exit status in $HOOK_RC.
+run_hook() {
+	local script=$1
+	shift
+	rm -f "$HOOKLOG" "$HOOKLOG".* "$WORK/secretvol/"*
+	HOOK_RC=0
+	env PATH="$FAKEBIN:$PATH" FAKE_LOG="$HOOKLOG" NAMESPACE=ns1 SECRET=app-proxy APP_NAME=app INSTANCE=app-ns1 "$@" \
+		bash "$script" >"$HOOKOUT" 2>&1 || HOOK_RC=$?
+	touch "$HOOKLOG"
+}
+# no_value NAME: the generated value, if any, appears in no output.
+no_value() {
+	if [ -s "$HOOKLOG.value" ] && grep -qF -- "$(cat "$HOOKLOG.value")" "$HOOKOUT"; then
+		fail "$1: the secret value was printed"
+	else
+		pass
+	fi
+}
+
+run_hook "$SESSION_SH" FAKE_SECRET=exists
+expect_eq "session Secret exists: success" 0 "$HOOK_RC"
+expect_eq "session Secret exists: no create" "" "$(grep '^oc create' "$HOOKLOG" || true)"
+grep -qF 'exists; keeping it' "$HOOKOUT" && pass || fail "session Secret exists: $(cat "$HOOKOUT")"
+
+run_hook "$SESSION_SH"
+expect_eq "session Secret created: success" 0 "$HOOK_RC"
+expect_eq "session Secret created: one create with the key session_secret" 1 "$(grep -c '^oc create secret generic app-proxy -n ns1 --from-file=session_secret=' "$HOOKLOG")"
+grep -Eqx '[a-zA-Z0-9]{32}' "$HOOKLOG.value" && pass || fail "session Secret created: not 32 alphanumerics: $(wc -c <"$HOOKLOG.value")"
+no_value "session Secret created"
+grep -qF 'Created Secret app-proxy.' "$HOOKOUT" && pass || fail "session Secret created: $(cat "$HOOKOUT")"
+
+run_hook "$SESSION_SH" FAKE_CREATE=exists
+expect_eq "session Secret created meanwhile: success" 0 "$HOOK_RC"
+grep -qF 'created meanwhile; keeping it' "$HOOKOUT" && pass || fail "session Secret created meanwhile: $(cat "$HOOKOUT")"
+no_value "session Secret created meanwhile"
+
+run_hook "$SESSION_SH" FAKE_CREATE=forbidden
+[ "$HOOK_RC" -ne 0 ] && pass || fail "session Secret create forbidden: the Job succeeded"
+grep -qF 'Cannot create Secret app-proxy' "$HOOKOUT" && pass || fail "session Secret create forbidden: $(cat "$HOOKOUT")"
+no_value "session Secret create forbidden"
+
+run_hook "$SESSION_SH" FAKE_SECRET=forbidden
+[ "$HOOK_RC" -ne 0 ] && pass || fail "session Secret unreadable: the Job succeeded"
+expect_eq "session Secret unreadable: no create" "" "$(grep '^oc create' "$HOOKLOG" || true)"
+
+run_hook "$LINK_SH" FAKE_HOST_AFTER=3
+expect_eq "ConsoleLink, host on the third read: success" 0 "$HOOK_RC"
+expect_eq "ConsoleLink, host on the third read: three reads" 3 "$(grep -c '^oc get route app -n ns1' "$HOOKLOG")"
+grep -qx 'oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -' "$HOOKLOG" && pass || fail "ConsoleLink: not applied: $(cat "$HOOKLOG")"
+grep -qx '  href: https://app.example.com' "$HOOKLOG.applied" && grep -qx '  name: app-ns1' "$HOOKLOG.applied" && pass ||
+	fail "ConsoleLink: applied $(cat "$HOOKLOG.applied" 2>/dev/null)"
+
+run_hook "$LINK_SH" FAKE_HOST_AFTER=never
+[ "$HOOK_RC" -ne 0 ] && pass || fail "ConsoleLink, no host: the Job succeeded"
+expect_eq "ConsoleLink, no host: 30 reads, no apply" "30 0" "$(grep -c '^oc get route' "$HOOKLOG") $(grep -c '^oc apply' "$HOOKLOG" || true)"
+grep -qF 'has no host yet' "$HOOKOUT" && pass || fail "ConsoleLink, no host: $(cat "$HOOKOUT")"
+
+run_hook "$LINK_SH" FAKE_APPLY=forbidden
+[ "$HOOK_RC" -ne 0 ] && pass || fail "ConsoleLink, apply fails: the Job succeeded"
+grep -qF 'consolelinks is forbidden' "$HOOKOUT" && pass || fail "ConsoleLink, apply fails: $(cat "$HOOKOUT")"
 
 finish

@@ -13,7 +13,7 @@
       "required": ["IMAGE", "OAUTH_PROXY_IMAGE"],
       "properties": {
         "IMAGE": {
-          "description": "Required. The updater image pinned by digest: <repository>@sha256:<digest> or <repository>:<tag>@sha256:<digest>.",
+          "description": "Required. The updater image of this chart's release, pinned by digest: <repository>@sha256:<digest> or <repository>:<tag>@sha256:<digest>. A tag naming another release fails; the digest is not verified.",
           "type": "string",
           "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
         },
@@ -58,7 +58,7 @@
       }
     },
     "allowTemplateMismatch": {
-      "description": "Deploy an IMAGE whose release tag is not this chart's release.",
+      "description": "Turn off the tag-consistency check, which refuses an IMAGE whose tag names another release than this chart's. It compares the tag only; it does not verify the digest.",
       "type": "boolean"
     },
     "gitops": {

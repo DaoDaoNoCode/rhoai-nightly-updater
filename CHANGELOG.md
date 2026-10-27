@@ -27,9 +27,11 @@ only accepts a tag whose version is the top dated section. See
   only definition of the app's objects. Hooks replace `install.sh`'s
   imperative steps: a Sync hook Job creates the cookie Secret once and never
   replaces it, a PostSync hook Job adds the ConsoleLink. Every image is
-  pinned by digest in Git (the updater, oauth-proxy and the hook image); a
-  tag, an unknown or misspelled value, or an image of another release fails
-  the render.
+  pinned by digest in Git (the updater, oauth-proxy and the hook image); an
+  image without a digest, an unknown or misspelled value, or an image tag
+  that names another release than the chart's fails the render. That last
+  check compares the tag only: docs/GITOPS.md says how to check the digest's
+  commit.
 - Template parameter `INSTALL_METHOD` (empty by default; the chart sets
   `gitops`), passed to the app: on a GitOps install the "vX.Y.Z is
   available" and "deployment is out of date" notices and the help dialog say

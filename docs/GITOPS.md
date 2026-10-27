@@ -27,7 +27,11 @@ The render fails, instead of applying something half-done, when:
   values key is misspelled (`values.schema.json` allows only known keys);
 - `IMAGE` or `OAUTH_PROXY_IMAGE` is missing, or an image is not pinned by
   digest ([section 3](#3-images-by-digest));
-- `IMAGE` is a release (`:vX.Y.Z@sha256:...`) other than the chart's own;
+- the tag of `IMAGE` names another release than the chart's
+  (`:vX.Y.Z@sha256:...`). This is a tag-consistency check only: it catches a
+  tag that names another release, but it does not verify the digest, and a
+  digest without a release tag passes it
+  ([section 3](#checking-that-the-image-matches-the-chart));
 - a `${...}` placeholder is left after substitution, or the Template uses the
   non-string `${{NAME}}` form (it does not today).
 
@@ -37,7 +41,7 @@ What `install.sh` does, and what replaces it here:
 |---|---|
 | Checks that you are cluster-admin | Argo CD's credentials for the destination cluster need the same ([section 8](#8-what-argo-cd-needs)) |
 | Detects the oauth-proxy tag from the cluster version | `parameters.OAUTH_PROXY_IMAGE`, set per cluster, by digest |
-| Resolves the image tag to a digest and checks the image's commit against the template | `parameters.IMAGE` by digest in Git; the chart refuses a tag, and a release tag that is not the chart's release |
+| Resolves the image tag to a digest and checks the image's commit against the template | `parameters.IMAGE` by digest in Git; the chart refuses a tag without a digest, and a tag that names another release. Nothing checks the digest's commit: do it yourself when you change it ([section 3](#checking-that-the-image-matches-the-chart)) |
 | `oc new-project` | The Application's `CreateNamespace=true` sync option |
 | Creates the cookie Secret `<APP_NAME>-proxy` once | The session Secret hook ([section 4](#4-the-two-hook-jobs)) |
 | `oc process \| oc apply`, then waits for the rollout | Argo CD syncs the rendered objects and waits for them to be healthy |
@@ -58,14 +62,14 @@ dialog.
 
 | Value | Default | Meaning |
 |---|---|---|
-| `parameters.IMAGE` | none, required | The updater image by digest: `quay.io/juntao_wang/rhoai-nightly-updater:vX.Y.Z@sha256:<digest>` (or without the tag). A release tag must be the chart's release |
+| `parameters.IMAGE` | none, required | The updater image by digest: `quay.io/juntao_wang/rhoai-nightly-updater:vX.Y.Z@sha256:<digest>` (or without the tag). It must be the chart's release; the chart checks only that a release tag, if there is one, is the chart's |
 | `parameters.OAUTH_PROXY_IMAGE` | none, required | The oauth-proxy image by digest; its tag is the cluster's OCP minor version: `registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.<minor>@sha256:<digest>`. The Template's own default (a tag) is for `install.sh` and is not used |
 | `parameters.NAMESPACE` | the release namespace | Must be the Application's destination namespace ([section 5](#5-the-namespace)) |
 | `parameters.APP_NAME` | `rhoai-nightly-updater` | The name of the app's objects; cluster-scoped names are `<APP_NAME>-<NAMESPACE>` |
 | `parameters.PULL_SECRET_NAMESPACE`, `parameters.MARKETPLACE_NAMESPACE` | `kube-system`, `openshift-marketplace` | Where the app gets a Role for the pull secret and the CatalogSources |
 | `parameters.IMAGE_REPOSITORY`, `parameters.RELEASES_URL` | the Template's | The update check and its release-notes link ([README: Configuration](../README.md#configuration)) |
 | `parameters.INSTALL_METHOD` | `gitops` | Leave it: it words the app's notices for Git |
-| `allowTemplateMismatch` | `false` | Deploy an `IMAGE` whose release tag is not the chart's (`install.sh`'s `ALLOW_TEMPLATE_MISMATCH=1`) |
+| `allowTemplateMismatch` | `false` | Turn off the tag-consistency check, so an `IMAGE` whose tag names another release renders (like `install.sh`'s `ALLOW_TEMPLATE_MISMATCH=1`). With it on, the digest is still not verified |
 | `gitops.cliImage` | `registry.redhat.io/openshift4/ose-cli-rhel9:v4.17@sha256:b39fdb5a...` | The image of both hook Jobs, by digest. They only get, create and apply single objects, so any recent `oc` works; the tag follows the oauth-proxy convention. The rhel9 repository starts at v4.16; on OCP 4.15 use `registry.redhat.io/openshift4/ose-cli:v4.15@sha256:<digest>` |
 | `gitops.sessionSecret.enabled` | `true` | The session Secret hook. With `false`, create Secret `<APP_NAME>-proxy` (key `session_secret`) before the first sync: the Deployment mounts it and does not start without it |
 | `gitops.consoleLink.enabled` | `true` | The ConsoleLink hook |
@@ -147,10 +151,38 @@ relying on the grouping:
 ```
 
 Renovate needs credentials for `registry.redhat.io` (a `hostRules` entry) to
-read its digests. The chart and the image must move together: a chart of one
-release with the image of another fails to render (unless
-`allowTemplateMismatch`), and if only the digest of the same release changes,
-nothing else needs to.
+read its digests. The chart and the image must move together; when only the
+digest of the same release changes, nothing else needs to.
+
+### Checking that the image matches the chart
+
+An image only works with the template of its own release (ports, probes,
+environment, RBAC). `install.sh` checks this by the commit the image was
+built from; the chart cannot read the image, so its tag-consistency check
+compares only the tag text: `:v2.1.0@sha256:...` with the v2.2.0 chart
+fails, but a digest of another release behind the `:v2.2.0` tag, a digest
+without a tag, or a `:main@sha256:...` build all render. When you change
+`parameters.IMAGE` by hand, check the digest against the chart's release:
+
+```bash
+# The commit the image was built from: its revision label (the Containerfile
+# sets it; org.opencontainers.image.version is the release).
+skopeo inspect docker://quay.io/juntao_wang/rhoai-nightly-updater@sha256:<digest> \
+  | jq -r '.Labels["org.opencontainers.image.revision"], .Labels["org.opencontainers.image.version"]'
+# The commit of the chart's release (targetRevision), in a clone:
+git rev-parse 'v2.2.0^{commit}'
+```
+
+The two commits must be the same. `oc image info <image> --filter-by-os=linux/amd64`
+shows the same labels.
+
+At run time the app checks part of this itself: it compares the
+`TEMPLATE_REVISION` its Deployment was created with against the revision it
+was built for (`api.ExpectedTemplateRevision` in `pkg/api/version.go`) and,
+when they differ, shows admins "this updater's deployment is out of date".
+That catches an image and a chart of different template revisions (different
+MAJOR versions). Two releases with the same revision are not reported, even
+if other details of their templates differ.
 
 ## 4. The two hook Jobs
 
@@ -226,24 +258,44 @@ what Git says.
 
 ## 7. Removing it
 
-Deleting the Application (with Argo CD's resources finalizer, the default
-for a cascading delete) removes everything the Template creates: the
+What happens to the app's objects depends on how the Application goes
+([Argo CD: App Deletion](https://argo-cd.readthedocs.io/en/stable/user-guide/app_deletion/)):
+
+- **Cascading deletion** removes the Application and every object it
+  synced. That happens when the Application carries the finalizer
+  `resources-finalizer.argocd.argoproj.io` (the examples in
+  [section 9](#9-examples) set it) and is deleted, by `argocd app delete` (it
+  adds the finalizer), by `kubectl delete`, or by its parent: an app of apps
+  pruning it after you remove its manifest from Git, or an ApplicationSet
+  when the cluster no longer matches or the ApplicationSet is deleted. The
+  ApplicationSet controller sets that finalizer on the Applications it
+  generates unless `syncPolicy.preserveResourcesOnDeletion: true`
+  ([Argo CD: ApplicationSet deletion](https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Application-Deletion/)).
+- **Non-cascading deletion** removes only the Application: an Application
+  without the finalizer (removing its manifest from Git deletes it, but
+  the objects stay), `argocd app delete --cascade=false`, or an
+  ApplicationSet with `preserveResourcesOnDeletion: true`. The app keeps
+  running, unmanaged; remove it with `install.sh uninstall` as below.
+
+A cascading deletion removes everything the Template creates: the
 Deployment, Service, Route, NetworkPolicy, ServiceMonitor, PrometheusRule,
 the ServiceAccount, the ClusterRole and ClusterRoleBinding
 `<APP_NAME>-<NAMESPACE>`, and the Roles in `<NAMESPACE>`, `kube-system` and
 `openshift-marketplace`.
 
-What stays:
-- the namespace, when `CreateNamespace=true` created it (Argo CD does not
-  delete namespaces it created), and with it Secret `<APP_NAME>-proxy` and the
-  app's ConfigMaps (activity log, snapshot, operation marker);
+What stays even then:
+- the namespace, when `CreateNamespace=true` created it: Argo CD creates it
+  without tracking it (`controller/sync_namespace.go` in Argo CD), so it is
+  not deleted with the application. With it stay Secret `<APP_NAME>-proxy`
+  and the app's ConfigMaps (activity log, snapshot, operation marker);
 - ConsoleLink `<APP_NAME>-<NAMESPACE>`, created by a Job;
 - the hook objects of a failed last run.
 
-Remove those after the Application is gone (with it still there, Argo CD
-would recreate the app), with `install.sh uninstall --namespace <NAMESPACE>
---app-name <APP_NAME>`, which deletes by the same instance label and then
-the namespace, or by hand:
+Remove those, or after a non-cascading deletion the whole app, once the
+Application is gone (with it still there, Argo CD would recreate the app),
+with `install.sh uninstall --namespace <NAMESPACE> --app-name <APP_NAME>`,
+which deletes the cluster-scoped objects and the Roles in other namespaces
+by the instance label, then the namespace, or by hand:
 
 ```bash
 oc delete consolelink,clusterrole,clusterrolebinding -l app.kubernetes.io/instance=<APP_NAME>-<NAMESPACE>
@@ -263,14 +315,31 @@ test resources) stay, as with `install.sh uninstall`.
   cluster-admin check. When Argo CD reaches a managed cluster through a
   proxy identity, check that admission on that cluster allows a
   NetworkPolicy and Roles in those namespaces.
-- **Annotation-based resource tracking**
-  (`application.resourceTrackingMethod: annotation`, the default from Argo
-  CD 3.0). With `label` or `annotation+label` tracking, Argo CD writes its
-  application name into the `app.kubernetes.io/instance` label, which the
-  Template uses for `<APP_NAME>-<NAMESPACE>`: `install.sh uninstall` would no
-  longer find the cluster-scoped objects by that label, and if the
-  application name happened to equal `<APP_NAME>-<NAMESPACE>`, Argo CD would
-  treat the hook-created ConsoleLink as its own and prune it.
+- **Annotation-based resource tracking**, `application.resourceTrackingMethod:
+  annotation` in `argocd-cm`: the default since Argo CD 3.0
+  ([upgrade notes](https://argo-cd.readthedocs.io/en/stable/operator-manual/upgrading/2.14-3.0/),
+  [resource tracking](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/)).
+  Argo CD then marks its objects with the `argocd.argoproj.io/tracking-id`
+  annotation only. The other two methods affect this chart in two separate
+  ways:
+  - *The instance label is overwritten* with `label` and with
+    `annotation+label`: both write the application name into the
+    instance label, `app.kubernetes.io/instance` by default (`SetAppInstance`
+    in Argo CD's `util/argo/resource_tracking.go`). The Template sets that
+    label to `<APP_NAME>-<NAMESPACE>` on its ClusterRole,
+    ClusterRoleBinding and the Roles in `kube-system` and
+    `openshift-marketplace`, and `install.sh uninstall` deletes by it; after
+    the overwrite it no longer finds them. Avoid it with `annotation`
+    tracking, or set `application.instanceLabelKey` in `argocd-cm` to another
+    key (for example `argocd.argoproj.io/instance`) so Argo CD writes that
+    label instead.
+  - *Adoption and pruning by label* happen with `label` tracking only. There
+    Argo CD treats every object whose instance label equals the
+    application's name as part of the application; with `annotation+label`
+    the label is informational and ownership is the tracking annotation. So
+    under `label` tracking, an Application named `<APP_NAME>-<NAMESPACE>`
+    would claim the ConsoleLink the hook creates (same label value, not in
+    Git) and, with `prune`, delete it.
 - **The chart's repository.** The GitLab project is not public, so point
   Argo CD at the public GitHub mirror,
   `https://github.com/DaoDaoNoCode/rhoai-nightly-updater.git`, which has the
@@ -296,6 +365,9 @@ kind: Application
 metadata:
   name: rhoai-nightly-updater
   namespace: openshift-gitops
+  # Deleting the Application deletes the app's objects (section 7).
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   sources:
@@ -357,6 +429,11 @@ spec:
     metadata:
       name: 'rhoai-nightly-updater-{{ .name }}'
       namespace: openshift-gitops
+      # The ApplicationSet controller adds this finalizer anyway unless
+      # syncPolicy.preserveResourcesOnDeletion is true; listed so the
+      # deletion behaviour is visible (section 7).
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
     spec:
       project: default
       sources:

@@ -14,16 +14,16 @@ it; it carries install.sh's app.kubernetes.io/instance label, so
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ $name }}
-  namespace: {{ $p.NAMESPACE }}
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
   annotations:
     {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ $name }}
-  namespace: {{ $p.NAMESPACE }}
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
   annotations:
     {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
 rules:
@@ -35,18 +35,18 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ $name }}
-  namespace: {{ $p.NAMESPACE }}
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
   annotations:
     {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ $name }}
+  name: {{ $name | quote }}
 subjects:
   - kind: ServiceAccount
-    name: {{ $name }}
-    namespace: {{ $p.NAMESPACE }}
+    name: {{ $name | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
 ---
 # ConsoleLinks are cluster-scoped. Server-side apply reads and patches the
 # one link by name; "create" cannot be limited to a name. The instance
@@ -55,9 +55,9 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ printf "%s-consolelink" $instance }}
+  name: {{ printf "%s-consolelink" $instance | quote }}
   labels:
-    app.kubernetes.io/instance: {{ $instance }}
+    app.kubernetes.io/instance: {{ $instance | quote }}
   annotations:
     {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
 rules:
@@ -72,25 +72,25 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ printf "%s-consolelink" $instance }}
+  name: {{ printf "%s-consolelink" $instance | quote }}
   labels:
-    app.kubernetes.io/instance: {{ $instance }}
+    app.kubernetes.io/instance: {{ $instance | quote }}
   annotations:
     {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ printf "%s-consolelink" $instance }}
+  name: {{ printf "%s-consolelink" $instance | quote }}
 subjects:
   - kind: ServiceAccount
-    name: {{ $name }}
-    namespace: {{ $p.NAMESPACE }}
+    name: {{ $name | quote }}
+    namespace: {{ $p.NAMESPACE | quote }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $name }}
-  namespace: {{ $p.NAMESPACE }}
+  name: {{ $name | quote }}
+  namespace: {{ $p.NAMESPACE | quote }}
   annotations:
     {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-1") | nindent 4 }}
 spec:
@@ -100,16 +100,16 @@ spec:
     metadata:
       # Not the app's "app" label: the Service and NetworkPolicy select it.
       labels:
-        app.kubernetes.io/part-of: {{ $p.APP_NAME }}
+        app.kubernetes.io/part-of: {{ $p.APP_NAME | quote }}
         app.kubernetes.io/component: consolelink
     spec:
-      serviceAccountName: {{ $name }}
+      serviceAccountName: {{ $name | quote }}
       restartPolicy: Never
       securityContext:
         {{- include "rnu.hookPodSecurity" . | nindent 8 }}
       containers:
         - name: consolelink
-          image: {{ .Values.gitops.cliImage }}
+          image: {{ .Values.gitops.cliImage | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: NAMESPACE

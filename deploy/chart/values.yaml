@@ -12,9 +12,11 @@
 # cannot change without a commit, and Renovate keeps the digests current
 # (docs/GITOPS.md says how to find one).
 parameters: {}
-  # Required, by digest. The updater image. A release tag (vX.Y.Z) must be
-  # this chart's release (appVersion): an image only works with the
-  # template of its own release, which install.sh checks by commit.
+  # Required, by digest. The updater image, of this chart's release: an
+  # image only works with the template of its own release. install.sh
+  # checks that by the image's commit; the chart can only check the tag: a
+  # release tag (vX.Y.Z) other than this chart's (appVersion) fails, but the
+  # digest itself is not verified (docs/GITOPS.md, section 3).
   # IMAGE: quay.io/juntao_wang/rhoai-nightly-updater:v2.2.0@sha256:<digest>
   #
   # Default: the release namespace, which Argo CD sets to the Application's
@@ -47,8 +49,10 @@ parameters: {}
   # Git instead of running install.sh. Leave it unset.
   # INSTALL_METHOD: gitops
 
-# Deploy an IMAGE whose release tag is not this chart's release (install.sh's
-# ALLOW_TEMPLATE_MISMATCH=1).
+# Turn off the tag-consistency check: deploy an IMAGE whose tag names
+# another release than this chart's (like install.sh's
+# ALLOW_TEMPLATE_MISMATCH=1). The check compares the tag only, not the
+# digest, so leaving it on does not prove that image and template match.
 allowTemplateMismatch: false
 
 # The hooks that do what install.sh does imperatively. Argo CD runs them;
