@@ -633,10 +633,21 @@ with these differences:
   runs it and is Ready, no pod runs another image, the catalog is `READY`)
   and reads the channel's head and build from that catalog's
   PackageManifest. Right after the catalog pod was replaced, the
-  PackageManifest can still list the previous build for a short while; OLM
-  installs from the registry pod, so Update then reports `install_mismatch`
-  (the installed CSV is not the build it read) and keeps the operator: run
-  it again.
+  PackageManifest can still list the previous build for a short while (OLM's
+  packageserver serves it from a cache it refreshes when the CatalogSource
+  or its connection changes), while OLM installs from the registry pod. So
+  the recreated Subscription pins `startingCSV` to the head Update checked:
+  with nothing installed, OLM's resolver considers only that CSV and reports
+  the Subscription unresolvable when the catalog lacks it
+  (operator-lifecycle-manager
+  `pkg/controller/registry/resolver/resolver.go`). If Git rolled the catalog
+  back to an older version, Update then fails with `resolution_failed`
+  instead of letting OLM install the older one, and the restore pins the
+  CSV it removed, so it installs that CSV again or nothing. A newer build of
+  the same CSV name is reported as `install_mismatch` (the installed CSV is
+  not the build Update read) and the operator is kept: run Update again.
+  Once installed the pin has no effect, so Argo CD dropping it on a later
+  sync changes nothing.
 - Before it deletes anything it checks that the admission policy below
   allows the Subscription it will create **and** the Subscription the
   restore would put back after a failure, using the same rule as the policy

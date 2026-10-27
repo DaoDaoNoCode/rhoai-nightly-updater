@@ -501,7 +501,8 @@ func TestUpdateUnderGitOps_CatalogOnlyManaged(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	spec := f.sub["spec"].(map[string]interface{})
-	if spec["channel"] == "fast" || spec["startingCSV"] != nil {
+	// Git's old pin is dropped; the new one is the verified head.
+	if spec["channel"] == "fast" || spec["startingCSV"] != "rhods-operator.3.6.0" {
 		t.Fatalf("recreated Subscription spec = %v", spec)
 	}
 }

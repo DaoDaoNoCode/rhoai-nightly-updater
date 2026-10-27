@@ -165,6 +165,19 @@ type operatorRecovery struct {
 	// conflicted). The restore leaves that one alone: it neither deletes
 	// nor overwrites it.
 	subscriptionReplaced bool
+	// attemptSubscriptionUID is the UID of the Subscription the operation
+	// applied (noteAttemptSubscription). The restore deletes only that one,
+	// or the previous Subscription when the operation applied none
+	// (subscriptionToDelete); another object under the name is left alone.
+	attemptSubscriptionUID string
+	// restoreStartingCSV, when set (Update's managed path, which leaves the
+	// catalog as Git or a policy sets it), is the CSV the operation removed:
+	// the restored Subscription pins it as startingCSV (unless its spec, Git's,
+	// sets a pin itself), so OLM installs that
+	// CSV again or reports that the catalog lacks it, and never installs
+	// another build of the catalog in its place (operator-lifecycle-manager
+	// pkg/controller/registry/resolver/resolver.go, getSubscriptionVariables).
+	restoreStartingCSV string
 	// csvRemoved: the operation deleted the previously installed CSV
 	// (removedCSVs names it), so OLM must reinstall the previous version.
 	csvRemoved  bool
@@ -356,15 +369,25 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		// by the UID just read: one an administrator created in the
 		// meantime is reported, and neither deleted nor overwritten. One
 		// the operation already found replaced is not even read.
+		replacedNow := false
 		if !subReplaced {
-			if err := deleteCurrentSubscription(cd); errors.Is(err, errReplacedMeanwhile) {
+			if err := r.deleteOwnSubscription(cd); errors.Is(err, errReplacedMeanwhile) && r.attemptSubscriptionUID != "" {
+				subReplaced, replacedNow = true, true
+				failures = append(failures, "another Subscription replaced the one this operation created, so it and the CSVs installed for it were left unchanged")
+			} else if errors.Is(err, errReplacedMeanwhile) {
 				subReplaced = true
 				failures = append(failures, "the Subscription was replaced by someone else while the restore ran, so it was left unchanged")
 			} else if err != nil {
 				failures = append(failures, "delete the new Subscription: "+err.Error())
 			}
 		}
-		csvs, err := r.attemptCSVsToRemove(cd)
+		// A replacement found now may already have installed CSVs, which
+		// the list below cannot tell from the attempt's: none is deleted.
+		var csvs []rhoaiCSV
+		var err error
+		if !replacedNow {
+			csvs, err = r.attemptCSVsToRemove(cd)
+		}
 		if err != nil {
 			failures = append(failures, "list CSVs: "+err.Error())
 		}
@@ -393,8 +416,18 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		failures = append(failures, r.catalogRestore(r, c)...)
 	}
 	if operatorTouched && r.subscription != nil && !subReplaced {
+		spec := r.subscription["spec"]
+		// A pin the restored spec sets itself (Git's) is kept.
+		if prev, _ := spec.(map[string]interface{}); r.csvRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
+			pinned := make(map[string]interface{}, len(prev)+1)
+			for k, v := range prev {
+				pinned[k] = v
+			}
+			pinned["startingCSV"] = r.restoreStartingCSV
+			spec = pinned
+		}
 		obj := map[string]interface{}{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-			"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS}, "spec": r.subscription["spec"]}
+			"metadata": map[string]interface{}{"name": SubName, "namespace": SubNS}, "spec": spec}
 		keepArgoTracking(r.subscription, obj)
 		if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
 			failures = append(failures, "Subscription: "+err.Error())
@@ -430,6 +463,9 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		// Git's catalog serves one build: the restore makes OLM install it
 		// again, which is the build that just failed.
 		message = "The Subscription was recreated with Git's settings; OLM installs the build the catalog serves again. To go back to another build, change the catalog image in Git."
+		if spec, _ := r.subscription["spec"].(map[string]interface{}); r.csvRemoved && r.restoreStartingCSV != "" && spec["startingCSV"] == nil {
+			message = fmt.Sprintf("The Subscription was recreated with Git's settings and startingCSV %s, the CSV that was installed: OLM installs the build the catalog serves again if the catalog has that CSV, and nothing else. To go back to another build, change the catalog image in Git.", r.restoreStartingCSV)
+		}
 	default:
 		message = "The previous catalog and Subscription were restored; OLM will reinstall the previous operator version. Watch the operator status before retrying."
 		if spec, _ := r.subscription["spec"].(map[string]interface{}); r.csvRemoved && spec["installPlanApproval"] == "Manual" {
@@ -598,14 +634,53 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	}
 }
 
-// deleteCurrentSubscription deletes the operator Subscription that exists
-// now, guarded by the UID it was read with.
-func deleteCurrentSubscription(c *Client) error {
-	meta, found, err := readObjectMeta(c, subscriptionPath())
-	if err != nil || !found {
-		return err
+// noteAttemptSubscription records the UID of the operator Subscription an
+// apply left. The API server answers a PATCH, server-side apply included,
+// with the resulting object (kubernetes
+// staging/src/k8s.io/apiserver/pkg/endpoints/handlers/patch.go,
+// PatchResource: transformResponseObject); only when that answer has no UID
+// is the Subscription read once. r nil records nothing.
+func (r *operatorRecovery) noteAttemptSubscription(c *Client, applied []byte) {
+	if r == nil {
+		return
 	}
-	return deleteSubscriptionWithUID(c, meta.UID)
+	if meta, err := parseObjectMeta(applied); err == nil && meta.UID != "" {
+		r.attemptSubscriptionUID = meta.UID
+		return
+	}
+	if meta, found, err := readObjectMeta(c, subscriptionPath()); err == nil && found {
+		r.attemptSubscriptionUID = meta.UID
+	}
+}
+
+// subscriptionToDelete is the UID of the Subscription the restore may
+// delete: the one the operation applied, else (it applied none) the
+// previous one, which the restore then applies again.
+func (r *operatorRecovery) subscriptionToDelete() string {
+	if r.attemptSubscriptionUID != "" {
+		return r.attemptSubscriptionUID
+	}
+	meta, _ := r.subscription["metadata"].(map[string]interface{})
+	uid, _ := meta["uid"].(string)
+	return uid
+}
+
+// deleteOwnSubscription deletes the Subscription subscriptionToDelete names,
+// guarded by its UID: errReplacedMeanwhile when another object holds the
+// name, nil when none does. Without a UID to delete, any Subscription found
+// is someone else's.
+func (r *operatorRecovery) deleteOwnSubscription(c *Client) error {
+	if uid := r.subscriptionToDelete(); uid != "" {
+		return deleteSubscriptionWithUID(c, uid)
+	}
+	_, found, err := readObjectMeta(c, subscriptionPath())
+	switch {
+	case err != nil:
+		return err
+	case found:
+		return errReplacedMeanwhile
+	}
+	return nil
 }
 
 // deleteSubscriptionWithUID deletes the operator Subscription only while it

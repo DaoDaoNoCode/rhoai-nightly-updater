@@ -399,10 +399,13 @@ func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body
 			}
 		}
 		f.sub = map[string]interface{}{"metadata": meta, "spec": spec, "status": map[string]interface{}{}}
+		// The API server answers an apply with the resulting object
+		// (apiserver handlers/patch.go), before anything else changes it.
+		applied, _ := json.Marshal(f.sub)
 		if f.onSubscribe != nil {
 			f.onSubscribe(f, spec)
 		}
-		_, _ = io.WriteString(w, `{}`)
+		_, _ = w.Write(applied)
 	default:
 		if f.sub == nil {
 			notFound(w)

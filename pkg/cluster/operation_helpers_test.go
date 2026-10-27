@@ -43,7 +43,7 @@ func TestApplySubscriptionWithRetry(t *testing.T) {
 				fmt.Fprint(w, `{}`)
 			})
 			var got []string
-			applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", sub, func(attempt int, err error, willRetry bool, backoff time.Duration) {
+			applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", sub, nil, func(attempt int, err error, willRetry bool, backoff time.Duration) {
 				state := "final"
 				if willRetry {
 					state = "retry"
@@ -62,7 +62,7 @@ func TestApplySubscriptionWithRetry(t *testing.T) {
 
 func TestApplySubscriptionWithRetry_CanceledWhileWaiting(t *testing.T) {
 	c, cancel := helperServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", map[string]interface{}{}, func(int, error, bool, time.Duration) { cancel() })
+	applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", map[string]interface{}{}, nil, func(int, error, bool, time.Duration) { cancel() })
 	if applyErr == nil || !errors.Is(cancelErr, context.Canceled) {
 		t.Fatalf("applyErr=%v cancelErr=%v", applyErr, cancelErr)
 	}

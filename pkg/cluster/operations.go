@@ -317,11 +317,16 @@ func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) erro
 // waiting SubRetryBackoffs between attempts. onFailure is called after every
 // failed attempt, with willRetry false for the last one. It returns the last
 // apply error, or the context error if canceled while waiting to retry.
-func applySubscriptionWithRetry(c *Client, path string, sub map[string]interface{}, onFailure func(attempt int, err error, willRetry bool, backoff time.Duration)) (applyErr, cancelErr error) {
+//
+// recovery, when set, records the UID of the Subscription the apply left
+// (noteAttemptSubscription), so the restore deletes only that one.
+func applySubscriptionWithRetry(c *Client, path string, sub map[string]interface{}, recovery *operatorRecovery, onFailure func(attempt int, err error, willRetry bool, backoff time.Duration)) (applyErr, cancelErr error) {
 	const attempts = 3
 	for attempt := 1; attempt <= attempts; attempt++ {
-		_, _, applyErr = c.apply(path, sub)
+		var body []byte
+		body, _, applyErr = c.apply(path, sub)
 		if applyErr == nil {
+			recovery.noteAttemptSubscription(c, body)
 			return nil, nil
 		}
 		willRetry := attempt < attempts
@@ -711,7 +716,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	emit(UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription..."})
 	newSub := buildSubscription(recovery.subscriptionBase(), CatalogName, nightlyChannel)
 	recovery.subscriptionChanged = true
-	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, &logs, emit, fail); r != nil || err != nil {
+	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, recovery, &logs, emit, fail); r != nil || err != nil {
 		return r, err
 	}
 	return verifyUpdateInstall(c, target, recovery, &logs, emit)
@@ -719,8 +724,8 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 
 // applyUpdateSubscription is Update's apply_subscription step: it applies sub
 // with retries. It returns a nil response when the Subscription was applied.
-func applyUpdateSubscription(c *Client, sub map[string]interface{}, channel string, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), sub, func(attempt int, err error, willRetry bool, _ time.Duration) {
+func applyUpdateSubscription(c *Client, sub map[string]interface{}, channel string, recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
+	subApplyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), sub, recovery, func(attempt int, err error, willRetry bool, _ time.Duration) {
 		if willRetry {
 			slog.Warn("failed to apply Subscription, retrying", "attempt", attempt, "error", err)
 			*logs = append(*logs, fmt.Sprintf("  Warning: Subscription apply attempt %d failed: %v — retrying", attempt, err))
@@ -1435,7 +1440,7 @@ func reinstallStableSteps(c *Client, stableSource, stableChannel, approveCSV str
 func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV string, recovery *operatorRecovery, logs []string, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	newSub := buildSubscription(recovery.subscriptionBase(), source, channel)
 	recovery.subscriptionChanged = true
-	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, func(attempt int, err error, willRetry bool, backoff time.Duration) {
+	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, recovery, func(attempt int, err error, willRetry bool, backoff time.Duration) {
 		if willRetry {
 			slog.Warn("failed to create Subscription, retrying", "target", kind, "attempt", attempt, "error", err, "backoff", backoff)
 			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s", attempt, err, backoff))
@@ -1827,7 +1832,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 		newSub["spec"].(map[string]interface{})["startingCSV"] = target
 		logs = append(logs, fmt.Sprintf("The Subscription uses Manual approval: startingCSV is pinned to %s and only its InstallPlan is approved", target))
 	}
-	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, func(attempt int, err error, _ bool, _ time.Duration) {
+	applyErr, cancelErr := applySubscriptionWithRetry(c, subscriptionPath(), newSub, recovery, func(attempt int, err error, _ bool, _ time.Duration) {
 		slog.Warn("Subscription recreation failed", "attempt", attempt, "error", err)
 		logs = append(logs, fmt.Sprintf("  Attempt %d/3 failed: %v", attempt, err))
 	})

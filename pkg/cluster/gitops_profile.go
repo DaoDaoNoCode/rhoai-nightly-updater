@@ -283,6 +283,9 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		channel += " (kept from Git)"
 	}
 	from := planned.catalogSpecFrom()
+	if bundle != "" {
+		channel += ", startingCSV " + bundle
+	}
 	logs = append(logs, "OK: CatalogSource left as "+from+" sets it",
 		fmt.Sprintf("[DRY-RUN] Would wait until the catalog %s manages serves the build, delete the old CSV and InstallPlan, then delete and at once recreate the Subscription with channel %s, keeping its config, approval mode and Argo CD tracking", from, channel))
 	return &types.OperationResponse{Success: true, Message: "Dry run complete. No changes were made.", Logs: logs}, nil

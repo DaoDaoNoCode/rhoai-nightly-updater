@@ -188,8 +188,8 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	} else if cs.Image != image {
 		return fail("Update stopped: "+(&errCatalogImageChanged{by: changedBy, image: cs.Image}).Error()+". The operator was not changed.", ErrorCodeGitOpsManaged)
 	}
-	// A managed Subscription keeps Git's startingCSV pin; an unmanaged one
-	// is rewritten as in any Update (buildSubscription drops the pin).
+	// A managed Subscription's startingCSV pin from Git must be the verified
+	// head; the new Subscription pins that head in any case (below).
 	startingCSV := ""
 	if g.subscriptionApp != "" {
 		prevSpec, _ := recovery.subscriptionBase()["spec"].(map[string]interface{})
@@ -232,6 +232,10 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	}
 	if uid := recovery.preCSVs[currentCSV.Name]; currentCSV.Name != "" && uid != "" {
 		recovery.noteCSVRemoved(currentCSV.Name)
+		// The catalog may serve another version than the PackageManifest
+		// said (see startingCSV below): the restore pins the removed CSV, so
+		// it reinstalls that one or nothing, never an older build.
+		recovery.restoreStartingCSV = currentCSV.Name
 		gone, err := deleteCSVByUIDAndWait(c, rhoaiCSV{Name: currentCSV.Name, UID: uid})
 		switch {
 		case errors.Is(err, errReplacedMeanwhile):
@@ -284,14 +288,33 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 				recovery.subscription = live
 				return fail(fmt.Sprintf("The Subscription now pins startingCSV %s in Git, but the catalog serves %s on channel %s. It is recreated with Git's current settings; make the pin and the catalog image agree in Git, then run Update again.", liveStartingCSV, target.HeadCSV, target.Channel), "conflict")
 			}
-			startingCSV = liveStartingCSV
+			// A pin Git sets now is the head (checked above): newSub pins it.
 		}
 		base = live
 	}
 	newSub := buildSubscription(base, CatalogName, target.Channel)
-	if startingCSV != "" {
-		newSub["spec"].(map[string]interface{})["startingCSV"] = startingCSV
-	}
+	// The new Subscription pins startingCSV to the verified head, also when
+	// Git sets no pin (a pin Git sets is that head: checked above). The head
+	// comes from the catalog's PackageManifest, which OLM's packageserver
+	// serves from a cache it refreshes when the CatalogSource or its gRPC
+	// connection changes (operator-lifecycle-manager
+	// pkg/package-server/provider/registry.go, syncCatalogSource and
+	// syncSourceState), so right after the catalog image changed it can
+	// still list the previous catalog's head, and the downgrade check would
+	// have passed on it. With startingCSV set and nothing installed (the old
+	// CSV is deleted), OLM's resolver considers only the bundle of that name
+	// in the Subscription's catalog and channel, and marks the Subscription
+	// unresolvable when the catalog has none (pkg/controller/registry/
+	// resolver/resolver.go, getSubscriptionVariables: "if no operator is
+	// installed and we have a startingCSV, filter for it", and "no operators
+	// found with name"). So OLM installs exactly the CSV that was checked, or
+	// nothing: Update then fails with resolution_failed and restores. Once
+	// installed the pin no longer matters (the resolver follows the
+	// installed CSV's replaces and skipRange), so Argo CD dropping it on a
+	// later sync changes nothing. The gitops admission policy does not
+	// restrict startingCSV (deploy/rbac-gitops.yaml).
+	newSub["spec"].(map[string]interface{})["startingCSV"] = target.HeadCSV
+	*logs = append(*logs, fmt.Sprintf("The new Subscription pins startingCSV %s: OLM installs exactly that CSV, or reports that the catalog does not have it", target.HeadCSV))
 	keepArgoTracking(base, newSub)
 	recovery.subscriptionChanged = true
 	if found {
@@ -306,7 +329,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 	}
-	if r, err := applyUpdateSubscription(c, newSub, target.Channel, logs, emit, fail); r != nil || err != nil {
+	if r, err := applyUpdateSubscription(c, newSub, target.Channel, recovery, logs, emit, fail); r != nil || err != nil {
 		return r, err
 	}
 	return verifyUpdateInstall(c, target, recovery, logs, emit)

@@ -113,6 +113,17 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- Recovery after a failed Update, Reinstall or Re-deploy deleted whatever
+  operator Subscription it found. It now deletes only the one the operation
+  applied (its UID, from the apply's answer), and leaves a replacement, and
+  the CSVs installed for it, alone and reports it.
+- Update's managed path (Argo CD or an ACM policy sets the catalog, both
+  profiles) read the head to check from the catalog's PackageManifest,
+  which can still describe the previous catalog right after Git changes the
+  image. After a rollback in Git, the downgrade check could pass and OLM
+  install the older build. The recreated Subscription now pins
+  `startingCSV` to the checked head, and the restore pins the removed CSV,
+  so OLM installs exactly those or nothing (`resolution_failed`).
 - Update under Argo CD: when someone replaced the operator Subscription
   just before Update deleted it, Update left the replacement alone, but its
   automatic restore then deleted the replacement and re-applied the old
