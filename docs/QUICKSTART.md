@@ -28,6 +28,8 @@ Before your first change, read **[How the tool keeps your cluster safe](../READM
 
 ## 1. Install the updater
 
+Is the cluster's configuration applied by Argo CD from Git? Deploy the Helm chart instead and continue at step 2: [GITOPS.md](GITOPS.md).
+
 Download the latest release's `install.sh` (it contains that release's `deploy/template.yaml`) and read it before you run it:
 
 ```bash

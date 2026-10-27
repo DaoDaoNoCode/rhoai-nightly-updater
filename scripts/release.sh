@@ -141,6 +141,24 @@ changelog_section() {
 		}'
 }
 
+# chart_check REF X.Y.Z: when REF has the Helm chart (deploy/chart, from
+# v2.2.0 on), its copy of the template is REF's deploy/template.yaml and
+# Chart.yaml names this release (version X.Y.Z, appVersion vX.Y.Z), so the
+# chart at a release tag deploys exactly that release's objects.
+chart_field() {
+	git show "$1:deploy/chart/Chart.yaml" | sed -n "s/^$2: *\"\{0,1\}\([^\"]*\)\"\{0,1\} *\$/\1/p" | head -1
+}
+
+chart_check() {
+	git cat-file -e "$1:deploy/chart/Chart.yaml" 2>/dev/null || return 0
+	[ "$(git rev-parse --verify --quiet "$1:deploy/chart/files/template.yaml" || true)" = "$(git rev-parse --verify --quiet "$1:deploy/template.yaml")" ] ||
+		die "deploy/chart/files/template.yaml at $1 is not a copy of deploy/template.yaml. Run 'make chart' and commit the copy."
+	cv=$(chart_field "$1" version)
+	av=$(chart_field "$1" appVersion)
+	[ "$cv" = "$2" ] && [ "$av" = "v$2" ] ||
+		die "deploy/chart/Chart.yaml at $1 has version '$cv' and appVersion '$av'; set them to $2 and v$2 in a commit on main before tagging."
+}
+
 # --- check --------------------------------------------------------------------
 
 cmd_check() {
@@ -159,6 +177,7 @@ cmd_check() {
 	printf '%s\n' "$top_date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ||
 		die "CHANGELOG.md section [$plain] is dated '$top_date'. Replace it with the release date (YYYY-MM-DD) in a commit on main before tagging."
 	[ -n "$(changelog_section "$ref" "$plain")" ] || die "CHANGELOG.md section [$plain] is empty."
+	chart_check "$ref" "$plain"
 
 	rev=$(template_revision "$ref")
 	[ -n "$rev" ] || die "$ref has no deploy/template.yaml."
@@ -196,6 +215,9 @@ cmd_notes() {
 	fi
 	printf 'From a clone: `git checkout %s && make deploy` (first install) or `make upgrade`.\n' "$version"
 	printf 'Deployment template: `deploy/template.yaml` of this tag (template revision %s).\n' "$rev"
+	if git cat-file -e "$ref:deploy/chart/Chart.yaml" 2>/dev/null; then
+		printf 'Argo CD: the Helm chart `deploy/chart` of this tag, with `parameters.IMAGE` set to this image by digest (`docs/GITOPS.md`).\n'
+	fi
 	if [ -n "${IMAGE:-}" ]; then
 		printf 'Image: `%s:%s`\n' "$IMAGE" "$version"
 	fi

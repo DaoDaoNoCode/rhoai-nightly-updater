@@ -29,7 +29,8 @@ ROLLOUT_TIMEOUT ?= 20m
 RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend \
-	test test-go test-frontend test-scripts vuln clean help env docs-fixtures docs-mock docs-screenshots docs-check
+	test test-go test-frontend test-scripts test-chart chart check-chart vuln clean help env docs-fixtures docs-mock \
+	docs-screenshots docs-check
 
 .DEFAULT_GOAL := help
 
@@ -91,6 +92,16 @@ release:  ## Tag a release: VERSION=vX.Y.Z (checks main, CHANGELOG and the templ
 undeploy:  ## Remove the app, its cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
 	@$(INSTALL) uninstall
 
+# The Helm chart for Argo CD (docs/GITOPS.md) renders a copy of
+# deploy/template.yaml: Helm reads only files inside the chart. Commit the
+# copy with every template change; check-chart and CI fail when it differs.
+chart:  ## Copy deploy/template.yaml into the Helm chart (deploy/chart/files/template.yaml)
+	cp deploy/template.yaml deploy/chart/files/template.yaml
+
+check-chart:  ## Fail when the Helm chart's copy of deploy/template.yaml differs (run make chart)
+	@cmp -s deploy/template.yaml deploy/chart/files/template.yaml || \
+		{ echo "deploy/chart/files/template.yaml differs from deploy/template.yaml; run 'make chart'"; exit 1; }
+
 dev:  ## Start local dev server (Go backend + React frontend)
 	./dev.sh
 
@@ -105,7 +116,7 @@ lint-go:  ## Run Go linters (gofmt, go vet, golangci-lint v2 with .golangci.yml)
 lint-frontend:  ## Type-check and lint the frontend
 	cd frontend && npm run typecheck && npm run lint
 
-test: test-go test-frontend test-scripts  ## Run all tests
+test: test-go test-frontend test-scripts test-chart  ## Run all tests
 
 test-go:  ## Run Go tests with the race detector
 	go test -race -count=1 ./...
@@ -116,6 +127,9 @@ test-frontend:  ## Run frontend tests
 test-scripts:  ## Test the release and install scripts (offline)
 	sh scripts/test-release.sh
 	bash scripts/test-install.sh
+
+test-chart:  ## Lint and render the Helm chart (offline; skipped without helm)
+	bash scripts/test-chart.sh
 
 vuln:  ## Check Go and npm dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

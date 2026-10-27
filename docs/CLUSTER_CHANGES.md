@@ -1,13 +1,13 @@
 # What the tool changes on your cluster
 
-This is every object the updater creates, patches or deletes, with the conditions. It is derived from the write calls in `pkg/cluster` (`post`, `put`, `patch`, `strategicPatch`, `apply`, `delete`, `deleteWithUID`, `deleteExact`) and from the Makefile. RBAC that allows exactly these calls is in `deploy/template.yaml` ([SECURITY.md](../SECURITY.md#serviceaccount-rbac)).
+This is every object the updater creates, patches or deletes, with the conditions. It is derived from the write calls in `pkg/cluster` (`post`, `put`, `patch`, `strategicPatch`, `apply`, `delete`, `deleteWithUID`, `deleteExact`), from the Makefile and `scripts/install.sh`, and from the Helm chart `deploy/chart`. RBAC that allows exactly these calls is in `deploy/template.yaml` ([SECURITY.md](../SECURITY.md#serviceaccount-rbac)).
 
 Conventions:
 - **Tool label:** objects the tool creates carry `app.kubernetes.io/managed-by=rhoai-nightly-updater`. Teardowns delete only labelled objects (or the exact objects earlier versions created), with a UID precondition. An object that isn't the tool's is reported as *Not managed by this tool* and left alone.
 - **SSA:** server-side apply with field manager `rhoai-nightly-updater`.
 - Every action below needs cluster-admin, a confirmation in the UI, and the cluster lock (one operation at a time).
 
-## 1. Installing the updater (`install.sh` and the `make` targets that run it, run by you)
+## 1. Installing the updater (`install.sh`, the `make` targets that run it, or Argo CD with the Helm chart)
 
 | Target | Objects |
 |---|---|
@@ -17,6 +17,8 @@ Conventions:
 | Legacy cleanup (after deploy and upgrade) | Deletes ClusterRoleBinding/ClusterRole `<APP>` only if bound to this namespace's SA, and ConsoleLink `<APP>` only if it points at this Route (or the old placeholder) |
 | ReplicaSet pruning (after deploy and upgrade) | Deletes the app's ReplicaSets that are owned by the Deployment (UID), scaled to 0 and not the current revision |
 | `make undeploy`, `install.sh uninstall` | Deletes the ConsoleLink, ClusterRole and ClusterRoleBinding labelled `app.kubernetes.io/instance=<APP>-<NS>`, the labelled Roles/RoleBindings in `kube-system`, `openshift-marketplace` (and `openshift-ingress`, from old installs), the legacy objects, and project `<NAMESPACE>` |
+| Argo CD sync of the Helm chart `deploy/chart` ([GITOPS.md](GITOPS.md)) | Everything in `deploy/template.yaml`, as above (the namespace comes from the Application's `CreateNamespace=true`). Sync hooks, before those objects: ServiceAccount, Role and RoleBinding `<APP>-session-secret` (Role: `get` Secret `<APP>-proxy`, `create` Secrets) and Job `<APP>-session-secret`, which creates Secret `<APP>-proxy` only if missing and never replaces it. PostSync hooks, once the app is healthy: ServiceAccount, Role and RoleBinding `<APP>-consolelink` (Role: `get` Route `<APP>`), ClusterRole and ClusterRoleBinding `<APP>-<NS>-consolelink` (`get`/`patch` ConsoleLink `<APP>-<NS>`, `create` ConsoleLinks; instance label) and Job `<APP>-consolelink`, which server-side-applies ConsoleLink `<APP>-<NS>` (field manager `rhoai-nightly-updater-gitops`), the same object `install.sh` adds. Argo CD deletes the hook objects after a successful sync and keeps them after a failed one. No legacy cleanup or ReplicaSet pruning |
+| Deleting that Argo CD Application | Deletes the template's objects. Leaves the namespace (with Secret `<APP>-proxy` and the app's ConfigMaps), ConsoleLink `<APP>-<NS>` and the hook objects of a failed run; `install.sh uninstall` removes them |
 
 ## 2. The updater's own state (namespace `<NAMESPACE>`)
 

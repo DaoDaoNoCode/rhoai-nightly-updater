@@ -42,6 +42,11 @@ variables:
   # installed with `go install`, which checks the module against go.sum's
   # checksum database.
   CRANE_VERSION: v0.22.1
+  # Helm renders the chart in the chart job: the release tarball of this
+  # version, checked against its SHA-256 (get.helm.sh, also in the release
+  # notes) before use. Keep in step with .github/workflows/ci.yml.
+  HELM_VERSION: v3.22.1
+  HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
 
 .test:
   stage: test
@@ -87,6 +92,18 @@ release-scripts:
     - sh scripts/test-release.sh
     - bash scripts/test-install.sh
 
+# The Helm chart for Argo CD (deploy/chart): its copy of the template is
+# deploy/template.yaml, and it lints and renders (scripts/test-chart.sh).
+chart:
+  extends: .test
+  image: $GO_IMAGE
+  script:
+    - curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
+    - echo "$HELM_SHA256  /tmp/helm.tar.gz" | sha256sum -c -
+    - tar -xzf /tmp/helm.tar.gz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+    - helm version
+    - bash scripts/test-chart.sh
+
 # Fails a tag pipeline before anything is built or published: the tag must
 # match the top dated section of CHANGELOG.md, and a TEMPLATE_REVISION change
 # since the previous release tag needs a higher MAJOR version.
@@ -116,7 +133,7 @@ release-guard:
 # :latest: that only moves with releases.
 build-main:
   extends: .kaniko-build
-  needs: [go, golangci-lint, frontend, release-scripts]
+  needs: [go, golangci-lint, frontend, release-scripts, chart]
   script:
     - >-
       /kaniko/executor
@@ -159,7 +176,7 @@ build-branch:
 # the push cannot interleave with another release job.
 release-build:
   extends: .kaniko-build
-  needs: [go, golangci-lint, frontend, release-scripts, release-guard]
+  needs: [go, golangci-lint, frontend, release-scripts, chart, release-guard]
   before_script: []
   script:
     - >-

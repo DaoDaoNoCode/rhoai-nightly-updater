@@ -1,0 +1,26 @@
+{{- /*
+Every object of the OpenShift Template, with each ${NAME} replaced by its
+parameter, as `oc process` does for install.sh. The Template stays the one
+source of truth for these objects; nothing here names one of them.
+
+Each object is substituted in its JSON form, with the value JSON-escaped,
+so a value can only ever change the string it is placed in. A placeholder
+left over (a parameter the Template does not declare) fails the render, and
+so does the non-string form ${{NAME}}, which the Template does not use.
+*/ -}}
+{{- $t := include "rnu.template" . | fromJson -}}
+{{- $params := include "rnu.params" . | fromJson -}}
+{{- if contains "${{" (toJson $t.objects) -}}
+{{- fail "deploy/template.yaml uses a ${{NAME}} (non-string) parameter, which this chart does not substitute; add it to deploy/chart/templates/objects.yaml" -}}
+{{- end -}}
+{{- range $i, $obj := $t.objects }}
+{{- $json := toJson $obj -}}
+{{- range $name, $value := $params -}}
+{{- $json = replace (printf "${%s}" $name) (toJson $value | trimPrefix "\"" | trimSuffix "\"") $json -}}
+{{- end -}}
+{{- if contains "${" $json -}}
+{{- fail (printf "object %d of deploy/template.yaml (%s %s) has placeholders that are not parameters: %s" $i $obj.kind $obj.metadata.name (regexFindAll "\\$\\{[^}]*\\}" $json -1 | uniq | join ", ")) -}}
+{{- end }}
+---
+{{ $json | fromJson | toYaml }}
+{{- end }}

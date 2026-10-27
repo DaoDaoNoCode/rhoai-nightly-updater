@@ -1,0 +1,170 @@
+{{- /*
+The console's application-menu entry, ConsoleLink <APP_NAME>-<NAMESPACE>:
+the same object install.sh's consolelink() applies (scripts/test-chart.sh
+compares the two). Its href is the Route's host, which the router assigns,
+so a PostSync hook Job reads the Route once the sync is healthy and
+server-side-applies the link. Argo CD does not track it and never prunes
+it; it carries install.sh's app.kubernetes.io/instance label, so
+`install.sh uninstall` removes it (docs/GITOPS.md).
+*/ -}}
+{{- if .Values.gitops.consoleLink.enabled }}
+{{- $p := include "rnu.params" . | fromJson }}
+{{- $name := printf "%s-consolelink" $p.APP_NAME }}
+{{- $instance := printf "%s-%s" $p.APP_NAME $p.NAMESPACE }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $p.NAMESPACE }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $p.NAMESPACE }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+rules:
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    resourceNames: [{{ $p.APP_NAME | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $p.NAMESPACE }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $p.NAMESPACE }}
+---
+# ConsoleLinks are cluster-scoped. Server-side apply reads and patches the
+# one link by name; "create" cannot be limited to a name. The instance
+# label lets `install.sh uninstall` remove these too if a failed run left
+# them behind.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-consolelink" $instance }}
+  labels:
+    app.kubernetes.io/instance: {{ $instance }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+rules:
+  - apiGroups: ["console.openshift.io"]
+    resources: ["consolelinks"]
+    resourceNames: [{{ $instance | quote }}]
+    verbs: ["get", "patch"]
+  - apiGroups: ["console.openshift.io"]
+    resources: ["consolelinks"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-consolelink" $instance }}
+  labels:
+    app.kubernetes.io/instance: {{ $instance }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-2") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-consolelink" $instance }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $p.NAMESPACE }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ $p.NAMESPACE }}
+  annotations:
+    {{- include "rnu.hook" (dict "phase" "PostSync" "wave" "-1") | nindent 4 }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      # Not the app's "app" label: the Service and NetworkPolicy select it.
+      labels:
+        app.kubernetes.io/part-of: {{ $p.APP_NAME }}
+        app.kubernetes.io/component: consolelink
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "rnu.hookPodSecurity" . | nindent 8 }}
+      containers:
+        - name: consolelink
+          image: {{ .Values.gitops.cliImage }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMESPACE
+              value: {{ $p.NAMESPACE | quote }}
+            - name: APP_NAME
+              value: {{ $p.APP_NAME | quote }}
+            - name: INSTANCE
+              value: {{ $instance | quote }}
+            # oc writes its cache under HOME; the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
+          # The router assigns the host when the Route is admitted; PostSync
+          # runs once the Route exists, so a short wait is enough.
+          # --force-conflicts takes over the fields of a link that an earlier
+          # install.sh (client-side apply) created.
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              host=""
+              for _ in $(seq 1 30); do
+                host=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}' || true)
+                [ -z "$host" ] || break
+                sleep 2
+              done
+              if [ -z "$host" ]; then
+                echo "Route $APP_NAME has no host yet" >&2
+                exit 1
+              fi
+              echo "App URL: https://$host"
+              printf '%s\n' \
+                'apiVersion: console.openshift.io/v1' \
+                'kind: ConsoleLink' \
+                'metadata:' \
+                "  name: $INSTANCE" \
+                '  labels:' \
+                "    app.kubernetes.io/instance: $INSTANCE" \
+                'spec:' \
+                '  applicationMenu:' \
+                '    section: Red Hat Applications' \
+                '    imageURL: data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0VFMDAwMCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01em0wIDIuMThMMTggNy4yN3Y3LjQ2TDEyIDE5LjgyIDYgMTQuNzNWNy4yN0wxMiA0LjE4eiIvPjwvc3ZnPg==' \
+                "  href: https://$host" \
+                '  location: ApplicationMenu' \
+                '  text: RHOAI Nightly Updater' |
+                oc apply --server-side --field-manager=rhoai-nightly-updater-gitops --force-conflicts -f -
+          resources:
+            {{- include "rnu.hookResources" . | nindent 12 }}
+          securityContext:
+            {{- include "rnu.hookContainerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

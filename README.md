@@ -25,7 +25,7 @@ bash install.sh --dry-run && bash install.sh
 
 The installer prints the app URL when it is done. To check the download, compare `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) with the SHA-256 in the [release notes](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest). For a specific version, download `https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh` instead.
 
-**New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup and your first update, step by step. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first.
+**New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup and your first update, step by step. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first. Cluster configured from Git by Argo CD? Deploy the Helm chart `deploy/chart` instead: [GITOPS.md](docs/GITOPS.md).
 
 ## A short tour
 
@@ -101,6 +101,7 @@ The app follows your system theme; the moon icon in the masthead switches it. Al
 |---|---|
 | [QUICKSTART.md](docs/QUICKSTART.md) | Install, one-time setup, first update, test resources |
 | [UPGRADING.md](docs/UPGRADING.md) | Which version you run, installs from before releases, moving between releases |
+| [GITOPS.md](docs/GITOPS.md) | Deploying with Argo CD: the Helm chart, its values, upgrades and removal |
 | [RUNBOOK.md](RUNBOOK.md) | Troubleshooting: what the app shows, and the fix |
 | [CHANGELOG.md](CHANGELOG.md) | What each release changed, and its upgrade notes |
 | [CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md) | Every object the tool creates, patches or deletes, and when |
@@ -173,6 +174,7 @@ Environment variables of the `app` container. The template sets the first group;
 | `BIND_ADDRESS`, `PORT` | `127.0.0.1`, `8080` | API listener, reachable only by oauth-proxy |
 | `METRICS_PORT` | `9090` | probes, `/api/version` and `/metrics` |
 | `TEMPLATE_REVISION` | `4` | lets the UI warn admins when the Deployment is older than the image expects |
+| `INSTALL_METHOD` | empty; `gitops` from the Helm chart | `gitops` words the upgrade notices for Git (change the chart's `targetRevision` and image) instead of `install.sh` ([GITOPS.md](docs/GITOPS.md)) |
 | `IMAGE_REPOSITORY`, `RELEASES_URL` | the Quay repository, the GitLab releases page | the update check: the highest `vX.Y.Z` tag of the repository, and where its release notes are; an empty `IMAGE_REPOSITORY` turns it off |
 | `INSTALLER_RELEASES_URL` | unset: `RELEASES_URL`, except that the default GitLab project maps to its public GitHub mirror (`https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases`), whose assets download without a sign-in | the releases page the update notice's install command downloads `install.sh` from: a GitHub (`https://github.com/<owner>/<repo>/releases`) or GitLab (`https://<host>/<project>/-/releases`) releases page. Not a template parameter; set it on the `app` container. A value of another shape, or with characters outside `A-Z a-z 0-9 . _ ~ / -` (and a `:port`), shows no command, only the release notes |
 | `GITHUB_TOKEN` | unset | GitHub API token for commit dates and PR search. A read-only fine-grained token with public-repository read access is enough |

@@ -129,6 +129,37 @@ git init -q -b main "$WORK/first"
 )
 expect_ok "first release" sh -c "cd '$WORK/first' && $SH '$RELEASE' check v0.1.0"
 
+# --- check: the Helm chart (deploy/chart) ----------------------------------------
+# chart VERSION APPVERSION: a chart with a copy of the template.
+chart() {
+	mkdir -p deploy/chart/files
+	printf '%s\n' 'apiVersion: v2' 'name: app' "version: $1" "appVersion: \"$2\"" >deploy/chart/Chart.yaml
+	cp deploy/template.yaml deploy/chart/files/template.yaml
+}
+git init -q -b main "$WORK/chart"
+(
+	cd "$WORK/chart"
+	mkdir deploy
+	template 1 >deploy/template.yaml
+	changelog '## [0.2.0] - 2026-01-02' '' 'Chart.' >CHANGELOG.md
+	chart 0.2.0 v0.2.0
+	commit_all with-chart
+)
+incharts() { sh -c "cd '$WORK/chart' && $SH '$RELEASE' $*"; }
+expect_ok "chart: version and copy match" incharts check v0.2.0
+(cd "$WORK/chart" && chart 0.1.0 v0.1.0 && commit_all old-chart-version)
+expect_fail "chart: version of another release" "has version '0.1.0' and appVersion 'v0.1.0'; set them to 0.2.0 and v0.2.0" incharts check v0.2.0
+(cd "$WORK/chart" && chart 0.2.0 0.2.0 && commit_all appversion-without-v)
+expect_fail "chart: appVersion without the v" "appVersion '0.2.0'" incharts check v0.2.0
+(cd "$WORK/chart" && chart 0.2.0 v0.2.0 && template 2 >deploy/template.yaml && commit_all template-not-copied)
+expect_fail "chart: template not copied" "Run 'make chart'" incharts check v0.2.0
+(cd "$WORK/chart" && rm deploy/chart/files/template.yaml && commit_all copy-missing)
+expect_fail "chart: copy missing" "is not a copy of deploy/template.yaml" incharts check v0.2.0
+(cd "$WORK/chart" && chart 0.2.0 v0.2.0 && commit_all fixed)
+expect_ok "chart: fixed" incharts check v0.2.0
+notes=$(incharts notes v0.2.0)
+printf '%s\n' "$notes" | grep -qF 'the Helm chart `deploy/chart` of this tag' && pass || fail "notes: no chart line: $notes"
+
 # --- notes -----------------------------------------------------------------------
 notes=$(IMAGE=quay.io/example/app $SH "$RELEASE" notes v1.0.0 v1.0.0)
 expect_eq "notes body" "First release." "$(printf '%s\n' "$notes" | head -1)"

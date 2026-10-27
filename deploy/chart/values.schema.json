@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "rhoai-nightly-updater chart values",
+  "description": "Every object accepts only the keys listed here, so a misspelled key fails the render. Every image is pinned by digest: Argo CD has no install.sh to resolve one. scripts/test-chart.sh checks that parameters lists exactly the parameters of deploy/template.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["parameters", "gitops"],
+  "properties": {
+    "parameters": {
+      "description": "The OpenShift Template's parameters, by their exact names. Unset ones take the Template's default; NAMESPACE defaults to the release namespace and INSTALL_METHOD to gitops.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["IMAGE", "OAUTH_PROXY_IMAGE"],
+      "properties": {
+        "IMAGE": {
+          "description": "Required. The updater image pinned by digest: <repository>@sha256:<digest> or <repository>:<tag>@sha256:<digest>.",
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+        },
+        "NAMESPACE": {
+          "description": "The app's namespace; must be the Argo CD destination namespace (the default).",
+          "type": "string",
+          "minLength": 1
+        },
+        "APP_NAME": {
+          "description": "The name of the app's objects.",
+          "type": "string",
+          "minLength": 1
+        },
+        "PULL_SECRET_NAMESPACE": {
+          "description": "The namespace of the cluster pull secret.",
+          "type": "string",
+          "minLength": 1
+        },
+        "MARKETPLACE_NAMESPACE": {
+          "description": "The namespace of the CatalogSources.",
+          "type": "string",
+          "minLength": 1
+        },
+        "OAUTH_PROXY_IMAGE": {
+          "description": "Required. The oauth-proxy image pinned by digest; its tag must match the cluster's OCP minor version (<repository>:v4.<minor>@sha256:<digest>).",
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+        },
+        "IMAGE_REPOSITORY": {
+          "description": "The repository the update check reads release tags from; empty turns it off.",
+          "type": "string"
+        },
+        "RELEASES_URL": {
+          "description": "Release notes are linked as <RELEASES_URL>/<tag>.",
+          "type": "string"
+        },
+        "INSTALL_METHOD": {
+          "description": "Set to gitops by the chart; leave it unset.",
+          "type": "string",
+          "enum": ["", "gitops"]
+        }
+      }
+    },
+    "allowTemplateMismatch": {
+      "description": "Deploy an IMAGE whose release tag is not this chart's release.",
+      "type": "boolean"
+    },
+    "gitops": {
+      "description": "The hooks that replace install.sh's imperative steps.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cliImage", "sessionSecret", "consoleLink"],
+      "properties": {
+        "cliImage": {
+          "description": "The image of the hook Jobs (they run oc), pinned by digest.",
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+        },
+        "sessionSecret": {
+          "description": "A Sync hook Job that creates Secret <APP_NAME>-proxy once.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "consoleLink": {
+          "description": "A PostSync hook Job that applies ConsoleLink <APP_NAME>-<NAMESPACE>.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

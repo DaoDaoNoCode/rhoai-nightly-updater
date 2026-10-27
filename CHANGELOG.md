@@ -18,6 +18,32 @@ only accepts a tag whose version is the top dated section. See
 
 ## [2.2.0] - unreleased
 
+### Added
+
+- A Helm chart, `deploy/chart`, so Argo CD can deploy the updater from a
+  GitOps repository at a release tag ([docs/GITOPS.md](docs/GITOPS.md)). It
+  renders `deploy/template.yaml` itself (a copy in the chart, checked by
+  `make check-chart`, CI and the release guard), so the template stays the
+  only definition of the app's objects. Hooks replace `install.sh`'s
+  imperative steps: a Sync hook Job creates the cookie Secret once and never
+  replaces it, a PostSync hook Job adds the ConsoleLink. Every image is
+  pinned by digest in Git (the updater, oauth-proxy and the hook image); a
+  tag, an unknown or misspelled value, or an image of another release fails
+  the render.
+- Template parameter `INSTALL_METHOD` (empty by default; the chart sets
+  `gitops`), passed to the app: on a GitOps install the "vX.Y.Z is
+  available" and "deployment is out of date" notices and the help dialog say
+  to change the chart's `targetRevision` and image in Git instead of running
+  `install.sh`. `GET /api/version` reports it as `installMethod`. Older
+  templates lack it and keep the `install.sh` wording, so
+  `TEMPLATE_REVISION` stays 4.
+- `make chart`, `make check-chart` and `make test-chart`
+  (`scripts/test-chart.sh`), and a `chart` job in GitLab CI and GitHub
+  Actions with Helm v3.22.1, checked by SHA-256.
+- The release guard also checks that `deploy/chart/Chart.yaml` names the
+  release (`version` X.Y.Z, `appVersion` vX.Y.Z), and the release notes name
+  the chart.
+
 ## [2.1.0] - 2026-10-14
 
 ### Added

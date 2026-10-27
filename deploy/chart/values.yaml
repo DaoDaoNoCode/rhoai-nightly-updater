@@ -1,0 +1,77 @@
+# Values of the rhoai-nightly-updater chart. values.schema.json refuses any
+# key that is not listed here, so a misspelled key fails the render instead
+# of being ignored. docs/GITOPS.md has the details and examples.
+
+# The OpenShift Template's parameters (deploy/template.yaml), by their exact
+# names, as strings. A parameter that is not set takes the Template's
+# default, except NAMESPACE and INSTALL_METHOD, which the chart sets.
+#
+# Every image is pinned by digest (<repository>@sha256:<digest> or
+# <repository>:<tag>@sha256:<digest>); a tag alone fails the render. This
+# replaces install.sh's digest resolution: the digest is in Git, so an image
+# cannot change without a commit, and Renovate keeps the digests current
+# (docs/GITOPS.md says how to find one).
+parameters: {}
+  # Required, by digest. The updater image. A release tag (vX.Y.Z) must be
+  # this chart's release (appVersion): an image only works with the
+  # template of its own release, which install.sh checks by commit.
+  # IMAGE: quay.io/juntao_wang/rhoai-nightly-updater:v2.2.0@sha256:<digest>
+  #
+  # Default: the release namespace, which Argo CD sets to the Application's
+  # destination namespace. Every namespaced object of the app goes here;
+  # set it only to the destination namespace.
+  # NAMESPACE: rhoai-nightly-updater
+  #
+  # The name of the app's objects (Deployment, Route, ...); cluster-scoped
+  # names are <APP_NAME>-<NAMESPACE>.
+  # APP_NAME: rhoai-nightly-updater
+  #
+  # Where the cluster pull secret and the CatalogSources are; the app gets
+  # a Role in each.
+  # PULL_SECRET_NAMESPACE: kube-system
+  # MARKETPLACE_NAMESPACE: openshift-marketplace
+  #
+  # Required, by digest. The oauth-proxy image. Its tag must match the
+  # cluster's OCP minor version (v4.17 for OCP 4.17.x); install.sh detects
+  # it from the cluster, the chart cannot, so set it per cluster. The
+  # Template's default (a tag, kept for install.sh) is not used.
+  # OAUTH_PROXY_IMAGE: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.17@sha256:<digest>
+  #
+  # The repository (no tag) the app reads release tags from for its "vX.Y.Z
+  # is available" notice; empty turns the check off. Release notes are
+  # linked as <RELEASES_URL>/<tag>.
+  # IMAGE_REPOSITORY: quay.io/juntao_wang/rhoai-nightly-updater
+  # RELEASES_URL: https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases
+  #
+  # Set to gitops by the chart: the app's upgrade notices then say to change
+  # Git instead of running install.sh. Leave it unset.
+  # INSTALL_METHOD: gitops
+
+# Deploy an IMAGE whose release tag is not this chart's release (install.sh's
+# ALLOW_TEMPLATE_MISMATCH=1).
+allowTemplateMismatch: false
+
+# The hooks that do what install.sh does imperatively. Argo CD runs them;
+# each can be turned off.
+gitops:
+  # The image of both hook Jobs, by digest; they only run `oc`. The tag
+  # follows the OAUTH_PROXY_IMAGE convention (the OCP minor version), but
+  # any recent oc works: the Jobs only get, create and apply single
+  # objects. The rhel9 repository has tags from v4.16 on; for OCP 4.15 use
+  # registry.redhat.io/openshift4/ose-cli:v4.15@sha256:<digest>. Pulled with
+  # the cluster's global pull secret, like the oauth-proxy image. The digest
+  # is the v4.17 manifest list of 2026-10-01 (Red Hat catalog).
+  cliImage: registry.redhat.io/openshift4/ose-cli-rhel9:v4.17@sha256:b39fdb5aa712cbb05682742ca9f1d65827a5efdcf298d630dabe1ad22474ef7d
+
+  sessionSecret:
+    # A Sync hook Job that creates Secret <APP_NAME>-proxy (the oauth-proxy
+    # cookie secret, 32 random characters) when it does not exist, and never
+    # replaces it, so sessions survive upgrades. With false, create the
+    # Secret before the first sync: the Deployment does not start without it.
+    enabled: true
+
+  consoleLink:
+    # A PostSync hook Job that adds the app to the console's application
+    # menu (ConsoleLink <APP_NAME>-<NAMESPACE>, linking to the Route's host).
+    # Argo CD does not prune it; `install.sh uninstall` removes it.
+    enabled: true

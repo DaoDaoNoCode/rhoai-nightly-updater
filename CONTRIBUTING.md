@@ -15,6 +15,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 - **Container Runtime**: Podman or Docker (auto-detected by `make build`)
 - **OpenShift CLI**: `oc` (required for deployment and local dev)
 - **golangci-lint v2**: install a release binary (https://golangci-lint.run/docs/welcome/install/local/); CI pins v2.14.0
+- **Helm 3.16 or newer**: for `make test-chart` (the Helm chart for Argo CD); CI pins v3.22.1. Without it the chart tests are skipped locally
 
 ### Cluster Access
 
@@ -114,7 +115,7 @@ devServer: {
 │   ├── package.json         # Node dependencies and scripts
 │   ├── tsconfig.json        # TypeScript compiler config
 │   └── webpack.config.js    # Webpack bundler config
-├── deploy/                  # Kubernetes manifests
+├── deploy/                  # template.yaml (the OpenShift Template) and chart/ (the Helm chart for Argo CD)
 ├── scripts/                 # Automation scripts
 └── docs/                    # Documentation
 ```
@@ -124,7 +125,7 @@ devServer: {
 ### All Tests
 
 ```bash
-make test              # Run both Go and frontend tests
+make test              # Go, frontend, release/install script and chart tests
 ```
 
 ### Go Tests
@@ -145,6 +146,16 @@ make test-frontend     # Runs: cd frontend && npm test
 ```
 
 Runs the Node test runner over `frontend/tests/*.test.cjs`, then Vitest (`npm run test:unit` runs Vitest only). No browser needed.
+
+### Script and chart tests
+
+```bash
+make test-scripts      # scripts/test-release.sh and scripts/test-install.sh (offline, fake oc/curl/crane)
+make test-chart        # scripts/test-chart.sh: helm lint and helm template of deploy/chart (offline)
+make check-chart       # only: the chart's copy of deploy/template.yaml is current
+```
+
+The Helm chart (`deploy/chart`, [docs/GITOPS.md](docs/GITOPS.md)) renders a copy of `deploy/template.yaml`, because Helm reads only files inside the chart. After any template change run `make chart` and commit the copy with it; `make check-chart`, `make test-chart`, CI and the release guard fail otherwise. `scripts/test-chart.sh` checks that every Template object renders exactly once with its parameters replaced, that the schema lists exactly the Template's parameters, that unknown keys, missing or tag-only images fail, and that the ConsoleLink hook applies the same object as `install.sh`.
 
 ## Documentation images
 
@@ -246,6 +257,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `golangci-lint`;
   - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build;
   - `release-scripts`: `scripts/test-release.sh` and `scripts/test-install.sh`;
+  - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases).
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters; an existing tag is kept when it is a build of the same commit, and refused from another commit) and moves `:main` only while the commit is still the tip of `main`. It never touches `:latest`.
 - **Other branches**: a manual job publishes `:$CI_COMMIT_REF_SLUG`.
@@ -283,9 +295,9 @@ How to cut a release:
    It checks the branch, the tree, `origin/main`, the CHANGELOG section and the template guard, creates an annotated tag and prints the push commands. Nothing is pushed.
 3. Push the tag to both remotes, as printed: `git push origin vX.Y.Z` (GitLab: images, `install.sh`, GitLab Release) and `git push github vX.Y.Z` (GitHub Release).
 4. Watch the tag pipeline. For a new MAJOR, `:latest` stays on the old major; when teammates have been told, run the manual `promote-latest` job of that pipeline.
-5. Start the next section: `## [X.Y.Z+1] - unreleased` (or the next planned version).
+5. Start the next section: `## [X.Y.Z+1] - unreleased` (or the next planned version), and set `version` and `appVersion` in `deploy/chart/Chart.yaml` to that version (`X.Y.Z+1`, `"vX.Y.Z+1"`) in the same commit. If the plan changes, change both again.
 
-The guard (`scripts/release.sh check`, the same in `make release` and CI) fails when the tag is not the top dated CHANGELOG section, or when `TEMPLATE_REVISION` differs from the previous release tag's (the highest lower `v*` tag) and the MAJOR is not higher. A MAJOR bump without a template change is allowed. Retrying a release pipeline is safe: an image already published from the same commit is kept; one from another commit stops the job.
+The guard (`scripts/release.sh check`, the same in `make release` and CI) fails when the tag is not the top dated CHANGELOG section, when `deploy/chart/Chart.yaml` does not name the release or its copy of the template is not `deploy/template.yaml` (`make test-chart` warns about both earlier), or when `TEMPLATE_REVISION` differs from the previous release tag's (the highest lower `v*` tag) and the MAJOR is not higher. A MAJOR bump without a template change is allowed. Retrying a release pipeline is safe: an image already published from the same commit is kept; one from another commit stops the job.
 
 ### Moving the image repository
 
@@ -302,7 +314,7 @@ The default repository, `quay.io/juntao_wang/rhoai-nightly-updater`, is a person
 To move for good:
 1. Copy the release tags to the new repository (`:vX.Y.Z`, `:vN`, `:latest`) so existing references keep resolving.
 2. Set the CI variables.
-3. Change the defaults in `Makefile`, `scripts/install.sh` (`DEFAULT_IMAGE`), `deploy/template.yaml` (`IMAGE_REPOSITORY`), `.gitlab-ci.yml` and `.github/workflows/release.yml` in one commit.
+3. Change the defaults in `Makefile`, `scripts/install.sh` (`DEFAULT_IMAGE`), `deploy/template.yaml` (`IMAGE_REPOSITORY`, then `make chart`), `.gitlab-ci.yml` and `.github/workflows/release.yml` in one commit.
 
 Installs of older releases keep checking the old repository for updates, so keep publishing there until they upgrade, or leave it in place as a mirror.
 
@@ -458,7 +470,9 @@ make deploy TAG=<GIT_SHA>   # first install; make upgrade afterwards. Requires c
 
 Both run `scripts/install.sh` (the script every release attaches as `install.sh`): they resolve `IMAGE:TAG` to a digest, check that the image was built from a commit with this checkout's `deploy/template.yaml`, create the cookie Secret once, apply the template, wait for the rollout, then add the ConsoleLink, remove legacy objects and prune old ReplicaSets. `DRY_RUN=1` only validates. Overrides, rollback and the first-time `ALLOW_TEMPLATE_MISMATCH=1` are described in [RUNBOOK §2](RUNBOOK.md#2-upgrade-roll-back-or-remove-the-updater). To deploy an image you pushed yourself, push it first (`make build push`), then run `make upgrade TAG=<GIT_SHA>`. If you changed the template, commit it first.
 
-If you change `deploy/template.yaml` in a way the running code depends on, bump `TEMPLATE_REVISION` there and `api.ExpectedTemplateRevision` together; the UI then tells admins to upgrade.
+If you change `deploy/template.yaml` in a way the running code depends on, bump `TEMPLATE_REVISION` there and `api.ExpectedTemplateRevision` together; the UI then tells admins to upgrade. After any change to it, run `make chart` so the Helm chart renders the same template.
+
+Clusters configured from Git deploy the Helm chart with Argo CD instead of `install.sh`: [docs/GITOPS.md](docs/GITOPS.md).
 
 #### 4. Verify Deployment
 
