@@ -37,6 +37,8 @@ function baseWorld() {
     components: F.healthyComponents(),
     diagnostics: F.diagnostics("healthy"),
     dashboard: F.dashboardIdle(),
+    // No PR or main build runs: nothing to describe.
+    dashboardBuilds: { builds: [] },
     resources: { minio: F.s3States.running, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServer] },
     // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
     gated: false,
@@ -169,7 +171,7 @@ const scenarios = {
   },
   // A signed-in user who is not a cluster-admin.
   "gitops-profile-reader": (w) => { scenarios.gitops(w); w.profile = "gitops"; w.canMutate = false; },
-  "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); },
+  "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); w.dashboardBuilds = F.dashboardBuilds(w.dashboard); },
   "s3-none": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.gated = true; },
   "s3-running": () => {},
   "s3-pending": (w) => { w.resources.minio = F.s3States.pending; w.gated = true; },
@@ -304,6 +306,7 @@ const routes = {
   "GET /api/components": () => world.components,
   "GET /api/diagnostics": () => world.diagnostics,
   "GET /api/dashboard/state": () => world.dashboard,
+  "GET /api/dashboard/builds": () => world.dashboardBuilds,
   "GET /api/resources/status": () => world.resources,
   "GET /api/resources/projects": () => ({ projects: F.projects }),
   "GET /api/activity": () => world.status.activity ?? [],

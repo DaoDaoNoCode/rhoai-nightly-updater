@@ -388,6 +388,37 @@ export function dashboardSession() {
   return s;
 }
 
+/**
+ * GET /api/dashboard/builds for dashboardSession(): the host was built from
+ * the PR's latest commit; gen-ai-ui from a commit two pushes ago, and the
+ * odh-pr-5123 tag has moved on to a newer build.
+ */
+export function dashboardBuilds(session = dashboardSession()) {
+  const pr = session.prNumber;
+  const repo = "opendatahub-io/odh-dashboard";
+  const head = hex(`pr-${pr}-head`, 40);
+  const older = hex(`pr-${pr}-older`, 40);
+  const build = (i, commit) => ({
+    deployment: i.deployment, container: i.container, image: i.currentImage, running: "pr", pr, flavor: "rhoai",
+    commit, repo, commitURL: `https://github.com/${repo}/commit/${commit}`,
+  });
+  const host = session.devImages.find((i) => i.container === "rhods-dashboard");
+  const genAI = session.devImages.find((i) => i.container === "gen-ai-ui");
+  return {
+    builds: [
+      {
+        ...build(host, head), buildDate: ago(55), commitDate: ago(70),
+        divergence: { base: `pr-${pr}`, baseHead: head, status: "identical", behind: 0, ahead: 0, compareURL: `https://github.com/${repo}/compare/${head}...${head}`, prState: "open", prTitle: "Show the model deployment status in the project overview", checkedAt: ago(1) },
+      },
+      {
+        ...build(genAI, older), buildDate: ago(60 * 5 + 10), commitDate: ago(60 * 5 + 30),
+        divergence: { base: `pr-${pr}`, baseHead: head, status: "behind", behind: 2, ahead: 0, compareURL: `https://github.com/${repo}/compare/${older}...${head}`, prState: "open", prTitle: "Show the model deployment status in the project overview", checkedAt: ago(1) },
+        newer: { image: `quay.io/${genAI.repository}:odh-pr-${pr}@${digest(`gen-ai-pr-${pr}-newer`)}`, tag: `odh-pr-${pr}`, commit: head, commitURL: `https://github.com/${repo}/commit/${head}`, buildDate: ago(50) },
+      },
+    ],
+  };
+}
+
 // --- Test resources -----------------------------------------------------------
 
 const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.48")}`;
