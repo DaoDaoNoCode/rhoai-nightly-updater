@@ -357,6 +357,31 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     expect(screen.queryByText(/Distance from/)).not.toBeInTheDocument();
   });
 
+  it("the page's Refresh asks for the builds again, even when the images did not change", async () => {
+    const api = stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": mainBuilds() });
+    renderPage();
+    await screen.findByText("Up to date with main");
+    await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh dashboard dev" }));
+    await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(2));
+  });
+
+  it("details of an image a container no longer runs are not shown next to the new one", async () => {
+    // The builds describe the previous images (a deploy switched the
+    // containers since): no commit, distance or newer-build notice for them.
+    const stale = mainBuilds();
+    stale.builds[0].image = pinned("odh-dashboard", "0000000000000000000000000000000000000000", "9");
+    stale.builds[1].image = pinned("odh-mod-arch-gen-ai", "0000000000000000000000000000000000000000", "8");
+    stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": stale });
+    renderPage();
+    await screen.findByRole("button", { name: "Revert to default" });
+    await screen.findByText("1111111");
+    expect(screen.queryByText("Up to date with main")).not.toBeInTheDocument();
+    expect(screen.queryByText("3 commits behind main")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Newer build available/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/A newer RHOAI main build exists/)).not.toBeInTheDocument();
+  });
+
   it("does not ask for builds while every container runs the release image", async () => {
     const api = stubApi({ "/api/dashboard/state": clean() });
     renderPage();

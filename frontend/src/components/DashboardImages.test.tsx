@@ -73,6 +73,15 @@ describe("DashboardImages build details", () => {
     expect(screen.getByText(text)).toBeInTheDocument();
   });
 
+  it("ignores details that describe another image than the one running", () => {
+    const other = `quay.io/opendatahub/odh-dashboard:main-0000000@sha256:${"b".repeat(64)}`;
+    render(<DashboardImages images={[image("rhods-dashboard", { running: "main", flavor: "rhoai" })]} defaultExpanded
+      buildDetails={details([build({ image: other, divergence: { base: "main", status: "identical", behind: 0, ahead: 0 } })])} />);
+    expect(screen.getByText("21c06a3")).toBeInTheDocument(); // the tag, shown short
+    expect(screen.queryByRole("link", { name: "21c06a3" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Up to date with main")).not.toBeInTheDocument();
+  });
+
   it("says when GitHub is rate limited and a newer build exists", () => {
     const newerSHA = "3".repeat(40);
     render(<DashboardImages images={[image("rhods-dashboard", { running: "main", flavor: "rhoai" })]} defaultExpanded

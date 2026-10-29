@@ -39,13 +39,14 @@ const (
 	// dashboardBranchHeadTTL is how long main's head SHA is reused: main
 	// moves many times a day, and one call per repository per TTL is cheap.
 	dashboardBranchHeadTTL = 5 * time.Minute
-	// dashboardPRHeadTTL is how long an open PR's head is reused; merged
-	// and closed PRs are kept for good.
-	dashboardPRHeadTTL = 5 * time.Minute
 	// dashboardFloatingTagTTL is how long a floating tag's digest is reused,
 	// so the page's polling does not hammer quay.io.
 	dashboardFloatingTagTTL = time.Minute
 )
+
+// dashboardPRHeadTTL is how long an open or closed PR's head is reused;
+// merged PRs are kept for good. (A var for tests.)
+var dashboardPRHeadTTL = 5 * time.Minute
 
 // dashboardBuildContainerTimeout bounds one container's registry and GitHub
 // reads; a variable so tests can shorten it.
@@ -377,8 +378,9 @@ func lookupBranchHead(ctx context.Context, repo, branch string) (branchHead, err
 	return v, err
 }
 
-// lookupPRHead reads a pull request for its head commit and state. Open
-// PRs are reused for dashboardPRHeadTTL; merged and closed ones for good.
+// lookupPRHead reads a pull request for its head commit and state. Open and
+// closed PRs are reused for dashboardPRHeadTTL (a closed PR can be reopened
+// and pushed to); merged ones for good.
 func lookupPRHead(ctx context.Context, repo string, number int) (prInfo, error) {
 	key := fmt.Sprintf("%s#%d", repo, number)
 	if info, ok := dashboardPRCache.Get(key); ok {
@@ -393,7 +395,7 @@ func lookupPRHead(ctx context.Context, repo string, number int) (prInfo, error) 
 			return prInfo{}, err
 		}
 		ttl := dashboardPRHeadTTL
-		if !info.notFound && (info.merged || info.state == "closed") {
+		if !info.notFound && info.merged {
 			ttl = 0
 		}
 		dashboardPRCache.Add(key, info, ttl)

@@ -114,7 +114,8 @@ export function divergenceLabel(b: DashboardContainerBuild, retryAfterSeconds?: 
     case "identical":
       return { status: "success", text: pr ? `Latest commit of ${pr}` : "Up to date with main" };
     case "behind":
-      return { status: "warning", text: pr ? `${pr} has ${plural(d.behind, "newer commit")}` : `${plural(d.behind, "commit")} behind main`, link: d.compareURL };
+      // Informational: a build is normally a few commits behind a moving branch.
+      return { status: "info", text: pr ? `${pr} has ${plural(d.behind, "newer commit")}` : `${plural(d.behind, "commit")} behind main`, link: d.compareURL };
     case "ahead":
     case "diverged":
       return { status: "warning", text: `Not on ${base}`, link: d.compareURL, tooltip: "An unmerged or rebased commit: the build has commits the branch lacks." };
@@ -169,7 +170,10 @@ export const DashboardImages: React.FC<DashboardImagesProps> = ({ images, defaul
     counts.set(t, (counts.get(t) ?? 0) + 1);
   }
   const summary = [...counts.entries()].map(([t, n]) => `${n} ${t}`).join(", ");
-  const buildFor = (image: DashboardDevImage) => buildDetails?.builds.find((b) => b.deployment === image.deployment && b.container === image.container);
+  // Details describe one image: after a deploy switched a container, the
+  // previous build's commit must not sit next to the new reference while the
+  // next fetch runs (or fails).
+  const buildFor = (image: DashboardDevImage) => buildDetails?.builds.find((b) => b.deployment === image.deployment && b.container === image.container && b.image === image.currentImage);
 
   return (
     <Card isExpanded={expanded}>

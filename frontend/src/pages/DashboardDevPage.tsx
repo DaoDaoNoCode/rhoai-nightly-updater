@@ -94,10 +94,13 @@ export function isNotDeployed(err: ApiError | null): boolean {
  * build exists for 2 containers. Deploy latest main again to switch." The
  * existing deploy actions pick the latest digest up; no new button.
  */
-export function newerBuildNotices(builds: DashboardContainerBuild[]): string[] {
+export function newerBuildNotices(builds: DashboardContainerBuild[], images: DashboardDevImage[] = []): string[] {
+  // Only builds that describe an image still running: after a deploy, the
+  // previous image's details stay until the next fetch.
+  const running = new Set(images.map((i) => `${i.deployment}/${i.container}@${i.currentImage}`));
   const groups = new Map<string, { build: DashboardContainerBuild; count: number }>();
   for (const b of builds) {
-    if (!b.newer) continue;
+    if (!b.newer || (images.length > 0 && !running.has(`${b.deployment}/${b.container}@${b.image}`))) continue;
     const key = `${b.running}:${b.pr ?? 0}:${b.flavor ?? ""}`;
     const g = groups.get(key);
     if (g) g.count += 1;
@@ -172,7 +175,7 @@ export const DashboardDevPage: React.FC = () => {
   // The commit of each PR/main build and its distance from main: a slower
   // read (registry, GitHub) kept out of the polled state; never an error here.
   const buildDetails = useDashboardBuilds(dashState);
-  const newerNotices = newerBuildNotices(buildDetails.builds);
+  const newerNotices = newerBuildNotices(buildDetails.builds, dashState?.devImages ?? []);
 
   // Finish waiting when the server shows the requested state. A stuck
   // rollout is reported by the server (ProgressDeadlineExceeded), so there
@@ -299,7 +302,7 @@ export const DashboardDevPage: React.FC = () => {
         description="Run an odh-dashboard pull request or the latest main build in this cluster's RHOAI, then revert to the release."
         lastRefreshed={lastRefreshed}
         loading={loading}
-        onRefresh={() => { setResult(null); void fetchState(); }}
+        onRefresh={() => { setResult(null); void fetchState(); buildDetails.refresh(); }}
       />
 
       {error && !notDeployed && dashState && (

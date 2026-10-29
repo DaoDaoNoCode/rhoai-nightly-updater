@@ -222,6 +222,37 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("closed-pr-is-read-again-once-reopened", func(t *testing.T) {
+		// A closed PR can be reopened and pushed to, so unlike a merged one it
+		// is not remembered for good.
+		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-5123")
+		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-5123"), map[string]string{"git.commit": prHead, "git.url": upstreamURL})
+		closed := openPR(prHead)
+		closed["state"] = "closed"
+		g.prs[5123] = closed
+		g.compare[prHead+"..."+prHead] = "identical"
+		previous := dashboardPRHeadTTL
+		dashboardPRHeadTTL = time.Nanosecond // 0 would mean "for good"
+		t.Cleanup(func() { dashboardPRHeadTTL = previous })
+		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}
+		if d := oneBuild(t, dashboardBuilds(context.Background(), images)).Divergence; d == nil || d.PRState != "closed" || d.Status != "identical" {
+			t.Fatalf("divergence=%+v", d)
+		}
+		newHead := strings.Repeat("e", 40)
+		time.Sleep(time.Millisecond)
+		g.mu.Lock()
+		g.prs[5123] = openPR(newHead)
+		g.compare[prHead+"..."+newHead] = "ahead"
+		g.compareCounts[prHead+"..."+newHead] = [2]int{1, 0}
+		g.mu.Unlock()
+		if d := oneBuild(t, dashboardBuilds(context.Background(), images)).Divergence; d == nil || d.PRState != "open" || d.Status != "behind" || d.BaseHead != newHead {
+			t.Fatalf("after reopening, divergence=%+v", d)
+		}
+		if g.count("pull") != 2 {
+			t.Fatalf("the closed PR must be read again, got %d reads", g.count("pull"))
+		}
+	})
+
 	t.Run("pr-not-found", func(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-5123")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-5123"), map[string]string{"git.commit": prHead, "git.url": upstreamURL})
