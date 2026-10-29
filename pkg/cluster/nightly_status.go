@@ -16,6 +16,13 @@ import (
 // refresh runs, so /api/status never waits on Quay twice. (A var for tests.)
 var nightlyStatusFresh = 60 * time.Second
 
+// nightlyStatusStaleMax is the oldest cached comparison still served while a
+// background refresh runs. Nobody polls a closed tab or an expired session,
+// so the first poll after hours away would otherwise show that old "latest"
+// until the next poll a minute later; past this age the poll looks the build
+// up like a first poll does, with the same timeout and error. (A var for tests.)
+var nightlyStatusStaleMax = 5 * time.Minute
+
 const (
 	// nightlyStatusErrorTTL keeps a failed lookup for one poll interval only.
 	nightlyStatusErrorTTL = 30 * time.Second
@@ -90,13 +97,15 @@ func getNightlyStatus(ctx context.Context, basicAuth string, sub types.Subscript
 	}
 
 	key := cs.Image
-	if cached, stored, ok := nightlyStatusCache.GetWithAge(key); ok {
+	if cached, stored, ok := nightlyStatusCache.GetWithAge(key); ok && time.Since(stored) < nightlyStatusStaleMax {
 		if time.Since(stored) >= nightlyStatusFresh {
+			// Stale while revalidating: this poll shows the old comparison, the next one the new.
 			goBackground(func() { refreshNightlyStatus(basicAuth, key, installed) })
 		}
 		addCachedBuildDetails(&cached)
 		return &cached
 	}
+	// No comparison yet, or one too old to show: look it up now, like a first poll.
 
 	lookupCtx, cancel := context.WithTimeout(ctx, nightlyStatusTimeout)
 	defer cancel()

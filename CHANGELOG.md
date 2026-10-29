@@ -20,6 +20,13 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- The Status page could show an old "latest nightly" on the first load after
+  hours without a poll (a closed tab, an expired session) until the next poll
+  or a click on Refresh: the latest-build comparison was served from the cache
+  whatever its age while a refresh ran in the background. A comparison older
+  than five minutes is now looked up before answering, with the same timeout
+  and error handling as a first poll; entries between one and five minutes
+  old are still served while they refresh.
 - docs/GITOPS.md said Renovate's `helm-values` manager does not read the
   chart's image values and sketched a regex manager for them, which would
   track each image twice: the manager reads any string under a key ending in
