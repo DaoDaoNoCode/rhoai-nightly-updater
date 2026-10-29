@@ -114,3 +114,39 @@ func TestCheckRedirect_StripsAuthorization(t *testing.T) {
 		t.Errorf("expected Authorization header to be stripped, got %q", auth)
 	}
 }
+
+// The commit comes from vcs-ref first (git.commit as fallback) and the
+// repository from git.url, vcs-url or io.openshift.build.source-location, in
+// that order. OpenShift CI images have no git.url, and their
+// org.opencontainers.image.revision is not the source commit, so it is never read.
+func TestParseImageLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		want   ImageLabels
+	}{
+		{"konflux", map[string]string{
+			"git.commit": "1111111111111111111111111111111111111111", "git.url": "https://github.com/opendatahub-io/odh-dashboard",
+			"vcs-ref": "1111111111111111111111111111111111111111", "build-date": "2026-10-29T01:02:03Z", "version": "3.6.0",
+		}, ImageLabels{GitCommit: "1111111111111111111111111111111111111111", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T01:02:03Z", Version: "3.6.0"}},
+		{"openshift-ci", map[string]string{
+			"vcs-ref": "2222222222222222222222222222222222222222", "io.openshift.build.commit.id": "2222222222222222222222222222222222222222",
+			"io.openshift.build.source-location": "https://github.com/opendatahub-io/odh-dashboard",
+			"org.opencontainers.image.revision":  "9999999999999999999999999999999999999999", "build-date": "2026-10-29T04:05:06Z",
+		}, ImageLabels{GitCommit: "2222222222222222222222222222222222222222", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T04:05:06Z"}},
+		{"vcs-url-before-source-location", map[string]string{
+			"git.commit": "3333333333333333333333333333333333333333", "vcs-url": "https://github.com/example/vcs",
+			"io.openshift.build.source-location": "https://github.com/example/openshift",
+		}, ImageLabels{GitCommit: "3333333333333333333333333333333333333333", GitURL: "https://github.com/example/vcs"}},
+		{"git-url-wins", map[string]string{
+			"git.commit": "4444444444444444444444444444444444444444", "git.url": "https://github.com/example/git", "vcs-url": "https://github.com/example/vcs",
+		}, ImageLabels{GitCommit: "4444444444444444444444444444444444444444", GitURL: "https://github.com/example/git"}},
+		{"revision-alone-is-not-a-commit", map[string]string{"org.opencontainers.image.revision": "5555555555555555555555555555555555555555"}, ImageLabels{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseImageLabels(tc.labels); *got != tc.want {
+				t.Fatalf("got %+v, want %+v", *got, tc.want)
+			}
+		})
+	}
+}

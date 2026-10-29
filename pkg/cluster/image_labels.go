@@ -442,7 +442,16 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	if labels == nil {
 		return nil, errNoImageLabels
 	}
+	return parseImageLabels(labels), nil
+}
 
+// parseImageLabels reads the build metadata out of an image's config labels.
+// Konflux images (quay.io/rhoai, the odh-* push builds) carry git.commit,
+// git.url and vcs-ref; OpenShift CI images (opendatahub pr-N and main) carry
+// vcs-ref, io.openshift.build.commit.id and io.openshift.build.source-location
+// but no git.url. org.opencontainers.image.revision is never read: on the
+// OpenShift CI images it is not the source commit.
+func parseImageLabels(labels map[string]string) *ImageLabels {
 	result := &ImageLabels{}
 
 	// Try vcs-ref first, then git.commit
@@ -452,8 +461,11 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 		result.GitCommit = v
 	}
 
-	if v := labels["git.url"]; v != "" {
-		result.GitURL = v
+	for _, key := range []string{"git.url", "vcs-url", "io.openshift.build.source-location"} {
+		if v := labels[key]; v != "" {
+			result.GitURL = v
+			break
+		}
 	}
 
 	if v := labels["build-date"]; v != "" {
@@ -464,7 +476,7 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 		result.Version = v
 	}
 
-	return result, nil
+	return result
 }
 
 var (

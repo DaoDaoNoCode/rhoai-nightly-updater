@@ -53,6 +53,16 @@ const (
 var dashboardDevMu sync.Mutex
 var dashboardDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
+// The immutable tags main builds are also published under, which Deploy
+// latest main pins to so the image reference names the commit. OpenShift CI's
+// postsubmit mirrors :main to :main-<first 7 hex of the commit>; Konflux tags
+// every push build with the full 40-hex commit next to :odh-stable. The same
+// scheme holds for every module repository.
+var (
+	dashboardODHCommitTagPattern = regexp.MustCompile(`^main-[0-9a-f]{7,40}$`)
+	dashboardCommitSHAPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
+
 type dashboardContainer struct {
 	Name  string `json:"name"`
 	Image string `json:"image"`
@@ -203,7 +213,8 @@ func dashboardBuildTags(mode string, pr int, flavor string) []string {
 }
 
 // parseDashboardBuild classifies an image of repo as a PR or main build and
-// returns its flavor and tag. Other images (release builds) return kind "".
+// returns its flavor and tag. A main build may run under its floating tag or
+// the commit tag Deploy pins it to. Other images (release builds) return kind "".
 func parseDashboardBuild(repo, image string) (kind string, pr int, flavor, tag string) {
 	prefix := "quay.io/" + repo + ":"
 	if !strings.HasPrefix(image, prefix) {
@@ -211,9 +222,9 @@ func parseDashboardBuild(repo, image string) (kind string, pr int, flavor, tag s
 	}
 	tag = strings.SplitN(strings.TrimPrefix(image, prefix), "@", 2)[0]
 	switch {
-	case tag == "odh-stable":
+	case tag == "odh-stable", dashboardCommitSHAPattern.MatchString(tag):
 		return "main", 0, DashboardFlavorRHOAI, tag
-	case tag == "main":
+	case tag == "main", dashboardODHCommitTagPattern.MatchString(tag):
 		return "main", 0, DashboardFlavorODH, tag
 	case strings.HasPrefix(tag, "odh-pr-"):
 		if n, err := strconv.Atoi(strings.TrimPrefix(tag, "odh-pr-")); err == nil && n > 0 {
@@ -923,6 +934,62 @@ func resolveDashboardBuildTags(ctx context.Context, repo string, tags []string) 
 	return "", "", false, nil
 }
 
+// dashboardCommitTag is the immutable tag a main build of floating tag
+// floatingTag and source commit commit is also published under, or "" when
+// the tag is not a main tag.
+func dashboardCommitTag(floatingTag, commit string) string {
+	commit = strings.ToLower(commit)
+	if !dashboardCommitSHAPattern.MatchString(commit) {
+		return ""
+	}
+	switch floatingTag {
+	case "main":
+		return "main-" + commit[:7]
+	case "odh-stable":
+		return commit
+	}
+	return ""
+}
+
+// pinDashboardMainBuild returns image (quay.io/<repo>:<floating tag>@<digest>,
+// as resolveDashboardBuild returns it) re-tagged with the build's commit tag
+// when the registry publishes that tag for the same digest, so the Deployment
+// names the commit it runs. The labels are read anonymously: the opendatahub
+// repositories are public. Without a commit label, without the tag, or when
+// the tag has moved to another digest, the floating tag is kept.
+func pinDashboardMainBuild(ctx context.Context, repo, floatingTag, image string) string {
+	_, digest, ok := extractRepoAndDigest(image)
+	if !ok {
+		return image
+	}
+	labelsCtx, cancel := context.WithTimeout(ctx, labelFetchTimeout)
+	labels, err := imageLabelsWithAuth(labelsCtx, "", image, false)
+	cancel()
+	if err != nil {
+		slog.Debug("dashboard main build keeps its floating tag: labels unreadable", "image", truncateForLog(image), "error", err)
+		return image
+	}
+	commitTag := dashboardCommitTag(floatingTag, labels.GitCommit)
+	if commitTag == "" {
+		slog.Debug("dashboard main build keeps its floating tag: no commit label", "image", truncateForLog(image), "commit", labels.GitCommit)
+		return image
+	}
+	pinned, found, err := resolveDashboardBuild(ctx, repo, commitTag)
+	switch {
+	case err != nil:
+		slog.Debug("dashboard main build keeps its floating tag: commit tag lookup failed", "image", truncateForLog(image), "tag", commitTag, "error", err)
+		return image
+	case !found:
+		slog.Debug("dashboard main build keeps its floating tag: commit tag not published", "image", truncateForLog(image), "tag", commitTag)
+		return image
+	}
+	if _, pinnedDigest, _ := extractRepoAndDigest(pinned); pinnedDigest != digest {
+		slog.Debug("dashboard main build keeps its floating tag: commit tag has another digest", "image", truncateForLog(image), "tag", commitTag, "tagDigest", pinnedDigest)
+		return image
+	}
+	return pinned
+}
+
 // DeployDashboardMainWithFlavor deploys the latest main build of the given
 // flavor ("" means the RHOAI build).
 func DeployDashboardMainWithFlavor(c *Client, flavor string) (*types.OperationResponse, error) {
@@ -1011,6 +1078,11 @@ func deployDashboardBuild(c *Client, mode string, pr int, flavor string) (*types
 	for i, image := range images {
 		go func(i int, repo string) {
 			image, tag, found, err := resolveDashboardBuildTags(c.ctx, repo, tags)
+			if err == nil && found && mode == "main" {
+				// One labels read and one HEAD more per container: the
+				// Deployment then names the commit, not a tag that moves.
+				image = pinDashboardMainBuild(c.ctx, repo, tag, image)
+			}
 			results <- checked{i, image, tag, found, err}
 		}(i, image.Repository)
 	}

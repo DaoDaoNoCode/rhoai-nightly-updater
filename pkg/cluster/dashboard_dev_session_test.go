@@ -9,32 +9,147 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
+// fixtureDigest is the digest of a published "repo:tag" build.
+func fixtureDigest(key string) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(key)))
+}
+
+// fixtureCommit is the 40-hex source commit of a published build's labels.
+func fixtureCommit(key string) string {
+	sum := sha256.Sum256([]byte("commit:" + key))
+	return fmt.Sprintf("%x", sum)[:40]
+}
+
+// fixtureCommitTag is the immutable tag a main build is also published under:
+// OpenShift CI mirrors :main to :main-<7 hex>, Konflux tags its push builds
+// with the full 40-hex commit next to :odh-stable.
+func fixtureCommitTag(key string) string {
+	_, tag, _ := strings.Cut(key, ":")
+	switch tag {
+	case "main":
+		return "main-" + fixtureCommit(key)[:7]
+	case "odh-stable":
+		return fixtureCommit(key)
+	}
+	return ""
+}
+
+// dashboardTagMock is an in-memory quay.io for the opendatahub repositories:
+// anonymous tokens, HEAD of a tag, the manifest and config blob of a digest.
+type dashboardTagMock struct {
+	mu      sync.Mutex
+	digests map[string]string            // "repo:tag" -> digest
+	labels  map[string]map[string]string // digest -> config labels (none: a config without labels)
+	heads   map[string]int               // HEAD requests per "repo:tag"
+}
+
 // mockDashboardTags publishes exactly the given "repo:tag" builds (repo
 // without the opendatahub/ prefix). Every tag has its own digest, so a switch
-// between builds changes the image reference.
-func mockDashboardTags(t *testing.T, published ...string) {
+// between builds changes the image reference. A main build (tag main or
+// odh-stable) also carries commit labels and its commit tag with the same
+// digest, as the real pipelines publish them; a test changes that through
+// the returned mock before deploying.
+func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 	t.Helper()
-	available := map[string]bool{}
-	for _, p := range published {
-		available[p] = true
-	}
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
-		// /v2/opendatahub/<repo>/manifests/<tag>
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/opendatahub/"), "/manifests/")
-		key := parts[0] + ":" + parts[len(parts)-1]
-		if !available[key] {
-			return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	m := &dashboardTagMock{digests: map[string]string{}, labels: map[string]map[string]string{}, heads: map[string]int{}}
+	for _, key := range published {
+		digest := fixtureDigest(key)
+		m.digests[key] = digest
+		if commitTag := fixtureCommitTag(key); commitTag != "" {
+			repo, _, _ := strings.Cut(key, ":")
+			m.labels[digest] = map[string]string{"vcs-ref": fixtureCommit(key), "git.url": "https://github.com/opendatahub-io/odh-dashboard", "build-date": "2026-10-29T06:00:00Z"}
+			m.digests[repo+":"+commitTag] = digest
 		}
-		digest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(key)))
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Docker-Content-Digest": []string{digest}}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	}
+	// Labels and tag digests are cached per digest across tests.
+	resetRegistryCaches()
+	original := quayHTTPClient
+	quayHTTPClient = &http.Client{Transport: m}
+	t.Cleanup(func() {
+		quayHTTPClient = original
+		resetRegistryCaches()
+	})
+	return m
+}
+
+func (m *dashboardTagMock) RoundTrip(r *http.Request) (*http.Response, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	answer := func(status int, body string, header http.Header) (*http.Response, error) {
+		if header == nil {
+			header = http.Header{}
+		}
+		return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	}
+	path := r.URL.Path
+	switch {
+	case path == "/v2/auth":
+		return answer(http.StatusOK, `{"token":"anonymous"}`, nil)
+	case strings.Contains(path, "/manifests/"):
+		// /v2/opendatahub/<repo>/manifests/<tag or digest>
+		repo, ref, _ := strings.Cut(strings.TrimPrefix(path, "/v2/opendatahub/"), "/manifests/")
+		if r.Method == http.MethodHead {
+			m.heads[repo+":"+ref]++
+			digest, ok := m.digests[repo+":"+ref]
+			if !ok {
+				return answer(http.StatusNotFound, "", nil)
+			}
+			return answer(http.StatusOK, "", http.Header{"Docker-Content-Digest": []string{digest}})
+		}
+		for _, digest := range m.digests {
+			if digest == ref {
+				return answer(http.StatusOK, fmt.Sprintf(`{"config":{"digest":"cfg-%s"}}`, ref), http.Header{"Content-Type": []string{"application/vnd.oci.image.manifest.v1+json"}})
+			}
+		}
+		return answer(http.StatusNotFound, "", nil)
+	case strings.Contains(path, "/blobs/cfg-"):
+		digest := path[strings.LastIndex(path, "/blobs/cfg-")+len("/blobs/cfg-"):]
+		labels, ok := m.labels[digest]
+		if !ok {
+			return answer(http.StatusOK, `{"config":{}}`, nil)
+		}
+		b, _ := json.Marshal(map[string]interface{}{"config": map[string]interface{}{"Labels": labels}})
+		return answer(http.StatusOK, string(b), nil)
+	}
+	return answer(http.StatusNotFound, "", nil)
+}
+
+// headCount reports how many HEAD requests "repo:tag" received.
+func (m *dashboardTagMock) headCount(key string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.heads[key]
+}
+
+// unpublish removes a tag.
+func (m *dashboardTagMock) unpublish(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.digests, key)
+}
+
+// republish points a tag at another digest (a newer build under the same tag).
+func (m *dashboardTagMock) republish(key, digest string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.digests[key] = digest
+}
+
+// setLabels replaces the labels of a digest (nil: a config without labels).
+func (m *dashboardTagMock) setLabels(digest string, labels map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if labels == nil {
+		delete(m.labels, digest)
+		return
+	}
+	m.labels[digest] = labels
 }
 
 // The fixture's three dashboard build repos.
@@ -149,9 +264,9 @@ func TestDashboardPRToMainRetargetsEveryComponent(t *testing.T) {
 	mustDeploy(t, c, "pr", 111, "")
 	mockDashboardTags(t, allFixtureTags("odh-stable")...)
 	mustDeploy(t, c, "main", 0, "")
-	for _, name := range []string{dashboardDeploymentName, "notebooks-ui", "future-workload"} {
-		if got := fixtureImage(f, name); !strings.Contains(got, ":odh-stable@") {
-			t.Fatalf("%s = %s", name, got)
+	for name, repo := range map[string]string{dashboardDeploymentName: "odh-dashboard", "notebooks-ui": "odh-mod-arch-notebooks", "future-workload": "odh-mod-arch-future"} {
+		if got, want := fixtureImage(f, name), "quay.io/opendatahub/"+repo+":"+fixtureCommitTag(repo+":odh-stable")+"@"+fixtureDigest(repo+":odh-stable"); got != want {
+			t.Fatalf("%s = %s, want %s", name, got, want)
 		}
 	}
 	var state types.DashboardState
@@ -176,8 +291,10 @@ func TestDashboardDeployFlavorSelection(t *testing.T) {
 		{"rhoai-pr", "pr", "", append(allFixtureTags("odh-pr-5"), allFixtureTags("pr-5")...), ":odh-pr-5@", "rhoai", ":odh-pr-5@"},
 		{"rhoai-pr-falls-back-per-component", "pr", "rhoai", []string{"odh-dashboard:pr-5", "odh-mod-arch-notebooks:odh-pr-5"}, ":pr-5@", "odh", ":odh-pr-5@"},
 		{"odh-pr-ignores-konflux", "pr", "odh", []string{"odh-dashboard:pr-5", "odh-mod-arch-notebooks:odh-pr-5"}, ":pr-5@", "odh", "release-notebooks"},
-		{"rhoai-main", "main", "", append(allFixtureTags("odh-stable"), allFixtureTags("main")...), ":odh-stable@", "rhoai", ":odh-stable@"},
-		{"odh-main", "main", "odh", append(allFixtureTags("odh-stable"), allFixtureTags("main")...), ":main@", "odh", ":main@"},
+		// Main builds are pinned under their commit tag (the full SHA for
+		// Konflux, main-<7 hex> for OpenShift CI); the floating tag stays in the session.
+		{"rhoai-main", "main", "", append(allFixtureTags("odh-stable"), allFixtureTags("main")...), ":" + fixtureCommitTag("odh-dashboard:odh-stable") + "@", "rhoai", ":" + fixtureCommitTag("odh-mod-arch-notebooks:odh-stable") + "@"},
+		{"odh-main", "main", "odh", append(allFixtureTags("odh-stable"), allFixtureTags("main")...), ":" + fixtureCommitTag("odh-dashboard:main") + "@", "odh", ":" + fixtureCommitTag("odh-mod-arch-notebooks:main") + "@"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
@@ -198,8 +315,15 @@ func TestDashboardDeployFlavorSelection(t *testing.T) {
 			if state.Flavor != wantFlavor || state.DefaultFlavor != DashboardFlavorRHOAI || len(state.AvailableFlavors) != 2 {
 				t.Errorf("flavor state=%q default=%q available=%v", state.Flavor, state.DefaultFlavor, state.AvailableFlavors)
 			}
-			if host := devImage(t, state, dashboardDeploymentName); host.Flavor != tc.hostFlavor {
-				t.Errorf("host flavor = %q, want %q", host.Flavor, tc.hostFlavor)
+			host := devImage(t, state, dashboardDeploymentName)
+			if host.Flavor != tc.hostFlavor || host.Running != tc.mode {
+				t.Errorf("host flavor = %q running = %q, want %q %q", host.Flavor, host.Running, tc.hostFlavor, tc.mode)
+			}
+			if tc.mode == "main" {
+				// The UI labels the row "Latest main" by the session's floating tag.
+				if want := dashboardBuildTags("main", 0, tc.hostFlavor)[0]; host.TargetTag != want || !host.MatchesTarget {
+					t.Errorf("host target tag = %q matches=%v, want %q", host.TargetTag, host.MatchesTarget, want)
+				}
 			}
 		})
 	}
@@ -582,6 +706,13 @@ func TestParseDashboardBuild(t *testing.T) {
 		{"quay.io/opendatahub/odh-dashboard:pr-12", "pr", "odh", 12},
 		{"quay.io/opendatahub/odh-dashboard:odh-stable@sha256:abc", "main", "rhoai", 0},
 		{"quay.io/opendatahub/odh-dashboard:main", "main", "odh", 0},
+		// The commit tags Deploy pins main builds under.
+		{"quay.io/opendatahub/odh-dashboard:21c06a3be1de89a8e18cf95cc7eef5a78add9481@sha256:abc", "main", "rhoai", 0},
+		{"quay.io/opendatahub/odh-dashboard:main-21c06a3@sha256:abc", "main", "odh", 0},
+		{"quay.io/opendatahub/odh-dashboard:main-21c06a3be1de89a8e18cf95cc7eef5a78add9481", "main", "odh", 0},
+		{"quay.io/opendatahub/odh-dashboard:main-21c06a", "", "", 0},
+		{"quay.io/opendatahub/odh-dashboard:21c06a3be1de89a8e18cf95cc7eef5a78add948", "", "", 0},
+		{"quay.io/opendatahub/odh-dashboard:21C06A3BE1DE89A8E18CF95CC7EEF5A78ADD9481", "", "", 0},
 		{"quay.io/opendatahub/odh-dashboard:odh-pr-21c06a3be1de89a8e18cf95cc7eef5a78add9481", "", "", 0},
 		{"quay.io/opendatahub/odh-dashboard:pr-0", "", "", 0},
 		{"quay.io/opendatahub/other:pr-12", "", "", 0},
@@ -592,6 +723,67 @@ func TestParseDashboardBuild(t *testing.T) {
 			t.Errorf("%s: kind=%q pr=%d flavor=%q", tc.image, kind, pr, flavor)
 		}
 	}
+}
+
+// Deploy latest main pins the build under its commit tag when the registry
+// publishes one for the same digest, so oc get deploy names the commit;
+// otherwise it keeps the floating tag, as before. PR deploys are unchanged.
+func TestDashboardMainDeploysUnderTheCommitTag(t *testing.T) {
+	host := "odh-dashboard:odh-stable"
+	for _, tc := range []struct {
+		name    string
+		flavor  string
+		prepare func(m *dashboardTagMock)
+		want    string // the host's tag
+	}{
+		{"rhoai", "", nil, fixtureCommitTag(host)},
+		{"odh", "odh", nil, fixtureCommitTag("odh-dashboard:main")},
+		{"commit-tag-missing", "", func(m *dashboardTagMock) { m.unpublish("odh-dashboard:" + fixtureCommitTag(host)) }, "odh-stable"},
+		{"commit-tag-has-another-digest", "", func(m *dashboardTagMock) { m.republish("odh-dashboard:"+fixtureCommitTag(host), digestOf(7)) }, "odh-stable"},
+		{"no-labels", "", func(m *dashboardTagMock) { m.setLabels(fixtureDigest(host), nil) }, "odh-stable"},
+		{"commit-label-not-a-sha", "", func(m *dashboardTagMock) { m.setLabels(fixtureDigest(host), map[string]string{"vcs-ref": "v1.2.3"}) }, "odh-stable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newDashboardDevFixture(t)
+			m := mockDashboardTags(t, append(allFixtureTags("odh-stable"), allFixtureTags("main")...)...)
+			if tc.prepare != nil {
+				tc.prepare(m)
+			}
+			mustDeploy(t, c, "main", 0, tc.flavor)
+			floating := "odh-stable"
+			if tc.flavor == "odh" {
+				floating = "main"
+			}
+			if got, want := fixtureImage(f, dashboardDeploymentName), "quay.io/opendatahub/odh-dashboard:"+tc.want+"@"+fixtureDigest("odh-dashboard:"+floating); got != want {
+				t.Fatalf("host = %s, want %s", got, want)
+			}
+			session, _ := dashboardSession(&f.operator)
+			for _, b := range session.Bindings {
+				if b.Tag != floating || b.Source != "main" || !strings.Contains(b.TargetImage, "@sha256:") {
+					t.Fatalf("binding %+v: the session keeps the floating tag", b)
+				}
+			}
+			var state types.DashboardState
+			populateDashboardDevState(c, &state)
+			if !state.DevImagesMatchTarget || state.DevMode != "main" {
+				t.Fatalf("state=%+v", state)
+			}
+			if h := devImage(t, state, dashboardDeploymentName); h.Running != "main" || h.TargetTag != floating {
+				t.Fatalf("host=%+v", h)
+			}
+		})
+	}
+	t.Run("pr-deploys-are-unchanged", func(t *testing.T) {
+		f, c := newDashboardDevFixture(t)
+		m := mockDashboardTags(t, allFixtureTags("odh-pr-5")...)
+		mustDeploy(t, c, "pr", 5, "")
+		if got, want := fixtureImage(f, dashboardDeploymentName), "quay.io/opendatahub/odh-dashboard:odh-pr-5@"+fixtureDigest("odh-dashboard:odh-pr-5"); got != want {
+			t.Fatalf("host = %s, want %s", got, want)
+		}
+		if n := m.headCount("odh-dashboard:odh-pr-5"); n != 1 {
+			t.Fatalf("PR deploy made %d HEAD requests for the PR tag, want 1 (no commit tag lookup)", n)
+		}
+	})
 }
 
 // Audit repro A04-2, through the public entry points: the second deployment's
