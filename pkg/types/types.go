@@ -704,3 +704,66 @@ type PRContainsBuild struct {
 	Message    string `json:"message,omitempty"`
 	CompareURL string `json:"compareURL,omitempty"` // GitHub compare page: merge commit...build commit
 }
+
+// DashboardBuildsResponse answers GET /api/dashboard/builds: the commit of
+// every PR or main build a dashboard container runs, its distance from the
+// branch it tracks, and whether a newer build exists under the same tag.
+type DashboardBuildsResponse struct {
+	Builds []DashboardContainerBuild `json:"builds"`
+	// GitHub is rate limited: divergence fields may be unknown until RetryAfterSeconds.
+	RateLimited       bool `json:"rateLimited,omitempty"`
+	RetryAfterSeconds int  `json:"retryAfterSeconds,omitempty"`
+}
+
+// DashboardContainerBuild describes the PR or main build one container runs.
+type DashboardContainerBuild struct {
+	Deployment string `json:"deployment"`
+	Container  string `json:"container"`
+	Image      string `json:"image"`   // the running image, as in DashboardDevImage.CurrentImage
+	Running    string `json:"running"` // "pr" or "main"
+	PR         int    `json:"pr,omitempty"`
+	Flavor     string `json:"flavor,omitempty"` // "rhoai" or "odh"
+	// From the running image's labels.
+	Commit     string `json:"commit,omitempty"`     // 40 hex
+	Repo       string `json:"repo,omitempty"`       // "opendatahub-io/odh-dashboard" (owner/name from the git URL label)
+	CommitURL  string `json:"commitURL,omitempty"`  // https://github.com/<repo>/commit/<commit>
+	BuildDate  string `json:"buildDate,omitempty"`  // build-date label, RFC 3339
+	CommitDate string `json:"commitDate,omitempty"` // GitHub committer date (cached forever per SHA; omitted when unknown)
+	// Divergence from the branch the build tracks: "main" builds against the
+	// repo's main branch, "pr" builds against the PR's head commit.
+	Divergence *DashboardBuildDivergence `json:"divergence,omitempty"`
+	// Newer is set when the floating tag this build came from now points to
+	// another digest: the build Deploy would pick up now.
+	Newer *DashboardNewerBuild `json:"newer,omitempty"`
+	// Reason explains missing fields: "no_commit_label", "registry_error", "unknown_repo".
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// DashboardBuildDivergence is how a build's commit relates to its base.
+type DashboardBuildDivergence struct {
+	Base     string `json:"base"`               // "main" or "pr-<N>"
+	BaseHead string `json:"baseHead,omitempty"` // SHA of main / of the PR head when checked
+	// Status describes the build against the base: "identical", "behind"
+	// (the base has commits the build lacks), "ahead" (the build has commits
+	// the base lacks), "diverged" or "unknown".
+	Status     string `json:"status"`
+	Behind     int    `json:"behind"`               // commits on the base the build lacks
+	Ahead      int    `json:"ahead"`                // commits in the build the base lacks
+	CompareURL string `json:"compareURL,omitempty"` // https://github.com/<repo>/compare/<commit>...<baseHead or base>
+	PRState    string `json:"prState,omitempty"`    // PR builds: "open", "merged", "closed"
+	PRTitle    string `json:"prTitle,omitempty"`
+	CheckedAt  string `json:"checkedAt,omitempty"` // RFC 3339, when GitHub was asked (cache time)
+	// Reason for "unknown": "rate_limited", "commit_not_found", "github_error", "pr_not_found".
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// DashboardNewerBuild is the build the floating tag points to now.
+type DashboardNewerBuild struct {
+	Image     string `json:"image"` // digest-pinned, as Deploy would write it
+	Tag       string `json:"tag"`   // the floating tag checked (odh-stable, main, odh-pr-N, pr-N)
+	Commit    string `json:"commit,omitempty"`
+	CommitURL string `json:"commitURL,omitempty"`
+	BuildDate string `json:"buildDate,omitempty"`
+}

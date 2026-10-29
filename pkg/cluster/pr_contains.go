@@ -110,6 +110,7 @@ type prInfo struct {
 	url         string
 	mergeCommit string
 	mergedAt    string
+	headSHA     string // the PR branch's current commit
 	notFound    bool
 }
 
@@ -166,6 +167,52 @@ func githubGet(ctx context.Context, path string) (*http.Response, error) {
 	return resp, nil
 }
 
+// fetchPullRequest reads a pull request from GitHub. A 404 is notFound, not
+// an error. The merge commit and head SHA are kept only when well-formed
+// (they end up in API paths).
+func fetchPullRequest(ctx context.Context, repo string, number int) (prInfo, error) {
+	key := fmt.Sprintf("%s#%d", repo, number)
+	resp, err := githubGet(ctx, fmt.Sprintf("/repos/%s/pulls/%d", repo, number))
+	if err != nil {
+		return prInfo{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, githubBodyLimit))
+	if err != nil {
+		return prInfo{}, err
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return prInfo{notFound: true}, nil
+	case resp.StatusCode != http.StatusOK:
+		return prInfo{}, fmt.Errorf("GitHub returned %d for pull request %s", resp.StatusCode, key)
+	}
+	var pr struct {
+		State          string `json:"state"`
+		Title          string `json:"title"`
+		HTMLURL        string `json:"html_url"`
+		Merged         bool   `json:"merged"`
+		MergedAt       string `json:"merged_at"`
+		MergeCommitSHA string `json:"merge_commit_sha"`
+		Head           struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return prInfo{}, fmt.Errorf("parse pull request: %w", err)
+	}
+	// An open PR also has a merge_commit_sha (GitHub's test merge), so
+	// only "merged" counts.
+	info := prInfo{merged: pr.Merged && pr.MergedAt != "", state: pr.State, title: pr.Title, url: pr.HTMLURL, mergedAt: pr.MergedAt}
+	if info.merged && githubSHAPattern.MatchString(pr.MergeCommitSHA) {
+		info.mergeCommit = pr.MergeCommitSHA
+	}
+	if githubSHAPattern.MatchString(pr.Head.SHA) {
+		info.headSHA = strings.ToLower(pr.Head.SHA)
+	}
+	return info, nil
+}
+
 // lookupPR reads a pull request. Merged PRs are cached for good: the merge
 // commit never changes.
 func lookupPR(ctx context.Context, repo string, number int) (prInfo, error) {
@@ -177,44 +224,17 @@ func lookupPR(ctx context.Context, repo string, number int) (prInfo, error) {
 		if info, ok := prCache.Get(key); ok {
 			return info, nil
 		}
-		resp, err := githubGet(ctx, fmt.Sprintf("/repos/%s/pulls/%d", repo, number))
-		if err != nil {
-			return prInfo{}, err
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, githubBodyLimit))
-		if err != nil {
-			return prInfo{}, err
-		}
+		info, err := fetchPullRequest(ctx, repo, number)
 		switch {
-		case resp.StatusCode == http.StatusNotFound:
-			info := prInfo{notFound: true}
+		case err != nil:
+			return prInfo{}, err
+		case info.notFound:
 			prCache.Add(key, info, prPendingTTL)
-			return info, nil
-		case resp.StatusCode != http.StatusOK:
-			return prInfo{}, fmt.Errorf("GitHub returned %d for pull request %s", resp.StatusCode, key)
-		}
-		var pr struct {
-			State          string `json:"state"`
-			Title          string `json:"title"`
-			HTMLURL        string `json:"html_url"`
-			Merged         bool   `json:"merged"`
-			MergedAt       string `json:"merged_at"`
-			MergeCommitSHA string `json:"merge_commit_sha"`
-		}
-		if err := json.Unmarshal(body, &pr); err != nil {
-			return prInfo{}, fmt.Errorf("parse pull request: %w", err)
-		}
-		// An open PR also has a merge_commit_sha (GitHub's test merge), so
-		// only "merged" counts.
-		info := prInfo{merged: pr.Merged && pr.MergedAt != "", state: pr.State, title: pr.Title, url: pr.HTMLURL, mergedAt: pr.MergedAt}
-		if info.merged {
-			if !githubSHAPattern.MatchString(pr.MergeCommitSHA) {
-				return prInfo{}, fmt.Errorf("pull request %s has no usable merge commit", key)
-			}
-			info.mergeCommit = pr.MergeCommitSHA
+		case info.merged && info.mergeCommit == "":
+			return prInfo{}, fmt.Errorf("pull request %s has no usable merge commit", key)
+		case info.merged:
 			prCache.Add(key, info, 0)
-		} else {
+		default:
 			prCache.Add(key, info, prPendingTTL)
 		}
 		return info, nil

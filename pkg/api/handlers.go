@@ -1166,6 +1166,25 @@ var HandleDashboardState = withAuth(func(c *cluster.Client, w http.ResponseWrite
 	writeJSON(w, state, "dashboard-state")
 })
 
+// HandleDashboardBuilds reports, for every dashboard container that runs a
+// PR or main build, its commit, its distance from the branch it tracks and
+// whether a newer build exists: GET /api/dashboard/builds. It is separate
+// from the polled state route because it reads the registry and GitHub. A
+// GitHub rate limit gives unknown divergences (rateLimited), never an error.
+var HandleDashboardBuilds = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	slog.Info("request", "op", "dashboard-builds")
+	result, err := cluster.GetDashboardBuilds(c)
+	if err != nil {
+		status, code, message := cluster.DashboardStateError(err)
+		if status != http.StatusNotFound {
+			slog.Error("dashboard builds error", "error", err, "errorCode", code)
+		}
+		writeError(w, message, status, code)
+		return
+	}
+	writeJSON(w, result, "dashboard-builds")
+})
+
 // HandleDashboardDeployPR deploys a PR image to the rhods-dashboard deployment.
 var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -43,10 +44,12 @@ func fixtureCommitTag(key string) string {
 // dashboardTagMock is an in-memory quay.io for the opendatahub repositories:
 // anonymous tokens, HEAD of a tag, the manifest and config blob of a digest.
 type dashboardTagMock struct {
-	mu      sync.Mutex
-	digests map[string]string            // "repo:tag" -> digest
-	labels  map[string]map[string]string // digest -> config labels (none: a config without labels)
-	heads   map[string]int               // HEAD requests per "repo:tag"
+	mu        sync.Mutex
+	digests   map[string]string            // "repo:tag" -> digest
+	manifests map[string]bool              // every digest ever published: a manifest outlives its tags
+	labels    map[string]map[string]string // digest -> config labels (none: a config without labels)
+	heads     map[string]int               // HEAD requests per "repo:tag"
+	delays    map[string]time.Duration     // repo -> latency of every request
 }
 
 // mockDashboardTags publishes exactly the given "repo:tag" builds (repo
@@ -57,10 +60,11 @@ type dashboardTagMock struct {
 // the returned mock before deploying.
 func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 	t.Helper()
-	m := &dashboardTagMock{digests: map[string]string{}, labels: map[string]map[string]string{}, heads: map[string]int{}}
+	m := &dashboardTagMock{digests: map[string]string{}, manifests: map[string]bool{}, labels: map[string]map[string]string{}, heads: map[string]int{}, delays: map[string]time.Duration{}}
 	for _, key := range published {
 		digest := fixtureDigest(key)
 		m.digests[key] = digest
+		m.manifests[digest] = true
 		if commitTag := fixtureCommitTag(key); commitTag != "" {
 			repo, _, _ := strings.Cut(key, ":")
 			m.labels[digest] = map[string]string{"vcs-ref": fixtureCommit(key), "git.url": "https://github.com/opendatahub-io/odh-dashboard", "build-date": "2026-10-29T06:00:00Z"}
@@ -79,6 +83,21 @@ func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 }
 
 func (m *dashboardTagMock) RoundTrip(r *http.Request) (*http.Response, error) {
+	m.mu.Lock()
+	var wait time.Duration
+	for repo, d := range m.delays {
+		if strings.HasPrefix(r.URL.Path, "/v2/opendatahub/"+repo+"/") {
+			wait = d
+		}
+	}
+	m.mu.Unlock()
+	if wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	answer := func(status int, body string, header http.Header) (*http.Response, error) {
@@ -102,10 +121,8 @@ func (m *dashboardTagMock) RoundTrip(r *http.Request) (*http.Response, error) {
 			}
 			return answer(http.StatusOK, "", http.Header{"Docker-Content-Digest": []string{digest}})
 		}
-		for _, digest := range m.digests {
-			if digest == ref {
-				return answer(http.StatusOK, fmt.Sprintf(`{"config":{"digest":"cfg-%s"}}`, ref), http.Header{"Content-Type": []string{"application/vnd.oci.image.manifest.v1+json"}})
-			}
+		if m.manifests[ref] {
+			return answer(http.StatusOK, fmt.Sprintf(`{"config":{"digest":"cfg-%s"}}`, ref), http.Header{"Content-Type": []string{"application/vnd.oci.image.manifest.v1+json"}})
 		}
 		return answer(http.StatusNotFound, "", nil)
 	case strings.Contains(path, "/blobs/cfg-"):
@@ -139,6 +156,14 @@ func (m *dashboardTagMock) republish(key, digest string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.digests[key] = digest
+	m.manifests[digest] = true
+}
+
+// delay makes every request for a repository take d.
+func (m *dashboardTagMock) delay(repo string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.delays[repo] = d
 }
 
 // setLabels replaces the labels of a digest (nil: a config without labels).

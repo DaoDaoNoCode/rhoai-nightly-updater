@@ -26,27 +26,50 @@ const (
 	commitNew = "a3b6b581b465f97f8701f220efadcf8787879dde"
 )
 
-// fakeGitHub is an in-memory GitHub REST API: pull requests and compare
-// answers, with injectable failures. It counts requests per path kind.
+// fakeGitHub is an in-memory GitHub REST API: pull requests, compare
+// answers, branch heads and commit dates, with injectable failures. It
+// counts requests per path kind.
 type fakeGitHub struct {
-	mu       sync.Mutex
-	prs      map[int]map[string]interface{}
-	compare  map[string]string // "base...head" -> status; missing = 404
-	failures map[string]func(w http.ResponseWriter) bool
-	calls    map[string]int
-	queries  []url.Values
-	auth     []string
-	inFlight atomic.Int32
-	maxIn    atomic.Int32
-	delay    time.Duration
+	mu      sync.Mutex
+	prs     map[int]map[string]interface{}
+	compare map[string]string // "base...head" -> status; missing = 404
+	// compareCounts gives ahead_by and behind_by of a compare (default 1, 0).
+	compareCounts map[string][2]int
+	// compareRepos are the repositories compare answers for.
+	compareRepos map[string]bool
+	branches     map[string]string // "repo:branch" -> head SHA; missing = 404
+	commitDate   string            // committer date of every git/commits/<sha>
+	failures     map[string]func(w http.ResponseWriter) bool
+	calls        map[string]int
+	queries      []url.Values
+	auth         []string
+	inFlight     atomic.Int32
+	maxIn        atomic.Int32
+	delay        time.Duration
 }
 
 func newFakeGitHub() *fakeGitHub {
 	return &fakeGitHub{
-		prs:      map[int]map[string]interface{}{},
-		compare:  map[string]string{},
-		failures: map[string]func(w http.ResponseWriter) bool{},
-		calls:    map[string]int{},
+		prs:           map[int]map[string]interface{}{},
+		compare:       map[string]string{},
+		compareCounts: map[string][2]int{},
+		compareRepos:  map[string]bool{forkRepo: true},
+		branches:      map[string]string{},
+		commitDate:    "2026-10-28T12:00:00Z",
+		failures:      map[string]func(w http.ResponseWriter) bool{},
+		calls:         map[string]int{},
+	}
+}
+
+// rateLimited makes every request of kind answer 429 with a reset in resetIn.
+func (g *fakeGitHub) rateLimited(kind string, resetIn time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.failures[kind] = func(w http.ResponseWriter) bool {
+		w.Header().Set("X-Ratelimit-Remaining", "0")
+		w.Header().Set("X-Ratelimit-Reset", strconv.FormatInt(time.Now().Add(resetIn).Unix(), 10))
+		w.WriteHeader(http.StatusTooManyRequests)
+		return true
 	}
 }
 
@@ -74,6 +97,10 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		kind = "pull"
 	case strings.Contains(r.URL.Path, "/compare/"):
 		kind = "compare"
+	case strings.Contains(r.URL.Path, "/branches/"):
+		kind = "branch"
+	case strings.Contains(r.URL.Path, "/git/commits/"):
+		kind = "commit"
 	}
 	g.mu.Lock()
 	g.calls[kind]++
@@ -100,19 +127,41 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(pr)
 	case "compare":
-		if !strings.HasPrefix(r.URL.Path, "/repos/"+forkRepo+"/compare/") {
-			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
-			return
-		}
+		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/compare/")], "/repos/")
 		spec := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		g.mu.Lock()
 		status, ok := g.compare[spec]
+		counts, hasCounts := g.compareCounts[spec]
+		allowed := g.compareRepos[repo]
 		g.mu.Unlock()
+		if !allowed {
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+			return
+		}
 		if !ok {
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": status, "ahead_by": 1, "behind_by": 0, "commits": []string{}})
+		if !hasCounts {
+			counts = [2]int{1, 0}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": status, "ahead_by": counts[0], "behind_by": counts[1], "commits": []string{}})
+	case "branch":
+		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/branches/")], "/repos/")
+		branch := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		g.mu.Lock()
+		sha, ok := g.branches[repo+":"+branch]
+		g.mu.Unlock()
+		if !ok {
+			http.Error(w, `{"message":"Branch not found"}`, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"name": branch, "commit": map[string]interface{}{"sha": sha}})
+	case "commit":
+		g.mu.Lock()
+		date := g.commitDate
+		g.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"committer": map[string]interface{}{"date": date}})
 	default:
 		http.NotFound(w, r)
 	}

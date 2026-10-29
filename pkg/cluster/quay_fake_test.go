@@ -170,6 +170,10 @@ func resetRegistryCaches() {
 	dashboardWarmAttempts.Purge()
 	prCache.Purge()
 	compareCache.Purge()
+	branchHeadCache.Purge()
+	divergenceCache.Purge()
+	dashboardPRCache.Purge()
+	dashboardTagCache.Purge()
 	githubBackoff.Lock()
 	githubBackoff.until = time.Time{}
 	githubBackoff.Unlock()
