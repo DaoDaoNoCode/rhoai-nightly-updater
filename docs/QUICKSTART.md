@@ -181,7 +181,7 @@ Optional, for testing pipelines in the dashboard. Open **Test resources**.
 | Update to a new nightly | Status → **Update to latest**, or **Update to a specific build** ([what it looks like](images/update.gif)) |
 | Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator...** |
 | Switch to stable, another nightly, or an exact older build | Status → Recovery → **Reinstall...** (downgrades need a confirmation checkbox) |
-| Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done |
+| Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |
 | S3 storage (SeaweedFS), pipeline servers, MLflow | Test resources |
 | Which nightly contains PR #N? | Build Explorer → search `#123` ([PR search](../README.md#build-explorer-pr-search)) |
 | Something looks wrong | Diagnostics → open the problem; automatic fixes ask for confirmation. [RUNBOOK](../RUNBOOK.md) |

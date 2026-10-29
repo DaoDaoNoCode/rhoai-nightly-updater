@@ -62,7 +62,7 @@ Every nightly tag on Quay: filter, see the contents of a build, compare it with 
 1. Who deployed which build, and when. Everyone on the cluster sees this dashboard until someone reverts.
 2. **Revert to default** restores the release images.
 
-It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI builds (`pr-<N>`, `main`).
+It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI builds (`pr-<N>`, `main`). The containers card shows the commit each container runs, how far it is behind upstream `main` (or the PR's latest commit), and tells you when a newer build exists under the same tag.
 
 ### Test resources: S3 storage, pipeline servers, MLflow
 

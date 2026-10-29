@@ -16,7 +16,48 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
-## [2.2.1] - unreleased
+## [2.3.0] - unreleased
+
+### Added
+
+- Dashboard Dev shows the commit of every PR or main build and its distance
+  from upstream `main`: `GET /api/dashboard/builds` reads each running
+  image's labels (anonymously; `quay.io/opendatahub` is public) for its
+  commit, build date and repository, asks GitHub how the commit relates to
+  the branch it tracks (`opendatahub-io/odh-dashboard` `main` for a main
+  build, the PR's head commit for a PR build) and resolves the tag the build
+  was deployed from. The containers card shows the short commit as a link,
+  "built"/"committed" times, and a chip: *Up to date with main*, *N commits
+  behind main* with a Compare link, *Not on main*, *Latest commit of PR #N*,
+  *PR #N has M newer commits*, *PR #N merged*, or *Distance from main
+  unknown* with the reason. When the tag has moved on, the card lists the
+  newer build and a notice above it says to deploy again; the existing
+  Deploy actions pick it up. The route is separate from the polled state
+  because registry and GitHub reads take seconds; GitHub answers are cached
+  (compare of two SHAs for good, `main`'s head for 5 minutes, a tag's digest
+  for a minute) and a rate limit leaves the distance unknown with the retry
+  time instead of failing. Anonymous GitHub allows 60 requests per hour per
+  egress IP; `GITHUB_TOKEN` on the Deployment raises it to 5000. Off in the
+  gitops profile like the rest of Dashboard Dev.
+
+### Changed
+
+- Deploy latest main writes the build under its commit tag,
+  `quay.io/opendatahub/<repo>:<commit tag>@sha256:...`, so the page and
+  `oc get deploy` name the commit instead of a tag that moves dozens of
+  times a day. Both pipelines publish such a tag next to the floating one:
+  Konflux tags every push build with the full 40-hex commit (next to
+  `odh-stable`, the RHOAI build) and OpenShift CI's postsubmit mirrors `main`
+  to `main-<first 7 hex of the commit>` (the ODH build); the same scheme holds
+  for every module repository. Deploy reads the resolved digest's commit
+  label and checks that the commit tag exists for the same digest; without a
+  commit label, without the tag, or when it has moved, the floating tag is
+  kept as before. The session still records the floating tag, so the page
+  keeps saying "Latest main". PR builds keep their `odh-pr-<N>`/`pr-<N>` tag.
+- The image label reader falls back from `git.url` to `vcs-url` and
+  `io.openshift.build.source-location` (the OpenShift CI images have no
+  `git.url`); `org.opencontainers.image.revision` is never read, since on
+  those images it is not the source commit.
 
 ### Fixed
 

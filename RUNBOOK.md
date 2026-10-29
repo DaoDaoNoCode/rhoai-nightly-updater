@@ -266,6 +266,8 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 - **Banner "Dashboard Dev session active":** `dashboard-operator` is paused (0 replicas), so RHOAI updates don't reach the dashboard. Use **Revert** on Dashboard Dev when done. Operator operations offer "Revert Dashboard Dev and continue".
 - **"A dashboard deletion is waiting for the paused dashboard-operator":** this is deadlock D1. Revert at once (§11.1).
 - **Stuck rollout:** the panel reports the Deployment's `ProgressDeadlineExceeded`. Revert, or deploy again.
+- **"Distance from main unknown" on a container:** the page could not ask GitHub how far the build's commit is from upstream `main` (or from the PR's latest commit). Usually the rate limit: GitHub allows 60 anonymous requests per hour per egress IP, shared by every user of the pod; the tooltip names the retry time. Set `GITHUB_TOKEN` on the updater Deployment ([README: Configuration](README.md#configuration)) to raise it to 5000/hour. Other reasons in the tooltip: GitHub does not know the commit (a force-pushed PR), the PR was not found, or GitHub answered an error (retried on the next refresh). The commit itself comes from the image labels and is shown either way.
+- **"A newer ... build exists" or "Newer build available" under a container:** the tag the build was deployed from (`odh-stable`, `main`, `odh-pr-N`, `pr-N`) now points to another image. Nothing changed on the cluster: the container keeps its digest-pinned image. **Deploy latest main** or **Deploy PR** again to switch; main builds are then written under their commit tag ([CLUSTER_CHANGES §7](docs/CLUSTER_CHANGES.md#7-dashboard-dev)).
 - **Revert fails, or the UI is down:** §11.1.
 
 ## 10. Test resources
