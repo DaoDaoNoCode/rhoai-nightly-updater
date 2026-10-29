@@ -542,6 +542,72 @@ export interface DashboardDevImage {
   podName?: string;
 }
 
+/** GET /api/dashboard/builds (pkg/types DashboardBuildsResponse): the commit of every PR or main build the dashboard runs. */
+export interface DashboardBuildsResponse {
+  builds: DashboardContainerBuild[];
+  /** GitHub is rate limited: divergences may be unknown until retryAfterSeconds. */
+  rateLimited?: boolean;
+  retryAfterSeconds?: number;
+}
+
+/** The PR or main build one dashboard container runs (pkg/types DashboardContainerBuild). */
+export interface DashboardContainerBuild {
+  deployment: string;
+  container: string;
+  /** The running image, as in DashboardDevImage.currentImage. */
+  image: string;
+  /** "pr" or "main". */
+  running: string;
+  pr?: number;
+  /** "rhoai" or "odh". */
+  flavor?: string;
+  /** 40 hex, from the image labels. */
+  commit?: string;
+  /** "opendatahub-io/odh-dashboard". */
+  repo?: string;
+  commitURL?: string;
+  buildDate?: string;
+  commitDate?: string;
+  divergence?: DashboardBuildDivergence;
+  /** The floating tag this build came from now points to another build. */
+  newer?: DashboardNewerBuild;
+  /** Why fields are missing: "no_commit_label", "registry_error", "unknown_repo". */
+  reason?: string;
+  message?: string;
+}
+
+/** How a build's commit relates to the branch it tracks (pkg/types DashboardBuildDivergence). */
+export interface DashboardBuildDivergence {
+  /** "main" or "pr-<N>". */
+  base: string;
+  baseHead?: string;
+  /** The build against the base: "identical", "behind", "ahead", "diverged" or "unknown". */
+  status: string;
+  /** Commits on the base the build lacks. */
+  behind: number;
+  /** Commits in the build the base lacks. */
+  ahead: number;
+  compareURL?: string;
+  /** PR builds: "open", "merged" or "closed". */
+  prState?: string;
+  prTitle?: string;
+  checkedAt?: string;
+  /** Why "unknown": "rate_limited", "commit_not_found", "github_error", "pr_not_found". */
+  reason?: string;
+  message?: string;
+}
+
+/** The build a floating tag points to now (pkg/types DashboardNewerBuild). */
+export interface DashboardNewerBuild {
+  /** Digest-pinned, as Deploy would write it. */
+  image: string;
+  /** The floating tag checked: odh-stable, main, odh-pr-N or pr-N. */
+  tag: string;
+  commit?: string;
+  commitURL?: string;
+  buildDate?: string;
+}
+
 export interface ResourcesStatus {
   /** Projects that already have a pipeline server the tool did not create. */
   unmanagedPipelineProjects?: string[] | null;

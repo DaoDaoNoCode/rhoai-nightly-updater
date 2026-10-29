@@ -34,7 +34,7 @@ import {
 } from "@patternfly/react-core";
 import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { DashboardDevImage, DashboardOverride, DashboardState, OperationResponse } from "../types";
+import type { DashboardContainerBuild, DashboardDevImage, DashboardOverride, DashboardState, OperationResponse } from "../types";
 import {
   assistRolloutFor,
   deployDashboardLatestMain,
@@ -46,6 +46,7 @@ import {
   type ApiError,
 } from "../services/api";
 import { usePolling } from "../hooks/usePolling";
+import { useDashboardBuilds } from "../hooks/useDashboardBuilds";
 import { PageHeader } from "../components/PageHeader";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
 import { PageErrorState, PageLoading } from "../components/PageStates";
@@ -86,6 +87,28 @@ function overrideFromError(err: ApiError): DashboardOverride | undefined {
 
 export function isNotDeployed(err: ApiError | null): boolean {
   return !!err && (err.errorCode === "dashboard_not_deployed" || (err.status === 404 && err.errorCode === "not_found"));
+}
+
+/**
+ * One sentence per build whose floating tag moved on: "A newer RHOAI main
+ * build exists for 2 containers. Deploy latest main again to switch." The
+ * existing deploy actions pick the latest digest up; no new button.
+ */
+export function newerBuildNotices(builds: DashboardContainerBuild[]): string[] {
+  const groups = new Map<string, { build: DashboardContainerBuild; count: number }>();
+  for (const b of builds) {
+    if (!b.newer) continue;
+    const key = `${b.running}:${b.pr ?? 0}:${b.flavor ?? ""}`;
+    const g = groups.get(key);
+    if (g) g.count += 1;
+    else groups.set(key, { build: b, count: 1 });
+  }
+  return [...groups.values()].map(({ build, count }) => {
+    const containers = `${count} container${count === 1 ? "" : "s"}`;
+    if (build.running === "pr") return `PR #${build.pr} has a newer build for ${containers}. Deploy PR #${build.pr} again to switch.`;
+    const flavor = build.flavor === "odh" ? "ODH" : "RHOAI";
+    return `A newer ${flavor} main build exists for ${containers}. Deploy latest main again to switch.`;
+  });
 }
 
 export const DashboardDevPage: React.FC = () => {
@@ -145,6 +168,11 @@ export const DashboardDevPage: React.FC = () => {
     delay: busy ? 5000 : COMPONENTS_POLL_MS,
     restartKey: busy,
   });
+
+  // The commit of each PR/main build and its distance from main: a slower
+  // read (registry, GitHub) kept out of the polled state; never an error here.
+  const buildDetails = useDashboardBuilds(dashState);
+  const newerNotices = newerBuildNotices(buildDetails.builds);
 
   // Finish waiting when the server shows the requested state. A stuck
   // rollout is reported by the server (ProgressDeadlineExceeded), so there
@@ -461,8 +489,16 @@ export const DashboardDevPage: React.FC = () => {
               </Card>
             </StackItem>
 
+            {newerNotices.length > 0 && (
+              <StackItem>
+                <Alert variant="info" isInline component="p" title={newerNotices.length === 1 ? newerNotices[0] : "Newer dashboard builds exist"}>
+                  {newerNotices.length > 1 && <List>{newerNotices.map((n) => <ListItem key={n}>{n}</ListItem>)}</List>}
+                </Alert>
+              </StackItem>
+            )}
+
             {(dashState.devImages?.length ?? 0) > 0 && (
-              <StackItem><DashboardImages images={dashState.devImages!} defaultExpanded={sessionActive} /></StackItem>
+              <StackItem><DashboardImages images={dashState.devImages!} defaultExpanded={sessionActive} buildDetails={buildDetails} /></StackItem>
             )}
           </Stack>
         </PageSection>

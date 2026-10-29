@@ -46,6 +46,12 @@ export const OPERATION_POLL_IDLE_MS = 15_000;
 export const GITOPS_POLICY_POLL_MS = 60_000;
 /** Dashboard Dev session check for the global "dashboard-operator paused" banner (ms). */
 export const DASHBOARD_OVERRIDE_POLL_MS = 120_000;
+/**
+ * Dashboard Dev build commits (GET /api/dashboard/builds) while the page is
+ * visible (ms). The backend caches GitHub answers; anonymous GitHub allows
+ * 60 requests per hour, shared by everyone using the pod.
+ */
+export const DASHBOARD_BUILDS_POLL_MS = 120_000;
 /** The backend caches the update check for 6 hours; a focused tab asks again after that. */
 export const UPDATE_CHECK_REFRESH_MS = 6 * 60 * 60 * 1000;
 

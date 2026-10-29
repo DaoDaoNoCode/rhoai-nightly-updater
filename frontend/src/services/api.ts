@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -702,6 +702,16 @@ export function getPRContains(pr: number, images: string[], signal?: AbortSignal
   const params = new URLSearchParams({ pr: String(pr) });
   for (const image of images) params.append('image', image);
   return request(`/api/build-explorer/contains?${params}`, { signal });
+}
+
+/**
+ * The commit of every PR or main build the dashboard runs, its distance from
+ * the branch it tracks and whether a newer build exists. Slower than the
+ * state (registry and GitHub reads); a GitHub rate limit is not an error.
+ * Older backends answer 404.
+ */
+export function getDashboardBuilds(signal?: AbortSignal): Promise<DashboardBuildsResponse> {
+  return request('/api/dashboard/builds', { signal });
 }
 
 /** Deploy the latest main dashboard build of the given flavor (B4). */

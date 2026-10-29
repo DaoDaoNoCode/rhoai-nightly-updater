@@ -4,7 +4,8 @@ import { DashboardDevPage } from "./DashboardDevPage";
 import { overrideAlerts } from "../components/DashboardSessionPanel";
 import { stubApi, jsonResponse } from "../test/apiStub";
 import { renderWithApp } from "../test/providers";
-import type { DashboardDevImage, DashboardOverride, DashboardState } from "../types";
+import { deferred } from "../test/utils";
+import type { DashboardBuildsResponse, DashboardDevImage, DashboardOverride, DashboardState } from "../types";
 
 function image(container: string, over: Partial<DashboardDevImage> = {}): DashboardDevImage {
   return {
@@ -238,5 +239,128 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     expect(main).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(main);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
+  const REPO = "opendatahub-io/odh-dashboard";
+  const HOST_SHA = "1111111111111111111111111111111111111111";
+  const GENAI_SHA = "2222222222222222222222222222222222222222";
+  const NEWER_SHA = "3333333333333333333333333333333333333333";
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+  const pinned = (repo: string, tag: string, seed: string) => `quay.io/opendatahub/${repo}:${tag}@sha256:${seed.repeat(64)}`;
+
+  /** A main session: the host runs its commit tag, gen-ai too. */
+  function mainSession(): DashboardState {
+    return clean({
+      operatorPaused: true, isDevMode: true, devMode: "main", flavor: "rhoai",
+      devImages: [
+        image("rhods-dashboard", { running: "main", flavor: "rhoai", targetTag: "odh-stable", currentImage: pinned("odh-dashboard", HOST_SHA, "1") }),
+        image("gen-ai-ui", { running: "main", flavor: "rhoai", targetTag: "odh-stable", currentImage: pinned("odh-mod-arch-gen-ai", GENAI_SHA, "2") }),
+        image("notebooks-ui"),
+      ],
+      override: { ...session, mode: "main", prNumber: undefined, stale: false, staleReasons: undefined, warnings: undefined, components: undefined },
+    });
+  }
+
+  function mainBuilds(): DashboardBuildsResponse {
+    return {
+      builds: [
+        {
+          deployment: "rhods-dashboard", container: "rhods-dashboard", image: pinned("odh-dashboard", HOST_SHA, "1"), running: "main", flavor: "rhoai",
+          commit: HOST_SHA, repo: REPO, commitURL: `https://github.com/${REPO}/commit/${HOST_SHA}`, buildDate: hoursAgo(2), commitDate: hoursAgo(3),
+          divergence: { base: "main", baseHead: HOST_SHA, status: "identical", behind: 0, ahead: 0, compareURL: `https://github.com/${REPO}/compare/${HOST_SHA}...main`, checkedAt: hoursAgo(0) },
+        },
+        {
+          deployment: "gen-ai-ui", container: "gen-ai-ui", image: pinned("odh-mod-arch-gen-ai", GENAI_SHA, "2"), running: "main", flavor: "rhoai",
+          commit: GENAI_SHA, repo: REPO, commitURL: `https://github.com/${REPO}/commit/${GENAI_SHA}`, buildDate: hoursAgo(9),
+          divergence: { base: "main", baseHead: HOST_SHA, status: "behind", behind: 3, ahead: 0, compareURL: `https://github.com/${REPO}/compare/${GENAI_SHA}...main`, checkedAt: hoursAgo(0) },
+          newer: { image: pinned("odh-mod-arch-gen-ai", NEWER_SHA, "3"), tag: "odh-stable", commit: NEWER_SHA, commitURL: `https://github.com/${REPO}/commit/${NEWER_SHA}`, buildDate: hoursAgo(1) },
+        },
+      ],
+    };
+  }
+
+  it("shows each container's commit, its distance from main and the newer build", async () => {
+    stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": mainBuilds() });
+    renderPage();
+    const host = await screen.findByRole("link", { name: "1111111" });
+    expect(host).toHaveAttribute("href", `https://github.com/${REPO}/commit/${HOST_SHA}`);
+    expect(host).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText("Up to date with main")).toBeInTheDocument();
+    expect(screen.getByText("built 2h ago")).toBeInTheDocument();
+    expect(screen.getByText("committed 3h ago")).toBeInTheDocument();
+    expect(screen.getByText("3 commits behind main")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Compare/ })).toHaveAttribute("href", `https://github.com/${REPO}/compare/${GENAI_SHA}...main`);
+    expect(screen.getByText(/Newer build available:/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "3333333" })).toBeInTheDocument();
+    // The 40-hex tag text is not shown anywhere.
+    expect(screen.queryByText(HOST_SHA)).not.toBeInTheDocument();
+    // The notice above the containers card; the existing Deploy latest main picks the build up.
+    expect(screen.getByText("A newer RHOAI main build exists for 1 container. Deploy latest main again to switch.")).toBeInTheDocument();
+  });
+
+  it("uses the PR wording for a PR session", async () => {
+    const state = active({
+      devImages: [
+        image("rhods-dashboard", { running: "pr", runningPR: 222, flavor: "rhoai", currentImage: pinned("odh-dashboard", "odh-pr-222", "1") }),
+        image("gen-ai-ui", { running: "pr", runningPR: 222, flavor: "rhoai", currentImage: pinned("odh-mod-arch-gen-ai", "odh-pr-222", "2") }),
+      ],
+    });
+    const builds: DashboardBuildsResponse = {
+      builds: [
+        { deployment: "rhods-dashboard", container: "rhods-dashboard", image: pinned("odh-dashboard", "odh-pr-222", "1"), running: "pr", pr: 222, flavor: "rhoai", commit: HOST_SHA, repo: REPO, commitURL: `https://github.com/${REPO}/commit/${HOST_SHA}`,
+          divergence: { base: "pr-222", baseHead: HOST_SHA, status: "identical", behind: 0, ahead: 0, prState: "merged", prTitle: "Fix" } },
+        { deployment: "gen-ai-ui", container: "gen-ai-ui", image: pinned("odh-mod-arch-gen-ai", "odh-pr-222", "2"), running: "pr", pr: 222, flavor: "rhoai", commit: GENAI_SHA, repo: REPO, commitURL: `https://github.com/${REPO}/commit/${GENAI_SHA}`,
+          divergence: { base: "pr-222", baseHead: NEWER_SHA, status: "behind", behind: 2, ahead: 0, prState: "open", compareURL: `https://github.com/${REPO}/compare/${GENAI_SHA}...${NEWER_SHA}` },
+          newer: { image: pinned("odh-mod-arch-gen-ai", "odh-pr-222", "3"), tag: "odh-pr-222", commit: NEWER_SHA } },
+      ],
+    };
+    stubApi({ "/api/dashboard/state": state, "/api/dashboard/builds": builds });
+    renderPage();
+    expect(await screen.findByText("Latest commit of PR #222")).toBeInTheDocument();
+    expect(screen.getByText("PR #222 merged")).toBeInTheDocument();
+    expect(screen.getByText("PR #222 has 2 newer commits")).toBeInTheDocument();
+    expect(screen.getByText("PR #222 has a newer build for 1 container. Deploy PR #222 again to switch.")).toBeInTheDocument();
+  });
+
+  it("a GitHub rate limit leaves the distance unknown with the retry time", async () => {
+    const builds = mainBuilds();
+    for (const b of builds.builds) {
+      b.divergence = { base: "main", status: "unknown", behind: 0, ahead: 0, reason: "rate_limited", message: "GitHub's API rate limit is reached; it resets at 2026-10-29T20:00:00Z." };
+      delete b.newer;
+    }
+    stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": { ...builds, rateLimited: true, retryAfterSeconds: 1500 } });
+    renderPage();
+    expect(await screen.findAllByText("Distance from main unknown")).toHaveLength(2);
+    expect(screen.getByText(/GitHub's rate limit is reached/)).toHaveTextContent("25 min");
+    expect(screen.queryByText(/newer/i)).not.toBeInTheDocument();
+  });
+
+  it("shows Checking... until the builds arrive", async () => {
+    const pending = deferred<Response>();
+    stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": () => pending.promise });
+    renderPage();
+    expect(await screen.findAllByText("Checking...")).toHaveLength(2);
+    pending.resolve(jsonResponse(mainBuilds()));
+    expect(await screen.findByText("Up to date with main")).toBeInTheDocument();
+    expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+  });
+
+  it("an older backend without the route (404) leaves the card as it was, with no error", async () => {
+    const api = stubApi({ "/api/dashboard/state": active(), "/api/dashboard/builds": () => jsonResponse({ error: "404 page not found", errorCode: "not_found" }, 404) });
+    renderPage();
+    expect(await screen.findByText("odh-pr-222")).toBeInTheDocument();
+    await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(1));
+    expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Build details could not be loaded/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Distance from/)).not.toBeInTheDocument();
+  });
+
+  it("does not ask for builds while every container runs the release image", async () => {
+    const api = stubApi({ "/api/dashboard/state": clean() });
+    renderPage();
+    await screen.findByRole("button", { name: "Deploy latest main" });
+    expect(api.calls.some((c) => c.includes("/api/dashboard/builds"))).toBe(false);
   });
 });
