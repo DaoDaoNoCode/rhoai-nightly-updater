@@ -655,7 +655,56 @@ func runContainsSearch(ctx context.Context, basicAuth string, search containsSea
 		}()
 	}
 	wg.Wait()
+	if search.base != "" && strings.EqualFold(search.repo, DefaultPRSearchRepo) && !anyContains(resp.Builds) {
+		resp.Stable = stableBranchInfo(ctx, search.base, noteRateLimit)
+	}
 	return resp, nil
+}
+
+func anyContains(builds []types.PRContainsBuild) bool {
+	for _, b := range builds {
+		if b.Result == "contains" {
+			return true
+		}
+	}
+	return false
+}
+
+// stableBranchInfo says whether upstream opendatahub-io/odh-dashboard's
+// stable branch has commit base yet, and when stable was last updated. A
+// dashboard change reaches the nightlies through that branch (checked
+// 2026-10-30): main → stable (the sync-stable workflow, in batches; it was
+// 12 commits and 7 hours behind main) → red-hat-data-services/odh-dashboard
+// main ("Merge remote-tracking branch 'upstream/stable'") → the release
+// branch (rhoai-3.6) → the nightly. So a commit can be a few commits behind
+// main and in no nightly yet, and the page says so instead of leaving the
+// reader to guess. Nil when GitHub could not be asked.
+func stableBranchInfo(ctx context.Context, base string, noteRateLimit func(time.Time)) *types.StableBranch {
+	const branch = "stable"
+	head, err := lookupBranchHead(ctx, DefaultPRSearchRepo, branch)
+	if err != nil {
+		var limited *githubRateLimitError
+		if errors.As(err, &limited) {
+			noteRateLimit(limited.until)
+		} else if !isContextError(err) {
+			slog.Warn("contains search: reading the stable branch failed", "error", err)
+		}
+		return nil
+	}
+	verdict, err := compareContains(ctx, DefaultPRSearchRepo, base, head.sha)
+	if err != nil || verdict.notFound {
+		var limited *githubRateLimitError
+		if errors.As(err, &limited) {
+			noteRateLimit(limited.until)
+		}
+		return nil
+	}
+	out := &types.StableBranch{Branch: branch, Head: head.sha, Contains: verdict.contains}
+	// The date is a nicety: without it the page still says which way it went.
+	if info, err := lookupCommit(ctx, DefaultPRSearchRepo, head.sha); err == nil && !info.notFound {
+		out.UpdatedAt = info.date
+	}
+	return out
 }
 
 // builtBefore reports whether the build's FBC image was pushed more than

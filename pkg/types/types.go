@@ -692,10 +692,24 @@ type PRContainsResponse struct {
 	CommitTitle string            `json:"commitTitle,omitempty"`
 	CommitURL   string            `json:"commitURL,omitempty"`
 	Builds      []PRContainsBuild `json:"builds"`
+	// Stable describes upstream opendatahub-io/odh-dashboard's stable branch,
+	// the step between main and the nightlies, when a search for that
+	// repository found the PR or commit in no build: whether stable has it
+	// yet and when stable was last updated. Absent for other repositories,
+	// when a build contains it, and when GitHub could not be asked.
+	Stable *StableBranch `json:"stable,omitempty"`
 	// RateLimited is set when GitHub's rate limit stopped some lookups; their
 	// builds are "unknown". RetryAfterSeconds says when to try again.
 	RateLimited       bool `json:"rateLimited,omitempty"`
 	RetryAfterSeconds int  `json:"retryAfterSeconds,omitempty"`
+}
+
+// StableBranch is the state of a repository's stable branch for a search.
+type StableBranch struct {
+	Branch    string `json:"branch"`              // "stable"
+	Head      string `json:"head"`                // its commit, 40 hex
+	UpdatedAt string `json:"updatedAt,omitempty"` // committer date of that commit, RFC 3339
+	Contains  bool   `json:"contains"`            // stable has the PR's merge commit, or the commit
 }
 
 // PRContainsBuild is the answer for one nightly build.

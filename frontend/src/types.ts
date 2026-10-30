@@ -771,6 +771,14 @@ export interface PRContainsBuild {
  * a PR search fills pr, title, url, mergeCommit and mergedAt; a commit search
  * fills commit, commitDate, commitTitle and commitURL.
  */
+export interface StableBranch {
+  branch: string;
+  head: string;
+  updatedAt?: string;
+  /** stable has the PR's merge commit, or the commit. */
+  contains: boolean;
+}
+
 export interface PRContainsResponse {
   repo: string;
   pr?: number;
@@ -783,6 +791,8 @@ export interface PRContainsResponse {
   commitTitle?: string;
   commitURL?: string;
   builds: PRContainsBuild[];
+  /** Upstream odh-dashboard's stable branch, the step between main and the nightlies, when nothing contains the PR or commit. */
+  stable?: StableBranch;
   rateLimited?: boolean;
   retryAfterSeconds?: number;
 }

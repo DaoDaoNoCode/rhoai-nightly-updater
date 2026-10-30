@@ -457,6 +457,68 @@ func TestForkCandidates(t *testing.T) {
 	}
 }
 
+func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
+	// A dashboard PR in no nightly: the answer says whether upstream's
+	// stable branch, the step between main and the nightlies, has it yet.
+	stableHead := strings.Repeat("5", 40)
+	setup := func(t *testing.T, stableStatus string) (*fakeGitHub, string) {
+		t.Helper()
+		g := newFakeGitHub()
+		installFakeGitHub(t, g)
+		g.prs[9938] = mergedPR(mergeSHA)
+		g.compare[mergeSHA+"..."+commitOld] = "diverged"
+		g.branches[DefaultPRSearchRepo+":stable"] = stableHead
+		g.commits[DefaultPRSearchRepo+"|"+stableHead] = "Merge main into stable"
+		g.compareRepos[DefaultPRSearchRepo] = true
+		if stableStatus != "" {
+			g.compare[mergeSHA+"..."+stableHead] = stableStatus
+		}
+		return g, seedBuild(t, 1, "rhoai-3.6", forkURL, commitOld)
+	}
+	t.Run("not in stable yet", func(t *testing.T) {
+		g, build := setup(t, "diverged")
+		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: build}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := resp.Stable; s == nil || s.Contains || s.Head != stableHead || s.Branch != "stable" || s.UpdatedAt != g.commitDate {
+			t.Fatalf("stable=%+v", resp.Stable)
+		}
+	})
+	t.Run("in stable, waiting for the fork", func(t *testing.T) {
+		_, build := setup(t, "ahead")
+		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: build}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := resp.Stable; s == nil || !s.Contains {
+			t.Fatalf("stable=%+v", resp.Stable)
+		}
+	})
+	t.Run("a build contains it: nothing to explain", func(t *testing.T) {
+		g, _ := setup(t, "ahead")
+		g.compare[mergeSHA+"..."+commitNew] = "ahead"
+		newer := seedBuild(t, 2, "rhoai-3.7", forkURL, commitNew)
+		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: newer}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Stable != nil || g.count("branch") != 0 {
+			t.Fatalf("stable=%+v, branch reads=%d", resp.Stable, g.count("branch"))
+		}
+	})
+	t.Run("stable unknown to GitHub: no explanation", func(t *testing.T) {
+		_, build := setup(t, "")
+		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: build}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Stable != nil {
+			t.Fatalf("stable=%+v", resp.Stable)
+		}
+	})
+}
+
 func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 	// A data-science-pipelines PR: no image is found by name, so the labels
 	// of the build's RHOAI images are read and the one built from the fork

@@ -2,7 +2,7 @@ import React from "react";
 import { Alert, AlertActionLink, Content, Spinner, Stack, StackItem } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td, type IAction } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { PRContainsBuild } from "../types";
+import type { PRContainsBuild, StableBranch } from "../types";
 import type { ContainsQuery } from "../services/api";
 import { cutoffOf, type ContainsSearchResult, type ContainsSearchState } from "../hooks/useContainsSearch";
 import type { SearchBuild } from "../hooks/useCommitSearch";
@@ -99,6 +99,55 @@ const ResultLabel: React.FC<{ answer: PRContainsBuild; label: string; reasons: R
   return <StatusLabel status="warning">Unknown ({reason})</StatusLabel>;
 };
 
+/**
+ * Why a merged PR or a commit can be in no nightly yet: the road from a
+ * repository's main branch to a nightly build, in plain words, for readers
+ * who do not know the upstream and downstream repositories. For the
+ * dashboard the backend says whether upstream's stable branch, the step
+ * between main and the nightlies, has the change yet.
+ */
+const NotYetExplanation: React.FC<{ kind: "pr" | "commit"; repo: string; fork: string; inSentence: string; stable?: StableBranch }> = ({ kind, repo, fork, inSentence, stable }) => {
+  const change = kind === "pr" ? "This PR" : "This commit";
+  const title = `Why no nightly has ${inSentence} yet`;
+  let body: React.ReactNode;
+  if (repo.toLowerCase() !== DEFAULT_REPO) {
+    body = (
+      <>
+        Nightlies are built from Red Hat&apos;s copy of each component&apos;s repository ({fork}), which takes in the changes of the upstream
+        project ({repo}) on its own schedule. A change merged upstream reaches a nightly only after that copy picks it up, which can take a
+        day or more. Check again later.
+      </>
+    );
+  } else {
+    const road = (
+      <>
+        Nightlies are not built straight from the odh-dashboard <code>main</code> branch. A change travels in steps: <code>main</code> → the{" "}
+        <code>stable</code> branch (updated in batches) → Red Hat&apos;s copy of the repository (red-hat-data-services/odh-dashboard) → the
+        release branch, for example <code>rhoai-3.6</code> → the nightly build.
+      </>
+    );
+    const updated = stable?.updatedAt ? <> (last updated <RelativeTime date={stable.updatedAt} size="inherit" />)</> : null;
+    if (!stable) {
+      body = <>{road} Each step can take hours, so a change can be merged and still be in no nightly. Check again later.</>;
+    } else if (!stable.contains) {
+      body = (
+        <>
+          {road} {change} is on <code>main</code> but has not reached <code>stable</code>{updated} yet, so no nightly can have it. Check again
+          after the next <code>stable</code> update, usually within a day.
+        </>
+      );
+    } else {
+      body = (
+        <>
+          {road} {change} has reached <code>stable</code>{updated}. It gets into a nightly once Red Hat&apos;s copy merges <code>stable</code>{" "}
+          and the next nightly is built, usually within a day.
+        </>
+      );
+    }
+  }
+  return <Alert variant="info" isInline isPlain component="p" title={title}>{body}</Alert>;
+};
+
 /** Results of "which builds contain PR #N" or "which builds contain commit X" in the Build Explorer search. */
 export const ContainsSearchResults: React.FC<{
   query: ContainsQuery;
@@ -168,10 +217,10 @@ export const ContainsSearchResults: React.FC<{
 
   const explanation = (
     <>
-      A build contains {what} when {kind === "pr" ? "the PR's merge commit" : "the commit"} is an ancestor of {commitInBuild}.
-      The odh-dashboard fork merges upstream main, so this is reliable for dashboard {kind === "pr" ? "PRs" : "commits"}. A fork that
-      cherry-picks or rebases upstream changes has different commit SHAs, so a {kind === "pr" ? "PR" : "commit"} it took that way shows
-      as &quot;does not contain&quot;. Builds built more than an hour before {kind === "pr" ? "the merge" : "the commit"} are not read.
+      A nightly build is made from Red Hat&apos;s copy of the repository ({fork}), which merges in the changes of the upstream project ({repo}).
+      A build contains {what} when {kind === "pr" ? "the PR's merge commit" : "the commit"} is in the history of {commitInBuild}.
+      Builds made more than an hour before {kind === "pr" ? "the PR was merged" : "the commit"} are skipped: they cannot have it.
+      If Red Hat&apos;s copy takes a change by cherry-pick instead of merge, the commit gets a new ID there and shows as &quot;does not contain&quot;.
       The search covers the installed build and the builds the filters list.
     </>
   );
@@ -218,6 +267,9 @@ export const ContainsSearchResults: React.FC<{
                 : <>No build contains {inSentence}.</>}
             </Content>
             {detail && <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">{detail}</Content>}
+            {containing.length === 0 && !allUnknown && results.length > 0 && (
+              <NotYetExplanation kind={kind} repo={repo} fork={fork} inSentence={inSentence} stable={info?.stable} />
+            )}
           </>
         )}
       </StackItem>

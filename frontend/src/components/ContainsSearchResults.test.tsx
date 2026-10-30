@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { ContainsSearchResults, detailLine, listNames, sentenceName } from "./ContainsSearchResults";
 import type { ContainsSearchResult, ContainsSearchState } from "../hooks/useContainsSearch";
 import type { PRContainsBuild } from "../types";
@@ -22,6 +22,39 @@ const done = (results: ContainsSearchResult[], info: ContainsSearchState["info"]
 function renderResults(search: ContainsSearchState, query: { kind: "pr" | "commit"; value: string; repo?: string } = { kind: "pr", value: "5123" }) {
   return render(<ContainsSearchResults query={query} search={search} plannedTotal={search.total} canCompare={false} isInstalledImage={() => false} onCompare={() => {}} onRetry={() => {}} />);
 }
+
+describe("why no nightly has it yet", () => {
+  const none = [result("rhoai-3.6", { result: "not_contained" }), result("rhoai-3.5", { result: "not_contained", reason: "built_before_merge" })];
+  const dashboard = { repo: "opendatahub-io/odh-dashboard", pr: 5123, mergedAt: hours(3), mergeCommit: "f".repeat(40) };
+
+  it("says the PR has not reached the stable branch, with the road a change travels", () => {
+    renderResults(done(none, { ...dashboard, stable: { branch: "stable", head: "5".repeat(40), updatedAt: hours(7), contains: false } }));
+    expect(screen.getByText("Why no nightly has PR #5123 yet")).toBeInTheDocument();
+    const body = screen.getByText(/Nightlies are not built straight from the odh-dashboard/);
+    expect(body).toHaveTextContent(/This PR is on main but has not reached stable \(last updated 7h ago/);
+    expect(body).toHaveTextContent(/red-hat-data-services\/odh-dashboard/);
+  });
+
+  it("says the commit is in stable and waits for the next nightly", () => {
+    renderResults(done(none, { repo: "opendatahub-io/odh-dashboard", commit: "a".repeat(40), commitDate: hours(30), stable: { branch: "stable", head: "5".repeat(40), contains: true } }), { kind: "commit", value: "a".repeat(40) });
+    expect(screen.getByText("Why no nightly has commit aaaaaaa yet")).toBeInTheDocument();
+    expect(screen.getByText(/Nightlies are not built straight/)).toHaveTextContent(/This commit has reached stable\. It gets into a nightly/);
+  });
+
+  it("explains another component's road without dates", () => {
+    renderResults(done(none, { repo: "opendatahub-io/data-science-pipelines", pr: 457, mergedAt: hours(3), mergeCommit: "f".repeat(40) }), { kind: "pr", value: "457", repo: "opendatahub-io/data-science-pipelines" });
+    expect(screen.getByText("Why no nightly has PR #457 yet")).toBeInTheDocument();
+    expect(screen.getByText(/Red Hat's copy of each component's repository/)).toHaveTextContent(/red-hat-data-services\/data-science-pipelines/);
+  });
+
+  it("is not shown when a build contains it, or when nothing could be checked", () => {
+    renderResults(done([result("rhoai-3.6", { result: "contains" })], dashboard));
+    expect(screen.queryByText(/Why no nightly/)).not.toBeInTheDocument();
+    cleanup();
+    renderResults(done([result("rhoai-3.6", { result: "unknown", reason: "rate_limited" })], dashboard));
+    expect(screen.queryByText(/Why no nightly/)).not.toBeInTheDocument();
+  });
+});
 
 describe("the words of the answer", () => {
   it("lists up to four names, then counts the rest", () => {

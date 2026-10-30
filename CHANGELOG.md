@@ -77,6 +77,16 @@ only accepts a tag whose version is the top dated section. See
   the Build Explorer search for it (*Find in nightlies*), as the commit's
   GitHub URL, so the search knows the repository.
 
+- When no nightly contains a PR or commit, the Build Explorer explains why
+  in plain words under *Why no nightly has it yet*: for odh-dashboard, the
+  road a change travels (`main` → the `stable` branch, updated in batches →
+  Red Hat's copy, red-hat-data-services/odh-dashboard → the release branch →
+  the nightly) and whether `stable` has the change yet, with its last update
+  time (one branch read and one compare, cached); for other components, that
+  nightlies come from Red Hat's copy of the repository, which takes upstream
+  changes on its own schedule. The "how contains is decided" popover and the
+  README say the same without assuming the reader knows the repositories.
+
 ### Changed
 
 - A nightly pushed more than an hour before the PR was merged (or before the
