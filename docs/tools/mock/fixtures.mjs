@@ -206,25 +206,43 @@ export function fbcContent(image) {
   return { tag: b.tag, image, bundleName: "rhods-operator.3.6.0", relatedImages, categories };
 }
 
-/** GET /api/build-explorer/contains: builds newer than the merge contain the PR. */
-export function prContains(pr, images) {
-  const mergedAt = ago(60 * 40);
+/**
+ * GET /api/build-explorer/contains?pr=N|commit=SHA[&repo=owner/name]. A PR
+ * (of any repository: the mock answers every one like the dashboard) is
+ * merged 40 hours ago and reaches only the build from main after it;
+ * release branches get a cherry-pick (another SHA). A commit is a fixed one
+ * of rhoai-3.6, committed 40 hours ago. Builds older than either are
+ * answered from their date alone (built_before_merge / built_before_commit).
+ */
+export function buildContains({ pr, commit, repo }, images) {
+  repo = repo || "opendatahub-io/odh-dashboard";
+  const name = repo.split("/")[1];
+  const fork = `red-hat-data-services/${name}`;
+  const base = pr ? hex(`merge-${pr}`, 40) : hex("commit-rhoai-3.6-2026-10-05", 40);
+  const baseDate = pr ? ago(60 * 40) : ago(60 * 40 + 30);
+  const subject = pr
+    ? { pr: Number(pr), title: "Show the model deployment status in the project overview", url: `https://github.com/${repo}/pull/${pr}`, mergeCommit: base, mergedAt: baseDate }
+    : { commit: base, commitDate: baseDate, commitTitle: "Show the model deployment status in the project overview", commitURL: `https://github.com/${fork}/commit/${base}` };
   return {
-    repo: "opendatahub-io/odh-dashboard",
-    pr,
-    title: "Show the model deployment status in the project overview",
-    url: `https://github.com/opendatahub-io/odh-dashboard/pull/${pr}`,
-    mergeCommit: hex(`merge-${pr}`, 40),
-    mergedAt,
+    repo,
+    ...subject,
     builds: images.map((image) => {
       const b = tagBuilds.find((t) => image === fbc(t.tag, t.seed)) ?? installedBuild;
-      const commit = hex(`dashboard-${b.seed}`, 40);
-      // Only the build from main after the merge; release branches get a cherry-pick (another SHA).
-      const contains = Date.parse(b.buildDate) > Date.parse(mergedAt) && b.tag === "rhoai-3.7-ea.1";
+      const row = { image, tag: b.tag, installed: image === INSTALLED_IMAGE };
+      const builtBefore = Date.parse(b.buildDate) < Date.parse(baseDate);
+      if (builtBefore) {
+        const hours = Math.round((Date.parse(baseDate) - Date.parse(b.buildDate)) / 3_600_000);
+        const age = hours < 48 ? `${hours} hours` : `${Math.round(hours / 24)} days`;
+        return pr
+          ? { ...row, result: "not_contained", reason: "built_before_merge", message: `Built ${age} before the PR was merged.` }
+          : { ...row, result: "not_contained", reason: "built_before_commit", message: `Built ${age} before the commit.` };
+      }
+      const buildCommit = hex(`${name}-${b.seed}`, 40);
+      const contains = pr ? b.tag === "rhoai-3.7-ea.1" : b.tag === "rhoai-3.6";
       return {
-        image, tag: b.tag, installed: image === INSTALLED_IMAGE, commit, commitRepo: "red-hat-data-services/odh-dashboard",
+        ...row, commit: buildCommit, commitRepo: fork,
         result: contains ? "contains" : "not_contained",
-        compareURL: `https://github.com/red-hat-data-services/odh-dashboard/compare/${hex(`merge-${pr}`, 40)}...${commit}`,
+        compareURL: `https://github.com/${fork}/compare/${base}...${buildCommit}`,
       };
     }),
   };

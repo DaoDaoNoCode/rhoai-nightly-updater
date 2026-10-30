@@ -332,7 +332,7 @@ async (page) => {
 
     async builds() {
       await open("/builds", "update-available");
-      const search = page.getByPlaceholder("Image, commit SHA or PR #");
+      const search = page.getByPlaceholder("Image, commit SHA, PR # or PR URL");
       await search.fill("#5123");
       await search.press("Enter");
       await wait(1500);
@@ -508,7 +508,7 @@ async (page) => {
       await open("/builds", "update-available");
       gif("build-explorer-pr-search", await mainClip(640));
       await frame(1000);
-      const search = page.getByPlaceholder("Image, commit SHA or PR #");
+      const search = page.getByPlaceholder("Image, commit SHA, PR # or PR URL");
       await clickShown(search, 600);
       for (const ch of "#5123") {
         await search.type(ch);

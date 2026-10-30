@@ -39,8 +39,47 @@ only accepts a tag whose version is the top dated section. See
   time instead of failing. Anonymous GitHub allows 60 requests per hour per
   egress IP; `GITHUB_TOKEN` on the Deployment raises it to 5000. Off in the
   gitops profile like the rest of Dashboard Dev.
+- The Build Explorer search takes the URL of a GitHub PR (or `owner/name#N`)
+  of any RHOAI component repository, not only `#N` of
+  opendatahub-io/odh-dashboard: `GET /api/build-explorer/contains` accepts
+  any `repo` and finds the build's component image by its `git.url` label,
+  the `red-hat-data-services` fork of that name (or the repository itself),
+  instead of an allowlist and a fixed image name. A compare that GitHub
+  answers 404 is reported as *Unknown (merge commit not in the fork)*: the
+  fork cherry-picks or rebases instead of merging upstream, so the build
+  cannot be checked; it is never reported as *Does not contain*.
+- A commit SHA is searched by containment, like a PR: the same route takes
+  `commit=` (7 to 40 hex), resolves it on the repository and then on the fork
+  (upstream odh-dashboard SHAs exist in the fork, which merges `upstream/main`)
+  and compares each build's component commit with it. Only when GitHub knows
+  the commit nowhere does the page fall back to the old scan for a component
+  image built from exactly that commit, and says so. The response describes a
+  commit with `commit`, `commitDate`, `commitTitle` and `commitURL`.
+- The search results start with one sentence: *PR #5123 is in rhoai-3.7-ea.1
+  and rhoai-3.6.*, *No build contains PR #5123 yet: it was merged 2h ago,
+  after the newest build (9h ago).* or *No build contains PR #5123.*, with a
+  subtle line for the rest (*Not in rhoai-3.5 and 4 older builds (built
+  before the merge). 3 builds could not be checked (GitHub rate limit).*).
+- `/builds?q=<text>` runs that search once the builds are listed, and
+  submitting a search writes it to the URL, so a search can be shared. The
+  Status page's `?image=` link keeps working.
+- Dashboard Dev's containers card links each PR or main build's commit to
+  the Build Explorer search for it (*Find in nightlies*).
 
 ### Changed
+
+- A nightly pushed before the PR was merged (or before the searched commit)
+  cannot contain it, so the search answers it from the build's date label
+  alone: *Does not contain, built before the merge*, with no catalog or
+  GitHub read. The page does the same for the builds whose date it already
+  has, without a request. A PR search over 25 builds now reads only the
+  builds newer than the merge.
+- The image label cache holds 10000 entries instead of 2000 (25 builds x
+  165 images), so a search over every build stays warm.
+- Wording: the commit search's finished line no longer says that later builds
+  also contain the commit; a build whose component image has no commit label
+  names that image; the help popover and the placeholder (*Image, commit SHA,
+  PR # or PR URL*) list what can be searched.
 
 - Deploy latest main writes the build under its commit tag,
   `quay.io/opendatahub/<repo>:<commit tag>@sha256:...`, so the page and

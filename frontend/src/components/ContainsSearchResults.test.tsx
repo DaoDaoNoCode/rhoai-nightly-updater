@@ -49,7 +49,9 @@ describe("the words of the answer", () => {
       result("rhoai-3.0", { result: "unknown", reason: "rate_limited" }),
     ];
     expect(detailLine("pr", results, "odh-dashboard")).toBe(
-      "Not in rhoai-3.6 (installed) and rhoai-3.5 and 2 older builds (built before the merge). 3 builds could not be checked (GitHub rate limit, merge commit not in the fork).");
+      "Not in rhoai-3.6 (installed), rhoai-3.5 and 2 older builds (built before the merge). 3 builds could not be checked (GitHub rate limit, merge commit not in the fork).");
+    expect(detailLine("pr", [...results.slice(1, 4), ...["a", "b", "c", "d"].map((t) => result(t, { result: "not_contained" }))], "odh-dashboard")).toBe(
+      "Not in rhoai-3.6 (installed), rhoai-3.5, 4 more builds and 1 older build (built before the merge).");
     expect(detailLine("commit", results.slice(3, 4), "odh-dashboard")).toBe("Not in 1 build built before the commit.");
     expect(detailLine("commit", results.slice(6, 7), "kserve")).toBe("1 build could not be checked (commit not in the fork).");
     expect(detailLine("pr", [result("rhoai-3.6", { result: "unknown", reason: "no_component_image" })], "data-science-pipelines")).toBe(

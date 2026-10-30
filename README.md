@@ -53,7 +53,7 @@ Below it, the Deployments table lists problems first, with pod details, git prov
 
 <img src="docs/images/build-explorer-pr-search.gif" alt="Typing #5123 in the build search lists which nightly builds contain that PR" width="760">
 
-Every nightly tag on Quay: filter, see the contents of a build, compare it with the installed one, and search by image, commit SHA or PR number (`#5123`). See [PR search](#build-explorer-pr-search) for its limits.
+Every nightly tag on Quay: filter, see the contents of a build, compare it with the installed one, and search by image, commit SHA, PR number (`#5123`) or PR URL. See [Build Explorer search](#build-explorer-search) for what it can find and how it decides.
 
 ### Dashboard Dev: try an odh-dashboard PR
 
@@ -164,11 +164,20 @@ Each re-checks its precondition right before acting and reports "Nothing to do" 
 
 **If the updater pod restarts mid-operation.** On SIGTERM the pod stops taking new changes (503, "restarting") and reports not ready. It then waits up to 980 s for the running operation: its 15-minute deadline plus a bounded restore and bookkeeping. `terminationGracePeriodSeconds` is 1020 and the strategy is `Recreate`, so rollouts never overlap. A deleted or evicted pod is replaced at once while it still drains, so every operation also holds a lease in the operation ConfigMap: the replacement shows the old pod's operation as running "on updater pod ..." and refuses changes until it ends (a crashed pod's lease expires after 45 s). oauth-proxy exits immediately, so **the UI is offline for up to ~17 minutes** in that case. If the pod is killed anyway (SIGKILL, node loss), the next pod finds the operation marker and shows "*X* was interrupted" with what to do. Re-running the same operation is safe. Diagrams: [RUNBOOK §5](RUNBOOK.md#5-operations-busy-stuck-interrupted).
 
-## Build Explorer PR search
+## Build Explorer search
 
-Type `#123` or `PR 123` to see which nightlies contain a merged opendatahub-io/odh-dashboard PR. The tool checks up to 40 builds. A build "contains" the PR when its dashboard commit includes the PR's merge commit (GitHub compare in red-hat-data-services/odh-dashboard). **Limitation:** a PR that reached a release branch only as a cherry-pick has a different SHA, so it shows as *not contained*.
+The search box on the Build Explorer takes:
 
-GitHub allows 60 unauthenticated requests per hour **per egress IP**, which every user of the pod shares. One uncached search costs about one call per build. Answers are cached, so repeats are free. Dashboard Dev's "commits behind main" uses the same quota, one call per container. Set a `GITHUB_TOKEN` (5000/hour); without it, once the limit is hit, commit dates stay blank, PR search reports the rate limit until GitHub's reset time, and Dashboard Dev shows *Distance from main unknown*.
+- a build reference (`quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:...`), which shows that build's contents;
+- `#123` or `PR 123`: which nightlies contain that merged opendatahub-io/odh-dashboard PR;
+- the URL of a GitHub PR (or `owner/name#123`) of any RHOAI component repository, for example `https://github.com/opendatahub-io/data-science-pipelines/pull/42`;
+- a commit SHA (7 to 40 characters): which nightlies contain it. An odh-dashboard commit, upstream or in the fork, is checked by containment; a commit GitHub does not know there is matched exactly against the commit each component image was built from.
+
+PR and commit searches cover the installed build and the builds the filters list (up to 40), and answer in one sentence: *PR #5123 is in rhoai-3.7-ea.1 and rhoai-3.6.* A search is in the page URL (`/builds?q=%235123`), so it can be shared; Dashboard Dev's containers card links to it with **Find in nightlies**.
+
+How "contains" is decided: RHOAI images are built from the `red-hat-data-services` forks, whose release branches merge upstream, so an upstream PR's merge commit (or an upstream commit) keeps its SHA in the fork. The build's component image names its commit in its labels; GitHub compare says whether that commit includes the merge commit. A build pushed before the PR was merged (or before the commit) cannot contain it and is answered from its build date alone, without a read. A fork that cherry-picks or rebases instead of merging does not have the merge commit; its builds show as *Unknown (merge commit not in the fork)*, never as *Does not contain*. **Limitation:** a dashboard PR cherry-picked to a release branch has a different SHA there, so that branch's builds show *Does not contain*.
+
+GitHub allows 60 unauthenticated requests per hour **per egress IP**, which every user of the pod shares. One uncached search costs about one call per build that is newer than the merge. Answers are cached, so repeats are free. Dashboard Dev's "commits behind main" uses the same quota, one call per container. Set a `GITHUB_TOKEN` (5000/hour); without it, once the limit is hit, commit dates stay blank, the search reports the rate limit until GitHub's reset time, and Dashboard Dev shows *Distance from main unknown*.
 
 ## Configuration
 

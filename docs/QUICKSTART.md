@@ -183,7 +183,7 @@ Optional, for testing pipelines in the dashboard. Open **Test resources**.
 | Switch to stable, another nightly, or an exact older build | Status → Recovery → **Reinstall...** (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |
 | S3 storage (SeaweedFS), pipeline servers, MLflow | Test resources |
-| Which nightly contains PR #N? | Build Explorer → search `#123` ([PR search](../README.md#build-explorer-pr-search)) |
+| Which nightly contains PR #N? | Build Explorer → search `#123` ([Build Explorer search](../README.md#build-explorer-search)) |
 | Something looks wrong | Diagnostics → open the problem; automatic fixes ask for confirmation. [RUNBOOK](../RUNBOOK.md) |
 
 ## Upgrade, roll back or remove the updater
@@ -196,5 +196,5 @@ Optional, for testing pipelines in the dashboard. Open **Test resources**.
 ## Notes
 
 - Metrics and alerts work only with user workload monitoring enabled (OpenShift docs: "Enabling monitoring for user-defined projects"). It is off by default; see [RUNBOOK §7](../RUNBOOK.md#7-metrics-and-alerts).
-- Build Explorer PR search works better with a `GITHUB_TOKEN` (see [README: Configuration](../README.md#configuration)).
+- Build Explorer PR and commit searches work better with a `GITHUB_TOKEN` (see [README: Configuration](../README.md#configuration)).
 - Problems: [RUNBOOK.md](../RUNBOOK.md). Everything the tool changes: [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md).

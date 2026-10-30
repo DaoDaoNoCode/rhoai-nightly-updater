@@ -302,7 +302,7 @@ const routes = {
   "GET /api/nightly-tags": () => F.nightlyTags(true),
   "GET /api/build-explorer/tags": (u) => F.nightlyTags(u.searchParams.get("includeDates") !== "false"),
   "GET /api/build-explorer/content": (u) => F.fbcContent(u.searchParams.get("image") || F.INSTALLED_IMAGE),
-  "GET /api/build-explorer/contains": (u) => F.prContains(Number(u.searchParams.get("pr")), u.searchParams.getAll("image")),
+  "GET /api/build-explorer/contains": (u) => F.buildContains({ pr: u.searchParams.get("pr"), commit: u.searchParams.get("commit"), repo: u.searchParams.get("repo") }, u.searchParams.getAll("image")),
   "GET /api/components": () => world.components,
   "GET /api/diagnostics": () => world.diagnostics,
   "GET /api/dashboard/state": () => world.dashboard,

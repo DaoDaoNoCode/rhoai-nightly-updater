@@ -249,12 +249,13 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 ## 8. Build Explorer, Quay and GitHub
 
 - **Tags don't load / Quay errors:** the Quay token is derived from the cluster pull secret. Test it on the Status page, then check `oc logs ... -c app | grep -i quay`.
-- **Commit dates show "-", or PR search reports a rate limit:** GitHub allows 60 requests/hour per egress IP without a token. Set `GITHUB_TOKEN` ([README: Configuration](README.md#configuration)). Results are cached in memory per pod (cleared on restart).
+- **Commit dates show "-", or the Build Explorer search reports a rate limit:** GitHub allows 60 requests/hour per egress IP without a token. Set `GITHUB_TOKEN` ([README: Configuration](README.md#configuration)). Results are cached in memory per pod (cleared on restart).
 - **A PR shows as not contained, but its change is in the build:**
 
   <img src="docs/images/builds-pr-search.png" alt="PR search for #5123: only rhoai-3.7-ea.1 contains it; the release branches do not" width="760">
 
-  In this example only the build from `main` contains the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. PR search only follows merge commits.
+  In this example only the build from `main` contains the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. The search only follows merge commits. Builds older than the merge say **Built before the merge**: they were not read.
+- **Unknown (merge commit not in the fork):** the component's `red-hat-data-services` fork does not have the PR's merge commit (or the searched commit), so GitHub cannot compare. The dashboard fork merges upstream `main`, so its builds are always comparable; other forks may cherry-pick or rebase instead, and their builds cannot be checked by this search. Look at the build's component commit (the link in the row) on GitHub instead.
 
 ## 9. Dashboard Dev
 

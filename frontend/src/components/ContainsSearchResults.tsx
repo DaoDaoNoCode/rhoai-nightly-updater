@@ -73,8 +73,11 @@ export function detailLine(kind: ContainsQuery["kind"], results: ContainsSearchR
   const older = results.filter((r) => r.answer.result === "not_contained" && !!r.answer.reason).length;
   const unknown = results.filter((r) => r.answer.result === "unknown");
   const parts: string[] = [];
-  if (named.length > 0 && older > 0) parts.push(`Not in ${listNames(named)} and ${plural(older, "older build")} (${before}).`);
-  else if (named.length > 0) parts.push(`Not in ${listNames(named)}.`);
+  if (named.length > 0 && older > 0) {
+    // The names run into the count: "rhoai-3.6, rhoai-3.5 and 3 older builds".
+    const listed = named.length <= 4 ? named.join(", ") : `${named[0]}, ${named[1]}, ${named.length - 2} more builds`;
+    parts.push(`Not in ${listed} and ${plural(older, "older build")} (${before}).`);
+  } else if (named.length > 0) parts.push(`Not in ${listNames(named)}.`);
   else if (older > 0) parts.push(`Not in ${plural(older, "build")} ${before}.`);
   if (unknown.length > 0) {
     const reasons = unknownReasons(kind, name);
