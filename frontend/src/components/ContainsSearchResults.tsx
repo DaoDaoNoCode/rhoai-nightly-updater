@@ -237,7 +237,7 @@ export const ContainsSearchResults: React.FC<{
                 <Th info={{ popover: <Content component="p">{explanation}</Content>, popoverProps: { headerContent: `How "contains ${subject}" is decided` } }}>
                   {subject}
                 </Th>
-                <Th modifier="wrap">Commit in build</Th>
+                <Th width={20}>Commit in build</Th>
                 <Th screenReaderText="Actions" />
               </Tr>
             </Thead>
