@@ -179,6 +179,8 @@ export interface DeploymentInfo {
   desired: number;
   available: number;
   image: string;
+  /** The digest-pinned reference the labels come from (a floating tag resolves through a running pod). */
+  labelImage?: string;
   unavailableReplicas: number;
   updatedReplicas: number;
   rolloutStuck: boolean;

@@ -349,6 +349,7 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 	for i, dep := range deployments {
 		if ref := labelImageRef(dep); ref != "" {
 			lookup[i] = ref
+			deployments[i].LabelImage = ref
 			refs = append(refs, ref)
 		}
 	}
@@ -421,11 +422,12 @@ func mainContainerImage(name string, containers []deploymentContainer) string {
 
 // labelImageRef is the digest-pinned reference whose labels describe dep's
 // image: the Deployment's own image when it is pinned, else the image ID of
-// a pod running the same repository (a Deployment that names a floating
-// tag, such as the MLflow server's quay.io/opendatahub/mlflow:odh-stable,
-// resolves to a digest only on its pods). Empty for images that are not
-// RHOAI or ODH builds (a UBI nginx has no commit to show) and for a
-// floating tag without a running pod.
+// a ready pod that runs that very reference (a Deployment that names a
+// floating tag, such as the MLflow server's quay.io/opendatahub/mlflow:odh-stable,
+// resolves to a digest only on its pods; a pod of an earlier rollout names
+// another reference and is skipped, whatever its position in the list).
+// Empty for images that are not RHOAI or ODH builds (a UBI nginx has no
+// commit to show) and for a floating tag without a ready pod.
 func labelImageRef(dep types.DeploymentInfo) string {
 	if dep.Image == "" || !isBuildImage(dep.Image) {
 		return ""
@@ -438,6 +440,9 @@ func labelImageRef(dep types.DeploymentInfo) string {
 		return ""
 	}
 	for _, pod := range dep.Pods {
+		if !pod.Ready || pod.Image != dep.Image {
+			continue
+		}
 		if r, _, ok := extractRepoAndDigest(pod.ImageID); ok && r == repo {
 			return pod.ImageID
 		}

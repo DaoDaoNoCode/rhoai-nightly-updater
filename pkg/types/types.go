@@ -290,12 +290,16 @@ type ComponentInfo struct {
 
 // DeploymentInfo holds readiness and image metadata for a Kubernetes Deployment.
 type DeploymentInfo struct {
-	Name                string            `json:"name"`
-	Namespace           string            `json:"namespace"`
-	Ready               int               `json:"ready"`
-	Desired             int               `json:"desired"`
-	Available           int               `json:"available"`
-	Image               string            `json:"image"` // first container image
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Ready     int    `json:"ready"`
+	Desired   int    `json:"desired"`
+	Available int    `json:"available"`
+	Image     string `json:"image"` // the main container's image, as the Deployment names it
+	// LabelImage is the digest-pinned reference the git labels were (or
+	// would be) read from: Image when it is pinned, else the digest a running
+	// pod reports for a floating tag. Empty for images that carry no labels.
+	LabelImage          string            `json:"labelImage,omitempty"`
 	UnavailableReplicas int               `json:"unavailableReplicas"`
 	UpdatedReplicas     int               `json:"updatedReplicas"`
 	RolloutStuck        bool              `json:"rolloutStuck"`

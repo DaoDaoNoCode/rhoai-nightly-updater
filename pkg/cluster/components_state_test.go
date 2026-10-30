@@ -200,8 +200,17 @@ func TestLabelImageRef(t *testing.T) {
 		want string
 	}{
 		{"pinned RHOAI image", types.DeploymentInfo{Image: "registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:" + strings.Repeat("1", 64)}, "registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:" + strings.Repeat("1", 64)},
-		{"floating ODH tag takes the pod's digest", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{ImageID: mlflowID}}}, mlflowID},
-		{"a pod of another repository does not count", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{ImageID: "quay.io/opendatahub/other@sha256:" + strings.Repeat("4", 64)}}}, ""},
+		{"floating ODH tag takes a ready pod's digest", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{Image: "quay.io/opendatahub/mlflow:odh-stable", ImageID: mlflowID, Ready: true}}}, mlflowID},
+		{"a pod of another repository does not count", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{Image: "quay.io/opendatahub/mlflow:odh-stable", ImageID: "quay.io/opendatahub/other@sha256:" + strings.Repeat("4", 64), Ready: true}}}, ""},
+		{"an old rollout's pod listed first does not count", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{
+			{Image: "quay.io/opendatahub/mlflow:odh-pr-42", ImageID: "quay.io/opendatahub/mlflow@sha256:" + strings.Repeat("6", 64), Ready: true},
+			{Image: "quay.io/opendatahub/mlflow:odh-stable", ImageID: mlflowID, Ready: true},
+		}}, mlflowID},
+		{"an old rollout's pod listed last does not count", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{
+			{Image: "quay.io/opendatahub/mlflow:odh-stable", ImageID: mlflowID, Ready: true},
+			{Image: "quay.io/opendatahub/mlflow:odh-pr-42", ImageID: "quay.io/opendatahub/mlflow@sha256:" + strings.Repeat("6", 64), Ready: true},
+		}}, mlflowID},
+		{"a pod that is not ready does not count", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{Image: "quay.io/opendatahub/mlflow:odh-stable", ImageID: mlflowID}}}, ""},
 		{"floating tag without a pod", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable"}, ""},
 		{"a base image has no commit", types.DeploymentInfo{Image: "registry.redhat.io/ubi9/nginx-126@sha256:" + strings.Repeat("5", 64)}, ""},
 		{"no image", types.DeploymentInfo{}, ""},

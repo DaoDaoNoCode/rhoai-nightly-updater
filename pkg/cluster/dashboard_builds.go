@@ -212,8 +212,8 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 			out.Reason, out.Message = "unknown_repo", "The image was not built from a GitHub repository, so it cannot be compared with main."
 		default:
 			// A PR build's git.url names the branch's repository, which is
-			// the contributor's fork for most PRs (odh-pr-10500 carried
-			// https://github.com/jesuino/odh-dashboard). The PR itself, and
+			// the contributor's fork for most PRs (an odh-pr-N image carries
+			// https://github.com/<user>/odh-dashboard). The PR itself, and
 			// every commit of it, lives in the upstream repository.
 			gitURL := labels.GitURL
 			if image.Running == "pr" {

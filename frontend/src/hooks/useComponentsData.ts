@@ -7,17 +7,21 @@ import { usePolling } from "./usePolling";
 /** Git/build metadata that only `?labels=true` resolves (from image labels). */
 export type DeploymentLabels = Pick<DeploymentInfo, "gitCommit" | "gitURL" | "commitDate" | "buildDate" | "version">;
 
-/** Labels belong to an image, so the key includes it: a rollout to a new image invalidates them. */
-export function labelKey(dep: Pick<DeploymentInfo, "namespace" | "name" | "image">): string {
-  return `${dep.namespace}/${dep.name}@${dep.image}`;
+/**
+ * Labels belong to an image, so the key includes it: a rollout to a new image
+ * invalidates them. For a floating tag the backend names the digest the
+ * labels come from (labelImage), so a new digest under the same tag does too.
+ */
+export function labelKey(dep: Pick<DeploymentInfo, "namespace" | "name" | "image" | "labelImage">): string {
+  return `${dep.namespace}/${dep.name}@${dep.labelImage || dep.image}`;
 }
 
 /**
  * The labels of a `?labels=true` response, by deployment and image. An image
  * the response has no labels for is left out: the registry read may have
- * failed or timed out, and the next poll asks for it again. (A base image
- * without labels is asked about once per poll that shows it, which is cheap:
- * the backend caches "no labels".)
+ * failed or timed out, and a later poll asks for it again (the same set of
+ * images at most every LABELS_RETRY_MS; a base image never gets labels, which
+ * is cheap: the backend caches "no labels").
  */
 export function extractLabels(resp: ComponentsResponse | null): Map<string, DeploymentLabels> {
   const map = new Map<string, DeploymentLabels>();

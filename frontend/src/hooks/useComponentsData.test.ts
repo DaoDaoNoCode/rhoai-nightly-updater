@@ -77,6 +77,14 @@ describe("useComponentsData", () => {
     expect(result.current.data?.deployments[0]).toMatchObject({ ready: 0, gitCommit: "sha-img1" });
   });
 
+  it("keys a floating tag by the digest the labels come from, so a new digest is asked about", () => {
+    const tagged = { ...dep("mlflow", "quay.io/opendatahub/mlflow:odh-stable", 1, true), labelImage: "quay.io/opendatahub/mlflow@sha256:aaaa" };
+    const labels = extractLabels(response([tagged]));
+    expect([...labels.keys()]).toEqual(["redhat-ods-applications/mlflow@quay.io/opendatahub/mlflow@sha256:aaaa"]);
+    const moved = { ...dep("mlflow", "quay.io/opendatahub/mlflow:odh-stable", 1), labelImage: "quay.io/opendatahub/mlflow@sha256:bbbb" };
+    expect(mergeDeploymentLabels([moved], labels)[0].gitCommit).toBeUndefined();
+  });
+
   it("leaves out images the response has no labels for, so they are asked about again", () => {
     const labels = extractLabels(response([dep("a", "img1", 1, true), dep("b", "img2", 1)]));
     expect([...labels.keys()]).toEqual(["redhat-ods-applications/a@img1"]);
