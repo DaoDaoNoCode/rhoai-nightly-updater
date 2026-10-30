@@ -132,9 +132,9 @@ const SearchHelp: React.FC = () => (
       <Stack hasGutter>
         <StackItem><code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code> shows that build.</StackItem>
         <StackItem>
-          A commit SHA (7 to 40 characters) lists the builds that contain it. An odh-dashboard commit, upstream or in the fork, is checked by
-          containment (the build&apos;s dashboard commit includes it); a commit GitHub does not know there is matched exactly against the
-          commit every component image was built from.
+          A commit SHA (7 to 40 characters), or the URL of a GitHub commit, lists the builds that contain it. An odh-dashboard commit, upstream
+          or in the fork, is checked by containment (the build&apos;s dashboard commit includes it); a commit GitHub does not know there is
+          matched exactly against the commit every component image was built from.
         </StackItem>
         <StackItem><code>#123</code> or <code>PR 123</code> checks which builds contain that merged opendatahub-io/odh-dashboard PR.</StackItem>
         <StackItem>A GitHub PR URL (or <code>owner/name#123</code>) of any RHOAI component repository does the same for that PR.</StackItem>
@@ -244,7 +244,11 @@ export const BuildExplorerPage: React.FC = () => {
 
   /** The search in the URL (?q=, or the Status page's older ?image=), so a search can be shared. */
   const urlQuery = searchParams.get("q") || searchParams.get("image") || "";
+  // The URL search the page last applied, or wrote itself: a different value
+  // in the URL (a link followed while the page is mounted) runs that search.
+  const appliedURLQuery = useRef("");
   const writeURL = useCallback((q: string) => {
+    appliedURLQuery.current = q;
     setSearchParams((params) => {
       const next = new URLSearchParams(params);
       next.delete("image");
@@ -270,15 +274,15 @@ export const BuildExplorerPage: React.FC = () => {
     setSubmitted((prev) => ({ query, nonce: (prev?.nonce ?? 0) + 1, builds }));
   }, [installed, filteredTags, writeURL]);
 
-  // A search in the URL runs once, when the builds it covers are known: the
-  // tags have loaded (or failed) and the installed build is settled. Later
-  // changes of the URL are the page's own (submitSearch writes ?q=).
-  const urlQueryApplied = useRef(false);
+  // A search in the URL runs when the builds it covers are known: the tags
+  // have loaded (or failed) and the installed build is settled. It runs again
+  // when the URL changes from outside (a navigation to /builds?q=other while
+  // the page is mounted); the page's own submits write the value they apply,
+  // so they do not run twice. An emptied ?q= clears the search.
   const statusLoaded = !!status || !statusLoading;
   useEffect(() => {
-    if (urlQueryApplied.current || loading || !statusLoaded) return;
-    urlQueryApplied.current = true;
-    if (!urlQuery) return;
+    if (loading || !statusLoaded || appliedURLQuery.current === urlQuery) return;
+    appliedURLQuery.current = urlQuery;
     setSearchText(urlQuery);
     submitSearch(urlQuery, { fromURL: true });
   }, [urlQuery, loading, statusLoaded, submitSearch]);
@@ -352,8 +356,10 @@ export const BuildExplorerPage: React.FC = () => {
             <CardBody className="pf-v6-u-px-0">
               <Toolbar inset={{ default: "insetLg" }} clearAllFilters={() => { setVersionFilter("all"); setTypeFilter("all"); }}>
                 <ToolbarContent alignItems="center">
-                  <ToolbarItem className="pf-v6-u-w-100 pf-v6-u-w-33-on-lg">
+                  {/* Full width on small screens; wide enough for the whole placeholder on desktop. */}
+                  <ToolbarItem className="pf-v6-u-w-100 pf-v6-u-w-auto-on-lg" style={{ minWidth: "min(22rem, 100%)" }}>
                     <SearchInput
+                      className="pf-v6-u-w-100"
                       id="build-search"
                       placeholder="Image, commit SHA, PR # or PR URL"
                       value={searchText}
@@ -541,6 +547,8 @@ const SearchResults: React.FC<{
     );
   }
   const short = value.slice(0, 12);
+  const searchedRepo = repo || DEFAULT_REPO;
+  const fork = searchedRepo.toLowerCase().startsWith("red-hat-data-services/") ? "" : `red-hat-data-services/${searchedRepo.split("/")[1]}`;
   const { checked, matches, failures } = commitSearch;
   // Before the first progress update the hook still holds the previous (idle) state.
   const total = commitSearch.total || submitted.builds.length;
@@ -549,7 +557,7 @@ const SearchResults: React.FC<{
     <Stack hasGutter>
       <StackItem>
         <Content component="p">
-          GitHub does not know <code>{short}</code> in {DEFAULT_REPO} or red-hat-data-services/odh-dashboard, so the builds were searched for a
+          GitHub does not know <code>{short}</code> in {searchedRepo}{fork && <> or {fork}</>}, so the builds were searched for a
           component image built from exactly this commit.
         </Content>
       </StackItem>

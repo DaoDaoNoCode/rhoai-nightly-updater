@@ -755,8 +755,8 @@ export interface PRContainsBuild {
   /**
    * Why: for not_contained, built_before_merge or built_before_commit (the
    * build is older than the PR's merge or the commit, so it was not read);
-   * for unknown, rate_limited, commit_not_found (the merge commit or commit
-   * is not in the fork), no_component_image, no_commit_label, unexpected_repo,
+   * for unknown, rate_limited, commit_not_found (GitHub does not know the
+   * merge commit or commit), no_component_image, no_commit_label, unexpected_repo,
    * build_unreadable or github_error.
    */
   reason?: string;

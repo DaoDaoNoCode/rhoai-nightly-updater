@@ -7,7 +7,6 @@ import type { ContainsQuery } from "../services/api";
 import { cutoffOf, type ContainsSearchResult, type ContainsSearchState } from "../hooks/useContainsSearch";
 import type { SearchBuild } from "../hooks/useCommitSearch";
 import type { BuildSide } from "./BuildCompare";
-import { imageTag, shortBuildRef } from "./buildDiff";
 import { NotRecorded, RelativeTime } from "./RelativeTime";
 import { RowActions } from "./RowActions";
 import { StatusLabel } from "./StatusLabel";
@@ -20,10 +19,12 @@ function repoName(repo: string): string {
   return repo.split("/")[1] || repo;
 }
 
-function unknownReasons(kind: ContainsQuery["kind"], name: string): Record<string, string> {
+function unknownReasons(name: string): Record<string, string> {
   return {
     rate_limited: "GitHub rate limit",
-    commit_not_found: kind === "pr" ? "merge commit not in the fork" : "commit not in the fork",
+    // Forks of one GitHub network resolve each other's SHAs, so this is a
+    // SHA GitHub does not know at all, not a fork that cherry-picks.
+    commit_not_found: "commit not on GitHub",
     no_component_image: `no ${name} image in this build`,
     no_commit_label: "no commit label",
     unexpected_repo: "built from another repository",
@@ -60,35 +61,39 @@ export function listNames(names: string[]): string {
   return `${names[0]}, ${names[1]} and ${names.length - 2} more builds`;
 }
 
-/** How a build is named in a sentence: its tag; the installed one as "rhoai-3.6 (installed)". */
+/** Up to four names, then "and N other checked builds". */
+function listChecked(names: string[]): string {
+  if (names.length <= 4) return listNames(names);
+  return `${names.slice(0, 4).join(", ")} and ${plural(names.length - 4, "other checked build")}`;
+}
+
+/** How a build is named in a sentence: its tag; the installed one as "the installed build" (the table keeps its label). */
 export function sentenceName(build: SearchBuild): string {
-  if (build.label.startsWith("Installed (")) return `${imageTag(build.image) || shortBuildRef(build.image)} (installed)`;
+  if (build.label.startsWith("Installed (")) return "the installed build";
   return build.label;
 }
 
-/** The subtle line after the answer: the builds that do not contain it, and those that could not be checked. */
+const isUnknown = (r: ContainsSearchResult) => r.answer.result === "unknown";
+
+/** The subtle line after the answer, in short sentences: the checked builds that do not contain it, the older ones, and those that could not be checked. */
 export function detailLine(kind: ContainsQuery["kind"], results: ContainsSearchResult[], name: string): string {
-  const before = kind === "pr" ? "built before the merge" : "built before the commit";
+  const before = kind === "pr" ? "the merge" : "the commit";
   const named = results.filter((r) => r.answer.result === "not_contained" && !r.answer.reason).map((r) => sentenceName(r.build));
   const older = results.filter((r) => r.answer.result === "not_contained" && !!r.answer.reason).length;
-  const unknown = results.filter((r) => r.answer.result === "unknown");
+  const unknown = results.filter(isUnknown);
   const parts: string[] = [];
-  if (named.length > 0 && older > 0) {
-    // The names run into the count: "rhoai-3.6, rhoai-3.5 and 3 older builds".
-    const listed = named.length <= 4 ? named.join(", ") : `${named[0]}, ${named[1]}, ${named.length - 2} more builds`;
-    parts.push(`Not in ${listed} and ${plural(older, "older build")} (${before}).`);
-  } else if (named.length > 0) parts.push(`Not in ${listNames(named)}.`);
-  else if (older > 0) parts.push(`Not in ${plural(older, "build")} ${before}.`);
+  if (named.length > 0) parts.push(`Not in ${listChecked(named)}.`);
+  if (older > 0) parts.push(`${plural(older, "older build")} ${older === 1 ? "was" : "were"} built before ${before}.`);
   if (unknown.length > 0) {
-    const reasons = unknownReasons(kind, name);
+    const reasons = unknownReasons(name);
     const why = [...new Set(unknown.map((r) => reasons[r.answer.reason ?? ""] ?? "unknown"))].join(", ");
     parts.push(`${plural(unknown.length, "build")} could not be checked (${why}).`);
   }
   return parts.join(" ");
 }
 
-const ResultLabel: React.FC<{ answer: PRContainsBuild; subject: string; reasons: Record<string, string> }> = ({ answer, subject, reasons }) => {
-  if (answer.result === "contains") return <StatusLabel status="success">Contains {subject}</StatusLabel>;
+const ResultLabel: React.FC<{ answer: PRContainsBuild; label: string; reasons: Record<string, string> }> = ({ answer, label, reasons }) => {
+  if (answer.result === "contains") return <StatusLabel status="success">Contains {label}</StatusLabel>;
   if (answer.result === "not_contained") return <StatusLabel status="neutral">Does not contain</StatusLabel>;
   const reason = reasons[answer.reason ?? ""] ?? "unknown";
   return <StatusLabel status="warning">Unknown ({reason})</StatusLabel>;
@@ -111,22 +116,23 @@ export const ContainsSearchResults: React.FC<{
   const name = repoName(repo);
   const fork = repo.toLowerCase().startsWith(`${FORK_OWNER}/`) ? repo : `${FORK_OWNER}/${name}`;
   const info = search.info;
-  const reasons = unknownReasons(kind, name);
-  // "PR #5123" or "Commit 6c8ac6e"; the sentence adds the commit's title.
+  const reasons = unknownReasons(name);
+  // "PR #5123" or "Commit 6c8ac6e"; the table label says "Contains PR #5123" or "Contains 6c8ac6e".
   const sha = (kind === "commit" && (info?.commit || query.value)) || "";
   const subject = kind === "pr" ? `PR #${query.value}` : `Commit ${sha.slice(0, 7)}`;
-  const subjectWithTitle = kind === "commit" && info?.commitTitle ? `${subject} (${info.commitTitle})` : subject;
+  const tableLabel = kind === "pr" ? subject : sha.slice(0, 7);
   const subjectURL = kind === "pr" ? info?.url || `https://github.com/${repo}/pull/${query.value}` : info?.commitURL || "";
   const subjectLink = subjectURL
-    ? <a href={subjectURL} target="_blank" rel="noopener noreferrer">{subject} <ExternalLinkAltIcon /></a>
+    ? <a href={subjectURL} target="_blank" rel="noopener noreferrer">{subject}<ExternalLinkAltIcon className="pf-v6-u-ml-xs" /></a>
     : <>{subject}</>;
 
   if (search.error) {
     const code = search.error.errorCode;
-    const expected = code === "pr_not_merged" || code === "pr_not_found" || code === "commit_not_found";
+    const expected = code === "pr_not_merged" || code === "pr_not_found" || code === "commit_not_found" || code === "validation";
     const title = code === "pr_not_merged" ? `${subject} is not merged`
       : code === "pr_not_found" ? `${repo} has no ${subject}`
       : code === "commit_not_found" ? `GitHub does not know ${subject.toLowerCase()}`
+      : code === "validation" ? `Cannot search ${repo} for ${subject}`
       : `Could not search for ${subject}`;
     return (
       <Alert component="p" variant={expected ? "warning" : "danger"} isInline isLiveRegion title={title}
@@ -142,20 +148,29 @@ export const ContainsSearchResults: React.FC<{
 
   const total = search.total || plannedTotal;
   const running = search.running || search.total === 0;
-  const containing = search.results.filter((r) => r.answer.result === "contains").map((r) => sentenceName(r.build));
+  const results = search.results;
+  const containing = results.filter((r) => r.answer.result === "contains").map((r) => sentenceName(r.build));
+  const allUnknown = results.length > 0 && results.every(isUnknown);
+  const someUnknown = results.some(isUnknown);
   const cutoff = cutoffOf(info);
-  const newestBuilt = search.results.reduce<number | null>((newest, r) => {
-    const t = r.build.buildDate ? Date.parse(r.build.buildDate) : NaN;
-    return Number.isNaN(t) ? newest : newest === null ? t : Math.max(newest, t);
-  }, null);
-  const detail = detailLine(kind, search.results, name);
+  // "After the newest build" is only claimed when every build's date is known.
+  const buildDates = results.map((r) => (r.build.buildDate ? Date.parse(r.build.buildDate) : NaN));
+  const newestBuilt = buildDates.length > 0 && buildDates.every((t) => !Number.isNaN(t)) ? Math.max(...buildDates) : null;
+  const detail = detailLine(kind, results, name);
+  const what = kind === "pr" ? "the PR" : "the commit";
+  const commitInBuild = (
+    <>
+      the commit the build&apos;s {name} image was built from (the <i>Commit in build</i> column, read from the image&apos;s labels), in {fork}
+    </>
+  );
 
   const explanation = (
     <>
-      A build contains {kind === "pr" ? "the PR" : "the commit"} when the commit its {name} image was built from, in {fork}, includes
-      {kind === "pr" ? " the PR's merge commit" : " it"} (GitHub compare). The fork merges {repo}, so upstream commits keep their SHA; a fork
-      that cherry-picks or rebases instead does not have {kind === "pr" ? "the merge commit" : "the commit"}, and its builds show as unknown.
-      Builds older than {kind === "pr" ? "the merge" : "the commit"} are not read. The search covers the installed build and the builds the filters list.
+      A build contains {what} when {kind === "pr" ? "the PR's merge commit" : "the commit"} is an ancestor of {commitInBuild}.
+      The odh-dashboard fork merges upstream main, so this is reliable for dashboard {kind === "pr" ? "PRs" : "commits"}. A fork that
+      cherry-picks or rebases upstream changes has different commit SHAs, so a {kind === "pr" ? "PR" : "commit"} it took that way shows
+      as &quot;does not contain&quot;. Builds built more than an hour before {kind === "pr" ? "the merge" : "the commit"} are not read.
+      The search covers the installed build and the builds the filters list.
     </>
   );
 
@@ -173,8 +188,9 @@ export const ContainsSearchResults: React.FC<{
               </>
             ) : (
               <>
-                {" "}in {info.commitURL?.includes(`/${FORK_OWNER}/`) ? fork : repo}
-                {info.commitDate && <>, committed <RelativeTime date={info.commitDate} size="inherit" /></>}.
+                {info.commitTitle ? <>: {info.commitTitle}</> : null}.{" "}
+                {info.commitDate ? <>Committed <RelativeTime date={info.commitDate} size="inherit" /> in</> : <>In</>}
+                {" "}{info.commitURL?.includes(`/${FORK_OWNER}/`) ? fork : repo}.
               </>
             )}
           </Content>
@@ -188,14 +204,16 @@ export const ContainsSearchResults: React.FC<{
         ) : (
           <>
             <Content component="p" aria-live="polite">
-              {containing.length > 0 ? <>{subjectWithTitle} is in {listNames(containing)}.</>
+              {containing.length > 0 ? <>{subject} is in {listNames(containing)}.</>
+                : allUnknown ? <>Could not tell whether any build contains {kind === "pr" ? subject : subject.toLowerCase()}.</>
                 : cutoff !== null && newestBuilt !== null && newestBuilt < cutoff ? (
                   <>
-                    No build contains {subjectWithTitle} yet: it was {kind === "pr" ? "merged" : "committed"}{" "}
+                    No build contains {subject} yet: it was {kind === "pr" ? "merged" : "committed"}{" "}
                     <RelativeTime date={new Date(cutoff)} size="inherit" />, after the newest build (<RelativeTime date={new Date(newestBuilt)} size="inherit" />).
                   </>
                 )
-                : <>No build contains {subjectWithTitle}.</>}
+                : someUnknown ? <>No checked build contains {subject}.</>
+                : <>No build contains {subject}.</>}
             </Content>
             {detail && <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">{detail}</Content>}
           </>
@@ -210,7 +228,7 @@ export const ContainsSearchResults: React.FC<{
           </Alert>
         </StackItem>
       )}
-      {search.results.length > 0 && (
+      {results.length > 0 && (
         <StackItem>
           <Table aria-label={`Builds and ${subject}`} variant="compact" borders={false}>
             <Thead>
@@ -219,12 +237,12 @@ export const ContainsSearchResults: React.FC<{
                 <Th info={{ popover: <Content component="p">{explanation}</Content>, popoverProps: { headerContent: `How "contains ${subject}" is decided` } }}>
                   {subject}
                 </Th>
-                <Th>{name === "odh-dashboard" ? "Dashboard commit" : `${name} commit`}</Th>
+                <Th modifier="wrap">Commit in build</Th>
                 <Th screenReaderText="Actions" />
               </Tr>
             </Thead>
             <Tbody>
-              {search.results.map(({ build, answer }, rowIndex) => {
+              {results.map(({ build, answer }, rowIndex) => {
                 const actions: IAction[] = [];
                 if (answer.compareURL) {
                   actions.push({
@@ -242,10 +260,10 @@ export const ContainsSearchResults: React.FC<{
                   <Tr key={build.image} isStriped={rowIndex % 2 === 1}>
                     <Td dataLabel="Build"><strong>{build.label}</strong></Td>
                     <Td dataLabel={subject}>
-                      <ResultLabel answer={answer} subject={subject} reasons={reasons} />
+                      <ResultLabel answer={answer} label={tableLabel} reasons={reasons} />
                       {note && <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">{note}</div>}
                     </Td>
-                    <Td dataLabel="Commit">
+                    <Td dataLabel="Commit in build">
                       {answer.commit && answer.commitRepo
                         ? <a href={`https://github.com/${answer.commitRepo}/commit/${answer.commit}`} target="_blank" rel="noopener noreferrer" title={`${answer.commitRepo}@${answer.commit}`}><code>{answer.commit.slice(0, 7)}</code></a>
                         : <NotRecorded what={answer.reason && CUTOFF_TEXT[answer.reason] ? `Not read: ${CUTOFF_TEXT[answer.reason].toLowerCase()}` : `No ${name} commit recorded`} />}

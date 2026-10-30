@@ -100,6 +100,9 @@ describe("classifySearch and imagesBuiltFrom", () => {
     ["abc12", "invalid"],
     ["https://github.com/opendatahub-io/odh-dashboard/pull/5123", "pr"],
     ["opendatahub-io/data-science-pipelines#42", "pr"],
+    ["https://github.com/opendatahub-io/odh-dashboard/commit/21c06a3be1de89a8e18cf95cc7eef5a78add9481", "commit"],
+    ["https://github.com/opendatahub-io/odh-dashboard/commit/21c06a", "image"],
+    ["https://github.com/opendatahub-io/odh-dashboard/commits/main", "image"],
     // Not a PR: an owner with a space, an issue URL, a PR number of zero.
     ["https://github.com/open datahub/odh-dashboard/pull/5123", "image"],
     ["https://github.com/opendatahub-io/odh-dashboard/issues/5123", "image"],
@@ -122,6 +125,13 @@ describe("classifySearch and imagesBuiltFrom", () => {
 
   it("bare PR forms keep the default repository", () => {
     for (const input of ["#5123", "PR 5123", "5123"]) expect(classifySearch(input)).toEqual({ kind: "pr", value: "5123" });
+  });
+
+  it("a GitHub commit URL names the commit's repository; a bare SHA keeps the default", () => {
+    const sha = "21c06a3be1de89a8e18cf95cc7eef5a78add9481";
+    expect(classifySearch(`https://github.com/opendatahub-io/odh-dashboard/commit/${sha}`)).toEqual({ kind: "commit", value: sha, repo: "opendatahub-io/odh-dashboard" });
+    expect(classifySearch(`https://github.com/Red-Hat-Data-Services/kserve/commit/${sha.slice(0, 7).toUpperCase()}/#diff-1`)).toEqual({ kind: "commit", value: sha.slice(0, 7), repo: "Red-Hat-Data-Services/kserve" });
+    expect(classifySearch(` ${sha} `)).toEqual({ kind: "commit", value: sha });
   });
 
   it("matches a full SHA or a prefix, case-insensitively", () => {

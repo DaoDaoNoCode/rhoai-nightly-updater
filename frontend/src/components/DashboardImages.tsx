@@ -243,8 +243,9 @@ export const DashboardImages: React.FC<DashboardImagesProps> = ({ images, defaul
                               {[
                                 build.buildDate && <RelativeTime key="built" date={build.buildDate} prefix="built " size="inherit" />,
                                 build.commitDate && <RelativeTime key="committed" date={build.commitDate} prefix="committed " size="inherit" />,
-                                // Which nightly builds contain this commit (Build Explorer).
-                                build.commit && <Link key="find" to={`/builds?q=${build.commit}`} aria-label={`Find commit ${build.commit.slice(0, 7)} in nightlies`}>Find in nightlies</Link>,
+                                // Which nightly builds contain this commit (Build Explorer). The
+                                // commit URL names the repository; a bare SHA means the dashboard.
+                                build.commit && <Link key="find" to={`/builds?q=${encodeURIComponent(build.commitURL || build.commit)}`} aria-label={`Find commit ${build.commit.slice(0, 7)} in nightlies`}>Find in nightlies</Link>,
                               ].filter(Boolean).map((part, i) => <React.Fragment key={i}>{i > 0 && " · "}{part}</React.Fragment>)}
                             </div>
                           )}

@@ -62,9 +62,9 @@ describe("DashboardImages build details", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("built 2h ago")).toBeInTheDocument();
     expect(screen.getByText("committed 5h ago")).toBeInTheDocument();
-    // The Build Explorer search for this commit, on the same line.
+    // The Build Explorer search for this commit, on the same line; the commit URL carries the repository.
     const find = screen.getByRole("link", { name: "Find commit 21c06a3 in nightlies" });
-    expect(find).toHaveAttribute("href", `/builds?q=${SHA}`);
+    expect(find).toHaveAttribute("href", `/builds?q=${encodeURIComponent(`https://github.com/opendatahub-io/odh-dashboard/commit/${SHA}`)}`);
     // (The absolute dates in between are the screen-reader text of each time.)
     expect(find.parentElement?.textContent).toMatch(/^built 2h ago .* · committed 5h ago .* · Find in nightlies$/);
     expect(screen.getByText("3 commits behind main")).toBeInTheDocument();
@@ -88,8 +88,9 @@ describe("DashboardImages build details", () => {
   });
 
   it("offers Find in nightlies for a PR build with a commit, not for a build without one", () => {
+    // Without a commit URL the link carries the bare SHA.
     render(<DashboardImages images={[image("rhods-dashboard", { running: "pr", runningPR: 5123, flavor: "rhoai" })]} defaultExpanded
-      buildDetails={details([build({ running: "pr", pr: 5123, buildDate: undefined, divergence: { base: "pr-5123", status: "identical", behind: 0, ahead: 0, prState: "open" } })])} />);
+      buildDetails={details([build({ running: "pr", pr: 5123, buildDate: undefined, commitURL: undefined, divergence: { base: "pr-5123", status: "identical", behind: 0, ahead: 0, prState: "open" } })])} />);
     expect(screen.getByRole("link", { name: "Find commit 21c06a3 in nightlies" })).toHaveAttribute("href", `/builds?q=${SHA}`);
     render(<DashboardImages images={[image("notebooks-ui", { running: "main", flavor: "rhoai" })]} defaultExpanded
       buildDetails={details([build({ deployment: "notebooks-ui", container: "notebooks-ui", commit: undefined, commitURL: undefined, reason: "no_commit_label", message: "The image has no labels." })])} />);

@@ -30,11 +30,27 @@ const IDLE: ContainsSearchState = { running: false, checked: 0, total: 0, info: 
 /** Request-level failures that end the search: nothing can be said about any build. */
 const FATAL_CODES = ["pr_not_merged", "pr_not_found", "commit_not_found", "upstream_error", "validation", "session_expired", "unauthorized", "forbidden"];
 
-/** When the searched PR was merged, or the commit was committed: a build older than this cannot contain it. */
+/** When the searched PR was merged, or the commit was committed (ms): a build built well before this cannot contain it. */
 export function cutoffOf(info: Omit<PRContainsResponse, "builds"> | null): number | null {
   const date = info?.mergedAt || info?.commitDate;
   const t = date ? Date.parse(date) : NaN;
   return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * A build is answered from its date alone only when it was built more than
+ * this long before the merge or the commit (same margin as the backend): a
+ * committer date comes from the developer's clock and the build date from the
+ * registry's, so they may disagree by minutes. (A committer date forged far
+ * into the future would skip every build; a known limit.)
+ */
+export const BUILT_BEFORE_MARGIN_MS = 3_600_000;
+
+/** Whether a build with this build date was built so long before `cutoff` (see cutoffOf) that it cannot contain the searched change. */
+export function builtBefore(buildDate: string | undefined, cutoff: number | null): boolean {
+  if (cutoff === null || !buildDate) return false;
+  const built = Date.parse(buildDate);
+  return !Number.isNaN(built) && built < cutoff - BUILT_BEFORE_MARGIN_MS;
 }
 
 /** The answer for a build built before the cutoff, given without a request. */
@@ -122,16 +138,13 @@ export function useContainsSearch(query: ContainsQuery | null, builds: SearchBui
       try {
         await ask(queue.shift()!);
         checked++;
-        // Builds older than the merge (or the commit) cannot contain it: no request.
+        // Builds well older than the merge (or the commit) cannot contain it: no request.
         const cutoff = cutoffOf(info);
-        if (cutoff !== null) {
-          for (const build of [...queue]) {
-            const built = build.buildDate ? Date.parse(build.buildDate) : NaN;
-            if (!Number.isNaN(built) && built < cutoff) {
-              queue.splice(queue.indexOf(build), 1);
-              results.push({ build, answer: builtBeforeAnswer(kind, build.image) });
-              checked++;
-            }
+        for (const build of [...queue]) {
+          if (builtBefore(build.buildDate, cutoff)) {
+            queue.splice(queue.indexOf(build), 1);
+            results.push({ build, answer: builtBeforeAnswer(kind, build.image) });
+            checked++;
           }
         }
         publish(true);
