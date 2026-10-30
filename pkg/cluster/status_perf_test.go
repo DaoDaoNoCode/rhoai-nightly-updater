@@ -344,6 +344,69 @@ func TestGetNightlyStatus_StaleEntryRefreshesInBackground(t *testing.T) {
 	}
 }
 
+// After hours without a poll (a closed tab, an expired session) the cached
+// comparison is too old to show: the first poll waits for Quay instead of
+// serving it and refreshing behind the user's back.
+func TestGetNightlyStatus_VeryStaleEntryIsLookedUpNow(t *testing.T) {
+	f := newFakeRegistry()
+	f.tagDigests["rhoai-3.6"] = digestOf(1)
+	installFakeRegistry(t, f)
+	sub := types.SubscriptionInfo{Source: CatalogName}
+	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
+	if got := getNightlyStatus(context.Background(), "a", sub, cs); got.UpdateAvailable == nil || *got.UpdateAvailable {
+		t.Fatal("the first lookup finds the installed build up to date")
+	}
+	nightlyBackground.Wait()
+
+	f.mu.Lock()
+	f.tagDigests["rhoai-3.6"] = digestOf(9)
+	f.mu.Unlock()
+	previousFresh, previousStale := nightlyStatusFresh, nightlyStatusStaleMax
+	nightlyStatusFresh, nightlyStatusStaleMax = 0, 0
+	t.Cleanup(func() {
+		nightlyBackground.Wait()
+		nightlyStatusFresh, nightlyStatusStaleMax = previousFresh, previousStale
+	})
+
+	got := getNightlyStatus(context.Background(), "a", sub, cs)
+	if got.UpdateAvailable == nil || !*got.UpdateAvailable {
+		t.Fatalf("a very stale entry must be looked up before answering, got updateAvailable=%v error=%q", got.UpdateAvailable, got.Error)
+	}
+	if got.Latest == nil || got.Latest.Digest != digestOf(9) {
+		t.Fatalf("latest = %+v, want digest %s", got.Latest, digestOf(9))
+	}
+}
+
+// When Quay is slow, a very stale entry behaves like a first poll: the answer
+// says the lookup is pending instead of showing the old comparison.
+func TestGetNightlyStatus_VeryStaleEntryReportsASlowQuay(t *testing.T) {
+	f := newFakeRegistry()
+	f.tagDigests["rhoai-3.6"] = digestOf(1)
+	installFakeRegistry(t, f)
+	sub := types.SubscriptionInfo{Source: CatalogName}
+	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
+	getNightlyStatus(context.Background(), "a", sub, cs)
+	nightlyBackground.Wait()
+
+	f.mu.Lock()
+	f.tagDigests["rhoai-3.6"] = digestOf(9)
+	f.latency = 200 * time.Millisecond
+	f.mu.Unlock()
+	previousFresh, previousStale := nightlyStatusFresh, nightlyStatusStaleMax
+	nightlyStatusFresh, nightlyStatusStaleMax = 0, 0
+	t.Cleanup(func() {
+		nightlyBackground.Wait()
+		nightlyStatusFresh, nightlyStatusStaleMax = previousFresh, previousStale
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	got := getNightlyStatus(ctx, "a", sub, cs)
+	if got.Error == "" || (got.UpdateAvailable != nil && !*got.UpdateAvailable) {
+		t.Fatalf("a very stale entry is not shown while Quay is slow, got %+v", got)
+	}
+}
+
 func TestDashboardCommitIsFilledFromCachedCatalog(t *testing.T) {
 	f := newFakeRegistry()
 	installed := digestOf(1)
