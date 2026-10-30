@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
 
 func TestBuildExplorerContainsValidation(t *testing.T) {
@@ -16,24 +18,28 @@ func TestBuildExplorerContainsValidation(t *testing.T) {
 		many.Add("image", pinned)
 	}
 	cases := map[string]string{
-		"missing pr and commit": "",
-		"both pr and commit":    "pr=1&commit=" + strings.Repeat("a", 40),
-		"non-numeric pr":        "pr=abc",
-		"hash prefix":           "pr=%23123",
-		"zero":                  "pr=0",
-		"negative":              "pr=-5",
-		"huge":                  "pr=123456789012",
-		"short commit":          "commit=abc12",
-		"non-hex commit":        "commit=abcdefg",
-		"long commit":           "commit=" + strings.Repeat("a", 41),
-		"repo without owner":    "pr=1&repo=odh-dashboard",
-		"repo with bad chars":   "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh dashboard"),
-		"repo with three parts": "pr=1&repo=a/b/c",
-		"path traversal repo":   "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh-dashboard/../x"),
-		"tag-only image":        "pr=1&image=" + url.QueryEscape("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"),
-		"foreign registry":      "pr=1&image=" + url.QueryEscape("docker.io/evil/fbc@sha256:"+strings.Repeat("a", 64)),
-		"other quay repo":       "pr=1&image=" + url.QueryEscape("quay.io/rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("a", 64)),
-		"too many images":       many.Encode(),
+		"missing pr and commit":       "",
+		"both pr and commit":          "pr=1&commit=" + strings.Repeat("a", 40),
+		"non-numeric pr":              "pr=abc",
+		"hash prefix":                 "pr=%23123",
+		"zero":                        "pr=0",
+		"negative":                    "pr=-5",
+		"huge":                        "pr=123456789012",
+		"short commit":                "commit=abc12",
+		"non-hex commit":              "commit=abcdefg",
+		"long commit":                 "commit=" + strings.Repeat("a", 41),
+		"repo without owner":          "pr=1&repo=odh-dashboard",
+		"repo with bad chars":         "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh dashboard"),
+		"repo with three parts":       "pr=1&repo=a/b/c",
+		"path traversal repo":         "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh-dashboard/../x"),
+		"path traversal owner":        "pr=1&repo=" + url.QueryEscape("../x"),
+		"dots-only name":              "pr=1&repo=" + url.QueryEscape("opendatahub-io/.."),
+		"owner outside the allowlist": "pr=1&repo=" + url.QueryEscape("evil/repo"),
+		"owner with a dot":            "commit=" + strings.Repeat("a", 40) + "&repo=" + url.QueryEscape("opendatahub.io/odh-dashboard"),
+		"tag-only image":              "pr=1&image=" + url.QueryEscape("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"),
+		"foreign registry":            "pr=1&image=" + url.QueryEscape("docker.io/evil/fbc@sha256:"+strings.Repeat("a", 64)),
+		"other quay repo":             "pr=1&image=" + url.QueryEscape("quay.io/rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("a", 64)),
+		"too many images":             many.Encode(),
 	}
 	for name, query := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -52,6 +58,25 @@ func TestBuildExplorerContainsValidation(t *testing.T) {
 				t.Errorf("errorCode %q", body.ErrorCode)
 			}
 		})
+	}
+}
+
+func TestBuildExplorerContainsRepositoryOutsideTheAllowlist(t *testing.T) {
+	setupDevMode(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/build-explorer/contains?pr=1&repo="+url.QueryEscape("evil/repo"), nil)
+	r.Header.Set("X-Forwarded-Access-Token", "tok")
+	HandleBuildExplorerContains(w, r)
+	if w.Code != 400 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Error     string `json:"error"`
+		ErrorCode string `json:"errorCode"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body.ErrorCode != "validation" || body.Error != cluster.SearchRepoMessage || !strings.HasPrefix(body.Error, "PR and commit search cover repositories of opendatahub-io, red-hat-data-services") {
+		t.Errorf("body %s", w.Body.String())
 	}
 }
 

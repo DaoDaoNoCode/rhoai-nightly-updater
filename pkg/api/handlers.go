@@ -981,7 +981,8 @@ var commitSearchRegex = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
 // HandleBuildExplorerContains reports which nightly builds contain a merged
 // pull request or a commit:
 // GET /api/build-explorer/contains?pr=<N>|commit=<sha>[&repo=<owner/name>][&image=<FBC ref>...].
-// Exactly one of pr and commit; repo defaults to opendatahub-io/odh-dashboard.
+// Exactly one of pr and commit; repo defaults to opendatahub-io/odh-dashboard
+// and must belong to one of the owners cluster.ValidSearchRepo allows.
 // Without image, the installed build and the newest build of every tag are
 // checked. A GitHub rate limit gives partial results (rateLimited), never an error.
 var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
@@ -991,7 +992,7 @@ var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.Respon
 		repo = cluster.DefaultPRSearchRepo
 	}
 	if !cluster.ValidSearchRepo(repo) {
-		writeError(w, "'repo' must be a GitHub repository, owner/name", http.StatusBadRequest, "validation")
+		writeError(w, cluster.SearchRepoMessage, http.StatusBadRequest, "validation")
 		return
 	}
 	prParam, commit := q.Get("pr"), q.Get("commit")

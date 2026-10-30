@@ -521,12 +521,17 @@ func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 	seedBuildDate(t, old, "2026-10-03T21:00:00Z")
 	sameMinute := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.3@%s", digestOf(2))
 	seedBuildDate(t, sameMinute, "2026-10-05T21:16:13Z") // not before: must be checked
+	// Within the hour before the merge: clocks may disagree, so it is checked.
+	halfHour := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.2@%s", digestOf(5))
+	seedBuildDate(t, halfHour, "2026-10-05T20:46:13Z")
+	twoHours := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.1@%s", digestOf(6))
+	seedBuildDate(t, twoHours, "2026-10-05T19:16:13Z")
 	newer := seedBuild(t, 3, "rhoai-3.6", forkURL, commitNew)
 	seedBuildDate(t, newer, "2026-10-06T02:30:00Z")
 	undated := seedBuild(t, 4, "rhoai-3.5", forkURL, commitNew)
 
 	resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(
-		prBuild{image: old}, prBuild{image: sameMinute}, prBuild{image: newer}, prBuild{image: undated}))
+		prBuild{image: old}, prBuild{image: sameMinute}, prBuild{image: halfHour}, prBuild{image: twoHours}, prBuild{image: newer}, prBuild{image: undated}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,6 +541,12 @@ func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 	}
 	if b := got["rhoai-3.3"]; b.Result != "unknown" || b.Reason != "build_unreadable" {
 		t.Errorf("build of the merge minute must be read: %+v", b)
+	}
+	if b := got["rhoai-3.2"]; b.Result != "unknown" || b.Reason != "build_unreadable" {
+		t.Errorf("build 30 minutes before the merge must be read: %+v", b)
+	}
+	if b := got["rhoai-3.1"]; b.Result != "not_contained" || b.Reason != "built_before_merge" || b.Message != "Built 2 hours before the PR was merged." {
+		t.Errorf("build 2 hours before the merge: %+v", b)
 	}
 	if b := got["rhoai-3.6"]; b.Result != "contains" {
 		t.Errorf("newer build: %+v", b)
@@ -809,10 +820,76 @@ func TestFindBuildsContainingPR_UnknownBuilds(t *testing.T) {
 	if got["rhoai-2.25"].Message != "This build has no image built from red-hat-data-services/odh-dashboard or opendatahub-io/odh-dashboard." {
 		t.Errorf("no_component_image message %q", got["rhoai-2.25"].Message)
 	}
-	// A compare 404 means the fork does not have the merge commit (a
-	// cherry-pick or rebase), which is said, not "does not contain".
-	if got["rhoai-2.21"].Message != "GitHub does not know the PR's merge commit "+mergeSHA[:12]+" in "+forkRepo+": the fork may cherry-pick or rebase instead of merging upstream, so this build cannot be checked." {
+	// A compare 404 means GitHub does not know the merge commit at all (forks
+	// of one network resolve each other's SHAs), which is said, not "does
+	// not contain".
+	if got["rhoai-2.21"].Message != "GitHub does not know commit "+mergeSHA[:12]+" in "+DefaultPRSearchRepo+" or "+forkRepo+"." {
 		t.Errorf("commit_not_found message %q", got["rhoai-2.21"].Message)
+	}
+}
+
+func TestValidSearchRepo(t *testing.T) {
+	for repo, want := range map[string]bool{
+		"opendatahub-io/odh-dashboard":                    true,
+		"OpenDataHub-io/odh-dashboard":                    true, // GitHub names are case-insensitive
+		"red-hat-data-services/data-science-pipelines":    true,
+		"kubeflow/kubeflow":                               true,
+		"kserve/kserve":                                   true,
+		"trustyai-explainability/trustyai-explainability": true,
+		"llm-d/llm-d":                                     true,
+		"feast-dev/feast":                                 true,
+		"ray-project/kuberay":                             true,
+		"opendatahub-io/odh_dashboard.v2":                 true,
+		"evil/repo":                                       false, // an owner outside the allowlist
+		"../x":                                            false, // would reach GitHub as /repos/../x
+		"opendatahub-io/..":                               false,
+		"opendatahub-io/.":                                false,
+		"opendatahub-io/":                                 false,
+		"opendatahub-io":                                  false,
+		"opendatahub-io/odh dashboard":                    false,
+		"opendatahub-io/odh-dashboard/x":                  false,
+		"opendatahub.io/odh-dashboard":                    false, // owners have no dots
+		"opendatahub-io/" + strings.Repeat("a", 101):      false,
+	} {
+		if got := ValidSearchRepo(repo); got != want {
+			t.Errorf("ValidSearchRepo(%q) = %v, want %v", repo, got, want)
+		}
+	}
+}
+
+func TestFindBuildsContainingPR_RepositoryAllowlist(t *testing.T) {
+	g := newFakeGitHub()
+	installFakeGitHub(t, g)
+	t.Run("an owner outside the allowlist is refused before GitHub is asked", func(t *testing.T) {
+		for _, repo := range []string{"evil/repo", "../x", "opendatahub-io/.."} {
+			_, err := findBuildsContainingPR(context.Background(), "", repo, 5, staticBuilds())
+			var searchErr *PRSearchError
+			if !errors.As(err, &searchErr) || searchErr.Status != 400 || searchErr.Code != "validation" || searchErr.Msg != SearchRepoMessage {
+				t.Errorf("%s: %v", repo, err)
+			}
+			_, err = findBuildsContainingCommit(context.Background(), "", repo, "abcdef0", staticBuilds())
+			if !errors.As(err, &searchErr) || searchErr.Status != 400 || searchErr.Code != "validation" || searchErr.Msg != SearchRepoMessage {
+				t.Errorf("%s (commit): %v", repo, err)
+			}
+		}
+		if g.count("pull")+g.count("commits") != 0 {
+			t.Error("GitHub was asked about a refused repository")
+		}
+	})
+	t.Run("the owner's case does not matter", func(t *testing.T) {
+		g.prRepos["OpenDataHub-io/odh-dashboard"] = true
+		g.prs[9938] = mergedPR(mergeSHA)
+		g.compare[mergeSHA+"..."+commitNew] = "ahead"
+		resp, err := findBuildsContainingPR(context.Background(), "", "OpenDataHub-io/odh-dashboard", 9938, staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Builds[0].Result != "contains" {
+			t.Errorf("%+v", resp.Builds[0])
+		}
+	})
+	if SearchRepoMessage != "PR and commit search cover repositories of opendatahub-io, red-hat-data-services, kubeflow, kserve, trustyai-explainability, llm-d, feast-dev and ray-project." {
+		t.Errorf("message %q", SearchRepoMessage)
 	}
 }
 

@@ -708,7 +708,7 @@ type PRContainsBuild struct {
 	// Reason explains the result. For "not_contained": "built_before_merge"
 	// or "built_before_commit" (the build is older than what it is searched
 	// for, so nothing was read about it). For "unknown": "rate_limited",
-	// "commit_not_found" (the merge commit or commit is not in the fork),
+	// "commit_not_found" (GitHub does not know the merge commit or commit),
 	// "no_component_image", "no_commit_label", "unexpected_repo",
 	// "build_unreadable" or "github_error".
 	Reason     string `json:"reason,omitempty"`

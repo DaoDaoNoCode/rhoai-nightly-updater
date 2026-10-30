@@ -14,14 +14,18 @@ package cluster
 // GET /repos/red-hat-data-services/odh-dashboard/commits/<7-char upstream
 // sha> resolves, compare/<old upstream sha>...<rhoai-3.6 head> is "ahead"
 // (contained) and compare/<today's upstream main head>...<rhoai-3.6 head> is
-// "diverged" (not merged yet). Other forks may cherry-pick or rebase instead;
-// then the upstream commit is unknown in the fork and compare answers 404,
-// which is reported as unknown ("commit not in the fork"), never as "does
-// not contain".
+// "diverged" (not merged yet). Forks of one GitHub network resolve each
+// other's SHAs (checked 2026-10-30: GET /repos/red-hat-data-services/
+// data-science-pipelines/commits/<upstream merge sha> is 200 and the compare
+// with a fork build commit is "diverged" although the fork never merged it),
+// so a fork that cherry-picks or rebases upstream changes answers "not
+// contained" for a PR it took that way: the cherry-pick has another SHA.
+// A compare 404 only happens for a SHA outside the network, which is
+// reported as unknown ("commit not on GitHub").
 //
-// A build whose image was pushed before the PR's merge date (or the commit's
-// date) cannot contain it: its answer comes from the FBC image's build-date
-// label alone, with no catalog or GitHub read.
+// A build whose image was pushed more than an hour before the PR's merge
+// date (or the commit's date) cannot contain it: its answer comes from the
+// FBC image's build-date label alone, with no catalog or GitHub read.
 //
 // GitHub compare semantics (GET /repos/{owner}/{repo}/compare/{base}...{head}):
 // "ahead" or "identical" means head contains base; "behind" or "diverged"
@@ -50,13 +54,42 @@ const DefaultPRSearchRepo = "opendatahub-io/odh-dashboard"
 // forkOwner owns the forks the RHOAI images are built from.
 const forkOwner = "red-hat-data-services"
 
-// searchRepoPattern is the "owner/name" a search may name (it ends up in
-// GitHub API paths).
-var searchRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$`)
+// searchRepoOwners are the GitHub owners a search may name: the upstreams the
+// RHOAI component forks come from, and the forks' owner. A search makes the
+// server call GitHub with its GITHUB_TOKEN for whatever repository is named,
+// so the repository is not free text. Compared case-insensitively, as GitHub
+// names are.
+var searchRepoOwners = []string{"opendatahub-io", "red-hat-data-services", "kubeflow", "kserve", "trustyai-explainability", "llm-d", "feast-dev", "ray-project"}
 
-// ValidSearchRepo reports whether repo is a well-formed "owner/name".
+// SearchRepoMessage is the validation error for a repository the search does
+// not cover.
+const SearchRepoMessage = "PR and commit search cover repositories of opendatahub-io, red-hat-data-services, kubeflow, kserve, trustyai-explainability, llm-d, feast-dev and ray-project."
+
+var (
+	// searchRepoOwnerPattern: GitHub owners have no dots, so "../x" is out.
+	searchRepoOwnerPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+	// searchRepoNamePattern: a repository name (it ends up in GitHub API paths).
+	searchRepoNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
+)
+
+// ValidSearchRepo reports whether repo is a well-formed "owner/name" whose
+// owner is one of searchRepoOwners.
 func ValidSearchRepo(repo string) bool {
-	return searchRepoPattern.MatchString(repo)
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || !searchRepoOwnerPattern.MatchString(owner) || !searchRepoNamePattern.MatchString(name) || strings.Trim(name, ".") == "" {
+		return false
+	}
+	for _, o := range searchRepoOwners {
+		if strings.EqualFold(o, owner) {
+			return true
+		}
+	}
+	return false
+}
+
+// invalidSearchRepo is the error for a repository ValidSearchRepo refuses.
+func invalidSearchRepo() error {
+	return &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: SearchRepoMessage}
 }
 
 // forkCandidates lists the repositories a build's component image may have
@@ -85,6 +118,13 @@ func isCandidate(candidates []string, repo string) bool {
 const (
 	// prMaxBuilds bounds the builds one request checks.
 	prMaxBuilds = 40
+	// builtBeforeMargin: a build is answered from its date alone only when
+	// it was built more than this long before the merge or the commit. A
+	// committer date comes from the developer's clock and the build date from
+	// the registry's, so they may disagree by minutes. (A committer date
+	// forged far into the future would make every build "older" than the
+	// commit and skip them all; that is a known limit.)
+	builtBeforeMargin = time.Hour
 	// prConcurrency bounds the builds checked at once (each needs a catalog,
 	// a label read and one GitHub call).
 	prConcurrency = 4
@@ -507,7 +547,7 @@ func rateLimitNoter(resp *types.PRContainsResponse) func(time.Time) {
 
 func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number int, list func(context.Context) ([]prBuild, error)) (*types.PRContainsResponse, error) {
 	if !ValidSearchRepo(repo) {
-		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: fmt.Sprintf("%q is not a GitHub repository (owner/name)", repo)}
+		return nil, invalidSearchRepo()
 	}
 	resp := &types.PRContainsResponse{Repo: repo, PR: number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", repo, number), Builds: []types.PRContainsBuild{}}
 	noteRateLimit := rateLimitNoter(resp)
@@ -548,7 +588,7 @@ func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number 
 
 func findBuildsContainingCommit(ctx context.Context, basicAuth, repo, sha string, list func(context.Context) ([]prBuild, error)) (*types.PRContainsResponse, error) {
 	if !ValidSearchRepo(repo) {
-		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: fmt.Sprintf("%q is not a GitHub repository (owner/name)", repo)}
+		return nil, invalidSearchRepo()
 	}
 	if !githubSHAPattern.MatchString(sha) || len(sha) > 40 {
 		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: "'commit' must be 7 to 40 hex characters"}
@@ -618,8 +658,9 @@ func runContainsSearch(ctx context.Context, basicAuth string, search containsSea
 	return resp, nil
 }
 
-// builtBefore reports whether the build's FBC image was pushed before t,
-// from its (cached) build-date label. False when the date is unknown.
+// builtBefore reports whether the build's FBC image was pushed more than
+// builtBeforeMargin before t, from its (cached) build-date label, and by how
+// much. False when the date is unknown.
 func builtBefore(ctx context.Context, basicAuth, image string, t time.Time) (time.Duration, bool) {
 	if t.IsZero() {
 		return 0, false
@@ -629,7 +670,7 @@ func builtBefore(ctx context.Context, basicAuth, image string, t time.Time) (tim
 		return 0, false
 	}
 	built, err := time.Parse(time.RFC3339, labels.BuildDate)
-	if err != nil || !built.Before(t) {
+	if err != nil || !built.Before(t.Add(-builtBeforeMargin)) {
 		return 0, false
 	}
 	return t.Sub(built), true
@@ -705,12 +746,14 @@ func checkBuildContains(ctx context.Context, basicAuth string, search containsSe
 	case err != nil:
 		out.Reason, out.Message = "github_error", err.Error()
 	case verdict.notFound:
-		what := "the PR's merge commit"
-		if search.commit {
-			what = "commit"
+		// Forks of one network resolve each other's SHAs, so this is a SHA
+		// GitHub does not know at all, not a fork that cherry-picks.
+		repos := []string{search.repo}
+		if !isCandidate(repos, component.repo) {
+			repos = append(repos, component.repo)
 		}
 		out.Reason = "commit_not_found"
-		out.Message = fmt.Sprintf("GitHub does not know %s %s in %s: the fork may cherry-pick or rebase instead of merging upstream, so this build cannot be checked.", what, shortSHA(search.base), component.repo)
+		out.Message = fmt.Sprintf("GitHub does not know commit %s in %s.", shortSHA(search.base), strings.Join(repos, " or "))
 	case verdict.contains:
 		out.Result = "contains"
 	default:
