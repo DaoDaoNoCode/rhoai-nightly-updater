@@ -86,7 +86,8 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 		if b.Deployment != "rhods-dashboard" || b.Image != image.CurrentImage || b.Running != "main" || b.Flavor != DashboardFlavorODH || b.PR != 0 {
 			t.Fatalf("build=%+v", b)
 		}
-		if b.Commit != commit || b.Repo != upstreamRepo || b.CommitURL != upstreamURL+"/commit/"+commit || b.BuildDate != "2026-10-29T06:00:00Z" || b.CommitDate != g.commitDate || b.Reason != "" {
+		// The build-date label is the UBI base's; the config's created time is the build.
+		if b.Commit != commit || b.Repo != upstreamRepo || b.CommitURL != upstreamURL+"/commit/"+commit || b.BuildDate != "2026-10-29T06:30:00Z" || b.CommitDate != g.commitDate || b.Reason != "" {
 			t.Fatalf("build=%+v", b)
 		}
 		d := b.Divergence
@@ -250,6 +251,22 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		}
 		if g.count("pull") != 2 {
 			t.Fatalf("the closed PR must be read again, got %d reads", g.count("pull"))
+		}
+	})
+
+	t.Run("pr-image-built-from-a-contributor-fork", func(t *testing.T) {
+		// Konflux labels the PR image with the branch's repository, the
+		// contributor's fork; the PR and its commits are upstream.
+		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-5123")
+		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-5123"), map[string]string{"git.commit": prHead, "git.url": "https://github.com/someone/odh-dashboard"})
+		g.prs[5123] = openPR(prHead)
+		g.compare[prHead+"..."+prHead] = "identical"
+		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}))
+		if b.Repo != DefaultPRSearchRepo || !strings.HasPrefix(b.CommitURL, "https://github.com/"+DefaultPRSearchRepo+"/commit/") {
+			t.Fatalf("repo=%q commitURL=%q", b.Repo, b.CommitURL)
+		}
+		if d := b.Divergence; d == nil || d.Status != "identical" || d.PRState != "open" || !strings.Contains(d.CompareURL, DefaultPRSearchRepo) {
+			t.Fatalf("divergence=%+v", d)
 		}
 	})
 

@@ -129,11 +129,21 @@ func TestParseImageLabels(t *testing.T) {
 			"git.commit": "1111111111111111111111111111111111111111", "git.url": "https://github.com/opendatahub-io/odh-dashboard",
 			"vcs-ref": "1111111111111111111111111111111111111111", "build-date": "2026-10-29T01:02:03Z", "version": "3.6.0",
 		}, ImageLabels{GitCommit: "1111111111111111111111111111111111111111", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T01:02:03Z", Version: "3.6.0"}},
+		// build-date and version are the UBI base's: the build date is the config's created time.
 		{"openshift-ci", map[string]string{
 			"vcs-ref": "2222222222222222222222222222222222222222", "io.openshift.build.commit.id": "2222222222222222222222222222222222222222",
 			"io.openshift.build.source-location": "https://github.com/opendatahub-io/odh-dashboard",
-			"org.opencontainers.image.revision":  "9999999999999999999999999999999999999999", "build-date": "2026-10-29T04:05:06Z",
-		}, ImageLabels{GitCommit: "2222222222222222222222222222222222222222", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T04:05:06Z"}},
+			"org.opencontainers.image.revision":  "9999999999999999999999999999999999999999", "build-date": "2026-10-29T04:05:06Z", "version": "9.8",
+		}, ImageLabels{GitCommit: "2222222222222222222222222222222222222222", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T22:55:20Z"}},
+		// A PR build: the OpenShift CI keys are present but empty, so no commit.
+		{"openshift-ci-pr-build", map[string]string{
+			"vcs-ref": "", "io.openshift.build.commit.id": "", "io.openshift.build.source-location": "",
+			"org.opencontainers.image.revision": "9999999999999999999999999999999999999999", "build-date": "2026-10-29T13:34:30Z", "version": "1",
+		}, ImageLabels{BuildDate: "2026-10-29T22:55:20Z"}},
+		{"openshift-ci-without-created", map[string]string{
+			"vcs-ref": "2222222222222222222222222222222222222222", "io.openshift.build.commit.id": "2222222222222222222222222222222222222222",
+			"build-date": "2026-10-29T04:05:06Z", "version": "9.8",
+		}, ImageLabels{GitCommit: "2222222222222222222222222222222222222222"}},
 		{"vcs-url-before-source-location", map[string]string{
 			"git.commit": "3333333333333333333333333333333333333333", "vcs-url": "https://github.com/example/vcs",
 			"io.openshift.build.source-location": "https://github.com/example/openshift",
@@ -144,7 +154,11 @@ func TestParseImageLabels(t *testing.T) {
 		{"revision-alone-is-not-a-commit", map[string]string{"org.opencontainers.image.revision": "5555555555555555555555555555555555555555"}, ImageLabels{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := parseImageLabels(tc.labels); *got != tc.want {
+			created := "2026-10-29T22:55:20.781805405Z"
+			if tc.name == "openshift-ci-without-created" {
+				created = ""
+			}
+			if got := parseImageLabels(tc.labels, created); *got != tc.want {
 				t.Fatalf("got %+v, want %+v", *got, tc.want)
 			}
 		})

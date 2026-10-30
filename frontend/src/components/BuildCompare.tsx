@@ -179,7 +179,7 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
                           <Td dataLabel="Installed"><Sha sha={r.fromCommit} /></Td>
                           <Td dataLabel="Selected"><Sha sha={r.toCommit} /></Td>
                           <Td dataLabel="Images"><ImageNames change={r} /></Td>
-                          <Td dataLabel="GitHub compare">
+                          <Td dataLabel="GitHub compare" modifier="nowrap">
                             {url && (
                               <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Compare ${r.repo} commits on GitHub`}>
                                 Compare <ExternalLinkAltIcon />

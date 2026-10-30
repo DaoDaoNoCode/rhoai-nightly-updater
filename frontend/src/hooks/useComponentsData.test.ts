@@ -77,6 +77,36 @@ describe("useComponentsData", () => {
     expect(result.current.data?.deployments[0]).toMatchObject({ ready: 0, gitCommit: "sha-img1" });
   });
 
+  it("leaves out images the response has no labels for, so they are asked about again", () => {
+    const labels = extractLabels(response([dep("a", "img1", 1, true), dep("b", "img2", 1)]));
+    expect([...labels.keys()]).toEqual(["redhat-ods-applications/a@img1"]);
+  });
+
+  it("asks for labels again after a poll when an image's first labels read failed", async () => {
+    let bLabelled = false;
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("labels=true")
+        ? jsonResponse(response([dep("a", "img1", 1, true), dep("b", "img2", 1, bLabelled)]))
+        : jsonResponse(response([dep("a", "img1", 1), dep("b", "img2", 1)])),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useComponentsData());
+    await tick();
+    expect(result.current.data?.deployments[1].gitCommit).toBeUndefined();
+    const labelCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).includes("labels=true")).length;
+    expect(labelCalls()).toBe(1);
+    // Not on the next polls: the same set waits LABELS_RETRY_MS.
+    bLabelled = true;
+    await tick(30_000);
+    await tick(30_000);
+    expect(labelCalls()).toBe(1);
+    for (let i = 0; i < 10; i++) await tick(30_000);
+    await tick();
+    expect(labelCalls()).toBe(2);
+    expect(result.current.labelsLoading).toBe(false);
+    expect(result.current.data?.deployments[1].gitCommit).toBe("sha-img2");
+  });
+
   it("fetches labels again only when a poll shows new images", async () => {
     let image = "img1";
     const fetchMock = vi.fn(async (url: string) =>

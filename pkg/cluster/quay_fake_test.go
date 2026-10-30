@@ -37,6 +37,9 @@ type fakeRegistry struct {
 	tokenExpiry   time.Duration
 }
 
+// fakeImageCreated is the config "created" time of every fake image.
+const fakeImageCreated = "2026-10-29T06:30:00.123456789Z"
+
 func newFakeRegistry() *fakeRegistry {
 	return &fakeRegistry{
 		counts:      map[string]int{},
@@ -140,7 +143,9 @@ func (f *fakeRegistry) answer(r *http.Request) (kind string, status int, body []
 		if !ok {
 			return "quay-blob", 200, []byte(`{"config":{}}`), nil
 		}
-		b, _ := json.Marshal(map[string]interface{}{"config": map[string]interface{}{"Labels": labels}})
+		// Every fake image was created at fakeImageCreated: the build date of
+		// an OpenShift CI image (whose build-date label is the base's).
+		b, _ := json.Marshal(map[string]interface{}{"created": fakeImageCreated, "config": map[string]interface{}{"Labels": labels}})
 		return "quay-blob", 200, b, nil
 	}
 	return "other", 404, nil, nil

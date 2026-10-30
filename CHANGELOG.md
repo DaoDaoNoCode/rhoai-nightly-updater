@@ -115,6 +115,34 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- The Components page showed a dash instead of a commit for the MLflow
+  server: its Deployment names `quay.io/opendatahub/mlflow:odh-stable`, a
+  floating tag of an ODH repository, and labels were read only for `rhoai/`
+  images pinned by digest. Labels are now read for ODH images too, from the
+  digest a running pod reports when the Deployment names a tag. An image
+  whose registry read failed or timed out was never asked about again until
+  Refresh or a reload; the page now asks again, in the background, five
+  minutes later. The dash of an image that is not an RHOAI or ODH build (the
+  dashboard redirect's UBI nginx) says so in its tooltip instead of "Not
+  recorded in the image labels".
+- An ODH (OpenShift CI) build showed the wrong build date and version:
+  "built 20h ago · committed 4h ago" on Dashboard Dev, and `9.8` as a
+  version on Components, because those images carry the UBI base image's
+  `build-date` and `version` labels. For an image with an
+  `io.openshift.build.commit.id` label the build date is now the image
+  config's `created` time and no version is shown.
+- A Dashboard Dev PR build (RHOAI flavour) showed *Distance from PR
+  unknown: opendatahub-io/odh-dashboard has no pull request*, because the
+  image's `git.url` label names the branch's repository, the contributor's
+  fork, and the PR was looked up there. PR builds are now compared in
+  upstream `opendatahub-io/odh-dashboard`, where the PR and its commits
+  live. An ODH (OpenShift CI) PR build has no commit label at all (the
+  `vcs-ref` is empty on PR builds, not on main builds); the card says so
+  instead of "The image has no commit label."
+- The Components row of a Deployment with several containers described the
+  first one: `rhods-dashboard` showed the kube-rbac-proxy sidecar's image
+  and commit. The row now describes the container named like the
+  Deployment, else the first container that is not a known sidecar.
 - The Status page could show an old "latest nightly" on the first load after
   hours without a poll (a closed tab, an expired session) until the next poll
   or a click on Refresh: the latest-build comparison was served from the cache

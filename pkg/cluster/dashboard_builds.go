@@ -202,17 +202,30 @@ func dashboardContainerBuild(ctx context.Context, image types.DashboardDevImage,
 		switch githubRepo, ok := githubRepoFromURL(labels.GitURL); {
 		case !dashboardCommitSHAPattern.MatchString(commit):
 			out.Reason, out.Message = "no_commit_label", "The image has no commit label."
+			if image.Running == "pr" && image.Flavor == DashboardFlavorODH {
+				// OpenShift CI leaves vcs-ref empty on PR builds (not on main builds).
+				out.Message = "ODH PR builds carry no commit label, so the commit cannot be shown; the RHOAI build of the PR has one."
+			}
 			out.BuildDate = labels.BuildDate
 		case !ok:
 			out.Commit, out.BuildDate = commit, labels.BuildDate
 			out.Reason, out.Message = "unknown_repo", "The image was not built from a GitHub repository, so it cannot be compared with main."
 		default:
+			// A PR build's git.url names the branch's repository, which is
+			// the contributor's fork for most PRs (odh-pr-10500 carried
+			// https://github.com/jesuino/odh-dashboard). The PR itself, and
+			// every commit of it, lives in the upstream repository.
+			gitURL := labels.GitURL
+			if image.Running == "pr" {
+				githubRepo = DefaultPRSearchRepo
+				gitURL = "https://github.com/" + githubRepo
+			}
 			out.Commit, out.BuildDate, out.Repo = commit, labels.BuildDate, githubRepo
 			out.CommitURL = "https://github.com/" + githubRepo + "/commit/" + commit
 			divergence := dashboardDivergence(ctx, githubRepo, commit, image.Running, image.RunningPR, noteRateLimit)
 			out.Divergence = &divergence
 			// One request per new SHA, cached for good; skipped while rate limited.
-			out.CommitDate = fetchCommitDate(ctx, labels.GitURL, commit)
+			out.CommitDate = fetchCommitDate(ctx, gitURL, commit)
 		}
 	}
 

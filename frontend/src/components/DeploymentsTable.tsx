@@ -97,6 +97,13 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
   changed: "Changed since the last install",
 };
 
+/** True for an image built from an RHOAI or ODH repository, whose labels carry a commit. */
+export function isBuildImage(image: string | undefined): boolean {
+  return /(^|\/)rhoai\/|quay\.io\/opendatahub\//.test(image ?? "");
+}
+/** The dash's tooltip for an image whose labels are never read (a UBI nginx, for example). */
+export const NOT_A_BUILD_IMAGE = "Not an RHOAI or ODH build: the image has no commit, build date or version to show";
+
 /** Commit, Built and Version are in the expanded row too; below lg they are hidden (UX-Components-12). */
 const WIDE_ONLY: ThProps["visibility"] = ["hidden", "visibleOnLg"];
 
@@ -300,6 +307,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
           const isExpanded = !!expanded[key];
           const health = deploymentHealth(dep);
           const shortSha = dep.gitCommit ? dep.gitCommit.slice(0, 7) : "";
+          const notRecorded = isBuildImage(dep.image) ? undefined : NOT_A_BUILD_IMAGE;
           const commitURL = dep.gitCommit && dep.gitURL ? `${dep.gitURL}/commit/${dep.gitCommit}` : "";
           const pods = dep.pods ?? [];
           const canUnblock = unschedulableRollout(dep);
@@ -349,17 +357,17 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
                       ) : <code>{shortSha}</code>}
                       {dep.commitDate && <div className="pf-v6-u-text-nowrap"><RelativeTime date={dep.commitDate} prefix="merged " /></div>}
                     </>
-                  ) : <NotRecorded />}
+                  ) : <NotRecorded what={notRecorded} />}
                 </Td>
                 <Td dataLabel="Built" modifier="nowrap" visibility={WIDE_ONLY}>
                   {labelsLoading && !dep.buildDate ? (
                     <Skeleton width="4rem" screenreaderText="Loading build date" />
                   ) : dep.buildDate ? (
                     <RelativeTime date={dep.buildDate} />
-                  ) : <NotRecorded />}
+                  ) : <NotRecorded what={notRecorded} />}
                 </Td>
                 <Td dataLabel="Version" visibility={WIDE_ONLY}>
-                  {labelsLoading && !dep.version ? <Skeleton width="3rem" screenreaderText="Loading version" /> : dep.version || <NotRecorded />}
+                  {labelsLoading && !dep.version ? <Skeleton width="3rem" screenreaderText="Loading version" /> : dep.version || <NotRecorded what={notRecorded} />}
                 </Td>
                 <Td isActionCell>
                   {actions.length > 0 && <RowActions items={actions} rowName={dep.name} />}

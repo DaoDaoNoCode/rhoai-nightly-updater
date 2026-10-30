@@ -123,6 +123,22 @@ describe("ComponentsPage Deployments table (A08-14, A08-11)", () => {
     expect(rowNames()).toHaveLength(3);
   });
 
+  it("a base image's dash says it is not a build, a build image's dash says the label is missing", async () => {
+    stubApi({ "/api/components": present([
+      dep("dashboard-redirect", { image: `registry.redhat.io/ubi9/nginx-126@sha256:${"b".repeat(64)}` }),
+      dep("gen-ai-ui", { buildDate: "2026-10-01T00:00:00Z" }),
+    ]) });
+    renderPage();
+    const table = await screen.findByRole("grid", { name: "Deployments" });
+    const rowOf = (name: string) => {
+      const row = within(table).getAllByRole("row").find((r) => r.querySelector('td[data-label="Name"] span')?.textContent === name);
+      if (!row) throw new Error(`no row ${name}`);
+      return row;
+    };
+    await waitFor(() => expect(within(rowOf("dashboard-redirect")).getAllByText(/Not an RHOAI or ODH build/).length).toBeGreaterThan(0));
+    expect(within(rowOf("gen-ai-ui")).getAllByText("Not recorded in the image labels").length).toBeGreaterThan(0);
+  });
+
   it("sorts by name when the Name header is clicked", async () => {
     stubApi({ "/api/components": present(deployments) });
     renderPage();

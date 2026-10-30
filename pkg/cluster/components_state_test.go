@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const almExamplesJSON = `[{"apiVersion":"datasciencecluster.opendatahub.io/v2","kind":"DataScienceCluster","metadata":{"labels":{"app.kubernetes.io/name":"datasciencecluster"},"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"mcplifecycleoperator":{"managementState":"Removed"}}}},{"apiVersion":"dscinitialization.opendatahub.io/v2","kind":"DSCInitialization","metadata":{"name":"default-dsci"},"spec":{}}]`
@@ -171,6 +173,45 @@ func TestGetComponents_UsesCachedLabelsWithoutQuay(t *testing.T) {
 	}
 	if total != 0 {
 		t.Fatalf("labels=false must not call Quay: %v", f.counts)
+	}
+}
+
+func TestMainContainerImage(t *testing.T) {
+	cs := []deploymentContainer{{"kube-rbac-proxy", "proxy"}, {"core-bff", "bff"}, {"rhods-dashboard", "dash"}}
+	if got := mainContainerImage("rhods-dashboard", cs); got != "dash" {
+		t.Fatalf("named container: %q", got)
+	}
+	if got := mainContainerImage("other", cs); got != "bff" {
+		t.Fatalf("first non-sidecar: %q", got)
+	}
+	if got := mainContainerImage("x", []deploymentContainer{{"kube-rbac-proxy", "proxy"}}); got != "proxy" {
+		t.Fatalf("only a sidecar: %q", got)
+	}
+	if got := mainContainerImage("x", nil); got != "" {
+		t.Fatalf("no containers: %q", got)
+	}
+}
+
+func TestLabelImageRef(t *testing.T) {
+	mlflowID := "quay.io/opendatahub/mlflow@sha256:" + strings.Repeat("3", 64)
+	cases := []struct {
+		name string
+		dep  types.DeploymentInfo
+		want string
+	}{
+		{"pinned RHOAI image", types.DeploymentInfo{Image: "registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:" + strings.Repeat("1", 64)}, "registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:" + strings.Repeat("1", 64)},
+		{"floating ODH tag takes the pod's digest", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{ImageID: mlflowID}}}, mlflowID},
+		{"a pod of another repository does not count", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable", Pods: []types.PodInfo{{ImageID: "quay.io/opendatahub/other@sha256:" + strings.Repeat("4", 64)}}}, ""},
+		{"floating tag without a pod", types.DeploymentInfo{Image: "quay.io/opendatahub/mlflow:odh-stable"}, ""},
+		{"a base image has no commit", types.DeploymentInfo{Image: "registry.redhat.io/ubi9/nginx-126@sha256:" + strings.Repeat("5", 64)}, ""},
+		{"no image", types.DeploymentInfo{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := labelImageRef(tc.dep); got != tc.want {
+				t.Fatalf("labelImageRef = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

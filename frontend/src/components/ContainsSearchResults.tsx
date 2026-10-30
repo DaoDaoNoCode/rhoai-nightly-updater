@@ -120,6 +120,8 @@ export const ContainsSearchResults: React.FC<{
   // "PR #5123" or "Commit 6c8ac6e"; the table label says "Contains PR #5123" or "Contains 6c8ac6e".
   const sha = (kind === "commit" && (info?.commit || query.value)) || "";
   const subject = kind === "pr" ? `PR #${query.value}` : `Commit ${sha.slice(0, 7)}`;
+  /** The subject inside a sentence: "PR #5123" keeps its capital, "commit 6c8ac6e" does not. */
+  const inSentence = kind === "pr" ? subject : subject.toLowerCase();
   const tableLabel = kind === "pr" ? subject : sha.slice(0, 7);
   const subjectURL = kind === "pr" ? info?.url || `https://github.com/${repo}/pull/${query.value}` : info?.commitURL || "";
   const subjectLink = subjectURL
@@ -199,21 +201,21 @@ export const ContainsSearchResults: React.FC<{
       <StackItem>
         {running ? (
           <Content component="p" aria-live="polite">
-            <Spinner size="sm" aria-label="Searching builds" />{" "}Checked {search.checked} of {total} builds for {subject}...
+            <Spinner size="sm" aria-label="Searching builds" />{" "}Checked {search.checked} of {total} builds for {inSentence}...
           </Content>
         ) : (
           <>
             <Content component="p" aria-live="polite">
               {containing.length > 0 ? <>{subject} is in {listNames(containing)}.</>
-                : allUnknown ? <>Could not tell whether any build contains {kind === "pr" ? subject : subject.toLowerCase()}.</>
+                : allUnknown ? <>Could not tell whether any build contains {inSentence}.</>
                 : cutoff !== null && newestBuilt !== null && newestBuilt < cutoff ? (
                   <>
-                    No build contains {subject} yet: it was {kind === "pr" ? "merged" : "committed"}{" "}
+                    No build contains {inSentence} yet: it was {kind === "pr" ? "merged" : "committed"}{" "}
                     <RelativeTime date={new Date(cutoff)} size="inherit" />, after the newest build (<RelativeTime date={new Date(newestBuilt)} size="inherit" />).
                   </>
                 )
-                : someUnknown ? <>No checked build contains {subject}.</>
-                : <>No build contains {subject}.</>}
+                : someUnknown ? <>No checked build contains {inSentence}.</>
+                : <>No build contains {inSentence}.</>}
             </Content>
             {detail && <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">{detail}</Content>}
           </>

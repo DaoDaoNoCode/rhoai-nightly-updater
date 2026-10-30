@@ -131,7 +131,7 @@ func (m *dashboardTagMock) RoundTrip(r *http.Request) (*http.Response, error) {
 		if !ok {
 			return answer(http.StatusOK, `{"config":{}}`, nil)
 		}
-		b, _ := json.Marshal(map[string]interface{}{"config": map[string]interface{}{"Labels": labels}})
+		b, _ := json.Marshal(map[string]interface{}{"created": fakeImageCreated, "config": map[string]interface{}{"Labels": labels}})
 		return answer(http.StatusOK, string(b), nil)
 	}
 	return answer(http.StatusNotFound, "", nil)

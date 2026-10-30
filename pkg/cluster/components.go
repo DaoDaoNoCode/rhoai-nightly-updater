@@ -345,9 +345,11 @@ func groupManagementState(comp map[string]interface{}) string {
 // read for the whole batch.
 func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInfo, fetch bool) {
 	var refs []string
-	for _, dep := range deployments {
-		if dep.Image != "" && isRHOAIImage(dep.Image) {
-			refs = append(refs, dep.Image)
+	lookup := make([]string, len(deployments))
+	for i, dep := range deployments {
+		if ref := labelImageRef(dep); ref != "" {
+			lookup[i] = ref
+			refs = append(refs, ref)
 		}
 	}
 	if len(refs) == 0 {
@@ -376,7 +378,7 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 		}
 	}
 	for i := range deployments {
-		l := labels[deployments[i].Image]
+		l := labels[lookup[i]]
 		if l == nil {
 			continue
 		}
@@ -386,6 +388,83 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 		deployments[i].BuildDate = l.BuildDate
 		deployments[i].Version = l.Version
 	}
+}
+
+type deploymentContainer struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+}
+
+// sidecarContainers are never the container a Deployment is about.
+var sidecarContainers = map[string]bool{"kube-rbac-proxy": true, "oauth-proxy": true, "kube-auth-proxy": true, "ca-bundle-watcher": true}
+
+// mainContainerImage is the image a Deployment is about: the container named
+// like the Deployment (rhods-dashboard lists kube-rbac-proxy and core-bff
+// before rhods-dashboard), else the first container that is not a known
+// sidecar, else the first container.
+func mainContainerImage(name string, containers []deploymentContainer) string {
+	for _, c := range containers {
+		if c.Name == name {
+			return c.Image
+		}
+	}
+	for _, c := range containers {
+		if !sidecarContainers[c.Name] {
+			return c.Image
+		}
+	}
+	if len(containers) > 0 {
+		return containers[0].Image
+	}
+	return ""
+}
+
+// labelImageRef is the digest-pinned reference whose labels describe dep's
+// image: the Deployment's own image when it is pinned, else the image ID of
+// a pod running the same repository (a Deployment that names a floating
+// tag, such as the MLflow server's quay.io/opendatahub/mlflow:odh-stable,
+// resolves to a digest only on its pods). Empty for images that are not
+// RHOAI or ODH builds (a UBI nginx has no commit to show) and for a
+// floating tag without a running pod.
+func labelImageRef(dep types.DeploymentInfo) string {
+	if dep.Image == "" || !isBuildImage(dep.Image) {
+		return ""
+	}
+	if _, _, ok := extractRepoAndDigest(dep.Image); ok {
+		return dep.Image
+	}
+	repo := imageRepoOf(dep.Image)
+	if repo == "" {
+		return ""
+	}
+	for _, pod := range dep.Pods {
+		if r, _, ok := extractRepoAndDigest(pod.ImageID); ok && r == repo {
+			return pod.ImageID
+		}
+	}
+	return ""
+}
+
+// isBuildImage reports whether an image is built from an RHOAI or ODH
+// repository, so its labels carry a commit: registry.redhat.io/rhoai (and
+// its quay.io mirror) or quay.io/opendatahub.
+func isBuildImage(imageRef string) bool {
+	return isRHOAIImage(imageRef) || strings.Contains(imageRef, "quay.io/opendatahub/")
+}
+
+// imageRepoOf is the repository path of a reference with a tag and no
+// digest, as extractRepoAndDigest spells it: "quay.io/opendatahub/mlflow:odh-stable"
+// gives "opendatahub/mlflow".
+func imageRepoOf(ref string) string {
+	ref = strings.TrimPrefix(ref, "docker-pullable://")
+	if colon := strings.LastIndex(ref, ":"); colon > strings.LastIndex(ref, "/") {
+		ref = ref[:colon]
+	}
+	slash := strings.Index(ref, "/")
+	if slash < 0 {
+		return ""
+	}
+	return ref[slash+1:]
 }
 
 func matchPodsToDeployments(pods []types.PodInfo, namespace string, deployments []types.DeploymentInfo) {
@@ -581,9 +660,7 @@ type deploymentList struct {
 			} `json:"selector"`
 			Template struct {
 				Spec struct {
-					Containers []struct {
-						Image string `json:"image"`
-					} `json:"containers"`
+					Containers []deploymentContainer `json:"containers"`
 				} `json:"spec"`
 			} `json:"template"`
 		} `json:"spec"`
@@ -632,11 +709,7 @@ func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error)
 			}
 		}
 
-		// Get the first container image
-		image := ""
-		if containers := item.Spec.Template.Spec.Containers; len(containers) > 0 {
-			image = containers[0].Image
-		}
+		image := mainContainerImage(item.Metadata.Name, item.Spec.Template.Spec.Containers)
 
 		deps = append(deps, types.DeploymentInfo{
 			Name:                item.Metadata.Name,

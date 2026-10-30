@@ -432,7 +432,8 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 
 	var config struct {
-		Config struct {
+		Created string `json:"created"`
+		Config  struct {
 			Labels map[string]string `json:"Labels"`
 		} `json:"config"`
 	}
@@ -444,17 +445,25 @@ func fetchConfigLabels(ctx context.Context, httpClient *http.Client, bearerToken
 	if labels == nil {
 		return nil, errNoImageLabels
 	}
-	return parseImageLabels(labels), nil
+	return parseImageLabels(labels, config.Created), nil
 }
 
 // parseImageLabels reads the build metadata out of an image's config labels.
 // Konflux images (quay.io/rhoai, the odh-* push builds) carry git.commit,
-// git.url and vcs-ref; OpenShift CI images (opendatahub pr-N and main) carry
-// vcs-ref, io.openshift.build.commit.id and io.openshift.build.source-location
-// but no git.url. org.opencontainers.image.revision is never read: on the
-// OpenShift CI images it is not the source commit.
-func parseImageLabels(labels map[string]string) *ImageLabels {
+// git.url, vcs-ref and their own build-date; OpenShift CI images (opendatahub
+// pr-N and main) carry the io.openshift.build.* keys but no git.url: a main
+// build fills vcs-ref, io.openshift.build.commit.id and
+// io.openshift.build.source-location, while a PR build leaves them empty
+// (checked 2026-10-30 on odh-dashboard:pr-10500), so a PR build has no
+// commit. On both, build-date, org.opencontainers.image.created and version
+// are the UBI base image's (build-date 05:53 on an image created at 22:55
+// from a commit of 22:42): the build date is the config's created time and
+// there is no version. org.opencontainers.image.revision is never read: on
+// the OpenShift CI images it is not the source commit.
+func parseImageLabels(labels map[string]string, created string) *ImageLabels {
 	result := &ImageLabels{}
+	_, hasOpenShiftKeys := labels["io.openshift.build.commit.id"]
+	openshiftCI := hasOpenShiftKeys && labels["git.commit"] == ""
 
 	// Try vcs-ref first, then git.commit
 	if v := labels["vcs-ref"]; v != "" {
@@ -470,6 +479,12 @@ func parseImageLabels(labels map[string]string) *ImageLabels {
 		}
 	}
 
+	if openshiftCI {
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			result.BuildDate = t.UTC().Format(time.RFC3339)
+		}
+		return result
+	}
 	if v := labels["build-date"]; v != "" {
 		result.BuildDate = v
 	}

@@ -12,9 +12,17 @@ export function labelKey(dep: Pick<DeploymentInfo, "namespace" | "name" | "image
   return `${dep.namespace}/${dep.name}@${dep.image}`;
 }
 
+/**
+ * The labels of a `?labels=true` response, by deployment and image. An image
+ * the response has no labels for is left out: the registry read may have
+ * failed or timed out, and the next poll asks for it again. (A base image
+ * without labels is asked about once per poll that shows it, which is cheap:
+ * the backend caches "no labels".)
+ */
 export function extractLabels(resp: ComponentsResponse | null): Map<string, DeploymentLabels> {
   const map = new Map<string, DeploymentLabels>();
   for (const dep of resp?.deployments ?? []) {
+    if (!dep.gitCommit && !dep.gitURL && !dep.commitDate && !dep.buildDate && !dep.version) continue;
     map.set(labelKey(dep), {
       gitCommit: dep.gitCommit,
       gitURL: dep.gitURL,
@@ -49,6 +57,9 @@ function missingLabelKeys(resp: ComponentsResponse, labels: Map<string, Deployme
 
 /** How long the first labels request may take before a fast plain request paints the page. */
 export const LABELS_FIRST_PAINT_MS = 1_500;
+
+/** How long a set of images without labels waits before a poll asks for them again. */
+export const LABELS_RETRY_MS = 5 * 60_000;
 
 /** ComponentsResponse with Go's null slices replaced by empty arrays. */
 export type NormalizedDSCCompatibility = DSCCompatibility & { invalidFields: string[]; missingComponents: string[]; extraComponents: string[] };
@@ -90,7 +101,8 @@ export function useComponentsData(): ComponentsData {
   const seq = useRef(0); // request start order
   const appliedSeq = useRef(0); // newest response applied to `raw`
   const labelsInFlight = useRef(false);
-  const attemptedLabelSets = useRef(new Set<string>());
+  /** When each set of images without labels was last asked about (signature → time). */
+  const attemptedLabelSets = useRef(new Map<string, number>());
   const labelsRef = useRef(labels);
   labelsRef.current = labels;
 
@@ -119,25 +131,33 @@ export function useComponentsData(): ComponentsData {
     }
   }, [apply, fail]);
 
-  // Returns true when the response was applied.
-  const fetchLabels = useCallback(async (): Promise<boolean> => {
+  // Returns true when the response was applied. A background retry (images
+  // whose labels were missing from an earlier response) shows no skeletons:
+  // the rows keep their dashes until the labels arrive.
+  const fetchLabels = useCallback(async (background = false): Promise<boolean> => {
     if (labelsInFlight.current) return false;
     labelsInFlight.current = true;
-    setLabelsLoading(true);
+    if (!background) setLabelsLoading(true);
     const requestSeq = ++seq.current;
     try {
       const resp = await getComponentsWithLabels();
       if (!mounted.current) return false;
       // Labels are valid for their image whatever the response order.
       const fresh = extractLabels(resp);
-      setLabels((prev) => new Map([...prev, ...fresh]));
+      setLabels((prev) => {
+        const next = new Map([...prev, ...fresh]);
+        // What this response could not label is asked about again after LABELS_RETRY_MS.
+        const missing = missingLabelKeys(resp, next);
+        if (missing.length > 0) attemptedLabelSets.current.set(missing.join("|"), Date.now());
+        return next;
+      });
       return apply(resp, requestSeq);
     } catch (e) {
       fail(e, requestSeq);
       return false;
     } finally {
       labelsInFlight.current = false;
-      if (mounted.current) setLabelsLoading(false);
+      if (mounted.current && !background) setLabelsLoading(false);
     }
   }, [apply, fail]);
 
@@ -161,15 +181,18 @@ export function useComponentsData(): ComponentsData {
     };
   }, [fetchLabels, fetchPlain]);
 
-  // A poll showed new images (for example after a rollout): resolve their labels once.
+  // A poll showed images without labels: new ones after a rollout, or ones
+  // whose registry read failed earlier. Resolve them, in the background, at
+  // most once per LABELS_RETRY_MS for the same set.
   useEffect(() => {
     if (!raw) return;
     const missing = missingLabelKeys(raw, labelsRef.current);
     if (missing.length === 0) return;
     const signature = missing.join("|");
-    if (attemptedLabelSets.current.has(signature) || labelsInFlight.current) return;
-    attemptedLabelSets.current.add(signature);
-    void fetchLabels();
+    const attempted = attemptedLabelSets.current.get(signature);
+    if ((attempted !== undefined && Date.now() - attempted < LABELS_RETRY_MS) || labelsInFlight.current) return;
+    attemptedLabelSets.current.set(signature, Date.now());
+    void fetchLabels(true);
   }, [raw, fetchLabels]);
 
   const refresh = useCallback(() => {
