@@ -134,19 +134,18 @@ const DivergenceChip: React.FC<{ build: DashboardContainerBuild; retryAfterSecon
   const chip = <StatusLabel status={label.status}>{label.text}</StatusLabel>;
   return (
     <>
-      <FlexItem>
+      {/* One item, so the Compare link wraps with its chip in a narrow column. */}
+      <FlexItem className="pf-v6-u-text-nowrap">
         {label.tooltip ? (
           <>
             <Tooltip content={label.tooltip}><span>{chip}</span></Tooltip>
             <span className="pf-v6-screen-reader"> ({label.tooltip})</span>
           </>
         ) : chip}
+        {label.link && (
+          <a className="pf-v6-u-ml-sm pf-v6-u-font-size-sm" href={label.link} target="_blank" rel="noopener noreferrer">Compare <ExternalLinkAltIcon /></a>
+        )}
       </FlexItem>
-      {label.link && (
-        <FlexItem className="pf-v6-u-font-size-sm">
-          <a href={label.link} target="_blank" rel="noopener noreferrer">Compare <ExternalLinkAltIcon /></a>
-        </FlexItem>
-      )}
       {build.divergence?.prState === "merged" && <FlexItem><TagLabel>PR #{build.pr} merged</TagLabel></FlexItem>}
     </>
   );
