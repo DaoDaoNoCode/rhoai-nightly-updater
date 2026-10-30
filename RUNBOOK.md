@@ -254,8 +254,8 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
   <img src="docs/images/builds-pr-search.png" alt="PR search for #5123: only rhoai-3.7-ea.1 contains it; the release branches do not" width="760">
 
-  In this example only the build from `main` contains the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. The search only follows merge commits. Builds older than the merge say **Built before the merge**: they were not read.
-- **Unknown (merge commit not in the fork):** the component's `red-hat-data-services` fork does not have the PR's merge commit (or the searched commit), so GitHub cannot compare. The dashboard fork merges upstream `main`, so its builds are always comparable; other forks may cherry-pick or rebase instead, and their builds cannot be checked by this search. Look at the build's component commit (the link in the row) on GitHub instead.
+  In this example only the build from `main` contains the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. A build contains the PR when the PR's merge commit is an ancestor of the component's commit in the fork (`red-hat-data-services/<name>`). The odh-dashboard fork merges upstream `main`, so this is reliable for dashboard PRs; a fork that cherry-picks or rebases upstream changes has different commit SHAs, so a PR it took that way shows as **Does not contain**. Look at the build's component commit (the link in the row) on GitHub instead. Builds built more than an hour before the merge say **Built before the merge**: they were not read.
+- **Unknown (commit not on GitHub):** GitHub does not know the searched commit (or the PR's merge commit) in the repository or its fork, so it cannot compare. Check the SHA.
 
 ## 9. Dashboard Dev
 

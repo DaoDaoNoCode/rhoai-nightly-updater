@@ -211,8 +211,9 @@ export function fbcContent(image) {
  * (of any repository: the mock answers every one like the dashboard) is
  * merged 40 hours ago and reaches only the build from main after it;
  * release branches get a cherry-pick (another SHA). A commit is a fixed one
- * of rhoai-3.6, committed 40 hours ago. Builds older than either are
- * answered from their date alone (built_before_merge / built_before_commit).
+ * of rhoai-3.6, committed 40 hours ago. Builds more than an hour older than
+ * either are answered from their date alone (built_before_merge /
+ * built_before_commit), as the backend does.
  */
 export function buildContains({ pr, commit, repo }, images) {
   repo = repo || "opendatahub-io/odh-dashboard";
@@ -229,7 +230,7 @@ export function buildContains({ pr, commit, repo }, images) {
     builds: images.map((image) => {
       const b = tagBuilds.find((t) => image === fbc(t.tag, t.seed)) ?? installedBuild;
       const row = { image, tag: b.tag, installed: image === INSTALLED_IMAGE };
-      const builtBefore = Date.parse(b.buildDate) < Date.parse(baseDate);
+      const builtBefore = Date.parse(b.buildDate) < Date.parse(baseDate) - 3_600_000;
       if (builtBefore) {
         const hours = Math.round((Date.parse(baseDate) - Date.parse(b.buildDate)) / 3_600_000);
         const age = hours < 48 ? `${hours} hours` : `${Math.round(hours / 24)} days`;

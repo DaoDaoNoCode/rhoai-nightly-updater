@@ -41,45 +41,60 @@ only accepts a tag whose version is the top dated section. See
   gitops profile like the rest of Dashboard Dev.
 - The Build Explorer search takes the URL of a GitHub PR (or `owner/name#N`)
   of any RHOAI component repository, not only `#N` of
-  opendatahub-io/odh-dashboard: `GET /api/build-explorer/contains` accepts
-  any `repo` and finds the build's component image by its `git.url` label,
-  the `red-hat-data-services` fork of that name (or the repository itself),
-  instead of an allowlist and a fixed image name. A compare that GitHub
-  answers 404 is reported as *Unknown (merge commit not in the fork)*: the
-  fork cherry-picks or rebases instead of merging upstream, so the build
-  cannot be checked; it is never reported as *Does not contain*.
-- A commit SHA is searched by containment, like a PR: the same route takes
-  `commit=` (7 to 40 hex), resolves it on the repository and then on the fork
-  (upstream odh-dashboard SHAs exist in the fork, which merges `upstream/main`)
-  and compares each build's component commit with it. Only when GitHub knows
-  the commit nowhere does the page fall back to the old scan for a component
-  image built from exactly that commit, and says so. The response describes a
-  commit with `commit`, `commitDate`, `commitTitle` and `commitURL`.
-- The search results start with one sentence: *PR #5123 is in rhoai-3.7-ea.1
-  and rhoai-3.6.*, *No build contains PR #5123 yet: it was merged 2h ago,
-  after the newest build (9h ago).* or *No build contains PR #5123.*, with a
-  subtle line for the rest (*Not in rhoai-3.5 and 4 older builds (built
-  before the merge). 3 builds could not be checked (GitHub rate limit).*).
-- `/builds?q=<text>` runs that search once the builds are listed, and
-  submitting a search writes it to the URL, so a search can be shared. The
-  Status page's `?image=` link keeps working.
+  opendatahub-io/odh-dashboard: `GET /api/build-explorer/contains` takes a
+  `repo` of `opendatahub-io`, `red-hat-data-services`, `kubeflow`, `kserve`,
+  `trustyai-explainability`, `llm-d`, `feast-dev` or `ray-project` (the
+  upstreams the RHOAI forks come from; anything else is a 400, since the
+  server asks GitHub with its own token) and finds the build's component
+  image by its `git.url` label, the `red-hat-data-services` fork of that name
+  (or the repository itself), instead of a fixed image name. A fork that
+  cherry-picks or rebases upstream changes has different commit SHAs, so a
+  PR it took that way shows as *Does not contain* (forks of one GitHub
+  network resolve each other's SHAs, so the compare answers); *Unknown
+  (commit not on GitHub)* only appears for a SHA GitHub does not know at all.
+- A commit SHA, or the URL of a GitHub commit, is searched by containment,
+  like a PR: the same route takes `commit=` (7 to 40 hex), resolves it on the
+  repository and then on the fork (upstream odh-dashboard SHAs exist in the
+  fork, which merges `upstream/main`) and compares each build's component
+  commit with it. Only when GitHub knows the commit nowhere does the page
+  fall back to the old scan for a component image built from exactly that
+  commit, and says so. The response describes a commit with `commit`,
+  `commitDate`, `commitTitle` and `commitURL`.
+- The search results start with one sentence: *PR #5123 is in the installed
+  build and rhoai-3.6.*, *No build contains PR #5123 yet: it was merged 2h
+  ago, after the newest build (9h ago).*, *No checked build contains PR
+  #5123.* or, when no build could be checked, *Could not tell whether any
+  build contains PR #5123.*, with a subtle line for the rest (*Not in
+  rhoai-3.5 and rhoai-3.4. 4 older builds were built before the merge. 3
+  builds could not be checked (GitHub rate limit).*). A commit's title is on
+  the header line (*Commit 6c8ac6e: Show the model deployment status.
+  Committed 1d ago in opendatahub-io/odh-dashboard.*).
+- `/builds?q=<text>` runs that search once the builds are listed, again when
+  the URL changes while the page is open, and submitting a search writes it
+  to the URL, so a search can be shared. The Status page's `?image=` link
+  keeps working.
 - Dashboard Dev's containers card links each PR or main build's commit to
-  the Build Explorer search for it (*Find in nightlies*).
+  the Build Explorer search for it (*Find in nightlies*), as the commit's
+  GitHub URL, so the search knows the repository.
 
 ### Changed
 
-- A nightly pushed before the PR was merged (or before the searched commit)
-  cannot contain it, so the search answers it from the build's date label
-  alone: *Does not contain, built before the merge*, with no catalog or
-  GitHub read. The page does the same for the builds whose date it already
-  has, without a request. A PR search over 25 builds now reads only the
-  builds newer than the merge.
+- A nightly pushed more than an hour before the PR was merged (or before the
+  searched commit) cannot contain it, so the search answers it from the
+  build's date label alone: *Does not contain, built before the merge*, with
+  no catalog or GitHub read. The hour allows for clock differences between a
+  committer's machine and the registry. The page does the same for the
+  builds whose date it already has, without a request. A PR search over 25
+  builds now reads only the builds newer than the merge.
 - The image label cache holds 10000 entries instead of 2000 (25 builds x
   165 images), so a search over every build stays warm.
 - Wording: the commit search's finished line no longer says that later builds
   also contain the commit; a build whose component image has no commit label
   names that image; the help popover and the placeholder (*Image, commit SHA,
-  PR # or PR URL*) list what can be searched.
+  PR # or PR URL*) list what can be searched. The results table's third
+  column is *Commit in build* (the component is named in the header popover),
+  the search field is wide enough for its placeholder on desktop, and the
+  installed build is "the installed build" in sentences.
 
 - Deploy latest main writes the build under its commit tag,
   `quay.io/opendatahub/<repo>:<commit tag>@sha256:...`, so the page and
