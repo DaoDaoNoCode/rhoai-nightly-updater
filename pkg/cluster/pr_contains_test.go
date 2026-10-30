@@ -204,12 +204,17 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type githubTransport struct {
 	server *url.URL
 	other  *atomic.Int32
+	// otherURLs collects the URLs of the requests other counts.
+	otherURLs *sync.Map
 }
 
 func (t githubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.URL.Host != "api.github.com" {
 		if t.other != nil {
 			t.other.Add(1)
+		}
+		if t.otherURLs != nil {
+			t.otherURLs.Store(r.URL.String(), true)
 		}
 		return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
 	}
@@ -229,12 +234,30 @@ func installFakeGitHub(t *testing.T, g *fakeGitHub) *atomic.Int32 {
 	resetRegistryCaches()
 	original := quayHTTPClient
 	registryReads := &atomic.Int32{}
-	quayHTTPClient = &http.Client{Transport: githubTransport{server: u, other: registryReads}, Timeout: 10 * time.Second}
+	registryURLs = &sync.Map{}
+	quayHTTPClient = &http.Client{Transport: githubTransport{server: u, other: registryReads, otherURLs: registryURLs}, Timeout: 10 * time.Second}
 	t.Cleanup(func() {
 		quayHTTPClient = original
 		resetRegistryCaches()
 	})
 	return registryReads
+}
+
+// registryURLs holds the URLs of the registry requests the fake GitHub
+// transport refused since installFakeGitHub was last called.
+var registryURLs *sync.Map
+
+// registryAsked reports whether any refused registry request named s.
+func registryAsked(s string) bool {
+	found := false
+	registryURLs.Range(func(k, _ any) bool {
+		if strings.Contains(k.(string), s) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func mergedPR(sha string) map[string]interface{} {
@@ -517,14 +540,17 @@ func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 
 	// Only the build date is known about the old build: its catalog is not
 	// cached, so reading it would hit the (absent) registry.
-	old := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.4@%s", digestOf(1))
+	// The two builds the date alone answers live in repositories of their
+	// own, so a registry request for them (the token request names the
+	// repository) is told apart from the reads the others need.
+	old := fmt.Sprintf("quay.io/rhoai/fbc-old:rhoai-3.4@%s", digestOf(1))
 	seedBuildDate(t, old, "2026-10-03T21:00:00Z")
 	sameMinute := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.3@%s", digestOf(2))
 	seedBuildDate(t, sameMinute, "2026-10-05T21:16:13Z") // not before: must be checked
 	// Within the hour before the merge: clocks may disagree, so it is checked.
 	halfHour := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.2@%s", digestOf(5))
 	seedBuildDate(t, halfHour, "2026-10-05T20:46:13Z")
-	twoHours := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.1@%s", digestOf(6))
+	twoHours := fmt.Sprintf("quay.io/rhoai/fbc-two-hours:rhoai-3.1@%s", digestOf(6))
 	seedBuildDate(t, twoHours, "2026-10-05T19:16:13Z")
 	newer := seedBuild(t, 3, "rhoai-3.6", forkURL, commitNew)
 	seedBuildDate(t, newer, "2026-10-06T02:30:00Z")
@@ -559,13 +585,20 @@ func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 	if g.count("compare") != 1 {
 		t.Errorf("%d compare calls, want 1", g.count("compare"))
 	}
-	// The registry was asked once, for the uncached catalog of rhoai-3.3
-	// (and the undated build's missing date), never for the old build.
-	if n := registryReads.Load(); n == 0 || n > 2 {
-		t.Errorf("%d registry reads", n)
+	// The registry was asked for the builds inside the margin (rhoai-3.3,
+	// rhoai-3.2 and the undated build; how many requests those take depends
+	// on retries and token reads, so only the floor is asserted), never for
+	// the builds the date alone answered.
+	if n := registryReads.Load(); n == 0 {
+		t.Error("no registry read for the builds that must be checked")
 	}
-	if _, ok := cachedFBCContent(old); ok {
-		t.Error("the old build's catalog was read")
+	if !registryAsked("rhoai-fbc-fragment") {
+		t.Error("the builds inside the margin were not read")
+	}
+	for name, repo := range map[string]string{"old": "fbc-old", "two hours before the merge": "fbc-two-hours"} {
+		if registryAsked(repo) {
+			t.Errorf("the %s build was read", name)
+		}
 	}
 }
 
