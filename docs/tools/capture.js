@@ -350,6 +350,17 @@ async (page) => {
         ],
         pad: 24,
       });
+      // The containers card: gen-ai-ui runs a commit two pushes behind the
+      // PR, and its odh-pr tag has moved on to a newer build.
+      const containers = card("Dashboard containers (4)");
+      const genAI = containers.getByRole("row").filter({ hasText: "Gen AI" }).first();
+      await crop("dashboard-dev-builds", [alert("has a newer build"), containers], {
+        notes: [
+          { at: label(genAI, "newer commits"), n: 3, pos: "l" },
+          { at: genAI.getByText("Newer build available"), n: 4, pos: "l" },
+        ],
+        pad: 24,
+      });
     },
 
     async resources() {
