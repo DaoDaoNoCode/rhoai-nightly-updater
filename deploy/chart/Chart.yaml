@@ -8,8 +8,8 @@ type: application
 # The release this chart belongs to, as in CHANGELOG.md: scripts/release.sh
 # check refuses a release tag whose version is not this one. Install the
 # chart from a release tag (targetRevision vX.Y.Z), with that release's image.
-version: 2.3.0
-appVersion: "v2.3.0"
+version: 2.3.1
+appVersion: "v2.3.1"
 home: https://github.com/DaoDaoNoCode/rhoai-nightly-updater
 sources:
   - https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater
