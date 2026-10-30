@@ -157,10 +157,25 @@ export function compareBuilds(fromImages: RelatedImage[], toImages: RelatedImage
 
 export type SearchKind = "empty" | "image" | "commit" | "pr" | "invalid";
 
+export interface SearchQuery {
+  kind: SearchKind;
+  value: string;
+  /** The PR's repository, "owner/name", when the search named one (a PR URL or owner/name#N); the default repository otherwise. */
+  repo?: string;
+}
+
+const GITHUB_NAME = "[A-Za-z0-9_.-]+";
+/** https://github.com/<owner>/<name>/pull/<N>, with an optional trailing "/", "/files", "#..." or "?...". */
+const PR_URL = new RegExp(`^https?://(?:www\\.)?github\\.com/(${GITHUB_NAME})/(${GITHUB_NAME})/pull/(\\d{1,7})(?:/[^#?]*)?(?:[#?].*)?$`, "i");
+/** <owner>/<name>#<N>. */
+const PR_REF = new RegExp(`^(${GITHUB_NAME})/(${GITHUB_NAME})#(\\d{1,7})$`);
+
 /** What the Build Explorer search box holds. */
-export function classifySearch(raw: string): { kind: SearchKind; value: string } {
+export function classifySearch(raw: string): SearchQuery {
   const value = raw.trim();
   if (!value) return { kind: "empty", value };
+  const prOf = value.match(PR_URL) ?? value.match(PR_REF);
+  if (prOf && parseInt(prOf[3], 10) > 0) return { kind: "pr", value: String(parseInt(prOf[3], 10)), repo: `${prOf[1]}/${prOf[2]}` };
   if (value.includes("/") || value.includes("@") || value.includes(":")) return { kind: "image", value };
   // "#123", "PR 123", "pr#123", "PR #123", or a bare number (up to 6 digits;
   // 7 or more digits may be an abbreviated commit SHA).

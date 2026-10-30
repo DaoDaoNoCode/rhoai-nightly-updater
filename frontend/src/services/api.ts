@@ -693,13 +693,23 @@ export function deployDashboardPR(pr: number, flavor?: string): Promise<Operatio
   });
 }
 
+/** What a contains search looks for: a merged PR or a commit, in a repository (default opendatahub-io/odh-dashboard). */
+export interface ContainsQuery {
+  kind: 'pr' | 'commit';
+  /** The PR number or the commit SHA (7 to 40 hex). */
+  value: string;
+  repo?: string;
+}
+
 /**
- * Whether the given builds contain merged PR `pr` of opendatahub-io/odh-dashboard.
- * Errors: 422 pr_not_merged, 404 pr_not_found, 400 validation. A GitHub rate
- * limit is not an error: the response has rateLimited and unknown builds.
+ * Whether the given builds contain the merged PR or the commit of `query`.
+ * Errors: 422 pr_not_merged, 404 pr_not_found or commit_not_found, 400
+ * validation. A GitHub rate limit is not an error: the response has
+ * rateLimited and unknown builds.
  */
-export function getPRContains(pr: number, images: string[], signal?: AbortSignal): Promise<PRContainsResponse> {
-  const params = new URLSearchParams({ pr: String(pr) });
+export function getBuildContains(query: ContainsQuery, images: string[], signal?: AbortSignal): Promise<PRContainsResponse> {
+  const params = new URLSearchParams({ [query.kind]: query.value });
+  if (query.repo) params.set('repo', query.repo);
   for (const image of images) params.append('image', image);
   return request(`/api/build-explorer/contains?${params}`, { signal });
 }

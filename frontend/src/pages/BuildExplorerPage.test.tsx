@@ -1,6 +1,7 @@
+import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import type { FBCContentResponse, RelatedImage, StatusResponse } from "../types";
 import { stubApi, jsonResponse, type Handler } from "../test/apiStub";
 import { deferred } from "../test/utils";
@@ -61,6 +62,14 @@ function tagRow(tag: string): HTMLElement {
   return within(table).getAllByRole("row").find((r) => r.querySelector('td[data-label="Tag"] strong')?.textContent === tag)!;
 }
 
+/** Types a search and presses Enter. */
+async function search(query: string) {
+  await screen.findByRole("grid", { name: "Nightly builds" });
+  const box = screen.getByRole("textbox", { name: /Find a build/ });
+  fireEvent.change(box, { target: { value: query } });
+  fireEvent.keyDown(box, { key: "Enter" });
+}
+
 beforeEach(() => {
   statusRef.current = {
     subscription: { name: "rhods-operator", source: "rhoai-catalog-dev", channel: "stable-3.x", state: "AtLatestKnown" },
@@ -119,21 +128,68 @@ describe("Build Explorer installed build and compare (A08-5)", () => {
 });
 
 describe("Build Explorer search", () => {
-  it("finds the builds with a component built from a commit, including the installed one", async () => {
-    setup();
+  const merge = "fa1bcdbf5d61a7efd4b83f3c36e9d61f591326b3";
+  const containsCalls = (api: { calls: string[] }) => api.calls.filter((c) => c.includes("/contains"));
+  /** A PR answer for one build, as the backend sends it. */
+  const prAnswer = (url: string, result: string, commit: string, extra: Record<string, unknown> = {}) => {
+    const params = new URL(url, "http://x").searchParams;
+    const image = params.get("image")!;
+    const repo = params.get("repo") ?? "opendatahub-io/odh-dashboard";
+    return jsonResponse({
+      repo, pr: Number(params.get("pr")), title: "Fix the thing", url: `https://github.com/${repo}/pull/${params.get("pr")}`,
+      mergeCommit: merge, mergedAt: "2026-10-05T21:16:13Z",
+      builds: [{ image, result, commit, commitRepo: "red-hat-data-services/odh-dashboard", compareURL: `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...${commit}`, ...extra }],
+    });
+  };
+
+  it("a commit GitHub does not know falls back to the builds with a component built from exactly that commit", async () => {
+    const api = setup({
+      "/api/build-explorer/contains": () => jsonResponse({ error: "GitHub does not know commit 32a2131 in opendatahub-io/odh-dashboard or red-hat-data-services/odh-dashboard.", errorCode: "commit_not_found" }, 404),
+    });
     renderPage();
-    await screen.findByRole("grid", { name: "Nightly builds" });
-    const box = screen.getByRole("textbox", { name: /Find a build/ });
-    fireEvent.change(box, { target: { value: "32a2131" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    await search("32a2131");
     expect(await screen.findByText(/Checked 4 builds:/)).toBeInTheDocument();
+    // One containment request (the first build alone), then the label scan.
+    expect(containsCalls(api)).toHaveLength(1);
+    expect(containsCalls(api)[0]).toContain("commit=32a2131");
+    expect(screen.getByText(/GitHub does not know/)).toHaveTextContent(
+      "GitHub does not know 32a2131 in opendatahub-io/odh-dashboard or red-hat-data-services/odh-dashboard, so the builds were searched for a component image built from exactly this commit.");
+    expect(screen.getByText(/Checked 4 builds:/)).toHaveTextContent("Builds that are not listed have no component built from exactly this commit (a later build of the same branch is not listed).");
     const table = screen.getByRole("grid", { name: /Builds with a component built from 32a2131/ });
     const builds = within(table).getAllByRole("row").slice(1).map((r) => r.querySelector("strong")?.textContent);
     expect(builds).toEqual(["Installed (rhoai-3.6 @ 4444444)", "rhoai-3.6-ea.2"]);
   });
 
+  it("a commit GitHub knows is searched by containment, with the commit's title, date and link", async () => {
+    const sha = "6c8ac6e0f1d2c3b4a5968778695a4b3c2d1e0f9a";
+    const build = "a3b6b581b465f97f8701f220efadcf8787879dde";
+    const verdicts: Record<string, string> = { [INSTALLED]: "not_contained", [LATEST]: "contains", [EA]: "not_contained", [R35]: "contains" };
+    const api = setup({
+      "/api/build-explorer/contains": (url: string) => {
+        const image = new URL(url, "http://x").searchParams.get("image")!;
+        return jsonResponse({
+          repo: "opendatahub-io/odh-dashboard", commit: sha, commitDate: "2026-10-05T10:00:00Z", commitTitle: "Show the model deployment status",
+          commitURL: `https://github.com/opendatahub-io/odh-dashboard/commit/${sha}`,
+          builds: [{ image, result: verdicts[image], commit: build, commitRepo: "red-hat-data-services/odh-dashboard", compareURL: `https://github.com/red-hat-data-services/odh-dashboard/compare/${sha}...${build}` }],
+        });
+      },
+    });
+    renderPage();
+    await search("6C8AC6E");
+    expect(await screen.findByText("Commit 6c8ac6e (Show the model deployment status) is in rhoai-3.6 and rhoai-3.5.")).toBeInTheDocument();
+    expect(screen.getByText("Not in rhoai-3.6 (installed) and rhoai-3.6-ea.2.")).toBeInTheDocument();
+    expect(containsCalls(api)).toHaveLength(4);
+    expect(containsCalls(api).every((c) => c.includes("commit=6c8ac6e") && !c.includes("repo="))).toBe(true);
+    expect(screen.getByRole("link", { name: /^Commit 6c8ac6e$/ })).toHaveAttribute("href", `https://github.com/opendatahub-io/odh-dashboard/commit/${sha}`);
+    expect(screen.getByText(/committed/).textContent).toMatch(/in opendatahub-io\/odh-dashboard, committed 3w ago/);
+    const table = screen.getByRole("grid", { name: "Builds and Commit 6c8ac6e" });
+    expect(within(table).getByRole("columnheader", { name: /Commit 6c8ac6e/ })).toBeInTheDocument();
+    expect(within(table).getAllByText("Contains Commit 6c8ac6e")).toHaveLength(2);
+    fireEvent.click(within(table).getByRole("button", { name: "Actions for rhoai-3.6" }));
+    expect(screen.getByRole("menuitem", { name: "GitHub comparison of commit 6c8ac6e with rhoai-3.6" })).toHaveAttribute("href", `https://github.com/red-hat-data-services/odh-dashboard/compare/${sha}...${build}`);
+  });
+
   it.each(["#9938", "PR 9938", "pr#9938", "9938"])("%s searches which builds contain the merged PR, with links and progress", async (query) => {
-    const merge = "fa1bcdbf5d61a7efd4b83f3c36e9d61f591326b3";
     const verdicts: Record<string, { result: string; commit: string }> = {
       [INSTALLED]: { result: "not_contained", commit: "32a213123fbc434a602ba5b05e4a2022dd0d85d6" },
       [LATEST]: { result: "contains", commit: "a3b6b581b465f97f8701f220efadcf8787879dde" },
@@ -144,35 +200,27 @@ describe("Build Explorer search", () => {
     const gate = deferred<void>();
     const api = setup({
       "/api/build-explorer/contains": async (url: string) => {
-        const params = new URL(url, "http://x").searchParams;
-        const image = params.get("image")!;
+        const image = new URL(url, "http://x").searchParams.get("image")!;
         await (image === INSTALLED ? first.promise : gate.promise);
-        const v = verdicts[image];
-        return jsonResponse({
-          repo: "opendatahub-io/odh-dashboard", pr: Number(params.get("pr")), title: "Fix the thing", url: "https://github.com/opendatahub-io/odh-dashboard/pull/9938",
-          mergeCommit: merge, mergedAt: "2026-10-05T21:16:13Z",
-          builds: [{ image, result: v.result, commit: v.commit, commitRepo: "red-hat-data-services/odh-dashboard", compareURL: `https://github.com/red-hat-data-services/odh-dashboard/compare/${merge}...${v.commit}` }],
-        });
+        return prAnswer(url, verdicts[image].result, verdicts[image].commit);
       },
     });
     renderPage();
-    await screen.findByRole("grid", { name: "Nightly builds" });
-    const box = screen.getByRole("textbox", { name: /Find a build/ });
-    fireEvent.change(box, { target: { value: query } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    await search(query);
     // The PR is resolved with the first build alone, then the rest go a few at a time.
     expect(await screen.findByText(/Checked 0 of 4 builds for PR #9938/)).toBeInTheDocument();
-    await waitFor(() => expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(1));
+    await waitFor(() => expect(containsCalls(api)).toHaveLength(1));
     await new Promise((r) => setTimeout(r, 20));
-    expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(1);
+    expect(containsCalls(api)).toHaveLength(1);
     first.resolve();
     expect(await screen.findByText(/Checked 1 of 4 builds for PR #9938/)).toBeInTheDocument();
-    await waitFor(() => expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(4));
+    await waitFor(() => expect(containsCalls(api)).toHaveLength(4));
     gate.resolve();
-    expect(await screen.findByText(/Checked 4 builds: 2 contain PR #9938/)).toBeInTheDocument();
-    const calls = api.calls.filter((c) => c.includes("/contains"));
+    expect(await screen.findByText("PR #9938 is in rhoai-3.6 and rhoai-3.5.")).toBeInTheDocument();
+    expect(screen.getByText("Not in rhoai-3.6 (installed) and rhoai-3.6-ea.2.")).toBeInTheDocument();
+    const calls = containsCalls(api);
     expect(calls).toHaveLength(4);
-    expect(calls.every((c) => c.startsWith("GET ") && c.includes("pr=9938"))).toBe(true);
+    expect(calls.every((c) => c.startsWith("GET ") && c.includes("pr=9938") && !c.includes("repo="))).toBe(true);
     expect(screen.getByRole("link", { name: /^PR #9938$/ })).toHaveAttribute("href", "https://github.com/opendatahub-io/odh-dashboard/pull/9938");
     expect(screen.getByText("fa1bcdbf5d61")).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Builds and PR #9938" });
@@ -194,6 +242,67 @@ describe("Build Explorer search", () => {
     expect(screen.getByRole("menuitem", { name: "Compare with installed" })).toBeInTheDocument();
   });
 
+  it("a PR URL of another component repository is searched in that repository", async () => {
+    const api = setup({ "/api/build-explorer/contains": (url: string) => prAnswer(url, "contains", "c".repeat(40)) });
+    renderPage();
+    await search("https://github.com/opendatahub-io/data-science-pipelines/pull/42/files");
+    expect(await screen.findByText("PR #42 is in rhoai-3.6 (installed), rhoai-3.6, rhoai-3.6-ea.2 and rhoai-3.5.")).toBeInTheDocument();
+    expect(containsCalls(api)).toHaveLength(4);
+    expect(containsCalls(api).every((c) => c.includes("pr=42") && c.includes("repo=opendatahub-io%2Fdata-science-pipelines"))).toBe(true);
+    expect(screen.getByRole("link", { name: /^PR #42$/ })).toHaveAttribute("href", "https://github.com/opendatahub-io/data-science-pipelines/pull/42");
+    const table = screen.getByRole("grid", { name: "Builds and PR #42" });
+    expect(within(table).getByRole("columnheader", { name: "data-science-pipelines commit" })).toBeInTheDocument();
+  });
+
+  it("builds older than the merge are answered without a request and counted in the summary", async () => {
+    // rhoai-3.6-ea.2 and rhoai-3.5 were built before the merge (2026-10-05T21:16:13Z), rhoai-3.6 after it.
+    const api = setup({
+      "/api/build-explorer/tags": {
+        tags: [
+          { tag: "rhoai-3.6", image: LATEST, buildDate: "2026-10-06T02:00:00Z" },
+          { tag: "rhoai-3.6-ea.2", image: EA, buildDate: "2026-09-18T02:00:00Z" },
+          { tag: "rhoai-3.5", image: R35, buildDate: "2026-10-05T02:00:00Z" },
+        ],
+      },
+      "/api/build-explorer/contains": (url: string) => (new URL(url, "http://x").searchParams.get("image") === INSTALLED
+        ? prAnswer(url, "not_contained", "", { reason: "built_before_merge", message: "Built 4 days before the PR was merged.", compareURL: undefined, commit: undefined, commitRepo: undefined })
+        : prAnswer(url, "contains", "a".repeat(40))),
+    });
+    renderPage();
+    await search("#9938");
+    expect(await screen.findByText("PR #9938 is in rhoai-3.6.")).toBeInTheDocument();
+    expect(screen.getByText("Not in 3 builds built before the merge.")).toBeInTheDocument();
+    // The installed build (asked first; the server answers from its date) and rhoai-3.6: two requests, none for the two older builds.
+    const calls = containsCalls(api);
+    expect(calls).toHaveLength(2);
+    expect(calls.some((c) => c.includes(encodeURIComponent(EA)) || c.includes(encodeURIComponent(R35)))).toBe(false);
+    const table = screen.getByRole("grid", { name: "Builds and PR #9938" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.querySelector("strong")?.textContent)).toEqual(["Installed (rhoai-3.6 @ 4444444)", "rhoai-3.6", "rhoai-3.6-ea.2", "rhoai-3.5"]);
+    expect(within(rows[2]).getByText("Does not contain")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("Built before the merge")).toBeInTheDocument();
+    expect(within(rows[3]).getByText("Built before the merge")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Built before the merge")).toBeInTheDocument();
+  });
+
+  it("says when no build contains the PR because it was merged after the newest build", async () => {
+    const hours = (n: number) => new Date(Date.now() - n * 3600_000).toISOString();
+    statusRef.current!.nightly = { installed: { image: INSTALLED, tag: "rhoai-3.6", digest: `sha256:${"4".repeat(64)}`, buildDate: hours(30) }, updateAvailable: false };
+    const api = setup({
+      "/api/build-explorer/tags": { tags: [{ tag: "rhoai-3.6", image: LATEST, buildDate: hours(20) }, { tag: "rhoai-3.5", image: R35, buildDate: hours(40) }] },
+      "/api/build-explorer/contains": (url: string) => jsonResponse({
+        repo: "opendatahub-io/odh-dashboard", pr: 5, title: "Brand new", mergeCommit: merge, mergedAt: hours(2),
+        builds: [{ image: new URL(url, "http://x").searchParams.get("image"), result: "not_contained", reason: "built_before_merge", message: "Built 28 hours before the PR was merged." }],
+      }),
+    });
+    renderPage();
+    await search("#5");
+    // (Each time is followed by its absolute date for screen readers.)
+    expect((await screen.findByText(/No build contains PR #5 yet/)).textContent).toMatch(/^No build contains PR #5 yet: it was merged 2h ago .*, after the newest build \(20h ago .*\)\.$/);
+    expect(screen.getByText("Not in 3 builds built before the merge.")).toBeInTheDocument();
+    expect(containsCalls(api)).toHaveLength(1);
+  });
+
   it("never offers to compare the installed build with itself when it is one of the listed tags", async () => {
     // The installed build is the newest rhoai-3.6, so it is listed under its tag, not as "Installed (...)".
     statusRef.current!.nightly = { installed: { image: LATEST, tag: "rhoai-3.6", digest: `sha256:${"0".repeat(64)}` }, updateAvailable: false };
@@ -204,11 +313,8 @@ describe("Build Explorer search", () => {
       },
     });
     renderPage();
-    await screen.findByRole("grid", { name: "Nightly builds" });
-    const box = screen.getByRole("textbox", { name: /Find a build/ });
-    fireEvent.change(box, { target: { value: "#1" } });
-    fireEvent.keyDown(box, { key: "Enter" });
-    expect(await screen.findByText(/Checked 3 builds: 3 contain PR #1/)).toBeInTheDocument();
+    await search("#1");
+    expect(await screen.findByText("PR #1 is in rhoai-3.6, rhoai-3.6-ea.2 and rhoai-3.5.")).toBeInTheDocument();
     // No GitHub link and no compare: the installed row has no actions at all.
     expect(screen.queryByRole("button", { name: "Actions for rhoai-3.6" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Actions for rhoai-3.5" }));
@@ -220,13 +326,10 @@ describe("Build Explorer search", () => {
       "/api/build-explorer/contains": () => jsonResponse({ error: "PR #10089 is open, so no build contains it", errorCode: "pr_not_merged" }, 422),
     });
     renderPage();
-    await screen.findByRole("grid", { name: "Nightly builds" });
-    const box = screen.getByRole("textbox", { name: /Find a build/ });
-    fireEvent.change(box, { target: { value: "PR #10089" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    await search("PR #10089");
     expect(await screen.findByText("PR #10089 is not merged")).toBeInTheDocument();
     expect(screen.getByText(/PR #10089 is open, so no build contains it\./)).toBeInTheDocument();
-    expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(1);
+    expect(containsCalls(api)).toHaveLength(1);
     expect(screen.queryByRole("grid", { name: /Builds and PR/ })).not.toBeInTheDocument();
   });
 
@@ -241,19 +344,53 @@ describe("Build Explorer search", () => {
       },
     });
     renderPage();
-    await screen.findByRole("grid", { name: "Nightly builds" });
-    const box = screen.getByRole("textbox", { name: /Find a build/ });
-    fireEvent.change(box, { target: { value: "#1" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    await search("#1");
     expect(await screen.findByText("GitHub's rate limit was reached")).toBeInTheDocument();
     expect(screen.getByText(/Try again in about 10 minutes/)).toBeInTheDocument();
-    expect(screen.getByText(/Checked 4 builds: none contains PR #1, 4 unknown/)).toBeInTheDocument();
+    expect(screen.getByText("No build contains PR #1.")).toBeInTheDocument();
+    expect(screen.getByText("4 builds could not be checked (GitHub rate limit).")).toBeInTheDocument();
     expect(screen.getAllByText("Unknown (GitHub rate limit)")).toHaveLength(4);
     limited = false;
     fireEvent.click(screen.getByRole("button", { name: "Search again" }));
-    expect(await screen.findByText(/Checked 4 builds: 4 contain PR #1/)).toBeInTheDocument();
+    expect(await screen.findByText("PR #1 is in rhoai-3.6 (installed), rhoai-3.6, rhoai-3.6-ea.2 and rhoai-3.5.")).toBeInTheDocument();
     expect(screen.queryByText("GitHub's rate limit was reached")).not.toBeInTheDocument();
-    expect(api.calls.filter((c) => c.includes("/contains"))).toHaveLength(8);
+    expect(containsCalls(api)).toHaveLength(8);
+  });
+});
+
+describe("Build Explorer search in the URL (?q=)", () => {
+  const Location: React.FC = () => <output data-testid="location">{useLocation().search}</output>;
+  const renderAt = (path: string) => render(<MemoryRouter initialEntries={[path]}><BuildExplorerPage /><Location /></MemoryRouter>);
+  const prOK = (url: string) => {
+    const params = new URL(url, "http://x").searchParams;
+    return jsonResponse({ repo: "opendatahub-io/odh-dashboard", pr: Number(params.get("pr")), mergeCommit: "f".repeat(40), builds: [{ image: params.get("image"), result: "contains" }] });
+  };
+
+  it("runs the search in ?q= once the builds are known", async () => {
+    const api = setup({ "/api/build-explorer/contains": prOK });
+    renderAt("/builds?q=%235123");
+    expect(await screen.findByText("PR #5123 is in rhoai-3.6 (installed), rhoai-3.6, rhoai-3.6-ea.2 and rhoai-3.5.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue("#5123");
+    const calls = api.calls.filter((c) => c.includes("/contains"));
+    expect(calls).toHaveLength(4);
+    expect(calls.every((c) => c.includes("pr=5123"))).toBe(true);
+    // The URL is kept as it was.
+    expect(screen.getByTestId("location")).toHaveTextContent("?q=%235123");
+  });
+
+  it("submitting a search writes it to the URL, clearing removes it, and the older ?image= still works", async () => {
+    setup({ "/api/build-explorer/contains": prOK });
+    renderAt(`/builds?image=${encodeURIComponent(R35)}`);
+    expect(await screen.findByRole("grid", { name: "Components in the searched build" })).toBeInTheDocument();
+    const box = screen.getByRole("textbox", { name: /Find a build/ });
+    await waitFor(() => expect(box).toHaveValue(R35));
+    fireEvent.change(box, { target: { value: "  #77 " } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText(/PR #77 is in/)).toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toBe("?q=%2377");
+    fireEvent.click(screen.getByRole("button", { name: "Clear the search and show all builds" }));
+    expect(await screen.findByRole("grid", { name: "Nightly builds" })).toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toBe("");
   });
 });
 

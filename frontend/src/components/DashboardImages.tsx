@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { Card, CardBody, CardExpandableContent, CardHeader, CardTitle, Content, Flex, FlexItem, Spinner, Title, Tooltip } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
@@ -237,11 +238,14 @@ export const DashboardImages: React.FC<DashboardImagesProps> = ({ images, defaul
                               </FlexItem>
                             )}
                           </Flex>
-                          {build && (build.buildDate || build.commitDate) && (
+                          {build && (build.buildDate || build.commitDate || build.commit) && (
                             <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle pf-v6-u-mb-xs">
-                              {build.buildDate && <RelativeTime date={build.buildDate} prefix="built " size="inherit" />}
-                              {build.buildDate && build.commitDate && " · "}
-                              {build.commitDate && <RelativeTime date={build.commitDate} prefix="committed " size="inherit" />}
+                              {[
+                                build.buildDate && <RelativeTime key="built" date={build.buildDate} prefix="built " size="inherit" />,
+                                build.commitDate && <RelativeTime key="committed" date={build.commitDate} prefix="committed " size="inherit" />,
+                                // Which nightly builds contain this commit (Build Explorer).
+                                build.commit && <Link key="find" to={`/builds?q=${build.commit}`} aria-label={`Find commit ${build.commit.slice(0, 7)} in nightlies`}>Find in nightlies</Link>,
+                              ].filter(Boolean).map((part, i) => <React.Fragment key={i}>{i > 0 && " · "}{part}</React.Fragment>)}
                             </div>
                           )}
                           {build?.newer && (

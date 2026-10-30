@@ -752,20 +752,34 @@ export interface PRContainsBuild {
   commit?: string;
   commitRepo?: string;
   result: "contains" | "not_contained" | "unknown";
-  /** Why the result is unknown: rate_limited, commit_not_found, no_component_image, no_commit_label, unexpected_repo, build_unreadable, github_error. */
+  /**
+   * Why: for not_contained, built_before_merge or built_before_commit (the
+   * build is older than the PR's merge or the commit, so it was not read);
+   * for unknown, rate_limited, commit_not_found (the merge commit or commit
+   * is not in the fork), no_component_image, no_commit_label, unexpected_repo,
+   * build_unreadable or github_error.
+   */
   reason?: string;
   message?: string;
   compareURL?: string;
 }
 
-/** GET /api/build-explorer/contains?pr=N[&image=...] */
+/**
+ * GET /api/build-explorer/contains?pr=N|commit=SHA[&repo=owner/name][&image=...]:
+ * a PR search fills pr, title, url, mergeCommit and mergedAt; a commit search
+ * fills commit, commitDate, commitTitle and commitURL.
+ */
 export interface PRContainsResponse {
   repo: string;
-  pr: number;
+  pr?: number;
   title?: string;
   url?: string;
   mergeCommit?: string;
   mergedAt?: string;
+  commit?: string;
+  commitDate?: string;
+  commitTitle?: string;
+  commitURL?: string;
   builds: PRContainsBuild[];
   rateLimited?: boolean;
   retryAfterSeconds?: number;

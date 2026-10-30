@@ -46,11 +46,11 @@ import { TagLabel } from "../components/StatusLabel";
 import { ImageRef } from "../components/ImageRef";
 import { BuildContents } from "../components/BuildContents";
 import { BuildCompare, type BuildSide } from "../components/BuildCompare";
-import { classifySearch, imageDigest, installedBuild, shortBuildRef, type InstalledBuild } from "../components/buildDiff";
+import { classifySearch, imageDigest, installedBuild, shortBuildRef, type InstalledBuild, type SearchQuery } from "../components/buildDiff";
 import { useClusterStatus } from "../state/AppState";
 import { useCommitSearch, type SearchBuild } from "../hooks/useCommitSearch";
-import { usePRSearch } from "../hooks/usePRSearch";
-import { PRSearchResults } from "../components/PRSearchResults";
+import { useContainsSearch } from "../hooks/useContainsSearch";
+import { ContainsSearchResults, DEFAULT_REPO } from "../components/ContainsSearchResults";
 
 export function parseTagVersion(
   tag: string,
@@ -131,8 +131,13 @@ const SearchHelp: React.FC = () => (
     bodyContent={
       <Stack hasGutter>
         <StackItem><code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code> shows that build.</StackItem>
-        <StackItem>A commit SHA (7 to 40 characters) lists the builds with a component built from it.</StackItem>
+        <StackItem>
+          A commit SHA (7 to 40 characters) lists the builds that contain it. An odh-dashboard commit, upstream or in the fork, is checked by
+          containment (the build&apos;s dashboard commit includes it); a commit GitHub does not know there is matched exactly against the
+          commit every component image was built from.
+        </StackItem>
         <StackItem><code>#123</code> or <code>PR 123</code> checks which builds contain that merged opendatahub-io/odh-dashboard PR.</StackItem>
+        <StackItem>A GitHub PR URL (or <code>owner/name#123</code>) of any RHOAI component repository does the same for that PR.</StackItem>
         <StackItem>Commit and PR searches cover the installed build and the builds the filters list.</StackItem>
       </Stack>
     }
@@ -141,8 +146,15 @@ const SearchHelp: React.FC = () => (
   </Popover>
 );
 
+/** A search the page can run: what was typed, classified, with the builds to search. */
+interface SubmittedSearch {
+  query: SearchQuery;
+  nonce: number;
+  builds: SearchBuild[];
+}
+
 export const BuildExplorerPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { status, loading: statusLoading } = useClusterStatus();
   const [tags, setTags] = useState<NightlyTag[]>([]);
   const [loading, setLoading] = useState(true);
@@ -158,7 +170,7 @@ export const BuildExplorerPage: React.FC = () => {
   const [typeSelectOpen, setTypeSelectOpen] = useState(false);
 
   const [searchText, setSearchText] = useState("");
-  const [submitted, setSubmitted] = useState<{ kind: ReturnType<typeof classifySearch>["kind"]; value: string; nonce: number; builds: SearchBuild[] } | null>(null);
+  const [submitted, setSubmitted] = useState<SubmittedSearch | null>(null);
   const [compareTo, setCompareTo] = useState<BuildSide | null>(null);
   const compareRef = useRef<HTMLDivElement>(null);
 
@@ -230,35 +242,55 @@ export const BuildExplorerPage: React.FC = () => {
       return compareTagsDesc(pa, pb);
     }), [tags, versionFilter, typeFilter]);
 
-  const submitSearch = useCallback((raw: string) => {
-    const { kind, value } = classifySearch(raw);
-    if (kind === "empty") {
+  /** The search in the URL (?q=, or the Status page's older ?image=), so a search can be shared. */
+  const urlQuery = searchParams.get("q") || searchParams.get("image") || "";
+  const writeURL = useCallback((q: string) => {
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.delete("image");
+      if (q) next.set("q", q);
+      else next.delete("q");
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const submitSearch = useCallback((raw: string, { fromURL = false } = {}) => {
+    const query = classifySearch(raw);
+    if (!fromURL) writeURL(query.kind === "empty" ? "" : raw.trim());
+    if (query.kind === "empty") {
       setSubmitted(null);
       return;
     }
-    // The commit search covers the installed build plus the builds listed now.
+    // Commit and PR searches cover the installed build plus the builds listed now.
     const builds: SearchBuild[] = [];
     if (installed && !filteredTags.some((t) => imageDigest(t.image) === installed.digest)) {
-      builds.push({ image: installed.image, label: `${INSTALLED_LABEL} (${shortBuildRef(installed.image)})` });
+      builds.push({ image: installed.image, label: `${INSTALLED_LABEL} (${shortBuildRef(installed.image)})`, buildDate: installed.buildDate });
     }
-    for (const t of filteredTags) builds.push({ image: t.image, label: t.tag });
-    setSubmitted((prev) => ({ kind, value, nonce: (prev?.nonce ?? 0) + 1, builds }));
-  }, [installed, filteredTags]);
+    for (const t of filteredTags) builds.push({ image: t.image, label: t.tag, buildDate: t.buildDate });
+    setSubmitted((prev) => ({ query, nonce: (prev?.nonce ?? 0) + 1, builds }));
+  }, [installed, filteredTags, writeURL]);
 
-  // ?image=... from the Status page's "View build contents" link.
-  const urlImageApplied = useRef(false);
+  // A search in the URL runs once, when the builds it covers are known: the
+  // tags have loaded (or failed) and the installed build is settled. Later
+  // changes of the URL are the page's own (submitSearch writes ?q=).
+  const urlQueryApplied = useRef(false);
+  const statusLoaded = !!status || !statusLoading;
   useEffect(() => {
-    if (urlImageApplied.current) return;
-    const urlImage = searchParams.get("image");
-    if (urlImage) {
-      urlImageApplied.current = true;
-      setSearchText(urlImage);
-      setSubmitted({ kind: "image", value: urlImage, nonce: 1, builds: [] });
-    }
-  }, [searchParams]);
+    if (urlQueryApplied.current || loading || !statusLoaded) return;
+    urlQueryApplied.current = true;
+    if (!urlQuery) return;
+    setSearchText(urlQuery);
+    submitSearch(urlQuery, { fromURL: true });
+  }, [urlQuery, loading, statusLoaded, submitSearch]);
 
-  const commitSearch = useCommitSearch(submitted?.kind === "commit" ? submitted.value : null, submitted?.builds ?? [], submitted?.nonce);
-  const prSearch = usePRSearch(submitted?.kind === "pr" ? parseInt(submitted.value, 10) : null, submitted?.builds ?? [], submitted?.nonce);
+  const containsQuery = submitted && (submitted.query.kind === "pr" || submitted.query.kind === "commit")
+    ? { kind: submitted.query.kind, value: submitted.query.value, repo: submitted.query.repo }
+    : null;
+  const containsSearch = useContainsSearch(containsQuery, submitted?.builds ?? [], submitted?.nonce);
+  // A commit GitHub does not know (in the dashboard repository or its fork)
+  // is looked for by label equality instead.
+  const exactCommit = submitted?.query.kind === "commit" && containsSearch.error?.errorCode === "commit_not_found" ? submitted.query.value : null;
+  const commitSearch = useCommitSearch(exactCommit, submitted?.builds ?? [], submitted?.nonce);
   const retrySearch = useCallback(() => setSubmitted((prev) => (prev ? { ...prev, nonce: prev.nonce + 1 } : prev)), []);
 
   const openCompare = (to: BuildSide) => {
@@ -269,6 +301,7 @@ export const BuildExplorerPage: React.FC = () => {
   const clearSearch = () => {
     setSearchText("");
     setSubmitted(null);
+    writeURL("");
   };
   /** True for the installed build, whatever its label in a result list. */
   const isInstalledImage = (image: string) => !!installed && imageDigest(image) === installed.digest;
@@ -291,7 +324,7 @@ export const BuildExplorerPage: React.FC = () => {
         details={
           <InstalledBuildDetails
             installed={installed}
-            statusLoaded={!!status || !statusLoading}
+            statusLoaded={statusLoaded}
             latest={latest}
             updateAvailable={updateAvailable}
           />
@@ -322,12 +355,12 @@ export const BuildExplorerPage: React.FC = () => {
                   <ToolbarItem className="pf-v6-u-w-100 pf-v6-u-w-33-on-lg">
                     <SearchInput
                       id="build-search"
-                      placeholder="Image, commit SHA or PR #"
+                      placeholder="Image, commit SHA, PR # or PR URL"
                       value={searchText}
                       onChange={(_e, val) => setSearchText(val)}
                       onSearch={(_e, val) => submitSearch(val)}
                       onClear={clearSearch}
-                      aria-label="Find a build by image reference, commit SHA or PR number"
+                      aria-label="Find a build by image reference, commit SHA, PR number or PR URL"
                     />
                   </ToolbarItem>
                   <ToolbarItem><SearchHelp /></ToolbarItem>
@@ -383,8 +416,8 @@ export const BuildExplorerPage: React.FC = () => {
                   <StackItem>
                     <SearchResults
                       submitted={submitted}
+                      containsSearch={containsSearch}
                       commitSearch={commitSearch}
-                      prSearch={prSearch}
                       canCompare={!!installedSide}
                       isInstalledImage={isInstalledImage}
                       onCompare={openCompare}
@@ -471,23 +504,34 @@ export const BuildExplorerPage: React.FC = () => {
 };
 
 const SearchResults: React.FC<{
-  submitted: { kind: string; value: string; nonce: number; builds: SearchBuild[] };
+  submitted: SubmittedSearch;
+  containsSearch: ReturnType<typeof useContainsSearch>;
   commitSearch: ReturnType<typeof useCommitSearch>;
-  prSearch: ReturnType<typeof usePRSearch>;
   canCompare: boolean;
   isInstalledImage: (image: string) => boolean;
   onCompare: (to: BuildSide) => void;
   onRetry: () => void;
-}> = ({ submitted, commitSearch, prSearch, canCompare, isInstalledImage, onCompare, onRetry }) => {
-  if (submitted.kind === "image") {
-    return <BuildContents key={`${submitted.value}|${submitted.nonce}`} image={submitted.value} title="the searched build" />;
+}> = ({ submitted, containsSearch, commitSearch, canCompare, isInstalledImage, onCompare, onRetry }) => {
+  const { kind, value, repo } = submitted.query;
+  if (kind === "image") {
+    return <BuildContents key={`${value}|${submitted.nonce}`} image={value} title="the searched build" />;
   }
-  if (submitted.kind === "pr") {
+  if (kind === "invalid") {
     return (
-      <PRSearchResults
+      <Alert component="p" variant="warning" isInline isLiveRegion title="Not a build reference, commit SHA, PR number or PR URL">
+        Enter an image reference such as quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:..., a commit SHA of 7 to 40 hex characters,
+        a PR number such as #123, or the URL of a GitHub PR.
+      </Alert>
+    );
+  }
+  const exactCommit = kind === "commit" && containsSearch.error?.errorCode === "commit_not_found";
+  if (kind === "empty") return null;
+  if (!exactCommit) {
+    return (
+      <ContainsSearchResults
         key={submitted.nonce}
-        pr={submitted.value}
-        search={prSearch}
+        query={{ kind, value, repo }}
+        search={containsSearch}
         plannedTotal={submitted.builds.length}
         canCompare={canCompare}
         isInstalledImage={isInstalledImage}
@@ -496,14 +540,7 @@ const SearchResults: React.FC<{
       />
     );
   }
-  if (submitted.kind === "invalid") {
-    return (
-      <Alert component="p" variant="warning" isInline isLiveRegion title="Not a build reference, commit SHA or PR number">
-        Enter an image reference such as quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:..., a commit SHA of 7 to 40 hex characters, or a PR number such as #123.
-      </Alert>
-    );
-  }
-  const short = submitted.value.slice(0, 12);
+  const short = value.slice(0, 12);
   const { checked, matches, failures } = commitSearch;
   // Before the first progress update the hook still holds the previous (idle) state.
   const total = commitSearch.total || submitted.builds.length;
@@ -511,9 +548,15 @@ const SearchResults: React.FC<{
   return (
     <Stack hasGutter>
       <StackItem>
+        <Content component="p">
+          GitHub does not know <code>{short}</code> in {DEFAULT_REPO} or red-hat-data-services/odh-dashboard, so the builds were searched for a
+          component image built from exactly this commit.
+        </Content>
+      </StackItem>
+      <StackItem>
         <Content component="p" aria-live="polite">
           {running ? <><Spinner size="sm" aria-label="Searching builds" />{" "}Checked {checked} of {total} builds for commit <code>{short}</code>...</>
-            : <>Checked {total} builds: {matches.length === 0 ? "no build has a component built from" : `${matches.length} ${matches.length === 1 ? "build has" : "builds have"} a component built from`} commit <code>{short}</code>. Later builds also contain the commit but are not listed.</>}
+            : <>Checked {total} builds: {matches.length === 0 ? "no build has a component built from" : `${matches.length} ${matches.length === 1 ? "build has" : "builds have"} a component built from`} commit <code>{short}</code>. Builds that are not listed have no component built from exactly this commit (a later build of the same branch is not listed).</>}
         </Content>
       </StackItem>
       {matches.length > 0 && (

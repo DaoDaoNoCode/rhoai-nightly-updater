@@ -5,8 +5,10 @@ import { imagesBuiltFrom } from "../components/buildDiff";
 
 export interface SearchBuild {
   image: string;
-  /** Display name: the tag, or "Installed". */
+  /** Display name: the tag, or "Installed (...)". */
   label: string;
+  /** The FBC image's build date (from the tags list), when known. */
+  buildDate?: string;
 }
 
 export interface CommitMatch {
@@ -29,10 +31,12 @@ export const COMMIT_SEARCH_CONCURRENCY = 2;
 const IDLE: CommitSearchState = { running: false, checked: 0, total: 0, matches: [], failures: [] };
 
 /**
- * Find the builds with a component built from a commit (A08-5). Reads each
- * build's content with git labels (cached by the backend after the first
- * read), a few at a time, and reports progress. A new search or unmount
- * cancels the requests of the previous one.
+ * Find the builds with a component built from exactly this commit (A08-5):
+ * the fallback when GitHub does not know the commit (useContainsSearch
+ * answers commit_not_found). Reads each build's content with git labels
+ * (cached by the backend after the first read), a few at a time, and
+ * reports progress. A new search or unmount cancels the requests of the
+ * previous one.
  */
 export function useCommitSearch(sha: string | null, builds: SearchBuild[], nonce = 0): CommitSearchState {
   const [state, setState] = useState<CommitSearchState>(IDLE);

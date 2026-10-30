@@ -98,8 +98,30 @@ describe("classifySearch and imagesBuiltFrom", () => {
     ["1234567", "commit"],
     ["not a thing", "invalid"],
     ["abc12", "invalid"],
+    ["https://github.com/opendatahub-io/odh-dashboard/pull/5123", "pr"],
+    ["opendatahub-io/data-science-pipelines#42", "pr"],
+    // Not a PR: an owner with a space, an issue URL, a PR number of zero.
+    ["https://github.com/open datahub/odh-dashboard/pull/5123", "image"],
+    ["https://github.com/opendatahub-io/odh-dashboard/issues/5123", "image"],
+    ["opendatahub-io/odh-dashboard#0", "image"],
   ])("%s -> %s", (input, kind) => {
     expect(classifySearch(input).kind).toBe(kind);
+  });
+
+  it.each([
+    ["https://github.com/opendatahub-io/odh-dashboard/pull/5123", "opendatahub-io/odh-dashboard", "5123"],
+    ["https://github.com/opendatahub-io/odh-dashboard/pull/5123/", "opendatahub-io/odh-dashboard", "5123"],
+    ["https://github.com/opendatahub-io/odh-dashboard/pull/5123/files", "opendatahub-io/odh-dashboard", "5123"],
+    ["https://github.com/opendatahub-io/odh-dashboard/pull/5123#issuecomment-99", "opendatahub-io/odh-dashboard", "5123"],
+    ["https://github.com/opendatahub-io/odh-dashboard/pull/5123?diff=split", "opendatahub-io/odh-dashboard", "5123"],
+    ["http://www.github.com/Red-Hat-Data-Services/odh_dashboard.v2/pull/007", "Red-Hat-Data-Services/odh_dashboard.v2", "7"],
+    ["  opendatahub-io/data-science-pipelines#42 ", "opendatahub-io/data-science-pipelines", "42"],
+  ])("%s names the PR's repository", (input, repo, value) => {
+    expect(classifySearch(input)).toEqual({ kind: "pr", value, repo });
+  });
+
+  it("bare PR forms keep the default repository", () => {
+    for (const input of ["#5123", "PR 5123", "5123"]) expect(classifySearch(input)).toEqual({ kind: "pr", value: "5123" });
   });
 
   it("matches a full SHA or a prefix, case-insensitively", () => {
