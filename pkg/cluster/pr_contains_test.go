@@ -30,8 +30,13 @@ const (
 // answers, branch heads and commit dates, with injectable failures. It
 // counts requests per path kind.
 type fakeGitHub struct {
-	mu      sync.Mutex
-	prs     map[int]map[string]interface{}
+	mu  sync.Mutex
+	prs map[int]map[string]interface{}
+	// prRepos are the repositories prs are found in (any other answers 404).
+	prRepos map[string]bool
+	// commits are the commits GET /repos/<repo>/commits/<ref> resolves, by
+	// "repo|full sha" -> message; a ref matches by prefix.
+	commits map[string]string
 	compare map[string]string // "base...head" -> status; missing = 404
 	// compareCounts gives ahead_by and behind_by of a compare (default 1, 0).
 	compareCounts map[string][2]int
@@ -51,6 +56,8 @@ type fakeGitHub struct {
 func newFakeGitHub() *fakeGitHub {
 	return &fakeGitHub{
 		prs:           map[int]map[string]interface{}{},
+		prRepos:       map[string]bool{DefaultPRSearchRepo: true},
+		commits:       map[string]string{},
 		compare:       map[string]string{},
 		compareCounts: map[string][2]int{},
 		compareRepos:  map[string]bool{forkRepo: true},
@@ -101,6 +108,8 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		kind = "branch"
 	case strings.Contains(r.URL.Path, "/git/commits/"):
 		kind = "commit"
+	case strings.Contains(r.URL.Path, "/commits/"):
+		kind = "commits"
 	}
 	g.mu.Lock()
 	g.calls[kind]++
@@ -118,14 +127,37 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case "pull":
 		num, _ := strconv.Atoi(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/pulls/")], "/repos/")
 		g.mu.Lock()
 		pr, ok := g.prs[num]
+		allowed := g.prRepos[repo]
 		g.mu.Unlock()
-		if !ok || !strings.HasPrefix(r.URL.Path, "/repos/opendatahub-io/odh-dashboard/pulls/") {
+		if !ok || !allowed {
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(pr)
+	case "commits":
+		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/commits/")], "/repos/")
+		ref := strings.ToLower(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+		g.mu.Lock()
+		var sha, message string
+		for key, msg := range g.commits {
+			keyRepo, full, _ := strings.Cut(key, "|")
+			if keyRepo == repo && strings.HasPrefix(full, ref) {
+				sha, message = full, msg
+			}
+		}
+		date := g.commitDate
+		g.mu.Unlock()
+		if sha == "" {
+			http.Error(w, `{"message":"No commit found for SHA: `+ref+`"}`, http.StatusUnprocessableEntity)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"sha": sha, "html_url": "https://github.com/" + repo + "/commit/" + sha,
+			"commit": map[string]interface{}{"message": message, "committer": map[string]interface{}{"date": date}},
+		})
 	case "compare":
 		repo := strings.TrimPrefix(r.URL.Path[:strings.Index(r.URL.Path, "/compare/")], "/repos/")
 		spec := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
@@ -167,11 +199,18 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// githubTransport sends api.github.com requests to the fake server.
-type githubTransport struct{ server *url.URL }
+// githubTransport sends api.github.com requests to the fake server. Requests
+// to any other host (quay.io) fail, and are counted when a counter is given.
+type githubTransport struct {
+	server *url.URL
+	other  *atomic.Int32
+}
 
 func (t githubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.URL.Host != "api.github.com" {
+		if t.other != nil {
+			t.other.Add(1)
+		}
 		return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
 	}
 	out := r.Clone(r.Context())
@@ -179,18 +218,23 @@ func (t githubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(out)
 }
 
-func installFakeGitHub(t *testing.T, g *fakeGitHub) {
+// installFakeGitHub routes GitHub to g and returns a counter of the registry
+// reads that were attempted (there is no registry: every build must come
+// from the caches, see seedBuild).
+func installFakeGitHub(t *testing.T, g *fakeGitHub) *atomic.Int32 {
 	t.Helper()
 	server := httptest.NewServer(g)
 	t.Cleanup(server.Close)
 	u, _ := url.Parse(server.URL)
 	resetRegistryCaches()
 	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: githubTransport{server: u}, Timeout: 10 * time.Second}
+	registryReads := &atomic.Int32{}
+	quayHTTPClient = &http.Client{Transport: githubTransport{server: u, other: registryReads}, Timeout: 10 * time.Second}
 	t.Cleanup(func() {
 		quayHTTPClient = original
 		resetRegistryCaches()
 	})
+	return registryReads
 }
 
 func mergedPR(sha string) map[string]interface{} {
@@ -214,6 +258,42 @@ func seedBuild(t *testing.T, n int, tag, gitURL, commit string) string {
 	}}, 0)
 	repo, digest, _ := extractRepoAndDigest(dash)
 	labelCache.Add(repo+"@"+digest, labelCacheValue{labels: ImageLabels{GitCommit: commit, GitURL: gitURL}}, 0)
+	return fbc
+}
+
+// seedBuildDate puts the FBC image's build-date label in the cache, as the
+// tags listing does.
+func seedBuildDate(t *testing.T, fbc, buildDate string) {
+	t.Helper()
+	repo, digest, ok := extractRepoAndDigest(fbc)
+	if !ok {
+		t.Fatal("bad fbc ref")
+	}
+	labelCache.Add(repo+"@"+digest, labelCacheValue{labels: ImageLabels{BuildDate: buildDate}}, 0)
+}
+
+// seedComponentBuild puts a build in the caches whose component images are
+// not the dashboard: the given (name, image repository, git URL, commit)
+// tuples, in catalog order, plus a base image without labels.
+func seedComponentBuild(t *testing.T, n int, tag string, images ...[4]string) string {
+	t.Helper()
+	fbc := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:%s@%s", tag, digestOf(n))
+	key, ok := fbcCacheKey(fbc)
+	if !ok {
+		t.Fatal("bad fbc ref")
+	}
+	related := []types.RelatedImage{{Name: "odh_base_image", Image: "registry.redhat.io/ubi9/ubi-minimal@" + digestOf(3000+n)}}
+	for i, img := range images {
+		ref := fmt.Sprintf("quay.io/rhoai/%s@%s", img[1], digestOf(4000+10*n+i))
+		related = append(related, types.RelatedImage{Name: img[0], Image: ref})
+		repo, digest, _ := extractRepoAndDigest(ref)
+		if img[3] == "" {
+			labelCache.Add(repo+"@"+digest, labelCacheValue{noLabels: true}, 0)
+		} else {
+			labelCache.Add(repo+"@"+digest, labelCacheValue{labels: ImageLabels{GitCommit: img[3], GitURL: img[2]}}, 0)
+		}
+	}
+	fbcContentCache.Add(key, &types.FBCContentResponse{Tag: tag, RelatedImages: related}, 0)
 	return fbc
 }
 
@@ -323,13 +403,288 @@ func TestFindBuildsContainingPR_RequestErrors(t *testing.T) {
 		})
 	}
 
-	t.Run("repository not on the allowlist", func(t *testing.T) {
+	t.Run("repository that is not owner/name", func(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
-		_, err := findBuildsContainingPR(context.Background(), "", "evil/repo", 1, staticBuilds())
+		for _, repo := range []string{"evil", "a/b/c", "a/b c", ""} {
+			_, err := findBuildsContainingPR(context.Background(), "", repo, 1, staticBuilds())
+			var searchErr *PRSearchError
+			if !errors.As(err, &searchErr) || searchErr.Code != "validation" || g.count("pull") != 0 {
+				t.Fatalf("%q: err %v, calls %d", repo, err, g.count("pull"))
+			}
+		}
+	})
+}
+
+func TestForkCandidates(t *testing.T) {
+	for repo, want := range map[string][]string{
+		"opendatahub-io/odh-dashboard":          {"red-hat-data-services/odh-dashboard", "opendatahub-io/odh-dashboard"},
+		"opendatahub-io/data-science-pipelines": {"red-hat-data-services/data-science-pipelines", "opendatahub-io/data-science-pipelines"},
+		"red-hat-data-services/odh-dashboard":   {"red-hat-data-services/odh-dashboard"},
+		"Red-Hat-Data-Services/ODH-Dashboard":   {"Red-Hat-Data-Services/ODH-Dashboard"},
+		"kserve/kserve":                         {"red-hat-data-services/kserve", "kserve/kserve"},
+	} {
+		got := forkCandidates(repo)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: %v, want %v", repo, got, want)
+		}
+	}
+	if !isCandidate([]string{"red-hat-data-services/odh-dashboard"}, "Red-Hat-Data-Services/odh-dashboard") {
+		t.Error("candidates must compare case-insensitively")
+	}
+}
+
+func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
+	// A data-science-pipelines PR: no image is found by name, so the labels
+	// of the build's RHOAI images are read and the one built from the fork
+	// (whatever its name) is compared.
+	g := newFakeGitHub()
+	installFakeGitHub(t, g)
+	const dspRepo = "opendatahub-io/data-science-pipelines"
+	const dspFork = "red-hat-data-services/data-science-pipelines"
+	g.prRepos[dspRepo] = true
+	g.compareRepos[dspFork] = true
+	g.prs[777] = mergedPR(mergeSHA)
+	g.compare[mergeSHA+"..."+commitNew] = "ahead"
+	g.compare[mergeSHA+"..."+commitOld] = "diverged"
+	kserveURL := "https://github.com/red-hat-data-services/kserve"
+	dspURL := "https://github.com/" + dspFork + ".git"
+	withDSP := seedComponentBuild(t, 1, "rhoai-3.6",
+		[4]string{"odh_kserve_image", "odh-kserve", kserveURL, commitOld},
+		[4]string{"odh_ml_pipelines_api_server_v2_image", "odh-ml-pipelines-api-server-v2-rhel9", dspURL, commitNew},
+		[4]string{"odh_ml_pipelines_persistenceagent_v2_image", "odh-ml-pipelines-persistenceagent-v2-rhel9", dspURL, commitNew},
+	)
+	older := seedComponentBuild(t, 2, "rhoai-3.5",
+		[4]string{"odh_ml_pipelines_api_server_v2_image", "odh-ml-pipelines-api-server-v2-rhel9", dspURL, commitOld},
+	)
+	// The first matching image's commit is malformed: the next one wins.
+	badCommit := seedComponentBuild(t, 3, "rhoai-3.4",
+		[4]string{"odh_ml_pipelines_api_server_v2_image", "odh-ml-pipelines-api-server-v2-rhel9", dspURL, "not-a-sha"},
+		[4]string{"odh_ml_pipelines_persistenceagent_v2_image", "odh-ml-pipelines-persistenceagent-v2-rhel9", dspURL, commitNew},
+	)
+	withoutDSP := seedComponentBuild(t, 4, "rhoai-3.3",
+		[4]string{"odh_kserve_image", "odh-kserve", kserveURL, commitOld},
+		[4]string{"odh_unlabelled_image", "odh-unlabelled", "", ""},
+	)
+	builds := staticBuilds(prBuild{image: withDSP}, prBuild{image: older}, prBuild{image: badCommit}, prBuild{image: withoutDSP})
+	resp, err := findBuildsContainingPR(context.Background(), "", dspRepo, 777, builds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resultsByTag(resp)
+	if b := got["rhoai-3.6"]; b.Result != "contains" || b.Commit != commitNew || !strings.EqualFold(b.CommitRepo, dspFork) ||
+		!strings.Contains(b.CompareURL, "/compare/"+mergeSHA+"..."+commitNew) {
+		t.Errorf("rhoai-3.6: %+v", b)
+	}
+	if b := got["rhoai-3.5"]; b.Result != "not_contained" || b.Commit != commitOld {
+		t.Errorf("rhoai-3.5: %+v", b)
+	}
+	if b := got["rhoai-3.4"]; b.Result != "contains" || b.Commit != commitNew {
+		t.Errorf("rhoai-3.4 (first match malformed): %+v", b)
+	}
+	if b := got["rhoai-3.3"]; b.Result != "unknown" || b.Reason != "no_component_image" ||
+		b.Message != "This build has no image built from "+dspFork+" or "+dspRepo+"." {
+		t.Errorf("rhoai-3.3: %+v", b)
+	}
+	if resp.URL != "https://github.com/opendatahub-io/odh-dashboard/pull/9938" { // the fake's html_url
+		t.Errorf("url %q", resp.URL)
+	}
+	// The component of each build is remembered: a second search reads no labels.
+	if _, ok := componentImageCache.Get(digestOf(1) + "|" + dspRepo); !ok {
+		t.Error("the component image was not cached")
+	}
+	if _, ok := componentImageCache.Get(digestOf(4) + "|" + dspRepo); !ok {
+		t.Error("the complete scan without a match was not cached")
+	}
+
+	t.Run("the PR on the fork itself", func(t *testing.T) {
+		g.prRepos[dspFork] = true
+		resp, err := findBuildsContainingPR(context.Background(), "", dspFork, 777, staticBuilds(prBuild{image: withDSP}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b := resp.Builds[0]; b.Result != "contains" {
+			t.Errorf("%+v", b)
+		}
+	})
+}
+
+func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
+	g := newFakeGitHub()
+	registryReads := installFakeGitHub(t, g)
+	g.prs[9938] = mergedPR(mergeSHA) // merged 2026-10-05T21:16:13Z
+	g.compare[mergeSHA+"..."+commitNew] = "ahead"
+
+	// Only the build date is known about the old build: its catalog is not
+	// cached, so reading it would hit the (absent) registry.
+	old := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.4@%s", digestOf(1))
+	seedBuildDate(t, old, "2026-10-03T21:00:00Z")
+	sameMinute := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.3@%s", digestOf(2))
+	seedBuildDate(t, sameMinute, "2026-10-05T21:16:13Z") // not before: must be checked
+	newer := seedBuild(t, 3, "rhoai-3.6", forkURL, commitNew)
+	seedBuildDate(t, newer, "2026-10-06T02:30:00Z")
+	undated := seedBuild(t, 4, "rhoai-3.5", forkURL, commitNew)
+
+	resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(
+		prBuild{image: old}, prBuild{image: sameMinute}, prBuild{image: newer}, prBuild{image: undated}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resultsByTag(resp)
+	if b := got["rhoai-3.4"]; b.Result != "not_contained" || b.Reason != "built_before_merge" || b.Message != "Built 2 days before the PR was merged." || b.Commit != "" || b.CompareURL != "" {
+		t.Errorf("old build: %+v", b)
+	}
+	if b := got["rhoai-3.3"]; b.Result != "unknown" || b.Reason != "build_unreadable" {
+		t.Errorf("build of the merge minute must be read: %+v", b)
+	}
+	if b := got["rhoai-3.6"]; b.Result != "contains" {
+		t.Errorf("newer build: %+v", b)
+	}
+	if b := got["rhoai-3.5"]; b.Result != "contains" {
+		t.Errorf("undated build: %+v", b)
+	}
+	// One compare for each build that was read (the undated one and the
+	// newer one share the cached answer); the old build cost nothing.
+	if g.count("compare") != 1 {
+		t.Errorf("%d compare calls, want 1", g.count("compare"))
+	}
+	// The registry was asked once, for the uncached catalog of rhoai-3.3
+	// (and the undated build's missing date), never for the old build.
+	if n := registryReads.Load(); n == 0 || n > 2 {
+		t.Errorf("%d registry reads", n)
+	}
+	if _, ok := cachedFBCContent(old); ok {
+		t.Error("the old build's catalog was read")
+	}
+}
+
+func TestRoughDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		20 * time.Second:              "1 minute",
+		time.Minute:                   "1 minute",
+		25 * time.Minute:              "25 minutes",
+		time.Hour:                     "1 hour",
+		90 * time.Minute:              "2 hours",
+		47 * time.Hour:                "47 hours",
+		49 * time.Hour:                "2 days",
+		12*24*time.Hour + 5*time.Hour: "12 days",
+	} {
+		if got := roughDuration(d); got != want {
+			t.Errorf("%s: %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestFindBuildsContainingCommit(t *testing.T) {
+	const upstreamSHA = "6c8ac6e0f1d2c3b4a5968778695a4b3c2d1e0f9a"
+	t.Run("resolved upstream, compared in the fork, short SHA", func(t *testing.T) {
+		g := newFakeGitHub()
+		installFakeGitHub(t, g)
+		g.commits[DefaultPRSearchRepo+"|"+upstreamSHA] = "Show the model deployment status\n\nLonger text."
+		g.commitDate = "2026-10-05T10:00:00Z"
+		g.compare[upstreamSHA+"..."+commitNew] = "ahead"
+		g.compare[upstreamSHA+"..."+commitOld] = "diverged"
+		contains := seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)
+		seedBuildDate(t, contains, "2026-10-06T02:30:00Z")
+		not := seedBuild(t, 2, "rhoai-3.5", forkURL, commitOld)
+		before := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.4@%s", digestOf(3))
+		seedBuildDate(t, before, "2026-10-04T03:00:00Z")
+		resp, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "6C8AC6E", staticBuilds(
+			prBuild{image: contains, installed: true}, prBuild{image: not}, prBuild{image: before}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Commit != upstreamSHA || resp.CommitTitle != "Show the model deployment status" || resp.CommitDate != "2026-10-05T10:00:00Z" ||
+			resp.CommitURL != "https://github.com/"+DefaultPRSearchRepo+"/commit/"+upstreamSHA || resp.PR != 0 || resp.MergeCommit != "" || resp.Repo != DefaultPRSearchRepo {
+			t.Fatalf("response %+v", resp)
+		}
+		got := resultsByTag(resp)
+		if b := got["rhoai-3.6"]; b.Result != "contains" || !b.Installed || b.CompareURL != "https://github.com/"+forkRepo+"/compare/"+upstreamSHA+"..."+commitNew {
+			t.Errorf("rhoai-3.6: %+v", b)
+		}
+		if b := got["rhoai-3.5"]; b.Result != "not_contained" || b.Reason != "" {
+			t.Errorf("rhoai-3.5: %+v", b)
+		}
+		if b := got["rhoai-3.4"]; b.Result != "not_contained" || b.Reason != "built_before_commit" || b.Message != "Built 31 hours before the commit." {
+			t.Errorf("rhoai-3.4: %+v", b)
+		}
+		if g.count("commits") != 1 {
+			t.Errorf("%d commit lookups, want 1 (upstream knows it)", g.count("commits"))
+		}
+		// Resolved commits and compare answers are kept: a repeat is free.
+		before2 := g.count("commits") + g.count("compare")
+		if _, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "6c8ac6e", staticBuilds(prBuild{image: contains}, prBuild{image: not})); err != nil {
+			t.Fatal(err)
+		}
+		if after := g.count("commits") + g.count("compare"); after != before2 {
+			t.Errorf("repeat search made %d GitHub calls", after-before2)
+		}
+	})
+
+	t.Run("resolved on the fork when upstream does not know it", func(t *testing.T) {
+		g := newFakeGitHub()
+		installFakeGitHub(t, g)
+		g.commits[forkRepo+"|"+commitOld] = "Fork-only change"
+		g.compare[commitOld+"..."+commitNew] = "ahead"
+		resp, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, commitOld[:10], staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Commit != commitOld || resp.CommitURL != "https://github.com/"+forkRepo+"/commit/"+commitOld || resp.Builds[0].Result != "contains" {
+			t.Errorf("response %+v", resp)
+		}
+		if g.count("commits") != 2 {
+			t.Errorf("%d commit lookups, want 2 (upstream, then the fork)", g.count("commits"))
+		}
+	})
+
+	t.Run("unknown everywhere", func(t *testing.T) {
+		g := newFakeGitHub()
+		installFakeGitHub(t, g)
+		listed := false
+		_, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", func(context.Context) ([]prBuild, error) {
+			listed = true
+			return nil, nil
+		})
 		var searchErr *PRSearchError
-		if !errors.As(err, &searchErr) || searchErr.Code != "validation" || g.count("pull") != 0 {
-			t.Fatalf("err %v, calls %d", err, g.count("pull"))
+		if !errors.As(err, &searchErr) || searchErr.Status != 404 || searchErr.Code != "commit_not_found" ||
+			searchErr.Msg != "GitHub does not know commit abcdef0 in opendatahub-io/odh-dashboard or red-hat-data-services/odh-dashboard." {
+			t.Fatalf("err %v", err)
+		}
+		if listed || g.count("commits") != 2 {
+			t.Errorf("listed %v, lookups %d", listed, g.count("commits"))
+		}
+		// The miss is remembered for a while.
+		if _, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", staticBuilds()); err == nil || g.count("commits") != 2 {
+			t.Errorf("err %v, lookups %d", err, g.count("commits"))
+		}
+	})
+
+	t.Run("rate limited while resolving: every build unknown, never an error", func(t *testing.T) {
+		g := newFakeGitHub()
+		installFakeGitHub(t, g)
+		g.rateLimited("commits", 10*time.Minute)
+		resp, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.RateLimited || resp.RetryAfterSeconds < 500 || resp.Commit != "abcdef0" {
+			t.Fatalf("response %+v", resp)
+		}
+		if b := resp.Builds[0]; b.Result != "unknown" || b.Reason != "rate_limited" || b.Commit != commitNew {
+			t.Errorf("build %+v", b)
+		}
+	})
+
+	t.Run("invalid input", func(t *testing.T) {
+		g := newFakeGitHub()
+		installFakeGitHub(t, g)
+		for repo, sha := range map[string]string{"evil": "abcdef0", DefaultPRSearchRepo: "abc", "a/b": strings.Repeat("a", 41)} {
+			_, err := findBuildsContainingCommit(context.Background(), "", repo, sha, staticBuilds())
+			var searchErr *PRSearchError
+			if !errors.As(err, &searchErr) || searchErr.Code != "validation" {
+				t.Errorf("%s %s: %v", repo, sha, err)
+			}
 		}
 	})
 }
@@ -450,6 +805,14 @@ func TestFindBuildsContainingPR_UnknownBuilds(t *testing.T) {
 	}
 	if got["rhoai-2.22"].CompareURL != "" {
 		t.Error("a repository outside the search was compared")
+	}
+	if got["rhoai-2.25"].Message != "This build has no image built from red-hat-data-services/odh-dashboard or opendatahub-io/odh-dashboard." {
+		t.Errorf("no_component_image message %q", got["rhoai-2.25"].Message)
+	}
+	// A compare 404 means the fork does not have the merge commit (a
+	// cherry-pick or rebase), which is said, not "does not contain".
+	if got["rhoai-2.21"].Message != "GitHub does not know the PR's merge commit "+mergeSHA[:12]+" in "+forkRepo+": the fork may cherry-pick or rebase instead of merging upstream, so this build cannot be checked." {
+		t.Errorf("commit_not_found message %q", got["rhoai-2.21"].Message)
 	}
 }
 

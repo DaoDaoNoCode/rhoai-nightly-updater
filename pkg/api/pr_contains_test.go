@@ -16,19 +16,24 @@ func TestBuildExplorerContainsValidation(t *testing.T) {
 		many.Add("image", pinned)
 	}
 	cases := map[string]string{
-		"missing pr":          "",
-		"non-numeric pr":      "pr=abc",
-		"hash prefix":         "pr=%23123",
-		"zero":                "pr=0",
-		"negative":            "pr=-5",
-		"huge":                "pr=123456789012",
-		"repo not allowed":    "pr=1&repo=evil/repo",
-		"fork repo":           "pr=1&repo=red-hat-data-services/odh-dashboard",
-		"tag-only image":      "pr=1&image=" + url.QueryEscape("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"),
-		"foreign registry":    "pr=1&image=" + url.QueryEscape("docker.io/evil/fbc@sha256:"+strings.Repeat("a", 64)),
-		"other quay repo":     "pr=1&image=" + url.QueryEscape("quay.io/rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("a", 64)),
-		"too many images":     many.Encode(),
-		"path traversal repo": "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh-dashboard/../x"),
+		"missing pr and commit": "",
+		"both pr and commit":    "pr=1&commit=" + strings.Repeat("a", 40),
+		"non-numeric pr":        "pr=abc",
+		"hash prefix":           "pr=%23123",
+		"zero":                  "pr=0",
+		"negative":              "pr=-5",
+		"huge":                  "pr=123456789012",
+		"short commit":          "commit=abc12",
+		"non-hex commit":        "commit=abcdefg",
+		"long commit":           "commit=" + strings.Repeat("a", 41),
+		"repo without owner":    "pr=1&repo=odh-dashboard",
+		"repo with bad chars":   "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh dashboard"),
+		"repo with three parts": "pr=1&repo=a/b/c",
+		"path traversal repo":   "pr=1&repo=" + url.QueryEscape("opendatahub-io/odh-dashboard/../x"),
+		"tag-only image":        "pr=1&image=" + url.QueryEscape("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"),
+		"foreign registry":      "pr=1&image=" + url.QueryEscape("docker.io/evil/fbc@sha256:"+strings.Repeat("a", 64)),
+		"other quay repo":       "pr=1&image=" + url.QueryEscape("quay.io/rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("a", 64)),
+		"too many images":       many.Encode(),
 	}
 	for name, query := range cases {
 		t.Run(name, func(t *testing.T) {

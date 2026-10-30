@@ -1,17 +1,27 @@
 package cluster
 
-// "Which nightly contains PR #N?"
+// "Which nightly contains PR #N?" and "which nightly contains commit X?"
 //
-// Pull requests are opened and merged in opendatahub-io/odh-dashboard, while
-// RHOAI images are built from red-hat-data-services/odh-dashboard (the git.url
-// label of the dashboard image). The fork's release branches are updated by
-// merging upstream main ("Merge remote-tracking branch 'upstream/main' into
-// rhoai-3.6"), so the upstream merge commit keeps its SHA in the fork. Checked
-// on 2026-10-05: compare/<merge of #9986>...<build commit 32a2131> in the fork
-// is "ahead" (contained), and compare/<merge of #10063>...32a2131 is
-// "diverged" (merged after that build), while the later build a3b6b58 is
-// "ahead" of it. A PR whose change reached a build only as a cherry-pick (a
-// different SHA) is reported as not contained.
+// Pull requests are opened and merged upstream (opendatahub-io/odh-dashboard,
+// opendatahub-io/data-science-pipelines, ...), while RHOAI images are built
+// from the red-hat-data-services forks: every component image of a nightly
+// carries a git.url label https://github.com/red-hat-data-services/<name> and
+// a commit label (checked 2026-10-29: 165 related images in the rhoai-3.6
+// build, 14 of them from red-hat-data-services/odh-dashboard; about 24 base
+// images have no git.url). The dashboard fork's release branches are updated
+// by merging upstream main ("Merge remote-tracking branch 'upstream/main'
+// into rhoai-3.6"), so upstream SHAs keep their identity in the fork:
+// GET /repos/red-hat-data-services/odh-dashboard/commits/<7-char upstream
+// sha> resolves, compare/<old upstream sha>...<rhoai-3.6 head> is "ahead"
+// (contained) and compare/<today's upstream main head>...<rhoai-3.6 head> is
+// "diverged" (not merged yet). Other forks may cherry-pick or rebase instead;
+// then the upstream commit is unknown in the fork and compare answers 404,
+// which is reported as unknown ("commit not in the fork"), never as "does
+// not contain".
+//
+// A build whose image was pushed before the PR's merge date (or the commit's
+// date) cannot contain it: its answer comes from the FBC image's build-date
+// label alone, with no catalog or GitHub read.
 //
 // GitHub compare semantics (GET /repos/{owner}/{repo}/compare/{base}...{head}):
 // "ahead" or "identical" means head contains base; "behind" or "diverged"
@@ -26,6 +36,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -36,38 +47,39 @@ import (
 // DefaultPRSearchRepo is the repository searched when none is given.
 const DefaultPRSearchRepo = "opendatahub-io/odh-dashboard"
 
-// prSearchRepo describes a repository whose PRs can be searched: the
-// repositories its build commits may come from, and how to find its image in
-// a catalog.
-type prSearchRepo struct {
-	buildRepos map[string]bool
-	image      func(*types.FBCContentResponse) string
+// forkOwner owns the forks the RHOAI images are built from.
+const forkOwner = "red-hat-data-services"
+
+// searchRepoPattern is the "owner/name" a search may name (it ends up in
+// GitHub API paths).
+var searchRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$`)
+
+// ValidSearchRepo reports whether repo is a well-formed "owner/name".
+func ValidSearchRepo(repo string) bool {
+	return searchRepoPattern.MatchString(repo)
 }
 
-// prSearchRepos is the allowlist: only repositories the nightly builds carry.
-var prSearchRepos = map[string]prSearchRepo{
-	DefaultPRSearchRepo: {
-		buildRepos: map[string]bool{
-			"red-hat-data-services/odh-dashboard": true,
-			"opendatahub-io/odh-dashboard":        true,
-		},
-		image: dashboardRelatedImage,
-	},
-}
-
-// IsPRSearchRepo reports whether repo's pull requests can be searched.
-func IsPRSearchRepo(repo string) bool {
-	_, ok := prSearchRepos[repo]
-	return ok
-}
-
-// PRSearchRepos lists the repositories whose PRs can be searched.
-func PRSearchRepos() []string {
-	out := make([]string, 0, len(prSearchRepos))
-	for repo := range prSearchRepos {
-		out = append(out, repo)
+// forkCandidates lists the repositories a build's component image may have
+// been built from for a search of repo: the red-hat-data-services fork of the
+// same name, and repo itself (the PR or commit may be on the fork already).
+func forkCandidates(repo string) []string {
+	_, name, _ := strings.Cut(repo, "/")
+	fork := forkOwner + "/" + name
+	if strings.EqualFold(fork, repo) {
+		return []string{repo}
 	}
-	return out
+	return []string{fork, repo}
+}
+
+// isCandidate reports whether repo is one of candidates (case-insensitive,
+// as GitHub names are).
+func isCandidate(candidates []string, repo string) bool {
+	for _, c := range candidates {
+		if strings.EqualFold(c, repo) {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -87,6 +99,9 @@ const (
 	// githubBodyLimit bounds a GitHub response body (a compare page with one
 	// commit and no files is about 16 KB, a pull request about 30 KB).
 	githubBodyLimit = 2 << 20
+	// componentImageCacheMax bounds the remembered "which image of this build
+	// is the component" answers (one per build and searched repository).
+	componentImageCacheMax = 1024
 )
 
 // PRSearchError is a request-level failure with an API errorCode.
@@ -114,6 +129,16 @@ type prInfo struct {
 	notFound    bool
 }
 
+// commitInfo is a commit GitHub resolved (possibly from a short SHA).
+type commitInfo struct {
+	sha      string // full, lower case
+	date     string // committer date
+	title    string // first line of the message
+	url      string
+	repo     string // where it was found
+	notFound bool
+}
+
 type compareVerdict struct {
 	contains bool
 	notFound bool // a commit is unknown to GitHub
@@ -124,6 +149,13 @@ var (
 	prFlight      flightGroup[prInfo]
 	compareCache  = newLRU[string, compareVerdict](4096)
 	compareFlight flightGroup[compareVerdict]
+	// commitCache remembers resolved commits for good (a SHA never changes
+	// meaning) and misses for compareNegativeTTL.
+	commitCache  = newLRU[string, commitInfo](1024)
+	commitLookup flightGroup[commitInfo]
+	// componentImageCache remembers which related image of a build is the
+	// searched component, so a repeated search does not rescan the labels.
+	componentImageCache = newLRU[string, componentLookup](componentImageCacheMax)
 )
 
 // githubBackoffUntil returns when GitHub calls may resume (zero when they may now).
@@ -242,6 +274,80 @@ func lookupPR(ctx context.Context, repo string, number int) (prInfo, error) {
 	return info, err
 }
 
+// fetchCommit resolves sha (7 to 40 hex) in repo. A 404 or 422 is notFound,
+// not an error.
+func fetchCommit(ctx context.Context, repo, sha string) (commitInfo, error) {
+	resp, err := githubGet(ctx, fmt.Sprintf("/repos/%s/commits/%s", repo, sha))
+	if err != nil {
+		return commitInfo{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, githubBodyLimit))
+	if err != nil {
+		return commitInfo{}, err
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity:
+		return commitInfo{notFound: true}, nil
+	case resp.StatusCode != http.StatusOK:
+		return commitInfo{}, fmt.Errorf("GitHub returned %d for commit %s of %s", resp.StatusCode, sha, repo)
+	}
+	var c struct {
+		SHA     string `json:"sha"`
+		HTMLURL string `json:"html_url"`
+		Commit  struct {
+			Message   string `json:"message"`
+			Committer struct {
+				Date string `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(body, &c); err != nil {
+		return commitInfo{}, fmt.Errorf("parse commit: %w", err)
+	}
+	full := strings.ToLower(c.SHA)
+	if !dashboardCommitSHAPattern.MatchString(full) {
+		return commitInfo{}, fmt.Errorf("GitHub reported no usable SHA for commit %s of %s", sha, repo)
+	}
+	title, _, _ := strings.Cut(c.Commit.Message, "\n")
+	return commitInfo{sha: full, date: c.Commit.Committer.Date, title: strings.TrimSpace(title), url: c.HTMLURL, repo: repo}, nil
+}
+
+// lookupCommit resolves sha in repo, then in each fork candidate, and returns
+// the first that knows it. Hits are cached for good, misses for a while.
+func lookupCommit(ctx context.Context, repo, sha string) (commitInfo, error) {
+	sha = strings.ToLower(sha)
+	repos := []string{repo}
+	for _, c := range forkCandidates(repo) {
+		if !isCandidate(repos, c) {
+			repos = append(repos, c)
+		}
+	}
+	key := strings.ToLower(strings.Join(repos, ",")) + "|" + sha
+	if info, ok := commitCache.Get(key); ok {
+		return info, nil
+	}
+	info, err, _ := commitLookup.Do(ctx, key, func(ctx context.Context) (commitInfo, error) {
+		if info, ok := commitCache.Get(key); ok {
+			return info, nil
+		}
+		for _, r := range repos {
+			info, err := fetchCommit(ctx, r, sha)
+			if err != nil {
+				return commitInfo{}, err
+			}
+			if !info.notFound {
+				commitCache.Add(key, info, 0)
+				return info, nil
+			}
+		}
+		miss := commitInfo{notFound: true}
+		commitCache.Add(key, miss, compareNegativeTTL)
+		return miss, nil
+	})
+	return info, err
+}
+
 // compareContains asks GitHub whether head contains base, in repo. SHAs are
 // immutable, so answers are cached for good (a missing commit for a while).
 func compareContains(ctx context.Context, repo, base, head string) (compareVerdict, error) {
@@ -308,6 +414,21 @@ type prBuild struct {
 	installed bool
 }
 
+// containsSearch is what the builds are checked against: a PR's merge commit
+// or a commit, in a repository and its fork candidates.
+type containsSearch struct {
+	repo       string
+	candidates []string
+	// base is the commit a build must contain; empty when GitHub could not
+	// be asked (rate limit): builds are then "unknown" with their commit.
+	base string
+	// baseDate is when base was merged or committed; builds older than it
+	// are answered without any read. Zero when unknown.
+	baseDate time.Time
+	// commit is true for a commit search, false for a PR search (wording).
+	commit bool
+}
+
 // FindBuildsContainingPR reports which nightly builds contain merged PR
 // number of repo. images are digest-pinned FBC references; when empty, the
 // installed nightly build and the newest build of every tag are checked.
@@ -315,7 +436,21 @@ func FindBuildsContainingPR(ctx context.Context, c *Client, repo string, number 
 	ctx, cancel := context.WithTimeout(ctx, prRequestTimeout)
 	defer cancel()
 	basicAuth := getQuayAuth(c)
-	list := func(ctx context.Context) ([]prBuild, error) {
+	return findBuildsContainingPR(ctx, basicAuth, repo, number, buildLister(c, basicAuth, images))
+}
+
+// FindBuildsContainingCommit reports which nightly builds contain commit sha
+// (7 to 40 hex) of repo, resolved on repo and then on its fork candidates.
+func FindBuildsContainingCommit(ctx context.Context, c *Client, repo, sha string, images []string) (*types.PRContainsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, prRequestTimeout)
+	defer cancel()
+	basicAuth := getQuayAuth(c)
+	return findBuildsContainingCommit(ctx, basicAuth, repo, sha, buildLister(c, basicAuth, images))
+}
+
+// buildLister lists the given images, or the default builds when none are given.
+func buildLister(c *Client, basicAuth string, images []string) func(context.Context) ([]prBuild, error) {
+	return func(ctx context.Context) ([]prBuild, error) {
 		if len(images) > 0 {
 			builds := make([]prBuild, 0, len(images))
 			for _, image := range images {
@@ -325,7 +460,6 @@ func FindBuildsContainingPR(ctx context.Context, c *Client, repo string, number 
 		}
 		return defaultPRBuilds(ctx, c, basicAuth)
 	}
-	return findBuildsContainingPR(ctx, basicAuth, repo, number, list)
 }
 
 // defaultPRBuilds lists the installed nightly build (when the Subscription
@@ -358,21 +492,26 @@ func defaultPRBuilds(ctx context.Context, c *Client, basicAuth string) ([]prBuil
 	return builds, nil
 }
 
-func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number int, list func(context.Context) ([]prBuild, error)) (*types.PRContainsResponse, error) {
-	spec, ok := prSearchRepos[repo]
-	if !ok {
-		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: fmt.Sprintf("PR search is not available for %s", repo)}
-	}
-	resp := &types.PRContainsResponse{Repo: repo, PR: number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", repo, number), Builds: []types.PRContainsBuild{}}
-	var rateLimit sync.Mutex
-	noteRateLimit := func(until time.Time) {
-		rateLimit.Lock()
-		defer rateLimit.Unlock()
+// rateLimitNoter records a GitHub rate limit on the response.
+func rateLimitNoter(resp *types.PRContainsResponse) func(time.Time) {
+	var mu sync.Mutex
+	return func(until time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
 		resp.RateLimited = true
 		if secs := int(time.Until(until).Round(time.Second) / time.Second); secs > resp.RetryAfterSeconds {
 			resp.RetryAfterSeconds = secs
 		}
 	}
+}
+
+func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number int, list func(context.Context) ([]prBuild, error)) (*types.PRContainsResponse, error) {
+	if !ValidSearchRepo(repo) {
+		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: fmt.Sprintf("%q is not a GitHub repository (owner/name)", repo)}
+	}
+	resp := &types.PRContainsResponse{Repo: repo, PR: number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", repo, number), Builds: []types.PRContainsBuild{}}
+	noteRateLimit := rateLimitNoter(resp)
+	search := containsSearch{repo: repo, candidates: forkCandidates(repo)}
 
 	info, err := lookupPR(ctx, repo, number)
 	var limited *githubRateLimitError
@@ -399,8 +538,63 @@ func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number 
 		if info.url != "" {
 			resp.URL = info.url
 		}
+		search.base = info.mergeCommit
+		if t, err := time.Parse(time.RFC3339, info.mergedAt); err == nil {
+			search.baseDate = t
+		}
 	}
+	return runContainsSearch(ctx, basicAuth, search, list, resp, noteRateLimit)
+}
 
+func findBuildsContainingCommit(ctx context.Context, basicAuth, repo, sha string, list func(context.Context) ([]prBuild, error)) (*types.PRContainsResponse, error) {
+	if !ValidSearchRepo(repo) {
+		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: fmt.Sprintf("%q is not a GitHub repository (owner/name)", repo)}
+	}
+	if !githubSHAPattern.MatchString(sha) || len(sha) > 40 {
+		return nil, &PRSearchError{Status: http.StatusBadRequest, Code: "validation", Msg: "'commit' must be 7 to 40 hex characters"}
+	}
+	sha = strings.ToLower(sha)
+	resp := &types.PRContainsResponse{Repo: repo, Commit: sha, Builds: []types.PRContainsBuild{}}
+	noteRateLimit := rateLimitNoter(resp)
+	search := containsSearch{repo: repo, candidates: forkCandidates(repo), commit: true}
+
+	info, err := lookupCommit(ctx, repo, sha)
+	var limited *githubRateLimitError
+	switch {
+	case errors.As(err, &limited):
+		noteRateLimit(limited.until)
+	case err != nil:
+		if isContextError(err) {
+			return nil, err
+		}
+		slog.Warn("commit search: resolving the commit failed", "repo", repo, "commit", sha, "error", err)
+		return nil, &PRSearchError{Status: http.StatusBadGateway, Code: "upstream_error", Msg: fmt.Sprintf("Could not read commit %s from GitHub: %v", shortSHA(sha), err)}
+	case info.notFound:
+		return nil, &PRSearchError{Status: http.StatusNotFound, Code: "commit_not_found",
+			Msg: fmt.Sprintf("GitHub does not know commit %s in %s.", shortSHA(sha), strings.Join(reposFor(repo), " or "))}
+	default:
+		resp.Commit, resp.CommitDate, resp.CommitTitle, resp.CommitURL = info.sha, info.date, info.title, info.url
+		search.base = info.sha
+		if t, err := time.Parse(time.RFC3339, info.date); err == nil {
+			search.baseDate = t
+		}
+	}
+	return runContainsSearch(ctx, basicAuth, search, list, resp, noteRateLimit)
+}
+
+// reposFor is repo followed by its fork candidates, without repeats.
+func reposFor(repo string) []string {
+	out := []string{repo}
+	for _, c := range forkCandidates(repo) {
+		if !isCandidate(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// runContainsSearch checks every listed build against search, a few at a time.
+func runContainsSearch(ctx context.Context, basicAuth string, search containsSearch, list func(context.Context) ([]prBuild, error), resp *types.PRContainsResponse, noteRateLimit func(time.Time)) (*types.PRContainsResponse, error) {
 	builds, err := list(ctx)
 	if err != nil {
 		return nil, err
@@ -417,17 +611,68 @@ func findBuildsContainingPR(ctx context.Context, basicAuth, repo string, number 
 				defer func() { <-sem }()
 			case <-ctx.Done():
 			}
-			resp.Builds[i] = checkBuildForPR(ctx, basicAuth, spec, resp.MergeCommit, b, noteRateLimit)
+			resp.Builds[i] = checkBuildContains(ctx, basicAuth, search, b, noteRateLimit)
 		}()
 	}
 	wg.Wait()
 	return resp, nil
 }
 
-func checkBuildForPR(ctx context.Context, basicAuth string, spec prSearchRepo, mergeCommit string, b prBuild, noteRateLimit func(time.Time)) types.PRContainsBuild {
+// builtBefore reports whether the build's FBC image was pushed before t,
+// from its (cached) build-date label. False when the date is unknown.
+func builtBefore(ctx context.Context, basicAuth, image string, t time.Time) (time.Duration, bool) {
+	if t.IsZero() {
+		return 0, false
+	}
+	labels, err := imageLabelsWithAuth(ctx, basicAuth, image, false)
+	if err != nil || labels.BuildDate == "" {
+		return 0, false
+	}
+	built, err := time.Parse(time.RFC3339, labels.BuildDate)
+	if err != nil || !built.Before(t) {
+		return 0, false
+	}
+	return t.Sub(built), true
+}
+
+// roughDuration words a duration for a sentence: "20 minutes", "3 hours", "12 days".
+func roughDuration(d time.Duration) string {
+	plural := func(n int, unit string) string {
+		if n == 1 {
+			return fmt.Sprintf("1 %s", unit)
+		}
+		return fmt.Sprintf("%d %ss", n, unit)
+	}
+	switch {
+	case d < time.Hour:
+		n := int(d.Round(time.Minute) / time.Minute)
+		if n < 1 {
+			n = 1
+		}
+		return plural(n, "minute")
+	case d < 48*time.Hour:
+		return plural(int(d.Round(time.Hour)/time.Hour), "hour")
+	default:
+		return plural(int(d.Round(24*time.Hour)/(24*time.Hour)), "day")
+	}
+}
+
+func checkBuildContains(ctx context.Context, basicAuth string, search containsSearch, b prBuild, noteRateLimit func(time.Time)) types.PRContainsBuild {
 	out := types.PRContainsBuild{Image: b.image, Tag: extractTagFromRef(b.image), Installed: b.installed, Result: "unknown"}
 	if err := ctx.Err(); err != nil {
 		out.Reason, out.Message = "build_unreadable", "The search timed out before this build was checked."
+		return out
+	}
+	// The cheapest answer first: a build pushed before the merge (or the
+	// commit) cannot contain it, and its date is already cached by the tags
+	// listing.
+	if age, ok := builtBefore(ctx, basicAuth, b.image, search.baseDate); ok {
+		out.Result = "not_contained"
+		if search.commit {
+			out.Reason, out.Message = "built_before_commit", fmt.Sprintf("Built %s before the commit.", roughDuration(age))
+		} else {
+			out.Reason, out.Message = "built_before_merge", fmt.Sprintf("Built %s before the PR was merged.", roughDuration(age))
+		}
 		return out
 	}
 	content, err := extractFBCContentWithAuth(ctx, basicAuth, b.image)
@@ -435,37 +680,23 @@ func checkBuildForPR(ctx context.Context, basicAuth string, spec prSearchRepo, m
 		out.Reason, out.Message = "build_unreadable", fmt.Sprintf("Could not read the build's catalog: %v", err)
 		return out
 	}
-	componentImage := spec.image(content)
-	if componentImage == "" {
-		out.Reason, out.Message = "no_component_image", "This build has no image of this repository."
-		return out
-	}
-	labels, err := imageLabelsWithAuth(ctx, basicAuth, componentImage, false)
-	switch {
-	case errors.Is(err, errNoImageLabels):
-		out.Reason, out.Message = "no_commit_label", "The component image has no commit label."
-		return out
-	case err != nil:
+	component, err := findComponentImage(ctx, basicAuth, b.image, content, search.repo, search.candidates)
+	if err != nil {
 		out.Reason, out.Message = "build_unreadable", fmt.Sprintf("Could not read the component image labels: %v", err)
 		return out
 	}
-	commitRepo, ok := githubRepoFromURL(labels.GitURL)
-	if !ok || !githubSHAPattern.MatchString(labels.GitCommit) {
-		out.Reason, out.Message = "no_commit_label", "The component image has no GitHub commit label."
+	if component.image == "" {
+		out.Reason, out.Message = component.reason, component.message
 		return out
 	}
-	out.Commit, out.CommitRepo = labels.GitCommit, commitRepo
-	if !spec.buildRepos[commitRepo] {
-		out.Reason, out.Message = "unexpected_repo", fmt.Sprintf("The component was built from %s, which this search does not cover.", commitRepo)
-		return out
-	}
-	if mergeCommit == "" {
-		// The PR could not be read (rate limit): the build commit is still shown.
+	out.Commit, out.CommitRepo = component.commit, component.repo
+	if search.base == "" {
+		// The PR or commit could not be read (rate limit): the build commit is still shown.
 		out.Reason = "rate_limited"
 		return out
 	}
-	out.CompareURL = fmt.Sprintf("https://github.com/%s/compare/%s...%s", commitRepo, mergeCommit, labels.GitCommit)
-	verdict, err := compareContains(ctx, commitRepo, mergeCommit, labels.GitCommit)
+	out.CompareURL = fmt.Sprintf("https://github.com/%s/compare/%s...%s", component.repo, search.base, component.commit)
+	verdict, err := compareContains(ctx, component.repo, search.base, component.commit)
 	var limited *githubRateLimitError
 	switch {
 	case errors.As(err, &limited):
@@ -474,13 +705,120 @@ func checkBuildForPR(ctx context.Context, basicAuth string, spec prSearchRepo, m
 	case err != nil:
 		out.Reason, out.Message = "github_error", err.Error()
 	case verdict.notFound:
-		out.Reason, out.Message = "commit_not_found", fmt.Sprintf("GitHub does not know commit %s in %s.", shortSHA(labels.GitCommit), commitRepo)
+		what := "the PR's merge commit"
+		if search.commit {
+			what = "commit"
+		}
+		out.Reason = "commit_not_found"
+		out.Message = fmt.Sprintf("GitHub does not know %s %s in %s: the fork may cherry-pick or rebase instead of merging upstream, so this build cannot be checked.", what, shortSHA(search.base), component.repo)
 	case verdict.contains:
 		out.Result = "contains"
 	default:
 		out.Result = "not_contained"
 	}
 	return out
+}
+
+// componentLookup is which related image of a build was built from the
+// searched repository (image empty: none, with the reason).
+type componentLookup struct {
+	image   string
+	commit  string
+	repo    string // "owner/name" from the image's git.url label
+	reason  string
+	message string
+}
+
+// findComponentImage finds the related image of a build built from one of
+// candidates. The dashboard image is found by name first (the common search)
+// and its git.url checked; otherwise the labels of the build's RHOAI images
+// are read (a few at a time, cached) and the first in catalog order with a
+// matching git.url and a well-formed commit wins: images of one repository
+// are built from the same commit. The answer is remembered per build and
+// repository, unless a label read failed, so the next search can retry.
+func findComponentImage(ctx context.Context, basicAuth, fbcImage string, content *types.FBCContentResponse, repo string, candidates []string) (componentLookup, error) {
+	_, digest, _ := extractRepoAndDigest(fbcImage)
+	key := digest + "|" + strings.ToLower(repo)
+	if v, ok := componentImageCache.Get(key); ok {
+		return v, nil
+	}
+	miss := componentLookup{reason: "no_component_image", message: fmt.Sprintf("This build has no image built from %s.", strings.Join(candidates, " or "))}
+	matches := func(labels *ImageLabels) (componentLookup, bool) {
+		labelRepo, ok := githubRepoFromURL(labels.GitURL)
+		if !ok || !isCandidate(candidates, labelRepo) || !githubSHAPattern.MatchString(labels.GitCommit) {
+			return componentLookup{}, false
+		}
+		return componentLookup{commit: strings.ToLower(labels.GitCommit), repo: labelRepo}, true
+	}
+
+	// Fast path: the dashboard image by name.
+	checked := ""
+	if _, name, _ := strings.Cut(repo, "/"); strings.EqualFold(name, "odh-dashboard") {
+		if image := dashboardRelatedImage(content); image != "" {
+			checked = image
+			labels, err := imageLabelsWithAuth(ctx, basicAuth, image, false)
+			switch {
+			case errors.Is(err, errNoImageLabels):
+				miss = componentLookup{reason: "no_commit_label", message: "The dashboard image has no commit label."}
+			case err != nil:
+				return componentLookup{}, err
+			default:
+				if m, ok := matches(labels); ok {
+					m.image = image
+					componentImageCache.Add(key, m, 0)
+					return m, nil
+				}
+				if labelRepo, ok := githubRepoFromURL(labels.GitURL); !ok || !githubSHAPattern.MatchString(labels.GitCommit) {
+					miss = componentLookup{reason: "no_commit_label", message: "The dashboard image has no GitHub commit label."}
+				} else {
+					miss = componentLookup{reason: "unexpected_repo", message: fmt.Sprintf("The dashboard image was built from %s, which this search does not cover.", labelRepo)}
+				}
+			}
+		}
+	}
+
+	// Scan: every RHOAI image of the build, in catalog order.
+	var refs []string
+	for _, ri := range content.RelatedImages {
+		if ri.Image != checked && isRHOAIImage(ri.Image) {
+			refs = append(refs, ri.Image)
+		}
+	}
+	labels := resolveImageLabels(ctx, basicAuth, refs, false)
+	if err := ctx.Err(); err != nil {
+		return componentLookup{}, err
+	}
+	complete := true
+	for _, ref := range refs {
+		l, ok := labels[ref]
+		if !ok {
+			// Left out: no labels (remembered) or a failed read (not remembered).
+			if _, negative := cachedNoLabels(ref); !negative {
+				complete = false
+			}
+			continue
+		}
+		if m, ok := matches(l); ok {
+			m.image = ref
+			componentImageCache.Add(key, m, 0)
+			return m, nil
+		}
+	}
+	if complete {
+		componentImageCache.Add(key, miss, 0)
+	}
+	return miss, nil
+}
+
+// cachedNoLabels reports whether the label cache remembers image as having
+// no labels (so a scan that skipped it is still complete).
+func cachedNoLabels(image string) (labelCacheValue, bool) {
+	repo, digest, ok := extractRepoAndDigest(image)
+	if !ok {
+		return labelCacheValue{}, false
+	}
+	v, ok := labelCache.Get(repo + "@" + digest)
+	return v, ok && v.noLabels
 }
 
 func shortSHA(sha string) string {

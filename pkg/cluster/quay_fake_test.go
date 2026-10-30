@@ -170,6 +170,8 @@ func resetRegistryCaches() {
 	dashboardWarmAttempts.Purge()
 	prCache.Purge()
 	compareCache.Purge()
+	commitCache.Purge()
+	componentImageCache.Purge()
 	branchHeadCache.Purge()
 	divergenceCache.Purge()
 	dashboardPRCache.Purge()

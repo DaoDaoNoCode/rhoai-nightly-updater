@@ -975,8 +975,13 @@ var HandleBuildExplorerContent = withAuth(func(c *cluster.Client, w http.Respons
 // prSearchMaxImages bounds the builds one PR search request names.
 const prSearchMaxImages = 40
 
+// commitSearchRegex is the commit a search may name: 7 to 40 hex characters.
+var commitSearchRegex = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+
 // HandleBuildExplorerContains reports which nightly builds contain a merged
-// pull request: GET /api/build-explorer/contains?pr=<N>[&repo=<owner/name>][&image=<FBC ref>...].
+// pull request or a commit:
+// GET /api/build-explorer/contains?pr=<N>|commit=<sha>[&repo=<owner/name>][&image=<FBC ref>...].
+// Exactly one of pr and commit; repo defaults to opendatahub-io/odh-dashboard.
 // Without image, the installed build and the newest build of every tag are
 // checked. A GitHub rate limit gives partial results (rateLimited), never an error.
 var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
@@ -985,13 +990,25 @@ var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.Respon
 	if repo == "" {
 		repo = cluster.DefaultPRSearchRepo
 	}
-	if !cluster.IsPRSearchRepo(repo) {
-		writeError(w, fmt.Sprintf("PR search supports only %s", strings.Join(cluster.PRSearchRepos(), ", ")), http.StatusBadRequest, "validation")
+	if !cluster.ValidSearchRepo(repo) {
+		writeError(w, "'repo' must be a GitHub repository, owner/name", http.StatusBadRequest, "validation")
 		return
 	}
-	pr, err := strconv.Atoi(q.Get("pr"))
-	if err != nil || pr <= 0 || pr > 99999999 {
-		writeError(w, "'pr' must be a pull request number", http.StatusBadRequest, "validation")
+	prParam, commit := q.Get("pr"), q.Get("commit")
+	if (prParam == "") == (commit == "") {
+		writeError(w, "give exactly one of 'pr' and 'commit'", http.StatusBadRequest, "validation")
+		return
+	}
+	var pr int
+	if prParam != "" {
+		var err error
+		pr, err = strconv.Atoi(prParam)
+		if err != nil || pr <= 0 || pr > 99999999 {
+			writeError(w, "'pr' must be a pull request number", http.StatusBadRequest, "validation")
+			return
+		}
+	} else if !commitSearchRegex.MatchString(commit) {
+		writeError(w, "'commit' must be a commit SHA of 7 to 40 hex characters", http.StatusBadRequest, "validation")
 		return
 	}
 	images := q["image"]
@@ -1006,9 +1023,15 @@ var HandleBuildExplorerContains = withAuth(func(c *cluster.Client, w http.Respon
 			return
 		}
 	}
-	slog.Info("request", "op", "build-explorer-contains", "repo", repo, "pr", pr, "images", len(images))
+	slog.Info("request", "op", "build-explorer-contains", "repo", repo, "pr", pr, "commit", commit, "images", len(images))
 
-	result, err := cluster.FindBuildsContainingPR(r.Context(), c, repo, pr, images)
+	var result *types.PRContainsResponse
+	var err error
+	if commit != "" {
+		result, err = cluster.FindBuildsContainingCommit(r.Context(), c, repo, commit, images)
+	} else {
+		result, err = cluster.FindBuildsContainingPR(r.Context(), c, repo, pr, images)
+	}
 	if err != nil {
 		var searchErr *cluster.PRSearchError
 		if errors.As(err, &searchErr) {

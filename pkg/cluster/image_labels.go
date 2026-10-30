@@ -27,8 +27,10 @@ type ImageLabels struct {
 
 const (
 	// Labels are read from a digest-addressed config blob, so they never
-	// change: entries leave the cache only through LRU eviction.
-	labelCacheMax = 2000
+	// change: entries leave the cache only through LRU eviction. Entries are
+	// small structs; 10000 holds the Build Explorer's 25 builds x 165 images
+	// at once, so a search over every build stays warm.
+	labelCacheMax = 10000
 	// An image without labels is remembered briefly; transient errors are not cached.
 	labelNegativeTTL = 10 * time.Minute
 	// Commit dates are immutable per SHA.

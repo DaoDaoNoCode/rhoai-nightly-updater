@@ -671,14 +671,22 @@ type DiagnosticsFixRequest struct {
 }
 
 // PRContainsResponse answers GET /api/build-explorer/contains: which nightly
-// builds contain a merged pull request.
+// builds contain a merged pull request (?pr=N) or a commit (?commit=SHA).
+// A PR search fills PR, Title, URL, MergeCommit and MergedAt; a commit search
+// fills Commit, CommitDate, CommitTitle and CommitURL.
 type PRContainsResponse struct {
-	Repo        string            `json:"repo"` // repository the PR was opened in, e.g. "opendatahub-io/odh-dashboard"
-	PR          int               `json:"pr"`
-	Title       string            `json:"title,omitempty"`
-	URL         string            `json:"url,omitempty"`         // the PR page
-	MergeCommit string            `json:"mergeCommit,omitempty"` // merge_commit_sha of the merged PR
-	MergedAt    string            `json:"mergedAt,omitempty"`
+	Repo        string `json:"repo"`         // repository searched, e.g. "opendatahub-io/odh-dashboard"
+	PR          int    `json:"pr,omitempty"` // the PR number (PR search)
+	Title       string `json:"title,omitempty"`
+	URL         string `json:"url,omitempty"`         // the PR page
+	MergeCommit string `json:"mergeCommit,omitempty"` // merge_commit_sha of the merged PR
+	MergedAt    string `json:"mergedAt,omitempty"`
+	// Commit search: the full SHA GitHub resolved, its committer date, the
+	// first line of its message and its page.
+	Commit      string            `json:"commit,omitempty"`
+	CommitDate  string            `json:"commitDate,omitempty"`
+	CommitTitle string            `json:"commitTitle,omitempty"`
+	CommitURL   string            `json:"commitURL,omitempty"`
 	Builds      []PRContainsBuild `json:"builds"`
 	// RateLimited is set when GitHub's rate limit stopped some lookups; their
 	// builds are "unknown". RetryAfterSeconds says when to try again.
@@ -697,12 +705,15 @@ type PRContainsBuild struct {
 	CommitRepo string `json:"commitRepo,omitempty"`
 	// Result is "contains", "not_contained" or "unknown".
 	Result string `json:"result"`
-	// Reason explains "unknown": "rate_limited", "commit_not_found",
+	// Reason explains the result. For "not_contained": "built_before_merge"
+	// or "built_before_commit" (the build is older than what it is searched
+	// for, so nothing was read about it). For "unknown": "rate_limited",
+	// "commit_not_found" (the merge commit or commit is not in the fork),
 	// "no_component_image", "no_commit_label", "unexpected_repo",
 	// "build_unreadable" or "github_error".
 	Reason     string `json:"reason,omitempty"`
 	Message    string `json:"message,omitempty"`
-	CompareURL string `json:"compareURL,omitempty"` // GitHub compare page: merge commit...build commit
+	CompareURL string `json:"compareURL,omitempty"` // GitHub compare page: merge commit (or commit)...build commit
 }
 
 // DashboardBuildsResponse answers GET /api/dashboard/builds: the commit of
