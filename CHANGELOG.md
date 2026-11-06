@@ -16,11 +16,16 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
-## [2.3.2] - unreleased
+## [2.3.2] - 2026-11-06
 
-## [2.3.1] - 2026-11-06
+2.3.1 was tagged with the same fix but never published: a clock-dependent
+test failed its pipelines. Its GitLab tag remains; there is no 2.3.1 image
+or installer.
 
 ### Fixed
+
+- A Build Explorer test expected "Committed 3w ago" of a fixed date and
+  started failing a month later; it now accepts any age.
 
 - The 3.7 builds were missing from the Status page, the Build Explorer and
   the update check: the tag scan read at most 30 pages of the registry's
