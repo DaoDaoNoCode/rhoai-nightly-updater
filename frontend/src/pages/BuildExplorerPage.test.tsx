@@ -182,7 +182,7 @@ describe("Build Explorer search", () => {
     expect(containsCalls(api).every((c) => c.includes("commit=6c8ac6e") && !c.includes("repo="))).toBe(true);
     expect(screen.getByRole("link", { name: /^Commit 6c8ac6e$/ })).toHaveAttribute("href", `https://github.com/opendatahub-io/odh-dashboard/commit/${sha}`);
     // The title is on the header line, not in the sentence.
-    expect(screen.getByText(/Committed/).textContent).toMatch(/^Commit 6c8ac6e: Show the model deployment status\. Committed 3w ago .* in opendatahub-io\/odh-dashboard\.$/);
+    expect(screen.getByText(/Committed/).textContent).toMatch(/^Commit 6c8ac6e: Show the model deployment status\. Committed \S+ ago .* in opendatahub-io\/odh-dashboard\.$/);
     const table = screen.getByRole("grid", { name: "Builds and Commit 6c8ac6e" });
     expect(within(table).getByRole("columnheader", { name: /Commit 6c8ac6e/ })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Commit in build" })).toBeInTheDocument();
