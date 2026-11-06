@@ -16,6 +16,8 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
+## [2.3.3] - unreleased
+
 ## [2.3.2] - 2026-11-06
 
 2.3.1 was tagged with the same fix but never published: a clock-dependent
