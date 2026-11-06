@@ -22,10 +22,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-const (
-	quayTagsURL = "https://quay.io/v2/rhoai/rhoai-fbc-fragment/tags/list"
-	quayImage   = "quay.io/rhoai/rhoai-fbc-fragment"
-)
+const quayImage = "quay.io/rhoai/rhoai-fbc-fragment"
 
 // quayHTTPClient is a shared HTTP client for all Quay/GitHub API calls,
 // avoiding per-request client allocation and enabling connection reuse.
@@ -107,10 +104,6 @@ func compareTags(a, b parsedTag) int {
 
 type quayTokenResponse struct {
 	Token string `json:"token"`
-}
-
-type quayTagsResponse struct {
-	Tags []string `json:"tags"`
 }
 
 // quayRHOAIRegistry is the registry path whose credentials the updater needs.
@@ -583,11 +576,206 @@ var (
 
 const tagScanCacheTTL = 5 * time.Minute
 
-// fetchAndParseTags scans the Quay v2 tags/list API to find all clean version tags.
-// It runs concurrent paginations from multiple lexicographic start points to cover
-// the full range without scanning every page sequentially. Results are cached for 5m.
-// A refresh mutex prevents multiple goroutines from performing the expensive scan
-// simultaneously (cache stampede).
+// The release tags are found by asking the registry whether each name
+// exists (HEAD manifests/<tag>), not by paging the tag list. The list holds
+// tens of thousands of per-commit tags (rhoai-3.6-<sha>, rhoai-3.6-ea.1-<sha>)
+// in a locale order that ignores punctuation, so no cursor can jump past a
+// version's block reliably, and a page cap leaves gaps: on 2026-11-06 3,600
+// tags lay between rhoai-3.5 and rhoai-3.7-ea.1, more than the 30 pages one
+// start point read, so the 3.7 builds were never listed. Names are
+// predictable (rhoai-M.m, rhoai-M.m.p, with -ea or -ea.N), so the probes
+// walk the version numbers and stop after a run of misses.
+const (
+	tagProbeFirstMajor = 2
+	tagProbeLastMajor  = 9
+	// tagProbeMinorGap is the run of missing minors that ends a major once
+	// one was found; a major with no minor in its first tagProbeMinorStart
+	// numbers is not there yet (2.x starts at 2.8), and ends the majors.
+	tagProbeMinorGap    = 8
+	tagProbeMinorStart  = 24
+	tagProbeSeriesGap   = 2 // consecutive missing patches or EAs that end a series
+	tagProbeConcurrency = 16
+)
+
+// probeTag reports whether the FBC repository has a tag of that name. A
+// 404 is "no"; a rejected token, throttling, a server error or a network
+// error (after one retry) is an error, so the scan is not cached.
+func probeTag(ctx context.Context, httpClient *http.Client, bearerToken, tag string) (bool, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, fmt.Sprintf("https://quay.io/v2/%s/manifests/%s", quayFBCRepo, tag), nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+		req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			// The digest comes for free; the tag list resolves it next.
+			if d := resp.Header.Get("Docker-Content-Digest"); d != "" {
+				tagDigestCache.Add(tag, d, 0)
+			}
+			return true, nil
+		case resp.StatusCode == http.StatusNotFound:
+			return false, nil
+		case tokenRejected(resp.StatusCode):
+			return false, &registryAuthError{what: "manifest HEAD", status: resp.StatusCode}
+		default:
+			lastErr = fmt.Errorf("manifest HEAD returned %d", resp.StatusCode)
+		}
+	}
+	return false, lastErr
+}
+
+// tagProber runs probes a few at a time and collects the tags that exist.
+type tagProber struct {
+	ctx        context.Context
+	httpClient *http.Client
+	token      string
+	sem        chan struct{}
+	background sync.WaitGroup // the EA and patch probes of the minors found
+	mu         sync.Mutex
+	found      map[string]bool
+	failed     bool
+}
+
+// exists probes one tag and records it when it is there. An error marks
+// the scan incomplete and counts as a miss, so a series still ends.
+func (p *tagProber) exists(tag string) bool {
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	case <-p.ctx.Done():
+		p.mu.Lock()
+		p.failed = true
+		p.mu.Unlock()
+		return false
+	}
+	ok, err := probeTag(p.ctx, p.httpClient, p.token, tag)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil {
+		slog.Warn("quay tag scan: probe failed", "tag", tag, "error", err)
+		p.failed = true
+		return false
+	}
+	if ok {
+		p.found[tag] = true
+	}
+	return ok
+}
+
+// series probes base+suffix(1), base+suffix(2), ... in parallel batches and
+// stops after tagProbeSeriesGap consecutive misses; the tags found are
+// handed to each.
+func (p *tagProber) series(suffix func(int) string, each func(tag string)) {
+	for n := 1; ; n += tagProbeSeriesGap {
+		hits := make([]bool, tagProbeSeriesGap)
+		var wg sync.WaitGroup
+		for i := range hits {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				hits[i] = p.exists(suffix(n + i))
+			}(i)
+		}
+		wg.Wait()
+		any := false
+		for i, hit := range hits {
+			if hit {
+				any = true
+				each(suffix(n + i))
+			}
+		}
+		if !any {
+			return
+		}
+	}
+}
+
+// version probes the EAs and patches of one version (rhoai-3.6 or
+// rhoai-3.6.1): rhoai-3.6-ea, rhoai-3.6-ea.1, ...; and, for a minor,
+// rhoai-3.6.1, ... each with its own EAs.
+func (p *tagProber) version(base string, patches bool) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.exists(base + "-ea")
+		p.series(func(n int) string { return fmt.Sprintf("%s-ea.%d", base, n) }, func(string) {})
+	}()
+	if patches {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var inner sync.WaitGroup
+			p.series(func(n int) string { return fmt.Sprintf("%s.%d", base, n) }, func(tag string) {
+				inner.Add(1)
+				go func() { defer inner.Done(); p.version(tag, false) }()
+			})
+			inner.Wait()
+		}()
+	}
+	wg.Wait()
+}
+
+// major probes the minors of rhoai-M in batches: a minor is there when its
+// GA tag or its first EA exists (3.7 had only rhoai-3.7-ea.1 for weeks).
+// It stops after tagProbeMinorGap consecutive misses, or after
+// tagProbeMinorStart numbers without any. Every minor found gets its EAs
+// and patches probed in the background. Returns whether the major exists.
+func (p *tagProber) major(m int) bool {
+	found := false
+	for minor := 0; ; minor += tagProbeMinorGap {
+		hits := make([]bool, tagProbeMinorGap)
+		var batch sync.WaitGroup
+		for i := range hits {
+			batch.Add(1)
+			go func(i int) {
+				defer batch.Done()
+				tag := fmt.Sprintf("rhoai-%d.%d", m, minor+i)
+				var ea sync.WaitGroup
+				ga, firstEA := false, false
+				ea.Add(2)
+				go func() { defer ea.Done(); ga = p.exists(tag) }()
+				go func() { defer ea.Done(); firstEA = p.exists(tag + "-ea.1") }()
+				ea.Wait()
+				hits[i] = ga || firstEA
+				if hits[i] {
+					p.background.Add(1)
+					go func() { defer p.background.Done(); p.version(tag, true) }()
+				}
+			}(i)
+		}
+		batch.Wait()
+		any := false
+		for _, hit := range hits {
+			any = any || hit
+		}
+		found = found || any
+		if !any && (found || minor+tagProbeMinorGap >= tagProbeMinorStart) {
+			break
+		}
+	}
+	return found
+}
+
+// fetchAndParseTags returns the release tags of the FBC repository, from
+// the cache when it is fresh. A scan that could not probe every name is
+// returned but not cached, so the next request scans again.
 func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken string) ([]parsedTag, error) {
 	tagScanCacheMu.RLock()
 	if len(tagScanCache) > 0 && time.Since(tagScanCacheAt) < tagScanCacheTTL {
@@ -612,75 +800,21 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 	tagScanCacheMu.RUnlock()
 
-	// Start concurrent paginations from evenly-spaced points across the
-	// rhoai- lexicographic range. Each goroutine scans up to 30 pages (3000 tags).
-	// This covers ~20k+ tags in parallel instead of sequentially.
-	startPoints := []string{
-		"rhoai-",    // catches everything from the start
-		"rhoai-2.2", // jumps past early 2.x noise
-		"rhoai-2.9", // jumps to the 2.9/3.0 boundary
-		"rhoai-3.2", // 3.2+ range
-		"rhoai-3.4", // 3.4+ range
-		"rhoai-3.5", // 3.5+ range (catches EA tags)
-		"rhoai-3.9", // future versions
-	}
-
-	type scanResult struct {
-		tags       []string
-		incomplete bool // a page could not be read even after a retry
-	}
-	results := make(chan scanResult, len(startPoints))
-
-	for _, start := range startPoints {
-		go func(startTag string) {
-			var found []string
-			lastTag := startTag
-			for page := 0; page < 30; page++ {
-				data, status, err := fetchTagPage(ctx, httpClient, bearerToken, lastTag)
-				if err != nil {
-					slog.Warn("quay tag scan: page failed", "start", startTag, "last", lastTag, "error", err)
-					results <- scanResult{tags: found, incomplete: true}
-					return
-				}
-				// Other client errors end this start point, as before; the
-				// remaining start points cover the rest of the range.
-				if status != http.StatusOK || len(data.Tags) == 0 {
-					break
-				}
-				pastRange := false
-				for _, tag := range data.Tags {
-					if cleanTagRegex.MatchString(tag) {
-						found = append(found, tag)
-					}
-					if tag > "rhoai." {
-						pastRange = true
-						break
-					}
-				}
-				if pastRange {
-					break
-				}
-				lastTag = data.Tags[len(data.Tags)-1]
-			}
-			results <- scanResult{tags: found}
-		}(start)
-	}
-
-	seen := make(map[string]bool)
-	var allCleanTags []string
-	incomplete := false
-	for range startPoints {
-		r := <-results
-		incomplete = incomplete || r.incomplete
-		for _, t := range r.tags {
-			if !seen[t] {
-				seen[t] = true
-				allCleanTags = append(allCleanTags, t)
-			}
+	p := &tagProber{ctx: ctx, httpClient: httpClient, token: bearerToken, sem: make(chan struct{}, tagProbeConcurrency), found: map[string]bool{}}
+	// Majors in order: once one exists, the first one with no minor ends
+	// the walk (there is no rhoai-5 before rhoai-4). Their EA and patch
+	// probes run meanwhile.
+	for m, any := tagProbeFirstMajor, false; m <= tagProbeLastMajor; m++ {
+		found := p.major(m)
+		if any && !found {
+			break
 		}
+		any = any || found
 	}
+	p.background.Wait()
+	incomplete := p.failed
 
-	if len(allCleanTags) == 0 {
+	if len(p.found) == 0 {
 		if incomplete {
 			return nil, fmt.Errorf("could not list rhoai release tags from Quay; retry shortly")
 		}
@@ -688,9 +822,9 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	}
 
 	var parsed []parsedTag
-	for _, tag := range allCleanTags {
-		if p, ok := parseTag(tag); ok {
-			parsed = append(parsed, p)
+	for tag := range p.found {
+		if q, ok := parseTag(tag); ok {
+			parsed = append(parsed, q)
 		}
 	}
 	if len(parsed) == 0 {
@@ -716,53 +850,6 @@ func fetchAndParseTags(ctx context.Context, httpClient *http.Client, bearerToken
 	tagScanCacheMu.Unlock()
 
 	return parsed, nil
-}
-
-// fetchTagPage reads one page of the Quay tag list. Network failures,
-// throttling and server errors are retried once and then returned as errors;
-// other responses are returned with their status for the caller to interpret.
-func fetchTagPage(ctx context.Context, httpClient *http.Client, bearerToken, last string) (quayTagsResponse, int, error) {
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return quayTagsResponse{}, 0, ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-		url := fmt.Sprintf("%s?n=100&last=%s", quayTagsURL, last)
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if err != nil {
-			return quayTagsResponse{}, 0, err
-		}
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
-		req.Header.Set("Accept", "application/json")
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if readErr != nil {
-			lastErr = readErr
-			continue
-		}
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("quay tags list returned HTTP %d", resp.StatusCode)
-			continue
-		}
-		var data quayTagsResponse
-		if resp.StatusCode == http.StatusOK {
-			if err := json.Unmarshal(body, &data); err != nil {
-				lastErr = fmt.Errorf("parse quay tags list: %w", err)
-				continue
-			}
-		}
-		return data, resp.StatusCode, nil
-	}
-	return quayTagsResponse{}, 0, lastErr
 }
 
 // FetchLatestNightly returns the highest-versioned nightly tag, its digest

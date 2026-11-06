@@ -18,6 +18,22 @@ only accepts a tag whose version is the top dated section. See
 
 ## [2.3.1] - unreleased
 
+### Fixed
+
+- The 3.7 builds were missing from the Status page, the Build Explorer and
+  the update check: the tag scan read at most 30 pages of the registry's
+  tag list from each of a few fixed start points, and 3,600 per-commit tags
+  (`rhoai-3.6-<sha>`, `rhoai-3.6-ea.N-<sha>`) had come to lie between
+  `rhoai-3.5` and `rhoai-3.7-ea.1`, with no start point between them. The
+  list is in a locale order that ignores punctuation, so no cursor can skip
+  a version's block reliably either. The release tags are now found by
+  asking the registry whether each name exists (`HEAD manifests/<tag>`):
+  the minors of each major in batches (a minor counts when its GA tag or
+  its first EA exists), then each minor's EAs and patches, stopping after a
+  run of misses. A few hundred small requests per scan, cached for five
+  minutes as before, and a version is never skipped however many commit
+  tags surround it. A probe that found a tag also caches its digest.
+
 ## [2.3.0] - 2026-10-30
 
 ### Added
