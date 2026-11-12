@@ -391,7 +391,9 @@ describe("Build Explorer search in the URL (?q=)", () => {
     const api = setup({ "/api/build-explorer/contains": prOK });
     renderAt("/builds?q=%235123");
     expect(await screen.findByText("PR #5123 is in the installed build, rhoai-3.6, rhoai-3.6-ea.2 and rhoai-3.5.")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue("#5123");
+    // SearchInput copies its value prop into its own state in an effect, one
+    // render after the page sets it; on a slow runner the answer can land first.
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue("#5123"));
     const calls = api.calls.filter((c) => c.includes("/contains"));
     expect(calls).toHaveLength(4);
     expect(calls.every((c) => c.includes("pr=5123"))).toBe(true);
@@ -414,7 +416,7 @@ describe("Build Explorer search in the URL (?q=)", () => {
     fireEvent.click(screen.getByRole("button", { name: "go to the other PR" }));
     expect(await screen.findByText("PR #10330 is in the installed build, rhoai-3.6, rhoai-3.6-ea.2 and rhoai-3.5.")).toBeInTheDocument();
     expect(screen.queryByText(/PR #10329 is in/)).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue("#10330");
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue("#10330"));
     expect(screen.getByTestId("location")).toHaveTextContent("?q=%2310330");
     const calls = api.calls.filter((c) => c.includes("/contains"));
     expect(calls.filter((c) => c.includes("pr=10329"))).toHaveLength(4);
@@ -423,7 +425,7 @@ describe("Build Explorer search in the URL (?q=)", () => {
     expect(calls).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "go to the list" }));
     expect(await screen.findByRole("grid", { name: "Nightly builds" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue("");
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /Find a build/ })).toHaveValue(""));
     expect(screen.queryByText(/PR #10330 is in/)).not.toBeInTheDocument();
   });
 
