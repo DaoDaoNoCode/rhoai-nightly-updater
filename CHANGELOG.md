@@ -18,6 +18,14 @@ only accepts a tag whose version is the top dated section. See
 
 ## [2.3.3] - unreleased
 
+### Fixed
+
+- Local development (`dev.sh`): the webpack dev server gzipped the proxied
+  API responses, which buffered the streamed progress of an operation until
+  it ended, so the page showed "Update: starting" for the whole update.
+  Compression is now off for the dev server; the deployed app has no such
+  proxy and was not affected.
+
 ## [2.3.2] - 2026-11-06
 
 2.3.1 was tagged with the same fix but never published: a clock-dependent

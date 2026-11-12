@@ -77,6 +77,9 @@ module.exports = (env, argv) => {
       hot: true,
       liveReload: true,
       historyApiFallback: true,
+      // No gzip: the dev server would buffer the streamed operation
+      // progress (text/event-stream) until the operation ends.
+      compress: false,
       proxy: [{ context: ['/api'], target: process.env.API_TARGET || 'http://127.0.0.1:8080' }],
     },
     // No source maps in production.
