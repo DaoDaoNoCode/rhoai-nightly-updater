@@ -26,6 +26,11 @@ only accepts a tag whose version is the top dated section. See
   Compression is now off for the dev server; the deployed app has no such
   proxy and was not affected.
 
+### Security
+
+- Go 1.27.4 (CI, the image build and the GitHub workflows): fixes the
+  net/http advisory GO-2026-6859 that govulncheck reports with 1.27.3.
+
 ## [2.3.2] - 2026-11-06
 
 2.3.1 was tagged with the same fix but never published: a clock-dependent
