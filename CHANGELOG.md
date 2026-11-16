@@ -26,6 +26,13 @@ only accepts a tag whose version is the top dated section. See
   Compression is now off for the dev server; the deployed app has no such
   proxy and was not affected.
 
+- OpenShift 5 clusters: the oauth-proxy image is now pulled from the
+  `openshift5` registry namespace instead of `openshift4`, matching the
+  cluster's major version. On OpenShift 5 the `openshift4` path has no
+  matching tag, so the proxy pod stayed in `ImagePullBackOff` and the app
+  never started. Detection still honours an explicit `OAUTH_PROXY_IMAGE`,
+  and 4.x clusters are unchanged.
+
 ### Security
 
 - Go 1.27.4 (CI, the image build and the GitHub workflows): fixes the

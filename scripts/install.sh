@@ -158,13 +158,16 @@ preflight() {
 	err "Cluster $(oc whoami --show-server 2>/dev/null || echo '?'), user $user, namespace $NAMESPACE, app $APP_NAME."
 }
 
-# The oauth-proxy tag must match the cluster's OCP minor version.
+# The oauth-proxy tag must match the cluster's OCP minor version, and the registry namespace
+# its major version: openshift4 for 4.x, openshift5 for 5.x. The openshift4 path has no 5.x tag,
+# so on an OpenShift 5 cluster that image never pulls (ImagePullBackOff, the proxy never starts).
 detect_oauth_proxy_image() {
 	[ -z "${OAUTH_PROXY_IMAGE:-}" ] || return 0
-	local minor
-	minor=$(oc version -o json 2>/dev/null | sed -n 's/.*"openshiftVersion": *"\([0-9]*\.[0-9]*\).*/\1/p' | head -1)
-	[ -n "$minor" ] || die "Cannot detect the OCP version; set OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.<minor>"
-	OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v$minor
+	local ver major
+	ver=$(oc version -o json 2>/dev/null | sed -n 's/.*"openshiftVersion": *"\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)
+	[ -n "$ver" ] || die "Cannot detect the OCP version; set OAUTH_PROXY_IMAGE=registry.redhat.io/openshift<major>/ose-oauth-proxy-rhel9:v<major>.<minor>"
+	major=${ver%%.*}
+	OAUTH_PROXY_IMAGE=registry.redhat.io/openshift${major}/ose-oauth-proxy-rhel9:v$ver
 }
 
 # --- Image ----------------------------------------------------------------------

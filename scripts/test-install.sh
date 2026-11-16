@@ -81,7 +81,7 @@ case "$1 $2" in
 "whoami ") echo admin ;;
 "whoami --show-server") echo https://api.example.com:6443 ;;
 "auth can-i") echo "${FAKE_ADMIN:-yes}"; [ "${FAKE_ADMIN:-yes}" = yes ] ;;
-"version -o") echo '{"openshiftVersion": "4.19.3"}' ;;
+"version -o") echo "{\"openshiftVersion\": \"${FAKE_OCP_VERSION:-4.19.3}\"}" ;;
 "image info")
 	[ -n "${FAKE_REVISION:-}" ] || exit 1
 	# FAKE_NO_OC_DIGEST: oc reads the labels but no digest.
@@ -139,7 +139,7 @@ DIGEST="sha256:$(printf 'a%.0s' $(seq 64))"
 # defaults of a cluster without the app.
 run() {
 	rm -f "$LOG" "$LOG.params"
-	env PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_DIGEST="${FAKE_DIGEST-$DIGEST}" FAKE_REVISION="${FAKE_REVISION-$COMMIT}" "$@"
+	env PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_DIGEST="${FAKE_DIGEST-$DIGEST}" FAKE_REVISION="${FAKE_REVISION-$COMMIT}" FAKE_OCP_VERSION="${FAKE_OCP_VERSION-4.19.3}" "$@"
 }
 mutations() { grep -E '^oc (create|new-project|delete|rollout|apply -f)' "$LOG" || true; }
 
@@ -151,6 +151,11 @@ expect_eq "dry run changes nothing" "" "$(mutations)"
 grep -qx "IMAGE=quay.io/example/app@$DIGEST" "$LOG.params" && pass || fail "dry run: image not pinned by digest: $(cat "$LOG.params")"
 grep -qx "OAUTH_PROXY_IMAGE=registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.19" "$LOG.params" && pass || fail "dry run: oauth-proxy image not from the cluster version"
 grep -qx "IMAGE_REPOSITORY=quay.io/example/app" "$LOG.params" && pass || fail "dry run: IMAGE_REPOSITORY missing"
+
+# An OpenShift 5 cluster must pull the proxy from the openshift5 namespace, not openshift4:
+# the openshift4 repository has no 5.x tag, so there it would never pull (ImagePullBackOff).
+FAKE_OCP_VERSION=5.0.1 expect_ok "asset: dry run on a 5.x cluster" run bash "$ASSET" --dry-run --namespace scratch-ns
+grep -qx "OAUTH_PROXY_IMAGE=registry.redhat.io/openshift5/ose-oauth-proxy-rhel9:v5.0" "$LOG.params" && pass || fail "dry run: oauth-proxy image not openshift5:v5.0 on a 5.x cluster ($(cat "$LOG.params" 2>/dev/null))"
 grep -qx "NAMESPACE=scratch-ns" "$LOG.params" && pass || fail "dry run: namespace flag ignored"
 grep -q "manifests/v9.8.7" "$LOG" && pass || fail "the asset did not resolve its own version"
 
