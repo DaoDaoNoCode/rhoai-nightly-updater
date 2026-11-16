@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,23 +54,31 @@ const (
 	s3AppSelector   = "app=seaweedfs"
 	s3Storage       = "20Gi"
 	// s3Port is SeaweedFS's S3 port (weed/command/mini.go "s3.port") and
-	// s3AdminPort its admin UI ("admin.port", 23646).
+	// s3AdminPort its admin UI ("admin.port"). SeaweedFS 4.49 moved the
+	// admin default from 23646 to 12535, because the admin's gRPC port
+	// (HTTP port + 10000) then sat in Linux's ephemeral port range and could
+	// be taken at startup (seaweedfs/seaweedfs#11816, fixing #10838). The
+	// port is passed explicitly, so a taken port stops weed mini instead of
+	// moving the UI away from the Service.
 	s3Port      = 8333
-	s3AdminPort = 23646
+	s3AdminPort = 12535
 	// s3AdminUser is the admin UI login: the default of -admin.user
-	// (weed/command/mini.go:565 at 4.48), set explicitly below.
+	// (weed/command/mini.go:603 at 4.54), set explicitly below.
 	s3AdminUser = "admin"
-	// seaweedfsDefaultImage is SeaweedFS 4.48
-	// (ghcr.io/chrislusf/seaweedfs:4.48, Apache-2.0), pinned by its
-	// multi-arch index digest (amd64, arm64, arm, 386). It is anonymously
-	// pullable. Upstream Kubeflow Pipelines made SeaweedFS its default
-	// object store in 2.15.0 (kubeflow/pipelines#11965) and runs this
-	// version (#14635); its OpenShift overlay lets restricted-v2 assign the
-	// UID (#12314), so no runAsUser is set here either. The image's
-	// entrypoint.sh drops to user "seaweed" only when started as root; under
-	// an assigned UID it runs weed directly, and /data must be writable,
-	// which the fsGroup restricted-v2 sets on the PVC provides.
-	seaweedfsDefaultImage = "ghcr.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
+	// seaweedfsDefaultImage is SeaweedFS 4.54
+	// (ghcr.io/chrislusf/seaweedfs:4.54, Apache-2.0), pinned by its
+	// multi-arch index digest (amd64, arm64, arm/v7, 386, ppc64le, s390x).
+	// It is anonymously pullable. Upstream Kubeflow Pipelines made SeaweedFS
+	// its default object store in 2.15.0 (kubeflow/pipelines#11965); its
+	// OpenShift overlay lets restricted-v2 assign the UID (#12314), so no
+	// runAsUser is set here either. The image's entrypoint.sh drops to user
+	// "seaweed" only when started as root; under an assigned UID it runs
+	// weed directly, and /data must be writable, which the fsGroup
+	// restricted-v2 sets on the PVC provides. The image's
+	// /etc/seaweedfs/filer.toml keeps the filer metadata in /data/filerldb2
+	// whatever -dir says (weed/command/mini.go:392-397 at 4.54); /data is
+	// the PVC here, so the metadata survives a restart.
+	seaweedfsDefaultImage = "ghcr.io/chrislusf/seaweedfs@sha256:4b42c212543a0acd4c0e675215ecdcaf62a186ef98def76c7e12701871222d15"
 )
 
 var (
@@ -290,6 +299,10 @@ type minioDeployment struct {
 				Containers []struct {
 					Name  string `json:"name"`
 					Image string `json:"image"`
+					Ports []struct {
+						Name          string `json:"name"`
+						ContainerPort int    `json:"containerPort"`
+					} `json:"ports"`
 				} `json:"containers"`
 			} `json:"spec"`
 		} `json:"template"`
@@ -316,6 +329,23 @@ func (d minioDeployment) image(container string) string {
 		}
 	}
 	return ""
+}
+
+// adminPort returns the admin UI port the SeaweedFS container declares, or
+// s3AdminPort when it declares none. A SeaweedFS set up by an earlier version
+// serves its admin UI on 23646 until setup is re-run (see s3AdminPort).
+func (d minioDeployment) adminPort() int {
+	for _, ctr := range d.Spec.Template.Spec.Containers {
+		if ctr.Name != s3Container {
+			continue
+		}
+		for _, p := range ctr.Ports {
+			if p.Name == "admin" && p.ContainerPort > 0 {
+				return p.ContainerPort
+			}
+		}
+	}
+	return s3AdminPort
 }
 
 func getMinIOStatus(c *Client) types.ResourceState {
@@ -471,7 +501,7 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 			case deploy.Spec.Replicas != nil && *deploy.Spec.Replicas == 0:
 				state.RepairNeeded = "Deployment seaweedfs is scaled to 0 replicas (for example by a manual rollback)."
 			case endpointsErr == nil:
-				serving = endpoints.s3ServingProblem()
+				serving = endpoints.s3ServingProblem(deploy.adminPort())
 				state.RepairNeeded = serving
 			}
 			if state.RepairNeeded == "" && legacyNPErr == nil && legacyNPOK && minioObjectOwned(legacyNP) && IsK8sError(legacyErr, 404) {
@@ -665,16 +695,16 @@ func s3Resources(user, password string) []minioResource {
 			},
 		}, false},
 		// "weed mini" listens on many ports besides S3 (master 9333/19333,
-		// volume 9340/19340, filer 8888/18888, worker gRPC 33646, Iceberg
-		// 8181, metrics 9101), and the master and filer HTTP APIs need no
-		// authentication. The pod is therefore fenced in before it starts:
+		// volume 9340/19340, filer 8888/18888, Iceberg 8181, Lance 9101; the
+		// admin's worker gRPC 22535 on loopback only), and the master and
+		// filer HTTP APIs need no authentication. The pod is therefore fenced in before it starts:
 		//   - S3 (8333) only from pods: the pipeline servers in their
 		//     projects, the data-science-pipelines operator's object-storage
 		//     health check (redhat-ods-applications), the router for a kept
 		//     legacy minio-api Route, and this tool's bucket creation. Any
 		//     namespace is allowed, because a pipeline server may live in any
 		//     project; there is no S3 Route.
-		//   - The admin UI (23646) only from the OpenShift router, through the
+		//   - The admin UI (12535) only from the OpenShift router, through the
 		//     minio-ui Route: namespaces labelled
 		//     policy-group.network.openshift.io/ingress (router pods) or
 		//     .../host-network (a HostNetwork router), as in the OpenShift
@@ -722,13 +752,17 @@ func s3Resources(user, password string) []minioResource {
 							"name":  s3Container,
 							"image": s3Image(),
 							// -bucket creates the bucket before the server
-							// reports ready (weed/command/mini.go:1385-1393 at
-							// 4.48); setup also creates it through the Service.
-							"args": []string{"mini", "-dir=/data", "-webdav=false", "-bucket=" + minioBucket},
+							// reports ready (weed/command/mini.go:1672-1679 at
+							// 4.54); setup also creates it through the Service.
+							// -admin.port.legacy=0 turns off the second admin
+							// listener SeaweedFS keeps on the old port 23646
+							// for compatibility (weed/command/mini.go:598).
+							"args": []string{"mini", "-dir=/data", "-webdav=false", "-bucket=" + minioBucket,
+								"-admin.port=" + strconv.Itoa(s3AdminPort), "-admin.port.legacy=0"},
 							"env": []map[string]interface{}{
 								// The S3 server adds a static admin identity
-								// from these (weed/s3api/auth_credentials.go:527-582
-								// at 4.48), so the S3 keys stay the ones in
+								// from these (weed/s3api/auth_credentials.go:555-611
+								// at 4.54), so the S3 keys stay the ones in
 								// minio-secret.
 								secretEnv("AWS_ACCESS_KEY_ID", "minio_root_user"),
 								secretEnv("AWS_SECRET_ACCESS_KEY", "minio_root_password"),
@@ -736,12 +770,15 @@ func s3Resources(user, password string) []minioResource {
 								// than -admin.password, so the password is not on
 								// the process command line: "weed mini" fills the
 								// unset admin flags from viper key admin.user /
-								// admin.password (weed/command/mini.go:1609-1611
-								// and 1578-1580, weed/command/admin.go:783-790 at
-								// 4.48), and viper reads WEED_-prefixed variables
+								// admin.password (weed/command/mini.go:1907-1909
+								// and 1985, weed/command/admin.go:874-881 at
+								// 4.54), and viper reads WEED_-prefixed variables
 								// with "." replaced by "_"
 								// (weed/util/config.go:204-212). With a password
-								// set, the UI requires a login.
+								// set, the UI requires a login and weed mini
+								// binds it to the pod's address; without one it
+								// would bind it to loopback only
+								// (weed/command/mini.go:1915-1928).
 								{"name": "WEED_ADMIN_USER", "value": s3AdminUser},
 								secretEnv("WEED_ADMIN_PASSWORD", "minio_root_password"),
 							},
@@ -768,7 +805,7 @@ func s3Resources(user, password string) []minioResource {
 								"seccompProfile":           map[string]interface{}{"type": "RuntimeDefault"},
 							},
 							// GET /status on the S3 port
-							// (weed/s3api/s3api_server.go:801 at 4.48).
+							// (weed/s3api/s3api_server.go:980 at 4.54).
 							"readinessProbe": map[string]interface{}{"httpGet": map[string]interface{}{"path": "/status", "port": s3Port}, "initialDelaySeconds": 5, "periodSeconds": 5},
 							"livenessProbe":  map[string]interface{}{"httpGet": map[string]interface{}{"path": "/status", "port": s3Port}, "initialDelaySeconds": 30, "periodSeconds": 10, "failureThreshold": 6},
 						}},

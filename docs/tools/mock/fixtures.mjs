@@ -440,7 +440,7 @@ export function dashboardBuilds(session = dashboardSession()) {
 
 // --- Test resources -----------------------------------------------------------
 
-const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.48")}`;
+const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.54")}`;
 const MINIO_OLD = `quay.io/minio/minio@${digest("minio-2025")}`;
 const S3_UI = `https://minio-ui-minio.${APPS}`;
 

@@ -71,7 +71,7 @@ func putS3Deployment(f *resourceFake, ready int) {
 // they send traffic to SeaweedFS.
 func putS3Serving(f *resourceFake) {
 	f.putJSON(minioSvcPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"selector":{"app":"seaweedfs"},"clusterIP":"172.30.10.20",
-		"ports":[{"name":"api","port":9000,"targetPort":8333},{"name":"ui","port":9090,"targetPort":23646}]}}`)
+		"ports":[{"name":"api","port":9000,"targetPort":8333},{"name":"ui","port":9090,"targetPort":12535}]}}`)
 	f.putJSON(minioUIRoute, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"host":"minio-ui-minio.apps.example.com","to":{"kind":"Service","name":"minio-service"},"port":{"targetPort":"ui"}}}`)
 }
 
@@ -176,7 +176,7 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 		t.Errorf("image = %q, want the digest-pinned SeaweedFS", ctr.Image)
 	}
 	// The admin password must not be on the command line.
-	if strings.Join(ctr.Args, " ") != "mini -dir=/data -webdav=false -bucket=pipelines" {
+	if strings.Join(ctr.Args, " ") != "mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0" {
 		t.Errorf("args = %v", ctr.Args)
 	}
 	if f.has("/apis/route.openshift.io/v1/namespaces/minio/routes/minio-api") {
@@ -202,7 +202,7 @@ func TestSetupMinIO_FreshClusterLabelsEverythingAndWaitsForReady(t *testing.T) {
 		t.Errorf("env = %v", envs)
 	}
 	svc, _ := json.Marshal(f.get("/api/v1/namespaces/minio/services/minio-service")["spec"])
-	for _, want := range []string{`{"name":"api","port":9000,"targetPort":8333}`, `{"name":"ui","port":9090,"targetPort":23646}`, `"selector":{"app":"seaweedfs"}`} {
+	for _, want := range []string{`{"name":"api","port":9000,"targetPort":8333}`, `{"name":"ui","port":9090,"targetPort":12535}`, `"selector":{"app":"seaweedfs"}`} {
 		if !strings.Contains(string(svc), want) {
 			t.Errorf("Service spec lacks %s: %s", want, svc)
 		}
@@ -437,7 +437,7 @@ func TestGetMinIOStatus_KeptMinIOVolume(t *testing.T) {
 // it. Otherwise it is incomplete, says why, and asks for Repair.
 func TestGetMinIOStatus_ServingConfiguration(t *testing.T) {
 	const (
-		svcOn = `{"metadata":{"labels":` + toolLabelJSON + `},"spec":{"selector":%s,"ports":[{"name":"api","port":9000,"targetPort":%s},{"name":"ui","port":9090,"targetPort":23646}]}}`
+		svcOn = `{"metadata":{"labels":` + toolLabelJSON + `},"spec":{"selector":%s,"ports":[{"name":"api","port":9000,"targetPort":%s},{"name":"ui","port":9090,"targetPort":12535}]}}`
 	)
 	svc := func(selector, target string) func(f *resourceFake) {
 		return func(f *resourceFake) { f.putJSON(minioSvcPath, fmt.Sprintf(svcOn, selector, target)) }
@@ -588,6 +588,57 @@ func TestGetMinIOStatus_ImageDrift(t *testing.T) {
 	st := getMinIOStatus(c)
 	if !strings.HasPrefix(st.Warning, "SeaweedFS runs ghcr.io/chrislusf/seaweedfs:4.47, not the image this version deploys") || !strings.Contains(st.Warning, "Re-run setup to update it") {
 		t.Errorf("warning = %q", st.Warning)
+	}
+}
+
+// SeaweedFS 4.49 moved the admin UI's default port from 23646 to 12535
+// (seaweedfs/seaweedfs#11816). A SeaweedFS that an earlier version set up
+// still declares and serves 23646 behind minio-service until setup is re-run,
+// so the Service is checked against the port the running Deployment declares:
+// that SeaweedFS stays Running (with the image warning), and only a Service
+// that misses the Deployment's port asks for Repair.
+func TestGetMinIOStatus_AdminPortOfTheDeployment(t *testing.T) {
+	t.Setenv("SEAWEEDFS_IMAGE", "")
+	const oldImage = "ghcr.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
+	cases := []struct {
+		name        string
+		image       string
+		ports       string // the container's ports, JSON
+		svcUIPort   string
+		wantReady   bool
+		wantRepair  string
+		wantWarning string
+	}{
+		{name: "set up by 2.x (4.48 on 23646)", image: oldImage, ports: `[{"name":"s3","containerPort":8333},{"name":"admin","containerPort":23646}]`, svcUIPort: "23646",
+			wantReady: true, wantWarning: "Re-run setup to update it"},
+		{name: "set up by this version", image: seaweedfsDefaultImage, ports: `[{"name":"s3","containerPort":8333},{"name":"admin","containerPort":12535}]`, svcUIPort: "12535",
+			wantReady: true},
+		{name: "Deployment updated, Service not yet", image: seaweedfsDefaultImage, ports: `[{"name":"s3","containerPort":8333},{"name":"admin","containerPort":12535}]`, svcUIPort: "23646",
+			wantRepair: "port ui forwards to 23646 instead of SeaweedFS's admin UI port 12535"},
+		{name: "no declared admin port: this version's", image: seaweedfsDefaultImage, ports: `[]`, svcUIPort: "23646",
+			wantRepair: "instead of SeaweedFS's admin UI port 12535"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putNamespace(f, toolLabelJSON, toolFieldManager)
+			f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},
+				"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+tc.image+`","ports":`+tc.ports+`}]}}},
+				"status":{"observedGeneration":1,"replicas":1,"readyReplicas":1,"updatedReplicas":1}}`)
+			putS3Serving(f)
+			f.putJSON(minioSvcPath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"selector":{"app":"seaweedfs"},"clusterIP":"172.30.10.20",
+				"ports":[{"name":"api","port":9000,"targetPort":8333},{"name":"ui","port":9090,"targetPort":`+tc.svcUIPort+`}]}}`)
+			st := getMinIOStatus(c)
+			if st.Ready != tc.wantReady {
+				t.Errorf("Ready = %v, want %v (%+v)", st.Ready, tc.wantReady, st)
+			}
+			if (tc.wantRepair == "") != (st.RepairNeeded == "") || !strings.Contains(st.RepairNeeded, tc.wantRepair) {
+				t.Errorf("RepairNeeded = %q, want %q", st.RepairNeeded, tc.wantRepair)
+			}
+			if (tc.wantWarning == "") != (st.Warning == "") || !strings.Contains(st.Warning, tc.wantWarning) {
+				t.Errorf("Warning = %q, want %q", st.Warning, tc.wantWarning)
+			}
+		})
 	}
 }
 

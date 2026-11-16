@@ -202,8 +202,9 @@ type minioEndpoints struct {
 }
 
 // s3ServingProblem explains why minio-service or Route minio-ui does not
-// send traffic to SeaweedFS, or returns "".
-func (e minioEndpoints) s3ServingProblem() string {
+// send traffic to SeaweedFS, whose admin UI listens on adminPort, or
+// returns "".
+func (e minioEndpoints) s3ServingProblem(adminPort int) string {
 	switch {
 	case !e.svcFound:
 		return "Service minio-service is missing, so pipeline servers cannot reach SeaweedFS."
@@ -211,8 +212,8 @@ func (e minioEndpoints) s3ServingProblem() string {
 		return fmt.Sprintf("Service minio-service selects %s instead of SeaweedFS (%s), so pipeline servers do not reach SeaweedFS.", firstNonEmpty(e.svcSelector, "no pods"), s3AppSelector)
 	case e.svcAPITarget != strconv.Itoa(s3Port):
 		return fmt.Sprintf("Service minio-service port %d forwards to %s instead of SeaweedFS's S3 port %d.", minioServiceAPIPort, firstNonEmpty(e.svcAPITarget, "nothing"), s3Port)
-	case e.svcUITarget != strconv.Itoa(s3AdminPort):
-		return fmt.Sprintf("Service minio-service port ui forwards to %s instead of SeaweedFS's admin UI port %d.", firstNonEmpty(e.svcUITarget, "nothing"), s3AdminPort)
+	case e.svcUITarget != strconv.Itoa(adminPort):
+		return fmt.Sprintf("Service minio-service port ui forwards to %s instead of SeaweedFS's admin UI port %d.", firstNonEmpty(e.svcUITarget, "nothing"), adminPort)
 	case !e.uiFound:
 		return "Route minio-ui (the admin UI) is missing."
 	case e.uiService != minioServiceName || e.uiPort != "ui":

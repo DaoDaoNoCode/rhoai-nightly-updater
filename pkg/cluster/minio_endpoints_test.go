@@ -134,7 +134,7 @@ func TestSetupMinIO_CreatesIngressPolicy(t *testing.T) {
 		`"policyTypes":["Ingress"]`,
 		`{"from":[{"namespaceSelector":{}}],"ports":[{"port":8333,"protocol":"TCP"}]}`,
 		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/ingress":""}}}`,
-		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/host-network":""}}}],"ports":[{"port":23646,"protocol":"TCP"}]`,
+		`{"namespaceSelector":{"matchLabels":{"policy-group.network.openshift.io/host-network":""}}}],"ports":[{"port":12535,"protocol":"TCP"}]`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("spec lacks %s: %s", want, raw)
@@ -154,7 +154,7 @@ func TestSetupMinIO_CreatesIngressPolicy(t *testing.T) {
 			ports = append(ports, p.Port)
 		}
 	}
-	if len(ports) != 2 || ports[0] != 8333 || ports[1] != 23646 {
+	if len(ports) != 2 || ports[0] != 8333 || ports[1] != 12535 {
 		t.Errorf("only the S3 and admin UI ports may be reachable: %v", ports)
 	}
 }

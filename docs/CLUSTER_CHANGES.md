@@ -137,9 +137,9 @@ The namespace, Service, Secret and bucket keep the names earlier versions used f
 | Namespace `minio` | created with the tool label. A namespace from an earlier version gets the label patched on |
 | PVC `seaweedfs-pvc` | 20Gi, RWO. A new name: SeaweedFS cannot read MinIO's on-disk format |
 | Secret `minio-secret` | keys `minio_root_user` (S3 access key) and `minio_root_password` (S3 secret key and admin UI password), random on first setup, reused on re-run |
-| NetworkPolicy `seaweedfs-ingress` | pods `app=seaweedfs`: 8333 (S3) from pods in all namespaces; 23646 (admin UI) only from the router namespaces; nothing else |
-| Deployment `seaweedfs` | `SEAWEEDFS_IMAGE` or the pinned `ghcr.io/chrislusf/seaweedfs` 4.48 digest; `weed mini -dir=/data -webdav=false -bucket=pipelines`; env `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`WEED_ADMIN_PASSWORD` from the Secret, `WEED_ADMIN_USER=admin`; probes `GET /status` on 8333; 64m/256Mi requests, 500m/1Gi limits; no fixed UID (restricted-v2) |
-| Service `minio-service` | applied once SeaweedFS is ready: selector `app=seaweedfs`, port `api` 9000 → 8333 and `ui` 9090 → 23646 |
+| NetworkPolicy `seaweedfs-ingress` | pods `app=seaweedfs`: 8333 (S3) from pods in all namespaces; 12535 (admin UI) only from the router namespaces; nothing else |
+| Deployment `seaweedfs` | `SEAWEEDFS_IMAGE` or the pinned `ghcr.io/chrislusf/seaweedfs` 4.54 digest; `weed mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0`; env `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`WEED_ADMIN_PASSWORD` from the Secret, `WEED_ADMIN_USER=admin`; probes `GET /status` on 8333; 64m/256Mi requests, 500m/1Gi limits; no fixed UID (restricted-v2) |
+| Service `minio-service` | applied once SeaweedFS is ready: selector `app=seaweedfs`, port `api` 9000 → 8333 and `ui` 9090 → 12535 (23646 for a SeaweedFS set up before 3.0.0, until setup is re-run) |
 | Route `minio-ui` | applied once SeaweedFS is ready: edge TLS to the admin UI (port `ui`). There is no S3 API Route |
 | Route `minio-api` (legacy) | deleted on setup unless a pipeline server uses its host |
 | Bucket `pipelines` | created by SeaweedFS on start and again through the S3 API |

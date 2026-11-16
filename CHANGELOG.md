@@ -18,6 +18,18 @@ only accepts a tag whose version is the top dated section. See
 
 ## [3.0.0] - unreleased
 
+### Changed
+
+- S3 storage: SeaweedFS 4.48 → 4.54, pinned by digest. SeaweedFS 4.49 moved
+  its admin UI from port 23646 to 12535 (the old port put the admin's gRPC
+  port in Linux's ephemeral range, where it could be taken at startup), so
+  setup now starts it on 12535 and turns off SeaweedFS's compatibility
+  listener on 23646; the NetworkPolicy and `minio-service` follow. Pipeline
+  servers are unaffected: the S3 endpoint stays
+  `minio-service.minio.svc:9000`. A storage set up by an earlier version
+  keeps running 4.48 on 23646 and asks to re-run setup, which updates it in
+  place and keeps the data volume.
+
 ## [2.3.3] - 2026-11-16
 
 ### Fixed
