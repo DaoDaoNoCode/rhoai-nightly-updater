@@ -273,7 +273,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 ## 10. Test resources
 
-The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from the MinIO earlier versions deployed. Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-test-resources).
+The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from earlier versions (which deployed MinIO). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-test-resources).
 
 <img src="docs/images/s3-incomplete.png" alt="S3 storage Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
 

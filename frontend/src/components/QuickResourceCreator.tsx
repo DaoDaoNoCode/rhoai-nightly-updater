@@ -98,7 +98,7 @@ export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = 
     return "Migrate to SeaweedFS replaces this MinIO from an earlier version. It starts with an empty bucket; the MinIO data volume is kept.";
   }
   if (kind === "minio" && managed && state.repairNeeded) {
-    return "Repair re-runs setup: it scales SeaweedFS back up if needed, waits for it, points Service minio-service and Route minio-ui at it and finishes the MinIO cleanup. Stored data is kept.";
+    return "Repair re-runs setup: it scales SeaweedFS back up if needed, waits for it, points Service minio-service and Route minio-ui at it and removes what is left of the earlier MinIO storage, if anything. Stored data is kept.";
   }
   if (!terminalReason(state)) return null;
   const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;
@@ -331,7 +331,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           changes: [
             <>Namespace <code>minio</code> {pending.kind === "repair-minio" || minio?.managedByTool ? "is kept and reused" : "is created"}, labelled as managed by this tool.</>,
             <>SeaweedFS: Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-pvc</code>, Secret <code>minio-secret</code> and NetworkPolicy <code>seaweedfs-ingress</code> are applied with the image the server is configured to use.</>,
-            <>Once SeaweedFS is ready: Service <code>minio-service</code> (the name is kept from MinIO, so pipeline servers need no changes), the admin UI Route <code>minio-ui</code> and the bucket <code>pipelines</code>.</>,
+            <>Once SeaweedFS is ready: Service <code>minio-service</code> (the S3 endpoint pipeline servers use; its name is kept from earlier versions), the admin UI Route <code>minio-ui</code> and the bucket <code>pipelines</code>.</>,
             <>Route <code>minio-api</code> (the S3 API outside the cluster) is removed if it exists; pipeline servers use the in-cluster service.</>,
           ],
           extra: <Content component="p">The server waits up to 90 seconds for SeaweedFS to become ready and reports the pod&apos;s reason if it cannot start.{pending.kind === "repair-minio" ? " Stored data is kept." : ""}</Content>,
@@ -364,7 +364,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
             <>The S3 storage objects this tool created in <code>{minio?.namespace || "minio"}</code> are deleted: Deployment <code>seaweedfs</code>, NetworkPolicy <code>seaweedfs-ingress</code>, Routes <code>minio-ui</code> and <code>minio-api</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code> and PersistentVolumeClaim <code>seaweedfs-pvc</code>, and what is left of MinIO from an earlier version (Deployment <code>minio</code>, NetworkPolicy <code>minio-ingress</code>, PersistentVolumeClaim <code>minio-pvc</code>). Objects with these names that the tool did not create are kept.</>,
             <>Namespace <code>{minio?.namespace || "minio"}</code> is kept. Delete it yourself with <code>oc delete project minio</code> once it is empty.</>,
           ],
-          dataLoss: pvcs(minio, "every object stored in them (pipeline artifacts, uploaded files, and the kept MinIO data)") ?? <>Every object stored in the S3 storage (pipeline artifacts, uploaded files).</>,
+          dataLoss: pvcs(minio, pvcList(minio).includes("minio-pvc")
+            ? "every object stored in them (pipeline artifacts, uploaded files, and the data of the earlier MinIO storage)"
+            : "every object stored in them (pipeline artifacts, uploaded files)") ?? <>Every object stored in the S3 storage (pipeline artifacts, uploaded files).</>,
           extra: <Content component="p">The server refuses while a pipeline server still uses the storage; the message names it. If some objects cannot be deleted, run Tear down again.</Content>,
         };
       case "setup-mlflow":
@@ -526,7 +528,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                             <RowTitle id="minio-item" name="S3 storage" state={minio}
                               extra={minio?.deployed ? <FlexItem><TagLabel>{minio.migrationPending ? "MinIO (migration pending)" : "SeaweedFS"}</TagLabel></FlexItem> : undefined} />
                             <Content component="p" className="pf-v6-u-text-color-subtle">
-                              Namespace <code>minio</code>: S3 storage for pipeline artifacts and test files. Pipeline servers reach it through Service <code>minio-service</code>, a name kept from MinIO for compatibility.{unmanagedNote(minio)}
+                              S3 storage (SeaweedFS) for pipeline artifacts and test files, in namespace <code>minio</code>, behind Service <code>minio-service</code>.{unmanagedNote(minio)}
                             </Content>
                             {minio && (
                               <StatusDetails
@@ -535,7 +537,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                                 teardownBlocked={(minio.deployed || pvcList(minio).length > 0) && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
                                 notes={[
                                   ...(minio.deployed && minio.uiUser ? [<React.Fragment key="login">Admin UI login: user <code>{minio.uiUser}</code>, password in Secret <code>minio-secret</code> (key <code>minio_root_password</code>): <code>oc extract -n minio secret/minio-secret --keys=minio_root_password --to=-</code></React.Fragment>] : []),
-                                  ...keptPVCs.map((p) => <React.Fragment key={p.name}>Old MinIO data volume kept: PersistentVolumeClaim {pvcWithSize(p)}. SeaweedFS does not use it; it is kept for a rollback or a manual copy of old objects (see RUNBOOK §10). Tear down deletes it.</React.Fragment>),
+                                  ...keptPVCs.map((p) => <React.Fragment key={p.name}>Data volume from the earlier MinIO storage (PersistentVolumeClaim {pvcWithSize(p)}), kept for a rollback or a manual copy (RUNBOOK §10.1); SeaweedFS does not use it. Tear down deletes it.</React.Fragment>),
                                 ]}
                               />
                             )}

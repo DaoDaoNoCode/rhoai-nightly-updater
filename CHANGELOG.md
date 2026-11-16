@@ -29,6 +29,13 @@ only accepts a tag whose version is the top dated section. See
   `minio-service.minio.svc:9000`. A storage set up by an earlier version
   keeps running 4.48 on 23646 and asks to re-run setup, which updates it in
   place and keeps the data volume.
+- The Storage card describes the storage as what it is, SeaweedFS:
+  "S3 storage (SeaweedFS) for pipeline artifacts and test files, in
+  namespace minio, behind Service minio-service." MinIO is named only where
+  something of it is left: a MinIO an earlier version still runs (with
+  **Migrate to SeaweedFS**), and its kept data volume `minio-pvc`. The
+  object names `minio`, `minio-service`, `minio-secret` and `minio-pvc`
+  stay, so pipeline servers need no edits.
 
 ## [2.3.3] - 2026-11-16
 
