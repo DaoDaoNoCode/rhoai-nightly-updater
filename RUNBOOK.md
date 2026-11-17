@@ -337,7 +337,7 @@ The run streams each step; closing the dialog does not stop it. After it, the ol
 ```mermaid
 flowchart TD
   A["Migrate storage"] --> B["Set up seaweedfs with the old keys"]
-  B --> C["Job seaweedfs-migrate: copy, check every byte, compare sizes"]
+  B --> C["Job seaweedfs-migrate: copy, check every byte"]
   C -->|"any difference"| X["Stop: nothing else changed"]
   C --> D["Move this tool's pipeline servers, one at a time"]
   D -->|"not ObjectStoreAvailable in 2 minutes"| Y["Stop: the old storage is kept"]

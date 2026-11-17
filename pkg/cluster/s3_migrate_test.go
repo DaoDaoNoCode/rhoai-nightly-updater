@@ -365,13 +365,16 @@ func TestCopyResultProblem(t *testing.T) {
 		{"missing", copyResult{Check: 1, Identical: 3, Missing: 1, Source: size(4, 4330), Destination: size(3, 4000)}, copyOverwrite, "1 object missing", true},
 		{"changed during an overwriting copy", copyResult{Check: 1, Identical: 3, Differ: 1, Source: size(4, 4330), Destination: size(4, 4330)}, copyOverwrite, "1 object different", true},
 		{"changed after a copy that keeps existing objects", copyResult{Check: 1, Identical: 2, Differ: 2, DifferSample: sample, Source: size(4, 4330), Destination: size(4, 4330)}, copyIgnoreExisting, "2 objects different in the new storage (for example pipelines/a.txt, pipelines/b.txt)", false},
-		{"no source size", copyResult{Identical: 4, Destination: size(4, 4330)}, copyOverwrite, "could not be read", true},
+		// The sizes are for the summary only.
+		{"no source size is not a problem", copyResult{Identical: 4, Destination: size(4, 4330)}, copyOverwrite, "", false},
 		{"no destination size is not a problem", copyResult{Identical: 4, Source: size(4, 4330)}, copyOverwrite, "", false},
+		// Objects written to the old storage between the check and the
+		// size listing: the check passed, so the copy is verified.
+		{"source grew after the check", copyResult{Identical: 4, Source: size(5, 4400), Destination: size(4, 4330)}, copyOverwrite, "", false},
 		// The one-way check proves every source object is there; the new
 		// storage may hold more, whichever mode.
 		{"extra object while nothing uses the new storage", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, copyOverwrite, "", false},
 		{"extra object once pipeline servers write there", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, copyIgnoreExisting, "", false},
-		{"fewer identical than objects", copyResult{Identical: 3, Source: size(4, 4330), Destination: size(4, 4330)}, copyOverwrite, "3 of the 4", true},
 	}
 	for _, tc := range cases {
 		p := tc.r.problem(tc.mode)
@@ -384,6 +387,26 @@ func TestCopyResultProblem(t *testing.T) {
 	}
 	if got := (copyResult{Source: size(4, 4330), Destination: size(6, 5000)}).extraObjects(); got != 2 {
 		t.Errorf("extraObjects = %d", got)
+	}
+	if got := (copyResult{Identical: 3}).summary(); got != "3 objects" {
+		t.Errorf("summary without sizes = %q", got)
+	}
+}
+
+// The check and the size listings run one after the other while the old
+// storage may still be written to: an object added in between makes the
+// size count larger than the checked count, which does not fail the run.
+func TestMigrate_SourceWrittenBetweenCheckAndSizeIsNotAMismatch(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	simulateMigrate(f, &migrateSim{result: `{"copy":0,"check":0,"identical":4,"missing":0,"differ":0,"errors":0,"source":{"count":5,"bytes":4400},"destination":{"count":4,"bytes":4330}}`, objectStore: "True"})
+	ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
+	if !ok || !strings.Contains(msg, "Migrated 5 objects (4400 bytes)") {
+		t.Fatalf("got %v: %s", ok, msg)
+	}
+	if !hasStep(steps, "copy", "OK: 4 objects copied and checked byte for byte") {
+		t.Error("the step does not report the checked count")
 	}
 }
 

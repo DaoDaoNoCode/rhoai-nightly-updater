@@ -90,7 +90,8 @@ var (
 //     for objects only in the new storage (fs/operations/check.go DstOnly);
 //     the first three different paths go into differSample (base64, so any
 //     byte of a key is safe in the JSON);
-//   - size --json counts objects and bytes on both sides.
+//   - size --json counts objects and bytes on both sides, for the summary
+//     only: it lists again after the check (copyResult.problem).
 //
 // The result is one JSON line in /dev/termination-log, which the kubelet
 // puts in the pod status (terminationMessagePath), so no pod-log access is
@@ -292,12 +293,27 @@ func (r copyResult) problem(mode string) *copyProblem {
 		return &copyProblem{what: fmt.Sprintf("the check found %s missing in the new storage, %s different and %s unreadable (written or changed in the old storage during the copy, or not readable then)", n(r.Missing), n(r.Differ), n(r.Errors)), retry: true}
 	case r.Check != 0:
 		return &copyProblem{what: fmt.Sprintf("rclone check failed (exit code %d)", r.Check), retry: true}
-	case r.Source == nil:
-		return &copyProblem{what: "the object count of the old storage could not be read", retry: true}
-	case r.Identical != r.Source.Count:
-		return &copyProblem{what: fmt.Sprintf("the check found %d of the %d objects identical", r.Identical, r.Source.Count), retry: true}
 	}
+	// check exited 0 with no +, * or ! line: every object it listed in the
+	// old storage is in the new one, byte for byte. The sizes come from
+	// separate listings taken after it, so objects written to the old
+	// storage in between would make them disagree with the check; they are
+	// used only for the summary (summary, extraObjects).
 	return nil
+}
+
+// checked is the number of objects of the old storage the check found
+// identical: all lines of its one-way --combined report once the check
+// passed.
+func (r copyResult) checked() int64 { return r.Identical + r.Missing + r.Differ + r.Errors }
+
+// summary describes what was copied: the old storage's objects and bytes
+// (size --json), or the checked count when the size could not be read.
+func (r copyResult) summary() string {
+	if r.Source != nil {
+		return sizeText(*r.Source)
+	}
+	return countNoun(int(r.checked()), "object", "objects")
 }
 
 // extraObjects returns how many more objects the new storage holds than
@@ -478,7 +494,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 		return resp, nil
 	}
 
-	msg := fmt.Sprintf("Migrated %s to namespace '%s'.", sizeText(*result.Source), s3Namespace)
+	msg := fmt.Sprintf("Migrated %s to namespace '%s'.", result.summary(), s3Namespace)
 	if len(repointed) > 0 {
 		msg += fmt.Sprintf(" %s now %s it: %s.", countNoun(len(repointed), "pipeline server", "pipeline servers"), verb(len(repointed), "uses", "use"), strings.Join(repointed, ", "))
 	}
@@ -486,8 +502,8 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 		msg += fmt.Sprintf(" Not changed by this tool, still on the old storage: %s.", strings.Join(listed, "; "))
 	}
 	msg += fmt.Sprintf(" The old storage in namespace '%s' is kept until you remove it.", legacyNamespace)
-	slog.Info("s3 storage migrated", "user", getUser(m.c), "objects", result.Source.Count)
-	recordS3Activity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, sizeText(*result.Source), len(repointed)), true)
+	slog.Info("s3 storage migrated", "user", getUser(m.c), "objects", result.checked())
+	recordS3Activity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil
 }
 
@@ -593,7 +609,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 	if extra := result.extraObjects(); extra > 0 {
 		m.step(step, "running", fmt.Sprintf("Note: the new storage holds %s more than the old one (written there directly, or deleted from the old storage after an earlier copy); they are kept", countNoun(int(extra), "object", "objects")))
 	}
-	m.step(step, "success", fmt.Sprintf("OK: %s copied and checked byte for byte", sizeText(*result.Source)))
+	m.step(step, "success", fmt.Sprintf("OK: %s copied and checked byte for byte", countNoun(int(result.checked()), "object", "objects")))
 	return result, nil
 }
 
@@ -1253,7 +1269,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	if resume {
 		msg = fmt.Sprintf("The rest of the old storage in namespace '%s' was removed. Its data volumes were already being deleted, so nothing was copied this time.", legacyNamespace)
 	} else {
-		msg = fmt.Sprintf("The old storage in namespace '%s' was removed; its %s are in namespace '%s'.", legacyNamespace, sizeText(*result.Source), s3Namespace)
+		msg = fmt.Sprintf("The old storage in namespace '%s' was removed; its %s are in namespace '%s'.", legacyNamespace, result.summary(), s3Namespace)
 	}
 	if len(d.kept) > 0 {
 		msg += fmt.Sprintf(" Left in place because this tool did not create them: %s.", strings.Join(d.kept, ", "))
