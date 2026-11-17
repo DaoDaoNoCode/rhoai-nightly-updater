@@ -174,7 +174,14 @@ const scenarios = {
   "dashboard-session": (w) => { w.dashboard = F.dashboardSession(); w.dashboardBuilds = F.dashboardBuilds(w.dashboard); },
   "s3-none": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.gated = true; },
   "s3-running": () => {},
-  "s3-pending": (w) => { w.resources.minio = F.s3States.pending; w.gated = true; },
+  "s3-migrate": (w) => {
+    w.resources = { minio: F.s3States.migrationNeeded, mlflow: F.mlflowStates.none, pipelineServers: [F.legacyPipelineServer], legacyStorage: F.legacyStorage("migrate") };
+    w.gated = true;
+  },
+  "s3-migrate-remove": (w) => {
+    w.resources = { minio: F.s3States.migrated, mlflow: F.mlflowStates.none, pipelineServers: [F.legacyPipelineServer], legacyStorage: F.legacyStorage("remove") };
+    w.gated = true;
+  },
   "s3-incomplete": (w) => { w.resources.minio = F.s3States.incomplete; w.gated = true; },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
 };
@@ -279,18 +286,41 @@ async function mutation(res, type, label, apply) {
 }
 
 const minioSetup = () => {
-  const migrated = world.resources.minio.migrationPending || world.resources.minio.keptPVCs;
-  world.resources.minio = migrated ? F.s3States.migrated : F.s3States.running;
+  world.resources.minio = F.s3States.running;
   if (!world.resources.pipelineServers.length) world.resources.minio = { ...world.resources.minio, teardownBlockedReason: undefined };
-  const note = world.resources.minio === F.s3States.migrated
-    ? " MinIO from the earlier version was replaced. SeaweedFS started fresh: objects stored in MinIO were not copied, so artifacts of earlier pipeline runs return 404; pipeline servers keep working with no edits. Its data volume, PVC minio-pvc (20Gi), is kept for a rollback or a manual copy; teardown deletes it."
-    : "";
   return {
     success: true,
-    message: `S3 storage (SeaweedFS) deployed with bucket 'pipelines'; pipeline servers reach it at minio-service.minio.svc:9000. Sign in to the admin UI as 'admin'; the password and the S3 keys are in secret 'minio-secret' in namespace 'minio'.${note}`,
-    logs: ["OK: Namespace minio", "OK: Secret minio-secret", "OK: PersistentVolumeClaim seaweedfs-pvc", "OK: Deployment seaweedfs ready", "OK: Service minio-service points at SeaweedFS", "OK: Route minio-ui", "OK: Bucket pipelines"],
+    message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'; pipeline servers reach it at http://seaweedfs-s3.seaweedfs.svc:8333. Sign in to the admin UI as 'admin'; the password (the S3 secret key) and the S3 keys are in Secret 'seaweedfs-s3-credentials' in namespace 'seaweedfs'.",
+    logs: ["OK: Namespace created", "OK: PVC created", "OK: Secret created", "OK: NetworkPolicy created", "OK: Deployment created", "OK: SeaweedFS is running", "OK: Service created", "OK: Admin UI Route created", "OK: Bucket 'pipelines' created"],
   };
 };
+
+/** Migrate storage: its steps wait for /__docs/advance in gated mode. */
+async function migrateStream(req, res) {
+  const { removeOldStorage = false } = await body(req);
+  const kind = removeOldStorage ? "remove" : "migrate";
+  beginOperation("migrate-storage", "Migrate S3 storage", removeOldStorage ? "remove old storage" : "migrate");
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  for (const step of F.migrateSteps(kind)) {
+    n += 1;
+    await nextStep();
+    if (res.destroyed) return;
+    const ev = { ...step, elapsedMs: n * 4000 };
+    if (step.step === "operation_complete") {
+      if (kind === "migrate") {
+        world.resources.minio = F.s3States.migrated;
+        world.resources.legacyStorage = F.legacyStorage("remove");
+      } else {
+        world.resources.minio = { ...F.s3States.running, teardownBlockedReason: F.s3States.migrated.teardownBlockedReason };
+        delete world.resources.legacyStorage;
+      }
+      endOperation(true, step.message);
+    }
+    res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  }
+  res.end();
+}
 
 const routes = {
   "GET /api/status": () => world.status,
@@ -340,6 +370,7 @@ async function api(req, res, u) {
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/minio/setup") return mutation(res, "setup-minio", "Set up S3 storage", minioSetup);
+  if (key === "POST /api/resources/minio/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/pipeline-server/setup") {
     const { project = "dev-project" } = await body(req);
     return mutation(res, "setup-pipeline-server", "Set up pipeline server", () => {

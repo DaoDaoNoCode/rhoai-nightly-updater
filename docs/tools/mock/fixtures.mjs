@@ -444,35 +444,79 @@ export function dashboardBuilds(session = dashboardSession()) {
 // --- Environment (/test-resources) ---------------------------------------------
 
 const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.54")}`;
-const MINIO_OLD = `quay.io/minio/minio@${digest("minio-2025")}`;
-const S3_UI = `https://minio-ui-minio.${APPS}`;
+const S3_UI = `https://seaweedfs-admin-seaweedfs.${APPS}`;
+const BLOCKED = (ps) => `1 pipeline server uses this S3 storage: ${ps}. Tear it down first.`;
 
 export const s3States = {
   running: {
-    deployed: true, ready: true, message: "Running", namespace: "minio", uiRoute: S3_UI, currentImage: SEAWEEDFS,
-    managedByTool: true, dataPVCs: ["seaweedfs-pvc"], uiUser: "admin",
-    teardownBlockedReason: "1 pipeline server uses this S3 storage: dev-project/nightly-dspa. Tear it down first.",
-  },
-  pending: {
-    deployed: true, ready: true, message: "Running", namespace: "minio", uiRoute: S3_UI, currentImage: MINIO_OLD,
-    managedByTool: true, dataPVCs: ["minio-pvc"], migrationPending: true,
-    warning: "MinIO from an earlier version of this tool still runs here and serves the pipeline servers. Re-run setup to replace it with SeaweedFS. Setup starts fresh: the objects stored in MinIO are not copied, so artifacts, logs and cached outputs of earlier pipeline runs return 404 (new runs work). Pipeline servers keep working with no edits (same Service, credentials and bucket), and the MinIO data volume, PVC minio-pvc, is kept for a rollback or a manual copy until teardown.",
-    teardownBlockedReason: "1 pipeline server uses this S3 storage: dev-project/nightly-dspa. Tear it down first.",
-  },
-  migrated: {
-    deployed: true, ready: true, message: "Running", namespace: "minio", uiRoute: S3_UI, currentImage: SEAWEEDFS,
-    managedByTool: true, dataPVCs: ["seaweedfs-pvc", "minio-pvc"], keptPVCs: [{ name: "minio-pvc", size: "20Gi" }], uiUser: "admin",
-    teardownBlockedReason: "1 pipeline server uses this S3 storage: dev-project/nightly-dspa. Tear it down first.",
+    deployed: true, ready: true, message: "Running", namespace: "seaweedfs", uiRoute: S3_UI, currentImage: SEAWEEDFS,
+    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
   },
   incomplete: {
-    deployed: true, ready: false, terminalError: true, namespace: "minio", currentImage: SEAWEEDFS, managedByTool: true, uiUser: "admin",
-    dataPVCs: ["seaweedfs-pvc", "minio-pvc"], keptPVCs: [{ name: "minio-pvc", size: "20Gi" }],
-    message: "Deployment seaweedfs is scaled to 0 replicas (for example by a manual rollback).",
-    repairNeeded: "Deployment seaweedfs is scaled to 0 replicas (for example by a manual rollback).",
-    teardownBlockedReason: "1 pipeline server uses this S3 storage: dev-project/nightly-dspa. Tear it down first.",
+    deployed: true, ready: false, terminalError: true, namespace: "seaweedfs", currentImage: SEAWEEDFS, managedByTool: true, uiUser: "admin",
+    dataPVCs: ["seaweedfs-data"],
+    message: "Deployment seaweedfs is scaled to 0 replicas.",
+    repairNeeded: "Deployment seaweedfs is scaled to 0 replicas.",
+    teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
   },
-  none: { deployed: false, ready: false, message: "Not deployed", managedByTool: false },
+  none: { deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false },
+  // Storage of an earlier version is still in namespace minio: nothing in
+  // namespace seaweedfs yet, or (stage "remove") the new storage is running.
+  migrationNeeded: {
+    deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false, migrationPending: true,
+    teardownBlockedReason: BLOCKED("dev-project/dspa"),
+  },
+  migrated: {
+    deployed: true, ready: true, message: "Running", namespace: "seaweedfs", uiRoute: S3_UI, currentImage: SEAWEEDFS,
+    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", migrationPending: true, teardownBlockedReason: BLOCKED("dev-project/dspa"),
+  },
 };
+
+/** The pipeline server an earlier version created ("dspa"), on the old storage. */
+export const legacyPipelineServer = {
+  deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "dspa", managedByTool: true,
+  apiRoute: `https://ds-pipeline-dspa-dev-project.${APPS}`, dataPVCs: ["mariadb-dspa"],
+};
+
+/** What 2.1 to 2.3 left in namespace minio (pkg/types LegacyStorageState). */
+export function legacyStorage(stage) {
+  return {
+    namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000",
+    objects: ["Deployment seaweedfs", "NetworkPolicy seaweedfs-ingress", "Route minio-ui", "Service minio-service", "Secret minio-secret", "PersistentVolumeClaim seaweedfs-pvc", "PersistentVolumeClaim minio-pvc"],
+    dataPVCs: [{ name: "seaweedfs-pvc", size: "20Gi" }, { name: "minio-pvc", size: "20Gi" }],
+    uncopiedPVCs: ["minio-pvc"],
+    usedBy: stage === "migrate" ? ["dev-project/dspa"] : [],
+    stage,
+    repoint: stage === "migrate" ? ["dev-project/dspa"] : [],
+    namespaceDeletable: true,
+  };
+}
+
+/** The steps Migrate storage streams (pkg/cluster MigrateS3Storage). */
+export function migrateSteps(kind) {
+  const rows = kind === "migrate"
+    ? [
+      ["check", "running", "Checking the storage in namespace 'minio'..."],
+      ["check", "success", "OK: SeaweedFS in namespace 'minio' is running"],
+      ["storage", "running", "Setting up the storage in namespace 'seaweedfs' with the same keys..."],
+      ["storage", "success", "OK: The new storage is ready"],
+      ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
+      ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
+      ["repoint", "running", "Moving pipeline server dev-project/dspa..."],
+      ["repoint", "success", "OK: 1 pipeline server moved"],
+      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace 'seaweedfs'. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace 'minio' is kept until you remove it."],
+    ]
+    : [
+      ["check", "success", "OK: Nothing of this tool uses the old storage"],
+      ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
+      ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
+      ["remove", "running", "Deleting the old storage in namespace 'minio'..."],
+      ["remove", "success", "OK: The old storage is deleted"],
+      ["namespace", "success", "OK: Namespace 'minio' is being deleted, with everything else in it"],
+      ["operation_complete", "success", "The old storage in namespace 'minio' was removed; its 37 objects (18204511 bytes) are in namespace 'seaweedfs'. Namespace 'minio' is being deleted, with everything else in it."],
+    ];
+  return rows.map(([step, status, message]) => ({ step, status, message }));
+}
 
 export const pipelineServer = {
   deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "nightly-dspa", managedByTool: true,

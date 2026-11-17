@@ -73,11 +73,11 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 <img src="docs/images/s3-running.png" alt="The Storage card: S3 storage, Running, on SeaweedFS" width="760">
 
-1. **S3 storage** is **Running**, on **SeaweedFS**, behind Service `minio-service` (a name kept from earlier versions).
+1. **S3 storage** is **Running**, on **SeaweedFS**, in namespace `seaweedfs`; pipeline servers reach it at `http://seaweedfs-s3.seaweedfs.svc:8333`.
 2. **Open admin UI** opens the SeaweedFS admin UI (user `admin`).
 3. **Tear down** stays disabled while a pipeline server uses the storage, and says which one.
 
-Pipeline servers (one per project) and an MLflow instance are on the same page.
+Pipeline servers (one per project) and an MLflow instance are on the same page. Storage an earlier version set up in namespace `minio` shows **Migration needed**: **Migrate storage** moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
 
 ### Diagnostics: what is wrong, and how to fix it
 
@@ -197,6 +197,7 @@ Environment variables of the `app` container. The template sets the first group;
 | `INSTALLER_RELEASES_URL` | unset: `RELEASES_URL`, except that the default GitLab project maps to its public GitHub mirror (`https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases`), whose assets download without a sign-in | the releases page the update notice's install command downloads `install.sh` from: a GitHub (`https://github.com/<owner>/<repo>/releases`) or GitLab (`https://<host>/<project>/-/releases`) releases page. Not a template parameter; set it on the `app` container. A value of another shape, or with characters outside `A-Z a-z 0-9 . _ ~ / -` (and a `:port`), shows no command, only the release notes |
 | `GITHUB_TOKEN` | unset | GitHub API token for commit dates, PR search and Dashboard Dev's distance from `main`. A read-only fine-grained token with public-repository read access is enough |
 | `SEAWEEDFS_IMAGE` | pinned `ghcr.io/chrislusf/seaweedfs@sha256:...` (4.54) | the S3 storage image, for example a mirror; must be a SeaweedFS 4.x whose `weed mini` reads `WEED_ADMIN_*`. `MINIO_IMAGE` is no longer read |
+| `RCLONE_IMAGE` | pinned `docker.io/rclone/rclone@sha256:...` (1.76.0) | the image of Migrate storage's copy Job, for example a mirror; must be an rclone 1.x image with `/bin/sh` |
 | `SEAWEEDFS_ACCESS_KEY_ID`, `SEAWEEDFS_SECRET_ACCESS_KEY` | random per install, kept in `seaweedfs/seaweedfs-s3-credentials` | S3 access key and secret key on a first setup (the secret key is also the admin UI password); keys already stored are kept. `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are no longer read |
 | `STABLE_SOURCE`, `STABLE_CHANNEL` | `redhat-operators`, detected | the catalog and channel used for "stable" |
 | `DSC_SAMPLE_REF` | unset | take DSC defaults from this rhods-operator git ref instead of the installed CSV's `alm-examples` |

@@ -301,7 +301,7 @@ new pod is ready.
 
 To roll back, revert that commit. Only releases from v2.2.0 on have the
 chart; to go further back, use `make rollback` from a clone
-([UPGRADING §5](UPGRADING.md#5-roll-back)), after removing the Application
+([UPGRADING §5](UPGRADING.md#6-roll-back)), after removing the Application
 without deleting its resources.
 
 `oc rollout undo` does not work with Argo CD either: the next sync puts back

@@ -36,25 +36,34 @@ only accepts a tag whose version is the top dated section. See
   Pipeline servers and MLflow are grouped under **Data & pipelines**, with
   Pipeline servers now right after the storage they use; the cards work as
   before.
-- S3 storage: SeaweedFS 4.48 → 4.54, pinned by digest. SeaweedFS 4.49 moved
-  its admin UI from port 23646 to 12535 (the old port put the admin's gRPC
-  port in Linux's ephemeral range, where it could be taken at startup), so
-  setup now starts it on 12535 and turns off SeaweedFS's compatibility
-  listener on 23646; the NetworkPolicy and `minio-service` follow. Pipeline
-  servers are unaffected: the S3 endpoint stays
-  `minio-service.minio.svc:9000`. A storage set up by an earlier version
-  keeps running 4.48 on 23646 (still shown as Running) and shows **Needs
-  repair** with **Repair**, which updates it in place: the data volume and
-  the credentials are kept. S3 is unavailable while the pod
-  restarts. Before, a storage on another image only showed a warning
-  without a button to update it.
-- The Storage card describes the storage as what it is, SeaweedFS:
-  "S3 storage (SeaweedFS) for pipeline artifacts and test files, in
-  namespace minio, behind Service minio-service." MinIO is named only where
-  something of it is left: a MinIO an earlier version still runs (with
-  **Migrate to SeaweedFS**), and its kept data volume `minio-pvc`. The
-  object names `minio`, `minio-service`, `minio-secret` and `minio-pvc`
-  stay, so pipeline servers need no edits.
+- **S3 storage in its own namespace, with SeaweedFS names**: namespace
+  `seaweedfs`, Service `seaweedfs-s3` (S3 on 8333, admin UI on 12535),
+  Secret `seaweedfs-s3-credentials` with the standard keys
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, PVC `seaweedfs-data`,
+  Route `seaweedfs-admin`. New pipeline servers use
+  `seaweedfs-s3.seaweedfs.svc:8333`. SeaweedFS 4.48 → 4.54, pinned by
+  digest; its admin UI runs on 12535 with the compatibility listener on
+  23646 turned off. `SEAWEEDFS_ACCESS_KEY_ID` and
+  `SEAWEEDFS_SECRET_ACCESS_KEY` set the keys of a first setup;
+  `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` and `MINIO_IMAGE` are no longer
+  read.
+- **Migrate storage** moves the storage an earlier version set up in
+  namespace `minio` (MinIO, or SeaweedFS behind the MinIO-era names) to
+  namespace `seaweedfs`, with its data: it sets up the new storage with the
+  same keys, copies every bucket and object with an rclone Job and checks
+  each byte (any difference stops it), and moves the pipeline servers this
+  tool created, waiting until each reaches the new storage. The old
+  storage is removed only in a separate, confirmed last step, after a
+  checklist for references the tool did not create; deleting namespace
+  `minio` is a separate choice, offered only when the tool created it.
+  Each run resumes where the last stopped. Until then the Storage card
+  reads **Migration needed**, with the old storage's objects under
+  **Details**, and the in-place MinIO-to-SeaweedFS replacement of 2.x is
+  retired. `RCLONE_IMAGE` overrides the pinned rclone 1.76.0 image.
+- The appearance popover follows a Contrast mode change: it stayed 8 px
+  off its button (glass has a narrower masthead inset) until the next
+  status refresh. Its last line names each choice that follows the system
+  ("Color scheme follows the system: Dark.").
 - Status page, Cluster setup: **Replace token** of the pull secret is a
   button like **Test with Quay** next to it, outlined in red because it
   overwrites a credential that may work, with PatternFly's normal spacing
@@ -79,7 +88,7 @@ only accepts a tag whose version is the top dated section. See
 - The appearance popover's arrow points at the appearance button.
 - Action rows use one PatternFly action group each, so related actions get
   the standard spacing: the Environment cards' rows (Open admin UI,
-  Migrate, Repair, Tear down, Set up, Open MLflow, Open pipelines) and the
+  Migrate storage, Repair, Tear down, Set up, Open MLflow, Open pipelines) and the
   Status page's installed-build actions.
 - The installed-build actions on the Status page are full-size buttons in
   one row: **Choose another build** is a secondary button and **View build
@@ -551,7 +560,7 @@ or installer.
   MinIO objects only to remove them.
 - **S3 test storage moves from MinIO to SeaweedFS** on the next storage setup
   or repair. SeaweedFS starts empty; the old `minio-pvc` is kept until
-  teardown. Rollback steps: [RUNBOOK §10.1](RUNBOOK.md#101-minio-to-seaweedfs-what-the-migration-does-and-how-to-roll-back).
+  teardown. Rollback steps: [RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version).
 - New template parameters `IMAGE_REPOSITORY` and `RELEASES_URL` (the update
   check); `install.sh` and `make` pass the repository they install from.
 

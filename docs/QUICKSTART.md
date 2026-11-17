@@ -74,7 +74,7 @@ If it stops with an `ERROR:` line:
 - *"HEAD is not on a release tag"*: check out a release (`git checkout vX.Y.Z`), or pass `TAG=main` / `TAG=<commit>` to test a build.
 - *"deploy/template.yaml in this checkout differs"*: your checkout is not the release you install. *"uncommitted changes"* means you edited the template locally.
 - *"cannot resolve ... to a digest"*: the tag doesn't exist, or quay.io is unreachable.
-- More in [UPGRADING.md](UPGRADING.md#6-faq).
+- More in [UPGRADING.md](UPGRADING.md#7-faq).
 
 ## 2. Open the app
 
@@ -166,13 +166,13 @@ Optional, for testing pipelines in the dashboard. Open **Environment**.
 
 <img src="images/s3-setup.png" alt="The Storage card: S3 storage Not deployed, with Set up" width="760">
 
-1. Under **Storage**, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `minio`, with a bucket `pipelines`, behind Service `minio-service`.
+1. Under **Storage**, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs`, with a bucket `pipelines`, behind Service `seaweedfs-s3`. (If the card reads **Migration needed**, an earlier version's storage is still in namespace `minio`: click **Migrate storage** instead.)
 
 <img src="images/pipeline-servers.png" alt="The Pipeline servers card with a Running pipeline server in dev-project" width="760">
 
 2. Under **Pipeline servers**, open **Add to a project**, pick a data science project and confirm. The pipeline server uses the S3 storage.
 
-**What you should see:** **S3 storage** shows **Running** and **SeaweedFS**, with **Open admin UI** (user `admin`; the password is in Secret `minio-secret` in `minio`). The pipeline server shows **Running** after 1–3 minutes. Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
+**What you should see:** **S3 storage** shows **Running** and **SeaweedFS**, with **Open admin UI** (user `admin`; the password is key `AWS_SECRET_ACCESS_KEY` of Secret `seaweedfs-s3-credentials` in `seaweedfs`). The pipeline server shows **Running** after 1–3 minutes. Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
 
 ## Day to day
 
@@ -189,7 +189,7 @@ Optional, for testing pipelines in the dashboard. Open **Environment**.
 ## Upgrade, roll back or remove the updater
 
 - **Upgrade:** when the app says "vX.Y.Z is available", download that release's `install.sh` (step 1) and run it; it sees the existing install and upgrades it, keeping everyone signed in. From a clone: `git fetch --tags && git checkout vX.Y.Z && make upgrade`. Details, and installs from before releases: [UPGRADING.md](UPGRADING.md).
-- **Roll back:** from a clone, `git fetch --tags && make rollback TAG=v1.0.0` (`DRY_RUN=1` validates). It applies that release's own template with its image and keeps sessions. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. [UPGRADING §5](UPGRADING.md#5-roll-back).
+- **Roll back:** from a clone, `git fetch --tags && make rollback TAG=v1.0.0` (`DRY_RUN=1` validates). It applies that release's own template with its image and keeps sessions. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. [UPGRADING §5](UPGRADING.md#6-roll-back).
 - If a cluster operation is running, an upgrade or rollback waits for it: the updater (UI included) is offline for up to ~17 minutes.
 - **Remove:** `bash install.sh uninstall` (or `make undeploy` from a clone) removes the updater, its cluster-wide RBAC and its ConsoleLink. It does **not** remove RHOAI, the nightly catalog, the pull secret, the IDMS, or anything created from Test resources. Tear those down in the app first.
 

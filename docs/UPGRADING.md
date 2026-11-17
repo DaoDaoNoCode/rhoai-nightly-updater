@@ -237,7 +237,7 @@ What v2.0.0 changes on top of v1.0.0:
   Certificates, the SeaweedFS objects);
 - the S3 test storage moves from MinIO to SeaweedFS on the next storage setup
   or repair. SeaweedFS starts empty; the old `minio-pvc` is kept until
-  teardown ([RUNBOOK §10.1](../RUNBOOK.md#101-minio-to-seaweedfs-what-the-migration-does-and-how-to-roll-back));
+  teardown ([RUNBOOK §10.1](../RUNBOOK.md#101-migrate-storage-from-an-earlier-version));
 - Diagnostics explain why the DataScienceCluster is not ready;
 - the masthead shows the release, and a notice says when a newer one exists.
 
@@ -248,7 +248,22 @@ removes the current names; also delete the legacy ones
 (`oc delete clusterrolebinding,clusterrole,consolelink $APP --ignore-not-found`),
 then `bash install.sh`.
 
-## 5. Roll back
+## 5. Upgrade to v3.0.0
+
+3.0.0 is a MAJOR release: template revision 5 adds RBAC, so the template is
+re-applied (the release's `install.sh`, or `make upgrade` from a v3.0.0
+checkout), as for v2.0.0.
+
+The S3 test storage moves from namespace `minio` to namespace `seaweedfs`.
+After the upgrade the Environment page shows **Migration needed** until you
+run **Migrate storage** ([RUNBOOK §10.1](../RUNBOOK.md#101-migrate-storage-from-an-earlier-version)):
+it copies the data, moves the pipeline servers this tool created, and
+removes the old storage only when you confirm. Until then the old storage
+keeps serving its pipeline servers unchanged. Anything else that uses
+`minio-service.minio.svc:9000` (a data connection, a workbench) needs the new
+endpoint `http://seaweedfs-s3.seaweedfs.svc:8333`; the keys stay the same.
+
+## 6. Roll back
 
 From a clone, to a release or any published commit build:
 
@@ -264,13 +279,14 @@ template revision with what the running image expects, and only notes that
 your checkout is a newer revision (verified live on a v1.0.0 install with
 the v2 smoke test: all checks pass).
 It does not undo what the newer version did on the cluster: a SeaweedFS
-migration stays (see [RUNBOOK §10.1](../RUNBOOK.md#101-minio-to-seaweedfs-what-the-migration-does-and-how-to-roll-back)
-to go back to MinIO), and RBAC that only the newer template had stays until
+migration stays (a 2.x updater reads the storage only in namespace
+`minio`: run 2.x's setup again, or keep 3.x until the old storage is
+removed), and RBAC that only the newer template had stays until
 the next upgrade or `make undeploy`. Roll forward with the newer release's
 `install.sh` or `make upgrade` from its checkout. `oc rollout undo` does not
 work: old ReplicaSets are pruned on purpose.
 
-## 6. FAQ
+## 7. FAQ
 
 **"deploy/template.yaml in this checkout differs from the template of commit ..."**
 Your checkout is not the release you install. Check out the release tag

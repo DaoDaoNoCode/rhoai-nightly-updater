@@ -400,18 +400,27 @@ async (page) => {
       });
       await crop("pipeline-servers", card("Pipeline servers"));
 
-      await open("/test-resources", "s3-pending");
-      const pending = card("Storage");
-      await crop("s3-migration-pending", pending, {
+      await open("/test-resources", "s3-migrate");
+      const old = card("Storage");
+      await old.getByRole("button", { name: "Details" }).click();
+      await wait(500);
+      await crop("s3-migration-needed", old, {
         notes: [
-          { at: label(pending, "MinIO (migration pending)"), n: 1, pos: "r" },
-          { at: pending.getByRole("button", { name: "Migrate to SeaweedFS" }), n: 2, pos: "l" },
+          { at: label(old, "Migration needed"), n: 1, pos: "r" },
+          { at: old.getByRole("button", { name: "Migrate storage" }), n: 2, pos: "l" },
+          { at: old.getByRole("button", { name: "Details" }), n: 3, pos: "l" },
         ],
         pad: 12,
       });
-      await pending.getByRole("button", { name: "Migrate to SeaweedFS" }).click();
+      await old.getByRole("button", { name: "Migrate storage" }).click();
       await wait(800);
       await crop("s3-migrate-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
+      await page.keyboard.press("Escape");
+
+      await open("/test-resources", "s3-migrate-remove");
+      await card("Storage").getByRole("button", { name: "Migrate storage" }).click();
+      await wait(800);
+      await crop("s3-remove-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
       await open("/test-resources", "s3-incomplete");
@@ -472,21 +481,28 @@ async (page) => {
     },
 
     async "gif-migrate"() {
-      await open("/test-resources", "s3-pending");
+      await open("/test-resources", "s3-migrate");
       gif("s3-migrate", await mainClip());
       await frame(1200);
-      await clickShown(card("Storage").getByRole("button", { name: "Migrate to SeaweedFS" }));
+      await clickShown(card("Storage").getByRole("button", { name: "Migrate storage" }));
       await wait(700);
       await hidePointer();
-      await frame(2400);
-      await clickShown(page.locator(".pf-v6-c-modal-box").getByRole("button", { name: "Migrate and start fresh" }), 700);
+      await frame(2600);
+      await clickShown(page.locator(".pf-v6-c-modal-box").getByRole("button", { name: "Migrate storage" }), 700);
       await hidePointer();
-      await wait(500);
-      await frame(1000);
-      await release();
-      await wait(1200);
-      await settle();
-      await frame(3000);
+      // The four steps, two events each, then the outcome.
+      for (let i = 0; i < 4; i++) {
+        await advance(2);
+        await wait(600);
+        await frame(900);
+      }
+      await advance(1);
+      await wait(900);
+      await frame(1200);
+      // The next part: the summary, the checklist and the removal.
+      await page.locator(".pf-v6-c-modal-box__body").evaluate((el) => el.scrollTo(0, el.scrollHeight));
+      await wait(400);
+      await frame(3200);
     },
 
     async "gif-repair"() {

@@ -128,33 +128,44 @@ Revert is safe to repeat and works without a saved session.
 
 ## 8. Environment page
 
-### S3 storage: SeaweedFS (namespace `minio`)
+### S3 storage: SeaweedFS (namespace `seaweedfs`)
 
-The namespace, Service, Secret and bucket keep the names earlier versions used for MinIO, so pipeline servers pointed at `minio-service.minio.svc:9000` keep working with no edits. Setup creates or updates the following, in this order. Updates are guarded by resourceVersion; a foreign object refuses. Every create and update is first sent as a server-side dry run (`?dryRun=All`), and none is made unless all pass. Before updating an object it created, setup moves its own field ownership from client-side to server-side apply in `metadata.managedFields` (as `kubectl apply --server-side` does), so a field it no longer sets is removed; other managers' entries are not touched. While the admin UI moves from port 23646 (SeaweedFS before 4.49) to 12535, the NetworkPolicy allows both until SeaweedFS is ready and `minio-service` points at the new port.
+Setup creates or updates the following, in this order. Updates are guarded by resourceVersion; a foreign object refuses. Every create and update is first sent as a server-side dry run (`?dryRun=All`), and none is made unless all pass. Before updating an object it created, setup moves its own field ownership from client-side to server-side apply in `metadata.managedFields` (as `kubectl apply --server-side` does), so a field it no longer sets is removed; other managers' entries are not touched. Setup refuses while storage from an earlier version is in namespace `minio`: Migrate storage (below) sets the new storage up instead.
 
 | Object | Notes |
 |---|---|
-| Namespace `minio` | created with the tool label. A namespace from an earlier version gets the label patched on |
-| PVC `seaweedfs-pvc` | 20Gi, RWO. A new name: SeaweedFS cannot read MinIO's on-disk format |
-| Secret `minio-secret` | keys `minio_root_user` (S3 access key) and `minio_root_password` (S3 secret key and admin UI password), random on first setup, reused on re-run |
+| Namespace `seaweedfs` | created with the tool label; a namespace of that name the tool did not create refuses |
+| PVC `seaweedfs-data` | 20Gi, RWO |
+| Secret `seaweedfs-s3-credentials` | keys `AWS_ACCESS_KEY_ID` (S3 access key) and `AWS_SECRET_ACCESS_KEY` (S3 secret key and admin UI password), random on first setup (or `SEAWEEDFS_ACCESS_KEY_ID`/`SEAWEEDFS_SECRET_ACCESS_KEY`), reused on re-run; Migrate storage sets the old storage's keys |
 | NetworkPolicy `seaweedfs-ingress` | pods `app=seaweedfs`: 8333 (S3) from pods in all namespaces; 12535 (admin UI) only from the router namespaces; nothing else |
 | Deployment `seaweedfs` | `SEAWEEDFS_IMAGE` or the pinned `ghcr.io/chrislusf/seaweedfs` 4.54 digest; `weed mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0`; env `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`WEED_ADMIN_PASSWORD` from the Secret, `WEED_ADMIN_USER=admin`; probes `GET /status` on 8333; 64m/256Mi requests, 500m/1Gi limits; no fixed UID (restricted-v2) |
-| Service `minio-service` | applied once SeaweedFS is ready: selector `app=seaweedfs`, port `api` 9000 → 8333 and `ui` 9090 → 12535 (23646 for a SeaweedFS set up before 3.0.0, until setup is re-run) |
-| Route `minio-ui` | applied once SeaweedFS is ready: edge TLS to the admin UI (port `ui`). There is no S3 API Route |
-| Route `minio-api` (legacy) | deleted on setup unless a pipeline server uses its host |
+| Service `seaweedfs-s3` | applied once SeaweedFS is ready: selector `app=seaweedfs`, ports `s3` 8333 and `ui` 12535. Pipeline servers use `seaweedfs-s3.seaweedfs.svc:8333` |
+| Route `seaweedfs-admin` | applied once SeaweedFS is ready: edge TLS to the admin UI (port `ui`). There is no S3 API Route |
 | Bucket `pipelines` | created by SeaweedFS on start and again through the S3 API |
 
-**Migration from MinIO.** When setup finds the tool's MinIO Deployment `minio` (earlier versions), it deploys SeaweedFS next to it as above; MinIO keeps serving until SeaweedFS is ready, and if SeaweedFS cannot start nothing is switched. Once it is ready, setup switches `minio-service` and `minio-ui`, then deletes Deployment `minio` and, once no MinIO pod is left (up to 20 seconds; otherwise it is kept and **Repair** removes it later), NetworkPolicy `minio-ingress` (labelled, by UID). The Environment page reports the storage as Running only when SeaweedFS is ready and `minio-service`/`minio-ui` point at it; otherwise it is Incomplete and **Repair** re-runs setup. **PVC `minio-pvc` is kept** and shown on the Environment page with its size. Objects stored in MinIO are **not copied**: artifacts of earlier pipeline runs return 404. Re-running setup is safe at any point. Rollback: RUNBOOK §10.
-
-**Teardown** deletes, in order: Deployments `seaweedfs` and `minio`, NetworkPolicies `seaweedfs-ingress` and `minio-ingress`, Routes `minio-ui`/`minio-api`, Service, Secret, and PVCs `seaweedfs-pvc` and `minio-pvc` (**the data is lost**). Each is deleted only if labelled, by UID. The **namespace is kept**; delete it with `oc delete project minio`. Teardown refuses in these cases:
-- a pipeline server still uses the storage;
-- the storage's Route/Service can't be read while pipeline servers exist;
+**Teardown** deletes, in order: Deployment `seaweedfs`, NetworkPolicy `seaweedfs-ingress`, Route `seaweedfs-admin`, Service `seaweedfs-s3`, Secret `seaweedfs-s3-credentials` and PVC `seaweedfs-data` (**the data is lost**), and, when storage from an earlier version is left in namespace `minio`, the tool's objects there too (below). Each is deleted only if the tool created it, by UID. The **namespaces are kept**; delete them with `oc delete project`. Teardown refuses in these cases:
+- a pipeline server still uses either storage;
+- a storage's Route/Service can't be read while pipeline servers exist;
 - a CRD conversion webhook is down (namespace deletion would hang).
+
+### S3 storage of an earlier version (namespace `minio`)
+
+Versions before 3.0.0 set up the storage in namespace `minio`: MinIO (Deployment `minio`, PVC `minio-pvc`, NetworkPolicy `minio-ingress`, Route `minio-api`), later SeaweedFS behind the same names (Deployment `seaweedfs`, PVC `seaweedfs-pvc`, NetworkPolicy `seaweedfs-ingress`), with Secret `minio-secret` (keys `minio_root_user`, `minio_root_password`), Service `minio-service` (port 9000) and Route `minio-ui`. 3.0.0 creates nothing there. It recognises these objects by the tool label or an earlier version's server-side apply in `metadata.managedFields`, reads the keys and the address, and deletes them only in Migrate storage's last step or in teardown.
+
+**Migrate storage** (streamed; each run does only what is missing, so it resumes after any step):
+
+| Step | Changes |
+|---|---|
+| 1. New storage | the setup above, with the keys of `minio-secret`. A storage in `seaweedfs` with other keys stops the run |
+| 2. Copy | Job `seaweedfs-migrate` in `seaweedfs`: rclone 1.76.0 (`RCLONE_IMAGE` or the pinned `docker.io/rclone/rclone` digest), `copy --ignore-existing` (never deletes or overwrites in the new storage), `check --one-way --download` and `size --json` on both sides. Keys only through `secretKeyRef`; restricted security context, no service account token, 100m/128Mi requests, 500m/512Mi limits, `backoffLimit: 0`, `activeDeadlineSeconds: 3600`, `ttlSecondsAfterFinished: 86400`. The result is the pod's termination message; the Job is deleted by UID once it is read. Any difference stops the run here |
+| 3. Pipeline servers | for each DSPA this tool created on `minio-service.minio.svc:9000` (labelled, or a `dspa` an earlier version created, proven by its managedFields): Secret `nightly-dspa-s3` with the same keys, then a merge patch (resourceVersion) of `spec.objectStorage.externalStorage.host` to `seaweedfs-s3.seaweedfs.svc:8333`, its secret to `nightly-dspa-s3`, and the tool label. The run waits up to 2 minutes for `ObjectStoreAvailable=True` at the new generation; otherwise it stops. Other DSPAs are listed, never changed |
+
+**Remove the old storage** (Migrate storage's last part, confirmed separately): refused while any pipeline server uses the old storage. It copies and checks once more, then deletes by UID the tool's objects in `minio` (the list above, `minio-pvc` included: MinIO's files from before SeaweedFS, which no running server reads and which cannot be copied) and the `dashboard-dspa-secret` of moved `dspa` servers. Namespace `minio` is deleted only when you tick it and its metadata shows the tool created it (label and a creation-time managedFields entry), which also deletes anything else in it.
 
 ### Pipeline server (a project you choose)
 | Action | Objects |
 |---|---|
-| Setup | Namespace `<project>` only if missing (labels `opendatahub.io/dashboard=true`, `modelmesh-enabled=false`); Secret `nightly-dspa-s3` (the S3 credentials from `minio-secret`, labelled); DSPA `nightly-dspa` → `minio-service.minio.svc:9000`, bucket `pipelines`. It refuses if the project already has a DSPA |
+| Setup | Namespace `<project>` only if missing (labels `opendatahub.io/dashboard=true`, `modelmesh-enabled=false`); Secret `nightly-dspa-s3` (the S3 credentials from `seaweedfs-s3-credentials`, labelled); DSPA `nightly-dspa` → `seaweedfs-s3.seaweedfs.svc:8333` (http, region `us-east-1`), bucket `pipelines`. It refuses if the project already has a DSPA |
 | Teardown | DSPA `nightly-dspa`, or legacy `dspa` if this tool created it, then its Secret (legacy `dashboard-dspa-secret`), by UID. The project is kept |
 
 ### MLflow (cluster-scoped CR `mlflow`, workloads in `redhat-ods-applications`)
