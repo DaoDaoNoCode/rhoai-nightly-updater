@@ -256,7 +256,7 @@ re-applied (the release's `install.sh`, or `make upgrade` from a v3.0.0
 checkout), as for v2.0.0.
 
 The S3 test storage moves from namespace `minio` to namespace `seaweedfs`.
-After the upgrade the Environment page shows **Migration needed** until you
+After the upgrade Storage (Environment page, Cluster tab) shows **Needs attention** until you
 run **Migrate storage** ([RUNBOOK §10.1](../RUNBOOK.md#101-migrate-storage-from-an-earlier-version)):
 it copies the data, moves the pipeline servers this tool created, and
 removes the old storage only when you confirm. Until then the old storage

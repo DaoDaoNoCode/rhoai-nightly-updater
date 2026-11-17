@@ -164,15 +164,14 @@ Open **Components**, then **Diagnostics**.
 
 Optional, for testing pipelines in the dashboard. Open **Environment**.
 
-<img src="images/s3-setup.png" alt="The Storage card: S3 storage Not deployed, with Set up" width="760">
+<img src="images/environment-goals.png" alt="Overview: Run a data science pipeline needs Storage and a Pipeline server, with Set up" width="760">
 
-1. Under **Storage**, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs`, with a bucket `pipelines`, behind Service `seaweedfs-s3`. (If the card reads **Migration needed**, an earlier version's storage is still in namespace `minio`: click **Migrate storage** instead.)
+1. On **Run a data science pipeline**, pick a data science project.
+2. Click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then a pipeline server in the project that uses it, and shows each step. (If Storage reads **Needs attention**, an earlier version's storage is still in namespace `minio`: **Show the storage**, then **Migrate storage**.)
 
-<img src="images/pipeline-servers.png" alt="The Pipeline servers card with a Running pipeline server in dev-project" width="760">
+<img src="images/environment-projects.png" alt="Projects tab: dev-project with its pipeline server Ready and Open pipelines" width="760">
 
-2. Under **Pipeline servers**, open **Add to a project**, pick a data science project and confirm. The pipeline server uses the S3 storage.
-
-**What you should see:** **S3 storage** shows **Running** and **SeaweedFS**, with **Open admin UI** (user `admin`; the password is key `AWS_SECRET_ACCESS_KEY` of Secret `seaweedfs-s3-credentials` in `seaweedfs`). The pipeline server shows **Running** after 1–3 minutes. Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
+**What you should see:** the goal reads **2 of 2 ready** and offers **Open pipelines**. The **Projects** tab shows the project's pipeline server **Ready** (after 1–3 minutes); **Cluster** shows Storage **Ready** with **Open admin UI** (user `admin`; **Details**, **How to use**, **Copy admin password**). Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
 
 ## Day to day
 

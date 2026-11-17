@@ -18,7 +18,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy` | [§5](#5-operations-busy-stuck-interrupted) |
 | **Operator failed**, **No Subscription**, a failed Update or Install a different build step | [§6](#6-update--install-a-different-build-failed) |
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
-| S3 storage "Migration needed", **Incomplete**, Tear down disabled | [§10](#10-environment-page) |
+| Storage **Needs attention** (Migrate storage or Repair), **Error**, Tear down disabled | [§10](#10-environment-page) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
 | "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
 | "Argo CD manages ...", **Install pending**, **OLM installing**, `gitops_managed`, `install_mismatch`, "sets the image of CatalogSource ... in Git" | [§13](#13-clusters-managed-by-argo-cd) |
@@ -275,37 +275,42 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PVC `seaweedfs-data`, Service `seaweedfs-s3`, Route `seaweedfs-admin`). Storage an earlier version set up in namespace `minio` is moved with **Migrate storage** (§10.1). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
-<img src="docs/images/s3-incomplete.png" alt="S3 storage Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
+The page has three tabs: **Overview** (goals: what a task needs and **Set up the rest**), **Cluster** (Storage, MLflow) and **Projects** (pick a project; its pipeline server). The tab and the project are in the address. Each card has one status and one action; **Details** opens a drawer with the object names, the reason for an error or a repair, the other actions (Tear down, Deploy PR, Revert) and **How to use**.
 
-1. **Incomplete**, on **SeaweedFS**: it does not serve through `seaweedfs-s3` and `seaweedfs-admin`.
-2. Why, in one line (here: scaled to 0).
+<img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
+
+1. **Needs attention**: SeaweedFS does not serve through `seaweedfs-s3` and `seaweedfs-admin`.
+2. Why, in the details (here: scaled to 0), and what Repair does.
 3. **Repair** re-runs setup and keeps the stored data:
 
 <img src="docs/images/s3-repair.gif" alt="Repair, confirm Repair S3 storage, the storage is Running again" width="760">
 
-<img src="docs/images/s3-running.png" alt="S3 storage Running; Tear down is blocked by a pipeline server" width="760">
+<img src="docs/images/environment-storage-details.png" alt="Storage Ready, with the details: endpoint, Tear down disabled, Copy admin password" width="760">
 
-1. **Running**, on **SeaweedFS**.
+1. **Ready**.
 2. **Open admin UI** (user `admin`).
-3. **Tear down** is disabled while a pipeline server uses the storage; the line names it.
+3. The S3 endpoint and the other names.
+4. **Tear down** is disabled while a pipeline server uses the storage; its tooltip names it.
+5. **Copy admin password** copies the admin UI password (cluster-admins only).
 
 | Problem | Fix |
 |---|---|
 | S3 storage setup: "not created by this tool" | Namespace `seaweedfs` holds foreign objects (or was not created by this tool). Nothing was changed. Remove them or use another cluster |
 | Setup or teardown: "not allowed ... run `make upgrade`" | The image is newer than the template (RBAC for the SeaweedFS names is missing; the banner says the template is outdated). An admin runs `make upgrade`, then retry. Nothing was changed by the refused step |
-| "Migration needed" | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up waits until then |
+| Storage "Needs attention" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
 | Migrate storage stopped: "The copy is not complete" | Nothing else changed. The message says what differs. Run Migrate storage again; it copies only what is missing and never deletes or overwrites in the new storage. "The new one N objects" while nothing uses it yet: something wrote to `seaweedfs`; check `oc get dspa -A` |
 | Migrate storage: "The copy is still running" | A large storage: the Job keeps running (up to an hour). Run Migrate storage again to wait for it |
 | Migrate storage: "does not reach the new storage" | The pipeline server was moved but DSPO reports `ObjectStoreAvailable` False. The old storage is kept. `oc get dspa -n <project> <name> -o jsonpath='{.status.conditions}'`, fix the cause, run Migrate storage again |
 | Migrate storage: "other keys" | Namespace `seaweedfs` already has a storage with other keys. Tear it down (nothing was migrated into it yet), then migrate |
 | Copy Job cannot start (ImagePullBackOff) | Set `RCLONE_IMAGE` to a pullable rclone 1.x image (a mirror), then run Migrate storage again |
-| S3 storage "Incomplete" or "Needs repair" | SeaweedFS runs but `seaweedfs-s3`/`seaweedfs-admin` do not point at it, or it is scaled to 0. Press **Repair** (re-runs setup) |
-| "Needs repair: SeaweedFS runs ..., not the image this version deploys" | Expected after `SEAWEEDFS_IMAGE` changed. **Repair** updates the Deployment in place; the data PVC and the credentials are kept. S3 is unavailable while the pod restarts (`Recreate`) |
+| Storage "Needs attention" with **Repair** ("Needs repair" in the details) | SeaweedFS runs but `seaweedfs-s3`/`seaweedfs-admin` do not point at it, or it is scaled to 0. Press **Repair** (re-runs setup) |
+| Details: "Needs repair: SeaweedFS runs ..., not the image this version deploys" | Expected after `SEAWEEDFS_IMAGE` changed. **Repair** updates the Deployment in place; the data PVC and the credentials are kept. S3 is unavailable while the pod restarts (`Recreate`) |
 | SeaweedFS not ready / ImagePullBackOff | Fix the cause (for example `SEAWEEDFS_IMAGE` to a mirror) and **Repair** again. `oc logs -n seaweedfs deploy/seaweedfs` |
 | S3 storage teardown refused | A pipeline server still uses the storage (the message names it). Tear that down first. After a partial teardown, run Tear down again |
 | Namespace left after teardown | Expected: `oc delete project seaweedfs` (or `minio`) once `oc get all,pvc,secret -n <namespace>` is empty |
 | Reach the S3 API from your laptop | `oc port-forward -n seaweedfs svc/seaweedfs-s3 8333`, endpoint `http://localhost:8333`, path-style, region `us-east-1`. Keys: `oc extract secret/seaweedfs-s3-credentials -n seaweedfs --to=-` |
-| Admin UI login | **Open admin UI**; user `admin`, password `oc extract -n seaweedfs secret/seaweedfs-s3-credentials --keys=AWS_SECRET_ACCESS_KEY --to=-` |
+| Admin UI login | **Open admin UI**; user `admin`. Storage details, **How to use**, **Copy admin password** copies the password (cluster-admins only; it is the S3 secret key). "Only cluster-admins can read this": you are not one; ask one |
+| Pipeline server **Set up** disabled: "Available once ..." | The storage is not ready, or Migrate storage has not copied the old storage yet; **Needs: Storage** links to it |
 | Pipeline server: "already has a pipeline server" | Projects get one DSPA; the existing one was left unchanged |
 | Old pipeline run artifacts return 404 after Migrate storage | They were written to MinIO before an earlier version replaced it with SeaweedFS, so they are on `minio-pvc`, which cannot be copied automatically. Copy them by hand before you remove the old storage (§10.1). If a cached step fails because its outputs are gone, re-run with caching disabled |
 | DSPA or project stuck Terminating | §11.4 |
@@ -315,11 +320,11 @@ The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PV
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:
 
-<img src="docs/images/s3-migration-needed.png" alt="S3 storage: Migration needed, with Migrate storage and the Details of the old storage" width="760">
+<img src="docs/images/s3-migration-needed.png" alt="Storage Needs attention, with Migrate storage, and the details of the old storage in the drawer" width="760">
 
-1. **Migration needed**: the old storage still holds the data and serves its pipeline servers.
+1. **Needs attention**: the old storage still holds the data and serves its pipeline servers.
 2. **Migrate storage** opens the plan; nothing changes until you confirm.
-3. **Details** names the old storage's objects and volumes.
+3. The details name the old storage's objects and volumes (the only place with MinIO-era names).
 
 <img src="docs/images/s3-migrate-dialog.png" alt="Dialog: Migrate storage, with the three steps, the pipeline server it moves and the volume that cannot be copied" width="760">
 
@@ -345,7 +350,7 @@ Before you remove the old storage, update what this tool did not create (data co
 
 <img src="docs/images/s3-remove-dialog.png" alt="Dialog: Remove the old storage?, with the checklist, what is deleted, and the choice to delete namespace minio" width="760">
 
-**Remove old storage** deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
+After a migration the Storage card offers **Remove old storage**. It deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
 
 Check the result:
 

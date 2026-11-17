@@ -232,7 +232,7 @@ async (page) => {
     ["healthy", "/components", "page-components"],
     ["healthy", "/builds", "page-build-explorer"],
     ["dashboard-session", "/dashboard-dev", "page-dashboard-dev"],
-    ["s3-running", "/test-resources", "page-test-resources"],
+    ["env-ready", "/test-resources?project=dev-project", "page-test-resources"],
     ["diag-prerequisite-missing", "/diagnostics", "page-diagnostics"],
   ];
 
@@ -386,57 +386,79 @@ async (page) => {
       });
     },
 
+    // The Environment page. Drawer images use the full width: below
+    // PatternFly's xl breakpoint the details drawer covers the cards.
     async resources() {
-      await open("/test-resources", "s3-running");
-      const storage = card("Storage");
-      await crop("s3-running", storage, {
-        notes: [
-          { at: label(storage, "Running") },
-          { at: label(storage, "SeaweedFS"), n: 1, pos: "r" },
-          { at: storage.getByRole("link", { name: /Open admin UI/ }), n: 2, pos: "l" },
-          { at: storage.getByText(/^Tear down is blocked/).locator("xpath=..").first(), n: 3, pos: "l" },
-        ],
-        pad: 12, // less than the 16 px gap to the "Data & pipelines" heading above the card
-      });
-      await crop("pipeline-servers", card("Pipeline servers"));
+      const tabCard = (title) => page.getByRole("region", { name: title, exact: true });
+      const drawer = () => page.locator("#environment-details");
+      const openDetails = async (title) => {
+        await tabCard(title).getByRole("button", { name: `${title} details` }).click();
+        await wait(500);
+      };
 
-      await open("/test-resources", "s3-migrate");
-      const old = card("Storage");
-      await old.getByRole("button", { name: "Details" }).click();
-      await wait(500);
-      await crop("s3-migration-needed", old, {
+      await open("/test-resources?project=dev-project", "s3-none");
+      const goal = tabCard("Run a data science pipeline");
+      await crop("environment-goals", [goal, tabCard("Track experiments with MLflow")], {
         notes: [
-          { at: label(old, "Migration needed"), n: 1, pos: "r" },
-          { at: old.getByRole("button", { name: "Migrate storage" }), n: 2, pos: "l" },
-          { at: old.getByRole("button", { name: "Details" }), n: 3, pos: "l" },
+          { at: goal.locator(".pf-v6-c-progress-stepper"), n: 1, pos: "l" },
+          { at: goal.getByText(/of 2 ready/), n: 2, pos: "r" },
+          { at: goal.getByRole("button", { name: /^Set up/ }), n: 3, pos: "r" },
         ],
-        pad: 12,
+        pad: 12, // less than the 16 px gutter to the heading above the cards
+      });
+
+      await open("/test-resources?tab=cluster", "s3-running", { width: W });
+      await openDetails("Storage");
+      await drawer().getByRole("button", { name: "How to use" }).click();
+      await wait(400);
+      const storage = tabCard("Storage");
+      await crop("environment-storage-details", [storage, drawer()], {
+        notes: [
+          { at: label(storage, "Ready"), n: 1, pos: "r" },
+          { at: storage.getByRole("link", { name: /Open admin UI/ }), n: 2, pos: "l" },
+          { at: row(drawer(), "S3 endpoint"), n: 3, pos: "l" },
+          { at: drawer().getByRole("button", { name: "Tear down" }), n: 4, pos: "r" },
+          { at: drawer().getByRole("button", { name: "Copy admin password" }), n: 5, pos: "r" },
+        ],
+        pad: 16,
+      });
+
+      await open("/test-resources?tab=projects&project=dev-project", "s3-running");
+      await crop("environment-projects", [page.locator("form").first(), tabCard("Pipeline server")], { pad: 16 });
+
+      await open("/test-resources?tab=cluster", "s3-migrate", { width: W });
+      await openDetails("Storage");
+      const old = tabCard("Storage");
+      await crop("s3-migration-needed", [old, drawer().getByRole("heading", { name: "Storage", exact: true }), drawer().getByText("Data volumes", { exact: true })], {
+        notes: [
+          { at: label(old, "Needs attention"), n: 1, pos: "r" },
+          { at: old.getByRole("button", { name: "Migrate storage" }), n: 2, pos: "l" },
+          { at: drawer().getByRole("heading", { name: "Storage of an earlier version" }), n: 3, pos: "l" },
+        ],
+        pad: 16,
       });
       await old.getByRole("button", { name: "Migrate storage" }).click();
       await wait(800);
       await crop("s3-migrate-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
-      await open("/test-resources", "s3-migrate-remove");
-      await card("Storage").getByRole("button", { name: "Migrate storage" }).click();
+      await open("/test-resources?tab=cluster", "s3-migrate-remove");
+      await tabCard("Storage").getByRole("button", { name: "Remove old storage" }).click();
       await wait(800);
       await crop("s3-remove-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
-      await open("/test-resources", "s3-incomplete");
-      const inc = card("Storage");
-      await crop("s3-incomplete", inc, {
+      await open("/test-resources?tab=cluster", "s3-incomplete", { width: W });
+      await openDetails("Storage");
+      const inc = tabCard("Storage");
+      await crop("s3-incomplete", [inc, drawer().locator(".pf-v6-c-alert").first()], {
         notes: [
-          { at: label(inc, "Incomplete") },
-          { at: label(inc, "SeaweedFS"), n: 1, pos: "r" },
-          { at: inc.getByText(/^Deployment seaweedfs is scaled to 0/).first(), n: 2, pos: "l" },
+          { at: label(inc, "Needs attention"), n: 1, pos: "r" },
+          { at: drawer().locator(".pf-v6-c-alert").first(), n: 2, pos: "l" },
           { at: inc.getByRole("button", { name: "Repair" }), n: 3, pos: "l" },
         ],
-        pad: 12,
+        pad: 16,
       });
-
-      await open("/test-resources", "s3-none");
-      await crop("s3-setup", card("Storage"), { notes: [{ at: card("Storage").getByRole("button", { name: /^Set up/ }).first(), n: 1, pos: "l" }] });
     },
 
     async diagnostics() {
@@ -481,10 +503,10 @@ async (page) => {
     },
 
     async "gif-migrate"() {
-      await open("/test-resources", "s3-migrate");
+      await open("/test-resources?tab=cluster", "s3-migrate");
       gif("s3-migrate", await mainClip());
       await frame(1200);
-      await clickShown(card("Storage").getByRole("button", { name: "Migrate storage" }));
+      await clickShown(page.getByRole("region", { name: "Storage", exact: true }).getByRole("button", { name: "Migrate storage" }));
       await wait(700);
       await hidePointer();
       await frame(2600);
@@ -506,10 +528,10 @@ async (page) => {
     },
 
     async "gif-repair"() {
-      await open("/test-resources", "s3-incomplete");
+      await open("/test-resources?tab=cluster", "s3-incomplete");
       gif("s3-repair", await mainClip());
       await frame(1200);
-      await clickShown(card("Storage").getByRole("button", { name: "Repair" }));
+      await clickShown(page.getByRole("region", { name: "Storage", exact: true }).getByRole("button", { name: "Repair" }));
       await wait(700);
       await hidePointer();
       await frame(2200);

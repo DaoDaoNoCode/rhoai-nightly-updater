@@ -71,13 +71,23 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 ### Environment: S3 storage, pipeline servers, MLflow
 
-<img src="docs/images/s3-running.png" alt="The Storage card: S3 storage, Running, on SeaweedFS" width="760">
+Three tabs, kept in the address so a link opens the same view: **Overview** (goals), **Cluster** (Storage, MLflow) and **Projects** (a project's pipeline server; `?tab=projects&project=<name>`).
 
-1. **S3 storage** is **Running**, on **SeaweedFS**, in namespace `seaweedfs`; pipeline servers reach it at `http://seaweedfs-s3.seaweedfs.svc:8333`.
-2. **Open admin UI** opens the SeaweedFS admin UI (user `admin`).
-3. **Tear down** stays disabled while a pipeline server uses the storage, and says which one.
+<img src="docs/images/environment-goals.png" alt="Overview: the goal cards Run a data science pipeline and Track experiments with MLflow, with their parts and Set up" width="760">
 
-Pipeline servers (one per project) and an MLflow instance are on the same page. Storage an earlier version set up in namespace `minio` shows **Migration needed**: **Migrate storage** moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+1. What the goal needs, in order, with each part's status. A project goal picks its project on the card.
+2. How many parts are ready.
+3. **Set up** (or **Set up the rest**) lists every change, then sets up the missing parts one after another and shows their progress. A part that needs attention gets **Show** instead; a finished goal gets **Open**.
+
+<img src="docs/images/environment-storage-details.png" alt="Cluster tab: the Storage card, Ready, with its details drawer open" width="760">
+
+1. One status per card: Not set up, Setting up, Ready, Needs attention, Error, Deleting or Not managed by this tool.
+2. The card's one action (here **Open admin UI**); **Details** opens the drawer.
+3. The drawer has the names and addresses (the S3 endpoint is `http://seaweedfs-s3.seaweedfs.svc:8333`).
+4. **Tear down** stays disabled while a pipeline server uses the storage; its tooltip says which one.
+5. **How to use** has **Copy admin password**: it copies the SeaweedFS admin UI password (user `admin`) from the server when you click it. Only cluster-admins can.
+
+Storage an earlier version set up in namespace `minio` shows **Needs attention** with **Migrate storage**, which moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
 
 ### Diagnostics: what is wrong, and how to fix it
 
