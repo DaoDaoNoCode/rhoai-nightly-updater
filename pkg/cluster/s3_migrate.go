@@ -61,13 +61,18 @@ const (
 var (
 	// MigrateCopyTimeout bounds how long one run waits for the copy Job;
 	// the rest of the 15-minute request deadline is for setup and the
-	// pipeline servers. A copy still running then is picked up by the next
-	// run. Tests shorten these.
+	// pipeline servers, and a server is moved only while a whole
+	// MigrateRepointTimeout wait still fits (repoint). A copy still running
+	// then is picked up by the next Migrate run. Tests shorten these.
 	MigrateCopyTimeout = 8 * time.Minute
 	MigratePoll        = 3 * time.Second
 	// MigrateRepointTimeout bounds the wait for one pipeline server's
 	// ObjectStoreAvailable condition after it was repointed.
 	MigrateRepointTimeout = 2 * time.Minute
+	// removeAfterCopyReserve is the part of the operation's deadline the
+	// removal keeps for what follows its final copy: the deletions (a few
+	// API calls each) and the PVC wait (S3DeleteTimeout, one minute).
+	removeAfterCopyReserve = 2 * time.Minute
 )
 
 // migrateScript runs in the Job. The remotes "old" and "new" come from
@@ -483,7 +488,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 	}
 
 	// Step 2: copy and verify.
-	result, resp := m.copyAndVerify(legacy, dspas, "copy")
+	result, resp := m.copyAndVerify(legacy, dspas, "copy", false)
 	if resp != nil {
 		return resp, nil
 	}
@@ -510,7 +515,16 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 // copyAndVerify runs the copy Job (or waits for one a previous run left
 // running with the same copyMode) and verifies its result. The Job is
 // deleted by UID once its result is read.
-func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step string) (copyResult, *types.OperationResponse) {
+//
+// fresh (the removal's final copy) always starts a new Job: one an earlier
+// run started began copying before objects written since, so its result
+// says nothing about them. Objects written after the fresh copy began are
+// still not covered; nothing in this tool's grants stops writes to the old
+// storage before its Service is deleted (see the removal checklist). A
+// fresh copy is not resumed by the next run, so it may use the operation's
+// remaining time, less removeAfterCopyReserve, when that is longer than
+// MigrateCopyTimeout.
+func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step string, fresh bool) (copyResult, *types.OperationResponse) {
 	c := m.c
 	fail := func(msg, code, activity string) (copyResult, *types.OperationResponse) {
 		resp, _ := m.fail(step, msg, code, activity)
@@ -541,7 +555,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 		return fail(fmt.Sprintf("Job %s/%s exists and was not created by this tool, so it was left unchanged and the copy did not start. Delete it, then retry.", s3Namespace, migrateJobName), "not_managed", "foreign job")
 	}
 	running := found && !job.Meta.terminating() && !job.finished()
-	if running && job.Mode == mode {
+	if running && job.Mode == mode && !fresh {
 		m.step(step, "running", "A copy started by an earlier run is still running: waiting for it")
 	} else {
 		if found {
@@ -554,7 +568,11 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 			// job_controller.go:1803 and controller_ref.go:59-67 at
 			// v1.35.0), so the two copies never overlap.
 			policy := "Background"
-			if running {
+			switch {
+			case running && fresh:
+				policy = "Foreground"
+				m.step(step, "running", "A copy an earlier run started is still running: stopping it, so the final copy starts now")
+			case running:
 				policy = "Foreground"
 				m.step(step, "running", "A copy an earlier run started with other settings is still running: stopping it")
 			}
@@ -582,13 +600,20 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 		}
 	}
 
-	job, issue, err := waitMigrateJob(c, job)
+	timeout := MigrateCopyTimeout
+	if deadline, ok := c.ctx.Deadline(); ok && fresh && time.Until(deadline)-removeAfterCopyReserve > timeout {
+		timeout = time.Until(deadline) - removeAfterCopyReserve
+	}
+	job, issue, err := waitMigrateJob(c, job, timeout)
 	switch {
 	case errors.Is(err, errS3CannotStart):
 		m.deleteMigrateJob(job)
 		return fail(fmt.Sprintf("The copy Job's pod cannot start (%s: %s). Nothing else was changed. Fix the cause (for example set RCLONE_IMAGE to a pullable rclone image), then run %s again.", issue.Reason, truncateMessage(issue.Message), m.op), "not_ready", "job cannot start")
+	case errors.Is(err, errS3NotReady) && fresh:
+		m.deleteMigrateJob(job)
+		return fail(fmt.Sprintf("The final copy and check did not finish within %s, so %s and the copy was stopped. Each %s run starts a new copy, which copies only what is new but reads every object again to check it, so a retry takes about as long; it can finish when the cluster is less busy.", timeout.Round(time.Second), m.kept, m.op), "copy_timeout", "final copy timed out")
 	case errors.Is(err, errS3NotReady):
-		return fail(fmt.Sprintf("The copy is still running after %s. Nothing else was changed. Run %s again to keep waiting for it.", MigrateCopyTimeout, m.op), "in_progress", "copy still running")
+		return fail(fmt.Sprintf("The copy is still running after %s. Nothing else was changed. Run %s again to keep waiting for it.", timeout, m.op), "in_progress", "copy still running")
 	case err != nil:
 		return fail(fmt.Sprintf("Stopped waiting for the copy Job: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "job wait failed")
 	}
@@ -713,12 +738,12 @@ func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
 	return j, err == nil, err
 }
 
-// waitMigrateJob waits, bounded by MigrateCopyTimeout, until the Job has
+// waitMigrateJob waits, bounded by timeout, until the Job has
 // finished. It returns errS3CannotStart as soon as its pod reports a
 // terminal waiting reason (ImagePullBackOff, ...), and errS3NotReady on
 // timeout.
-func waitMigrateJob(c *Client, job migrateJobInfo) (migrateJobInfo, workloadPodIssue, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, MigrateCopyTimeout)
+func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migrateJobInfo, workloadPodIssue, error) {
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
@@ -959,6 +984,14 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		if len(moved) > 0 {
 			done = strings.Join(moved, ", ")
 		}
+		// The operation's deadline (15 minutes, pkg/api/handlers.go) can
+		// come before the last wait ends: setup, a copy wait of
+		// MigrateCopyTimeout and a MigrateRepointTimeout wait per server.
+		// A server is moved only when its whole wait fits, so a run never
+		// ends with one moved but not yet checked.
+		if deadline, ok := c.ctx.Deadline(); ok && time.Until(deadline) < MigrateRepointTimeout {
+			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, MigrateRepointTimeout, done), "in_progress", "out of time")
+		}
 		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
 		if err := writeSecret(p, false); err != nil {
 			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), p.d.Meta.Namespace, err)
@@ -972,8 +1005,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 			}
 			return failed(fmt.Sprintf("Cannot move pipeline server %s: %v. Already moved: %s. The old storage is kept; run Migrate storage again.%s", name, err, done, templateHint(err)), code, "DSPA patch failed")
 		}
-		meta, _ := parseObjectMeta(body)
-		d, err := waitObjectStore(c, p.d.Meta.Namespace, p.d.Meta.Name, meta.Generation)
+		d, err := waitObjectStore(c, p.d.Meta.Namespace, p.d.Meta.Name, repointedGeneration(body, p.d.Meta.Generation))
 		if err != nil {
 			return failed(fmt.Sprintf("Pipeline server %s was moved to the new storage, but %s. The old storage is kept. Check the pipeline server's conditions, then run Migrate storage again.", name, err.Error()), "not_ready", "moved server not ready")
 		}
@@ -986,6 +1018,20 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 	}
 	m.step("repoint", "success", fmt.Sprintf("OK: %s moved", countNoun(len(moved), "pipeline server", "pipeline servers")))
 	return moved, listed, nil
+}
+
+// repointedGeneration is the generation DSPO must have observed for a
+// repointed DSPA's ObjectStoreAvailable to count: the one in the patch
+// response, or before+1 when that cannot be read. The patch carries the
+// resourceVersion that was read (a precondition) and changes spec, so it is
+// the first change after generation before and the API server sets
+// before+1; a condition from before the patch (generation before or
+// lower) is never accepted, even when the response cannot be parsed.
+func repointedGeneration(patchResponse []byte, before int64) int64 {
+	if meta, err := parseObjectMeta(patchResponse); err == nil && meta.Generation > before {
+		return meta.Generation
+	}
+	return before + 1
 }
 
 func objectStoreText(d dspaInfo) string {
@@ -1196,8 +1242,9 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		m.step("copy", "skipped", fmt.Sprintf("Not copied again: the old storage cannot be copied from any more (%s), and its data volumes are already being deleted", source.why))
 	} else {
 		// Objects written to the old storage since the migration (hand-made
-		// clients) are copied before anything is deleted.
-		r, resp := m.copyAndVerify(legacy, dspas, "copy")
+		// clients) are copied before anything is deleted, by a copy that
+		// starts now (fresh).
+		r, resp := m.copyAndVerify(legacy, dspas, "copy", true)
 		if resp != nil {
 			return resp, nil
 		}

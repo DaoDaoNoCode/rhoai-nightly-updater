@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"testing"
+	"time"
 )
 
 const (
@@ -79,6 +80,32 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 				t.Errorf("pipeline servers = %+v, want UIRoute %q", st.PipelineServers, tc.want)
 			}
 		})
+	}
+}
+
+// A transient read error is cached only briefly: once the read works, the
+// link shows without waiting out the five minutes an answer is kept.
+func TestCachedDashboardURL_ReadErrorIsCachedBriefly(t *testing.T) {
+	dashboardURLCache.Purge()
+	t.Cleanup(dashboardURLCache.Purge)
+	oldTTL := dashboardURLErrorTTL
+	dashboardURLErrorTTL = 20 * time.Millisecond
+	t.Cleanup(func() { dashboardURLErrorTTL = oldTTL })
+	f, c := newResourceFake(t)
+	f.putJSON(dashboardsPath+"/default-dashboard", `{"status":{"url":"https://rh-ai.apps.example.com"}}`)
+	f.fail["GET "+dashboardsPath] = 500
+	if got := cachedDashboardURL(c); got != "" {
+		t.Fatalf("cachedDashboardURL = %q during the error", got)
+	}
+	delete(f.fail, "GET "+dashboardsPath)
+	time.Sleep(30 * time.Millisecond)
+	if got := cachedDashboardURL(c); got != "https://rh-ai.apps.example.com" {
+		t.Errorf("cachedDashboardURL = %q after the error cleared", got)
+	}
+	// An answer is kept for the full lifetime.
+	f.fail["GET "+dashboardsPath] = 500
+	if got := cachedDashboardURL(c); got != "https://rh-ai.apps.example.com" {
+		t.Errorf("a cached answer was not used: %q", got)
 	}
 }
 

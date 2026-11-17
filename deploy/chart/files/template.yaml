@@ -187,7 +187,9 @@ objects:
         resourceNames: ["seaweedfs-pvc", "minio-pvc"]
         verbs: ["delete"]
       # Pods in the RHOAI and module namespaces and openshift-marketplace:
-      # status, debug info and diagnostics (read-only)
+      # status, debug info and diagnostics; in namespace seaweedfs, the S3
+      # storage's pod (why it is not ready) and the Migrate storage copy
+      # Job's pod (its result is the pod's termination message) (read-only)
       - apiGroups: [""]
         resources: ["pods"]
         verbs: ["list"]

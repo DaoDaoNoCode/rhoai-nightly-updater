@@ -295,14 +295,28 @@ func cachedConsoleURL(c *Client) string {
 // profile's RBAC (deploy/rbac-gitops.yaml) has no Route read, so it uses
 // the Dashboard CR only (dashboardURLFromComponent): on a release without
 // status.url the app launcher shows no dashboard link rather than a guess.
+// A read error is cached only briefly, so a transient failure does not hide
+// the link for the full five minutes.
 var dashboardURLCache = newLRU[string, string](8)
+
+// Dashboard URL cache lifetimes: an answer (a URL or none), and a read
+// error.
+var (
+	dashboardURLTTL      = 5 * time.Minute
+	dashboardURLErrorTTL = 15 * time.Second
+)
 
 func cachedDashboardURL(c *Client) string {
 	if u, ok := dashboardURLCache.Get(c.baseURL); ok {
 		return u
 	}
-	u := dashboardURLFromComponent(c)
-	dashboardURLCache.Add(c.baseURL, u, 5*time.Minute)
+	u, err := readDashboardURLFromComponent(c)
+	ttl := dashboardURLTTL
+	if err != nil {
+		slog.Debug("cannot read the dashboard URL", "error", err)
+		ttl = dashboardURLErrorTTL
+	}
+	dashboardURLCache.Add(c.baseURL, u, ttl)
 	return u
 }
 
