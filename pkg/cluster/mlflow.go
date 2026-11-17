@@ -277,10 +277,13 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 			"migration": map[string]interface{}{
 				"mode": "Automatic",
 			},
-			"resources": map[string]interface{}{
-				"requests": map[string]interface{}{"cpu": "500m", "memory": "1Gi"},
-				"limits":   map[string]interface{}{"cpu": "2", "memory": "2Gi"},
-			},
+			// No "resources": the operator then uses its chart's defaults
+			// (mlflow-operator internal/controller/helm.go passes
+			// spec.resources only when set; charts/mlflow/values.yaml ships
+			// requests 1 CPU / 2Gi, limits 4 CPU / 3Gi on rhoai-3.6). The
+			// server runs 8 workers that idle near 1.9Gi together; the 2Gi
+			// limit this CR used to set got the container OOMKilled while
+			// MLflow generated its demo data (seen live on 3.6).
 			"storage": map[string]interface{}{
 				"accessModes": []string{"ReadWriteOnce"},
 				"resources": map[string]interface{}{

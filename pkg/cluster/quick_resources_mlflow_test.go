@@ -87,6 +87,11 @@ func TestSetupMLflow(t *testing.T) {
 		if _, set := mlflowImageOf(f); set {
 			t.Error("setup must leave spec.image unset so the operator's RHOAI default applies")
 		}
+		// The operator's chart defaults apply only when spec.resources is
+		// unset; a lower limit got the 8-worker server OOMKilled (live, 3.6).
+		if r, set := cr["spec"].(map[string]interface{})["resources"]; set {
+			t.Errorf("setup must leave spec.resources unset so the operator's defaults apply, got %v", r)
+		}
 		if hasMutation(f, "PATCH "+mlflowPath) {
 			t.Error("setup must create, not force-apply over an existing CR")
 		}

@@ -20,6 +20,10 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- MLflow set up by this tool uses the MLflow operator's own resource
+  defaults (on 3.6: requests 1 CPU / 2 GiB, limits 4 CPU / 3 GiB) instead
+  of a 2 GiB limit, which got its 8-worker server OOMKilled while MLflow
+  generated demo data.
 - **Environment page, for someone new to it.** What a feature needs shows
   before Set up: a DataScienceCluster component that is not Managed (with
   Open Components), no data science project (with a link to the
