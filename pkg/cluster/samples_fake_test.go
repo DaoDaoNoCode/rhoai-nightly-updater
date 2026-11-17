@@ -593,6 +593,23 @@ func (f *mlflowFake) generate(w http.ResponseWriter) {
 	f.writeJSON(w, map[string]interface{}{"status": "created", "experiment_id": e.id, "features_generated": generated, "navigation_url": "/experiments/" + e.id})
 }
 
+// mlflowDeleteDemo is MLflow's own demo/delete as seen live: every
+// feature's data goes, except that evaluation runs and issues stay behind
+// (now useless), the version tags stay, and the experiment is soft-deleted.
+func (f *mlflowFake) mlflowDeleteDemo() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for name := range f.demo.versions {
+		f.demo.data[name] = false
+	}
+	for _, name := range []string{"evaluation", "issues"} {
+		f.demo.data[name], f.demo.broken[name] = true, true
+	}
+	if e := f.expByName(demoExperiment); e != nil {
+		e.stage = "deleted"
+	}
+}
+
 func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, params map[string]string, body map[string]interface{}) {
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	name := firstNonEmpty(params["mcp"], params["skill"])

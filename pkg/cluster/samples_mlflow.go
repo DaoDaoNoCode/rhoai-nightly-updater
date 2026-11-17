@@ -172,7 +172,7 @@ type mlflowSample struct {
 // reference graph (gitops_offline_test.go) does not reach MLflow.
 func mlflowSamples() map[string]mlflowSample {
 	return map[string]mlflowSample{
-		SampleGenAIDemo: {status: demoStatus},
+		SampleGenAIDemo: {status: demoStatus, add: addGenAIDemo, regenerate: regenerateGenAIDemo},
 		SampleTraining:  {status: trainingStatus, add: addTraining, remove: removeTraining},
 		SampleMCPServer: {status: mcpStatus},
 		SampleSkill:     {status: skillStatus},
