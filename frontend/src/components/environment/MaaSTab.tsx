@@ -225,7 +225,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
         <FeatureSection title="What this creates">
           <CreatesList items={[
             <>A PostgreSQL database for MaaS&apos;s API keys: one CloudNativePG instance with a 1 GiB volume, for development and test, and Secret <code>maas-db-config</code> with its address, in the AI gateway&apos;s namespace</>,
-            <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none)</>,
+            <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
             <>MaaS turned on in the DataScienceCluster (<code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
             <>Publishing: the model routes through the MaaS gateway, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the access policy <code>rhoai-nightly-updater-access</code> list it</>,
             <>Not done by this tool: Connectivity Link (Kuadrant) and its Authorino TLS, which a cluster-admin sets up (the parts above show how)</>,
@@ -301,8 +301,8 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
         changes: [
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => i.namespace).join(", ") || "none"}).</>,
           <>DataScienceCluster: <code>aigateway.modelsAsAService</code> back to its value before setup (only if this tool changed it).</>,
-          <>Deleted: Gateway <code>maas-default-gateway</code> (and GatewayClass <code>openshift-default</code> if this tool made it and no other gateway uses it), the database <code>maas-db</code> with its volume, and Secret <code>maas-db-config</code>.</>,
-          <>Kept: Connectivity Link, Authorino, the CloudNativePG operator, the namespaces RHOAI made, and every object that was not created by this tool.</>,
+          <>Deleted: Gateway <code>maas-default-gateway</code>, the database <code>maas-db</code> with its volume, and Secret <code>maas-db-config</code>.</>,
+          <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: Connectivity Link, Authorino, the CloudNativePG operator, the namespaces RHOAI made, and every object that was not created by this tool.</>,
         ],
       };
     case "publish-maas":

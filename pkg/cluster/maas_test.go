@@ -198,6 +198,30 @@ func TestMaaSTeardown_ReverseOrderRestoresTheDSCAndKeepsForeignObjects(t *testin
 	}
 }
 
+func TestMaaSTeardown_KeepsAToolCreatedOpenshiftDefaultClass(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if !mc.f.has(tMaaSClass) {
+		t.Fatal("setup did not create the missing GatewayClass")
+	}
+	mc.f.requests = nil
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("second setup: %+v", res)
+	}
+	if indexOfPrefix(mc.f.mutations(), "PATCH "+tMaaSClass) >= 0 {
+		t.Fatal("setup changed an existing GatewayClass")
+	}
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success || !strings.Contains(res.Message, "GatewayClass openshift-default") {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if !mc.f.has(tMaaSClass) || indexOfPrefix(mc.f.mutations(), "DELETE "+tMaaSClass) >= 0 {
+		t.Fatal("removal deleted GatewayClass openshift-default")
+	}
+}
+
 func TestMaaSSetup_UsesAForeignDatabaseSecretAsIs(t *testing.T) {
 	mc := newMaaSCluster(t)
 	mc.f.putJSON(tMaaSDBConfig, `{"data":{"DB_CONNECTION_URL":"eA=="}}`)

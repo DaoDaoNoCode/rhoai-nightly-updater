@@ -400,8 +400,14 @@ objects:
         verbs: ["create"]
       - apiGroups: ["gateway.networking.k8s.io"]
         resources: ["gatewayclasses"]
-        resourceNames: ["openshift-ai-inference", "openshift-default"]
+        resourceNames: ["openshift-ai-inference"]
         verbs: ["get", "patch", "delete"]
+      # MaaS: read OpenShift's shared class openshift-default (created only
+      # when missing, with the create rule above; never changed or deleted)
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gatewayclasses"]
+        resourceNames: ["openshift-default"]
+        verbs: ["get"]
       # The apps domain, for the gateway's hostname inference.<domain>
       - apiGroups: ["config.openshift.io"]
         resources: ["ingresses"]
@@ -489,11 +495,6 @@ objects:
         resources: ["secrets"]
         resourceNames: ["maas-db-config"]
         verbs: ["patch", "delete"]
-      # The gateways that use GatewayClass openshift-default (it is kept
-      # while another one does), read-only
-      - apiGroups: ["gateway.networking.k8s.io"]
-        resources: ["gateways"]
-        verbs: ["list"]
       # Connectivity Link: the Kuadrant CR (a prerequisite, never written)
       # and whether its Authorino is set up for TLS (read-only)
       - apiGroups: ["kuadrant.io"]

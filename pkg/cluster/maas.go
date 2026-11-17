@@ -323,8 +323,6 @@ func rhclWarning(version string) string {
 // writes, by kind; only these names.
 func maasObjectPath(kind, ns string) string {
 	switch kind {
-	case "GatewayClass":
-		return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-default")
 	case "Gateway":
 		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "maas-default-gateway")
 	case "Cluster":
@@ -337,8 +335,6 @@ func maasObjectPath(kind, ns string) string {
 
 func maasCreatePath(kind, ns string) string {
 	switch kind {
-	case "GatewayClass":
-		return withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", ""))
 	case "Gateway":
 		return withToolFieldManager(namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", ""))
 	case "Cluster":
@@ -361,6 +357,15 @@ func maasDesc(kind, ns string) string {
 		return "Secret " + ns + "/" + maasDBConfigSecret
 	}
 	return kind
+}
+
+// maasGatewayClassPath is GatewayClass openshift-default: OpenShift's
+// shared class for gateways. This tool only reads it, and creates it when
+// the cluster has none (setup-gateway.sh setup_gatewayclass); it never
+// changes or deletes it, also when it created it: other gateways may use
+// it, and a class alone costs nothing.
+func maasGatewayClassPath() string {
+	return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-default")
 }
 
 // maasGatewayState is the MaaS gateway as read.

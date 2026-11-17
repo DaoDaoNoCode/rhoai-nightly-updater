@@ -115,10 +115,12 @@ func UnpublishMaaSModel(c *Client, project string) (*types.OperationResponse, er
 // maasGatewayPlan is the gateway's objects as setup or a publication writes
 // them, with what was read of each.
 type maasGatewayPlan struct {
-	objects      map[string]map[string]interface{}
-	current      map[string]objectMeta
-	found        map[string]bool
-	classForeign bool
+	objects map[string]map[string]interface{}
+	current map[string]objectMeta
+	found   map[string]bool
+	// classMissing: GatewayClass openshift-default does not exist; setup
+	// creates it (and nothing ever changes or deletes it).
+	classMissing bool
 	host         string
 }
 
@@ -126,27 +128,26 @@ type maasGatewayPlan struct {
 // namespaces the gateway admits. A refusal is a message and a code.
 func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewayPlan, string, string) {
 	plan := &maasGatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}}
-	for _, kind := range []string{"GatewayClass", "Gateway"} {
-		meta, ok, err := readObjectMeta(c, maasObjectPath(kind, ""))
-		if err != nil {
-			return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc(kind, ""), err, templateHint(err)), errorCodeFromK8sErr(err)
-		}
-		plan.current[kind], plan.found[kind] = meta, ok
-		if ok && meta.terminating() {
-			return nil, fmt.Sprintf("%s is still being deleted. Wait until it is gone, then try again.", maasDesc(kind, "")), "terminating"
-		}
-		if !ok || gatewayOwned(meta) {
-			continue
-		}
-		if kind == "Gateway" {
-			return nil, "", "foreign"
-		}
-		// setup-gateway.sh uses an existing openshift-default as it is;
-		// only OpenShift's own controller's.
-		body, _, err := c.get(maasObjectPath("GatewayClass", ""))
-		if err != nil {
-			return nil, fmt.Sprintf("Cannot read GatewayClass %s: %v.", maasGatewayClass, err), errorCodeFromK8sErr(err)
-		}
+	meta, ok, err := readObjectMeta(c, maasObjectPath("Gateway", ""))
+	if err != nil {
+		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("Gateway", ""), err, templateHint(err)), errorCodeFromK8sErr(err)
+	}
+	plan.current["Gateway"], plan.found["Gateway"] = meta, ok
+	if ok && meta.terminating() {
+		return nil, fmt.Sprintf("%s is still being deleted. Wait until it is gone, then try again.", maasDesc("Gateway", "")), "terminating"
+	}
+	if ok && !gatewayOwned(meta) {
+		return nil, "", "foreign"
+	}
+	// setup-gateway.sh uses an existing openshift-default as it is; only
+	// OpenShift's own controller's.
+	body, _, err := c.get(maasGatewayClassPath())
+	switch {
+	case IsK8sError(err, 404):
+		plan.classMissing = true
+	case err != nil:
+		return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", maasGatewayClass, err), errorCodeFromK8sErr(err)
+	default:
 		var gc struct {
 			Spec struct {
 				ControllerName string `json:"controllerName"`
@@ -154,9 +155,8 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 		}
 		_ = json.Unmarshal(body, &gc)
 		if gc.Spec.ControllerName != gatewayControllerName {
-			return nil, fmt.Sprintf("GatewayClass %s exists, was not created by this tool, and belongs to controller %q instead of OpenShift's (%s). Nothing was changed.", maasGatewayClass, gc.Spec.ControllerName, gatewayControllerName), "not_managed"
+			return nil, fmt.Sprintf("GatewayClass %s exists and belongs to controller %q instead of OpenShift's (%s). Nothing was changed.", maasGatewayClass, gc.Spec.ControllerName, gatewayControllerName), "not_managed"
 		}
-		plan.classForeign = true
 	}
 	domain, err := clusterAppsDomain(c)
 	if err != nil {
@@ -172,10 +172,22 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 }
 
 func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, string) {
-	for _, kind := range []string{"GatewayClass", "Gateway"} {
-		if kind == "GatewayClass" && plan.classForeign {
-			continue
+	if plan.classMissing {
+		// Create only (setup_gatewayclass); one created meanwhile is used.
+		data, _ := json.Marshal(plan.objects["GatewayClass"])
+		var query url.Values
+		if dryRun {
+			query = url.Values{"dryRun": {"All"}}
 		}
+		if _, _, err := m.c.do(http.MethodPost, withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !IsK8sError(err, 409) {
+			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, templateHint(err)), maasWriteCode(err)
+		}
+		if !dryRun {
+			plan.classMissing = false
+			m.logs = append(m.logs, "OK: GatewayClass "+maasGatewayClass+" created")
+		}
+	}
+	for _, kind := range []string{"Gateway"} {
 		k := kind
 		read := func() (objectMeta, bool, error) { return readObjectMeta(m.c, maasObjectPath(k, "")) }
 		action, meta, found, err := ensureToolObject(m.c, maasDesc(kind, ""), maasObjectPath(kind, ""), maasCreatePath(kind, ""), plan.objects[kind], plan.current[kind], plan.found[kind], read, gatewayOwned, dryRun)
@@ -424,7 +436,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	}
 	var objs []obj
 	owned := 0
-	for _, kind := range []string{"Gateway", "GatewayClass", "Secret", "Cluster"} {
+	for _, kind := range []string{"Gateway", "Secret", "Cluster"} {
 		meta, found, err := readObjectMeta(c, maasObjectPath(kind, infra))
 		if err != nil && (kind != "Cluster" || !IsK8sError(err, 404)) {
 			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), errorCodeFromK8sErr(err), "read failed")
@@ -504,20 +516,11 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		return true, nil
 	}
 	var kept []string
-	// The gateway, then its class when no other gateway uses it.
-	for _, o := range objs[:2] {
-		if o.kind == "GatewayClass" && o.found && toolOwned(o.meta) {
-			if users := gatewayClassUsers(c); len(users) > 0 {
-				kept = append(kept, fmt.Sprintf("GatewayClass %s (used by %s)", maasGatewayClass, strings.Join(users, ", ")))
-				continue
-			}
-		}
-		if _, res := del("gateway", o); res != nil {
-			return res, nil
-		}
+	if _, res := del("gateway", objs[0]); res != nil {
+		return res, nil
 	}
-	m.step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer.")
-	for _, o := range objs[2:] {
+	m.step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer. GatewayClass "+maasGatewayClass+" stays: it is OpenShift's shared class for gateways and costs nothing on its own.")
+	for _, o := range objs[1:] {
 		if _, res := del("database", o); res != nil {
 			return res, nil
 		}
@@ -528,33 +531,11 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 			kept = append(kept, maasDesc(o.kind, infra)+" (not created by this tool)")
 		}
 	}
-	msg := "The MaaS platform this tool set up is removed. Kept: Connectivity Link (Kuadrant) and Authorino, the CloudNativePG operator, and the namespaces and objects RHOAI's operator made"
+	msg := "The MaaS platform this tool set up is removed. Kept: GatewayClass " + maasGatewayClass + " (OpenShift's shared class for gateways; it costs nothing on its own), Connectivity Link (Kuadrant) and Authorino, the CloudNativePG operator, and the namespaces and objects RHOAI's operator made"
 	if len(kept) > 0 {
 		msg += "; " + strings.Join(kept, "; ")
 	}
 	return m.done(msg + ".")
-}
-
-// gatewayClassUsers are the Gateways (other than the MaaS gateway) that
-// use GatewayClass openshift-default; it is kept while one does.
-func gatewayClassUsers(c *Client) []string {
-	body, _, err := c.get(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""))
-	if err != nil {
-		return []string{"(cannot list gateways: kept to be safe)"}
-	}
-	var list struct {
-		Items []gatewayObject `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
-		return []string{"(cannot list gateways: kept to be safe)"}
-	}
-	var out []string
-	for _, g := range list.Items {
-		if g.Spec.GatewayClassName == maasGatewayClass && (g.Metadata.Name != maasGatewayName || g.Metadata.Namespace != inferenceGatewayNamespace) {
-			out = append(out, g.Metadata.Namespace+"/"+g.Metadata.Name)
-		}
-	}
-	return out
 }
 
 // --- publish ----------------------------------------------------------------------
@@ -870,7 +851,7 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 		return m.fail("gateway", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 	}
 	if gwPlan, msg, code := planMaaSGateway(c, infra, rec.Published); msg == "" && code != "foreign" && gwPlan.found["Gateway"] {
-		gwPlan.classForeign = true // only the gateway changes
+		gwPlan.classMissing = false // only the gateway changes
 		if msg, code := m.applyGateway(gwPlan, false); msg != "" {
 			return m.fail("gateway", msg, code, "gateway apply failed")
 		}
