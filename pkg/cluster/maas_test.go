@@ -422,3 +422,36 @@ func TestMaaSStatus_TheComponentWinsOverAStaleDSCCondition(t *testing.T) {
 		t.Fatalf("status = %+v, %v", st.Platform, err)
 	}
 }
+
+// A publication undone half-way stays visible and Unpublish finishes it
+// (live: the model reference was deleted, then the model's patch failed,
+// and the tab showed "Not published" with no way to retry).
+func TestMaaSUnpublish_FinishesAHalfUndonePublication(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("model: %+v", res)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+	mc.f.mu.Lock()
+	delete(mc.f.objects, fakeKey{gv: "maas.opendatahub.io/v1alpha1", ns: "proj", plural: "maasmodelrefs", name: "qwen25-05b-instruct"})
+	mc.f.mu.Unlock()
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil || len(st.Items) != 1 || !st.Items[0].Published || st.Items[0].Ready || !strings.Contains(st.Items[0].Message, "Partly published") {
+		t.Fatalf("status = %+v, %v", st.Items, err)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
+		t.Fatalf("unpublish: %+v", res)
+	}
+	router := mc.f.get(testModelPath)["spec"].(map[string]interface{})["router"].(map[string]interface{})
+	if gw, ok := router["gateway"].(map[string]interface{}); !ok || len(gw) != 0 {
+		t.Fatalf("model router after unpublish: %v", router)
+	}
+	if st, _ := GetMaaSStatus(mc.c); len(st.Items) != 1 || st.Items[0].Published || st.Items[0].Message != "Not published" {
+		t.Fatalf("status after unpublish = %+v", st.Items)
+	}
+}

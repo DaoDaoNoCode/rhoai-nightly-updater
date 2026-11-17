@@ -1045,6 +1045,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
+	rec, recErr := readMaaSRecord(c)
 	authPhase, _ := maasPhase(c, namespacedPath(maasAPIGroup, "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
 	subPhase, _ := maasPhase(c, namespacedPath(maasAPIGroup, "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	for _, m := range models {
@@ -1068,6 +1069,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			default:
 				item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", firstNonEmpty(item.Phase, "pending"), firstNonEmpty(authPhase, "pending"), firstNonEmpty(subPhase, "pending"))
 			}
+		} else if left := maasLeftovers(m, recErr == nil && rec.published(m.Metadata.Namespace)); !found && len(left) > 0 {
+			// A publication undone half-way (live: Unpublish deleted the
+			// model reference, then failed on the model): Unpublish again
+			// finishes it, so the tab must still offer it.
+			item.Published, item.Deployed = true, true
+			item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
 		} else {
 			item.Message = "Not published"
 			if found {
@@ -1084,6 +1091,25 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	}
 	sort.Slice(st.Items, func(i, j int) bool { return st.Items[i].Namespace < st.Items[j].Namespace })
 	return st, nil
+}
+
+// maasLeftovers names what is left of a publication of the tool's model
+// once its MaaSModelRef is gone: the model's route through the MaaS
+// gateway, and this tool's record of the publication.
+func maasLeftovers(m llmisvcObject, recorded bool) []string {
+	var left []string
+	if m.Spec.Router != nil && m.Spec.Router.Gateway != nil {
+		for _, ref := range m.Spec.Router.Gateway.Refs {
+			if ref.Name == maasGatewayName {
+				left = append(left, "the model's route through "+maasGatewayName)
+				break
+			}
+		}
+	}
+	if recorded {
+		left = append(left, "this tool's record of the publication")
+	}
+	return left
 }
 
 // servedVersionsMissing: API discovery says the group is not served
