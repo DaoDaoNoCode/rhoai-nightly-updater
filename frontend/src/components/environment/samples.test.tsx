@@ -5,7 +5,7 @@ import { QuickResourceCreator } from "../QuickResourceCreator";
 import { jsonResponse, stubApi } from "../../test/apiStub";
 import { sseEvent, sseResponse } from "../../test/utils";
 import type { MLflowSamplesStatus, PipelineSampleStatus, ResourceState, ResourcesStatus, SampleStatus } from "../../types";
-import { mlflowSampleSteps, pipelineSampleSteps, runLabel, runTime, sampleLabel, sampleNote, samplesFor } from "./samples";
+import { listWords, mlflowSampleSteps, pipelineSampleSteps, runLabel, runTime, sampleLabel, sampleNote, samplesFor } from "./samples";
 
 // No real waits: every test runs on fake timers and moves them inside act().
 const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
@@ -167,7 +167,7 @@ describe("MLflow tab: Sample data", () => {
     fireEvent.click(within(samplesSection()).getByRole("button", { name: "Add all" }));
     await tick();
     const confirm = screen.getByRole("dialog", { name: /Add sample data to dev\?/ });
-    expect(confirm).toHaveTextContent("In dev's MLflow workspace: the agent and prompt demo (about 30 seconds) and a training experiment with a registered model.");
+    expect(confirm).toHaveTextContent("In dev's MLflow workspace: the agent and prompt demo (about 30 seconds), and a training experiment with a registered model.");
     fireEvent.click(within(confirm).getByRole("button", { name: "Add" }));
     await tick();
     expect(api.bodies["POST /api/resources/samples/mlflow/stream"]).toEqual([{ project: "dev", action: "add", samples: ["genai-demo", "training"] }]);
@@ -519,5 +519,13 @@ describe("sample names inside sentences", () => {
   it("keeps acronyms as written (live: the step read \"Add the mCP server\")", () => {
     expect(mlflowSampleSteps("add", ["mcp-server", "skill"]).map((s) => s.title)).toEqual(["Check MLflow", "Add the MCP server", "Add the agent skill"]);
     expect(mlflowSampleSteps("remove", ["training"]).map((s) => s.title)).toEqual(["Check MLflow", "Remove the training experiment and registered model"]);
+  });
+});
+
+describe("listWords", () => {
+  it("adds a comma before the last \"and\" when an item has its own", () => {
+    expect(listWords(["a"])).toBe("a");
+    expect(listWords(["a", "b", "c"])).toBe("a, b and c");
+    expect(listWords(["the training experiment and registered model", "the MCP server"])).toBe("the training experiment and registered model, and the MCP server");
   });
 });

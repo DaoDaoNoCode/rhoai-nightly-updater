@@ -152,7 +152,16 @@ export function pipelineSampleSteps(action: "run" | "remove"): GoalRunStepInfo[]
     ];
 }
 
-const listWords = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}` : items[0] ?? "");
+/**
+ * "a, b and c". A comma goes before the last "and" too when an item has its
+ * own "and", so "the training experiment and registered model, and the MCP
+ * server" reads as two items.
+ */
+export const listWords = (items: string[]) => {
+  if (items.length < 2) return items[0] ?? "";
+  const last = items.some((i) => i.includes(" and ")) ? ", and " : " and ";
+  return `${items.slice(0, -1).join(", ")}${last}${items[items.length - 1]}`;
+};
 
 /** The confirmation of a sample change, or null for another kind of change. */
 export function samplesConfirm(pending: Pending): ConfirmSpec | null {
@@ -180,7 +189,7 @@ export function samplesConfirm(pending: Pending): ConfirmSpec | null {
       return {
         title: ids.length > 1 ? `Remove the sample data from ${project}?` : `Remove the ${names[0]} from ${project}?`, confirm: "Remove", danger: true,
         runTitle: ids.length > 1 ? `Remove the sample data from ${project}` : `Remove the ${names[0]} from ${project}`,
-        summary: <Content component="p">Deletes the {listWords(names)} from {project}: only what this tool added, found by its tag. The agent and prompt demo stays; remove it in the MLflow UI.</Content>,
+        summary: <Content component="p">Deletes {listWords(names.map((n) => `the ${n}`))} from {project}: only what this tool added, found by its tag. The agent and prompt demo stays; remove it in the MLflow UI.</Content>,
         changes: ids.map((id) => {
           switch (id) {
             case "training": return <>Registered model <code>nightly-sample-classifier</code> is deleted; experiment <code>nightly-sample-training</code> moves to MLflow&apos;s deleted experiments (Add restores it).</>;
