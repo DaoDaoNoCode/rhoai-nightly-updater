@@ -246,6 +246,28 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the Playground tab in every state, light and dark,
+    // to check it by eye (screenshots.sh playground-review, THEMES_DIR).
+    async "playground-review"() {
+      for (const st of ["none", "no-model", "model-not-ready", "starting", "ready", "foreign", "failed", "api-differs", "blocked"]) {
+        for (const dark of [false, true]) {
+          await open("/test-resources?tab=playground&project=dev-project", `env-playground-${st}`, { dark, width: 1440 });
+          await fit();
+          await page.screenshot({ path: `${out}/themes/playground-${st}-${dark ? "dark" : "light"}.png` });
+        }
+      }
+      await open("/test-resources", "env-playground-ready");
+      await fit();
+      await page.screenshot({ path: `${out}/themes/playground-overview-light.png` });
+      for (const st of ["none", "ready"]) {
+        for (const dark of [false, true]) {
+          await open("/test-resources?tab=playground&project=dev-project", `env-playground-${st}`, { dark, width: 400 });
+          await fit();
+          await page.screenshot({ path: `${out}/themes/playground-${st}-${dark ? "dark" : "light"}-400.png` });
+        }
+      }
+    },
+
     // Not a docs image: every page in every color scheme and contrast mode,
     // to check a theme change by eye (screenshots.sh themes, THEMES_DIR).
     async themes() {
@@ -444,6 +466,28 @@ async (page) => {
         notes: [
           { at: broken.getByText("The cluster preset's image is not published yet"), n: 1, pos: "r" },
           { at: broken.getByRole("button", { name: "Use the newest released Red Hat image" }), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+
+      // Playground: a ready playground; Set up with the models it uses.
+      await open("/test-resources?tab=playground&project=dev-project", "env-playground-ready");
+      const playground = part("Playground");
+      await crop("environment-playground", [panel().getByRole("heading", { name: "Playground", level: 2 }), playground], {
+        notes: [
+          { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
+          { at: part("Chat models").getByText("Qwen2.5 0.5B Instruct (CPU)"), n: 2, pos: "l" },
+          { at: playground.getByRole("link", { name: /Open the playground/ }), n: 3, pos: "r" },
+        ],
+        pad: 24,
+      });
+      await open("/test-resources?tab=playground&project=dev-project", "env-playground-none");
+      const setUp = panel().getByRole("button", { name: "Set up the playground in dev-project" });
+      await crop("environment-playground-setup", [part("Chat models"), setUp], {
+        notes: [
+          { at: panel().getByRole("checkbox", { name: "Select row 0" }), n: 1, pos: "l" },
+          { at: panel().getByText("Not used unless you choose it (needs a Models as a Service subscription)").first(), n: 2, pos: "l" },
+          { at: setUp, n: 3, pos: "r" },
         ],
         pad: 24,
       });

@@ -40,6 +40,8 @@ function baseWorld() {
     // No PR or main build runs: nothing to describe.
     dashboardBuilds: { builds: [] },
     resources: { minio: F.s3States.running, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServer] },
+    // The Gen AI playground (GET /api/resources/playground).
+    playground: F.playgroundWorld(),
     // Sample states by project; a project not named has none of the samples.
     samples: { mlflow: {}, pipeline: {} },
     // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
@@ -277,6 +279,19 @@ const scenarios = {
   },
   "env-models-reader": (w) => { scenarios["env-models-ready"](w); w.canMutate = false; },
   "env-models-gated": (w) => { w.resources.models = F.modelsStatus(); w.gated = true; },
+  // Playground: every state in dev-project, on a ready model.
+  "env-playground-none": (w) => { scenarios["env-models-ready"](w); },
+  "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
+  "env-playground-model-not-ready": (w) => {
+    scenarios["env-models-ready"](w);
+    w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.deepseek, F.playgroundModels.maas];
+  },
+  "env-playground-starting": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.starting()]; },
+  "env-playground-ready": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.ready()]; },
+  "env-playground-foreign": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.foreign()]; },
+  "env-playground-failed": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.failed()]; },
+  "env-playground-api-differs": (w) => { scenarios["env-models-ready"](w); w.playground.apiProblem = F.PLAYGROUND_API_DIFFERS; w.playground.apiCode = "api_missing"; },
+  "env-playground-blocked": (w) => { scenarios["env-models-ready"](w); w.playground.blocked = F.PLAYGROUND_BLOCKED; },
   // Sample changes wait for /__docs/advance: a row shows its operation.
   "env-samples-gated": (w) => { scenarios["env-samples-new"](w); w.gated = true; },
 };
@@ -419,13 +434,14 @@ async function migrateStream(req, res) {
 
 /** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
 async function cleanupStream(req, res) {
-  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false } = await body(req);
+  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [] } = await body(req);
   beginOperation("cleanup", "Clean up the environment", [pipelineServers.length ? `${pipelineServers.length} pipeline servers` : "", storage ? "S3 storage" : "", mlflow ? "MLflow" : ""].filter(Boolean).join(", "));
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const parts = [
     ...pipelineServers.map((p) => ({ id: `pipeline-server:${p}`, title: `the pipeline server in '${p}'`, done: `Pipeline server removed from '${p}'.`, apply: () => { world.resources.pipelineServers = world.resources.pipelineServers.filter((ps) => ps.namespace !== p); } })),
     ...(storage ? [{ id: "storage", title: "the S3 storage", done: deleteNamespace ? "S3 storage removed. Namespace 'seaweedfs' is being deleted." : "S3 storage removed.", apply: () => { world.resources.minio = F.s3States.none; delete world.resources.legacyStorage; } }] : []),
     ...(mlflow ? [{ id: "mlflow", title: "MLflow", done: "MLflow removed.", apply: () => { world.resources.mlflow = F.mlflowStates.none; } }] : []),
+    ...playgrounds.map((p) => ({ id: `playground:${p}`, title: `the playground in '${p}'`, done: `Playground deleted from ${p}: the dashboard removed its server, configuration and database. The project and its models stay.`, apply: () => removePlayground(p) })),
     ...models.map((p) => ({ id: `model:${p}`, title: `the model in '${p}'`, done: `Model qwen25-05b-instruct deleted from '${p}'; KServe removed its Deployment, Service and route. The project stays.`, apply: () => removeModel(p) })),
     ...(inferenceGateway ? [{ id: "inference-gateway", title: "the inference gateway", done: "Inference gateway deleted: Gateway openshift-ingress/openshift-ai-inference, ConfigMap openshift-ingress/openshift-ai-inference-options and GatewayClass openshift-ai-inference. OpenShift removes its load balancer and the ingress operator its DNS record.", apply: () => { world.resources.inferenceGateway = F.gatewayStates.none; } }] : []),
   ];
@@ -515,6 +531,54 @@ async function modelsStream(req, res) {
     }
   }
   const message = done.join(" ");
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
+/** GET /api/resources/playground (pkg/cluster GetPlaygroundStatus): the models are the project's. */
+function playgroundOf(project) {
+  const { modelsByProject, ...pg } = world.playground;
+  if (pg.apiProblem || !project) return { ...pg, project: project || undefined };
+  return { ...pg, project, models: modelsByProject[project] ?? [] };
+}
+
+function removePlayground(project) {
+  world.playground.items = world.playground.items.filter((i) => i.namespace !== project);
+}
+
+/** POST /api/resources/playground/stream (pkg/cluster RunPlayground). */
+async function playgroundStream(req, res) {
+  const { action, project, models = [] } = await body(req);
+  beginOperation("playground", "Playground", `${action} playground in ${project}`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  let message;
+  if (action === "teardown") {
+    send({ step: "delete", status: "running", message: `Asking the dashboard to delete the playground lsd-genai-playground in ${project}...` });
+    await nextStep();
+    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.terminating(project)];
+    send({ step: "delete", status: "success", message: `The dashboard is deleting the playground in ${project}.` });
+    send({ step: "gone", status: "running", message: "Waiting until the playground is gone..." });
+    await nextStep();
+    removePlayground(project);
+    send({ step: "gone", status: "success", message: `The playground in ${project} is gone.` });
+    message = `Playground deleted from ${project}: the dashboard removed its server, configuration and database. The project and its models stay.`;
+  } else {
+    const names = models.length ? models.map((m) => m.name) : (world.playground.modelsByProject[project] ?? []).filter((m) => m.source === "namespace" && m.ready && m.chat).map((m) => m.name);
+    send({ step: "check", status: "running", message: "Checking what the playground needs..." });
+    await nextStep();
+    send({ step: "check", status: "success", message: `Ready to set up: ${project} with ${names.join(", ")}.` });
+    send({ step: "install", status: "running", message: `Asking the dashboard to set up the playground in ${project}...` });
+    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.starting(project)];
+    send({ step: "install", status: "success", message: `The dashboard is setting up the playground in ${project}.` });
+    send({ step: "ready", status: "running", message: "The playground is starting (phase Initializing)..." });
+    await nextStep();
+    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.ready(project)];
+    send({ step: "ready", status: "success", message: `The playground in ${project} is ready.` });
+    message = `The playground in ${project} is ready. Open it in the dashboard's Gen AI studio.`;
+  }
   endOperation(true, message);
   send({ step: "operation_complete", status: "success", message });
   res.end();
@@ -627,6 +691,7 @@ const routes = {
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
   "GET /api/resources/status": () => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...world.resources }),
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
+  "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline": (u) => pipelineSampleOf(u.searchParams.get("project") || ""),
   // Made up, like every value here.
@@ -668,6 +733,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/minio/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
+  if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });
   }

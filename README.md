@@ -116,10 +116,19 @@ MLflow on RHOAI keeps each data science project apart as a workspace. Once it is
 
 The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page where you try a project's models and ask about your documents, in a project you choose.
 
-1. **Chat models**: the project's ready chat models. The playground needs one: when there is none, **Set up a model on the Models tab**.
-2. **Playground**: its state as the dashboard reports it, and **Open the playground** (Gen AI studio, then Playground, then the project). One someone set up in the dashboard reads **Not managed by this tool**: open it, but this tool does not delete it.
+<img src="docs/images/environment-playground.png" alt="Playground tab: Ready in dev-project; the project's chat models in a table, with where each runs and whether the playground uses it; the playground Ready with Open the playground" width="760">
 
-**Set up** asks the dashboard itself to create the playground, as its Gen AI studio does, with the models you tick (the project's own are ticked; a Models as a Service model works only with a subscription to it), and waits until it is ready, typically 1 to 2 minutes. **Use it** has a chat request to run from a terminal with your own `oc whoami -t` token. **Delete** (in the part's menu) asks the dashboard to delete it, with its chats and documents; the models stay. Troubleshooting: [RUNBOOK §10.3](RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).
+1. The feature's state in the selected project.
+2. **Chat models**: the project's ready chat models, with where each runs and whether the playground uses it. The playground needs one: when there is none, **Set up a model on the Models tab**.
+3. **Playground**: its state as the dashboard reports it, and **Open the playground** (Gen AI studio, then Playground, then the project). One someone set up in the dashboard reads **Not managed by this tool**: open it, but this tool does not delete it.
+
+<img src="docs/images/environment-playground-setup.png" alt="Before Set up: the project's own model is chosen, Models as a Service models are not used unless chosen, and Set up the playground in dev-project" width="760">
+
+1. Before Set up, the models are rows you choose: the project's own ready models are chosen, as in the dashboard.
+2. A Models as a Service model is not used unless you choose it; it works only with a subscription to it.
+3. **Set up** runs it.
+
+**Set up** asks the dashboard itself to create the playground, as its Gen AI studio does, with the models you choose, and waits until it is ready, typically 1 to 2 minutes. **Use it** has a chat request to run from a terminal with your own `oc whoami -t` token. **Delete** (in the part's menu) asks the dashboard to delete it, with its chats and documents; the models stay. Troubleshooting: [RUNBOOK §10.3](RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).
 
 <img src="docs/images/environment-models-image.png" alt="Model Error: the cluster preset's image is not published yet, with Use the newest released Red Hat image" width="760">
 

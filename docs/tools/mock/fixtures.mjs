@@ -763,3 +763,36 @@ export function updateSteps(image) {
     ["operation_complete", "success", "RHOAI nightly update complete: rhods-operator.3.6.0 is installed."],
   ].map(([step, status, message, detail]) => ({ step, status, message, ...(detail ? { detail } : {}) }));
 }
+
+// --- Playground (pkg/types PlaygroundStatus, PlaygroundState, PlaygroundModel) ---
+// The words are the backend's (pkg/cluster playground.go); the models are
+// what the dashboard's gen-ai API lists (aaa/models, maas/models).
+
+export const playgroundModels = {
+  qwen: { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true },
+  deepseek: { name: "deepseek-r1-qwen-7b", displayName: "DeepSeek R1 Distill Qwen 7B", source: "namespace", status: "Failed", ready: false, chat: true },
+  maas: { name: "gpt-oss-20b", source: "maas", status: "Ready", ready: true, chat: true },
+  opt: { name: "publishers/llm/models/facebook/opt-125m", displayName: "Facebook OPT 125M (Simulated)", source: "maas", status: "Ready", ready: true, chat: true },
+};
+
+const PLAYGROUND = { name: "lsd-genai-playground", deployed: true, requested: true, managedByTool: true };
+export const playgroundStates = {
+  starting: (ns = "dev-project") => ({ ...PLAYGROUND, namespace: ns, ready: false, phase: "Initializing", message: "Starting (phase Initializing)" }),
+  ready: (ns = "dev-project", over = {}) => ({ ...PLAYGROUND, namespace: ns, ready: true, phase: "Ready", message: "Ready", ...over }),
+  foreign: (ns = "dev-project") => playgroundStates.ready(ns, { managedByTool: false, requested: false }),
+  failed: (ns = "dev-project") => ({
+    ...PLAYGROUND, namespace: ns, ready: false, phase: "Failed", terminalError: true,
+    message: `The playground's server failed to start (phase Failed). The events of project ${ns} and its playground pods say why; delete it and set it up again.`,
+  }),
+  terminating: (ns = "dev-project") => ({ ...PLAYGROUND, namespace: ns, ready: false, phase: "Terminating", terminating: true, message: "Terminating" }),
+};
+
+/** The playground world: cluster parts, items, and the models of each project. */
+export const playgroundWorld = (over = {}) => ({
+  operatorReady: "True", genAiUi: "available", items: [],
+  modelsByProject: { "dev-project": [playgroundModels.qwen, playgroundModels.maas, playgroundModels.opt], "fraud-detection": [playgroundModels.maas], "llm-eval": [playgroundModels.maas] },
+  ...over,
+});
+
+export const PLAYGROUND_API_DIFFERS = "This RHOAI release's dashboard gen-ai API differs from the one this tool knows: GET /gen-ai/api/v1/aaa/models answered 404 (the requested resource could not be found). Use the playground from the dashboard's Gen AI studio instead.";
+export const PLAYGROUND_BLOCKED = { component: "ogx", dsc: "default-dsc", state: "Removed", reason: "The Gen AI playground is turned off on this cluster: component ogx is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." };
