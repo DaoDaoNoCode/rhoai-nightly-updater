@@ -296,7 +296,9 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 		"subscription": {string(sub), `"tokenRateLimits":[{"limit":100,"window":"1m"}]`},
 		"subject":      {string(auth), `"groups":[{"name":"system:authenticated"}]`},
 		"gateway":      {string(gw), `"values":["redhat-ai-gateway-infra","models-as-a-service","proj"]`},
-		"model":        {string(model), `"refs":[{"name":"maas-default-gateway","namespace":"openshift-ingress"}]`},
+		// It keeps the inference gateway (live: a lone MaaS ref took the
+		// model off it, and its address and the playground failed).
+		"model": {string(model), `"refs":[{"name":"openshift-ai-inference","namespace":"openshift-ingress"},{"name":"maas-default-gateway","namespace":"openshift-ingress"}]`},
 	} {
 		if !strings.Contains(pair[0], pair[1]) {
 			t.Fatalf("%s lacks %s: %s", what, pair[1], pair[0])

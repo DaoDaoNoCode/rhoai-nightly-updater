@@ -607,7 +607,16 @@ func applyMaaSObject(c *Client, desc, path, createPath string, obj map[string]in
 
 // setModelGatewayRef adds (on) or removes the MaaS gateway ref on the
 // tool's model, as field manager rhoai-nightly-updater-maas: a server-side
-// apply of only that ref, so removing it reverts exactly this change.
+// apply of only the refs, so removing them reverts exactly this change.
+//
+// The model keeps its inference gateway: the docs append the MaaS gateway
+// to the model's refs (model-setup.md, "/spec/gateway/refs/-") and the
+// dashboard's MaaS transformer keeps the other refs. The tool's model
+// names no ref (spec.router.gateway {}: the default, the inference
+// gateway), so a lone MaaS ref would replace that; live, the model's
+// inference address then answered 404 and the playground 500. The refs
+// are written as the inference gateway and the MaaS gateway, as a
+// dashboard-deployed model ends up.
 func setModelGatewayRef(c *Client, project, resourceVersion string, on bool) error {
 	path, _ := toolModelPath(project, maasModelRefName)
 	obj := map[string]interface{}{
@@ -617,7 +626,10 @@ func setModelGatewayRef(c *Client, project, resourceVersion string, on bool) err
 	}
 	if on {
 		obj["spec"] = map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{
-			"refs": []interface{}{map[string]interface{}{"name": maasGatewayName, "namespace": inferenceGatewayNamespace}},
+			"refs": []interface{}{
+				map[string]interface{}{"name": inferenceGatewayName, "namespace": inferenceGatewayNamespace},
+				map[string]interface{}{"name": maasGatewayName, "namespace": inferenceGatewayNamespace},
+			},
 		}}}
 	}
 	data, _ := json.Marshal(obj)
@@ -716,7 +728,7 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 	if err := setModelGatewayRef(c, project, model.Metadata.ResourceVersion, true); err != nil {
 		return m.fail("model", fmt.Sprintf("Failed to route the model through the MaaS gateway: %v. Unpublish to undo.", err), maasWriteCode(err), "model patch failed")
 	}
-	m.step("model", "success", "The model routes through "+maasGatewayName+"; its address moves to the MaaS gateway.")
+	m.step("model", "success", "The model routes through "+maasGatewayName+" as well as the inference gateway, so its address and the playground keep working.")
 	m.step("maas", "running", "Creating the model reference, the subscription and the access policy...")
 	for _, w := range []struct {
 		desc, path, create string

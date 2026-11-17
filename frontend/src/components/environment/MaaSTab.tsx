@@ -111,7 +111,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
   return (
     <TabSection title="Published models" id="maas-models">
       <Content component="p">
-        Publishing offers this tool&apos;s model to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample). The model&apos;s address moves to the MaaS gateway while it is published; Unpublish puts it back.
+        Publishing offers this tool&apos;s model to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample). The model stays on the inference gateway too, so its address on the Models tab and the playground keep working; Unpublish takes it off the MaaS gateway.
       </Content>
       {items.length === 0 ? (
         <Content component="p">
@@ -308,7 +308,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
     case "publish-maas":
       return {
         title: `Publish the model in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish the model in ${pending.project}`,
-        summary: <Content component="p">Everyone signed in to the cluster can then call the model through MaaS with an API key, up to 100 tokens a minute each. Its address moves to the MaaS gateway until you unpublish it.</Content>,
+        summary: <Content component="p">Everyone signed in to the cluster can then call the model through MaaS with an API key, up to 100 tokens a minute each. It stays on the inference gateway too, so the Models tab's commands and the playground keep working.</Content>,
         changes: [
           <>Gateway <code>maas-default-gateway</code>: admits routes from {pending.project}.</>,
           <>The model in {pending.project}: routes through the MaaS gateway (only that is changed).</>,
