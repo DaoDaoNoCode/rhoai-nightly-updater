@@ -238,33 +238,101 @@ describe("S3 storage after FXB (kept namespace, warning, teardown codes)", () =>
 });
 
 describe("storage from an earlier version", () => {
-  // What 2.1 to 2.3 left in namespace minio, still used by a pipeline server.
+  // What 2.1 to 2.3 left in namespace minio, still used by a pipeline server
+  // an earlier version created and by one made by hand.
   const legacy: LegacyStorageState = {
     namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000",
     objects: ["Deployment seaweedfs", "NetworkPolicy seaweedfs-ingress", "Route minio-ui", "Service minio-service", "Secret minio-secret", "PersistentVolumeClaim seaweedfs-pvc", "PersistentVolumeClaim minio-pvc"],
     dataPVCs: [{ name: "seaweedfs-pvc", size: "20Gi" }, { name: "minio-pvc", size: "20Gi" }],
-    uncopiedPVCs: ["minio-pvc"], usedBy: ["juntao-test/dspa"],
+    uncopiedPVCs: ["minio-pvc"], usedBy: ["juntao-test/dspa", "team-x/dspa"],
+    stage: "migrate", repoint: ["juntao-test/dspa"], notMoved: ["team-x/dspa (not created by this tool)"],
+    namespaceDeletable: false, namespaceKeptReason: "Namespace 'minio' is kept: its metadata does not show that this tool created it (it may hold other things).",
   };
+  const blocked = "2 pipeline servers use this S3 storage: juntao-test/dspa, team-x/dspa. Tear them down first.";
   const notDeployed: ResourceState = {
-    deployed: false, ready: false, namespace: "seaweedfs", managedByTool: false, message: "Not deployed", migrationPending: true,
-    teardownBlockedReason: "1 pipeline server uses this S3 storage: juntao-test/dspa. Tear it down first.",
+    deployed: false, ready: false, namespace: "seaweedfs", managedByTool: false, message: "Not deployed", migrationPending: true, teardownBlockedReason: blocked,
   };
+  const runningDspa: ResourceState = { deployed: true, ready: true, namespace: "juntao-test", name: "dspa", managedByTool: true, message: "Running", dataPVCs: ["mariadb-dspa"] };
+  const sse = (...events: object[]) => () => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 
-  it("names MinIO-era objects only in the earlier-storage detail, and Set up says why it waits", async () => {
-    setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [] }));
+  it("reads Migration needed, offers Migrate storage, and names the old objects only in Details", async () => {
+    setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
-    const detail = (await within(storage).findByText("Storage from an earlier version")).closest(".pf-v6-c-alert") as HTMLElement;
-    expect(detail).toHaveTextContent("SeaweedFS in namespace minio, at minio-service.minio.svc:9000, still holds the data of earlier versions of this tool. Pipeline server juntao-test/dspa still uses it.");
-    expect(detail).toHaveTextContent("Data volumes: seaweedfs-pvc (20Gi), minio-pvc (20Gi).");
-    expect(detail).toHaveTextContent("minio-pvc holds MinIO's files from before SeaweedFS replaced it; no running server reads it, so it is not copied.");
-    // Everything else on the card uses the new names only.
+    expect(await within(storage).findByText("Migration needed")).toBeInTheDocument();
+    expect(within(storage).queryByText("Not deployed")).not.toBeInTheDocument();
+    expect(within(storage).getByRole("button", { name: "Migrate storage" })).toHaveClass("pf-m-primary");
+    expect(within(storage).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
+    // The blocked reason is Tear down's tooltip, not printed in the card.
+    expect(within(storage).getByRole("button", { name: "Tear down" })).toHaveAttribute("aria-disabled", "true");
+    expect(storage).not.toHaveTextContent(/Tear down is blocked|Tear them down first/);
+    // Old object names appear only in the collapsed Details.
+    const toggle = within(storage).getByRole("button", { name: "Details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
     const rest = storage.cloneNode(true) as HTMLElement;
-    rest.querySelector(".pf-v6-c-alert")?.remove();
-    expect(rest).not.toHaveTextContent(/minio/i);
-    expect(within(storage).getByRole("button", { name: "Set up" })).toHaveAttribute("aria-disabled", "true");
-    // Nothing exists in namespace seaweedfs yet: no ownership tag.
-    expect(within(storage).queryByText("Not managed by this tool")).not.toBeInTheDocument();
+    rest.querySelector(".pf-v6-c-expandable-section")?.remove();
+    expect(rest).not.toHaveTextContent(/minio-service|minio-secret|minio-pvc|seaweedfs-pvc|minio-ui/);
+    fireEvent.click(toggle);
+    const details = storage.querySelector("dl[aria-label=\"Storage from an earlier version\"]") as HTMLElement;
+    expect(details).toBeVisible();
+    expect(details).toHaveTextContent("SeaweedFS in namespace minio, at minio-service.minio.svc:9000");
+    expect(details).toHaveTextContent("seaweedfs-pvc (20Gi), minio-pvc (20Gi). minio-pvc holds MinIO's files from before SeaweedFS and cannot be copied.");
+    // The pipeline server on the old storage works: no "set up storage first".
+    const pipelines = await screen.findByRole("list", { name: "Pipeline servers" });
+    expect(screen.queryByText(/set up storage first/)).not.toBeInTheDocument();
+    expect(within(pipelines).getByText(/Migrate storage \(Storage card\) moves it to the new storage/)).toBeInTheDocument();
+  });
+
+  it("Migrate storage shows the plan, runs as a stream, then offers the removal with the checklist", async () => {
+    const api = setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }), {
+      "POST /api/resources/minio/migrate/stream": sse(
+        { step: "check", status: "success", message: "OK: SeaweedFS in namespace 'minio' is running", elapsedMs: 1 },
+        { step: "storage", status: "success", message: "OK: The new storage is ready", elapsedMs: 2 },
+        { step: "copy", status: "success", message: "OK: 4 objects (4330 bytes) copied and checked byte for byte", elapsedMs: 3 },
+        { step: "repoint", status: "success", message: "OK: 1 pipeline server moved", elapsedMs: 4 },
+        { step: "operation_complete", status: "success", message: "Migrated 4 objects (4330 bytes) to namespace 'seaweedfs'. The old storage in namespace 'minio' is kept until you remove it.", elapsedMs: 5 },
+      ),
+    });
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    fireEvent.click(await within(storage).findByRole("button", { name: "Migrate storage" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Moves the pipeline server this tool created to the new storage, one at a time, and waits until each reaches it: juntao-test/dspa.");
+    expect(dialog).toHaveTextContent("team-x/dspa (not created by this tool)");
+    expect(dialog).toHaveTextContent("minio-pvc holds MinIO's files from before SeaweedFS replaced it. No running server reads it, so it cannot be copied");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
+    expect(await within(dialog).findByText("Migrated")).toBeInTheDocument();
+    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{}]);
+    expect(dialog).toHaveTextContent("OK: 4 objects (4330 bytes) copied and checked byte for byte");
+    // The next part: the checklist and the removal, which is blocked while
+    // the hand-made server still uses the old storage.
+    expect(dialog).toHaveTextContent("Endpoint: http://seaweedfs-s3.seaweedfs.svc:8333 instead of http://minio-service.minio.svc:9000.");
+    expect(dialog).toHaveTextContent("Anything that still uses minio-service.minio.svc stops working after this step.");
+    expect(dialog).toHaveTextContent(legacy.namespaceKeptReason!);
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Remove old storage" })).toHaveClass("pf-m-danger");
+  });
+
+  it("removal: the namespace is a separate choice, and is sent only when ticked", async () => {
+    const removable: LegacyStorageState = { ...legacy, stage: "remove", repoint: [], notMoved: [], usedBy: [], namespaceDeletable: true, namespaceKeptReason: undefined };
+    const ready: ResourceState = { deployed: true, ready: true, namespace: "seaweedfs", managedByTool: true, message: "Running", migrationPending: true };
+    const api = setup(live({ minio: ready, legacyStorage: removable, pipelineServers: [] }), {
+      "POST /api/resources/minio/migrate/stream": sse({ step: "operation_complete", status: "success", message: "The old storage in namespace 'minio' was removed.", elapsedMs: 1 }),
+    });
+    render(<QuickResourceCreator mutateBlocker={null} />);
+    const storage = await screen.findByRole("list", { name: "Storage" });
+    expect(await within(storage).findByText(/kept until you remove it/)).toBeInTheDocument();
+    fireEvent.click(within(storage).getByRole("button", { name: "Migrate storage" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: /Remove the old storage\?/ })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Deleting the namespace also deletes anything else in it");
+    const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace minio" });
+    expect(box).not.toBeChecked();
+    fireEvent.click(box);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove old storage" }));
+    expect(await within(dialog).findByText("Old storage removed")).toBeInTheDocument();
+    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{ removeOldStorage: true, deleteNamespace: true }]);
   });
 
   it("Tear down covers the earlier storage too, and names its data", async () => {

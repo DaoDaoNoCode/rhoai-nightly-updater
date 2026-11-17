@@ -362,6 +362,22 @@ export interface LegacyStorageState {
   /** Pipeline servers (namespace/name) that still point at it. */
   usedBy?: string[] | null;
   terminating?: boolean;
+  /**
+   * The next part of Migrate storage: "migrate" (set up the new storage,
+   * copy the objects, move the pipeline servers) or "remove" (delete the
+   * old storage). pkg/cluster legacyStorageState.
+   */
+  stage: "migrate" | "remove";
+  /** Pipeline servers this tool created on the old storage: Migrate storage moves them. */
+  repoint?: string[] | null;
+  /** The other pipeline servers on the old storage, each with why the tool leaves it. */
+  notMoved?: string[] | null;
+  /** Why the old storage cannot be removed yet. */
+  removeBlockedReason?: string;
+  /** True when this tool created namespace minio, so removing the old storage may delete it. */
+  namespaceDeletable: boolean;
+  /** Why the namespace is not offered for deletion. */
+  namespaceKeptReason?: string;
 }
 
 export interface ResourceState {

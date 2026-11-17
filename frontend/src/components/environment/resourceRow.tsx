@@ -106,11 +106,14 @@ export function unmanagedNote(state: ResourceState | undefined): string {
   return state?.managedByTool === false && state.teardownBlockedReason ? ` ${state.teardownBlockedReason}` : "";
 }
 
-/** Name, status and category tags of one resource row. */
-export const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; extra?: React.ReactNode }> = ({ id, name, state, extra }) => (
+/**
+ * Name, status and category tags of one resource row. status replaces the
+ * status derived from state (one status label per row).
+ */
+export const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; status?: React.ReactNode; extra?: React.ReactNode }> = ({ id, name, state, status, extra }) => (
   <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
     <FlexItem><strong id={id}>{name}</strong></FlexItem>
-    {state && <FlexItem><ResourceStatus state={state} /></FlexItem>}
+    {status ? <FlexItem>{status}</FlexItem> : state && <FlexItem><ResourceStatus state={state} /></FlexItem>}
     {/* Only for something that exists: the backend also reports managedByTool false when nothing is deployed. */}
     {state?.managedByTool === false && (state.deployed || isTerminating(state) || !!state.setupBlockedReason) && (
       <FlexItem><TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel></FlexItem>

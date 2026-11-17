@@ -606,6 +606,29 @@ export function streamRefresh(
   return streamSSE('/api/refresh/stream', body, onStep, onDone, onConnectionDrop);
 }
 
+/** What a Migrate storage run does (pkg/types MigrateStorageRequest). */
+export interface MigrateStorageOptions {
+  /** The last part: remove the old storage. */
+  removeOldStorage?: boolean;
+  /** Also delete namespace minio (only with removeOldStorage). */
+  deleteNamespace?: boolean;
+}
+
+/**
+ * Stream Migrate storage via SSE: steps "check", "storage", "copy",
+ * "repoint", or with removeOldStorage "check", "copy", "remove",
+ * "namespace". Returns an AbortController so the caller can stop listening;
+ * the operation continues on the server.
+ */
+export function streamMigrateStorage(
+  options: MigrateStorageOptions,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/minio/migrate/stream', options, onStep, onDone, onConnectionDrop);
+}
+
 /**
  * Unblock stuck rollouts. With a target only that Deployment is changed.
  * "Nothing to do" is a 422 with errorCode nothing_to_do, returned as a

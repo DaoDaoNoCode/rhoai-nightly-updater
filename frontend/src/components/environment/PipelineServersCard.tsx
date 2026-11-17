@@ -21,7 +21,7 @@ import {
   Title,
 } from "@patternfly/react-core";
 import PlusCircleIcon from "@patternfly/react-icons/dist/esm/icons/plus-circle-icon";
-import type { ResourceState } from "../../types";
+import type { LegacyStorageState, ResourceState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import { CardList, CardListItem } from "../CardList";
 import {
@@ -47,11 +47,16 @@ export const PipelineServersCard: React.FC<CardActionProps & {
   availableProjects: string[];
   /** Projects with a pipeline server this tool did not create. */
   unmanagedProjects: Set<string>;
-}> = ({ statusLoaded, minio, pipelineServers, availableProjects, unmanagedProjects, baseReason, resAction, setPending }) => {
+  /** Storage an earlier version left in namespace minio, which some servers may still use. */
+  legacy?: LegacyStorageState | null;
+}> = ({ statusLoaded, minio, pipelineServers, availableProjects, unmanagedProjects, legacy, baseReason, resAction, setPending }) => {
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const minioReady = !!minio?.ready;
+  const onOldStorage = new Set(legacy?.usedBy ?? []);
   // N10: every cause is a tooltip on the toggle, which stays focusable (aria-disabled).
-  const addPipelineReason = baseReason ?? (!minioReady ? "Available once the S3 storage is running." : null);
+  const addPipelineReason = baseReason ?? (!minioReady
+    ? (legacy ? "New pipeline servers use the new S3 storage: available once Migrate storage (Storage card) has set it up." : "Available once the S3 storage is running.")
+    : null);
 
   const addPipelineControl = addPipelineReason ? (
     <TooltipButton variant="secondary" icon={<PlusCircleIcon />} disabledReason={addPipelineReason}>Add to a project</TooltipButton>
@@ -84,7 +89,7 @@ export const PipelineServersCard: React.FC<CardActionProps & {
       </CardHeader>
       <CardBody>
         <Stack hasGutter>
-          {statusLoaded && !minioReady && (
+          {statusLoaded && !minioReady && !legacy && (
             <StackItem>
               <Alert
                 variant="warning"
@@ -115,7 +120,8 @@ export const PipelineServersCard: React.FC<CardActionProps & {
                   )}>
                     <RowTitle id={`ps-${ps.namespace}`} name={ps.namespace ?? ""} state={ps} />
                     {ps.name && <Content component="p" className="pf-v6-u-text-color-subtle">DataSciencePipelinesApplication <code>{ps.name}</code>.{unmanagedNote(ps)}</Content>}
-                    <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
+                    <StatusDetails kind="pipeline" state={ps} minioReady={minioReady || (onOldStorage.has(`${ps.namespace}/${ps.name}`) && !!legacy?.ready)}
+                      notes={onOldStorage.has(`${ps.namespace}/${ps.name}`) ? ["Stores its artifacts in the storage of an earlier version; Migrate storage (Storage card) moves it to the new storage."] : []} />
                   </CardListItem>
                 ))}
               </CardList>
@@ -143,7 +149,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
       return {
         title: `Set up a pipeline server in ${pending.project}?`, confirm: "Set up",
         changes: [
-          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, storing artifacts in the S3 storage (Service <code>minio-service</code>).</>,
+          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, storing artifacts in the S3 storage (Service <code>seaweedfs-s3</code> in namespace <code>seaweedfs</code>).</>,
         ],
         extra: <Content component="p">The pipeline server takes 1 to 3 minutes to become ready.</Content>,
       };

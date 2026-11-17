@@ -24,6 +24,8 @@ import { type Pending, isTerminating, terminalReason } from "./environment/resou
 import { StorageCard, storageConfirm } from "./environment/StorageCard";
 import { PipelineServersCard, pipelineServerConfirm } from "./environment/PipelineServersCard";
 import { MLflowCard, mlflowConfirm } from "./environment/MLflowCard";
+import { MigrateStorageModal } from "./environment/MigrateStorageModal";
+import { useMigrateStorage } from "./environment/useMigrateStorage";
 
 export { nextStep, terminalReason } from "./environment/resourceRow";
 
@@ -132,6 +134,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     refreshProjects();
   };
 
+  const [migrateOpen, setMigrateOpen] = useState(false);
+  const migration = useMigrateStorage(useCallback(() => {
+    void fetchResources();
+    refreshProjects();
+  }, [fetchResources, refreshProjects]));
+
   const execute = (p: Pending) => {
     switch (p.kind) {
       case "setup-minio": return handleResourceAction("setup-minio", setupMinIO);
@@ -146,7 +154,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     }
   };
 
-  const baseReason = mutateBlocker ?? (resAction ? BUSY_REASON : null);
+  const baseReason = mutateBlocker ?? (resAction || migration.run?.running ? BUSY_REASON : null);
   const unmanagedProjects = new Set(resStatus?.unmanagedPipelineProjects ?? []);
   const availableProjects = projectList.filter((p) => !pipelineServers.some((ps) => ps.namespace === p) && !unmanagedProjects.has(p));
   // After a teardown the namespace stays (deployed:false, managedByTool:true).
@@ -209,7 +217,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   <Title headingLevel="h2" size="xl" id="environment-data-pipelines">Data &amp; pipelines</Title>
                 </StackItem>
                 <StackItem>
-                  <StorageCard minio={minio} legacy={resStatus?.legacyStorage} minioLeftovers={minioLeftovers} {...actionProps} />
+                  <StorageCard minio={minio} legacy={resStatus?.legacyStorage} minioLeftovers={minioLeftovers} {...actionProps}
+                    migrating={!!migration.run?.running} onMigrate={() => setMigrateOpen(true)} />
                 </StackItem>
                 <StackItem>
                   <PipelineServersCard
@@ -218,6 +227,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     pipelineServers={pipelineServers}
                     availableProjects={availableProjects}
                     unmanagedProjects={unmanagedProjects}
+                    legacy={resStatus?.legacyStorage}
                     {...actionProps}
                   />
                 </StackItem>
@@ -229,6 +239,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           </StackItem>
         </Stack>
       </PageSection>
+
+      <MigrateStorageModal
+        isOpen={migrateOpen}
+        legacy={resStatus?.legacyStorage}
+        run={migration.run}
+        baseReason={migration.run?.running ? null : mutateBlocker ?? (resAction ? BUSY_REASON : null)}
+        onStart={(kind, deleteNamespace) => migration.start(kind, kind === "remove" ? { removeOldStorage: true, deleteNamespace } : {})}
+        onClose={() => {
+          setMigrateOpen(false);
+          migration.reset();
+        }}
+      />
 
       {modal && (
         <ConfirmActionModal
