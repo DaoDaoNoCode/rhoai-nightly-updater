@@ -3,7 +3,6 @@ import {
   ActionListItem,
   Alert,
   Button,
-  Checkbox,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -17,6 +16,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
+import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import type { PlaygroundModel, PlaygroundModelRef, PlaygroundStatus, ResourcesStatus } from "../../types";
 import { type ConfirmSpec, type Pending, type PlaygroundPending, ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
 import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
@@ -58,9 +58,14 @@ export interface PlaygroundTabProps {
   onModels: () => void;
 }
 
-/** A model's name for people: its display name, with the name when they differ. */
-const modelLabel = (m: PlaygroundModel) => (m.displayName && m.displayName !== m.name ? `${m.displayName} (${m.name})` : m.name);
-const sourceWords = (m: PlaygroundModel) => (m.source === "maas" ? "Models as a Service: needs a subscription" : "Deployed in the project");
+/** A model's name for people: its display name, else its name. */
+const modelKey = (m: PlaygroundModel) => `${m.source}/${m.name}`;
+const sourceWords = (m: PlaygroundModel) => (m.source === "maas" ? "Models as a Service" : "Deployed in the project");
+
+/** A technical name that may wrap after each "/" (never inside a word). */
+const BreakableName: React.FC<{ name: string }> = ({ name }) => (
+  <code>{name.split("/").map((part, i) => <React.Fragment key={i}>{i > 0 && <>/<wbr /></>}{part}</React.Fragment>)}</code>
+);
 
 /** A chat request to the project's playground with the user's own OpenShift token. */
 export function playgroundCurl(dashboardUrl: string, project: string, model: string, source: string): string {
@@ -73,11 +78,25 @@ export function playgroundCurl(dashboardUrl: string, project: string, model: str
   ].join("\n");
 }
 
-/** The model(s) the playground uses, in the project. */
-const ModelsPart: React.FC<PlaygroundTabProps & { project: string }> = ({ playground, project, onModels }) => {
+/** What the playground does with a model, in words. */
+function playgroundUse(m: PlaygroundModel, picked: string[] | null): string {
+  if (picked) {
+    if (picked.includes(modelKey(m))) return "Used";
+    return m.source === "maas" ? "Not used unless you choose it (needs a Models as a Service subscription)" : "Not used";
+  }
+  return m.source === "maas" ? "Only with a Models as a Service subscription" : "Used";
+}
+
+/**
+ * The model(s) the playground uses, in the project: a compact table (name,
+ * where it runs, whether the playground uses it). Before Set up its rows
+ * are selectable: the project's own models are chosen, as in the dashboard.
+ */
+const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: string[] | null; onPick: ((keys: string[]) => void) | null }> = ({ playground, project, onModels, picked, onPick }) => {
   const s = playgroundModelStatus(playground, project);
   const chat = playgroundChatModels(playground, project);
   const notReady = playgroundModelsNotReady(playground, project);
+  const toggle = (m: PlaygroundModel, on: boolean) => onPick?.(on ? [...(picked ?? []).filter((k) => k !== modelKey(m)), modelKey(m)] : (picked ?? []).filter((k) => k !== modelKey(m)));
   return (
     <PartItem id="playground-models" title="Chat models" scope={`In project ${project}`} status={s} unmanaged={false}
       actions={<ActionListItem><Button variant="link" isInline onClick={onModels}>{chat.length > 0 ? "Show on the Models tab" : "Set up a model on the Models tab"}</Button></ActionListItem>}>
@@ -85,18 +104,37 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string }> = ({ playgr
         {s === "unknown"
           ? playground?.modelsProblem ?? "The project's models are being read from the dashboard."
           : chat.length > 0
-            ? "The playground chats with these models. A model added to the project later shows up in the playground without setting it up again."
+            ? onPick
+              ? "The playground uses the models you choose: the project's own ready models are chosen. A model added to the project later shows up in the playground without setting it up again."
+              : "The playground chats with the project's own ready models. A model added to the project later shows up without setting it up again."
             : `${project} has no ready chat model yet. The playground needs one: the Models tab sets up a small one on CPU.`}
       </Content>
       {chat.length > 0 && (
-        <DescriptionList isCompact isHorizontal aria-label="Chat models">
-          {chat.map((m) => (
-            <DescriptionListGroup key={`${m.source}/${m.name}`}>
-              <DescriptionListTerm>{modelLabel(m)}</DescriptionListTerm>
-              <DescriptionListDescription>{sourceWords(m)}</DescriptionListDescription>
-            </DescriptionListGroup>
-          ))}
-        </DescriptionList>
+        <Table variant="compact" aria-label="Chat models">
+          <Thead>
+            <Tr>
+              {onPick && <Th screenReaderText="Use" />}
+              <Th modifier="wrap">Model</Th>
+              <Th modifier="wrap">Where it runs</Th>
+              <Th modifier="wrap">In the playground</Th>
+            </Tr>
+          </Thead>
+          <Tbody>
+            {chat.map((m, i) => (
+              <Tr key={modelKey(m)}>
+                {onPick && <Td select={{ rowIndex: i, onSelect: (_e, on) => toggle(m, on), isSelected: !!picked?.includes(modelKey(m))}} />}
+                <Td dataLabel="Model" modifier="wrap">
+                  <Stack>
+                    <StackItem>{m.displayName || m.name}</StackItem>
+                    {m.displayName && m.displayName !== m.name && <StackItem><Content component="small"><BreakableName name={m.name} /></Content></StackItem>}
+                  </Stack>
+                </Td>
+                <Td dataLabel="Where it runs" modifier="wrap">{sourceWords(m)}</Td>
+                <Td dataLabel="In the playground" modifier="wrap">{playgroundUse(m, picked)}</Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
       )}
       {notReady.length > 0 && (
         <Alert variant="warning" isInline component="p" title="Not every model in the project is ready">
@@ -128,7 +166,9 @@ const PlaygroundPart: React.FC<PlaygroundTabProps & { project: string }> = ({ st
             ? "The dashboard's Gen AI playground: a chat page where you try the project's models, add documents to ask about, and compare answers."
             : `Not set up in ${project} yet. The dashboard's Gen AI playground is a chat page where you try the project's models; Set up asks the dashboard to create it, as its own Gen AI studio does. It takes 1 to 2 minutes.`}
       </Content>
-      {item && exists && <ProblemAlerts kind="playground" state={item} />}
+      {item?.terminalError
+        ? <Alert variant="danger" isInline component="div" title="The playground can't start"><Content component="p">{item.message}</Content></Alert>
+        : item && exists && <ProblemAlerts kind="playground" state={item} />}
       {item && s === "setting-up" && !terminalReason(item) && !isTerminating(item) && <StartingNote state={item} typical="1 to 2 minutes" />}
       {exists && (
         <DescriptionList isCompact isHorizontal aria-label="Playground details">
@@ -144,33 +184,13 @@ const PlaygroundPart: React.FC<PlaygroundTabProps & { project: string }> = ({ st
           )}
           {href && (
             <DescriptionListGroup>
-              <DescriptionListTerm>In the dashboard</DescriptionListTerm>
-              <DescriptionListDescription>Gen AI studio, then Playground, then project {project}</DescriptionListDescription>
+              <DescriptionListTerm>Where</DescriptionListTerm>
+              <DescriptionListDescription>In the dashboard: Gen AI studio, then Playground, then project {project}</DescriptionListDescription>
             </DescriptionListGroup>
           )}
         </DescriptionList>
       )}
     </PartItem>
-  );
-};
-
-/** The models Set up uses: every ready chat model, the project's own chosen by default. */
-const ModelChoice: React.FC<{ playground: PlaygroundStatus | null; project: string; chosen: string[]; onChange: (keys: string[]) => void }> = ({ playground, project, chosen, onChange }) => {
-  const chat = playgroundChatModels(playground, project);
-  if (chat.length === 0) return null;
-  const key = (m: PlaygroundModel) => `${m.source}/${m.name}`;
-  return (
-    <Form isWidthLimited onSubmit={(e) => e.preventDefault()}>
-      <FormGroup role="group" isStack label="Models the playground uses" fieldId="playground-models-choice">
-        {chat.map((m) => (
-          <Checkbox key={key(m)} id={`playground-model-${key(m)}`} label={modelLabel(m)} description={sourceWords(m)}
-            isChecked={chosen.includes(key(m))} onChange={(_e, v) => onChange(v ? [...chosen.filter((k) => k !== key(m)), key(m)] : chosen.filter((k) => k !== key(m)))} />
-        ))}
-        <FormHelperText>
-          <HelperText><HelperTextItem>As in the dashboard: the project&apos;s own models are chosen. A Models as a Service model works only with a subscription to it.</HelperTextItem></HelperText>
-        </FormHelperText>
-      </FormGroup>
-    </Form>
   );
 };
 
@@ -220,13 +240,14 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
   const noProjects = projectsLoaded && projects.length === 0;
   const item = project ? playgroundIn(playground, project) : undefined;
   const toolPlaygrounds = (playground?.items ?? []).filter((i) => i.managedByTool && (i.deployed || i.terminating));
-  const defaults = React.useMemo(() => (project ? defaultPlaygroundModels(playground, project).map((m) => `${m.source}/${m.name}`) : []), [playground, project]);
+  const defaults = React.useMemo(() => (project ? defaultPlaygroundModels(playground, project).map(modelKey) : []), [playground, project]);
   const [chosen, setChosen] = React.useState<string[] | null>(null);
   React.useEffect(() => setChosen(null), [project]);
   const picked = chosen ?? defaults;
   const chat = project ? playgroundChatModels(playground, project) : [];
-  const models: PlaygroundModelRef[] = chat.filter((m) => picked.includes(`${m.source}/${m.name}`)).map((m) => ({ name: m.name, source: m.source }));
+  const models: PlaygroundModelRef[] = chat.filter((m) => picked.includes(modelKey(m))).map((m) => ({ name: m.name, source: m.source }));
   const settingUp = next?.kind === "set-up";
+  const choosing = settingUp && !readOnly;
   const pickReason = settingUp && chat.length > 0 && models.length === 0 ? "Choose at least one model." : null;
   return (
     <Stack hasGutter>
@@ -261,7 +282,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
       <StackItem>
         {project ? (
           <PartList aria-label="What Playground needs">
-            <ModelsPart {...props} project={project} />
+            <ModelsPart {...props} project={project} picked={choosing ? picked : null} onPick={choosing ? setChosen : null} />
             <PlaygroundPart {...props} project={project} />
           </PartList>
         ) : (
@@ -272,7 +293,6 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
           </PartList>
         )}
       </StackItem>
-      {project && settingUp && !readOnly && <StackItem><ModelChoice playground={playground} project={project} chosen={picked} onChange={setChosen} /></StackItem>}
       {next?.kind === "set-up" && project && (
         <StackItem>
           <PrimaryAction label={next.label} onClick={() => onSetUp([{ kind: "setup-playground", project, models }])} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? pickReason} />

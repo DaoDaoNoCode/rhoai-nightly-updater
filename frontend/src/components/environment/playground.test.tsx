@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
@@ -7,6 +7,7 @@ import type { PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState,
 import { IDLE, playgroundState } from "./featureState";
 import { cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { playgroundCurl, playgroundSteps } from "./PlaygroundTab";
+import { PLAYGROUND_POLL_MS } from "./usePlaygroundStatus";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const status: ResourcesStatus = { minio: none, mlflow: none, pipelineServers: [], dashboardUrl: "https://rh-ai.apps.example.com" };
@@ -95,9 +96,11 @@ describe("Playground tab", () => {
     });
     renderAt("/test-resources?tab=playground&project=dev");
     const models = await screen.findByRole("listitem", { name: "Chat models" });
-    expect(within(models).getByText("Qwen2.5 0.5B Instruct (CPU) (qwen25-05b-instruct)")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /Qwen2.5/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /gpt-oss-20b/ })).not.toBeChecked();
+    const table = within(models).getByRole("grid", { name: "Chat models" });
+    expect(within(table).getByText("Qwen2.5 0.5B Instruct (CPU)")).toBeInTheDocument();
+    expect(within(table).getByRole("checkbox", { name: "Select row 0" })).toBeChecked();
+    expect(within(table).getByRole("checkbox", { name: "Select row 1" })).not.toBeChecked();
+    expect(within(table).getByText("Not used unless you choose it (needs a Models as a Service subscription)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up the playground in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up the playground in dev\?/ });
     expect(within(dialog).getByText(/with qwen25-05b-instruct/)).toBeInTheDocument();
@@ -128,5 +131,41 @@ describe("Playground tab", () => {
     renderAt("/test-resources");
     const row = await screen.findByRole("row", { name: /Playground/ });
     expect(await within(row).findByText("Ready in dev")).toBeInTheDocument();
+  });
+});
+
+// No real waits: the status is read again on fake timers while a playground
+// starts or is deleted, and not once it has settled.
+describe("Playground polling", () => {
+  const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const reads = (api: { calls: string[] }) => api.calls.filter((c) => c.startsWith("GET /api/resources/playground")).length;
+
+  it.each([
+    ["starting", item("dev", { ready: false, phase: "Initializing" }), item("dev")],
+    ["deleting", item("dev", { ready: false, phase: "Terminating", terminating: true }), undefined],
+  ])("reads again while %s, then stops", async (_name, moving, settled) => {
+    vi.useFakeTimers();
+    try {
+      let current: PlaygroundState | undefined = moving;
+      const api = stubApi({
+        "/api/resources/status": status,
+        "/api/resources/projects": { projects: ["dev"] },
+        "/api/resources/playground": () => new Response(JSON.stringify(pg({ items: current ? [current] : [] })), { status: 200, headers: { "Content-Type": "application/json" } }),
+      });
+      renderAt("/test-resources?tab=playground&project=dev");
+      await tick();
+      const first = reads(api);
+      expect(first).toBeGreaterThan(0);
+      await tick(PLAYGROUND_POLL_MS);
+      expect(reads(api)).toBe(first + 1);
+      current = settled;
+      await tick(PLAYGROUND_POLL_MS);
+      const after = reads(api);
+      await tick(PLAYGROUND_POLL_MS * 3);
+      expect(reads(api)).toBe(after);
+      expect(screen.getByRole("listitem", { name: "Playground" })).toHaveTextContent(settled ? "Ready" : "Not set up");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
