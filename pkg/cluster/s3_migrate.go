@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -601,8 +600,8 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 	}
 
 	timeout := MigrateCopyTimeout
-	if deadline, ok := c.ctx.Deadline(); ok && fresh && time.Until(deadline)-removeAfterCopyReserve > timeout {
-		timeout = time.Until(deadline) - removeAfterCopyReserve
+	if deadline, ok := c.ctx.Deadline(); ok && fresh && clk.Until(deadline)-removeAfterCopyReserve > timeout {
+		timeout = clk.Until(deadline) - removeAfterCopyReserve
 	}
 	job, issue, err := waitMigrateJob(c, job, timeout)
 	switch {
@@ -743,7 +742,7 @@ func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
 // terminal waiting reason (ImagePullBackOff, ...), and errS3NotReady on
 // timeout.
 func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migrateJobInfo, workloadPodIssue, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	ctx, cancel := clk.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
@@ -755,13 +754,11 @@ func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migra
 				return job, issue, errS3CannotStart
 			}
 		}
-		select {
-		case <-ctx.Done():
+		if clk.Sleep(ctx, MigratePoll) != nil {
 			if c.ctx.Err() != nil {
 				return job, workloadPodIssue{}, c.ctx.Err()
 			}
 			return job, workloadPodIssue{}, errS3NotReady
-		case <-time.After(MigratePoll):
 		}
 		next, found, err := readMigrateJob(cc)
 		switch {
@@ -989,7 +986,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		// MigrateCopyTimeout and a MigrateRepointTimeout wait per server.
 		// A server is moved only when its whole wait fits, so a run never
 		// ends with one moved but not yet checked.
-		if deadline, ok := c.ctx.Deadline(); ok && time.Until(deadline) < MigrateRepointTimeout {
+		if deadline, ok := c.ctx.Deadline(); ok && clk.Until(deadline) < MigrateRepointTimeout {
 			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, MigrateRepointTimeout, done), "in_progress", "out of time")
 		}
 		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
@@ -1049,7 +1046,7 @@ func objectStoreText(d dspaInfo) string {
 // condition does not end the wait: DSPO requeues and checks again, for
 // example while the new Service's address propagates.
 func waitObjectStore(c *Client, project, name string, generation int64) (dspaInfo, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, MigrateRepointTimeout)
+	ctx, cancel := clk.WithTimeout(c.ctx, MigrateRepointTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	last := dspaInfo{Meta: objectMeta{Generation: generation}}
@@ -1067,13 +1064,11 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 			}
 			last = d
 		}
-		select {
-		case <-ctx.Done():
+		if clk.Sleep(ctx, MigratePoll) != nil {
 			if c.ctx.Err() != nil {
 				return last, c.ctx.Err()
 			}
 			return last, fmt.Errorf("after %s %s", MigrateRepointTimeout, objectStoreText(last))
-		case <-time.After(MigratePoll):
 		}
 	}
 }

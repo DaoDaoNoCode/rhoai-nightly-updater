@@ -387,12 +387,12 @@ func TestSetupS3Storage_StopsEarlyOnImagePullBackOff(t *testing.T) {
 	f, c := newResourceFake(t)
 	notReadyAfterApply(f)
 	putS3Pod(f, "seaweedfs-1", seaweedfsDefaultImage, "ImagePullBackOff", "Back-off pulling image")
-	start := time.Now()
+	start := clk.Now()
 	resp, _ := SetupS3Storage(c)
 	if resp.Success || resp.ErrorCode != "not_ready" || !strings.Contains(resp.Message, "ImagePullBackOff") {
 		t.Fatalf("setup = %+v", resp)
 	}
-	if time.Since(start) > 2*time.Second {
+	if clk.Since(start) >= S3ReadyTimeout {
 		t.Error("setup must stop at a terminal pod reason, not wait for the timeout")
 	}
 }
@@ -888,12 +888,12 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 	fastS3Timings(t)
 	S3ReadyTimeout = 200 * time.Millisecond
 	c := stallServer(t, 0)
-	start := time.Now()
+	start := clk.Now()
 	_, err := waitS3Ready(c, seaweedfsDefaultImage)
 	if err != errS3NotReady {
 		t.Fatalf("err = %v, want errS3NotReady", err)
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("waited %s past a 200ms deadline", d)
+	if d := clk.Since(start); d != 200*time.Millisecond {
+		t.Errorf("waited %s, want the 200ms deadline", d)
 	}
 }

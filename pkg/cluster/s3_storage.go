@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -1231,9 +1230,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	log.add(fmt.Sprintf("Creating bucket '%s'...", s3Bucket))
 	bucketErr := s3BucketCreator(c, s3Bucket)
 	if bucketErr != nil {
-		select {
-		case <-c.ctx.Done():
-		case <-time.After(s3BucketRetryDelay):
+		if clk.Sleep(c.ctx, s3BucketRetryDelay) == nil {
 			bucketErr = s3BucketCreator(c, s3Bucket)
 		}
 	}
@@ -1264,7 +1261,7 @@ var (
 // request runs under one context bounded by S3ReadyTimeout, so a request
 // that starts just before the deadline cannot overrun it.
 func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, S3ReadyTimeout)
+	ctx, cancel := clk.WithTimeout(c.ctx, S3ReadyTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	var last workloadPodIssue
@@ -1300,10 +1297,8 @@ func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
 		} else if !IsK8sError(err, 404) && !IsNetworkError(err) {
 			return last, err
 		}
-		select {
-		case <-ctx.Done():
+		if clk.Sleep(ctx, S3ReadyPoll) != nil {
 			return expired()
-		case <-time.After(S3ReadyPoll):
 		}
 	}
 }

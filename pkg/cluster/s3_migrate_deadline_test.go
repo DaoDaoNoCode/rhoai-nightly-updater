@@ -70,13 +70,10 @@ func TestRemoveOldStorage_FinalCopyUsesTheRemainingTime(t *testing.T) {
 	sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
 	simulateMigrate(f, sim)
 	releasePVCWhenServerGone(f, &stuck)
-	// The copy takes longer than MigrateCopyTimeout (200ms here) but ends
-	// within the remaining time. It finishes after 120 reads of the Job, not
-	// after a timer: the code polls every MigratePoll (5ms) and reads the Job
-	// at most twice per poll, so at least 300ms have passed by then, whatever
-	// the scheduler does.
-	finishJobAfterReads(f, sim, 120)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// The copy takes 400ms on the clock: longer than MigrateCopyTimeout
+	// (200ms here) but within the remaining time.
+	finishJobAfter(f, sim, 2*MigrateCopyTimeout)
+	ctx, cancel := clk.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ok, msg, _, _ := runMigrate(t, c.WithContext(ctx), MigrateOptions{RemoveOldStorage: true})
 	if !ok {
@@ -92,7 +89,7 @@ func TestMigrate_StopsBeforeARepointThatCannotFinishInTime(t *testing.T) {
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := clk.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ok, msg, code, _ := runMigrate(t, c.WithContext(ctx), MigrateOptions{})
 	if ok || code != "in_progress" || !strings.Contains(msg, "Not enough time is left in this run to move pipeline server juntao-test/dspa") || !strings.Contains(msg, "run Migrate storage again to continue") {

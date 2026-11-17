@@ -55,6 +55,21 @@ func finishJobAfterReads(f *resourceFake, sim *migrateSim, n int) {
 	}
 }
 
+// finishJobAfter lets the copy Job report running until d has passed on
+// the clock (counted from now), then complete.
+func finishJobAfter(f *resourceFake, sim *migrateSim, d time.Duration) {
+	next := f.beforeServe
+	end := clk.Now().Add(d)
+	f.beforeServe = func(method, path string) {
+		if method == "GET" && strings.Contains(path, "/jobs/"+migrateJobName) && !clk.Now().Before(end) {
+			f.mu.Lock()
+			sim.jobRunning = false
+			f.mu.Unlock()
+		}
+		next(method, path)
+	}
+}
+
 // jobCopyMode returns a stored copy Job's COPY_MODE.
 func jobCopyMode(job map[string]interface{}) string {
 	tmpl, _ := ensureMap(job, "spec")["template"].(map[string]interface{})
