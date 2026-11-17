@@ -36,7 +36,7 @@ func TestPostOperationContext(t *testing.T) {
 			parent := context.WithValue(context.Background(), ctxKey{}, "v")
 			if tc.deadline != 0 {
 				var cancel context.CancelFunc
-				parent, cancel = context.WithDeadline(parent, time.Now().Add(tc.deadline))
+				parent, cancel = clk.WithDeadline(parent, clk.Now().Add(tc.deadline))
 				// Cancelling the operation's context must not end the
 				// bookkeeping.
 				cancel()
@@ -60,8 +60,8 @@ func TestPostOperationContext(t *testing.T) {
 			if !ok {
 				t.Fatal("no deadline")
 			}
-			if d := time.Until(end) - tc.wantEndNear; d > time.Second || d < -time.Second {
-				t.Errorf("deadline in %s, want about %s", time.Until(end), tc.wantEndNear)
+			if d := clk.Until(end); d != tc.wantEndNear {
+				t.Errorf("deadline in %s, want %s", d, tc.wantEndNear)
 			}
 		})
 	}
@@ -73,10 +73,10 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 	t.Cleanup(func() { activityWriteTimeout = old })
 
 	t.Run("stalled API server", func(t *testing.T) {
-		c := stallServer(t, 0) // every request hangs for 5s
-		start := time.Now()
+		c := stallServer(t, 0) // every request takes 5s
+		start := clk.Now()
 		RecordActivity(c, types.ActivityEntry{Action: "test"})
-		if d := time.Since(start); d > 2*time.Second {
+		if d := clk.Since(start); d != activityWriteTimeout {
 			t.Fatalf("RecordActivity took %s with a %s budget", d, activityWriteTimeout)
 		}
 	})
@@ -84,11 +84,6 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 		var calls atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls.Add(1)
-			select {
-			case <-r.Context().Done():
-				return
-			case <-time.After(150 * time.Millisecond):
-			}
 			if r.Method == http.MethodGet {
 				_, _ = w.Write([]byte(`{"metadata":{"resourceVersion":"1"},"data":{}}`))
 				return
@@ -97,11 +92,12 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 			_, _ = w.Write([]byte(`{"kind":"Status","code":409}`))
 		}))
 		t.Cleanup(srv.Close)
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-		start := time.Now()
+		// Every call takes 150ms: unbounded, 3 attempts of GET+PUT take
+		// 900ms. Bounded, the GET is answered and the budget ends the PUT.
+		c := withLatency(&Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, 150*time.Millisecond)
+		start := clk.Now()
 		RecordActivity(c, types.ActivityEntry{Action: "test"})
-		// Unbounded, 3 attempts of GET+PUT take about 900ms.
-		if d := time.Since(start); d > 600*time.Millisecond {
+		if d := clk.Since(start); d != activityWriteTimeout || calls.Load() != 1 {
 			t.Fatalf("RecordActivity took %s (%d calls) with a %s budget", d, calls.Load(), activityWriteTimeout)
 		}
 	})
@@ -112,7 +108,7 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 			w.WriteHeader(404)
 		}))
 		t.Cleanup(srv.Close)
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-postDeadlineWork()-time.Second))
+		ctx, cancel := clk.WithDeadline(context.Background(), clk.Now().Add(-postDeadlineWork()-time.Second))
 		defer cancel()
 		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}
 		RecordActivity(c, types.ActivityEntry{Action: "test"})

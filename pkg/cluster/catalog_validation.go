@@ -153,10 +153,10 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 	if _, _, err := c.apply(path, spec); err != nil {
 		return catalogTarget{}, fmt.Errorf("create verification catalog: %w", err)
 	}
-	deadline := time.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	lastProblem := "the catalog has not reported its state yet"
 	var pull pullFailureWatch
-	for time.Now().Before(deadline) {
+	for clk.Now().Before(deadline) {
 		body, _, err := c.get(path)
 		if err != nil {
 			lastProblem = "read verification catalog: " + err.Error()
@@ -198,10 +198,8 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 				lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 			}
 		}
-		select {
-		case <-c.ctx.Done():
-			return catalogTarget{}, c.ctx.Err()
-		case <-time.After(CatalogPollInterval):
+		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+			return catalogTarget{}, err
 		}
 	}
 	return catalogTarget{}, fmt.Errorf("selected image did not publish a ready RHOAI catalog with a matching channel: %s", lastProblem)
@@ -289,9 +287,9 @@ func (w *pullFailureWatch) check(c *Client, source, image string) error {
 		return nil
 	}
 	if w.since.IsZero() {
-		w.since = time.Now()
+		w.since = clk.Now()
 	}
-	if reason == "InvalidImageName" || time.Since(w.since) >= CatalogImagePullGrace {
+	if reason == "InvalidImageName" || clk.Since(w.since) >= CatalogImagePullGrace {
 		return &catalogImagePullError{image: image, detail: detail}
 	}
 	return nil

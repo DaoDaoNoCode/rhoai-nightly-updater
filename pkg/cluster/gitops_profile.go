@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -350,7 +349,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // verifyUpdateInstall reports install_mismatch (the operator is kept) when
 // the installed CSV's build annotations differ.
 func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
-	deadline := time.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	var pull pullFailureWatch
 	last := ""
 	for {
@@ -369,13 +368,11 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 		if err := pull.check(c, CatalogName, image); err != nil {
 			return catalogTarget{}, err
 		}
-		if !time.Now().Before(deadline) {
+		if !clk.Now().Before(deadline) {
 			return catalogTarget{}, errors.New(problem)
 		}
-		select {
-		case <-c.ctx.Done():
-			return catalogTarget{}, c.ctx.Err()
-		case <-time.After(CatalogPollInterval):
+		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+			return catalogTarget{}, err
 		}
 	}
 }

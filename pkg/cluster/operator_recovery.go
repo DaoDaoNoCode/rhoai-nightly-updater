@@ -132,7 +132,7 @@ func operationLockLost(c *Client) bool {
 // (the activity log), which are written even after the lock was lost.
 func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
 	parent := context.Background()
-	end := time.Now().Add(timeout)
+	end := clk.Now().Add(timeout)
 	if c != nil && c.ctx != nil {
 		parent = context.WithoutCancel(c.ctx)
 		if d, ok := c.ctx.Deadline(); ok {
@@ -141,7 +141,7 @@ func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, cont
 			}
 		}
 	}
-	return context.WithDeadline(parent, end)
+	return clk.WithDeadline(parent, end)
 }
 
 // operatorRecovery holds the desired state captured before an operation and
@@ -614,7 +614,7 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 			return false, err
 		}
 	}
-	deadline := time.Now().Add(CSVDeletionTimeout)
+	deadline := clk.Now().Add(CSVDeletionTimeout)
 	for {
 		meta, found, err := readObjectMeta(c, path)
 		if err != nil {
@@ -623,13 +623,11 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 		if !found || meta.UID != csv.UID {
 			return true, nil
 		}
-		if time.Now().After(deadline) {
+		if clk.Now().After(deadline) {
 			return false, nil
 		}
-		select {
-		case <-c.ctx.Done():
-			return false, c.ctx.Err()
-		case <-time.After(InstallPlanPollInterval):
+		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
+			return false, err
 		}
 	}
 }

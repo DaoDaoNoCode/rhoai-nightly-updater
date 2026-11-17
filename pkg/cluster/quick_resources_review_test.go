@@ -8,6 +8,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,35 +108,35 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 	})
 }
 
-// stallServer answers 404 to nothing: every GET hangs until the client gives
-// up, like an API server that stopped responding.
+// stallServer answers every request with status at once, or, for status
+// 0, like an API server that stopped responding: each request takes 5s on
+// the fake clock (unless its context ends first), then gets an empty 200.
 func stallServer(t *testing.T, status int) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if status != 0 {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"kind":"Status","code":` + itoa(status) + `}`))
-			return
-		}
-		select {
-		case <-r.Context().Done():
-		case <-time.After(5 * time.Second):
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	if status == 0 {
+		return withLatency(c, 5*time.Second)
+	}
+	return c
 }
 
 func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 	t.Run("stalled API call does not overrun the deadline", func(t *testing.T) {
 		c := stallServer(t, 0)
-		start := time.Now()
+		start := clk.Now()
 		gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", 200*time.Millisecond, 10*time.Millisecond)
 		if gone || err != nil {
 			t.Fatalf("gone=%v err=%v, want a plain timeout", gone, err)
 		}
-		if d := time.Since(start); d > time.Second {
-			t.Errorf("waited %s past a 200ms deadline", d)
+		if d := clk.Since(start); d != 200*time.Millisecond {
+			t.Errorf("waited %s, want the 200ms deadline", d)
 		}
 	})
 	for _, status := range []int{401, 403, 500} {
@@ -149,10 +150,10 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 	}
 	t.Run("caller context cancelled", func(t *testing.T) {
 		c := stallServer(t, 0)
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		ctx, cancel := clk.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		gone, err := waitForDeletion(c.WithContext(ctx), "/x", time.Second, 10*time.Millisecond)
-		if gone || err == nil {
+		if gone || !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("gone=%v err=%v, want the caller's context error", gone, err)
 		}
 	})

@@ -206,19 +206,17 @@ func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
 // longer exists. It returns false on timeout and the context error if the
 // operation is canceled.
 func waitForCSVGone(c *Client, name string) (bool, error) {
-	deadline := time.Now().Add(CSVDeletionTimeout)
+	deadline := clk.Now().Add(CSVDeletionTimeout)
 	for {
 		_, _, err := c.get(csvPath(name))
 		if IsK8sError(err, 404) {
 			return true, nil
 		}
-		if time.Now().After(deadline) {
+		if clk.Now().After(deadline) {
 			return false, nil
 		}
-		select {
-		case <-c.ctx.Done():
-			return false, c.ctx.Err()
-		case <-time.After(InstallPlanPollInterval):
+		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
+			return false, err
 		}
 	}
 }
@@ -274,8 +272,9 @@ const installDeadlineReserve = 10 * time.Second
 // Manual approval is how admins hold back upgrades, and OLM cannot undo an
 // approved upgrade (RHOAI operator notes §1.3, §1.4).
 func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
+	// waitStart is compared with the cluster's condition times (adminAckNote).
 	waitStart := time.Now()
-	deadline := waitStart.Add(OperatorInstallTimeout)
+	deadline := clk.Now().Add(OperatorInstallTimeout)
 	budgetLimited := false
 	if opDeadline, ok := c.ctx.Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
 		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
@@ -312,15 +311,13 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 	}
 
 	for {
-		select {
-		case <-c.ctx.Done():
-			if errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
 				return stopped("timeout", "The operation deadline passed before OLM finished installing the operator")
 			}
 			return stopped("cancelled", "The operation was cancelled before OLM finished installing the operator")
-		case <-time.After(InstallPlanPollInterval):
 		}
-		if time.Now().After(deadline) {
+		if clk.Now().After(deadline) {
 			if budgetLimited {
 				return stopped("install_timeout", "OLM did not finish installing the operator within the operation's time budget")
 			}
@@ -370,9 +367,9 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 			case "ResolutionFailed":
 				resolutionFailing = true
 				if resolutionSince.IsZero() {
-					resolutionSince = time.Now()
+					resolutionSince = clk.Now()
 				}
-				if time.Since(resolutionSince) >= ResolutionFailedGrace {
+				if clk.Since(resolutionSince) >= ResolutionFailedGrace {
 					return failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond)))
 				}
 				progress("OLM resolution failed, retrying: " + describeCondition(cond))
@@ -380,9 +377,9 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 				if strings.Contains(strings.ToLower(cond.Message), "pull") {
 					pullFailing = true
 					if pullSince.IsZero() {
-						pullSince = time.Now()
+						pullSince = clk.Now()
 					}
-					if time.Since(pullSince) >= BundlePullFailureGrace {
+					if clk.Since(pullSince) >= BundlePullFailureGrace {
 						return failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+IDMSSource+" and the pull secret.")
 					}
 					progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
@@ -458,10 +455,10 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 		if phase == "Failed" {
 			sawCSVFailed = true
 			if csvFailedSince.IsZero() {
-				csvFailedSince = time.Now()
+				csvFailedSince = clk.Now()
 			}
 			detail := describeCondition(olmCondition{Reason: csv.Status.Reason, Message: csv.Status.Message})
-			if time.Since(csvFailedSince) >= CSVFailedGrace {
+			if clk.Since(csvFailedSince) >= CSVFailedGrace {
 				return failed("csv_failed", fmt.Sprintf("CSV %s failed to install: %s", name, detail))
 			}
 			progress(fmt.Sprintf("CSV %s: Failed (%s); waiting to see whether OLM retries", name, detail))
@@ -473,12 +470,12 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 		}
 		if phase == "Succeeded" && sub.Status.InstalledCSV == name {
 			if succeededSince.IsZero() {
-				succeededSince = time.Now()
+				succeededSince = clk.Now()
 			}
 			// Stay until the CSV has kept Succeeded for CSVSucceededSettle,
 			// unless the next poll would pass the deadline: a CSV that is
 			// Succeeded then is reported as installed.
-			if time.Since(succeededSince) < CSVSucceededSettle && time.Now().Add(InstallPlanPollInterval).Before(deadline) {
+			if clk.Since(succeededSince) < CSVSucceededSettle && clk.Now().Add(InstallPlanPollInterval).Before(deadline) {
 				progress(fmt.Sprintf("CSV %s: Succeeded; confirming that OLM keeps it installed", name))
 				continue
 			}
@@ -842,13 +839,13 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 // with that caveat once the wait ends.
 func adminAckNote(c *Client, csvName string, since time.Time) string {
 	version := strings.TrimPrefix(csvName, SubName+".")
-	end := time.Now().Add(upgradeGateWait)
+	end := clk.Now().Add(upgradeGateWait)
 	if d, ok := c.ctx.Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
 		end = d.Add(-installDeadlineReserve)
 	}
 	// Every read, discovery included, ends with the wait: a slow API server
 	// cannot stretch it.
-	ctx, cancel := context.WithDeadline(c.ctx, end)
+	ctx, cancel := clk.WithDeadline(c.ctx, end)
 	defer cancel()
 	c = c.WithContext(ctx)
 	const staleHedge = " It was reported before this install finished, so it may clear once the new operator reconciles."
@@ -873,7 +870,7 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 				stale = append(stale, g.String())
 			}
 		}
-		last := !dscFound || !time.Now().Add(upgradeGatePoll).Before(end)
+		last := !dscFound || !clk.Now().Add(upgradeGatePoll).Before(end)
 		switch {
 		case len(fresh) > 0:
 			return upgradeGateMessage(fresh, "")
@@ -883,10 +880,8 @@ func adminAckNote(c *Client, csvName string, since time.Time) string {
 			// Nothing more to wait for: no DSC, or the wait is over.
 			return ended()
 		}
-		select {
-		case <-ctx.Done():
+		if clk.Sleep(ctx, upgradeGatePoll) != nil {
 			return ended()
-		case <-time.After(upgradeGatePoll):
 		}
 	}
 }

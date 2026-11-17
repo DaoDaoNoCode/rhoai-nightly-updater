@@ -1821,8 +1821,8 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Use a short context timeout to avoid waiting the full 120s
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// The operation's deadline comes before the catalog's own timeout.
+	ctx, cancel := clk.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	client := &Client{

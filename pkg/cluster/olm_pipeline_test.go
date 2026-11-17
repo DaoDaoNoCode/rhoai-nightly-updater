@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -330,13 +329,13 @@ func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 	old := CatalogReadyTimeout
 	CatalogReadyTimeout = 10 * time.Second
 	t.Cleanup(func() { CatalogReadyTimeout = old })
-	start := time.Now()
+	start := clk.Now()
 	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" || !strings.Contains(result.Message, "unauthorized") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if time.Since(start) > 5*time.Second {
-		t.Fatalf("pull failure was not detected early (%s)", time.Since(start))
+	if clk.Since(start) > 5*time.Second {
+		t.Fatalf("pull failure was not detected early (%s)", clk.Since(start))
 	}
 	for _, w := range f.writes() {
 		if !strings.Contains(w, "-verify-") {
@@ -495,7 +494,15 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 	t.Run("cancelled while waiting for OLM", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 		ctx, cancel := context.WithCancel(context.Background())
-		f.onSubscribe = func(*fakeOLM, map[string]interface{}) { go func() { time.Sleep(30 * time.Millisecond); cancel() }() }
+		// The user cancels when the wait first polls the new Subscription.
+		subscribed := false
+		f.onSubscribe = func(*fakeOLM, map[string]interface{}) { subscribed = true }
+		f.intercept = func(_ *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+			if subscribed && r.Method == http.MethodGet && r.URL.Path == subscriptionPath() {
+				cancel()
+			}
+			return false
+		}
 		emit, events := eventsRecorder()
 		result, err := UpdateStream(f.client(ctx), testNightlyImage, emit)
 		if err != nil || result == nil || result.Success || result.ErrorCode != "cancelled" || len(result.Logs) == 0 {
@@ -627,10 +634,10 @@ func TestUpgradeGateNoteFromTheDSC(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
 			f.dsc = tc.dsc
-			start := time.Now()
-			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", start)
-			if tc.quiet != (note == "") || time.Since(start) > tc.maxTime {
-				t.Fatalf("note %q after %s", note, time.Since(start))
+			start := clk.Now()
+			note := adminAckNote(f.client(context.Background()), "rhods-operator.3.6.0", time.Now())
+			if tc.quiet != (note == "") || clk.Since(start) > tc.maxTime {
+				t.Fatalf("note %q after %s", note, clk.Since(start))
 			}
 			for _, w := range tc.want {
 				if !strings.Contains(note, w) {
@@ -683,20 +690,14 @@ func TestUpgradeGateWaitIsBoundedBySlowReads(t *testing.T) {
 	oldWait, oldPoll := upgradeGateWait, upgradeGatePoll
 	upgradeGateWait, upgradeGatePoll = 150*time.Millisecond, 20*time.Millisecond
 	t.Cleanup(func() { upgradeGateWait, upgradeGatePoll = oldWait, oldPoll })
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select { // answers nothing until the client gives up
-		case <-r.Context().Done():
-		case <-time.After(10 * time.Second):
-		}
-	}))
-	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-	start := time.Now()
-	if note := adminAckNote(c, "rhods-operator.3.6.0", start); note != "" {
+	// Every read takes 10s (on the fake clock) unless the client gives up.
+	c := withLatency(stallServer(t, 0), 10*time.Second)
+	start := clk.Now()
+	if note := adminAckNote(c, "rhods-operator.3.6.0", time.Now()); note != "" {
 		t.Fatalf("note %q", note)
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("the wait took %s", d)
+	if d := clk.Since(start); d != upgradeGateWait {
+		t.Fatalf("the wait took %s, want %s", d, upgradeGateWait)
 	}
 }
 
@@ -851,10 +852,10 @@ func TestRestore_ReapplyRunsAfterTheDeletionBudget(t *testing.T) {
 	f.mu.Unlock()
 	result := &types.OperationResponse{}
 	emit, _ := eventsRecorder()
-	start := time.Now()
+	start := clk.Now()
 	r.restore(c, result, emit)
-	if time.Since(start) > 900*time.Millisecond {
-		t.Fatalf("restore took %s: the CSV waits did not respect the budget", time.Since(start))
+	if clk.Since(start) > 900*time.Millisecond {
+		t.Fatalf("restore took %s: the CSV waits did not respect the budget", clk.Since(start))
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1106,14 +1107,25 @@ func TestReinstallDowngrade_StoredVersionsCheck(t *testing.T) {
 // CSVSucceededSettle, so a failure in that second pass is not reported as
 // success.
 func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
-	setPhase := func(f *fakeOLM, phase string) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.csvs["rhods-operator.3.6.0"]["status"] = map[string]interface{}{"phase": phase, "reason": "NeedsReinstall"}
+	// phaseOverTime makes the CSV's phase follow the clock from now on:
+	// every request sees phase(time since now), or the phase it had for "".
+	phaseOverTime := func(f *fakeOLM, phase func(elapsed time.Duration) string) {
+		start := clk.Now()
+		f.intercept = func(f *fakeOLM, _ http.ResponseWriter, _ *http.Request) bool {
+			if p := phase(clk.Since(start)); p != "" {
+				f.csvs["rhods-operator.3.6.0"]["status"] = map[string]interface{}{"phase": p, "reason": "NeedsReinstall"}
+			}
+			return false
+		}
 	}
 	t.Run("flips back and stays down", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-		go func() { time.Sleep(CSVSucceededSettle / 2); setPhase(f, "Pending") }()
+		phaseOverTime(f, func(elapsed time.Duration) string {
+			if elapsed >= CSVSucceededSettle/2 {
+				return "Pending"
+			}
+			return ""
+		})
 		var logs []string
 		outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 		if outcome.succeeded {
@@ -1122,20 +1134,24 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 	})
 	t.Run("flips back and recovers", func(t *testing.T) {
 		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-		go func() {
-			time.Sleep(CSVSucceededSettle / 2)
-			setPhase(f, "Pending")
-			time.Sleep(2 * CSVSucceededSettle)
-			setPhase(f, "Succeeded")
-		}()
-		start := time.Now()
+		pendingFrom, pendingUntil := CSVSucceededSettle/2, CSVSucceededSettle/2+2*CSVSucceededSettle
+		phaseOverTime(f, func(elapsed time.Duration) string {
+			switch {
+			case elapsed >= pendingUntil:
+				return "Succeeded"
+			case elapsed >= pendingFrom:
+				return "Pending"
+			}
+			return ""
+		})
+		start := clk.Now()
 		var logs []string
 		outcome := waitForOperatorInstall(f.client(context.Background()), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
 		if !outcome.succeeded {
 			t.Fatalf("outcome = %+v", outcome)
 		}
-		if min := CSVSucceededSettle/2 + 2*CSVSucceededSettle + CSVSucceededSettle; time.Since(start) < min {
-			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", time.Since(start), min)
+		if min := pendingUntil + CSVSucceededSettle; clk.Since(start) < min {
+			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", clk.Since(start), min)
 		}
 	})
 }

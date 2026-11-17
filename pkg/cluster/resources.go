@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -480,7 +479,7 @@ func unionFieldsV1(a, b map[string]json.RawMessage) (map[string]json.RawMessage,
 // (false, nil) on timeout and (false, err) on any read error, including
 // 401/403: an unreadable object is not "still being deleted".
 func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Client) (bool, error)) (bool, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	ctx, cancel := clk.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
@@ -499,10 +498,7 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 		if err != nil {
 			return false, err
 		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(interval):
-		}
+		_ = clk.Sleep(ctx, interval) // the deadline is checked after the next poll
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -438,14 +437,12 @@ func readCatalogServing(c *Client, image string, target catalogTarget) catalogSe
 // error, a *catalogImagePullError, or an *errCatalogImageChanged (by
 // changedBy) when the image changed meanwhile.
 func waitForCatalogServing(c *Client, image string, target catalogTarget, changedBy string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
-	deadline := time.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
+	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	var pull pullFailureWatch
 	last := ""
-	for time.Now().Before(deadline) {
-		select {
-		case <-c.ctx.Done():
-			return false, c.ctx.Err()
-		case <-time.After(CatalogPollInterval):
+	for clk.Now().Before(deadline) {
+		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+			return false, err
 		}
 		s := readCatalogServing(c, image, target)
 		if s.image != "" && s.image != image {

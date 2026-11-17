@@ -82,12 +82,12 @@ func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
 	t.Cleanup(func() { OperatorInstallTimeout = old })
 	f := newFakeOLM(t)
 	f.sub = map[string]interface{}{"metadata": map[string]interface{}{"name": SubName}, "spec": map[string]interface{}{}, "status": map[string]interface{}{}}
-	ctx, cancel := context.WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
+	ctx, cancel := clk.WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
 	defer cancel()
 	var logs []string
-	start := time.Now()
+	start := clk.Now()
 	out := waitForOperatorInstall(f.client(ctx), "verify_installplan", func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
-	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || time.Since(start) > 5*time.Second {
-		t.Fatalf("outcome = %+v after %s", out, time.Since(start))
+	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || clk.Since(start) > 300*time.Millisecond+InstallPlanPollInterval {
+		t.Fatalf("outcome = %+v after %s", out, clk.Since(start))
 	}
 }

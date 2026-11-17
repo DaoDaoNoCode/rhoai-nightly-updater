@@ -263,13 +263,11 @@ type UpdateStepEvent struct {
 // is the context error if the operation is canceled, or a
 // *catalogImagePullError when the catalog pod cannot pull image.
 func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
-	deadline := time.Now().Add(CatalogReadyTimeout)
+	deadline := clk.Now().Add(CatalogReadyTimeout)
 	var pull pullFailureWatch
-	for time.Now().Before(deadline) {
-		select {
-		case <-c.ctx.Done():
-			return false, c.ctx.Err()
-		case <-time.After(CatalogPollInterval):
+	for clk.Now().Before(deadline) {
+		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+			return false, err
 		}
 
 		cs, err := getCatalogSource(c)
@@ -294,19 +292,17 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 // READY before OLM refreshes its PackageManifest. A timeout is logged and the
 // caller proceeds; the context error is returned if the operation is canceled.
 func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) error {
-	start := time.Now()
-	for time.Since(start) < PackageManifestPropagationWait {
+	start := clk.Now()
+	for clk.Since(start) < PackageManifestPropagationWait {
 		if err := c.ctx.Err(); err != nil {
 			return err
 		}
 		if ch, _ := detectNightlyChannel(c, image); ch != "" {
-			*logs = append(*logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", time.Since(start).Round(time.Second), ch))
+			*logs = append(*logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", clk.Since(start).Round(time.Second), ch))
 			return nil
 		}
-		select {
-		case <-c.ctx.Done():
-			return c.ctx.Err()
-		case <-time.After(3 * time.Second):
+		if err := clk.Sleep(c.ctx, 3*time.Second); err != nil {
+			return err
 		}
 	}
 	*logs = append(*logs, fmt.Sprintf("Warning: PackageManifest not ready after %s, proceeding with detection", PackageManifestPropagationWait))
@@ -338,10 +334,8 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]interface
 		if !willRetry {
 			break
 		}
-		select {
-		case <-c.ctx.Done():
-			return applyErr, c.ctx.Err()
-		case <-time.After(backoff):
+		if err := clk.Sleep(c.ctx, backoff); err != nil {
+			return applyErr, err
 		}
 	}
 	return applyErr, nil
@@ -668,10 +662,8 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 		}
 		slog.Warn("detectNightlyChannel failed", "attempt", attempt, "error", detectErr)
 		if attempt < 3 {
-			select {
-			case <-c.ctx.Done():
-				return &types.OperationResponse{Success: false, Message: "Operation stopped while detecting the channel", Logs: logs}, c.ctx.Err()
-			case <-time.After(ChannelRetryDelay):
+			if err := clk.Sleep(c.ctx, ChannelRetryDelay); err != nil {
+				return &types.OperationResponse{Success: false, Message: "Operation stopped while detecting the channel", Logs: logs}, err
 			}
 		}
 	}
@@ -751,10 +743,8 @@ func readCSVMetaRetrying(c *Client, csv string) (meta objectMeta, found bool, er
 		if err == nil || attempt == 2 || c.ctx.Err() != nil {
 			return meta, found, err
 		}
-		select {
-		case <-c.ctx.Done():
+		if clk.Sleep(c.ctx, time.Second) != nil {
 			return meta, found, err
-		case <-time.After(time.Second):
 		}
 	}
 }
@@ -1333,10 +1323,8 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 
 	// --- Step 8: wait_propagation ---
 	emit(UpdateStepEvent{Step: "wait_propagation", Status: "running", Message: "Waiting for cleanup to propagate..."})
-	select {
-	case <-c.ctx.Done():
-		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, c.ctx.Err()
-	case <-time.After(PropagationWait):
+	if err := clk.Sleep(c.ctx, PropagationWait); err != nil {
+		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, err
 	}
 	logs = append(logs, fmt.Sprintf("OK: waited %s for cleanup propagation", PropagationWait))
 	emit(UpdateStepEvent{Step: "wait_propagation", Status: "success", Message: "Cleanup propagated"})
@@ -1817,10 +1805,8 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
 		}
 	}
-	select {
-	case <-c.ctx.Done():
-		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, c.ctx.Err()
-	case <-time.After(RefreshCleanupWait):
+	if err := clk.Sleep(c.ctx, RefreshCleanupWait); err != nil {
+		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, err
 	}
 	emit(UpdateStepEvent{Step: "wait_cleanup", Status: "success", Message: "Cleanup propagated"})
 
