@@ -373,7 +373,7 @@ async (page) => {
           { at: storage.getByRole("link", { name: /Open admin UI/ }), n: 2, pos: "l" },
           { at: storage.getByText(/^Tear down is blocked/).locator("xpath=..").first(), n: 3, pos: "l" },
         ],
-        pad: 26,
+        pad: 12, // less than the 16 px gap to the "Data & pipelines" heading above the card
       });
       await crop("pipeline-servers", card("Pipeline servers"));
 
@@ -384,7 +384,7 @@ async (page) => {
           { at: label(pending, "MinIO (migration pending)"), n: 1, pos: "r" },
           { at: pending.getByRole("button", { name: "Migrate to SeaweedFS" }), n: 2, pos: "l" },
         ],
-        pad: 24,
+        pad: 12,
       });
       await pending.getByRole("button", { name: "Migrate to SeaweedFS" }).click();
       await wait(800);
@@ -400,7 +400,7 @@ async (page) => {
           { at: inc.getByText(/^Deployment seaweedfs is scaled to 0/).first(), n: 2, pos: "l" },
           { at: inc.getByRole("button", { name: "Repair" }), n: 3, pos: "l" },
         ],
-        pad: 24,
+        pad: 12,
       });
 
       await open("/test-resources", "s3-none");

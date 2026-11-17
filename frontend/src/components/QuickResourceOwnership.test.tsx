@@ -254,6 +254,9 @@ describe("migration from MinIO (start fresh)", () => {
     render(<QuickResourceCreator mutateBlocker={null} />);
     const storage = await screen.findByRole("list", { name: "Storage" });
     expect(await within(storage).findByText("MinIO (migration pending)")).toBeInTheDocument();
+    // MinIO serves until the migration: the description does not claim SeaweedFS.
+    expect(within(storage).getByText(/^S3 storage for pipeline artifacts and test files/)).toHaveTextContent(
+      "S3 storage for pipeline artifacts and test files, in namespace minio, behind Service minio-service.");
     expect(within(storage).queryByText("SeaweedFS")).not.toBeInTheDocument();
     expect(within(storage).getByText(/Migrate to SeaweedFS replaces this MinIO/)).toBeInTheDocument();
     expect(within(storage).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();

@@ -65,7 +65,8 @@ export const StorageCard: React.FC<CardActionProps & {
             <RowTitle id="minio-item" name="S3 storage" state={minio}
               extra={minio?.deployed ? <FlexItem><TagLabel>{minio.migrationPending ? "MinIO (migration pending)" : "SeaweedFS"}</TagLabel></FlexItem> : undefined} />
             <Content component="p" className="pf-v6-u-text-color-subtle">
-              S3 storage (SeaweedFS) for pipeline artifacts and test files, in namespace <code>minio</code>, behind Service <code>minio-service</code>.{unmanagedNote(minio)}
+              {/* Until it is migrated, a MinIO from an earlier version serves (the tag and the warning say so). */}
+              S3 storage{minio?.migrationPending ? "" : " (SeaweedFS)"} for pipeline artifacts and test files, in namespace <code>minio</code>, behind Service <code>minio-service</code>.{unmanagedNote(minio)}
             </Content>
             {minio && (
               <StatusDetails
