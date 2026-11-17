@@ -33,7 +33,8 @@ import (
 // Remove the old storage (after the user has read the summary): copy and
 // verify once more (objects written since), delete the old storage's objects
 // by UID, and the namespace minio only when the tool provably created it
-// and the user chose to.
+// and the user chose to. A removal that stopped part-way is finished by
+// running it again (removeOldStorage).
 const (
 	migrateJobName   = "seaweedfs-migrate"
 	migrateContainer = "rclone"
@@ -323,7 +324,7 @@ func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEven
 func (m *migrateRun) sourceReady(legacy *legacyStorage, step string) (s3Keys, *types.OperationResponse) {
 	switch {
 	case legacy.server == "":
-		resp, _ := m.fail(step, fmt.Sprintf("No server runs in namespace '%s' any more, so there is nothing to copy from. Nothing was changed. Tear down removes what is left.", legacyNamespace), "prerequisites", "no server")
+		resp, _ := m.fail(step, fmt.Sprintf("No server runs in namespace '%s' any more, so its objects cannot be copied. Nothing was changed, and a retry gives the same result while no server runs there.", legacyNamespace), "prerequisites", "no server")
 		return s3Keys{}, resp
 	case !legacy.ready:
 		resp, _ := m.fail(step, fmt.Sprintf("%s in namespace '%s' is not running, so its objects cannot be copied. Nothing was changed. Start it again (Deployment %s), then retry.", legacy.server, legacyNamespace, map[string]string{"SeaweedFS": s3Deployment, "MinIO": legacyMinIODeployment}[legacy.server]), "prerequisites", "server not ready")
@@ -338,15 +339,16 @@ func (m *migrateRun) sourceReady(legacy *legacyStorage, step string) (s3Keys, *t
 }
 
 // newStorageMatches reports whether the new storage is ready with the given
-// keys; an error response when it holds other keys.
-func (m *migrateRun) newStorageMatches(keys s3Keys, step string) (bool, *types.OperationResponse) {
+// keys (any keys when keys is nil); an error response when it holds other
+// keys. Neither flow points at Tear down here: it deletes both storages.
+func (m *migrateRun) newStorageMatches(keys *s3Keys, step string) (bool, *types.OperationResponse) {
 	stored, found, err := readS3Keys(m.c)
 	if err != nil {
 		resp, _ := m.fail(step, fmt.Sprintf("Cannot read the new storage's keys: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "new keys unreadable")
 		return false, resp
 	}
-	if found && stored != keys {
-		resp, _ := m.fail(step, fmt.Sprintf("The storage in namespace '%s' has other keys than the one in namespace '%s', so clients that keep their keys could not use it. Nothing was changed. Tear down the storage in '%s' (it holds no migrated data yet unless you put some there), then migrate again.", s3Namespace, legacyNamespace, s3Namespace), "conflict", "keys differ")
+	if found && keys != nil && stored != *keys {
+		resp, _ := m.fail(step, fmt.Sprintf("The storage in namespace '%s' has other keys than the one in namespace '%s', so clients that keep their keys could not use it. Nothing was changed, and a retry gives the same result: this tool never changes the keys of a storage that may hold data.", s3Namespace, legacyNamespace), "conflict", "keys differ")
 		return false, resp
 	}
 	state := getS3Status(m.c)
@@ -363,7 +365,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 
 	// Step 1: the new storage, with the old keys.
 	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace '%s' with the same keys...", s3Namespace))
-	ready, resp := m.newStorageMatches(keys, "storage")
+	ready, resp := m.newStorageMatches(&keys, "storage")
 	if resp != nil {
 		return resp, nil
 	}
@@ -916,14 +918,118 @@ func readLegacyNamespace(c *Client) (objectMeta, bool, error) {
 	return readObjectMeta(c, "/api/v1/namespaces/"+legacyNamespace)
 }
 
+// legacyRemovalPhases is the order Remove old storage deletes the objects
+// earlier versions created in namespace minio (the same set as
+// legacyStorageObjects). The server's Deployments go only after everything
+// that can fail on its own, so a run that stops before them leaves a server
+// the next run copies from again; one that stops after them is finished by
+// the next run without a copy (removeOldStorage).
+//
+//  1. Before the server: the Routes (clients outside the cluster no longer
+//     reach it), the data PVCs, its keys and last its Service (clients in
+//     the cluster no longer reach it by name). Deleting a PVC that a pod
+//     uses only marks it: the kubernetes.io/pvc-protection finalizer keeps
+//     it until no pod object uses it, and the kubelet starts no new pod with
+//     a PVC that is being deleted
+//     (pkg/controller/volume/pvcprotection/pvc_protection_controller.go:382-394
+//     at v1.35.0; Kubernetes docs, Persistent Volumes, "Storage Object in
+//     Use Protection"). So the server keeps serving the data until its
+//     Deployment goes, and a PVC that is being deleted records that the
+//     deletion began. The PVCs come before the keys and the Service, which
+//     the copy needs: a run that stops before the PVCs leaves everything
+//     the next copy needs, one that stops after them leaves the PVCs marked.
+//     The pipeline servers' old credentials Secrets are deleted first in
+//     this phase (deleteLegacyDSPASecrets).
+//  2. The server: its Deployments.
+//  3. After the server: once the PVCs are gone, the pods that used them are
+//     gone too (see 1), and the NetworkPolicies follow. Deleting them while
+//     the server runs would open every port of it to every pod: a pod no
+//     policy selects accepts all ingress (Kubernetes docs, Network
+//     Policies, "The two sorts of pod isolation"). A storage without data
+//     PVCs has nothing to wait for, so its policies may go while its pods
+//     are still stopping.
+var legacyRemovalPhases = struct{ beforeServer, server, afterServer []legacyObjectName }{
+	beforeServer: []legacyObjectName{
+		{"Route", legacyUIRoute},
+		{"Route", legacyAPIRoute},
+		{"PersistentVolumeClaim", legacySeaweedFSPVC},
+		{"PersistentVolumeClaim", legacyMinIOPVC},
+		{"Secret", legacySecret},
+		{"Service", legacyService},
+	},
+	server: []legacyObjectName{
+		{"Deployment", s3Deployment},
+		{"Deployment", legacyMinIODeployment},
+	},
+	afterServer: []legacyObjectName{
+		{"NetworkPolicy", s3NetworkPolicy},
+		{"NetworkPolicy", legacyMinIONetworkPolicy},
+	},
+}
+
+// legacyObjectName names one object of the earlier storage.
+type legacyObjectName struct{ kind, name string }
+
+// copySource tells whether the old storage can still be copied from: its
+// server is ready, its Service exists (the copy Job reaches the server
+// through it) and its keys are readable. why says what is missing, or "".
+type copySource struct {
+	keys      s3Keys
+	keysFound bool
+	why       string
+}
+
+func readCopySource(c *Client, legacy *legacyStorage) (copySource, error) {
+	var s copySource
+	keys, err := readLegacyKeys(c)
+	switch {
+	case err == nil:
+		s.keys, s.keysFound = keys, true
+	case !IsK8sError(err, http.StatusNotFound):
+		return s, err
+	}
+	switch {
+	case legacy.server == "":
+		s.why = "no server runs there any more"
+	case !legacy.ready:
+		s.why = legacy.server + " there is not running"
+	case !legacy.serviceFound:
+		s.why = fmt.Sprintf("its Service %s is gone", legacyService)
+	case !s.keysFound:
+		s.why = fmt.Sprintf("its Secret %s with the keys is gone", legacySecret)
+	}
+	return s, nil
+}
+
 // removeOldStorage deletes the old storage once nothing of this tool needs
 // it: a last copy and check, then every object the tool created there (by
-// UID), and the namespace when asked and provably the tool's.
+// UID, in legacyRemovalPhases order), and the namespace when asked and
+// provably the tool's.
+//
+// A run that stopped part-way is finished by the next one. Whether it may
+// skip the copy is derived from the cluster, not recorded: when the old
+// storage can no longer be copied from (copySource) and every data PVC that
+// is left is being deleted, a removal got past the copy. Phase 1 marks the
+// PVCs only after a verified copy, and before it deletes anything the copy
+// needs, so a run never stops in a state that is neither copiable nor
+// marked. If someone else deleted a PVC, its deletion was requested already
+// and completes once no pod uses it; finishing the removal only completes
+// what was started. A data PVC that is not being deleted while the
+// storage cannot be copied from may hold objects that were never copied:
+// the run stops and deletes nothing.
 func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, deleteNamespace bool) (*types.OperationResponse, error) {
 	c := m.c
-	keys, resp := m.sourceReady(legacy, "check")
-	if resp != nil {
-		return resp, nil
+	source, err := readCopySource(c, legacy)
+	if err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot read the old storage's keys; nothing was deleted: %v.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "prerequisites"), "keys unreadable")
+	}
+	resume := source.why != ""
+	if pending := legacy.pvcsNotDeleting(); resume && len(pending) > 0 {
+		return m.fail("check", sourceGoneMessage(legacy, source.why, pending), "prerequisites", "source gone, data not copied")
+	}
+	var keys *s3Keys
+	if source.keysFound {
+		keys = &source.keys
 	}
 	ready, resp := m.newStorageMatches(keys, "check")
 	if resp != nil {
@@ -933,7 +1039,9 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		return m.fail("check", fmt.Sprintf("The storage in namespace '%s' is not ready, so the old storage is kept. Run Migrate storage first.", s3Namespace), "prerequisites", "new storage not ready")
 	}
 	if reason := s3TeardownBlocker(dspas, legacy.address); reason != "" {
-		return m.fail("check", "The old storage is still in use, so nothing was deleted. "+strings.Replace(reason, "Tear them down first.", "Run Migrate storage to move those this tool created; point the others at the new storage or tear them down.", 1), "prerequisites", "pipeline servers on the old storage")
+		instead := "Run Migrate storage to move those this tool created; point the others at the new storage or delete them."
+		reason = strings.Replace(strings.Replace(reason, "Tear them down first.", instead, 1), "Tear it down first.", instead, 1)
+		return m.fail("check", "The old storage is still in use, so nothing was deleted. "+reason, "prerequisites", "pipeline servers on the old storage")
 	}
 	endpoints, err := readS3Endpoints(c)
 	if err != nil {
@@ -946,21 +1054,117 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	}
 	m.step("check", "success", "OK: Nothing of this tool uses the old storage")
 
-	// Objects written to the old storage since the migration (hand-made
-	// clients) are copied before anything is deleted.
-	result, resp := m.copyAndVerify(legacy, dspas, "copy")
-	if resp != nil {
-		return resp, nil
+	var result copyResult
+	if resume {
+		m.step("copy", "skipped", fmt.Sprintf("Not copied again: the old storage cannot be copied from any more (%s), and its data volumes are already being deleted", source.why))
+	} else {
+		// Objects written to the old storage since the migration (hand-made
+		// clients) are copied before anything is deleted.
+		r, resp := m.copyAndVerify(legacy, dspas, "copy")
+		if resp != nil {
+			return resp, nil
+		}
+		result = r
 	}
 
 	m.step("remove", "running", fmt.Sprintf("Deleting the old storage in namespace '%s'...", legacyNamespace))
 	var d storageDeletion
-	var logs []string
-	for _, o := range legacyStorageObjects {
-		d.deleteOwnedObject(c, legacyNamespace, o.kind, o.name, &logs)
+	stopped := func(stage string) (*types.OperationResponse, error) {
+		code := "delete_failed"
+		if len(d.deleted) > 0 {
+			code = "partial_failure"
+		}
+		return m.fail("remove", fmt.Sprintf("Some objects of the old storage could not be deleted: %s.%s Run Remove old storage again to continue.%s", strings.Join(d.failed, "; "), stage, templateHint(d.forbidden)), code, "delete failed")
 	}
-	// The credentials Secret of pipeline servers an earlier version named
-	// "dspa": they now use nightly-dspa-s3 (repoint).
+	// deleteAll deletes objects in order and stops at the first failure, so
+	// the state a run leaves is one legacyRemovalPhases describes.
+	deleteAll := func(objects []legacyObjectName) {
+		for _, o := range objects {
+			var logs []string
+			d.deleteOwnedObject(c, legacyNamespace, o.kind, o.name, &logs)
+			for _, l := range logs {
+				m.step("remove", "running", l)
+			}
+			if len(d.failed) > 0 {
+				return
+			}
+		}
+	}
+
+	// Phase 1: everything that can fail on its own, while the server runs.
+	m.deleteLegacyDSPASecrets(dspas, &d)
+	if len(d.failed) == 0 {
+		deleteAll(legacyRemovalPhases.beforeServer)
+	}
+	if len(d.failed) > 0 {
+		return stopped(fmt.Sprintf(" The server's Deployment in namespace '%s' was not deleted.", legacyNamespace))
+	}
+	// Phase 2: the server.
+	deleteAll(legacyRemovalPhases.server)
+	if len(d.failed) > 0 {
+		return stopped("")
+	}
+	// Phase 3: its PVCs (and with them its pods), then its NetworkPolicies.
+	if len(d.pvcUIDs) > 0 {
+		remaining, err := waitPVCsGone(c, d.pvcUIDs)
+		if err != nil {
+			return m.fail("remove", fmt.Sprintf("The old storage's server was deleted, but whether its PVCs are gone cannot be checked: %v. Run Remove old storage again to continue.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "in_progress"), "PVC wait failed")
+		}
+		if len(remaining) > 0 {
+			return m.fail("remove", fmt.Sprintf("The old storage's server was deleted, but PVC %s %s still terminating after %s. Run Remove old storage again to continue.", strings.Join(remaining, ", "), verb(len(remaining), "is", "are"), S3DeleteTimeout), "in_progress", "PVCs terminating")
+		}
+	}
+	deleteAll(legacyRemovalPhases.afterServer)
+	if len(d.failed) > 0 {
+		return stopped("")
+	}
+	if len(d.deleted) > 0 {
+		m.step("remove", "success", fmt.Sprintf("OK: The old storage is deleted (%s)", strings.Join(d.deleted, ", ")))
+	} else {
+		m.step("remove", "success", "OK: The old storage is deleted")
+	}
+
+	nsMsg := m.removeNamespace(deleteNamespace)
+	if strings.HasPrefix(nsMsg, "!") {
+		return m.fail("namespace", strings.TrimPrefix(nsMsg, "!"), "partial_failure", "namespace delete failed")
+	}
+	var msg string
+	if resume {
+		msg = fmt.Sprintf("The rest of the old storage in namespace '%s' was removed. Its data volumes were already being deleted, so nothing was copied this time.", legacyNamespace)
+	} else {
+		msg = fmt.Sprintf("The old storage in namespace '%s' was removed; its %s are in namespace '%s'.", legacyNamespace, sizeText(*result.Source), s3Namespace)
+	}
+	if len(d.kept) > 0 {
+		msg += fmt.Sprintf(" Left in place because this tool did not create them: %s.", strings.Join(d.kept, ", "))
+	}
+	msg += " " + nsMsg
+	slog.Info("old s3 storage removed", "user", getUser(c), "deleted", strings.Join(d.deleted, ", "), "resumed", resume)
+	recordS3Activity(c, "migrate-storage", fmt.Sprintf("%s removed (%s)", legacyNamespace, strings.TrimSuffix(nsMsg, ".")), true)
+	return &types.OperationResponse{Success: true, Message: strings.TrimSpace(msg), Logs: m.logs}, nil
+}
+
+// sourceGoneMessage explains why the removal stops when the old storage
+// cannot be copied from and its data PVCs (pending) are not being deleted.
+func sourceGoneMessage(legacy *legacyStorage, why string, pending []string) string {
+	msg := fmt.Sprintf("The old storage in namespace '%s' cannot be copied from (%s), and its data %s %s %s not being deleted, so %s may hold objects that were never copied. Nothing was deleted.",
+		legacyNamespace, why, verb(len(pending), "volume", "volumes"), strings.Join(pending, ", "), verb(len(pending), "is", "are"), verb(len(pending), "it", "they"))
+	if legacy.server != "" && !legacy.ready {
+		deployment := map[string]string{"SeaweedFS": s3Deployment, "MinIO": legacyMinIODeployment}[legacy.server]
+		return msg + fmt.Sprintf(" Start the server again (Deployment %s), then run Remove old storage again.", deployment)
+	}
+	cmds := make([]string, 0, len(pending))
+	for _, p := range pending {
+		cmds = append(cmds, fmt.Sprintf("`oc delete pvc %s -n %s`", p, legacyNamespace))
+	}
+	return msg + fmt.Sprintf(" A retry gives the same result. If you have checked that namespace '%s' holds everything you need, delete the %s yourself (%s), then run Remove old storage again to remove the rest.",
+		s3Namespace, verb(len(pending), "volume", "volumes"), strings.Join(cmds, ", "))
+}
+
+// deleteLegacyDSPASecrets deletes the credentials Secret of the pipeline
+// servers an earlier version named "dspa": they now use nightly-dspa-s3
+// (repoint).
+func (m *migrateRun) deleteLegacyDSPASecrets(dspas []dspaInfo, d *storageDeletion) {
+	var logs []string
 	for _, ds := range dspas {
 		if ds.Meta.Name == legacyDSPAName && ds.managedByTool() && ds.SecretName == dspaSecretName {
 			var inProject []dspaInfo
@@ -969,7 +1173,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 					inProject = append(inProject, o)
 				}
 			}
-			if note := deleteDSPASecret(c, ds.Meta.Namespace, &dspaInfo{Meta: objectMeta{UID: "none"}, SecretName: legacyDSPASecretName}, inProject, &logs); note != "" {
+			if note := deleteDSPASecret(m.c, ds.Meta.Namespace, &dspaInfo{Meta: objectMeta{UID: "none"}, SecretName: legacyDSPASecretName}, inProject, &logs); note != "" {
 				d.failed = append(d.failed, strings.TrimSpace(note))
 			}
 		}
@@ -977,36 +1181,6 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	for _, l := range logs {
 		m.step("remove", "running", l)
 	}
-	if len(d.failed) > 0 {
-		code := "delete_failed"
-		if len(d.deleted) > 0 {
-			code = "partial_failure"
-		}
-		return m.fail("remove", fmt.Sprintf("Some objects of the old storage could not be deleted: %s. Run Remove old storage again.%s", strings.Join(d.failed, "; "), templateHint(d.forbidden)), code, "delete failed")
-	}
-	if len(d.pvcUIDs) > 0 {
-		remaining, err := waitPVCsGone(c, d.pvcUIDs)
-		if err != nil {
-			return m.fail("remove", fmt.Sprintf("The old storage's objects were deleted, but whether its PVCs are gone cannot be checked: %v.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "in_progress"), "PVC wait failed")
-		}
-		if len(remaining) > 0 {
-			return m.fail("remove", fmt.Sprintf("The old storage's objects were deleted, but PVC %s %s still terminating after %s. Run Remove old storage again to check.", strings.Join(remaining, ", "), verb(len(remaining), "is", "are"), S3DeleteTimeout), "in_progress", "PVCs terminating")
-		}
-	}
-	m.step("remove", "success", fmt.Sprintf("OK: The old storage is deleted (%s)", strings.Join(d.deleted, ", ")))
-
-	nsMsg := m.removeNamespace(deleteNamespace)
-	if strings.HasPrefix(nsMsg, "!") {
-		return m.fail("namespace", strings.TrimPrefix(nsMsg, "!"), "partial_failure", "namespace delete failed")
-	}
-	msg := fmt.Sprintf("The old storage in namespace '%s' was removed; its %s are in namespace '%s'.", legacyNamespace, sizeText(*result.Source), s3Namespace)
-	if len(d.kept) > 0 {
-		msg += fmt.Sprintf(" Left in place because this tool did not create them: %s.", strings.Join(d.kept, ", "))
-	}
-	msg += " " + nsMsg
-	slog.Info("old s3 storage removed", "user", getUser(c), "deleted", strings.Join(d.deleted, ", "))
-	recordS3Activity(c, "migrate-storage", fmt.Sprintf("%s removed (%s)", legacyNamespace, strings.TrimSuffix(nsMsg, ".")), true)
-	return &types.OperationResponse{Success: true, Message: strings.TrimSpace(msg), Logs: m.logs}, nil
 }
 
 // removeNamespace deletes namespace minio when asked and owned by the tool,
@@ -1034,7 +1208,9 @@ func (m *migrateRun) removeNamespace(requested bool) string {
 	}
 	m.step("namespace", "running", fmt.Sprintf("Deleting namespace '%s'...", legacyNamespace))
 	if _, err := deleteWithUID(c, "/api/v1/namespaces/"+legacyNamespace, meta.UID); err != nil && !IsK8sError(err, 404) {
-		return fmt.Sprintf("!The old storage was removed, but namespace '%s' could not be deleted: %v.%s", legacyNamespace, err, templateHint(err))
+		// Nothing of the old storage is left, so a retry finds nothing to
+		// remove and is not offered (readLegacyStorage returns nil).
+		return fmt.Sprintf("!The old storage was removed, but namespace '%s' could not be deleted: %v.%s A retry finds nothing left to remove; delete the namespace with `oc delete project %s` once you have checked it holds nothing else.", legacyNamespace, err, templateHint(err), legacyNamespace)
 	}
 	m.step("namespace", "success", fmt.Sprintf("OK: Namespace '%s' is being deleted, with everything else in it", legacyNamespace))
 	return fmt.Sprintf("Namespace '%s' is being deleted, with everything else in it.", legacyNamespace)

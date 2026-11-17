@@ -1411,15 +1411,18 @@ func (d *storageDeletion) deleteOwnedObject(c *Client, namespace, kind, name str
 }
 
 // waitPVCsGone waits, bounded by S3DeleteTimeout, until none of the PVCs is
-// left. It returns the names still present on timeout.
+// left. It returns the names still present on timeout: those of the last
+// listing that succeeded (the one at the deadline fails with the expired
+// context, and must not read as "none left").
 func waitPVCsGone(c *Client, uids map[string]string) ([]string, error) {
-	var remaining []string
 	namespaces := map[string]bool{}
 	for _, ns := range uids {
 		namespaces[ns] = true
 	}
-	_, err := waitForGone(c, S3DeleteTimeout, S3DeletePoll, func(cc *Client) (bool, error) {
-		remaining = remaining[:0]
+	var remaining []string
+	listed := false
+	gone, err := waitForGone(c, S3DeleteTimeout, S3DeletePoll, func(cc *Client) (bool, error) {
+		var left []string
 		for _, ns := range []string{s3Namespace, legacyNamespace} {
 			if !namespaces[ns] {
 				continue
@@ -1430,13 +1433,20 @@ func waitPVCsGone(c *Client, uids map[string]string) ([]string, error) {
 			}
 			for _, p := range pvcs {
 				if _, ok := uids[p.Meta.UID]; ok {
-					remaining = append(remaining, ns+"/"+p.Meta.Name)
+					left = append(left, ns+"/"+p.Meta.Name)
 				}
 			}
 		}
-		return len(remaining) == 0, nil
+		remaining, listed = left, true
+		return len(left) == 0, nil
 	})
-	return remaining, err
+	switch {
+	case gone || err != nil:
+		return nil, err
+	case !listed:
+		return nil, fmt.Errorf("the PVCs could not be listed within %s", S3DeleteTimeout)
+	}
+	return remaining, nil
 }
 
 // s3TeardownBlocker explains why the S3 storage cannot be torn down because

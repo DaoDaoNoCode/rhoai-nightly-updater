@@ -84,7 +84,9 @@ only accepts a tag whose version is the top dated section. See
   checklist for references the tool did not create; deleting namespace
   `minio` (and everything in it) is a separate, unticked choice, offered
   when it carries the tool's label.
-  Each run resumes where the last stopped. Until then the Storage card
+  Each run resumes where the last stopped, the removal too: it deletes the
+  old server last among what can fail, and once the server is gone a
+  re-run finishes without copying again. Until then the Storage card
   reads **Migration needed**, with the old storage's objects under
   **Details**, and the in-place MinIO-to-SeaweedFS replacement of 2.x is
   retired. `RCLONE_IMAGE` overrides the pinned rclone 1.76.0 image.

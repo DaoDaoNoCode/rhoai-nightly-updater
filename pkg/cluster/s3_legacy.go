@@ -42,9 +42,10 @@ func legacyS3Host() string {
 }
 
 // legacyStorageObjects are the objects earlier versions created in
-// namespace minio, in the order they are deleted: the Deployments first, so
-// their pods release the PVCs (whose kubernetes.io/pvc-protection finalizer
-// waits for that).
+// namespace minio, in the order teardown deletes them: the Deployments
+// first, so their pods release the PVCs (whose kubernetes.io/pvc-protection
+// finalizer waits for that). Remove old storage, which must stay resumable
+// after the copy, uses its own order (legacyRemovalPhases).
 var legacyStorageObjects = []struct{ kind, name string }{
 	{"Deployment", s3Deployment},
 	{"Deployment", legacyMinIODeployment},
@@ -144,6 +145,9 @@ type legacyStorage struct {
 	// replica.
 	server string
 	ready  bool
+	// serviceFound is true while Service minio-service exists (whoever
+	// created it): the copy Job reaches the server through it.
+	serviceFound bool
 	// others are the Deployments and PVCs in the namespace this tool did
 	// not create ("Deployment name"): what deleting the namespace would
 	// also delete, as far as the tool can see (it cannot list every kind).
@@ -238,6 +242,9 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 		}
 		if r.err != nil {
 			return nil, fmt.Errorf("read %s %s/%s: %w", o.kind, legacyNamespace, o.name, r.err)
+		}
+		if o.kind == "Service" && r.found {
+			l.serviceFound = true
 		}
 		if !r.found || !storageObjectOwned(r.meta) {
 			continue
@@ -336,6 +343,18 @@ func (l *legacyStorage) hasPVC(name string) bool {
 		}
 	}
 	return false
+}
+
+// pvcsNotDeleting returns the names of the data PVCs that are not being
+// deleted (no deletionTimestamp).
+func (l *legacyStorage) pvcsNotDeleting() []string {
+	var names []string
+	for _, p := range l.pvcs {
+		if !p.Meta.terminating() {
+			names = append(names, p.Meta.Name)
+		}
+	}
+	return names
 }
 
 // uncopiable returns the data PVCs whose objects no server of the earlier
