@@ -513,13 +513,14 @@ Make variables (`IMAGE`, `TAG`, `NAMESPACE`, `APP_NAME`, `RUNTIME`, `PLATFORM`, 
 
 Runtime variables of the deployed container (`GITHUB_TOKEN`, `INSTALLER_RELEASES_URL`, `SEAWEEDFS_IMAGE`, `STABLE_SOURCE`, `STABLE_CHANNEL`, `DSC_SAMPLE_REF`, `LOG_LEVEL`, ...) are documented once, in [README: Configuration](README.md#configuration).
 
-Local development only (`dev.sh` sets the first five):
+Local development only (`dev.sh` sets the first four rows):
 
 | Variable | Purpose |
 |---|---|
 | `DEV_MODE=true` | No oauth-proxy, no cluster-admin gate; binds `127.0.0.1`; checks Host/Origin |
 | `DEV_TOKEN`, `DEV_USER` | Your `oc` token and username |
 | `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT` | The API server from `oc whoami --show-server` |
+| `DEV_S3_ENDPOINT`, `S3_LOCAL_PORT` | The backend's one direct S3 request (creating the storage bucket) cannot resolve the Service's cluster DNS name from a workstation. `dev.sh` keeps `oc port-forward -n seaweedfs svc/seaweedfs-s3` open on `127.0.0.1:$S3_LOCAL_PORT` (default 18333; retried until the Service exists) and sets `DEV_S3_ENDPOINT` to it. Used only with `DEV_MODE`, and only for a loopback `http://host:port`; pipeline servers and the copy Job always use the in-cluster address |
 | `KUBE_CA_FILE` | CA bundle for an API server with a private CA. Example: `oc config view --raw --minify -o jsonpath='{..certificate-authority-data}' \| base64 -d > /tmp/ca.pem`. Without it the system trust store is used (ROSA API certificates are publicly trusted) |
 | `DEV_INSECURE_TLS=true` | Skips API server certificate verification (only with `DEV_MODE`; logs a warning). Prefer `KUBE_CA_FILE` |
 | `BIND_ADDRESS`, `DEV_ALLOW_REMOTE=true` | A non-loopback bind address is refused unless `DEV_ALLOW_REMOTE=true` (anyone who reaches it acts with your token) |

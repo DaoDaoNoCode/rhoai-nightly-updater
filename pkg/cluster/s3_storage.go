@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -106,6 +108,28 @@ func s3Host() string {
 // s3Endpoint is s3Host as a URL.
 func s3Endpoint() string {
 	return "http://" + s3Host()
+}
+
+// s3BucketEndpoint is where the app itself sends its one S3 request (creating
+// the bucket): the Service, s3Endpoint. A dev-mode backend runs on a
+// workstation that cannot resolve cluster DNS, so dev.sh keeps a port-forward
+// to the Service open and points DEV_S3_ENDPOINT at it. The override is used
+// only with DEV_MODE=true and only for a loopback http URL, so the storage
+// keys are never sent to any other address. Pipeline servers and the copy Job
+// always get s3Endpoint.
+func s3BucketEndpoint(getenv func(string) string) string {
+	raw := getenv("DEV_S3_ENDPOINT")
+	if getenv("DEV_MODE") != "true" || raw == "" {
+		return s3Endpoint()
+	}
+	u, err := url.Parse(raw)
+	if err == nil && u.Scheme == "http" && (u.Path == "" || u.Path == "/") && u.RawQuery == "" && u.User == nil && u.Port() != "" {
+		if ip := net.ParseIP(u.Hostname()); (ip != nil && ip.IsLoopback()) || u.Hostname() == "localhost" {
+			return "http://" + u.Host
+		}
+	}
+	slog.Warn("DEV_S3_ENDPOINT ignored: it must be a loopback http URL with a port, such as http://127.0.0.1:18333", "value", raw)
+	return s3Endpoint()
 }
 
 func randomHex(n int) (string, error) {
@@ -1215,7 +1239,7 @@ func createS3Bucket(c *Client, bucket string) error {
 	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
 		return fmt.Errorf("no S3 keys in Secret %s/%s", s3Namespace, s3Secret)
 	}
-	return s3PutBucket(c.ctx, s3Endpoint(), keys.AccessKey, keys.SecretKey, bucket)
+	return s3PutBucket(c.ctx, s3BucketEndpoint(os.Getenv), keys.AccessKey, keys.SecretKey, bucket)
 }
 
 // s3KeptNamespaceHint ends every teardown message: namespaces are never
