@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import {
+  ActionListItem,
   Alert,
   Card,
   CardBody,
@@ -8,7 +9,6 @@ import {
   Content,
   EmptyState,
   EmptyStateBody,
-  FlexItem,
   HelperText,
   HelperTextItem,
   MenuToggle,
@@ -104,12 +104,12 @@ export const PipelineServersCard: React.FC<CardActionProps & {
                 {pipelineServers.map((ps) => (
                   <CardListItem key={ps.namespace} labelledBy={`ps-${ps.namespace}`} actions={rowActions(
                     <>
-                      {ps.ready && ps.uiRoute && <FlexItem><ExternalLink href={ps.uiRoute}>Open pipelines</ExternalLink></FlexItem>}
+                      {ps.ready && ps.uiRoute && <ActionListItem><ExternalLink href={ps.uiRoute}>Open pipelines</ExternalLink></ActionListItem>}
                       {ps.managedByTool !== false && !isTerminating(ps) && (
-                        <FlexItem>
+                        <ActionListItem>
                           <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name })}
                             isLoading={resAction === "teardown-pipeline-server"} disabledReason={baseReason ?? ps.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                        </FlexItem>
+                        </ActionListItem>
                       )}
                     </>,
                   )}>

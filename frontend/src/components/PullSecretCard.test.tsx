@@ -69,14 +69,33 @@ describe("PullSecretSetup actions of an existing secret", () => {
     }
     expect(replace).toHaveClass("pf-m-danger");
     expect(test).not.toHaveClass("pf-m-danger");
-    expect(replace).toHaveAttribute("aria-expanded", "false");
+    // Both in one ActionListGroup: PatternFly's action-to-action spacing.
+    expect(test.closest(".pf-v6-c-action-list__group")).toBe(replace.closest(".pf-v6-c-action-list__group"));
+    expect(test.closest(".pf-v6-c-action-list__group")).not.toBeNull();
+  });
 
-    // The form is the confirmation; the same button then cancels.
-    fireEvent.click(replace);
-    const cancel = screen.getByRole("button", { name: "Cancel replacing" });
-    expect(cancel).toHaveAttribute("aria-expanded", "true");
-    expect(cancel).not.toHaveClass("pf-m-danger");
-    expect(screen.getByRole("button", { name: "Replace secret" })).toBeInTheDocument();
+  it("opens the form as the confirmation step: Replace token (danger) and Cancel, with focus moving in and back", async () => {
+    renderWithApp(<PullSecretSetup pullSecret={ready} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Replace token" }));
+
+    // The toggle is hidden while the form is open; Test with Quay stays.
+    const input = screen.getByLabelText("quay.io/rhoai auth token");
+    expect(input).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Test with Quay" })).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Replace token" });
+    expect(submit).toHaveClass("pf-m-danger");
+    expect(submit).not.toHaveClass("pf-m-secondary");
+    expect(submit).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByText(/Replace secret|Cancel replacing/)).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: token } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Replace token" })).not.toHaveAttribute("aria-disabled", "true"));
+
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toHaveClass("pf-m-link");
+    fireEvent.click(cancel);
+    expect(screen.queryByLabelText("quay.io/rhoai auth token")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replace token" })).toHaveFocus();
   });
 });
 

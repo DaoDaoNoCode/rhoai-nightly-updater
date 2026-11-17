@@ -1,5 +1,8 @@
 import React, { useState } from "react";
 import {
+  ActionList,
+  ActionListGroup,
+  ActionListItem,
   Alert,
   AlertActionLink,
   Button,
@@ -423,19 +426,26 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
       </CardBody>
       <CardFooter>
         <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapMd" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
-          {primary && <FlexItem>{primary}</FlexItem>}
-          {prerequisitesMet && !gitOpsApp && !gitOpsProfile && (
-            <FlexItem>
-              <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
-            </FlexItem>
-          )}
-          {previewBuild && onPreview && (
-            <FlexItem>
-              <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(previewBuild.image)}>
-                View build contents
-              </Button>
-            </FlexItem>
-          )}
+          {/* One action group: PatternFly's action-to-action spacing. */}
+          <FlexItem>
+            <ActionList>
+              <ActionListGroup>
+                {primary && <ActionListItem>{primary}</ActionListItem>}
+                {prerequisitesMet && !gitOpsApp && !gitOpsProfile && (
+                  <ActionListItem>
+                    <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
+                  </ActionListItem>
+                )}
+                {previewBuild && onPreview && (
+                  <ActionListItem>
+                    <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(previewBuild.image)}>
+                      View build contents
+                    </Button>
+                  </ActionListItem>
+                )}
+              </ActionListGroup>
+            </ActionList>
+          </FlexItem>
           {!prerequisitesMet && (
             <FlexItem>
               <Content component="p" className="pf-v6-u-text-color-subtle">Finish the cluster setup above first.</Content>

@@ -57,10 +57,16 @@ only accepts a tag whose version is the top dated section. See
   stay, so pipeline servers need no edits.
 - Status page, Cluster setup: **Replace token** of the pull secret is a
   button like **Test with Quay** next to it, outlined in red because it
-  overwrites a credential that may work; the form it opens is still the
-  confirmation, and the same button then reads **Cancel replacing**. The
-  two buttons are one action group, with PatternFly's normal spacing
-  between them instead of the wide gap between groups.
+  overwrites a credential that may work, with PatternFly's normal spacing
+  between the two (one action group) instead of the wide gap between
+  groups. It opens the form, the confirmation step, and hides while the
+  form is open; the form ends with **Replace token** (red, enabled once a
+  token is pasted) and **Cancel**. Focus moves to the token field, and
+  back to **Replace token** on Cancel.
+- Action rows use one PatternFly action group each, so related actions get
+  the standard spacing: the Environment cards' rows (Open admin UI,
+  Migrate, Repair, Tear down, Set up, Open MLflow, Open pipelines) and the
+  Status page's installed-build actions.
 
 ### Fixed
 

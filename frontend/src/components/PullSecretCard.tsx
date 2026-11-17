@@ -1,12 +1,16 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActionList,
   ActionListGroup,
   ActionListItem,
+  ActionGroup,
   Alert,
   Button,
   Content,
   Flex,
+  Form,
+  FormGroup,
+  FormHelperText,
   FlexItem,
   HelperText,
   HelperTextItem,
@@ -78,6 +82,27 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   // An invalid secret has to be replaced, so the form starts open.
   const [replaceOpen, setReplaceOpen] = useState(invalid);
   const [showSecret, setShowSecret] = useState(false);
+  const tokenInputRef = useRef<HTMLInputElement>(null);
+  const replaceButtonRef = useRef<HTMLButtonElement>(null);
+  // Focus follows the replace flow: into the token field when the form
+  // opens, back to Replace token when it is cancelled (the button that
+  // opened it was hidden meanwhile).
+  const focusReplaceButton = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (replaceOpen && mounted.current) tokenInputRef.current?.focus();
+    if (!replaceOpen && focusReplaceButton.current) {
+      focusReplaceButton.current = false;
+      replaceButtonRef.current?.focus();
+    }
+    mounted.current = true;
+  }, [replaceOpen]);
+  const cancelReplace = () => {
+    setAuthValue("");
+    setShowSecret(false);
+    focusReplaceButton.current = true;
+    setReplaceOpen(false);
+  };
 
   const handleSave = async () => {
     setAuthLoading(true);
@@ -87,6 +112,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
       setAuthResult(res);
       if (res.success) {
         setAuthValue("");
+        focusReplaceButton.current = true;
         setReplaceOpen(false);
         setTestResult(null);
         onStatusRefresh?.();
@@ -117,15 +143,17 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
     ?? (!authValue.trim() ? "Paste the auth token first." : null)
     ?? (tokenInvalid ? "This is not a base64 user:password token." : null);
 
+  // One PatternFly form: the token field and its actions. For an existing
+  // secret it is the confirmation step of Replace token; replacing
+  // overwrites a credential that may work, so its action is danger.
   const form = (
-    <Stack hasGutter>
-      <StackItem>
-        <Content component="p" className="pf-v6-u-font-size-sm">{CREDENTIALS_HELP}</Content>
-      </StackItem>
-      <StackItem>
+    <Form onSubmit={(e) => e.preventDefault()}>
+      <Content component="p" className="pf-v6-u-font-size-sm">{CREDENTIALS_HELP}</Content>
+      <FormGroup fieldId={pullSecret.exists ? "update-pull-secret" : "create-pull-secret"}>
         <InputGroup>
           <InputGroupItem isFill>
             <TextInput
+              ref={tokenInputRef}
               id={pullSecret.exists ? "update-pull-secret" : "create-pull-secret"}
               type={showSecret ? "text" : "password"}
               value={authValue}
@@ -135,6 +163,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
               aria-label="quay.io/rhoai auth token"
               validated={tokenInvalid ? "error" : "default"}
               aria-describedby="pull-secret-token-help"
+              autoComplete="off"
             />
           </InputGroupItem>
           <InputGroupItem>
@@ -146,24 +175,29 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             />
           </InputGroupItem>
         </InputGroup>
-        <HelperText id="pull-secret-token-help">
-          <HelperTextItem variant={tokenInvalid ? "error" : "default"}>
-            {tokenInvalid ? "Expected base64 of user:password (the \"auth\" value of a Docker config)." : "Saved as additional-pull-secret in kube-system."}
-          </HelperTextItem>
-        </HelperText>
-      </StackItem>
-      <StackItem>
+        <FormHelperText>
+          <HelperText id="pull-secret-token-help">
+            <HelperTextItem variant={tokenInvalid ? "error" : "default"}>
+              {tokenInvalid ? "Expected base64 of user:password (the \"auth\" value of a Docker config)." : "Saved as additional-pull-secret in kube-system."}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
+      </FormGroup>
+      <ActionGroup>
         <TooltipButton
-          variant={pullSecret.exists ? "secondary" : "primary"}
+          variant={pullSecret.exists ? "danger" : "primary"}
           onClick={handleSave}
-          isLoading={authLoading}
+          isLoading={authLoading || undefined}
           isDisabled={authLoading}
           disabledReason={saveReason}
         >
-          {pullSecret.exists ? "Replace secret" : "Create secret"}
+          {pullSecret.exists ? "Replace token" : "Create secret"}
         </TooltipButton>
-      </StackItem>
-    </Stack>
+        {pullSecret.exists && (
+          <Button variant="link" onClick={cancelReplace} isDisabled={authLoading}>Cancel</Button>
+        )}
+      </ActionGroup>
+    </Form>
   );
 
   return (
@@ -207,14 +241,16 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
                     Test with Quay
                   </Button>
                 </ActionListItem>
-                <ActionListItem>
-                  {/* Danger: replacing overwrites a credential that may work. The
-                      form below is the confirmation; while it is open the same
-                      button cancels, so focus stays on it. */}
-                  <Button variant="secondary" isDanger={!replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
-                    {replaceOpen ? "Cancel replacing" : "Replace token"}
-                  </Button>
-                </ActionListItem>
+                {/* Danger: replacing overwrites a credential that may work. It
+                    opens the form below (the confirmation) and is hidden
+                    while the form is open; Cancel there brings it back. */}
+                {!replaceOpen && (
+                  <ActionListItem>
+                    <Button ref={replaceButtonRef} variant="secondary" isDanger onClick={() => setReplaceOpen(true)}>
+                      Replace token
+                    </Button>
+                  </ActionListItem>
+                )}
               </ActionListGroup>
             </ActionList>
           </StackItem>

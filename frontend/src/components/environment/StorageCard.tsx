@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Card, CardBody, CardHeader, CardTitle, Content, FlexItem, Stack, StackItem, Title } from "@patternfly/react-core";
+import { ActionListItem, Alert, Card, CardBody, CardHeader, CardTitle, Content, FlexItem, Stack, StackItem, Title } from "@patternfly/react-core";
 import type { KeptPVC, ResourceState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import { CardList, CardListItem } from "../CardList";
@@ -35,30 +35,30 @@ export const StorageCard: React.FC<CardActionProps & {
         <CardList aria-label="Storage">
           <CardListItem labelledBy="minio-item" actionsBesideFrom="xl" actions={rowActions(
             <>
-              {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>{minio.migrationPending ? "Open MinIO console" : "Open admin UI"}</ExternalLink></FlexItem>}
+              {minio?.ready && minio.uiRoute && <ActionListItem><ExternalLink href={minio.uiRoute}>{minio.migrationPending ? "Open MinIO console" : "Open admin UI"}</ExternalLink></ActionListItem>}
               {minio && !minio.deployed && !isTerminating(minio) && (
-                <FlexItem>
+                <ActionListItem>
                   <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
-                </FlexItem>
+                </ActionListItem>
               )}
               {minio?.migrationPending && minio.managedByTool !== false && !isTerminating(minio) && (
-                <FlexItem>
+                <ActionListItem>
                   <TooltipButton variant="primary" onClick={() => setPending({ kind: "migrate-minio" })} isLoading={resAction === "setup-minio"}
                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Migrate to SeaweedFS</TooltipButton>
-                </FlexItem>
+                </ActionListItem>
               )}
               {minio?.deployed && !minio.migrationPending && minio.managedByTool !== false && (!!terminalReason(minio) || !!minio.repairNeeded) && !isTerminating(minio) && (
-                <FlexItem>
+                <ActionListItem>
                   <TooltipButton variant="secondary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
                     disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
-                </FlexItem>
+                </ActionListItem>
               )}
               {minio && minio.managedByTool !== false && !isTerminating(minio) && (minio.deployed || minioLeftovers) && (
-                <FlexItem>
+                <ActionListItem>
                   <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
                     disabledReason={baseReason ?? minio.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                </FlexItem>
+                </ActionListItem>
               )}
             </>,
           )}>

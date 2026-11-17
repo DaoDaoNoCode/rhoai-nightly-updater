@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import {
+  ActionListItem,
   Alert,
   Card,
   CardBody,
@@ -45,18 +46,18 @@ export const MLflowCard: React.FC<CardActionProps & { mlflow?: ResourceState }> 
         <CardList aria-label="MLflow">
           <CardListItem labelledBy="mlflow-item" actions={rowActions(
             <>
-              {mlflow?.ready && mlflow.uiRoute && <FlexItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></FlexItem>}
+              {mlflow?.ready && mlflow.uiRoute && <ActionListItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></ActionListItem>}
               {mlflow && !mlflow.deployed && (
-                <FlexItem>
+                <ActionListItem>
                   <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
                     disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
-                </FlexItem>
+                </ActionListItem>
               )}
               {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
-                <FlexItem>
+                <ActionListItem>
                   <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
                     disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                </FlexItem>
+                </ActionListItem>
               )}
             </>,
           )}>

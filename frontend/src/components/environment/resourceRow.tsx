@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, Flex, FlexItem, HelperText, HelperTextItem } from "@patternfly/react-core";
+import { ActionList, ActionListGroup, Button, Flex, FlexItem, HelperText, HelperTextItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
 import type { ResourceState } from "../../types";
@@ -126,11 +126,17 @@ export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }>
   <Button variant="link" isInline component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
 );
 
-/** The actions of one resource row: beside the row on wide screens, wrapping below it otherwise. */
+/**
+ * The actions of one resource row (ActionListItems): one ActionListGroup,
+ * so they get PatternFly's action-to-action spacing; beside the row on wide
+ * screens (right-aligned), below it otherwise.
+ */
 export const rowActions = (children: React.ReactNode) => (
-  <>
-    <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapSm" }} alignItems={{ default: "alignItemsCenter" }} justifyContent={{ md: "justifyContentFlexEnd" }} flexWrap={{ default: "wrap" }}>{children}</Flex>
-  </>
+  <Flex justifyContent={{ md: "justifyContentFlexEnd" }}>
+    <ActionList>
+      <ActionListGroup>{children}</ActionListGroup>
+    </ActionList>
+  </Flex>
 );
 
 /** A change the user is asked to confirm. */

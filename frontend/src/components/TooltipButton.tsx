@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef } from "react";
 import { Button, Tooltip, type ButtonProps } from "@patternfly/react-core";
 
 export interface TooltipButtonProps extends ButtonProps {
@@ -17,11 +17,17 @@ export interface TooltipButtonProps extends ButtonProps {
  * (https://www.patternfly.org/components/button, "Aria-disabled examples").
  */
 export const TooltipButton: React.FC<TooltipButtonProps> = ({ disabledReason, isDisabled, ...props }) => {
+  // triggerRef, not children: wrapping the button makes PatternFly add a
+  // display: contents <div> around it, so in a layout that styles its direct
+  // children (a Form ActionGroup gives them margins) the button lost its
+  // margins and was stretched and clipped.
+  const ref = useRef<HTMLButtonElement>(null);
   if (disabledReason) {
     return (
-      <Tooltip content={disabledReason}>
-        <Button {...props} isAriaDisabled />
-      </Tooltip>
+      <>
+        <Button {...props} ref={ref} isAriaDisabled />
+        <Tooltip content={disabledReason} triggerRef={ref} />
+      </>
     );
   }
   return <Button {...props} isDisabled={isDisabled} />;
