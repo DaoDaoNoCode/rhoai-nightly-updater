@@ -198,6 +198,10 @@ const scenarios = {
   },
   // MLflow made in the dashboard (by the MLflow operator), running or broken; the rest is this tool's.
   "env-mlflow-unmanaged": (w) => { w.resources.mlflow = F.mlflowStates.foreign; },
+  // The storage alone: its Tear down is not blocked, and offers the namespace.
+  "env-storage-only": (w) => {
+    w.resources = { minio: { ...F.s3States.running, teardownBlockedReason: undefined, otherObjects: ["Deployment notes-app"] }, mlflow: F.mlflowStates.none, pipelineServers: [] };
+  },
   "env-mlflow-unmanaged-broken": (w) => { w.resources.mlflow = F.mlflowStates.foreignBroken; },
   // Like the live cluster on 2026-11-17: an empty project sorts first, the
   // pipeline server is in a later one, and MLflow was made in the dashboard.

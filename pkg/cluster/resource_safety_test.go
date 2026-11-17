@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 func TestS3TeardownDependencyFailure(t *testing.T) {
@@ -24,7 +26,7 @@ func TestS3TeardownDependencyFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
-	result, err := TeardownS3Storage(c)
+	result, err := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if err != nil || result.Success || deleted {
 		t.Fatalf("dependency lookup failed but result success=%v deleted=%v error=%v", result.Success, deleted, err)
 	}

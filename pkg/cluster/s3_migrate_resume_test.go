@@ -307,7 +307,8 @@ func TestMigrate_MessagesNeverPointAtTearDown(t *testing.T) {
 		putMigrationCase(f)
 		putReadyManagedS3(f)
 		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
-		if ok || !strings.Contains(msg, "a retry gives the same result") {
+		// Follow-up 7: it names the ways forward, by hand.
+		if ok || !strings.Contains(msg, "a retry gives the same result") || !strings.Contains(msg, "`oc delete project seaweedfs`") || !strings.Contains(msg, "rclone") || !strings.Contains(msg, "Secret 'minio-secret' in 'minio'") {
 			t.Fatalf("got %v: %s", ok, msg)
 		}
 		noTearDownAdvice(t, msg)

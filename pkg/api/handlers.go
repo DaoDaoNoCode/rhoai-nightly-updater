@@ -1555,9 +1555,15 @@ var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.Re
 		return
 	}
 	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.S3TeardownRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
 	beginOperation(w, "")
-	slog.Info("mutation", "op", "teardown-minio")
-	result, err := cluster.TeardownS3Storage(c)
+	slog.Info("mutation", "op", "teardown-minio", "deleteNamespace", req.DeleteNamespace)
+	result, err := cluster.TeardownS3Storage(c, req)
 	if err != nil {
 		slog.Error("teardown-minio failed", "error", err)
 		writeError(w, "S3 storage teardown failed", http.StatusInternalServerError)

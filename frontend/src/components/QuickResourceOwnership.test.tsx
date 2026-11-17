@@ -468,6 +468,44 @@ describe("every setup has its removal on the same tab", () => {
     expect(dialog).toHaveTextContent("Namespace seaweedfs is kept");
   });
 
+  // Follow-up 8: the storage's namespace, which this tool created, can go
+  // with it, as the user's informed choice.
+  it("storage Tear down offers namespace seaweedfs, unticked, above the data loss, and sends it only when ticked", async () => {
+    const own: ResourceState = { ...readyMinio, dataPVCs: ["seaweedfs-data"], namespaceDeletable: true, otherObjects: ["Deployment notes-app"] };
+    const api = setup(live({ minio: own, pipelineServers: [] }), {
+      "POST /api/resources/minio/teardown": () => jsonResponse({ success: true, message: "S3 storage removed. Namespace 'seaweedfs' is being deleted, with everything else in it.", logs: [] }),
+    });
+    renderAt("/test-resources?tab=pipelines&project=fresh");
+    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    const dialog = await screen.findByRole("dialog");
+    const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace seaweedfs (created by this tool)" });
+    expect(box).not.toBeChecked();
+    expect(dialog).toHaveTextContent("Deletes namespace seaweedfs and everything in it, including anything this tool did not create.");
+    expect(dialog).toHaveTextContent("this tool sees there: Deployment notes-app.");
+    expect(dialog).toHaveTextContent("Namespace seaweedfs is kept");
+    const danger = within(dialog).getByText("Data is deleted and cannot be recovered");
+    expect(box.compareDocumentPosition(danger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(box);
+    expect(await within(dialog).findByText(/Then namespace/)).toHaveTextContent("Then namespace seaweedfs is deleted, with everything in it.");
+    expect(dialog).not.toHaveTextContent("Namespace seaweedfs is kept");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/minio/teardown"]).toEqual([{ deleteNamespace: true }]));
+  });
+
+  it("a namespace this tool did not write is not offered, and says why; unticked sends nothing extra", async () => {
+    const own: ResourceState = { ...readyMinio, dataPVCs: ["seaweedfs-data"], namespaceDeletable: false, namespaceKeptReason: "Namespace 'seaweedfs' is kept: it carries this tool's label, but its managedFields show no write by this tool." };
+    const api = setup(live({ minio: own, pipelineServers: [] }), {
+      "POST /api/resources/minio/teardown": () => jsonResponse({ success: true, message: "S3 storage removed.", logs: [] }),
+    });
+    renderAt("/test-resources?tab=pipelines&project=fresh");
+    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("its managedFields show no write by this tool");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/minio/teardown"]).toEqual([{}]));
+  });
+
   it("a deployed PR image is removed with Revert, and storage of an earlier version with Remove old storage", async () => {
     const legacy: LegacyStorageState = { namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000", objects: ["Deployment seaweedfs"], stage: "remove", namespaceDeletable: false, usedBy: [] };
     setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: legacy, pipelineServers: [], mlflow: { ...ownMlflow, prOverride: true, prNumber: 7 } }));

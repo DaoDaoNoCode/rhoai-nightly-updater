@@ -677,6 +677,12 @@ export interface ResourceState {
   revertImage?: string;
   /** Login name of the resource's web UI (the SeaweedFS admin UI: "admin"). */
   uiUser?: string;
+  /** Tear down may also delete the resource's namespace, which this tool created (the S3 storage's seaweedfs). */
+  namespaceDeletable?: boolean;
+  /** Why that namespace is not offered for deletion. */
+  namespaceKeptReason?: string;
+  /** Deployments and PVCs in that namespace this tool did not create (it cannot list every kind). */
+  otherObjects?: string[] | null;
   /** Storage from an earlier version is left in namespace minio (ResourcesStatus.legacyStorage); Migrate storage moves it. */
   migrationPending?: boolean;
   /**

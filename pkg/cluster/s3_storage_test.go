@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const (
@@ -686,7 +688,7 @@ func TestTeardownS3Storage(t *testing.T) {
 	fastS3Timings(t)
 	f, c := newResourceFake(t)
 	putDeployedS3(f)
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if !resp.Success {
 		t.Fatalf("teardown = %+v", resp)
 	}
@@ -699,8 +701,97 @@ func TestTeardownS3Storage(t *testing.T) {
 		t.Errorf("teardown = %+v", resp)
 	}
 	// Re-running finds nothing left.
-	if again, _ := TeardownS3Storage(c); !again.Success || !strings.Contains(again.Message, "No S3 storage objects created by this tool remain") {
+	if again, _ := TeardownS3Storage(c, types.S3TeardownRequest{}); !again.Success || !strings.Contains(again.Message, "No S3 storage objects created by this tool remain") {
 		t.Errorf("re-run = %+v", again)
+	}
+}
+
+// putToolNamespace puts namespace seaweedfs as this tool creates it: the
+// tool label, written by the tool's field manager.
+func putToolNamespace(f *resourceFake) {
+	f.putJSON(s3NSPath, `{"metadata":{"labels":`+toolLabelJSON+`,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`},"status":{"phase":"Active"}}`)
+}
+
+// Tear down deletes namespace seaweedfs only when asked, only once every
+// object is gone, and only when this tool created it.
+func TestTeardownS3Storage_DeleteNamespace(t *testing.T) {
+	deleted := func(f *resourceFake) bool { return hasExactMutation(f, "DELETE "+s3NSPath) }
+	t.Run("ticked, created by this tool: deleted after the objects, by UID", func(t *testing.T) {
+		fastS3Timings(t)
+		f, c := newResourceFake(t)
+		putDeployedS3(f)
+		putToolNamespace(f)
+		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{DeleteNamespace: true})
+		if !resp.Success || !deleted(f) || f.has(s3NSPath) || !strings.Contains(resp.Message, "Namespace 'seaweedfs' is being deleted, with everything else in it.") || strings.Contains(resp.Message, "oc delete project") {
+			t.Fatalf("teardown = %+v", resp)
+		}
+		if f.has(s3DeployPath) || f.has(s3SecretPath) {
+			t.Error("the storage's objects are left")
+		}
+	})
+	t.Run("ticked, the namespace was recreated since it was checked: the UID precondition keeps it", func(t *testing.T) {
+		fastS3Timings(t)
+		f, c := newResourceFake(t)
+		putDeployedS3(f)
+		putToolNamespace(f)
+		f.onGet = func(k fakeKey, obj map[string]interface{}) {
+			if k.plural == "namespaces" && k.name == s3Namespace {
+				obj["metadata"].(map[string]interface{})["uid"] = "uid-seen-by-check"
+			}
+		}
+		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{DeleteNamespace: true})
+		if resp.Success || !f.has(s3NSPath) || !strings.Contains(resp.Message, "namespace seaweedfs") {
+			t.Fatalf("teardown = %+v", resp)
+		}
+	})
+	t.Run("not ticked: kept, with the command", func(t *testing.T) {
+		fastS3Timings(t)
+		f, c := newResourceFake(t)
+		putDeployedS3(f)
+		putToolNamespace(f)
+		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
+		if !resp.Success || deleted(f) || !strings.Contains(resp.Message, "oc delete project seaweedfs") {
+			t.Fatalf("teardown = %+v", resp)
+		}
+	})
+	t.Run("ticked, labelled but never written by this tool: kept, with why", func(t *testing.T) {
+		fastS3Timings(t)
+		f, c := newResourceFake(t)
+		putDeployedS3(f)
+		putS3Namespace(f, toolLabelJSON)
+		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{DeleteNamespace: true})
+		if !resp.Success || deleted(f) || !strings.Contains(resp.Message, "its managedFields show no write by this tool") {
+			t.Fatalf("teardown = %+v", resp)
+		}
+	})
+	t.Run("ticked, an object cannot be deleted: the namespace stays", func(t *testing.T) {
+		fastS3Timings(t)
+		f, c := newResourceFake(t)
+		putDeployedS3(f)
+		putToolNamespace(f)
+		f.fail["DELETE "+s3SecretPath] = 500
+		resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{DeleteNamespace: true})
+		if resp.Success || deleted(f) {
+			t.Fatalf("teardown = %+v", resp)
+		}
+	})
+}
+
+// The status says whether Tear down may offer the namespace, and what else
+// the tool sees in it.
+func TestGetS3Status_NamespaceDeletion(t *testing.T) {
+	f, c := newResourceFake(t)
+	putReadyManagedS3(f)
+	putToolNamespace(f)
+	f.putJSON("/apis/apps/v1/namespaces/seaweedfs/deployments/notes-app", `{"metadata":{}}`)
+	f.putJSON("/api/v1/namespaces/seaweedfs/persistentvolumeclaims/scratch", `{"metadata":{}}`)
+	st := getS3Status(c)
+	if !st.NamespaceDeletable || st.NamespaceKeptReason != "" || strings.Join(st.OtherObjects, ", ") != "Deployment notes-app, PersistentVolumeClaim scratch" {
+		t.Fatalf("status = %+v", st)
+	}
+	putS3Namespace(f, toolLabelJSON)
+	if st := getS3Status(c); st.NamespaceDeletable || !strings.Contains(st.NamespaceKeptReason, "no write by this tool") {
+		t.Fatalf("status = %+v", st)
 	}
 }
 
@@ -709,7 +800,7 @@ func TestTeardownS3Storage_KeepsForeignObjects(t *testing.T) {
 	f, c := newResourceFake(t)
 	putDeployedS3(f)
 	f.putJSON(s3SecretPath, foreignJSON(`,"data":{"k":"dXNlcg=="}`))
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if !resp.Success || !strings.Contains(resp.Message, "Left in place because this tool did not create them: Secret seaweedfs/seaweedfs-s3-credentials") {
 		t.Fatalf("teardown = %+v", resp)
 	}
@@ -727,7 +818,7 @@ func TestTeardownS3Storage_DeleteUsesUIDPrecondition(t *testing.T) {
 			obj["metadata"].(map[string]interface{})["uid"] = "uid-seen-by-check"
 		}
 	}
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if resp.Success || !f.has(s3DeployPath) || !strings.Contains(resp.Message, "Deployment seaweedfs/seaweedfs") {
 		t.Fatalf("a Deployment with a different UID must not be deleted: %+v", resp)
 	}
@@ -740,7 +831,7 @@ func TestTeardownS3Storage_BlockedByPipelineServers(t *testing.T) {
 			f, c := newResourceFake(t)
 			putDeployedS3(f)
 			putDSPA(f, "team", "dspa", `{}`, "Mozilla", "Update", host, "s", "", "")
-			resp, _ := TeardownS3Storage(c)
+			resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 			if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "team/dspa") {
 				t.Fatalf("teardown = %+v", resp)
 			}
@@ -759,7 +850,7 @@ func TestTeardownS3Storage_FailsClosedWhenEndpointsUnreadable(t *testing.T) {
 	putDeployedS3(f)
 	putDSPA(f, "team", "dspa", `{}`, "Mozilla", "Update", "s3.amazonaws.com", "s", "", "")
 	f.fail["GET "+s3RoutePath] = 500
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if resp.Success || !strings.Contains(resp.Message, "nothing was deleted") {
 		t.Fatalf("teardown = %+v", resp)
 	}
@@ -779,7 +870,7 @@ func TestTeardownS3Storage_UnreadableEndpointsWithoutPipelineServersProceeds(t *
 	f, c := newResourceFake(t)
 	putDeployedS3(f)
 	f.fail["GET "+s3RoutePath] = 500
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if resp.Success || resp.ErrorCode != "partial_failure" || f.has(s3DeployPath) {
 		t.Fatalf("teardown = %+v", resp)
 	}
@@ -788,7 +879,7 @@ func TestTeardownS3Storage_UnreadableEndpointsWithoutPipelineServersProceeds(t *
 func TestTeardownS3Storage_NothingDeployed(t *testing.T) {
 	fastS3Timings(t)
 	_, c := newResourceFake(t)
-	if resp, _ := TeardownS3Storage(c); !resp.Success || !strings.Contains(resp.Message, "nothing to remove") {
+	if resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{}); !resp.Success || !strings.Contains(resp.Message, "nothing to remove") {
 		t.Fatalf("teardown = %+v", resp)
 	}
 }

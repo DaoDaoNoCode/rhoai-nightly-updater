@@ -112,7 +112,9 @@ export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }>
 
 /** A change the user is asked to confirm. */
 export type Pending =
-  | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
+  | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
+  /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
+  | { kind: "teardown-minio"; deleteNamespace?: boolean }
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
 
@@ -122,6 +124,8 @@ export interface ConfirmSpec {
   confirm: string;
   changes: React.ReactNode[];
   dataLoss?: React.ReactNode;
+  /** A choice that changes what is deleted, shown above the data-loss alert it changes. */
+  choice?: React.ReactNode;
   danger?: boolean;
   extra?: React.ReactNode;
 }

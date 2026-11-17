@@ -69,6 +69,15 @@ only accepts a tag whose version is the top dated section. See
   it, instead of an `oc extract` command on the page. Only cluster-admins
   get it; it is never part of the status, never cached and never logged,
   and it is gone when you hide it or leave the tab.
+- **Tear down the S3 storage** can also delete namespace `seaweedfs`
+  ("Also delete namespace seaweedfs (created by this tool)"): offered only
+  when the namespace carries the tool label and the tool wrote it,
+  unticked, with what it deletes and what the tool sees there. Needs the
+  template's new `delete` on namespace `seaweedfs` (SECURITY.md).
+- Pipelines tab: clearing the project picker clears the project (the
+  address keeps an empty `project=`), so the picker and the parts show
+  the same; reload keeps it, back restores the project.
+- Migrate storage's "other keys" refusal names the ways forward by hand.
 - New pipeline servers wait until Migrate storage has copied the old
   storage: the copy's check compares both sides, and a server writing to the
   new storage first would make it fail. Migrate storage tells you to run

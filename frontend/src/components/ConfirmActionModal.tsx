@@ -23,6 +23,8 @@ export interface ConfirmActionModalProps {
   children?: React.ReactNode;
   /** Data that is lost, shown as a danger alert. */
   dataLoss?: React.ReactNode;
+  /** A choice that changes what is deleted (a checkbox), shown before the data-loss alert. */
+  choice?: React.ReactNode;
   confirmLabel: string;
   confirmVariant?: "primary" | "danger";
   isLoading?: boolean;
@@ -38,7 +40,7 @@ export interface ConfirmActionModalProps {
  * of them; Cancel is always available and Escape closes the dialog.
  */
 export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
-  isOpen, title, changes, children, dataLoss, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, onConfirm, onCancel,
+  isOpen, title, changes, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, onConfirm, onCancel,
 }) => {
   const titleId = React.useId();
   return (
@@ -52,6 +54,7 @@ export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
               {changes.map((change, i) => <ListItem key={i}>{change}</ListItem>)}
             </List>
           </StackItem>
+          {choice && <StackItem>{choice}</StackItem>}
           {dataLoss && (
             <StackItem>
               <Alert component="p" variant="danger" isInline title="Data is deleted and cannot be recovered">{dataLoss}</Alert>

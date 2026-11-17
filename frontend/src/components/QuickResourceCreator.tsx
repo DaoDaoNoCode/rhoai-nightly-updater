@@ -46,6 +46,7 @@ import { SetupRunModal } from "./environment/SetupRun";
 import { useGoalRun, type GoalRunStep } from "./environment/useGoalRun";
 import {
   type Busy,
+  type FeatureState,
   defaultProject,
   mlflowState,
   pipelineServerIn,
@@ -101,6 +102,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const tabParam = searchParams.get("tab") ?? "";
   const tab: EnvironmentTab = (ENVIRONMENT_TABS as readonly string[]).includes(tabParam) ? (tabParam as EnvironmentTab) : OLD_TABS.includes(tabParam) ? "pipelines" : "overview";
   const urlProject = searchParams.get("project") || null;
+  // project: a name; "" an explicit clear (the URL keeps an empty project=,
+  // so the default does not come back); null drops it (the default applies).
   const navigate = useCallback((next: { tab?: EnvironmentTab; project?: string | null }, replace = false) => {
     setSearchParams((params) => {
       const p = new URLSearchParams(params);
@@ -109,8 +112,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
         else p.set("tab", next.tab);
       }
       if (next.project !== undefined) {
-        if (next.project) p.set("project", next.project);
-        else p.delete("project");
+        if (next.project === null) p.delete("project");
+        else p.set("project", next.project);
       }
       return p;
     }, { replace });
@@ -229,7 +232,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     switch (p.kind) {
       case "setup-minio": return ["setup-minio", setupMinIO, null];
       case "repair-minio": return ["setup-minio", setupMinIO, null];
-      case "teardown-minio": return ["teardown-minio", teardownMinIO, null];
+      case "teardown-minio": return ["teardown-minio", () => teardownMinIO(!!p.deleteNamespace), null];
       case "setup-mlflow": return ["setup-mlflow", setupMLflow, null];
       case "teardown-mlflow": return ["teardown-mlflow", teardownMLflow, null];
       case "deploy-mlflow-pr": return ["deploy-mlflow-pr", () => deployMLflowPR(p.pr), null];
@@ -242,7 +245,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     const [action, fn, target] = request(p);
     return runAction(action, fn, target, true);
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers);
 
   /** Set up: confirm every change, then run the missing parts in order. */
   const setUp = (feature: string, setup: Pending[]) => {
@@ -278,7 +281,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     ...pipelineServers.map((ps) => ps.namespace ?? ""),
     ...(resStatus?.unmanagedPipelineServers ?? []).map((ps) => ps.namespace ?? ""),
   ].filter(Boolean))].sort();
-  const project = defaultProject(resStatus, projectNames, urlProject);
+  // One state for the picker and the content: the URL's project; an empty
+  // project= after a clear means none; only without project= at all (a
+  // first visit) the default applies.
+  const project = searchParams.has("project") ? urlProject : defaultProject(resStatus, projectNames, null);
   const projectOptions: ProjectOption[] = projectNames.map((name) => {
     const status = pipelineServerStatus(resStatus, name, busy);
     const foreign = pipelineServerUnmanaged(resStatus, name);
@@ -286,7 +292,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     return { name, description: has ? `Pipeline server: ${envStatusText(status)}${foreign ? " · not managed by this tool" : ""}` : undefined };
   });
 
-  const pipelines = pipelinesState(resStatus, project, projectNames, busy);
+  // After an explicit clear the tab says so instead of the cross-project
+  // summary, which names a project the picker no longer shows.
+  const cleared = searchParams.has("project") && !project;
+  const pipelines: FeatureState = cleared
+    ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
+    : pipelinesState(resStatus, project, projectNames, busy);
   const pipelinesSummary = pipelinesState(resStatus, null, projectNames, busy);
   const mlflowNow = mlflowState(resStatus, busy);
   const overviewRows: OverviewRow[] = [
@@ -354,7 +365,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     onOpenTab={(row) => navigate({ tab: row.id as EnvironmentTab })} />
                 )}
                 {tab === "pipelines" && (
-                  <PipelinesTab status={resStatus} project={project} projects={projectOptions} onProject={(p) => navigate({ project: p })}
+                  <PipelinesTab status={resStatus} project={project} projects={projectOptions} onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
                     state={pipelines} busy={busy} baseReason={baseReason} readReason={readBlocker} minioLeftovers={minioLeftovers}
                     setPending={setPending} onMigrate={() => setMigrateOpen(true)} onSetUp={(setup) => setUp("Pipelines", setup)} />
                 )}
@@ -385,6 +396,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           title={modal.title}
           changes={modal.changes}
           dataLoss={modal.dataLoss}
+          choice={modal.choice}
           confirmLabel={modal.confirm}
           confirmVariant={modal.danger ? "danger" : "primary"}
           isLoading={!!resAction}

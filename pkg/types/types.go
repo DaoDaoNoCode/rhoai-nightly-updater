@@ -610,6 +610,14 @@ type ResourcesStatus struct {
 
 // MigrateStorageRequest is the body of POST
 // /api/resources/minio/migrate/stream.
+type S3TeardownRequest struct {
+	// DeleteNamespace also deletes namespace seaweedfs, with everything in
+	// it, once the storage's objects are gone (only when this tool created
+	// it: it carries the tool label and a tool manager wrote it).
+	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
+}
+
+// MigrateStorageRequest is the body of POST /api/resources/minio/migrate/stream.
 type MigrateStorageRequest struct {
 	// RemoveOldStorage runs the last part: removing the old storage once the
 	// migration is done. Without it Migrate storage sets up the new storage,
@@ -711,6 +719,14 @@ type ResourceState struct {
 	// RevertImage is the image Revert restores. Empty with PROverride set
 	// means the operator default (spec.image.image removed).
 	RevertImage string `json:"revertImage,omitempty"`
+	// NamespaceDeletable: Tear down may also delete the resource's
+	// namespace, which this tool created (the S3 storage's seaweedfs).
+	NamespaceDeletable bool `json:"namespaceDeletable,omitempty"`
+	// NamespaceKeptReason says why the namespace is not offered for deletion.
+	NamespaceKeptReason string `json:"namespaceKeptReason,omitempty"`
+	// OtherObjects are the Deployments and PVCs in that namespace this tool
+	// did not create (it cannot list every kind).
+	OtherObjects []string `json:"otherObjects,omitempty"`
 	// Warning is a security or upgrade notice that needs the user's action
 	// but does not stop the resource from working (for example the S3
 	// storage running another image than this version deploys).

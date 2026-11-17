@@ -105,6 +105,35 @@ describe("Environment page", () => {
     }
   });
 
+  // The picker and the content come from one state: a clear is kept in the
+  // URL (an empty project=), so the default project does not come back.
+  it("clearing the project shows the prompt in the picker and the content; reload keeps it; back restores the project", async () => {
+    stubApi({ "/api/resources/status": { minio: readyMinio, mlflow: notDeployed, pipelineServers: [readyDspa("juntao-test")] }, "/api/resources/projects": { projects: ["a-test-project", "juntao-test"] } });
+    const router = renderPage("/test-resources?tab=pipelines&project=juntao-test");
+    expect(await screen.findByRole("listitem", { name: /^Pipeline server \(juntao-test\)/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toHaveValue("juntao-test");
+    fireEvent.click(screen.getByRole("button", { name: "Clear the project filter" }));
+    await waitFor(() => expect(router.state.location.search).toBe("?tab=pipelines&project="));
+    expect(await screen.findByText("Choose a project to see or set up its pipeline server.")).toBeInTheDocument();
+    expect(screen.queryByRole("listitem", { name: /^Pipeline server/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: /^S3 storage/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toHaveValue("");
+    // The header agrees: no project, not a summary naming one.
+    expect(screen.getByText("No project chosen")).toBeInTheDocument();
+    expect(screen.queryByText("Ready in juntao-test")).not.toBeInTheDocument();
+    await act(() => router.navigate(-1));
+    expect(await screen.findByRole("listitem", { name: /^Pipeline server \(juntao-test\)/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toHaveValue("juntao-test");
+  });
+
+  it("a cleared project stays cleared on reload; without project= the default applies", async () => {
+    stubApi({ "/api/resources/status": { minio: readyMinio, mlflow: notDeployed, pipelineServers: [readyDspa("juntao-test")] }, "/api/resources/projects": { projects: ["a-test-project", "juntao-test"] } });
+    renderPage("/test-resources?tab=pipelines&project=");
+    expect(await screen.findByText("Choose a project to see or set up its pipeline server.")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toHaveValue("");
+    expect(screen.queryByRole("listitem", { name: /^Pipeline server/ })).not.toBeInTheDocument();
+  });
+
   it("Set up on the Pipelines tab sets up only what is missing, in order, after one confirmation", async () => {
     let status: ResourcesStatus = { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] };
     const api = stubApi({

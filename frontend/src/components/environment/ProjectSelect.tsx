@@ -27,7 +27,9 @@ export const ProjectSelect: React.FC<{
   projects: ProjectOption[];
   selected: string | null;
   onSelect: (project: string) => void;
-}> = ({ id, projects, selected, onSelect }) => {
+  /** The clear button clears the selection too, not only the typed filter. */
+  onClear?: () => void;
+}> = ({ id, projects, selected, onSelect, onClear }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [inputValue, setInputValue] = useState(selected ?? "");
   const [filter, setFilter] = useState("");
@@ -105,7 +107,7 @@ export const ProjectSelect: React.FC<{
         {inputValue && (
           <TextInputGroupUtilities>
             <Button variant="plain" aria-label="Clear the project filter" icon={<TimesIcon />}
-              onClick={() => { setInputValue(""); setFilter(""); setFocused(null); inputRef.current?.focus(); }} />
+              onClick={() => { setInputValue(""); setFilter(""); setFocused(null); if (selected) onClear?.(); inputRef.current?.focus(); }} />
           </TextInputGroupUtilities>
         )}
       </TextInputGroup>

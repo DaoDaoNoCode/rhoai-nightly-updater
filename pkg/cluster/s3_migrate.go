@@ -446,7 +446,7 @@ func (m *migrateRun) newStorageMatches(keys *s3Keys, step string) (bool, *types.
 		return false, resp
 	}
 	if found && keys != nil && stored != *keys {
-		resp, _ := m.fail(step, fmt.Sprintf("The storage in namespace '%s' has other keys than the one in namespace '%s', so clients that keep their keys could not use it. Nothing was changed, and a retry gives the same result: this tool never changes the keys of a storage that may hold data.", s3Namespace, legacyNamespace), "conflict", "keys differ")
+		resp, _ := m.fail(step, fmt.Sprintf("The storage in namespace '%s' has other keys than the one in namespace '%s', so clients that keep their keys could not use it. Nothing was changed, and a retry gives the same result: this tool never changes the keys of a storage that may hold data. Two ways forward, both by hand: if namespace '%s' holds nothing you need, delete it (check with `oc get all,pvc,secret -n %s`, then `oc delete project %s`) and run Migrate storage again, which sets the storage up there with the old keys. Or copy the data yourself, for example with rclone, from the old storage (keys in Secret '%s' in '%s') to the new one (keys in Secret '%s' in '%s') and point your clients at the new storage and its keys. (Removing the storage from this page would delete the old storage too.)", s3Namespace, legacyNamespace, s3Namespace, s3Namespace, s3Namespace, legacySecret, legacyNamespace, s3Secret, s3Namespace), "conflict", "keys differ")
 		return false, resp
 	}
 	state := getS3Status(m.c)
@@ -1078,22 +1078,28 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 	}
 }
 
-// legacyNamespaceDeletable reports whether removing the old storage may
-// offer to delete namespace minio: it carries the tool's label and one of
-// the tool's managers wrote it (earlier versions created it, or labelled
-// one they had created). Who created a namespace cannot be proven from its
-// metadata (an entry's time is the manager's last write), so the deletion
-// is the user's informed choice: the dialog says it deletes everything in
-// the namespace, lists what the tool can see there, and starts unticked.
-// reason says why it is not offered.
-func legacyNamespaceDeletable(meta objectMeta) (bool, string) {
+// toolNamespaceDeletable reports whether a removal may offer to delete a
+// storage namespace (minio when the old storage is removed, seaweedfs when
+// the storage is torn down): it carries the tool's label and one of the
+// tool's managers wrote it (this or an earlier version created it, or
+// labelled one it had created). Who created a namespace cannot be proven
+// from its metadata (an entry's time is the manager's last write), so the
+// deletion is the user's informed choice: the dialog says it deletes
+// everything in the namespace, lists what the tool can see there, and
+// starts unticked. reason says why it is not offered.
+func toolNamespaceDeletable(name string, meta objectMeta) (bool, string) {
 	switch {
 	case !meta.hasToolLabel():
-		return false, fmt.Sprintf("Namespace '%s' is kept: it does not carry this tool's label (%s=%s).", legacyNamespace, managedByLabelKey, managedByLabelValue)
+		return false, fmt.Sprintf("Namespace '%s' is kept: it does not carry this tool's label (%s=%s).", name, managedByLabelKey, managedByLabelValue)
 	case !meta.hasManager(toolManagers):
-		return false, fmt.Sprintf("Namespace '%s' is kept: it carries this tool's label, but its managedFields show no write by this tool.", legacyNamespace)
+		return false, fmt.Sprintf("Namespace '%s' is kept: it carries this tool's label, but its managedFields show no write by this tool.", name)
 	}
 	return true, ""
+}
+
+// legacyNamespaceDeletable is toolNamespaceDeletable for namespace minio.
+func legacyNamespaceDeletable(meta objectMeta) (bool, string) {
+	return toolNamespaceDeletable(legacyNamespace, meta)
 }
 
 // readLegacyNamespace reads namespace minio's metadata.

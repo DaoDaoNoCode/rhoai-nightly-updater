@@ -450,7 +450,7 @@ const BLOCKED = (ps) => `1 pipeline server uses this S3 storage: ${ps}. Tear it 
 export const s3States = {
   running: {
     deployed: true, ready: true, message: "Running", namespace: "seaweedfs", uiRoute: S3_UI, currentImage: SEAWEEDFS,
-    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
+    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", namespaceDeletable: true, teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
   },
   incomplete: {
     deployed: true, ready: false, terminalError: true, namespace: "seaweedfs", currentImage: SEAWEEDFS, managedByTool: true, uiUser: "admin",

@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const (
@@ -171,7 +173,7 @@ func TestTeardownS3Storage_RemovesEarlierStorage(t *testing.T) {
 	putDeployedS3(f)
 	putLegacySeaweedFS(f)
 	f.putJSON(legacyAPIRoutePath, foreignJSON(`,"spec":{"host":"someone-else.apps.example.com"}`))
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if !resp.Success {
 		t.Fatalf("teardown = %+v", resp)
 	}
@@ -195,7 +197,7 @@ func TestTeardownS3Storage_BlockedByPipelineServersOnEarlierStorage(t *testing.T
 			f, c := newResourceFake(t)
 			putLegacySeaweedFS(f)
 			putDSPA(f, "team", "dspa", `{}`, "Mozilla", "Update", host, "s", "", "")
-			resp, _ := TeardownS3Storage(c)
+			resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 			if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "team/dspa") {
 				t.Fatalf("teardown = %+v", resp)
 			}
@@ -212,7 +214,7 @@ func TestTeardownS3Storage_EarlierStorageAddressUnreadableFailsClosed(t *testing
 	putLegacySeaweedFS(f)
 	putDSPA(f, "team", "dspa", `{}`, "Mozilla", "Update", "s3.amazonaws.com", "s", "", "")
 	f.fail["GET "+legacyAPIRoutePath] = 500
-	resp, _ := TeardownS3Storage(c)
+	resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if resp.Success || !strings.Contains(resp.Message, "nothing was deleted") {
 		t.Fatalf("teardown = %+v", resp)
 	}

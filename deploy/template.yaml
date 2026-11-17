@@ -109,11 +109,11 @@ objects:
         resources: ["events"]
         verbs: ["list"]
       # Namespaces: list DS projects; create redhat-ods-operator, seaweedfs
-      # and pipeline projects. S3 storage teardown removes only the tool's
-      # own objects and keeps the namespaces. Only minio, the namespace of
-      # the storage earlier versions set up, may be deleted: at the end of
-      # Migrate storage, when the user ticks it; offered only when it carries
-      # the tool label and the tool's managers wrote it (UID precondition).
+      # and pipeline projects. Only the two storage namespaces may be
+      # deleted, each only when the user ticks it and only when it carries
+      # the tool label and the tool's managers wrote it (UID precondition):
+      # minio (the storage earlier versions set up) at the end of Migrate
+      # storage, and seaweedfs at the end of the storage's Tear down.
       - apiGroups: [""]
         resources: ["namespaces"]
         verbs: ["get", "list", "create"]
@@ -123,7 +123,7 @@ objects:
         verbs: ["patch"]
       - apiGroups: [""]
         resources: ["namespaces"]
-        resourceNames: ["minio"]
+        resourceNames: ["minio", "seaweedfs"]
         verbs: ["delete"]
       # Secrets: no list and no general read. The S3 storage's keys, the
       # keys of the storage earlier versions left in namespace minio (read

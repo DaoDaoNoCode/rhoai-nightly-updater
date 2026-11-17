@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ActionListItem,
+  Checkbox,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -54,6 +55,8 @@ export interface PipelinesTabProps {
   project: string | null;
   projects: ProjectOption[];
   onProject: (project: string) => void;
+  /** Clears the project (the URL keeps an empty project=). */
+  onClearProject: () => void;
   /** pipelinesState for the project: the same as the Overview's. */
   state: FeatureState;
   busy: Busy;
@@ -197,7 +200,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps & { project: string }> = ({
  * what is missing; what it creates and Tear down below.
  */
 export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
-  const { status, project, projects, onProject, state, busy, baseReason, setPending, onSetUp, minioLeftovers } = props;
+  const { status, project, projects, onProject, onClearProject, state, busy, baseReason, setPending, onSetUp, minioLeftovers } = props;
   const { minio, legacyStorage: legacy } = status;
   const server = project ? pipelineServerIn(status, project) : undefined;
   const serverManaged = !!server && server.managedByTool !== false;
@@ -209,7 +212,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       <StackItem>
         <Form isWidthLimited onSubmit={(e) => e.preventDefault()}>
           <FormGroup label="Project" fieldId="pipelines-project">
-            <ProjectSelect id="pipelines-project" projects={projects} selected={project} onSelect={onProject} />
+            <ProjectSelect id="pipelines-project" projects={projects} selected={project} onSelect={onProject} onClear={onClearProject} />
           </FormGroup>
         </Form>
       </StackItem>
@@ -222,7 +225,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       {!project && (
         <StackItem>
           <EmptyState headingLevel="h3" titleText="Choose a project" variant="xs">
-            <EmptyStateBody>No project has a pipeline server yet. Choose the project to set one up in.</EmptyStateBody>
+            <EmptyStateBody>Choose a project to see or set up its pipeline server.</EmptyStateBody>
           </EmptyState>
         </StackItem>
       )}
@@ -277,7 +280,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
 };
 
 /** The confirmation of a Storage change, or null for another feature's change. */
-export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null): ConfirmSpec | null {
+export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null, setPending?: (p: Pending) => void): ConfirmSpec | null {
   switch (pending.kind) {
     case "setup-minio":
     case "repair-minio":
@@ -293,15 +296,33 @@ export function storageConfirm(pending: Pending, minio: ResourceState | undefine
       };
     case "teardown-minio": {
       const current = !!minio && (minio.deployed || pvcList(minio).length > 0);
-      const namespaces = [...(current ? [S3_NAMESPACE] : []), ...(legacy ? [legacy.namespace] : [])];
+      // Namespace seaweedfs goes too only when the user ticks it, and it is
+      // offered only for the namespace this tool created (pkg/cluster
+      // toolNamespaceDeletable): the same informed choice as for minio.
+      const offerNamespace = current && minio?.managedByTool !== false && !!minio?.namespaceDeletable;
+      const deleteNamespace = offerNamespace && pending.deleteNamespace === true;
+      const others = minio?.otherObjects ?? [];
+      const namespaces = [...(current && !deleteNamespace ? [S3_NAMESPACE] : []), ...(legacy ? [legacy.namespace] : [])];
       const pvcs = [...(current ? pvcList(minio).map((n) => `${S3_NAMESPACE}/${n}`) : []), ...(legacy?.dataPVCs ?? []).map((p) => `${legacy!.namespace}/${p.name}`)];
       return {
         title: "Tear down S3 storage?", confirm: "Tear down S3 storage", danger: true,
         changes: [
           ...(current ? [<>The S3 storage objects this tool created in namespace <code>{S3_NAMESPACE}</code> are deleted: Deployment <code>seaweedfs</code>, NetworkPolicy <code>seaweedfs-ingress</code>, Route <code>seaweedfs-admin</code>, Service <code>seaweedfs-s3</code>, Secret <code>seaweedfs-s3-credentials</code> and PersistentVolumeClaim <code>seaweedfs-data</code>.</>] : []),
           ...(legacy ? [<>The storage an earlier version left in namespace <code>{legacy.namespace}</code> is deleted: {joinNodes(legacy.objects.map((o) => <code key={o}>{o}</code>))}.</>] : []),
-          <>Objects with these names that the tool did not create are kept. {namespaces.length > 1 ? "Namespaces" : "Namespace"} {joinNodes(namespaces.map((n) => <code key={n}>{n}</code>))} {namespaces.length > 1 ? "are" : "is"} kept: delete {namespaces.length > 1 ? "them" : "it"} yourself with {joinNodes(namespaces.map((n) => <code key={n}>oc delete project {n}</code>))} once empty.</>,
+          ...(deleteNamespace ? [<>Then namespace <code>{S3_NAMESPACE}</code> is deleted, with everything in it.</>] : []),
+          <>Objects with these names that the tool did not create are kept.{namespaces.length > 0 && <> {namespaces.length > 1 ? "Namespaces" : "Namespace"} {joinNodes(namespaces.map((n) => <code key={n}>{n}</code>))} {namespaces.length > 1 ? "are" : "is"} kept: delete {namespaces.length > 1 ? "them" : "it"} yourself with {joinNodes(namespaces.map((n) => <code key={n}>oc delete project {n}</code>))} once empty.</>}</>,
         ],
+        choice: !current ? undefined : offerNamespace ? (
+          <Checkbox id="teardown-delete-namespace" label={<>Also delete namespace <code>{S3_NAMESPACE}</code> (created by this tool)</>}
+            description={<>
+              Deletes namespace <code>{S3_NAMESPACE}</code> and everything in it, including anything this tool did not create.{" "}
+              {others.length > 0
+                ? <>Besides the storage&apos;s objects, this tool sees there: {joinNodes(others.map((o) => <code key={o}>{o}</code>))}.</>
+                : <>Besides the storage&apos;s objects, this tool sees no Deployments or PersistentVolumeClaims there.</>}{" "}
+              It cannot list every kind (Secrets, ConfigMaps and others): check with <code>oc get all,pvc,secret,configmap -n {S3_NAMESPACE}</code>.
+            </>}
+            isChecked={deleteNamespace} onChange={(_e, v) => setPending?.({ kind: "teardown-minio", deleteNamespace: v })} />
+        ) : minio?.namespaceKeptReason ? <Content component="p">{minio.namespaceKeptReason}</Content> : undefined,
         dataLoss: pvcs.length > 0
           ? <>PersistentVolumeClaim{pvcs.length > 1 ? "s" : ""} {joinNodes(pvcs.map((n) => <code key={n}>{n}</code>))}, with every object stored in {pvcs.length > 1 ? "them" : "it"} (pipeline artifacts, uploaded files{legacy ? ", and the data of earlier versions" : ""}).</>
           : <>Every object stored in the S3 storage (pipeline artifacts, uploaded files).</>,

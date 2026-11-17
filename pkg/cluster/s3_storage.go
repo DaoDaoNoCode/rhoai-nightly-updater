@@ -555,8 +555,10 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 		endpointsErr error
 		pvcs         []storagePVC
 		pvcErr       error
+		deploys      []objectMeta
+		deploysErr   error
 	)
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		deployBody, _, deployErr = c.get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
@@ -571,7 +573,17 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 			pvcs, pvcErr = listPVCs(c, s3Namespace)
 		}
 	}()
+	go func() {
+		defer wg.Done()
+		if ns.Managed {
+			deploys, deploysErr = listDeploymentMetas(c, s3Namespace)
+		}
+	}()
 	wg.Wait()
+	if ns.Managed {
+		state.NamespaceDeletable, state.NamespaceKeptReason = toolNamespaceDeletable(s3Namespace, ns.Meta)
+		state.OtherObjects = s3OtherObjects(pvcs, pvcErr, deploys, deploysErr)
+	}
 
 	if endpoints.ui.host != "" {
 		state.UIRoute = "https://" + endpoints.ui.host
@@ -1493,9 +1505,12 @@ func s3TeardownBlocker(dspas []dspaInfo, addresses ...storageAddress) string {
 // (see legacyStorageObjects). Each object is read by name, deleted only
 // when it carries the tool's label (or an earlier version's server-side
 // apply marker), and deleted with a UID precondition, so an object someone
-// else created or recreated is never removed. The namespaces are never
-// deleted (see s3KeptNamespaceHint). Re-running it is safe.
-func TeardownS3Storage(c *Client) (*types.OperationResponse, error) {
+// else created or recreated is never removed. Namespace seaweedfs is
+// deleted only with opts.DeleteNamespace, once every object is gone, and
+// only when this tool created it (toolNamespaceDeletable, UID
+// precondition); otherwise the namespaces are kept (s3KeptNamespaceHint).
+// Re-running it is safe.
+func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		recordS3Activity(c, "teardown-minio", fmt.Sprintf("%s (%s)", s3Namespace, activity), false)
@@ -1577,7 +1592,24 @@ func TeardownS3Storage(c *Client) (*types.OperationResponse, error) {
 	if len(d.pvcNames) > 0 {
 		dataNote = fmt.Sprintf(" %s %s and all stored objects (pipeline artifacts, models, test files) are deleted with %s.", verb(len(d.pvcNames), "PVC", "PVCs"), strings.Join(d.pvcNames, " and "), verb(len(d.pvcNames), "it", "them"))
 	}
-	nsHint := s3KeptNamespaceHint(keptNamespaces)
+	nsNote := ""
+	if current && opts.DeleteNamespace && len(d.failed) == 0 {
+		// Every object is gone: the namespace goes with whatever else is in
+		// it, as the user chose. A namespace someone else created or labelled
+		// is kept, with why.
+		if ok, reason := toolNamespaceDeletable(s3Namespace, ns.Meta); !ok {
+			nsNote = " " + reason
+			logs = append(logs, reason)
+		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !IsK8sError(err, 404) {
+			d.failed = append(d.failed, fmt.Sprintf("namespace %s: %v", s3Namespace, err))
+			d.forbidden = err
+		} else {
+			keptNamespaces = keptNamespaces[1:]
+			nsNote = fmt.Sprintf(" Namespace '%s' is being deleted, with everything else in it.", s3Namespace)
+			logs = append(logs, "OK: Namespace "+s3Namespace+" is being deleted")
+		}
+	}
+	nsHint := nsNote + s3KeptNamespaceHint(keptNamespaces)
 	if len(d.failed) > 0 {
 		recordS3Activity(c, "teardown-minio", fmt.Sprintf("%s (failed: %s)", s3Namespace, strings.Join(d.failed, "; ")), false)
 		code := "partial_failure"
@@ -1614,6 +1646,32 @@ func TeardownS3Storage(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, "OK: S3 storage removed")
 	return &types.OperationResponse{Success: true, Message: "S3 storage removed." + dataNote + keptNote + nsHint, Logs: logs}, nil
+}
+
+// s3OtherObjects names the Deployments and PVCs in namespace seaweedfs
+// that are not the storage's own, for Tear down's "Also delete namespace"
+// choice. The tool cannot list every kind (no cluster-wide Secret list), so
+// the dialog says so.
+func s3OtherObjects(pvcs []storagePVC, pvcErr error, deploys []objectMeta, deploysErr error) []string {
+	var others []string
+	for _, p := range pvcs {
+		if p.Meta.Name != s3PVC {
+			others = append(others, "PersistentVolumeClaim "+p.Meta.Name)
+		}
+	}
+	if pvcErr != nil {
+		others = append(others, "(the PersistentVolumeClaims could not be listed: "+pvcErr.Error()+")")
+	}
+	for _, d := range deploys {
+		if d.Name != s3Deployment {
+			others = append(others, "Deployment "+d.Name)
+		}
+	}
+	if deploysErr != nil {
+		others = append(others, "(the Deployments could not be listed: "+deploysErr.Error()+")")
+	}
+	sort.Strings(others)
+	return others
 }
 
 // namespaceDeletionDetail returns the namespace controller's reported

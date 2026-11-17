@@ -338,8 +338,9 @@ export function setupMinIO(): Promise<OperationResponse> {
   return request('/api/resources/minio/setup', { method: 'POST', acceptStatuses: [422] });
 }
 
-export function teardownMinIO(): Promise<OperationResponse> {
-  return request('/api/resources/minio/teardown', { method: 'POST', acceptStatuses: [422] });
+/** Tear down the S3 storage; deleteNamespace also deletes namespace seaweedfs (only when this tool created it). */
+export function teardownMinIO(deleteNamespace = false): Promise<OperationResponse> {
+  return request('/api/resources/minio/teardown', { method: 'POST', body: JSON.stringify(deleteNamespace ? { deleteNamespace: true } : {}), acceptStatuses: [422] });
 }
 
 /**
