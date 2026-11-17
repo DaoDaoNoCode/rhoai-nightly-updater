@@ -604,10 +604,8 @@ func probeTag(ctx context.Context, httpClient *http.Client, bearerToken, tag str
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return false, ctx.Err()
-			case <-time.After(500 * time.Millisecond):
+			if err := clk.Sleep(ctx, 500*time.Millisecond); err != nil {
+				return false, err
 			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, fmt.Sprintf("https://quay.io/v2/%s/manifests/%s", quayFBCRepo, tag), nil)

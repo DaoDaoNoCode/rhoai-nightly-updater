@@ -20,8 +20,9 @@ import (
 type fakeRegistry struct {
 	mu      sync.Mutex
 	counts  map[string]int
-	scopes  [][]string // scopes of each token request
-	latency time.Duration
+	scopes  [][]string    // scopes of each token request
+	latency time.Duration // on clk
+	gate    *callGate     // when set, every request waits at it
 
 	tags       []string          // tag list (sorted on use)
 	tagDigests map[string]string // tag -> digest for HEAD
@@ -71,11 +72,12 @@ func fakeJWT(exp time.Time) string {
 }
 
 func (f *fakeRegistry) RoundTrip(r *http.Request) (*http.Response, error) {
+	if f.gate != nil {
+		f.gate.pass()
+	}
 	if f.latency > 0 {
-		select {
-		case <-time.After(f.latency):
-		case <-r.Context().Done():
-			return nil, r.Context().Err()
+		if err := clk.Sleep(r.Context(), f.latency); err != nil {
+			return nil, err
 		}
 	}
 	kind, status, body, header := f.answer(r)

@@ -331,16 +331,9 @@ func TestGetNightlyStatus_StaleEntryRefreshesInBackground(t *testing.T) {
 	if got := getNightlyStatus(context.Background(), "a", sub, cs); *got.UpdateAvailable {
 		t.Fatal("the stale value is served while refreshing")
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		got := getNightlyStatus(context.Background(), "a", sub, cs)
-		if got.UpdateAvailable != nil && *got.UpdateAvailable {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("background refresh did not pick up the new build")
-		}
-		time.Sleep(10 * time.Millisecond)
+	nightlyBackground.Wait()
+	if got := getNightlyStatus(context.Background(), "a", sub, cs); got.UpdateAvailable == nil || !*got.UpdateAvailable {
+		t.Fatal("background refresh did not pick up the new build")
 	}
 }
 
@@ -399,7 +392,7 @@ func TestGetNightlyStatus_VeryStaleEntryReportsASlowQuay(t *testing.T) {
 		nightlyStatusFresh, nightlyStatusStaleMax = previousFresh, previousStale
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := clk.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	got := getNightlyStatus(ctx, "a", sub, cs)
 	if got.Error == "" || (got.UpdateAvailable != nil && !*got.UpdateAvailable) {
@@ -421,18 +414,12 @@ func TestDashboardCommitIsFilledFromCachedCatalog(t *testing.T) {
 	sub := types.SubscriptionInfo{Source: CatalogName}
 	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + installed}
 	getNightlyStatus(context.Background(), "a", sub, cs)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		got := getNightlyStatus(context.Background(), "a", sub, cs)
-		if got.Installed.DashboardCommit == "96088eb" && got.Latest.DashboardCommit == "96088eb" {
-			if got.Installed.DashboardGitURL == "" {
-				t.Fatal("missing git URL")
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("dashboard commit never filled: %+v", got.Installed)
-		}
-		time.Sleep(10 * time.Millisecond)
+	nightlyBackground.Wait()
+	got := getNightlyStatus(context.Background(), "a", sub, cs)
+	if got.Installed.DashboardCommit != "96088eb" || got.Latest.DashboardCommit != "96088eb" {
+		t.Fatalf("dashboard commit never filled: %+v", got.Installed)
+	}
+	if got.Installed.DashboardGitURL == "" {
+		t.Fatal("missing git URL")
 	}
 }
