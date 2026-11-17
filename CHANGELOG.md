@@ -20,6 +20,15 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **Environment page, Playground tab.** One Set up asks the installed RHOAI
+  dashboard's own gen-ai API to create its Gen AI playground in a project,
+  with the project's ready chat models, as a click in its Gen AI studio does
+  (nothing of the playground is copied into this tool); Delete asks it to
+  remove it. Only playgrounds this tool requested are deleted; one made in
+  the dashboard shows as not managed. Clean up everything deletes the
+  playgrounds before the models. The calls use the updater's ServiceAccount
+  token; new ClusterRole rules for the dashboard's install and delete are
+  audited in SECURITY.md. The Overview gets a Playground row.
 - **Environment page, Models tab.** One Set up deploys a small chat model
   (Qwen2.5 0.5B Instruct, vLLM on CPU, LLMInferenceService
   `qwen25-05b-instruct`) in a data science project, and the cluster's

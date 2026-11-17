@@ -365,6 +365,32 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $U
 
 Rollback: **Delete model**, then **Delete inference gateway** (or **Clean up Models**, which runs both in that order). By hand, only for what the tool made (`app.kubernetes.io/managed-by=rhoai-nightly-updater`): `oc delete llminferenceservice qwen25-05b-instruct -n <project>`, then `oc delete gateway openshift-ai-inference -n openshift-ingress`, `oc delete configmap openshift-ai-inference-options -n openshift-ingress`, `oc delete gatewayclass openshift-ai-inference`.
 
+### 10.3 Playground: the dashboard's Gen AI playground
+
+The **Playground** tab asks the RHOAI dashboard's own gen-ai API to create or delete its Gen AI playground in a project. Calls and objects: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#playground-the-dashboards-gen-ai-playground-a-project-you-choose).
+
+Chat with a ready playground from a terminal (the dashboard checks that your user may use the project):
+
+```bash
+TOKEN=$(oc whoami -t)
+curl -s -X POST "https://rh-ai.<apps domain>/gen-ai/api/v1/lsd/responses?namespace=<project>" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"model":"qwen25-05b-instruct","model_source_type":"namespace","input":"Say hello","stream":false}'
+```
+
+| Symptom | Cause and fix |
+|---|---|
+| Set up unavailable: "Needs: Models" | The project has no ready chat model. Set one up on the Models tab, or wait until it is ready |
+| Set up unavailable: "Not every model in <project> is ready" | The dashboard's install checks every model deployed for Gen AI in the project. Wait, or delete the model that cannot start (`oc get llminferenceservice,inferenceservice -n <project>`) |
+| "This RHOAI release's dashboard gen-ai API differs" | A gen-ai path answered 404 on this release. Use the playground from the dashboard's Gen AI studio; report the call the message names |
+| "The dashboard's gen-ai API refused the request (HTTP 403)" | The updater's ServiceAccount lacks a rule the dashboard needs: re-apply the template (`deploy/template.yaml`). `oc auth can-i list ogxservers.ogx.io -n <project> --as=system:serviceaccount:<ns>:<sa>` must say yes |
+| Install fails: "An earlier playground ... left objects behind" | ConfigMaps of a playground whose server is gone (400 "already exists"). Someone with edit rights deletes the one named, for example `oc delete configmap -n <project> llama-stack-config` (check `oc get configmap -n <project> -l opendatahub.io/dashboard=true`), then Set up again |
+| "still being removed after 3:00" | The previous playground's database (`genai-pgvector*`) is still terminating: `oc get deploy,pvc -n <project> -l gen-ai.opendatahub.io/pgvector=true`. Set up again once it is gone |
+| Playground **Error** (phase Failed) | `oc get ogxserver lsd-genai-playground -n <project> -o yaml` and `oc get events -n <project>`; the OGX operator's webhook and `default-ogx` must be ready. Delete and set up again |
+| Delete unavailable, **Not managed by this tool** | Someone set it up in the dashboard; delete it there |
+
+Rollback: **Delete** in the playground's menu (or **Clean up Playground**). By hand, the dashboard's way: `oc delete ogxserver lsd-genai-playground -n <project>`, then the `genai-pgvector*` objects (`oc delete deploy,svc,networkpolicy,pvc,secret,configmap -n <project> -l gen-ai.opendatahub.io/pgvector=true`), then remove `<project>` from the `playgrounds` key of ConfigMap `rhoai-nightly-updater-snapshot` in the updater's namespace.
+
 ### 10.1 Migrate storage from an earlier version
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:

@@ -112,6 +112,15 @@ MLflow on RHOAI keeps each data science project apart as a workspace. Once it is
 
 **Set up** creates whatever is missing (the gateway, then the model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. Once ready, **Use it** has commands that call the model with your own `oc whoami -t` token (no account or key is made). Each part's menu has **Delete**; the gateway stays while a model uses it. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-a-cpu-model).
 
+#### Playground: the dashboard's Gen AI playground
+
+The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page where you try a project's models and ask about your documents, in a project you choose.
+
+1. **Chat models**: the project's ready chat models. The playground needs one: when there is none, **Set up a model on the Models tab**.
+2. **Playground**: its state as the dashboard reports it, and **Open the playground** (Gen AI studio, then Playground, then the project). One someone set up in the dashboard reads **Not managed by this tool**: open it, but this tool does not delete it.
+
+**Set up** asks the dashboard itself to create the playground, as its Gen AI studio does, with the models you tick (the project's own are ticked; a Models as a Service model works only with a subscription to it), and waits until it is ready, typically 1 to 2 minutes. **Use it** has a chat request to run from a terminal with your own `oc whoami -t` token. **Delete** (in the part's menu) asks the dashboard to delete it, with its chats and documents; the models stay. Troubleshooting: [RUNBOOK §10.3](RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).
+
 <img src="docs/images/environment-models-image.png" alt="Model Error: the cluster preset's image is not published yet, with Use the newest released Red Hat image" width="760">
 
 1. On a nightly cluster whose preset image is missing from the registry, the model says so in plain words.
