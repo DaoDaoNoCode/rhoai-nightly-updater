@@ -218,7 +218,12 @@ export type Pending =
   | { kind: "teardown-gateway" }
   /** The Gen AI playground in a project, through the dashboard's API (one streamed operation). */
   | { kind: "setup-playground"; project: string; models?: PlaygroundModelRef[] }
-  | { kind: "teardown-playground"; project: string };
+  | { kind: "teardown-playground"; project: string }
+  /** Models as a Service: the platform, or this tool's model in a project (one streamed operation). */
+  | { kind: "setup-maas" }
+  | { kind: "teardown-maas" }
+  | { kind: "publish-maas"; project: string }
+  | { kind: "unpublish-maas"; project: string };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" | "pipeline-sample" }>;
@@ -226,7 +231,10 @@ export type SamplePending = Extract<Pending, { kind: "mlflow-samples" | "pipelin
 export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-model" | "teardown-gateway" }>;
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending>;
+/** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
+export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" }>;
+export const isMaaSPending = (p: Pending): p is MaaSPending => p.kind === "setup-maas" || p.kind === "teardown-maas" || p.kind === "publish-maas" || p.kind === "unpublish-maas";
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples" || p.kind === "pipeline-sample";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway";

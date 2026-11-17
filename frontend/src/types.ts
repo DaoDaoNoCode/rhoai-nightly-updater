@@ -1061,3 +1061,45 @@ export interface PlaygroundRequest {
   project: string;
   models?: PlaygroundModelRef[];
 }
+
+/** One part of the MaaS platform (pkg/types MaaSPart). */
+export interface MaaSPart {
+  id: "dsc" | "kuadrant" | "database" | "gateway" | "authorino-tls" | "maas-api" | "tenant";
+  title: string;
+  /** "manual": a cluster-admin does it (commands says how). */
+  state: "ready" | "missing" | "waiting" | "problem" | "manual" | "unknown";
+  message?: string;
+  managedByTool?: boolean;
+  notManaged?: boolean;
+  warning?: string;
+  commands?: string;
+  docUrl?: string;
+}
+
+/** One of this tool's models and its MaaS publication (pkg/types MaaSModel). */
+export interface MaaSModel extends ResourceState {
+  displayName?: string;
+  modelReady: boolean;
+  published: boolean;
+  phase?: string;
+  endpoint?: string;
+  access?: string;
+  subscription?: string;
+}
+
+/** GET /api/resources/maas (pkg/types MaaSStatus). */
+export interface MaaSStatus {
+  blocked?: ComponentBlock;
+  platform: ResourceState;
+  parts: MaaSPart[];
+  url?: string;
+  subscription: string;
+  dashboardUrl?: string;
+  items?: MaaSModel[];
+}
+
+/** The body of POST /api/resources/maas/stream. */
+export interface MaaSRequest {
+  action: "setup" | "teardown" | "publish" | "unpublish";
+  project?: string;
+}

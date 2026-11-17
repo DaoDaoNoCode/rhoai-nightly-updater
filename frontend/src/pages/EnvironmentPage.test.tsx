@@ -33,15 +33,17 @@ afterEach(() => {
 
 describe("Environment page", () => {
   it("opens on the Overview: a summary line and one row per feature with its state and next step", async () => {
-    stubApi({ "/api/resources/status": { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] }, "/api/resources/projects": { projects: [] }, "/api/resources/playground": { items: [] } });
+    stubApi({ "/api/resources/status": { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] }, "/api/resources/projects": { projects: [] }, "/api/resources/playground": { items: [] },
+      "/api/resources/maas": { platform: { deployed: false, ready: false, managedByTool: false }, parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }], subscription: "rhoai-nightly-updater-subscription" } });
     renderPage("/test-resources");
     expect(screen.getByRole("heading", { level: 1, name: "Environment" })).toBeInTheDocument();
     expect(document.title).toBe("Environment — RHOAI Nightly Updater");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "Pipelines", "MLflow", "Models", "Playground"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByText("0 of 4 ready")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 5 ready")).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Features" });
-    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["Pipelines", "MLflow", "Models", "Playground"]);
+    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
+    expect(await row("MaaS")).toHaveTextContent(/Not set up\s*Set up MaaS/);
     expect(await row("Pipelines")).toHaveTextContent("Not set up in any project");
     expect(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" })).toHaveClass("pf-m-inline");
     expect(within(await row("MLflow")).getByRole("button", { name: "Set up MLflow…" })).toBeInTheDocument();
@@ -56,7 +58,7 @@ describe("Environment page", () => {
       "/api/resources/playground": { items: [] },
     });
     const router = renderPage("/test-resources");
-    expect(await screen.findByText("2 of 4 ready")).toBeInTheDocument();
+    expect(await screen.findByText("2 of 5 ready")).toBeInTheDocument();
     const mlflow = await row("MLflow");
     expect(mlflow).toHaveTextContent("Ready · not managed by this tool");
     expect(within(mlflow).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");

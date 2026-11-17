@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSRequest, MaaSStatus } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -654,6 +654,10 @@ export interface CleanupRequest {
   inferenceGateway?: boolean;
   /** The projects whose playground (this tool's) goes, before the models. */
   playgrounds?: string[];
+  /** The projects whose model this tool unpublishes from MaaS, first. */
+  maasPublished?: string[];
+  /** The MaaS platform this tool set up, last. */
+  maasPlatform?: boolean;
 }
 
 /**
@@ -707,6 +711,26 @@ export function streamPlayground(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/playground/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** Models as a Service: the platform part by part, and this tool's models with their publication. */
+export function getMaaS(): Promise<MaaSStatus> {
+  return request('/api/resources/maas');
+}
+
+/**
+ * MaaS: sets up or removes the platform ("check", "database", "gateway",
+ * "authorino-tls", "dsc", "ready"; removal "check", "unpublish", "dsc",
+ * "gateway", "database"), or publishes or unpublishes this tool's model in
+ * a project.
+ */
+export function streamMaaS(
+  req: MaaSRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/maas/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /** The MLflow samples of one project (named reads only; cached on the server for 15 s). */

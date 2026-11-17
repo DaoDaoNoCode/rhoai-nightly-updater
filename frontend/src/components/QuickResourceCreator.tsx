@@ -31,6 +31,7 @@ import {
   streamPipelineSample,
   streamModels,
   streamPlayground,
+  streamMaaS,
   toApiError,
   type StreamDoneHandler,
   type StreamDetachHandler,
@@ -42,9 +43,10 @@ import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
 import { PageLoading } from "./PageStates";
 import { errorResult } from "../outcomes";
-import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { ModelsTab, modelsConfirm, modelsSteps } from "./environment/ModelsTab";
 import { PlaygroundTab, playgroundConfirm, playgroundSteps } from "./environment/PlaygroundTab";
+import { MaaSTab, maasConfirm, maasSteps, useMaaSStatus } from "./environment/MaaSTab";
 import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
 import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
@@ -74,6 +76,8 @@ import {
   defaultPlaygroundProject,
   playgroundIn,
   playgroundState,
+  maasState,
+  type MaaSOp,
   pipelineServerIn,
   pipelineServerStatus,
   pipelineServerUnmanaged,
@@ -102,9 +106,9 @@ export function readyCheck(kind: ResourceKind, state: ResourceState | undefined)
 const BUSY_REASON = "Another operation is in progress";
 
 /** The tabs, in the URL as ?tab= (overview is the default and is left out). */
-export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models", "playground"] as const;
+export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models", "playground", "maas"] as const;
 export type EnvironmentTab = (typeof ENVIRONMENT_TABS)[number];
-const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "Playground" };
+const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "Playground", maas: "MaaS" };
 /** Tabs of the earlier layout: links to them open Pipelines. */
 const OLD_TABS = ["cluster", "projects"];
 
@@ -305,6 +309,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const playgroundProjectParam = searchParams.has("project") ? urlProject : playgroundDefault;
   const playgroundRead = usePlaygroundStatus(tab === "playground" ? playgroundProjectParam : null, playgroundRefresh, !!playgroundOp, tab === "overview" || tab === "playground" || !!cleanupScope);
   const pg = playgroundRead.data;
+  const [maasOp, setMaaSOp] = useState<MaaSOp | null>(null);
+  const [maasRefresh, setMaaSRefresh] = useState(0);
+  const maasRead = useMaaSStatus(maasRefresh, !!maasOp, tab === "overview" || tab === "maas" || !!cleanupScope);
+  const maas = maasRead.data;
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
@@ -322,7 +330,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas) ?? samplesConfirm(p);
 
   /** A confirmed Models change: one streamed request whose steps the run dialog shows. */
   const startModels = (p: ModelsPending) => {
@@ -374,6 +382,29 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
 
+  /** A confirmed MaaS change: one streamed request whose steps the run dialog shows. */
+  const startMaaS = (p: MaaSPending) => {
+    if (run.run?.running) return;
+    const spec = maasConfirm(p, maas);
+    const action = p.kind === "setup-maas" ? "setup" : p.kind === "teardown-maas" ? "teardown" : p.kind === "publish-maas" ? "publish" : "unpublish";
+    const project = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.project : null;
+    setPending(null);
+    setSampleRun(null);
+    setModelsRun(null);
+    setPlaygroundRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setMaaSOp({ action, project });
+    const end = () => {
+      setMaaSOp(null);
+      setMaaSRefresh((n) => n + 1);
+      void fetchResources();
+    };
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS({ action, ...(project ? { project } : {}) },
+      onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
+    action === "setup" || action === "publish" ? "setup" : "delete");
+  };
+
   /**
    * A confirmed sample change: one streamed request (one rate-limit slot on
    * the server) whose steps the run dialog shows; when it ends, the tab
@@ -418,6 +449,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       startPlayground(p);
       return;
     }
+    if (isMaaSPending(p)) {
+      startMaaS(p);
+      return;
+    }
     setSampleRun(null);
     setModelsRun(null);
     setPlaygroundRun(null);
@@ -443,10 +478,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setPending(playground);
       return;
     }
+    const maasSetup = setup.find(isMaaSPending);
+    if (maasSetup) {
+      setPending(maasSetup);
+      return;
+    }
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isMaaSPending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = request(p);
@@ -480,6 +520,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, onStep, (success, error, apiError) => {
       void fetchResources();
       setPlaygroundRefresh((n) => n + 1);
+      setMaaSRefresh((n) => n + 1);
       onDone(success, error, apiError);
     }, (reason) => {
       void fetchResources();
@@ -500,7 +541,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   }, [run.run?.running, runOpen]);
 
   const runningSomething = !!resAction || migrating || !!run.run?.running;
-  const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp };
+  const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // After a deletion the namespace stays (deployed:false, managedByTool:true).
   // Offer Delete again while tool objects are still reported (the data
@@ -555,6 +596,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
     : playgroundState(resStatus, pg, playgroundProject, busy);
   const playgroundSummary = playgroundState(resStatus, pg, null, busy);
+  const maasNow = maasState(maas, busy);
   const playgroundOptions: ProjectOption[] = projectNames.map((name) => {
     const i = playgroundIn(pg, name);
     return { name, description: i?.deployed ? `Playground: ${i.ready ? "Ready" : i.terminating ? "Deleting" : "Not ready"}${i.managedByTool ? "" : " · not managed by this tool"}` : undefined };
@@ -580,6 +622,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     {
       id: "playground", name: "Playground", gives: "Chat with a project's models in the dashboard's Gen AI playground", state: playgroundSummary,
       href: `?tab=playground${playgroundSummary.project ? `&project=${encodeURIComponent(playgroundSummary.project)}` : ""}`,
+    },
+    {
+      id: "maas", name: "MaaS", gives: "Offer models to everyone on the cluster with API keys and token limits", state: maasNow, href: "?tab=maas",
     },
   ];
   const anythingToClean = !!resStatus && (() => {
@@ -700,6 +745,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     state={playgroundNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
                     setPending={setPending} onSetUp={(setup) => setUp("Playground", setup)} onCleanup={() => setCleanupScope("playground")}
                     onModels={() => navigate({ tab: "models", ...(playgroundProject ? { project: playgroundProject } : {}) })} />
+                )}
+                {tab === "maas" && (
+                  <MaaSTab maas={maas} maasError={maasRead.error} state={maasNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
+                    setPending={setPending} onSetUp={(setup) => setUp("MaaS", setup)} onModels={() => navigate({ tab: "models" })} />
                 )}
               </StackItem>
             )}

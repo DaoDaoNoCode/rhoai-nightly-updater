@@ -1,4 +1,4 @@
-import type { ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
+import type { MaaSPart, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 
@@ -21,6 +21,14 @@ export interface Busy {
   models?: ModelsOp | null;
   /** A Playground operation runs from this page: its action and project. */
   playground?: PlaygroundOp | null;
+  /** A MaaS operation runs from this page: its action and project (publish). */
+  maas?: MaaSOp | null;
+}
+
+/** What a running MaaS operation changes. */
+export interface MaaSOp {
+  action: "setup" | "teardown" | "publish" | "unpublish";
+  project: string | null;
 }
 
 /** What a running Playground operation changes. */
@@ -476,4 +484,71 @@ export function playgroundState(status: ResourcesStatus | null, pg: PlaygroundSt
   if (summary) return summary;
   if (pg.apiProblem) return { status: "unknown", label: "Unknown: the dashboard's gen-ai API cannot be used", next: null, project: null };
   return { status: "not-set-up", label: "Not set up in any project", next: { kind: "choose-project" }, project: null };
+}
+
+// --- Models as a Service: the platform (cluster) and this tool's published models ----------
+
+/** A platform part's state in the page's words. */
+export function maasPartStatus(part: MaaSPart): EnvStatus {
+  switch (part.state) {
+    case "ready":
+      return "ready";
+    case "missing":
+      return "not-set-up";
+    case "waiting":
+      return "setting-up";
+    case "problem":
+      return "error";
+    case "manual":
+      return "needs-attention";
+    default:
+      return "unknown";
+  }
+}
+
+/** The MaaS platform as a whole. */
+export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus {
+  if (!m) return "unknown";
+  if (busy.maas?.action === "setup") return "setting-up";
+  if (busy.maas?.action === "teardown") return "deleting";
+  const states = m.parts.map(maasPartStatus);
+  if (states.every((s) => s === "ready")) return "ready";
+  for (const s of ["error", "needs-attention", "setting-up", "unknown"] as EnvStatus[]) {
+    if (states.includes(s) && (s !== "unknown" || m.platform.deployed)) return s;
+  }
+  return "not-set-up";
+}
+
+/** The dashboard's MaaS pages (odh-dashboard packages/maas: /maas). */
+export function maasDashboardHref(dashboardUrl: string | undefined): string | undefined {
+  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/maas` : undefined;
+}
+
+/**
+ * Models as a Service: a cluster feature (the platform), with this tool's
+ * published models. The tab and the Overview both show this.
+ */
+export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState {
+  if (!m) return { status: "unknown", label: "Checking", next: null, project: null };
+  const status = maasPlatformStatus(m, busy);
+  const unmanaged = m.platform.deployed && !m.platform.managedByTool;
+  const suffix = unmanaged ? NOT_MANAGED : "";
+  const published = (m.items ?? []).filter((i) => i.published);
+  if (status === "ready") {
+    const what = published.length === 0 ? "no model of this tool published" : `${published.length} ${published.length === 1 ? "model" : "models"} published`;
+    const href = maasDashboardHref(m.dashboardUrl);
+    return { status, label: `Ready, ${what}${suffix}`, next: href ? { kind: "open", label: "Open MaaS in the dashboard", href } : null, project: null };
+  }
+  if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Removing" : "Setting up", next: null, project: null };
+  if (PROBLEM.includes(status)) {
+    const part = m.parts.find((p) => PROBLEM.includes(maasPartStatus(p)));
+    return { status, label: `${envStatusText(status)}${suffix}`, next: { kind: "show-issue", part: `maas-${part?.id ?? "dsc"}` }, project: null };
+  }
+  if (status === "unknown") return { status, label: `Unknown${suffix}`, next: null, project: null };
+  return {
+    status: "not-set-up",
+    label: "Not set up",
+    next: { kind: "set-up", label: "Set up MaaS", setup: [{ kind: "setup-maas" }], reason: m.platform.setupBlockedReason ?? null },
+    project: null,
+  };
 }
