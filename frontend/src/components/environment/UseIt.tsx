@@ -47,6 +47,9 @@ export const ComponentAlert: React.FC<{ feature: string; block: ComponentBlock }
   const title = block.dsc
     ? `${feature} is turned off on this cluster`
     : `${feature} is not available on this cluster`;
+  // The reason opens with what the title says; the body says the rest.
+  const prefix = `${title}: `;
+  const body = block.reason.startsWith(prefix) ? block.reason.charAt(prefix.length).toUpperCase() + block.reason.slice(prefix.length + 1) : block.reason;
   const rows = [
     ...(block.dsc ? [{ term: "DataScienceCluster", value: block.dsc }] : []),
     { term: "Component", value: block.component },
@@ -55,7 +58,7 @@ export const ComponentAlert: React.FC<{ feature: string; block: ComponentBlock }
   return (
     <Alert variant="warning" isInline component="div" title={title}
       actionLinks={<AlertActionLink onClick={() => navigate("/components")}>Open Components</AlertActionLink>}>
-      <Content component="p">{block.reason}</Content>
+      <Content component="p">{body}</Content>
       <TechnicalDetails rows={rows} />
     </Alert>
   );

@@ -388,7 +388,7 @@ async (page) => {
 
     // The Environment page: the Overview, then one tab per feature.
     async resources() {
-      const part = (name) => page.getByRole("listitem", { name: new RegExp(`^${name} \\(`) });
+      const part = (name) => page.getByRole("listitem", { name, exact: true });
       const panel = () => page.getByRole("tabpanel");
 
       await open("/test-resources", "env-live");
@@ -443,7 +443,8 @@ async (page) => {
       await page.keyboard.press("Escape");
 
       await open("/test-resources?tab=pipelines", "s3-migrate-remove");
-      await part("S3 storage").getByRole("button", { name: "Remove old storage" }).click();
+      await part("S3 storage").getByRole("button", { name: "S3 storage actions" }).click();
+      await page.getByRole("menuitem", { name: /Delete old storage/ }).click();
       await wait(800);
       await crop("s3-remove-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
@@ -505,7 +506,7 @@ async (page) => {
       await open("/test-resources?tab=pipelines", "s3-migrate");
       gif("s3-migrate", await mainClip());
       await frame(1200);
-      await clickShown(page.getByRole("listitem", { name: /^S3 storage \(/ }).getByRole("button", { name: "Migrate storage" }));
+      await clickShown(page.getByRole("listitem", { name: "S3 storage", exact: true }).getByRole("button", { name: "Migrate storage" }));
       await wait(700);
       await hidePointer();
       await frame(2600);
@@ -520,7 +521,7 @@ async (page) => {
       await advance(1);
       await wait(900);
       await frame(1200);
-      // The next part: the summary, the checklist and the removal.
+      // The outcome: the data is in the new storage; the old storage is deleted later, apart.
       await page.locator(".pf-v6-c-modal-box__body").evaluate((el) => el.scrollTo(0, el.scrollHeight));
       await wait(400);
       await frame(3200);
@@ -530,11 +531,11 @@ async (page) => {
       await open("/test-resources?tab=pipelines", "s3-incomplete");
       gif("s3-repair", await mainClip());
       await frame(1200);
-      await clickShown(page.getByRole("listitem", { name: /^S3 storage \(/ }).getByRole("button", { name: "Repair" }));
+      await clickShown(page.getByRole("listitem", { name: "S3 storage", exact: true }).getByRole("button", { name: "Repair" }));
       await wait(700);
       await hidePointer();
       await frame(2200);
-      await clickShown(page.locator(".pf-v6-c-modal-box").getByRole("button", { name: "Repair S3 storage" }), 700);
+      await clickShown(page.locator(".pf-v6-c-modal-box").getByRole("button", { name: "Repair", exact: true }), 700);
       await hidePointer();
       await wait(500);
       await frame(1000);

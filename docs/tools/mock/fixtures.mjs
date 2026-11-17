@@ -450,14 +450,14 @@ const BLOCKED = (ps) => `1 pipeline server uses this S3 storage: ${ps}. Delete i
 export const s3States = {
   running: {
     deployed: true, ready: true, message: "Running", namespace: "seaweedfs", uiRoute: S3_UI, currentImage: SEAWEEDFS,
-    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", namespaceDeletable: true, teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
+    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", namespaceDeletable: true, teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"), usedBy: ["dev-project/nightly-dspa"],
   },
   incomplete: {
     deployed: true, ready: false, terminalError: true, namespace: "seaweedfs", currentImage: SEAWEEDFS, managedByTool: true, uiUser: "admin",
     dataPVCs: ["seaweedfs-data"],
     message: "Deployment seaweedfs is scaled to 0 replicas.",
     repairNeeded: "Deployment seaweedfs is scaled to 0 replicas.",
-    teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
+    teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"), usedBy: ["dev-project/nightly-dspa"],
   },
   none: { deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false },
   starting: {
@@ -480,11 +480,11 @@ export const s3States = {
   // namespace seaweedfs yet, or (stage "remove") the new storage is running.
   migrationNeeded: {
     deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false, migrationPending: true,
-    teardownBlockedReason: BLOCKED("dev-project/dspa"),
+    teardownBlockedReason: BLOCKED("dev-project/dspa"), usedBy: ["dev-project/dspa"],
   },
   migrated: {
     deployed: true, ready: true, message: "Running", namespace: "seaweedfs", uiRoute: S3_UI, currentImage: SEAWEEDFS,
-    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", migrationPending: true, teardownBlockedReason: BLOCKED("dev-project/dspa"),
+    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", migrationPending: true, teardownBlockedReason: BLOCKED("dev-project/dspa"), usedBy: ["dev-project/dspa"],
   },
 };
 

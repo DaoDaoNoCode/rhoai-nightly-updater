@@ -188,7 +188,7 @@ const scenarios = {
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
   "env-starting": (w) => { w.resources = { minio: F.s3States.starting, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServerStarting] }; },
   "env-error": (w) => {
-    w.resources = { minio: { ...F.s3States.imagePull, teardownBlockedReason: F.s3States.running.teardownBlockedReason }, mlflow: F.mlflowStates.prBroken, pipelineServers: [F.pipelineServer] };
+    w.resources = { minio: { ...F.s3States.imagePull, teardownBlockedReason: F.s3States.running.teardownBlockedReason, usedBy: F.s3States.running.usedBy }, mlflow: F.mlflowStates.prBroken, pipelineServers: [F.pipelineServer] };
   },
   "env-foreign": (w) => {
     w.resources = {
@@ -200,7 +200,7 @@ const scenarios = {
   "env-mlflow-unmanaged": (w) => { w.resources.mlflow = F.mlflowStates.foreign; },
   // The storage alone: its Tear down is not blocked, and offers the namespace.
   "env-storage-only": (w) => {
-    w.resources = { minio: { ...F.s3States.running, teardownBlockedReason: undefined, otherObjects: ["Deployment notes-app"] }, mlflow: F.mlflowStates.none, pipelineServers: [] };
+    w.resources = { minio: { ...F.s3States.running, teardownBlockedReason: undefined, usedBy: undefined, otherObjects: ["Deployment notes-app"] }, mlflow: F.mlflowStates.none, pipelineServers: [] };
   },
   "env-mlflow-unmanaged-broken": (w) => { w.resources.mlflow = F.mlflowStates.foreignBroken; },
   // Like the live cluster on 2026-11-17: an empty project sorts first, the
@@ -210,6 +210,16 @@ const scenarios = {
     w.resources.mlflow = F.mlflowStates.foreign;
   },
   "env-reader": (w) => { w.resources.mlflow = F.mlflowStates.running; w.canMutate = false; },
+  // A fresh cluster whose DataScienceCluster turns pipelines and MLflow off.
+  "env-components-off": (w) => {
+    w.resources = {
+      minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [],
+      pipelinesBlocked: { component: "aipipelines", dsc: "default-dsc", state: "Removed", reason: "Data Science Pipelines is turned off on this cluster: component aipipelines is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." },
+      mlflowBlocked: { component: "mlflowoperator", dsc: "default-dsc", state: "Removed", reason: "MLflow is turned off on this cluster: component mlflowoperator is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." },
+    };
+  },
+  // No data science project yet.
+  "env-no-projects": (w) => { w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; w.projects = []; },
 };
 for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook"]) {
   scenarios[`diag-${name}`] = (w) => {
@@ -313,7 +323,7 @@ async function mutation(res, type, label, apply) {
 
 const minioSetup = () => {
   world.resources.minio = F.s3States.running;
-  if (!world.resources.pipelineServers.length) world.resources.minio = { ...world.resources.minio, teardownBlockedReason: undefined };
+  if (!world.resources.pipelineServers.length) world.resources.minio = { ...world.resources.minio, teardownBlockedReason: undefined, usedBy: undefined };
   return {
     success: true,
     message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'; pipeline servers reach it at http://seaweedfs-s3.seaweedfs.svc:8333. Sign in to the admin UI as 'admin'; the password (the S3 secret key) and the S3 keys are in Secret 'seaweedfs-s3-credentials' in namespace 'seaweedfs'.",
@@ -338,13 +348,39 @@ async function migrateStream(req, res) {
         world.resources.minio = F.s3States.migrated;
         world.resources.legacyStorage = F.legacyStorage("remove");
       } else {
-        world.resources.minio = { ...F.s3States.running, teardownBlockedReason: F.s3States.migrated.teardownBlockedReason };
+        world.resources.minio = { ...F.s3States.running, teardownBlockedReason: F.s3States.migrated.teardownBlockedReason, usedBy: F.s3States.migrated.usedBy };
         delete world.resources.legacyStorage;
       }
       endOperation(true, step.message);
     }
     res.write(`data: ${JSON.stringify(ev)}\n\n`);
   }
+  res.end();
+}
+
+/** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
+async function cleanupStream(req, res) {
+  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false } = await body(req);
+  beginOperation("cleanup", "Clean up the environment", [pipelineServers.length ? `${pipelineServers.length} pipeline servers` : "", storage ? "S3 storage" : "", mlflow ? "MLflow" : ""].filter(Boolean).join(", "));
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  const parts = [
+    ...pipelineServers.map((p) => ({ id: `pipeline-server:${p}`, title: `the pipeline server in '${p}'`, done: `Pipeline server removed from '${p}'.`, apply: () => { world.resources.pipelineServers = world.resources.pipelineServers.filter((ps) => ps.namespace !== p); } })),
+    ...(storage ? [{ id: "storage", title: "the S3 storage", done: deleteNamespace ? "S3 storage removed. Namespace 'seaweedfs' is being deleted." : "S3 storage removed.", apply: () => { world.resources.minio = F.s3States.none; delete world.resources.legacyStorage; } }] : []),
+    ...(mlflow ? [{ id: "mlflow", title: "MLflow", done: "MLflow removed.", apply: () => { world.resources.mlflow = F.mlflowStates.none; } }] : []),
+  ];
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  for (const p of parts) {
+    send({ step: p.id, status: "running", message: `Deleting ${p.title}...` });
+    await nextStep();
+    if (res.destroyed) return;
+    p.apply();
+    send({ step: p.id, status: "success", message: p.done });
+  }
+  const titles = parts.map((p) => p.title);
+  const message = `Deleted ${titles.length > 1 ? `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}` : titles[0]}.`;
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
   res.end();
 }
 
@@ -363,7 +399,7 @@ const routes = {
   "GET /api/diagnostics": () => world.diagnostics,
   "GET /api/dashboard/state": () => world.dashboard,
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
-  "GET /api/resources/status": () => world.resources,
+  "GET /api/resources/status": () => ({ dashboardUrl: F.DASHBOARD_URL, ...world.resources }),
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   // Made up, like every value here.
   "GET /api/resources/minio/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", password: "docs-mock-password" }),
@@ -402,6 +438,7 @@ async function api(req, res, u) {
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/minio/setup") return mutation(res, "setup-minio", "Set up S3 storage", minioSetup);
   if (key === "POST /api/resources/minio/migrate/stream") return migrateStream(req, res);
+  if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/pipeline-server/setup") {
     const { project = "dev-project" } = await body(req);
     return mutation(res, "setup-pipeline-server", "Set up pipeline server", () => {
