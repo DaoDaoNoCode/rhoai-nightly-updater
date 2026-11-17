@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"io"
 	"net/http"
 	"regexp"
@@ -163,6 +164,13 @@ func (k *kfpFake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data, _ := io.ReadAll(file)
+		// Parse like the real server: invalid YAML must fail the test here
+		// (the real KFP upload handler hung on it, live on 3.6).
+		var parsed map[string]interface{}
+		if err := yaml.Unmarshal(data, &parsed); err != nil || parsed["pipelineInfo"] == nil {
+			k.grpcError(w, 400, fmt.Sprintf("Failed to parse the pipeline spec: %v", err))
+			return
+		}
 		id := k.id("pipe")
 		k.pipelines[id] = &kfpFakePipeline{name: r.URL.Query().Get("name"), description: r.URL.Query().Get("description"), spec: string(data), versions: []string{k.id("ver")}}
 		k.writeJSON(w, map[string]string{"pipeline_id": id, "name": r.URL.Query().Get("name"), "description": r.URL.Query().Get("description")})
@@ -340,10 +348,9 @@ func TestPipelineSample_RunAndStatus(t *testing.T) {
 		t.Fatalf("objects %d %d %d", len(k.experiments), len(k.pipelines), len(k.runs))
 	}
 	for _, p := range k.pipelines {
-		for _, want := range []string{"image: " + pipelineSampleDefaultImage, "schemaVersion: 2.1.0", "{{$.outputs.artifacts['greeting'].path}}", "producerTask: write-artifact"} {
-			if !strings.Contains(p.spec, want) {
-				t.Errorf("spec lacks %q", want)
-			}
+		// The spec's structure is checked by TestPipelineSampleSpec_IsValidIR.
+		if p.spec != pipelineSampleSpec(pipelineSampleDefaultImage) {
+			t.Errorf("uploaded spec is not the sample with the default image:\n%s", p.spec)
 		}
 	}
 	var runID string
@@ -371,7 +378,7 @@ func TestPipelineSample_ImageOverride(t *testing.T) {
 		t.Fatal(resp.Message)
 	}
 	for _, p := range k.pipelines {
-		if strings.Count(p.spec, "image: mirror.example/ubi9/ubi-minimal@sha256:abc") != 2 {
+		if p.spec != pipelineSampleSpec("mirror.example/ubi9/ubi-minimal@sha256:abc") {
 			t.Errorf("spec %s", p.spec)
 		}
 	}
@@ -463,5 +470,49 @@ func TestPipelineSample_DevModeUsesTheRoute(t *testing.T) {
 	putSampleDSPA(env, toolLabelJSON, "True", "https://ds-pipeline-nightly-dspa.proj.svc.cluster.local:8443", env.srv.URL)
 	if resp, steps := runPipeline(t, env, "run"); !resp.Success {
 		t.Errorf("%+v\n%s", resp, stepMessages(steps))
+	}
+}
+
+// The sample spec is valid YAML whatever its strings hold, and carries the
+// values the launcher and the dashboard read.
+func TestPipelineSampleSpec_IsValidIR(t *testing.T) {
+	image := "registry.example.com/x@sha256:" + strings.Repeat("a", 64)
+	var spec struct {
+		PipelineInfo   struct{ Name, Description string } `yaml:"pipelineInfo"`
+		SchemaVersion  string                             `yaml:"schemaVersion"`
+		DeploymentSpec struct {
+			Executors map[string]struct {
+				Container struct {
+					Image   string   `yaml:"image"`
+					Command []string `yaml:"command"`
+					Args    []string `yaml:"args"`
+				} `yaml:"container"`
+			} `yaml:"executors"`
+		} `yaml:"deploymentSpec"`
+		Root struct {
+			Dag struct {
+				Tasks map[string]struct {
+					DependentTasks []string `yaml:"dependentTasks"`
+				} `yaml:"tasks"`
+			} `yaml:"dag"`
+		} `yaml:"root"`
+	}
+	if err := yaml.Unmarshal([]byte(pipelineSampleSpec(image)), &spec); err != nil {
+		t.Fatalf("the sample spec is not valid YAML: %v", err)
+	}
+	if spec.PipelineInfo.Name != pipelineSampleName || spec.PipelineInfo.Description != pipelineSampleDescription || !strings.Contains(spec.PipelineInfo.Description, ": ") {
+		t.Errorf("pipelineInfo = %+v (the description must survive its \": \")", spec.PipelineInfo)
+	}
+	if spec.SchemaVersion != "2.1.0" {
+		t.Errorf("schemaVersion = %q", spec.SchemaVersion)
+	}
+	for _, name := range []string{"exec-write-artifact", "exec-read-artifact"} {
+		c := spec.DeploymentSpec.Executors[name].Container
+		if c.Image != image || len(c.Command) != 2 || len(c.Args) != 2 || !strings.HasPrefix(c.Args[1], "{{$.") {
+			t.Errorf("%s = %+v", name, c)
+		}
+	}
+	if got := spec.Root.Dag.Tasks["read-artifact"].DependentTasks; len(got) != 1 || got[0] != "write-artifact" {
+		t.Errorf("read-artifact depends on %v", got)
 	}
 }

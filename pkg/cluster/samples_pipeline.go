@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"log/slog"
 	"mime/multipart"
 	"net/url"
@@ -79,72 +80,62 @@ func pipelineSampleImage() string {
 // 2.1.0) with two shell-only container components. The launcher replaces
 // the artifact path placeholders; "sh -c script path" passes the path as
 // $0. Caching is off so every run executes.
+//
+// It is built as data and marshalled, never templated as text: a templated
+// description with ": " in it was invalid YAML, and KFP's upload handler
+// hung on it until the route answered 504 (seen live on 3.6).
 func pipelineSampleSpec(image string) string {
-	return `# PIPELINE DEFINITION
-# Name: ` + pipelineSampleName + `
-# Description: ` + pipelineSampleDescription + `
-components:
-  comp-write-artifact:
-    executorLabel: exec-write-artifact
-    outputDefinitions:
-      artifacts:
-        greeting:
-          artifactType:
-            schemaTitle: system.Artifact
-            schemaVersion: 0.0.1
-  comp-read-artifact:
-    executorLabel: exec-read-artifact
-    inputDefinitions:
-      artifacts:
-        greeting:
-          artifactType:
-            schemaTitle: system.Artifact
-            schemaVersion: 0.0.1
-deploymentSpec:
-  executors:
-    exec-write-artifact:
-      container:
-        image: ` + image + `
-        command: [sh, -c]
-        args:
-          - 'mkdir -p "$(dirname "$0")" && echo "Hello from the rhoai-nightly-updater sample pipeline" > "$0" && echo "Wrote $0"'
-          - "{{$.outputs.artifacts['greeting'].path}}"
-    exec-read-artifact:
-      container:
-        image: ` + image + `
-        command: [sh, -c]
-        args:
-          - 'echo "Read $0:" && cat "$0"'
-          - "{{$.inputs.artifacts['greeting'].path}}"
-pipelineInfo:
-  name: ` + pipelineSampleName + `
-  description: ` + pipelineSampleDescription + `
-root:
-  dag:
-    tasks:
-      write-artifact:
-        cachingOptions: {}
-        componentRef:
-          name: comp-write-artifact
-        taskInfo:
-          name: write-artifact
-      read-artifact:
-        cachingOptions: {}
-        componentRef:
-          name: comp-read-artifact
-        dependentTasks:
-          - write-artifact
-        inputs:
-          artifacts:
-            greeting:
-              taskOutputArtifact:
-                outputArtifactKey: greeting
-                producerTask: write-artifact
-        taskInfo:
-          name: read-artifact
-schemaVersion: 2.1.0
-sdkVersion: kfp-2.13.0
-`
+	artifact := map[string]interface{}{
+		"artifactType": map[string]interface{}{"schemaTitle": "system.Artifact", "schemaVersion": "0.0.1"},
+	}
+	container := func(script, path string) map[string]interface{} {
+		return map[string]interface{}{"container": map[string]interface{}{
+			"image": image, "command": []string{"sh", "-c"}, "args": []string{script, path},
+		}}
+	}
+	spec := map[string]interface{}{
+		"components": map[string]interface{}{
+			"comp-write-artifact": map[string]interface{}{
+				"executorLabel":     "exec-write-artifact",
+				"outputDefinitions": map[string]interface{}{"artifacts": map[string]interface{}{"greeting": artifact}},
+			},
+			"comp-read-artifact": map[string]interface{}{
+				"executorLabel":    "exec-read-artifact",
+				"inputDefinitions": map[string]interface{}{"artifacts": map[string]interface{}{"greeting": artifact}},
+			},
+		},
+		"deploymentSpec": map[string]interface{}{"executors": map[string]interface{}{
+			"exec-write-artifact": container(`mkdir -p "$(dirname "$0")" && echo "Hello from the rhoai-nightly-updater sample pipeline" > "$0" && echo "Wrote $0"`,
+				"{{$.outputs.artifacts['greeting'].path}}"),
+			"exec-read-artifact": container(`echo "Read $0:" && cat "$0"`, "{{$.inputs.artifacts['greeting'].path}}"),
+		}},
+		"pipelineInfo": map[string]interface{}{"name": pipelineSampleName, "description": pipelineSampleDescription},
+		"root": map[string]interface{}{"dag": map[string]interface{}{"tasks": map[string]interface{}{
+			"write-artifact": map[string]interface{}{
+				"cachingOptions": map[string]interface{}{},
+				"componentRef":   map[string]interface{}{"name": "comp-write-artifact"},
+				"taskInfo":       map[string]interface{}{"name": "write-artifact"},
+			},
+			"read-artifact": map[string]interface{}{
+				"cachingOptions": map[string]interface{}{},
+				"componentRef":   map[string]interface{}{"name": "comp-read-artifact"},
+				"dependentTasks": []string{"write-artifact"},
+				"inputs": map[string]interface{}{"artifacts": map[string]interface{}{"greeting": map[string]interface{}{
+					"taskOutputArtifact": map[string]interface{}{"outputArtifactKey": "greeting", "producerTask": "write-artifact"},
+				}}},
+				"taskInfo": map[string]interface{}{"name": "read-artifact"},
+			},
+		}}},
+		"schemaVersion": "2.1.0",
+		"sdkVersion":    "kfp-2.13.0",
+	}
+	out, err := yaml.Marshal(spec)
+	if err != nil {
+		// Marshalling plain maps of strings cannot fail; a panic here is a
+		// programming error caught by the tests.
+		panic(fmt.Sprintf("marshal the sample pipeline: %v", err))
+	}
+	return string(out)
 }
 
 // runsInCluster reports whether the app runs in a pod (a ServiceAccount
