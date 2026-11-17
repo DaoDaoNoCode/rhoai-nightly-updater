@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { createPoller, exponentialBackoff, usePolling } from "./usePolling";
 import { useAsyncData } from "./useAsyncData";
 import { setDocumentHidden } from "../test/utils";
@@ -129,12 +129,12 @@ describe("useAsyncData", () => {
       return { value: 1 };
     });
     const { result } = renderHook(() => useAsyncData(fetchFn, 1000));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(() => vi.advanceTimersByTimeAsync(0));
     expect(result.current.data).toEqual({ value: 1 });
     fail = true;
-    await vi.advanceTimersByTimeAsync(1000);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(result.current.data).toEqual({ value: 1 });
-    await vi.advanceTimersByTimeAsync(0);
+    await act(() => vi.advanceTimersByTimeAsync(0));
     expect(result.current.error?.errorCode).toBe("network");
   });
 });
