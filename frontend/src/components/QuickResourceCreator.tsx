@@ -148,6 +148,10 @@ interface SetupConfirm {
  * the status and the projects, and runs every change in one dialog that
  * shows its progress and outcome.
  */
+
+/** The feature a run of the dialog belongs to. */
+type RunFeature = "pipelines" | "mlflow" | "models" | "playground" | "maas" | "samples" | "other";
+
 export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, readBlocker = null, consoleURL, onResult, renderHeader }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
   // The latest status, for a Set up run that waits until its parts work.
@@ -310,6 +314,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const playgroundRead = usePlaygroundStatus(tab === "playground" ? playgroundProjectParam : null, playgroundRefresh, !!playgroundOp, tab === "overview" || tab === "playground" || !!cleanupScope);
   const pg = playgroundRead.data;
   const [maasOp, setMaaSOp] = useState<MaaSOp | null>(null);
+  // The last MaaS operation, for the run dialog's next step.
+  const [maasRun, setMaaSRun] = useState<MaaSOp | null>(null);
+  // Which feature the run dialog's run belongs to, set by whatever starts
+  // it: the dialog's next step and words come from it (never guessed from
+  // the run's title or the last runs of other features).
+  const [runFeature, setRunFeature] = useState<RunFeature>("other");
   const [maasRefresh, setMaaSRefresh] = useState(0);
   const maasRead = useMaaSStatus(maasRefresh, !!maasOp, tab === "overview" || tab === "maas" || !!cleanupScope);
   const maas = maasRead.data;
@@ -345,6 +355,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     trackFeature(p.kind);
     setModelsOp(op);
     setModelsRun(op);
+    setRunFeature("models");
     setPollGaveUp(false);
     setPollRound((n) => n + 1);
     const end = () => {
@@ -369,6 +380,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     setModelsRun(null);
     setRunOpen(true);
     trackFeature(p.kind);
+    setRunFeature("playground");
     setPlaygroundOp(op);
     setPlaygroundRun(op);
     const end = () => {
@@ -395,6 +407,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     setRunOpen(true);
     trackFeature(p.kind);
     setMaaSOp({ action, project });
+    setMaaSRun({ action, project });
+    setRunFeature("maas");
     const end = () => {
       setMaaSOp(null);
       setMaaSRefresh((n) => n + 1);
@@ -421,6 +435,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     trackFeature(p.kind);
     setSampleOp(op);
     setSampleRun(op);
+    setRunFeature("samples");
     const end = () => {
       setSampleOp(null);
       setSamplesRefresh((n) => n + 1);
@@ -462,6 +477,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     setPending(null);
     setRunOpen(true);
     const kind = p.kind.startsWith("teardown") ? "delete" : "change";
+    setRunFeature("other");
     void run.start(title, [{ id: p.kind, title, run: () => runAction(action, fn, target) }], { kind });
   };
 
@@ -510,6 +526,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const startCleanup = (req: CleanupRequest) => {
     setCleanupScope(null);
+    setRunFeature("other");
     setSampleRun(null);
     setModelsRun(null);
     setPlaygroundRun(null);
@@ -634,24 +651,30 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   // The run's "what next" and main action, from the feature it set up.
   // A sample run: after adding MLflow samples, open the project's workspace.
-  const runFeature = playgroundRun ? "playground" : modelsRun ? "models" : run.run?.title.includes("MLflow") ? "mlflow" : "pipelines";
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
     ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowWorkspaceHref(mlflow.uiRoute, sampleRun.project) }
     : null;
   const modelsNext = modelsRun?.project ? modelsState(resStatus, modelsRun.project, projectNames, busy).next : null;
   const playgroundNext = playgroundRun ? playgroundState(resStatus, pg, playgroundRun.project, busy).next : null;
-  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : sampleNext;
-  const whatNext = run.run?.kind === "setup" && runFeature === "playground"
+  const maasNext = runFeature === "maas" && maasNow.next?.kind === "open" ? maasNow.next : null;
+  const runNext: NextStep | null = run.run?.kind === "setup"
+    ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : runFeature === "maas" ? maasNext : runFeature === "pipelines" ? pipelines.next : null)
+    : runFeature === "samples" ? sampleNext : null;
+  const whatNext = run.run?.kind === "setup" && runFeature === "maas"
+    ? <Content component="p">{maasRun?.action === "publish"
+      ? `On the MaaS tab, Use it mints an API key (shown once) and calls ${maasRun.project ? `the model in ${maasRun.project}` : "the model"} with it. The dashboard's Models as a Service pages list it with its subscription.`
+      : "On the MaaS tab, publish a model to offer it through MaaS: callers then use an API key instead of their OpenShift token, within the subscription's token limits."}</Content>
+    : run.run?.kind === "setup" && runFeature === "playground"
     ? <Content component="p">{`Open the playground in ${playgroundRun?.project}, choose a model and ask it something. On the Playground tab, Use it also has a chat request to run from a terminal.`}</Content>
     : run.run?.kind === "setup" && runFeature === "models"
     ? <Content component="p">{modelsRun?.project
       ? `On the Models tab, Use it has the model's address and commands that call it with your OpenShift token. In the dashboard, ${modelsRun.project} lists the model, and Gen AI studio offers it in the playground.`
       : "Choose a project on the Models tab and set up a model there: it routes through this gateway."}</Content>
-    : run.run?.kind === "setup"
+    : run.run?.kind === "setup" && (runFeature === "mlflow" || runFeature === "pipelines")
     ? <Content component="p">{runFeature === "mlflow"
       ? "Open MLflow workspaces to choose a project and see its experiments. On the MLflow tab, Sample data adds example experiments, traces and a model to a project in one click."
       : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run, or run the sample pipeline on the Pipelines tab to check that runs work.`}</Content>
-    : sampleRun && sampleRun.action !== "remove"
+    : runFeature === "samples" && sampleRun && sampleRun.action !== "remove"
       ? <Content component="p">{sampleRun.feature === "mlflow"
         ? `Open ${sampleRun.project} in MLflow to see the sample data; the dashboard shows it on the pages each sample names.`
         : "The Pipelines tab shows the run's state until it ends, with a link to the run in the dashboard."}</Content>
@@ -660,8 +683,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const startSetUp = () => {
     if (!setupConfirm) return;
-    const { title, steps, done, recheck } = setupConfirm;
+    const { feature, title, steps, done, recheck } = setupConfirm;
     setSetupConfirm(null);
+    setRunFeature(feature === "MLflow" ? "mlflow" : "pipelines");
     setSampleRun(null);
     setRunOpen(true);
     void run.start(title, steps, {

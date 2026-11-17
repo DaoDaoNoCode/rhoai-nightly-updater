@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { QuickResourceCreator } from "../QuickResourceCreator";
+import { stubApi } from "../../test/apiStub";
 import type { MaaSStatus } from "../../types";
 import { IDLE, maasState } from "./featureState";
 import { maasCurl, maasSteps } from "./MaaSTab";
@@ -72,5 +76,31 @@ describe("Clean up everything with MaaS", () => {
   it("a published model cannot go without its publication", () => {
     expect(cleanupBlocked(status, { models: ["p"] }, ["p"])).toContain("published to MaaS");
     expect(cleanupBlocked(status, { models: ["p"], maasPublished: ["p"] }, ["p"])).toBeNull();
+  });
+});
+
+describe("MaaS run dialog", () => {
+  const sse = (...events: object[]) => () => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  const none = { deployed: false, ready: false, managedByTool: false };
+  const status: ResourcesStatus = { minio: none, mlflow: none, pipelineServers: [], dashboardUrl: "https://rh-ai.apps.example.com" };
+
+  it("after setting up the platform, says what to do with MaaS (live: it showed the Pipelines tab's next step)", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }, { id: "database", title: "Database", state: "missing" }]),
+      "POST /api/resources/maas/stream": sse(
+        { step: "check", status: "success", message: "Everything the platform needs is there." },
+        { step: "operation_complete", status: "success", message: "The MaaS platform is ready." },
+      ),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Set up MaaS" }));
+    const confirm = await screen.findByRole("dialog", { name: /Set up Models as a Service\?/ });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Set up" }));
+    const run = await screen.findByRole("dialog", { name: "Set up Models as a Service" });
+    expect(await within(run).findByText(/publish a model to offer it through MaaS/)).toBeInTheDocument();
+    expect(within(run).queryByText(/import a pipeline/)).toBeNull();
+    expect(within(run).queryByRole("link", { name: /Open pipelines/ })).toBeNull();
   });
 });
