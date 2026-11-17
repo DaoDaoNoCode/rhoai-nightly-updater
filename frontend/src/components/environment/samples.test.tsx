@@ -108,7 +108,7 @@ describe("MLflow tab: Sample data", () => {
     const demo = row("Agent and prompt demo");
     expect(demo).toHaveTextContent("Agent traces, prompts and evaluations of a sample agent. In the dashboard: Agent traces, Prompt management.");
     expect(within(demo).getByText("Added")).toBeInTheDocument();
-    expect(within(demo).getByRole("button", { name: "Regenerate agent and prompt demo" })).toBeInTheDocument();
+    expect(within(demo).getByRole("button", { name: "Regenerate the agent and prompt demo" })).toBeInTheDocument();
     // The demo is never removed by the tool: its note says how.
     expect(within(demo).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
     expect(demo).toHaveTextContent("delete it in the MLflow UI");
@@ -117,8 +117,8 @@ describe("MLflow tab: Sample data", () => {
     const training = row("Training experiment and registered model");
     expect(within(training).getByText("Partly added")).toBeInTheDocument();
     expect(training).toHaveTextContent("Missing: registered model. Add completes it; Remove deletes what is there.");
-    expect(within(training).getByRole("button", { name: "Add training experiment and registered model" })).toBeInTheDocument();
-    expect(within(training).getByRole("button", { name: "Remove training experiment and registered model" })).toBeInTheDocument();
+    expect(within(training).getByRole("button", { name: "Add the training experiment and registered model" })).toBeInTheDocument();
+    expect(within(training).getByRole("button", { name: "Remove the training experiment and registered model" })).toBeInTheDocument();
 
     const mcp = row("MCP server");
     expect(within(mcp).getByText("Not managed by this tool")).toBeInTheDocument();
@@ -206,7 +206,7 @@ describe("MLflow tab: Sample data", () => {
     renderAt("/test-resources?tab=mlflow&project=dev");
     await tick();
     expect(within(row("Agent and prompt demo")).getByText("Partly added")).toBeInTheDocument();
-    fireEvent.click(within(row("Agent and prompt demo")).getByRole("button", { name: "Regenerate agent and prompt demo" }));
+    fireEvent.click(within(row("Agent and prompt demo")).getByRole("button", { name: "Regenerate the agent and prompt demo" }));
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: /Regenerate the agent and prompt demo in dev\?/ })).getByRole("button", { name: "Regenerate" }));
     await tick();
@@ -222,7 +222,7 @@ describe("MLflow tab: Sample data", () => {
     });
     renderAt("/test-resources?tab=mlflow&project=dev");
     await tick();
-    fireEvent.click(within(row("Agent skill")).getByRole("button", { name: "Add agent skill" }));
+    fireEvent.click(within(row("Agent skill")).getByRole("button", { name: "Add the agent skill" }));
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: /Add the agent skill to dev\?/ })).getByRole("button", { name: "Add" }));
     await tick();
@@ -232,7 +232,7 @@ describe("MLflow tab: Sample data", () => {
     await tick();
     expect(within(row("Agent skill")).getByText("Adding")).toBeInTheDocument();
     expect(within(row("Training experiment and registered model")).getByText("Not added")).toBeInTheDocument();
-    const add = within(row("Training experiment and registered model")).getByRole("button", { name: "Add training experiment and registered model" });
+    const add = within(row("Training experiment and registered model")).getByRole("button", { name: "Add the training experiment and registered model" });
     expect(add).toHaveAttribute("aria-disabled", "true");
     expect(add).toHaveAccessibleDescription("Another operation is in progress");
     stream.push(sseEvent("operation_complete", "success", "Samples added in project 'dev'."));
@@ -249,7 +249,7 @@ describe("MLflow tab: Sample data", () => {
     });
     renderAt("/test-resources?tab=mlflow&project=dev");
     await tick();
-    fireEvent.click(within(row("Training experiment and registered model")).getByRole("button", { name: "Add training experiment and registered model" }));
+    fireEvent.click(within(row("Training experiment and registered model")).getByRole("button", { name: "Add the training experiment and registered model" }));
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: /Add the training experiment and registered model to dev\?/ })).getByRole("button", { name: "Add" }));
     await tick();
@@ -262,7 +262,7 @@ describe("MLflow tab: Sample data", () => {
     await tick();
     const reason = "Read-only access: adding or removing sample data needs a cluster-admin. Ask one to do it for you.";
     expect(within(samplesSection()).getByText(reason)).toBeInTheDocument();
-    for (const name of ["Add all", "Remove all", "Add training experiment and registered model", "Remove agent skill"]) {
+    for (const name of ["Add all", "Remove all", "Add the training experiment and registered model", "Remove the agent skill"]) {
       const b = within(samplesSection()).getByRole("button", { name });
       expect(b).toHaveAttribute("aria-disabled", "true");
       expect(b).toHaveAccessibleDescription(reason);
@@ -512,5 +512,12 @@ describe("Overview: samples as the next step", () => {
     const table = screen.getByRole("grid", { name: "Features" });
     expect(within(table).queryByRole("button", { name: "Add sample data" })).not.toBeInTheDocument();
     expect(within(table).queryByRole("button", { name: "Run a sample pipeline" })).not.toBeInTheDocument();
+  });
+});
+
+describe("sample names inside sentences", () => {
+  it("keeps acronyms as written (live: the step read \"Add the mCP server\")", () => {
+    expect(mlflowSampleSteps("add", ["mcp-server", "skill"]).map((s) => s.title)).toEqual(["Check MLflow", "Add the MCP server", "Add the agent skill"]);
+    expect(mlflowSampleSteps("remove", ["training"]).map((s) => s.title)).toEqual(["Check MLflow", "Remove the training experiment and registered model"]);
   });
 });

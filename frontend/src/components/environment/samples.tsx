@@ -18,6 +18,8 @@ export const MLFLOW_SAMPLE_IDS: MLflowSampleId[] = ["genai-demo", "training", "m
 
 interface SampleInfo {
   name: string;
+  /** The name inside a sentence ("Add the MCP server"): written out, because lowercasing breaks acronyms. */
+  inSentence: string;
   /** What you can see after adding it, and where, in one line. */
   value: string;
   /** Add's outcome, for the confirmation ("In p: <adds>, ..."). */
@@ -30,31 +32,35 @@ interface SampleInfo {
 export const SAMPLE_INFO: Record<MLflowSampleId, SampleInfo> = {
   "genai-demo": {
     name: "Agent and prompt demo",
+    inSentence: "agent and prompt demo",
     value: "Agent traces, prompts and evaluations of a sample agent. In the dashboard: Agent traces, Prompt management.",
     adds: "the agent and prompt demo (about 30 seconds)",
     creates: <>Experiment <code>MLflow Demo</code>, with the prompts, traces, evaluation datasets and runs that MLflow&apos;s own demo generator makes.</>,
   },
   training: {
     name: "Training experiment and registered model",
+    inSentence: "training experiment and registered model",
     value: "Three training runs with metric charts, and a registered model. In the dashboard: Develop and train > Experiments.",
     adds: "a training experiment with a registered model",
     creates: <>Experiment <code>nightly-sample-training</code> with three runs (parameters and step metrics), and registered model <code>nightly-sample-classifier</code> with two versions and the alias <code>champion</code>. Metadata only: the model has no files to download or serve.</>,
   },
   "mcp-server": {
     name: "MCP server",
+    inSentence: "MCP server",
     value: "A public MCP server (DeepWiki) to try in the Gen AI playground. In the dashboard: AI hub > MCP servers.",
     adds: "an MCP server entry",
     creates: <>MCP server <code>com.deepwiki/rhoai-nightly-sample</code>, active, with the endpoint <code>https://mcp.deepwiki.com/mcp</code>. The playground needs internet access to call it.</>,
   },
   skill: {
     name: "Agent skill",
+    inSentence: "agent skill",
     value: "An agent skill (mcp-builder, from anthropics/skills). In the dashboard: AI hub > Skills.",
     adds: "an agent skill entry",
     creates: <>Skill <code>nightly-sample-mcp-builder</code>: a registration of <code>skills/mcp-builder</code> in <code>https://github.com/anthropics/skills</code> at a fixed commit. MLflow stores the reference only; it downloads nothing.</>,
   },
 };
 
-const sampleName = (id: MLflowSampleId) => SAMPLE_INFO[id].name;
+const nameInSentence = (id: MLflowSampleId) => SAMPLE_INFO[id].inSentence;
 
 /** A sample operation this page runs now. */
 export interface SampleOp {
@@ -124,7 +130,7 @@ export function mlflowSampleSteps(action: MLflowSampleAction, samples: MLflowSam
   const verb = action === "add" ? "Add" : action === "remove" ? "Remove" : "Regenerate";
   return [
     { id: "check", title: "Check MLflow" },
-    ...order.filter((id) => samples.includes(id)).map((id) => ({ id, title: `${verb} the ${sampleName(id).charAt(0).toLowerCase()}${sampleName(id).slice(1)}` })),
+    ...order.filter((id) => samples.includes(id)).map((id) => ({ id, title: `${verb} the ${nameInSentence(id)}` })),
   ];
 }
 
@@ -154,7 +160,7 @@ export function samplesConfirm(pending: Pending): ConfirmSpec | null {
     case "mlflow-samples": {
       const { project, action, samples } = pending;
       const ids = MLFLOW_SAMPLE_IDS.filter((id) => samples.includes(id));
-      const names = ids.map((id) => sampleName(id).toLowerCase());
+      const names = ids.map(nameInSentence);
       if (action === "add") {
         const many = ids.length > 1;
         return {

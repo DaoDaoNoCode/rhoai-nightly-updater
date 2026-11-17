@@ -68,7 +68,7 @@ const SampleRow: React.FC<{
             {actions.map((a) => (
               <FlexItem key={a}>
                 <TooltipButton variant="link" isInline isDanger={a === "remove"} onClick={() => onAction(a, sample.id)} disabledReason={reason}
-                  aria-describedby={reason ? reasonId : undefined} aria-label={`${ACTION_LABEL[a]} ${name.toLowerCase()}`}>
+                  aria-describedby={reason ? reasonId : undefined} aria-label={`${ACTION_LABEL[a]} the ${info?.inSentence ?? sample.name}`}>
                   {ACTION_LABEL[a]}
                 </TooltipButton>
               </FlexItem>
