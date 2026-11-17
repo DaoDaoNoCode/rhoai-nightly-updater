@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -602,6 +603,27 @@ func TestMigrate_Refusals(t *testing.T) {
 		ok, _, code, _ := runMigrate(t, c, MigrateOptions{})
 		if ok || code != "not_managed" || !f.has(migrateJobPathT) {
 			t.Fatalf("got %v %s", ok, code)
+		}
+	})
+	// Inside Migrate storage a setup that stops names Migrate storage as the
+	// way to continue, once: never the Storage card's "re-run setup".
+	t.Run("new storage setup stops at the bucket", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		s3BucketCreator = func(*Client, string) error { return errors.New("connection refused") }
+		ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
+		if ok || !strings.Contains(msg, "Run Migrate storage again to retry") || strings.Count(msg, "Migrate storage again") != 1 {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+		for _, s := range steps {
+			if strings.Contains(strings.ToLower(s.Message), "re-run setup") {
+				t.Errorf("step %s says re-run setup: %s", s.Step, s.Message)
+			}
+		}
+		if !hasStep(steps, "storage", "Run Migrate storage again to retry") {
+			t.Error("the failed storage step does not name Migrate storage")
 		}
 	})
 	t.Run("a pipeline server with its own port is listed, not moved", func(t *testing.T) {

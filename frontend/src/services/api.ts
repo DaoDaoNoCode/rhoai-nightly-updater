@@ -342,6 +342,15 @@ export function teardownMinIO(): Promise<OperationResponse> {
   return request('/api/resources/minio/teardown', { method: 'POST', acceptStatuses: [422] });
 }
 
+/**
+ * The S3 storage's admin UI login. The server reads it from the storage's
+ * Secret on this request only (cluster-admins only, Cache-Control:
+ * no-store); keep the password out of state, logs and the DOM.
+ */
+export function getS3AdminLogin(): Promise<{ user: string; password: string }> {
+  return request('/api/resources/minio/admin-password', { cache: 'no-store' });
+}
+
 export function setupPipelineServer(project: string): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/setup', {
     method: 'POST',

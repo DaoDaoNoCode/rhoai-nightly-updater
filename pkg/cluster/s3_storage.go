@@ -165,6 +165,54 @@ func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
 	return s3Keys{AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField])}, true, nil
 }
 
+// S3AdminLoginUnavailable is why S3AdminLogin offers no password: the
+// storage is not set up, or this tool did not create it.
+type S3AdminLoginUnavailable struct{ Reason string }
+
+func (e *S3AdminLoginUnavailable) Error() string { return e.Reason }
+
+// S3AdminLogin returns the SeaweedFS admin UI login: user s3AdminUser and
+// the S3 secret key, which setup passes to the server as the admin password
+// (WEED_ADMIN_PASSWORD, see s3Resources). It reads the storage's Secret on
+// each call, so the password is never part of the status. It answers only
+// for storage this tool set up: the namespace carries the tool label and
+// the tool wrote the Secret. The caller must keep the password out of logs
+// and caches.
+func S3AdminLogin(c *Client) (user, password string, err error) {
+	ns, err := lookupS3Namespace(c)
+	if err != nil {
+		return "", "", err
+	}
+	switch {
+	case !ns.Exists:
+		return "", "", &S3AdminLoginUnavailable{"The S3 storage is not set up."}
+	case !ns.Managed:
+		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Namespace '%s' was not created by this tool, so it does not read the password there.", s3Namespace)}
+	}
+	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
+	if IsK8sError(err, 404) {
+		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' does not exist in namespace '%s'. Repair re-creates it.", s3Secret, s3Namespace)}
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	var secret struct {
+		Metadata objectMeta        `json:"metadata"`
+		Data     map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &secret); err != nil {
+		return "", "", fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+	}
+	if !storageObjectOwned(secret.Metadata) {
+		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' in namespace '%s' was not created by this tool, so it does not read it.", s3Secret, s3Namespace)}
+	}
+	password = decodeBase64Field(secret.Data[s3SecretKeyField])
+	if password == "" {
+		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' has no %s. Repair writes it again.", s3Secret, s3SecretKeyField)}
+	}
+	return s3AdminUser, password, nil
+}
+
 // s3Credentials returns the keys a setup writes to the storage's Secret.
 // Keys already stored there are kept, because pipeline servers hold copies
 // of them. On a first setup, SEAWEEDFS_ACCESS_KEY_ID and
@@ -897,9 +945,26 @@ func recordS3Activity(c *Client, action, detail string, success bool) {
 	})
 }
 
-// s3ForeignHint tells the user how to resolve a refusal over an object that
+// s3Retry names the action that retries a storage setup that stopped: the
+// Storage card's Set up (or Repair), or Migrate storage, whose first step
+// is this setup and which continues from where it stopped. A message must
+// name the action the user is in: inside Migrate storage "re-run setup"
+// would send them to the wrong place.
+type s3Retry struct {
+	// again continues a sentence ("..., then re-run setup"), Again starts one.
+	again, Again string
+}
+
+var (
+	s3RetrySetup   = s3Retry{"re-run setup", "Re-run setup"}
+	s3RetryMigrate = s3Retry{"run Migrate storage again", "Run Migrate storage again"}
+)
+
+// foreignHint tells the user how to resolve a refusal over an object that
 // has a name the tool uses but no ownership label.
-var s3ForeignHint = fmt.Sprintf("Delete or rename it, or label it with `oc label -n %s <kind>/<name> app.kubernetes.io/managed-by=rhoai-nightly-updater` if this tool created it, then re-run setup.", s3Namespace)
+func (r s3Retry) foreignHint() string {
+	return fmt.Sprintf("Delete or rename it, or label it with `oc label -n %s <kind>/<name> app.kubernetes.io/managed-by=rhoai-nightly-updater` if this tool created it, then %s.", s3Namespace, r.again)
+}
 
 // templateHint explains a 403 from the API server: the updater's own
 // ServiceAccount was refused, which after an upgrade means its RBAC still
@@ -940,7 +1005,7 @@ func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
 		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (credentials)", s3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, templateHint(err)), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
-	return setupS3Storage(c, keys, &opLog{})
+	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup)
 }
 
 // opLog collects an operation's log lines for its response, and passes each
@@ -966,7 +1031,8 @@ func (l *opLog) add(line string) {
 // ensureToolObject). Every create and apply is sent as a server-side dry
 // run before any is made, so an object the API server rejects changes
 // nothing (the namespace, which the dry runs need, is created before them).
-func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationResponse, error) {
+// retry names the action that continues a setup that stopped.
+func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.OperationResponse, error) {
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		slog.Warn("s3 storage setup failed", "reason", activity, "user", getUser(c))
 		recordS3Activity(c, "setup-minio", fmt.Sprintf("namespace=%s (%s)", s3Namespace, activity), false)
@@ -1007,7 +1073,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 		log.add("Namespace already exists (created by this tool) — reusing")
 	}
 	if ns.terminating() {
-		return fail(fmt.Sprintf("Namespace '%s' is terminating. Wait for it to fully delete before re-creating.", s3Namespace), "terminating", "namespace terminating")
+		return fail(fmt.Sprintf("Namespace '%s' is still being deleted. Wait until it is gone, then %s.", s3Namespace, retry.again), "terminating", "namespace terminating")
 	}
 	if !ns.Managed {
 		return fail(fmt.Sprintf("Namespace '%s' already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", s3Namespace), "not_managed", "namespace not managed")
@@ -1038,10 +1104,10 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 		}
 	}
 	if len(foreign) > 0 {
-		return fail(fmt.Sprintf("Namespace '%s' already contains %s, not created by this tool. Nothing was changed. %s", s3Namespace, strings.Join(foreign, ", "), s3ForeignHint), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
+		return fail(fmt.Sprintf("Namespace '%s' already contains %s, not created by this tool. Nothing was changed. %s", s3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
 	}
 	if len(deleting) > 0 {
-		return fail(fmt.Sprintf("%s in namespace '%s' is still being deleted. Wait until it is gone, then retry.", strings.Join(deleting, ", "), s3Namespace), "terminating", "objects terminating")
+		return fail(fmt.Sprintf("%s in namespace '%s' is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), s3Namespace, retry.again), "terminating", "objects terminating")
 	}
 
 	// Step 3: Create or update the server objects. The Service and the
@@ -1070,7 +1136,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 			}
 			var foreignErr *foreignObjectError
 			if errors.As(err, &foreignErr) {
-				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, s3ForeignHint), "not_managed", r.name+" became foreign")
+				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, retry.foreignHint()), "not_managed", r.name+" became foreign")
 			}
 			code := errorCodeFromK8sErr(err)
 			if errors.Is(err, errObjectChanged) || IsK8sError(err, 409) {
@@ -1079,7 +1145,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 			if dryRun {
 				return fail(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", r.name, err, templateHint(err)), code, "dry run "+r.name+" failed")
 			}
-			return fail(fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. Re-run setup to retry, or tear down to remove it.%s", r.name, err, done, templateHint(err)), code, "apply "+r.name+" failed")
+			return fail(fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. %s to retry, or tear down to remove it.%s", r.name, err, done, retry.Again, templateHint(err)), code, "apply "+r.name+" failed")
 		}
 		if !dryRun {
 			applied = append(applied, r.name)
@@ -1121,7 +1187,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 				}
 			}
 			log.add("SeaweedFS is not ready: " + reason)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; re-run setup once it is ready.", S3ReadyTimeout, reason), "timeout", "not ready")
+			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready")
 		}
 		if errors.Is(err, errS3CannotStart) {
 			msg := issue.Reason
@@ -1129,7 +1195,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 				msg += ": " + truncateMessage(issue.Message)
 			}
 			log.add("SeaweedFS cannot start: " + msg)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and re-run setup, or tear it down.", msg), "not_ready", issue.Reason)
+			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or tear it down.", msg, retry.again), "not_ready", issue.Reason)
 		}
 		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "wait failed")
 	}
@@ -1160,7 +1226,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog) (*types.OperationRespons
 	}
 	if bucketErr != nil {
 		log.add(fmt.Sprintf("Bucket creation failed: %v — you can create it from the SeaweedFS admin UI.", bucketErr))
-		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. Re-run setup to retry, or create bucket '%s' from the admin UI.", bucketErr, s3Bucket), "", "bucket failed")
+		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket '%s' from the admin UI.", bucketErr, retry.Again, s3Bucket), "", "bucket failed")
 	}
 	log.add(fmt.Sprintf("OK: Bucket '%s' created", s3Bucket))
 

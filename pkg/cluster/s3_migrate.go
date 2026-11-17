@@ -375,13 +375,14 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 				m.emit(UpdateStepEvent{Step: "storage", Status: "running", Message: line})
 			}
 		}}
-		res, err := setupS3Storage(m.c, keys, log)
+		res, err := setupS3Storage(m.c, keys, log, s3RetryMigrate)
 		m.logs = append(m.logs, log.lines...)
 		if err != nil {
 			return nil, err
 		}
 		if !res.Success {
-			return m.fail("storage", "Setting up the new storage did not finish: "+res.Message+" The old storage is unchanged; run Migrate storage again to continue.", res.ErrorCode, "setup failed")
+			// res.Message names Migrate storage as the way to continue (s3RetryMigrate).
+			return m.fail("storage", "Setting up the new storage did not finish: "+res.Message+" The old storage is unchanged.", res.ErrorCode, "setup failed")
 		}
 		m.step("storage", "success", "OK: The new storage is ready")
 	}

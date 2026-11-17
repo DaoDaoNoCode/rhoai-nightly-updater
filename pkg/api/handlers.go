@@ -1441,6 +1441,56 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 	writeOperationResult(w, result, "setup-minio")
 })
 
+// readS3AdminLogin reads the SeaweedFS admin UI login; tests replace it.
+var readS3AdminLogin = cluster.S3AdminLogin
+
+// adminReadMessage explains a 403 from withAdminRead.
+const adminReadMessage = "Only cluster-admins can read this through the updater."
+
+// withAdminRead gates a read that returns a credential: only a user who
+// passes the mutation gate (cluster-admin, see mutationRequirement) gets an
+// answer. Such a user can read every Secret in the cluster with their own
+// token, so the ServiceAccount reveals nothing they could not read
+// themselves. Unlike withMutationAuth it takes no lock and starts no
+// operation: nothing changes.
+func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
+	return withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+		allowed, err := mutationPermission(r.Context(), extractUserToken(r))
+		if err != nil {
+			writeAuthError(w, err, "Cannot verify your permissions. Nothing was read.")
+			return
+		}
+		if !allowed {
+			writeError(w, adminReadMessage, http.StatusForbidden, "forbidden")
+			return
+		}
+		fn(c, w, r)
+	})
+}
+
+// HandleS3AdminPassword returns the S3 storage's admin UI login (the
+// Storage card's "Copy admin password"). The password is read from Secret
+// seaweedfs-s3-credentials on each request, answered only to a
+// cluster-admin, never cached (Cache-Control: no-store) and never logged:
+// the log line names the user, not the value.
+var HandleS3AdminPassword = withAdminRead(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	user, password, err := readS3AdminLogin(c)
+	var unavailable *cluster.S3AdminLoginUnavailable
+	switch {
+	case errors.As(err, &unavailable):
+		writeError(w, unavailable.Reason, http.StatusConflict, "unavailable")
+		return
+	case err != nil:
+		slog.Error("s3 admin password read failed", "error", err)
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "Cannot read the admin password: "+err.Error(), code, errorCode)
+		return
+	}
+	slog.Info("credential read", "op", "s3-admin-password", "user", resolveUsername(r))
+	writeJSON(w, map[string]string{"user": user, "password": password}, "s3-admin-password")
+})
+
 // runMigrateStorage runs Migrate storage; tests replace it.
 var runMigrateStorage = cluster.MigrateS3Storage
 

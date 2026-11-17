@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -411,7 +412,20 @@ func TestSetupS3Storage_ApplyFailureReportsPartialProgress(t *testing.T) {
 	readyAfterApply(f)
 	f.fail["POST /apis/apps/v1/namespaces/seaweedfs/deployments"] = 500
 	resp, _ := SetupS3Storage(c)
-	if resp.Success || !strings.Contains(resp.Message, "Already applied: PVC, Secret, NetworkPolicy") {
+	if resp.Success || !strings.Contains(resp.Message, "Already applied: PVC, Secret, NetworkPolicy") || !strings.Contains(resp.Message, "Re-run setup to retry") {
+		t.Fatalf("setup = %+v", resp)
+	}
+}
+
+// The Storage card's setup names itself as the way to continue (inside
+// Migrate storage the same failure names Migrate storage).
+func TestSetupS3Storage_BucketFailureSaysReRunSetup(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	readyAfterApply(f)
+	s3BucketCreator = func(*Client, string) error { return errors.New("connection refused") }
+	resp, _ := SetupS3Storage(c)
+	if resp.Success || !strings.Contains(resp.Message, "Re-run setup to retry, or create bucket 'pipelines' from the admin UI") || strings.Contains(resp.Message, "Migrate") {
 		t.Fatalf("setup = %+v", resp)
 	}
 }
