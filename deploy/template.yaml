@@ -426,6 +426,11 @@ objects:
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceserviceconfigs"]
         verbs: ["get"]
+      # The dashboard's hardware profiles, to record the one that fits the
+      # model as the deploy wizard does (Models). Read-only.
+      - apiGroups: ["infrastructure.opendatahub.io"]
+        resources: ["hardwareprofiles"]
+        verbs: ["list"]
 
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding

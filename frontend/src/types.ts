@@ -811,6 +811,8 @@ export interface CatalogModel {
   displayName: string;
   uri: string;
   cpu: string;
+  /** What the scheduler reserves; memory is the limit. */
+  memoryRequest: string;
   memory: string;
 }
 
@@ -822,6 +824,8 @@ export interface ModelState extends ResourceState {
   /** Which image it runs: the preset's, the newest released one, or VLLM_CPU_IMAGE's. */
   imageKind?: "preset" | "released" | "override";
   imageVersion?: string;
+  /** The dashboard hardware profile it is recorded under ("<namespace>/<name>"), when one fits. */
+  hardwareProfile?: string;
   /** The preset's image is not in the registry (a nightly build's): setting it up with the newest released image fixes it. */
   presetImageMissing?: boolean;
 }

@@ -599,7 +599,7 @@ export const gatewayStates = {
 
 const MODEL = { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true };
 export const modelStates = {
-  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/qwen25-05b-instruct`, imageKind: "preset", ...over }),
+  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/qwen25-05b-instruct`, imageKind: "preset", hardwareProfile: "redhat-ods-applications/default-profile", ...over }),
   released: (ns = "dev-project") => modelStates.ready(ns, { imageKind: "released", imageVersion: "3.5.3", currentImage: RELEASED_IMAGE }),
   starting: (ns = "dev-project") => ({ ...MODEL, namespace: ns, ready: false, managedByTool: true, message: "MainWorkloadReady: Deployment qwen25-05b-instruct-kserve is not ready", imageKind: "preset" }),
   imageMissing: (ns = "dev-project") => ({
@@ -612,12 +612,12 @@ export const modelStates = {
 export const modelsStatus = (over = {}) => ({
   dependencies: "True", preset: PRESET, imagePlan: "released",
   imagePlanReason: "This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves registry.redhat.io/rhaii/vllm-cpu-rhel9; the newest released Red Hat image is used instead.",
-  catalog: [{ name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct", cpu: "4", memory: "16Gi" }],
+  catalog: [{ name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct", cpu: "4", memoryRequest: "6Gi", memory: "8Gi" }],
   items: [],
   ...over,
 });
 
-export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12Gi of memory free (up to 16Gi), and the most CPU free is 2.3 CPUs and 41.2 GiB on ip-10-0-1-23.ec2.internal. It may stay pending until a node is added or other workloads stop; the setup still runs.";
+export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 6Gi of memory free (up to 8Gi), and the most CPU free is 2.3 CPUs and 41.2 GiB on ip-10-0-1-23.ec2.internal. It may stay pending until a node is added or other workloads stop; the setup still runs.";
 
 // --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleStatus) ---
 // The names, messages and actions are the backend's (pkg/cluster samples_*.go).

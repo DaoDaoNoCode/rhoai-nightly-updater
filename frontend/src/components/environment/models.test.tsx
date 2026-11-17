@@ -19,7 +19,7 @@ const model = (ns: string, over: Partial<ModelState> = {}): ModelState => ({
   deployed: true, ready: true, managedByTool: true, namespace: ns, name: "qwen25-05b-instruct", message: "Running",
   displayName: "Qwen2.5 0.5B Instruct (CPU)", url: `https://inference.apps.example.com/${ns}/qwen25-05b-instruct`, imageKind: "preset", ...over,
 });
-const catalog = [{ name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct", cpu: "4", memory: "16Gi" }];
+const catalog = [{ name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct", cpu: "4", memoryRequest: "6Gi", memory: "8Gi" }];
 const modelsStatus = (over: Partial<ModelsStatus> = {}): ModelsStatus => ({ dependencies: "True", preset: "v3-6-0-kserve-config-llm-template-cpu", imagePlan: "preset", catalog, ...over });
 const status = (over: Partial<ResourcesStatus> = {}): ResourcesStatus => ({
   minio: none, mlflow: none, pipelineServers: [], dashboardUrl: "https://rh-ai.apps.example.com",
@@ -126,7 +126,7 @@ describe("Models tab", () => {
   });
 
   it("shows both parts with their details and how to call a ready model", async () => {
-    stubApi({ "/api/resources/status": status({ inferenceGateway: { ...gateway, usedBy: ["dev/qwen25-05b-instruct"], teardownBlockedReason: "Models route through it: dev/qwen25-05b-instruct. Delete that model first." }, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
+    stubApi({ "/api/resources/status": status({ inferenceGateway: { ...gateway, usedBy: ["dev/qwen25-05b-instruct"], teardownBlockedReason: "Models route through it: dev/qwen25-05b-instruct. Delete that model first." }, models: modelsStatus({ items: [model("dev", { hardwareProfile: "redhat-ods-applications/default-profile" })] }) }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=models&project=dev");
     const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
     expect(within(gw).getByText(/runs on a cloud load balancer, which costs money while it exists/)).toBeInTheDocument();
@@ -138,6 +138,10 @@ describe("Models tab", () => {
     expect(within(part).getByRole("link", { name: /Open dev in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects/dev?section=model-server");
     expect(screen.getByRole("heading", { name: "Use it" })).toBeInTheDocument();
     expect(screen.getByText(/"model":"qwen25-05b-instruct"/)).toBeInTheDocument();
+    // What the dashboard shows for it: the hardware profile, and why it lists no tokens.
+    expect(within(part).getByText("redhat-ods-applications/default-profile")).toBeInTheDocument();
+    expect(within(part).getByText(/so the dashboard lists no tokens for this model/)).toBeInTheDocument();
+    expect(within(part).getByText(/4 CPUs and 6 GiB of memory \(up to 8 GiB\)/)).toBeInTheDocument();
     // In use: the gateway's Delete says why it is not available.
     fireEvent.click(within(gw).getByRole("button", { name: "Inference gateway actions" }));
     expect(await screen.findByRole("menuitem", { name: /Delete inference gateway/ })).toHaveAttribute("aria-disabled", "true");

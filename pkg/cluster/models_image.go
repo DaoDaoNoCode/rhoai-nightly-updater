@@ -370,7 +370,7 @@ func modelCapacityWarning(c *Client, entry catalogModel) string {
 		return w
 	}
 	cpu, _ := parseQuantity(entry.CPU)
-	mem, _ := parseQuantity(entry.requestMemory)
+	mem, _ := parseQuantity(entry.MemoryRequest)
 	w, err := capacityWarning(c, cpu, mem, entry)
 	if err != nil {
 		return ""
@@ -421,7 +421,7 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel) (string, e
 		}
 	}
 	if len(free) == 0 {
-		return fmt.Sprintf("No schedulable amd64 worker was found; the model needs one with %s CPUs and %s of memory free.", entry.CPU, entry.requestMemory), nil
+		return fmt.Sprintf("No schedulable amd64 worker was found; the model needs one with %s CPUs and %s of memory free.", entry.CPU, entry.MemoryRequest), nil
 	}
 	body, _, err = c.get("/api/v1/pods?fieldSelector=" + url.QueryEscape("status.phase!=Succeeded,status.phase!=Failed"))
 	if err != nil {
@@ -475,7 +475,7 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel) (string, e
 		}
 	}
 	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s), and the most CPU free is %.1f CPUs and %.1f GiB on %s. It may stay pending until a node is added or other workloads stop; the setup still runs.",
-		entry.CPU, entry.requestMemory, entry.Memory, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30), best), nil
+		entry.CPU, entry.MemoryRequest, entry.Memory, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30), best), nil
 }
 
 func maxFloat(a, b float64) float64 {

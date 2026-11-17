@@ -787,3 +787,96 @@ func TestInferenceGatewayStatus_PlannedURLBeforeSetup(t *testing.T) {
 		t.Errorf("not set up: deployed=%v planned=%q external=%q", got.Deployed, got.PlannedURL, got.ExternalURL)
 	}
 }
+
+const testHardwareProfiles = "/apis/infrastructure.opendatahub.io/v1/namespaces/redhat-ods-applications/hardwareprofiles"
+
+func hwProfile(name, cpuMax, memMax string, extra string) string {
+	return `{"metadata":{"name":"` + name + `","resourceVersion":"41"` + extra + `},"spec":{"identifiers":[
+		{"identifier":"cpu","minCount":1,"maxCount":` + cpuMax + `},
+		{"identifier":"memory","minCount":"2Gi","maxCount":"` + memMax + `"}]}}`
+}
+
+// The model is recorded under the first enabled CPU-only profile without
+// scheduling whose ranges hold its requests and limits, as the dashboard's
+// wizard records it; the model's memory stays within RHOAI 3.6's
+// default-profile (live: it measured 7.6 GiB with the preset's 4 GiB KV cache).
+func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
+	mc := newModelsCluster(t)
+	putProfiles(mc,
+		hwProfile("a-disabled", "8", "32Gi", `,"annotations":{"opendatahub.io/disabled":"true"}`),
+		hwProfile("b-small", "4", "4Gi", ""),
+		`{"metadata":{"name":"c-gpu"},"spec":{"identifiers":[{"identifier":"cpu","minCount":1,"maxCount":8},{"identifier":"memory","minCount":"2Gi","maxCount":"64Gi"},{"identifier":"nvidia.com/gpu","minCount":1,"maxCount":1}]}}`,
+		`{"metadata":{"name":"d-pinned"},"spec":{"identifiers":[{"identifier":"cpu","minCount":1,"maxCount":8},{"identifier":"memory","minCount":"2Gi","maxCount":"64Gi"}],"scheduling":{"type":"Node","node":{"nodeSelector":{"pool":"x"}}}}}`,
+		hwProfile("default-profile", "4", "8Gi", ""))
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	model := mc.f.get("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct")
+	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if ann[hardwareProfileNameAnnotation] != "default-profile" || ann[hardwareProfileNamespaceAnnotation] != "redhat-ods-applications" || ann[hardwareProfileVersionAnnotation] != "41" {
+		t.Errorf("hardware profile annotations: %v", ann)
+	}
+	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+	res2, _ := json.Marshal(main["resources"])
+	if string(res2) != `{"limits":{"cpu":"4","memory":"8Gi"},"requests":{"cpu":"4","memory":"6Gi"}}` {
+		t.Errorf("resources: %s", res2)
+	}
+	if env, _ := json.Marshal(main["env"]); !strings.Contains(string(env), `{"name":"VLLM_CPU_KVCACHE_SPACE","value":"2"}`) {
+		t.Errorf("env: %s", env)
+	}
+	said := false
+	for _, e := range events {
+		said = said || strings.Contains(e.Message, "Hardware profile: redhat-ods-applications/default-profile")
+	}
+	if !said {
+		t.Error("the run does not name the hardware profile")
+	}
+	st := modelState(mc.c, readModelForTest(t, mc), false)
+	if st.HardwareProfile != "redhat-ods-applications/default-profile" {
+		t.Errorf("status hardware profile = %q", st.HardwareProfile)
+	}
+}
+
+// No profile fits: the model is set up without one, and the run says why.
+func TestModelsSetup_NoFittingHardwareProfileSaysWhy(t *testing.T) {
+	mc := newModelsCluster(t)
+	putProfiles(mc, hwProfile("default-profile", "2", "8Gi", ""))
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	model := mc.f.get("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct")
+	if _, set := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})[hardwareProfileNameAnnotation]; set {
+		t.Error("a profile was recorded although none fits")
+	}
+	for _, e := range events {
+		if strings.Contains(e.Message, "Hardware profile: none") {
+			if !strings.Contains(e.Message, "default-profile: cpu 4 is outside 1-2") {
+				t.Errorf("reason: %q", e.Message)
+			}
+			return
+		}
+	}
+	t.Error("the run does not say why there is no hardware profile")
+}
+
+func readModelForTest(t *testing.T, mc *modelsCluster) llmisvcObject {
+	t.Helper()
+	m, found, err := readToolModel(mc.c, "proj", "qwen25-05b-instruct")
+	if err != nil || !found {
+		t.Fatalf("read model: %v %v", found, err)
+	}
+	return m
+}
+
+// putProfiles stores each profile at its own path; the fake lists them.
+func putProfiles(mc *modelsCluster, profiles ...string) {
+	for _, p := range profiles {
+		var meta struct {
+			Metadata struct{ Name string } `json:"metadata"`
+		}
+		_ = json.Unmarshal([]byte(p), &meta)
+		mc.f.putJSON(testHardwareProfiles+"/"+meta.Metadata.Name, p)
+	}
+}

@@ -29,6 +29,15 @@ import { type Busy, type FeatureState, dashboardProjectHref, gatewayStatus, mode
 /** The catalog's model (pkg/cluster modelCatalog), for the words before the status has loaded. */
 export const MODEL_NAME = "qwen25-05b-instruct";
 export const MODEL_DISPLAY = "Qwen2.5 0.5B Instruct";
+
+/** "6Gi" as "6 GiB". */
+const gib = (q: string) => q.replace(/^(\d+(?:\.\d+)?)Gi$/, "$1 GiB");
+
+/** What the catalog's model needs on a worker, from the status (pkg/cluster modelCatalog). */
+export const modelNeeds = (status: ResourcesStatus | null | undefined): string => {
+  const c = status?.models?.catalog?.[0];
+  return c ? `${c.cpu} CPUs and ${gib(c.memoryRequest)} of memory (up to ${gib(c.memory)})` : "4 CPUs and several GiB of memory";
+};
 /** The inference gateway's objects (pkg/cluster inference_gateway.go). */
 const GATEWAY = "openshift-ai-inference";
 const GATEWAY_NS = "openshift-ingress";
@@ -165,8 +174,8 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason
       {unmanaged
         ? <Content component="p">A model named <code>{model?.name}</code> was created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
         : model
-          ? <Content component="p">A small chat model, served by vLLM on CPU (4 CPUs, up to 16 GiB of memory) in {project}. The dashboard lists it with the project&apos;s deployments, and its Gen AI playground can chat with it.</Content>
-          : <Content component="p">Not set up in {project} yet. Set up deploys {MODEL_DISPLAY} on CPU: it needs 4 CPUs and 12 to 16 GiB of memory on one worker, and takes 3 to 5 minutes the first time.</Content>}
+          ? <Content component="p">A small chat model, served by vLLM on CPU ({modelNeeds(status)}) in {project}. The dashboard lists it with the project&apos;s deployments, and its Gen AI playground can chat with it.</Content>
+          : <Content component="p">Not set up in {project} yet. Set up deploys {MODEL_DISPLAY} on CPU: it needs {modelNeeds(status)} on one worker, and takes 3 to 5 minutes the first time.</Content>}
       {model?.presetImageMissing && managed && (
         <Alert variant="danger" isInline component="div" title="The cluster preset's image is not published yet"
           actionLinks={!readOnly && !baseReason ? <AlertActionLink onClick={useReleased}>Use the newest released Red Hat image</AlertActionLink> : undefined}>
@@ -201,6 +210,25 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason
                   <StackItem>{imageWords(model)}</StackItem>
                   {model.currentImage && <StackItem><ImageRef image={model.currentImage} what="runtime image" /></StackItem>}
                 </Stack>
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          )}
+          {managed && (
+            <DescriptionListGroup>
+              <DescriptionListTerm>Hardware profile</DescriptionListTerm>
+              <DescriptionListDescription>
+                {model.hardwareProfile
+                  ? <><code>{model.hardwareProfile}</code>, as the dashboard shows it</>
+                  : "None: no profile on this cluster allows the model's CPUs and memory, so the dashboard shows \"No hardware profile\""}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          )}
+          {managed && (
+            <DescriptionListGroup>
+              <DescriptionListTerm>Token authentication</DescriptionListTerm>
+              <DescriptionListDescription>
+                On: every caller uses their own OpenShift token, so the dashboard lists no tokens for this model.
+                If you edit it in the dashboard, add a token there before you save: saving it without one turns authentication off.
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}
@@ -357,7 +385,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         summary: (
           <Stack hasGutter>
             {gateway && <StackItem><Content component="p">On the cluster: the inference gateway, the front door to models. It creates a cloud load balancer, which costs money while it exists.</Content></StackItem>}
-            {project && <StackItem><Content component="p">In {project}: {MODEL_DISPLAY} on CPU. It needs 4 CPUs and 12 to 16 GiB of memory on one worker, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
+            {project && <StackItem><Content component="p">In {project}: {MODEL_DISPLAY} on CPU. It needs {modelNeeds(status)} on one worker, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
           </Stack>
         ),
         changes: [

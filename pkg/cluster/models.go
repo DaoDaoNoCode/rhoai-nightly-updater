@@ -61,19 +61,27 @@ var errLLMISvcAPIMissing = errors.New("the LLMInferenceService API (serving.kser
 // resources it needs on CPU.
 type catalogModel struct {
 	types.CatalogModel
-	// requestMemory is what the scheduler reserves; Memory is the limit.
-	requestMemory string
-	// threads is OMP_NUM_THREADS, the CPU count (the preset's comment:
-	// validated on a 4 vCPU / 16Gi pod).
+	// threads is OMP_NUM_THREADS, the CPU count.
 	threads string
+	// kvCacheGiB is VLLM_CPU_KVCACHE_SPACE: vLLM on CPU reserves this
+	// much memory for its KV cache when it starts, whatever the load.
+	kvCacheGiB string
 }
 
 // modelCatalog: one small chat model with a chat template, ungated on
 // Hugging Face (Apache-2.0), which serves chat on 4 CPUs.
+//
+// Memory, measured live (RHOAI 3.6, vLLM CPU 3.5.3): with the preset's
+// 4 GiB KV cache the container held 7.6 GiB from start to four parallel
+// 600-token chats (cgroup memory.peak 7.73 GiB). A 2 GiB cache still holds
+// over 100k tokens for this model (24 layers x 2 KV heads x 64 x 2 x 2 bytes
+// = 12 KiB per token), about 25 full 4096-token contexts, and keeps it near
+// 5.6 GiB: so 6 GiB requested and 8 GiB limit, which also fits the
+// dashboard's default hardware profile (up to 4 CPUs and 8 GiB on 3.6).
 var modelCatalog = []catalogModel{{
-	CatalogModel:  types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct", CPU: "4", Memory: "16Gi"},
-	requestMemory: "12Gi",
-	threads:       "4",
+	CatalogModel: types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct", CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi"},
+	threads:      "4",
+	kvCacheGiB:   "2",
 }}
 
 func catalogEntry(name string) (catalogModel, bool) {
@@ -227,6 +235,9 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 	s.CurrentImage = m.mainImage()
 	s.ImageKind = firstNonEmpty(m.Metadata.Annotations[modelImageSourceAnnotation], "preset")
 	s.ImageVersion = m.Metadata.Annotations[modelImageVersionAnnotation]
+	if name := m.Metadata.Annotations[hardwareProfileNameAnnotation]; name != "" {
+		s.HardwareProfile = m.Metadata.Annotations[hardwareProfileNamespaceAnnotation] + "/" + name
+	}
 	if !s.ManagedByTool {
 		s.TeardownBlockedReason = "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it."
 	}
@@ -418,7 +429,7 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 }
 
 // modelManifest is the LLMInferenceService setup applies.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan) map[string]interface{} {
+func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile) map[string]interface{} {
 	annotations := map[string]interface{}{
 		"openshift.io/display-name": entry.DisplayName,
 		"opendatahub.io/model-type": "generative",
@@ -430,13 +441,20 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 		"name": "main",
 		"env": []interface{}{
 			map[string]interface{}{"name": "OMP_NUM_THREADS", "value": entry.threads},
-			map[string]interface{}{"name": "VLLM_CPU_KVCACHE_SPACE", "value": "4"},
+			map[string]interface{}{"name": "VLLM_CPU_KVCACHE_SPACE", "value": entry.kvCacheGiB},
 			map[string]interface{}{"name": "VLLM_ADDITIONAL_ARGS", "value": "--max-model-len 4096"},
 		},
 		"resources": map[string]interface{}{
-			"requests": map[string]interface{}{"cpu": entry.CPU, "memory": entry.requestMemory},
+			"requests": map[string]interface{}{"cpu": entry.CPU, "memory": entry.MemoryRequest},
 			"limits":   map[string]interface{}{"cpu": entry.CPU, "memory": entry.Memory},
 		},
+	}
+	if hw.Name != "" {
+		// As the dashboard's deploy wizard records the profile
+		// (applyHardwareProfileConfig): its Deployments page then names it.
+		annotations[hardwareProfileNameAnnotation] = hw.Name
+		annotations[hardwareProfileNamespaceAnnotation] = hw.Namespace
+		annotations[hardwareProfileVersionAnnotation] = hw.ResourceVersion
 	}
 	if img.Image != "" {
 		main["image"] = img.Image
@@ -618,13 +636,14 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 
 // modelPlan is what a model setup will write, decided before any write.
 type modelPlan struct {
-	entry   catalogModel
-	project string
-	preset  string
-	image   imagePlan
-	obj     map[string]interface{}
-	current objectMeta
-	found   bool
+	entry    catalogModel
+	project  string
+	preset   string
+	image    imagePlan
+	hardware hardwareProfile
+	obj      map[string]interface{}
+	current  objectMeta
+	found    bool
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -811,8 +830,14 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if img.Reason != "" {
 		m.step("check", "running", "Image: "+img.Reason)
 	}
-	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img,
-		obj: modelManifest(req.Project, entry, preset.name, img), current: existing.Metadata, found: found}, "", ""
+	hw, why := pickHardwareProfile(c, entry)
+	if hw.Name != "" {
+		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
+	} else {
+		m.step("check", "running", "Hardware profile: none; the dashboard shows the model without one, because "+why+".")
+	}
+	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
+		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).

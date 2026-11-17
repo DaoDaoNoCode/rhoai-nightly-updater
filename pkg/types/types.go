@@ -681,7 +681,9 @@ type CatalogModel struct {
 	DisplayName string `json:"displayName"`
 	URI         string `json:"uri"`
 	CPU         string `json:"cpu"`
-	Memory      string `json:"memory"`
+	// MemoryRequest is what the scheduler reserves; Memory is the limit.
+	MemoryRequest string `json:"memoryRequest"`
+	Memory        string `json:"memory"`
 }
 
 // ModelState is one LLMInferenceService of the catalog in a project
@@ -695,6 +697,9 @@ type ModelState struct {
 	// released image's version.
 	ImageKind    string `json:"imageKind,omitempty"`
 	ImageVersion string `json:"imageVersion,omitempty"`
+	// HardwareProfile is the dashboard hardware profile the model is
+	// recorded under ("<namespace>/<name>"), or "" when none fits it.
+	HardwareProfile string `json:"hardwareProfile,omitempty"`
 	// PresetImageMissing: the preset's image cannot be pulled because the
 	// registry does not have it (a nightly build's image is not published
 	// yet); setting the model up again with the newest released image
