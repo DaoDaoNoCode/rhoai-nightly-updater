@@ -378,3 +378,25 @@ func TestAuthorinoTrustsServiceCA(t *testing.T) {
 		}
 	}
 }
+
+// Live on RHOAI 3.6, after MaaS was turned off and on again, the DSC kept
+// ModelsAsAServiceReady False/Removed while its AIGateway component (which
+// the DSC copies) reported True and maas-api served: the component wins.
+func TestMaaSStatus_TheComponentWinsOverAStaleDSCCondition(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	stale := `{"spec":{"components":{"kserve":{"managementState":"Managed"},"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}},
+		"status":{"conditions":[{"type":"ModelsAsAServiceReady","status":"False","reason":"Removed","message":"modelsAsAService ManagementState is Removed"}]}}`
+	mc.f.putJSON(tMaaSDSC, stale)
+	if st, _ := GetMaaSStatus(mc.c); st.Platform.Ready {
+		t.Fatal("without the component, the DSC's condition must still count")
+	}
+	mc.f.putJSON("/apis/components.platform.opendatahub.io/v1alpha1/aigateways/default-aigateway",
+		`{"status":{"conditions":[{"type":"ModelsAsAServiceReady","status":"True","reason":"Ready"}]}}`)
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil || !st.Platform.Ready {
+		t.Fatalf("status = %+v, %v", st.Platform, err)
+	}
+}

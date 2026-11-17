@@ -228,7 +228,39 @@ func readMaaSDSC(c *Client) (maasDSC, error) {
 	sub, _ := ag["modelsAsAService"].(map[string]interface{})
 	d.maas, _ = sub["managementState"].(string)
 	d.ready, d.readyMsg = dscConditionStatus(r.Object, "ModelsAsAServiceReady")
+	// The AIGateway component reports the condition first-hand; the DSC
+	// copies it, and on RHOAI 3.6 kept the copy from before MaaS was turned
+	// back on (live: DSC False/Removed, component True/Ready, maas-api
+	// serving). The component wins when it reports one.
+	if ready, msg := aigatewayMaaSReady(c); ready != "" {
+		d.ready, d.readyMsg = ready, msg
+	}
 	return d, nil
+}
+
+// aigatewayMaaSReady reads ModelsAsAServiceReady from the AIGateway
+// component the operator projects from the DSC (components.platform.
+// opendatahub.io, listed at the version that serves it): "True", "False"
+// or "" when there is none or it cannot be read.
+func aigatewayMaaSReady(c *Client) (string, string) {
+	read, err := listServed(c, "components.platform.opendatahub.io", "/apis/components.platform.opendatahub.io/%s/aigateways", nil, []string{"v1alpha1"})
+	if err != nil || read.Body == nil {
+		return "", ""
+	}
+	var list struct {
+		Items []struct {
+			Status struct {
+				Conditions []k8sCondition `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(read.Body, &list) != nil || len(list.Items) != 1 {
+		return "", ""
+	}
+	if cond, ok := findCondition(list.Items[0].Status.Conditions, "ModelsAsAServiceReady"); ok {
+		return cond.Status, firstNonEmpty(cond.Message, cond.Reason)
+	}
+	return "", ""
 }
 
 // dscConditionStatus reads a DataScienceCluster condition: "True", "False"
