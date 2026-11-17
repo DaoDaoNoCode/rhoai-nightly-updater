@@ -1449,6 +1449,55 @@ var HandleMLflowSamplesStatus = withAuth(func(c *cluster.Client, w http.Response
 	writeJSON(w, st, "mlflow-samples")
 })
 
+// runMLflowSamples runs a samples operation; tests replace it.
+var runMLflowSamples = cluster.RunMLflowSamples
+
+// HandleMLflowSamplesStream adds, removes or regenerates MLflow samples in
+// one project, streaming a step per sample. The samples are MLflow API
+// calls, not Kubernetes writes, so there is no dry run.
+var HandleMLflowSamplesStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.MLflowSamplesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if !namespaceRegex.MatchString(req.Project) {
+		writeError(w, "a valid project is required", http.StatusBadRequest, "validation")
+		return
+	}
+	if problem := cluster.ValidateMLflowSamplesRequest(req); problem != "" {
+		writeError(w, problem, http.StatusBadRequest, "validation")
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in mlflow-samples handler", "error", rec)
+		}
+	}()
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	defer sseWriter.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	beginOperation(w, fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ", "), req.Project))
+	slog.Info("mutation", "op", "mlflow-samples", "action", req.Action, "samples", req.Samples, "project", req.Project)
+	result, runErr := runMLflowSamples(c, req, forwardSteps(sseWriter))
+	sendOperationResult(sseWriter, result, runErr)
+	if runErr != nil {
+		slog.Error("mlflow-samples failed", "error", runErr)
+	}
+})
+
 // HandleS3StorageSetup deploys the S3 storage (SeaweedFS in namespace seaweedfs) with a bucket for
 // pipeline artifacts. The route and the operation kind keep their names from earlier versions.
 var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {

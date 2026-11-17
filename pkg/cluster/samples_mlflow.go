@@ -173,7 +173,7 @@ type mlflowSample struct {
 func mlflowSamples() map[string]mlflowSample {
 	return map[string]mlflowSample{
 		SampleGenAIDemo: {status: demoStatus},
-		SampleTraining:  {status: trainingStatus},
+		SampleTraining:  {status: trainingStatus, add: addTraining, remove: removeTraining},
 		SampleMCPServer: {status: mcpStatus},
 		SampleSkill:     {status: skillStatus},
 	}
