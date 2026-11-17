@@ -32,7 +32,7 @@ const sample = (id: SampleStatus["id"], state: SampleStatus["state"], over: Part
   actions: state === "absent" || state === "removed" ? ["add"] : state === "present" ? (id === "genai-demo" ? ["regenerate"] : ["remove"]) : state === "partial" ? (id === "genai-demo" ? ["regenerate"] : ["add", "remove"]) : [],
   ...over,
 });
-const DEMO_HINT = "The updater cannot remove the demo (it holds no right to delete MLflow data it did not name); remove it from the MLflow UI. Clean up leaves it in place.";
+const DEMO_HINT = "To remove the demo, delete it in the MLflow UI. This tool does not remove it, and Clean up leaves it in place.";
 const mlflowSamples = (samples: SampleStatus[], over: Partial<MLflowSamplesStatus> = {}): MLflowSamplesStatus => ({ project: "dev", available: true, mlflowURL: MLFLOW_URL, samples, ...over });
 
 const status = (over: Partial<ResourcesStatus> = {}): ResourcesStatus => ({ minio: readyMinio, mlflow: ownMlflow, pipelineServers: [dspa("dev")], ...over });
@@ -111,7 +111,7 @@ describe("MLflow tab: Sample data", () => {
     expect(within(demo).getByRole("button", { name: "Regenerate agent and prompt demo" })).toBeInTheDocument();
     // The demo is never removed by the tool: its note says how.
     expect(within(demo).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
-    expect(demo).toHaveTextContent("remove it from the MLflow UI");
+    expect(demo).toHaveTextContent("delete it in the MLflow UI");
     expect(within(demo).getByRole("link", { name: "Open in MLflow" })).toHaveAttribute("href", `${MLFLOW_URL}/#/experiments/7?workspace=dev`);
 
     const training = row("Training experiment and registered model");

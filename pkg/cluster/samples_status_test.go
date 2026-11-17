@@ -111,7 +111,7 @@ func TestMLflowSamplesStatus_Demo(t *testing.T) {
 		t.Errorf("link = %q", s.Link)
 	}
 	demo.tags[demoVersionTagPrefix+"evaluation"], demo.tags[demoVersionTagPrefix+"issues"] = "2", "4"
-	if s := env.status(t)[SampleGenAIDemo]; s.State != "present" || !strings.Contains(s.Message, "cannot remove") {
+	if s := env.status(t)[SampleGenAIDemo]; s.State != "present" || !strings.Contains(s.Message, "delete it in the MLflow UI") {
 		t.Errorf("complete: %+v", s)
 	}
 	demo.tags = map[string]string{}

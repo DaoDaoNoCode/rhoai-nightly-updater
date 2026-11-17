@@ -47,7 +47,7 @@ const (
 )
 
 // demoRemoveHint tells the user how to remove the demo without the tool.
-const demoRemoveHint = "The updater cannot remove the demo (it holds no right to delete MLflow data it did not name); remove it from the MLflow UI. Clean up leaves it in place."
+const demoRemoveHint = "To remove the demo, delete it in the MLflow UI. This tool does not remove it, and Clean up leaves it in place."
 
 // demoVersionTags returns the demo's feature version tags: feature -> value.
 func demoVersionTags(e *mlflowExperiment) map[string]string {

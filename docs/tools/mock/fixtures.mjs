@@ -587,7 +587,7 @@ export const SAMPLE_NAMES = {
   skill: "Agent skill",
 };
 export const SAMPLE_IDS = Object.keys(SAMPLE_NAMES);
-const DEMO_REMOVE_HINT = "The updater cannot remove the demo (it holds no right to delete MLflow data it did not name); remove it from the MLflow UI. Clean up leaves it in place.";
+const DEMO_REMOVE_HINT = "To remove the demo, delete it in the MLflow UI. This tool does not remove it, and Clean up leaves it in place.";
 const mlflowLink = (project, id) => `https://data-science-gateway.${APPS}/mlflow/#/experiments/${id}?workspace=${encodeURIComponent(project)}`;
 
 /** One MLflow sample of a project in the given state, as GetMLflowSamplesStatus reports it. */

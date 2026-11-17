@@ -71,7 +71,7 @@ export const samplesFor = (samples: SampleStatus[], action: "add" | "remove") =>
 
 /** Why Add all or Remove all has nothing to do, or null. */
 export const bulkEmptyReason = (action: "add" | "remove") =>
-  action === "add" ? "Every sample that can be added is added already." : "No sample that this tool added is here.";
+  action === "add" ? "Every sample that can be added is added already." : "Nothing here that this tool can remove.";
 
 export const READ_ONLY_SAMPLES = "Read-only access: adding or removing sample data needs a cluster-admin. Ask one to do it for you.";
 
