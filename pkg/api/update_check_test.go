@@ -38,7 +38,7 @@ func TestInstallerReleasesURL(t *testing.T) {
 	}
 	// Release notes stay on RELEASES_URL; only the download moves.
 	got := compareReleases("v2.0.0", "v2.0.1", canonicalReleasesURL, mirrorReleasesURL)
-	if got.ReleaseNotesURL != canonicalReleasesURL+"/v2.0.1" || got.InstallerURL != mirrorReleasesURL+"/download/v2.0.1/install.sh" {
+	if got.ReleaseNotesURL != mirrorReleasesURL+"/tag/v2.0.1" || got.InstallerURL != mirrorReleasesURL+"/download/v2.0.1/install.sh" {
 		t.Errorf("canonical project: %+v", got)
 	}
 }
@@ -94,7 +94,7 @@ func TestCompareReleases(t *testing.T) {
 		{"major", "v1.0.0", "v2.0.0", notes, UpdateInfo{Current: "v1.0.0", Latest: "v2.0.0", UpdateAvailable: true, MajorUpgrade: true, ReleaseNotesURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0",
 			InstallerURL: "https://gitlab.example.com/group/app/-/releases/v2.0.0/downloads/install.sh"}},
 		{"github releases", "v2.0.0", "v2.0.1", "https://github.com/example/app/releases", UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true,
-			ReleaseNotesURL: "https://github.com/example/app/releases/v2.0.1", InstallerURL: "https://github.com/example/app/releases/download/v2.0.1/install.sh"}},
+			ReleaseNotesURL: "https://github.com/example/app/releases/tag/v2.0.1", InstallerURL: "https://github.com/example/app/releases/download/v2.0.1/install.sh"}},
 		{"other notes page", "v2.0.0", "v2.0.1", "https://docs.example.com/app/releases", UpdateInfo{Current: "v2.0.0", Latest: "v2.0.1", UpdateAvailable: true,
 			ReleaseNotesURL: "https://docs.example.com/app/releases/v2.0.1"}},
 		{"no https notes", "v1.0.0", "v1.1.0", "http://example.com/releases", UpdateInfo{Current: "v1.0.0", Latest: "v1.1.0", UpdateAvailable: true}},

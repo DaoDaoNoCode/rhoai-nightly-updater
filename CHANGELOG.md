@@ -20,6 +20,10 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- The update notice's "Release notes" link opens the public GitHub release
+  (`.../releases/tag/vX.Y.Z`), the same page the install command downloads
+  `install.sh` from. The GitLab release page it linked before redirects
+  anyone not signed in to GitLab to the sign-in page.
 - **New look: PatternFly 6.7's felt theme**, with an appearance button in
   the masthead (it replaces the moon icon). **Color scheme**: System,
   Light or Dark; **Contrast mode**: System, Default, High contrast or

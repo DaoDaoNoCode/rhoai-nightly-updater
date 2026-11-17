@@ -116,8 +116,12 @@ func installerReleasesURL(releasesURL string) string {
 }
 
 // compareReleases builds the answer for the running version and the highest
-// release found: release notes on releasesURL, the installer on
-// installerReleases.
+// release found. The release notes and the installer both come from
+// installerReleases, the public releases page (installerReleasesURL): the
+// canonical GitLab project's release pages redirect anonymous readers to its
+// sign-in page, and its public GitHub mirror publishes the same notes with
+// each release. releasesURL is used for the notes only when installerReleases
+// is not an https URL.
 func compareReleases(running, latest, releasesURL, installerReleases string) UpdateInfo {
 	cur, ok := parseRelease(running)
 	if !ok {
@@ -132,8 +136,12 @@ func compareReleases(running, latest, releasesURL, installerReleases string) Upd
 	if cur.less(lv) {
 		info.UpdateAvailable = true
 		info.MajorUpgrade = lv[0] != cur[0]
-		if strings.HasPrefix(releasesURL, "https://") {
-			info.ReleaseNotesURL = strings.TrimRight(releasesURL, "/") + "/" + latest
+		notes := installerReleases
+		if !strings.HasPrefix(notes, "https://") {
+			notes = releasesURL
+		}
+		if strings.HasPrefix(notes, "https://") {
+			info.ReleaseNotesURL = releaseNotesURL(strings.TrimRight(notes, "/"), latest)
 		}
 		if strings.HasPrefix(installerReleases, "https://") {
 			info.InstallerURL = installerURL(strings.TrimRight(installerReleases, "/"), latest)
@@ -155,6 +163,19 @@ var safeInstallerURL = regexp.MustCompile(`^https://[A-Za-z0-9._~-]+(:[0-9]{1,5}
 // (.github/workflows/release.yml), GitLab release links at
 // <project>/-/releases/<tag>/downloads/<direct_asset_path>
 // (scripts/release.sh gitlab-release). "" for any other page.
+// releaseNotesURL is the page of one release on a releases page: GitHub's
+// documented release link is /OWNER/REPO/releases/tag/TAG ("Linking to
+// releases", GitHub docs); GitLab's is .../-/releases/TAG, and any other
+// releases page gets /TAG as before.
+func releaseNotesURL(releasesURL, tag string) string {
+	if u, err := url.Parse(releasesURL); err == nil && u.Host == "github.com" {
+		if segs := strings.Split(strings.Trim(u.Path, "/"), "/"); len(segs) == 3 && segs[2] == "releases" {
+			return releasesURL + "/tag/" + tag
+		}
+	}
+	return releasesURL + "/" + tag
+}
+
 func installerURL(releasesURL, tag string) string {
 	u, err := url.Parse(releasesURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
