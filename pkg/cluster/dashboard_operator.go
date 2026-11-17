@@ -863,7 +863,7 @@ func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) erro
 		selector = append(selector, k+"="+v)
 	}
 	sort.Strings(selector)
-	ctx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
+	ctx, cancel := clk.WithTimeout(c.ctx, 60*time.Second)
 	defer cancel()
 	reader := *c
 	reader.ctx = ctx
@@ -891,10 +891,8 @@ func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) erro
 		if len(pods.Items) == 0 {
 			return nil
 		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("waiting for dashboard-operator pods to terminate: %w", ctx.Err())
-		case <-time.After(time.Second):
+		if err := clk.Sleep(ctx, time.Second); err != nil {
+			return fmt.Errorf("waiting for dashboard-operator pods to terminate: %w", err)
 		}
 	}
 }
@@ -1258,10 +1256,8 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if !IsK8sError(err, http.StatusConflict) || attempt == 4 {
 			return err
 		}
-		select {
-		case <-c.ctx.Done():
-			return c.ctx.Err()
-		case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
+		if err := clk.Sleep(c.ctx, time.Duration(attempt+1)*100*time.Millisecond); err != nil {
+			return err
 		}
 	}
 	return fmt.Errorf("dashboard image patch exhausted conflict retries")
@@ -1474,7 +1470,7 @@ func RevertDashboardDevForOperation(c *Client) error {
 }
 
 func waitDashboardOperatorReady(c *Client, replicas int) error {
-	ctx, cancel := context.WithTimeout(c.ctx, dashboardOperatorReadyTimeout)
+	ctx, cancel := clk.WithTimeout(c.ctx, dashboardOperatorReadyTimeout)
 	defer cancel()
 	reader := *c
 	reader.ctx = ctx
@@ -1496,10 +1492,8 @@ func waitDashboardOperatorReady(c *Client, replicas int) error {
 		default:
 			last = fmt.Sprintf("%d/%d replicas ready", operator.Status.ReadyReplicas, dashboardOperatorReplicas(operator))
 		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("dashboard-operator did not become ready (%s): %w", last, ctx.Err())
-		case <-time.After(dashboardOperatorPollInterval):
+		if err := clk.Sleep(ctx, dashboardOperatorPollInterval); err != nil {
+			return fmt.Errorf("dashboard-operator did not become ready (%s): %w", last, err)
 		}
 	}
 }

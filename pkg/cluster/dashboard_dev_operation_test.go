@@ -159,13 +159,15 @@ func TestRevertDashboardDevForOperation(t *testing.T) {
 		f, c := newDashboardDevFixture(t)
 		mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 		mustDeploy(t, c, "pr", 1, "")
-		ctx, cancel := context.WithCancel(context.Background())
+		// The caller gives up after 50ms, long before the operator's
+		// readiness timeout.
+		ctx, cancel := clk.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
 		c.ctx = ctx
-		time.AfterFunc(50*time.Millisecond, cancel)
-		start := time.Now()
+		start := clk.Now()
 		err := RevertDashboardDevForOperation(c)
-		if err == nil || time.Since(start) > 10*time.Second || *f.operator.Spec.Replicas != 2 {
-			t.Fatalf("err=%v elapsed=%v", err, time.Since(start))
+		if err == nil || clk.Since(start) != 50*time.Millisecond || *f.operator.Spec.Replicas != 2 {
+			t.Fatalf("err=%v elapsed=%v", err, clk.Since(start))
 		}
 	})
 	t.Run("resume-rejected", func(t *testing.T) {

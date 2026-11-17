@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"testing"
-	"time"
 )
 
 const (
@@ -86,11 +85,7 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 // A transient read error is cached only briefly: once the read works, the
 // link shows without waiting out the five minutes an answer is kept.
 func TestCachedDashboardURL_ReadErrorIsCachedBriefly(t *testing.T) {
-	dashboardURLCache.Purge()
-	t.Cleanup(dashboardURLCache.Purge)
-	oldTTL := dashboardURLErrorTTL
-	dashboardURLErrorTTL = 20 * time.Millisecond
-	t.Cleanup(func() { dashboardURLErrorTTL = oldTTL })
+	cacheTime := fakeCacheClock(t, dashboardURLCache)
 	f, c := newResourceFake(t)
 	f.putJSON(dashboardsPath+"/default-dashboard", `{"status":{"url":"https://rh-ai.apps.example.com"}}`)
 	f.fail["GET "+dashboardsPath] = 500
@@ -98,7 +93,7 @@ func TestCachedDashboardURL_ReadErrorIsCachedBriefly(t *testing.T) {
 		t.Fatalf("cachedDashboardURL = %q during the error", got)
 	}
 	delete(f.fail, "GET "+dashboardsPath)
-	time.Sleep(30 * time.Millisecond)
+	cacheTime.Advance(dashboardURLErrorTTL)
 	if got := cachedDashboardURL(c); got != "https://rh-ai.apps.example.com" {
 		t.Errorf("cachedDashboardURL = %q after the error cleared", got)
 	}
