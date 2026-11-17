@@ -36,10 +36,33 @@ only accepts a tag whose version is the top dated section. See
   Content-Security-Policy stays `default-src 'self'` (no inline script).
 - **Test resources is now the Environment page**: one-click setups for
   developing and reproducing issues on the cluster. Its address stays
-  `/test-resources`, so bookmarks and links keep working. Storage,
-  Pipeline servers and MLflow are grouped under **Data & pipelines**, with
-  Pipeline servers now right after the storage they use; the cards work as
-  before.
+  `/test-resources`, so bookmarks and links keep working. It has three
+  tabs, kept in the address (`?tab=cluster`, `?tab=projects&project=<name>`),
+  so links, reloads and the browser's back and forward buttons open the
+  same view:
+  - **Overview** asks "What do you want to do?": one card per goal (run a
+    data science pipeline; track experiments with MLflow) with the parts it
+    needs and their status, "N of M ready", and one action: **Set up** or
+    **Set up the rest** (confirmed, then the missing parts run one after
+    another in a progress dialog), **Show** the part that needs attention,
+    or **Open**. A project goal picks its project on the card.
+  - **Cluster**: Storage and MLflow. **Projects**: a project picker (type to
+    filter; each project says what it has) and the project's pipeline server.
+  - Compact cards: a title with one status (Not set up, Setting up, Ready,
+    Needs attention, Error, Deleting, Not managed by this tool), one
+    sentence and one action. **Details** opens a drawer with the object
+    names, addresses, warnings and repair reasons, the other actions (Tear
+    down, Deploy PR, Revert), **How to use** and **What this creates**.
+- **Copy admin password** (Storage details, How to use) copies the
+  SeaweedFS admin UI password from the server on click, instead of an
+  `oc extract` command on the card. Only cluster-admins get it; it is never
+  part of the status, never cached and never logged.
+- New pipeline servers wait until Migrate storage has copied the old
+  storage: the copy's check compares both sides, and a server writing to the
+  new storage first would make it fail. Migrate storage tells you to run
+  Migrate storage again when its setup step stops (it said "re-run setup").
+  A failed run shows its reason once, and the removal's "Also delete
+  namespace minio" choice sits above the data-loss notice.
 - **S3 storage in its own namespace, with SeaweedFS names**: namespace
   `seaweedfs`, Service `seaweedfs-s3` (S3 on 8333, admin UI on 12535),
   Secret `seaweedfs-s3-credentials` with the standard keys

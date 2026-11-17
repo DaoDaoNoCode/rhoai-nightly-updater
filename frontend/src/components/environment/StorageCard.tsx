@@ -1,36 +1,30 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   ActionListItem,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   Content,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  ExpandableSection,
-  FlexItem,
-  Title,
 } from "@patternfly/react-core";
 import type { KeptPVC, LegacyStorageState, ResourceState } from "../../types";
+import { getS3AdminLogin } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
-import { CardList, CardListItem } from "../CardList";
-import { StatusLabel, TagLabel } from "../StatusLabel";
+import { ImageRef } from "../ImageRef";
 import {
   type CardActionProps,
   type ConfirmSpec,
   type Pending,
   ExternalLink,
-  RowTitle,
-  StatusDetails,
+  ProblemAlerts,
+  createdBy,
   isTerminating,
   pvcList,
-  rowActions,
   terminalReason,
-  unmanagedNote,
 } from "./resourceRow";
+import { CreatesList, DetailsActions, DetailsAlert, DetailsSection, DetailsStack, HowToUse, ResourceCard } from "./ResourceCard";
+import { CopyFromServerButton } from "./CopyFromServerButton";
+import { envStatus, type EnvStatus } from "./resourceStatus";
 
 /** The storage's namespace and in-cluster address (pkg/cluster s3Namespace, s3Host). */
 export const S3_NAMESPACE = "seaweedfs";
@@ -40,20 +34,82 @@ const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size
 
 const joinNodes = (nodes: React.ReactNode[]) => nodes.map((n, i) => <React.Fragment key={i}>{i > 0 ? ", " : ""}{n}</React.Fragment>);
 
+/** What the Storage card and its details need. */
+export interface StorageProps extends CardActionProps {
+  minio?: ResourceState;
+  legacy?: LegacyStorageState | null;
+  /** Tool objects left after a teardown (or a teardown that did not finish): Tear down stays offered. */
+  minioLeftovers: boolean;
+  /** Opens Migrate storage. */
+  onMigrate: () => void;
+  /** Migrate storage is running from this page. */
+  migrating: boolean;
+  /** Why the admin password cannot be read by this user, or null. */
+  readReason: string | null;
+}
+
+/** The storage's one status. Storage of an earlier version still holding the data needs attention. */
+export function storageStatus({ minio, legacy, resAction, migrating }: Pick<StorageProps, "minio" | "legacy" | "resAction" | "migrating">): EnvStatus {
+  const busy = migrating || resAction === "setup-minio" ? "setting-up" : resAction === "teardown-minio" ? "deleting" : null;
+  return envStatus(minio, { busy, attention: legacy?.stage === "migrate" });
+}
+
 /**
- * The storage an earlier version left in namespace minio, inside the card's
- * collapsed "Details": the only place the card names MinIO-era objects.
+ * Why a new pipeline server cannot be set up on the storage yet, or null.
+ * The storage must be ready, and a migration must have copied the old
+ * storage first: the copy's check compares both sides, so a pipeline
+ * server writing to the new storage before it would make the check fail.
  */
+export function storageNotReadyReason(minio: ResourceState | undefined, legacy: LegacyStorageState | null | undefined, migrating: boolean): string | null {
+  if (migrating) return "Migrate storage is running. Wait until it has finished.";
+  if (legacy?.stage === "migrate") return "Available once Migrate storage has moved the data of an earlier version to the new storage (Storage, Cluster tab).";
+  if (!minio?.ready) return minio?.deployed ? "Available once the S3 storage is ready (Storage, Cluster tab)." : "Available once the S3 storage is set up (Storage, Cluster tab).";
+  return null;
+}
+
+/** Tear down is offered: the tool's storage exists, or storage of an earlier version does. */
+const teardownOffered = ({ minio, legacy, minioLeftovers }: StorageProps) =>
+  !!minio && !isTerminating(minio) && ((minio.managedByTool !== false && (minio.deployed || minioLeftovers)) || !!legacy);
+
+/** The S3 storage (SeaweedFS in namespace seaweedfs) as a compact card. */
+export const StorageCard: React.FC<StorageProps & { onDetails: (opener: HTMLElement) => void; detailsOpen: boolean }> = (props) => {
+  const { minio, legacy, onMigrate, migrating, baseReason, resAction, setPending, onDetails, detailsOpen } = props;
+  let action: React.ReactNode = null;
+  if (legacy) {
+    const disabledReason = migrating ? null : baseReason ?? (legacy.terminating ? `Namespace ${legacy.namespace} is being deleted.` : null);
+    action = legacy.stage === "migrate"
+      ? <TooltipButton variant="primary" onClick={onMigrate} isLoading={migrating} disabledReason={disabledReason}>Migrate storage</TooltipButton>
+      : <TooltipButton variant="secondary" isDanger onClick={onMigrate} isLoading={migrating} disabledReason={disabledReason}>Remove old storage</TooltipButton>;
+  } else if (minio && !minio.deployed && !isTerminating(minio)) {
+    action = <TooltipButton variant="primary" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
+      disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>;
+  } else if (minio?.deployed && minio.managedByTool !== false && (!!terminalReason(minio) || !!minio.repairNeeded) && !isTerminating(minio)) {
+    action = <TooltipButton variant="primary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
+      disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>;
+  } else if (minio?.ready && minio.uiRoute) {
+    action = <ExternalLink href={minio.uiRoute}>Open admin UI</ExternalLink>;
+  }
+  const needs = legacy?.stage === "migrate"
+    ? "An earlier version's storage still holds the data: Migrate storage moves it here."
+    : legacy?.stage === "remove"
+      ? "The data was moved here. The earlier version's storage is kept until you remove it."
+      : undefined;
+  return (
+    <ResourceCard id="storage" title="Storage" status={storageStatus(props)} action={action} needs={needs} onDetails={onDetails} detailsOpen={detailsOpen}
+      purpose="S3 storage (SeaweedFS) for pipeline artifacts and test files." />
+  );
+};
+
+/** The storage an earlier version left in namespace minio: the only place that names MinIO-era objects. */
 const LegacyStorageDetails: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
-  const [expanded, setExpanded] = useState(false);
   const pvcs = legacy.dataPVCs ?? [];
   const usedBy = legacy.usedBy ?? [];
   const uncopied = legacy.uncopiedPVCs ?? [];
   return (
-    <ExpandableSection toggleText="Details" isExpanded={expanded} onToggle={(_e, v) => setExpanded(v)} className="pf-v6-u-mt-sm">
-      <DescriptionList isCompact isHorizontal aria-label="Storage from an earlier version">
+    <DetailsSection title="Storage of an earlier version">
+      <DescriptionList isCompact aria-label="Storage from an earlier version">
         <DescriptionListGroup>
-          <DescriptionListTerm>Old storage</DescriptionListTerm>
+          <DescriptionListTerm>Server</DescriptionListTerm>
           <DescriptionListDescription>{legacy.server ? `${legacy.server}${legacy.ready ? "" : " (not running)"}` : "No server"} in namespace <code>{legacy.namespace}</code>, at <code>{legacy.endpoint}</code></DescriptionListDescription>
         </DescriptionListGroup>
         {usedBy.length > 0 && (
@@ -76,79 +132,89 @@ const LegacyStorageDetails: React.FC<{ legacy: LegacyStorageState }> = ({ legacy
           </DescriptionListGroup>
         )}
       </DescriptionList>
-    </ExpandableSection>
+    </DetailsSection>
   );
 };
 
-/** The S3 storage (SeaweedFS in namespace seaweedfs), or the storage an earlier version left in namespace minio to migrate. */
-export const StorageCard: React.FC<CardActionProps & {
-  minio?: ResourceState;
-  legacy?: LegacyStorageState | null;
-  /** Tool objects left after a teardown (or a teardown that did not finish): Tear down stays offered. */
-  minioLeftovers: boolean;
-  /** Opens Migrate storage. */
-  onMigrate: () => void;
-  /** Migrate storage is running from this page. */
-  migrating: boolean;
-}> = ({ minio, legacy, minioLeftovers, onMigrate, migrating, baseReason, resAction, setPending }) => {
-  const teardownOffered = !!minio && !isTerminating(minio) && ((minio.managedByTool !== false && (minio.deployed || minioLeftovers)) || !!legacy);
+/** The storage's details, in the drawer. */
+export const StorageDetails: React.FC<StorageProps> = (props) => {
+  const { minio, legacy, baseReason, resAction, setPending, readReason } = props;
+  const deployed = !!minio?.deployed;
+  const adminLogin = deployed && !!minio?.uiUser && minio.managedByTool !== false;
   return (
-    <Card>
-      <CardHeader><CardTitle><Title headingLevel="h3" size="lg">Storage</Title></CardTitle></CardHeader>
-      <CardBody>
-        <CardList aria-label="Storage">
-          <CardListItem labelledBy="minio-item" actionsBesideFrom="xl" actions={rowActions(
-            <>
-              {minio?.ready && minio.uiRoute && <ActionListItem><ExternalLink href={minio.uiRoute}>Open admin UI</ExternalLink></ActionListItem>}
-              {legacy && (
-                <ActionListItem>
-                  <TooltipButton variant="primary" onClick={onMigrate} isLoading={migrating}
-                    disabledReason={migrating ? null : baseReason ?? (legacy.terminating ? `Namespace ${legacy.namespace} is being deleted.` : null)}>Migrate storage</TooltipButton>
-                </ActionListItem>
-              )}
-              {!legacy && minio && !minio.deployed && !isTerminating(minio) && (
-                <ActionListItem>
-                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
-                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
-                </ActionListItem>
-              )}
-              {!legacy && minio?.deployed && minio.managedByTool !== false && (!!terminalReason(minio) || !!minio.repairNeeded) && !isTerminating(minio) && (
-                <ActionListItem>
-                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
-                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
-                </ActionListItem>
-              )}
-              {teardownOffered && (
-                <ActionListItem>
-                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
-                    disabledReason={baseReason ?? minio!.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                </ActionListItem>
-              )}
-            </>,
-          )}>
-            <RowTitle id="minio-item" name="S3 storage" state={minio}
-              status={legacy ? <StatusLabel status="warning">Migration needed</StatusLabel> : undefined}
-              extra={minio?.deployed ? <FlexItem><TagLabel>SeaweedFS</TagLabel></FlexItem> : undefined} />
-            <Content component="p" className="pf-v6-u-text-color-subtle">
-              {!legacy && <>S3 storage (SeaweedFS) for pipeline artifacts and test files, in namespace <code>{S3_NAMESPACE}</code>. Pipeline servers reach it at <code>{S3_ENDPOINT}</code>.{unmanagedNote(minio)}</>}
-              {legacy?.stage === "migrate" && <>The storage of an earlier version of this tool, in namespace <code>{legacy.namespace}</code>, still holds the data. Migrate storage moves it to namespace <code>{S3_NAMESPACE}</code> (<code>{S3_ENDPOINT}</code>), with the pipeline servers this tool created.</>}
-              {legacy?.stage === "remove" && <>The data and this tool&apos;s pipeline servers are in namespace <code>{S3_NAMESPACE}</code> (<code>{S3_ENDPOINT}</code>). The old storage in namespace <code>{legacy.namespace}</code> is kept until you remove it: Migrate storage finishes the move.</>}
-            </Content>
-            {minio && (!legacy || minio.deployed) && (
-              <StatusDetails
-                kind="minio"
-                state={minio}
-                // With old storage, Tear down's tooltip gives the reason; the
-                // card body does not repeat it.
-                teardownBlocked={!legacy && (minio.deployed || pvcList(minio).length > 0) && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
-                notes={minio.deployed && minio.uiUser ? [<React.Fragment key="login">Admin UI login: user <code>{minio.uiUser}</code>, password in Secret <code>seaweedfs-s3-credentials</code> (key <code>AWS_SECRET_ACCESS_KEY</code>): <code>oc extract -n seaweedfs secret/seaweedfs-s3-credentials --keys=AWS_SECRET_ACCESS_KEY --to=-</code></React.Fragment>] : []}
-              />
-            )}
-            {legacy && <LegacyStorageDetails legacy={legacy} />}
-          </CardListItem>
-        </CardList>
-      </CardBody>
-    </Card>
+    <DetailsStack>
+      {legacy?.stage === "migrate" && (
+        <DetailsAlert variant="warning" title="Migration needed">
+          The storage of an earlier version of this tool, in namespace <code>{legacy.namespace}</code>, still holds the data. Migrate storage moves it to namespace <code>{S3_NAMESPACE}</code>, with the pipeline servers this tool created.
+        </DetailsAlert>
+      )}
+      {legacy?.stage === "remove" && (
+        <DetailsAlert variant="info" title="The old storage is kept until you remove it">
+          The data and this tool&apos;s pipeline servers are in namespace <code>{S3_NAMESPACE}</code>. Remove old storage finishes the move.
+        </DetailsAlert>
+      )}
+      {minio && (!legacy || deployed) && <ProblemAlerts kind="minio" state={minio} />}
+      <DescriptionList isCompact isHorizontal aria-label="Storage details">
+        <DescriptionListGroup>
+          <DescriptionListTerm>Namespace</DescriptionListTerm>
+          <DescriptionListDescription><code>{S3_NAMESPACE}</code></DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>S3 endpoint</DescriptionListTerm>
+          <DescriptionListDescription><ImageRef image={S3_ENDPOINT} what="S3 endpoint" truncate={false} /></DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>Bucket</DescriptionListTerm>
+          <DescriptionListDescription><code>pipelines</code></DescriptionListDescription>
+        </DescriptionListGroup>
+        {deployed && minio?.uiRoute && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Admin UI</DescriptionListTerm>
+            <DescriptionListDescription><a href={minio.uiRoute} target="_blank" rel="noopener noreferrer">{minio.uiRoute.replace(/^https:\/\//, "")}</a></DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {deployed && minio?.currentImage && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Image</DescriptionListTerm>
+            <DescriptionListDescription><ImageRef image={minio.currentImage} /></DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {deployed && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Created by</DescriptionListTerm>
+            <DescriptionListDescription>{createdBy(minio)}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+      </DescriptionList>
+      {teardownOffered(props) && (
+        <DetailsActions>
+          <ActionListItem>
+            <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
+              disabledReason={baseReason ?? minio!.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+          </ActionListItem>
+        </DetailsActions>
+      )}
+      <HowToUse text={<>
+        <p>Pipeline servers set up from this page use the storage without further settings.</p>
+        <p>
+          Other S3 clients in the cluster use the endpoint above, region <code>us-east-1</code>, path-style addressing and the keys in Secret <code>seaweedfs-s3-credentials</code> in namespace <code>{S3_NAMESPACE}</code> (<code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code>).
+        </p>
+        {adminLogin && <p>Sign in to the admin UI as <code>{minio.uiUser}</code>; the password is the S3 secret key.</p>}
+      </>}>
+        {adminLogin && (
+          <CopyFromServerButton fetchText={async () => (await getS3AdminLogin()).password} disabledReason={readReason}
+            copiedText={`Copied the password of user ${minio.uiUser}.`}>Copy admin password</CopyFromServerButton>
+        )}
+      </HowToUse>
+      {legacy && <LegacyStorageDetails legacy={legacy} />}
+      <CreatesList items={[
+        <>Namespace <code>{S3_NAMESPACE}</code>, labelled as managed by this tool</>,
+        <>Deployment <code>seaweedfs</code> with PersistentVolumeClaim <code>seaweedfs-data</code> (20Gi)</>,
+        <>Secret <code>seaweedfs-s3-credentials</code> (the S3 keys)</>,
+        <>Service <code>seaweedfs-s3</code>, Route <code>seaweedfs-admin</code> (admin UI) and NetworkPolicy <code>seaweedfs-ingress</code></>,
+        <>Bucket <code>pipelines</code></>,
+      ]} />
+    </DetailsStack>
   );
 };
 

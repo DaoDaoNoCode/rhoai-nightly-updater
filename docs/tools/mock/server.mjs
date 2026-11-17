@@ -184,6 +184,16 @@ const scenarios = {
   },
   "s3-incomplete": (w) => { w.resources.minio = F.s3States.incomplete; w.gated = true; },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // The Environment page's other states, one scenario each.
+  "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  "env-starting": (w) => { w.resources = { minio: F.s3States.starting, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServerStarting] }; },
+  "env-error": (w) => {
+    w.resources = { minio: { ...F.s3States.imagePull, teardownBlockedReason: F.s3States.running.teardownBlockedReason }, mlflow: F.mlflowStates.prBroken, pipelineServers: [F.pipelineServer] };
+  },
+  "env-foreign": (w) => {
+    w.resources = { minio: F.s3States.foreign, mlflow: F.mlflowStates.foreign, pipelineServers: [], unmanagedPipelineProjects: ["fraud-detection"] };
+  },
+  "env-reader": (w) => { w.resources.mlflow = F.mlflowStates.running; w.canMutate = false; },
 };
 for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook"]) {
   scenarios[`diag-${name}`] = (w) => {
@@ -339,6 +349,8 @@ const routes = {
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
   "GET /api/resources/status": () => world.resources,
   "GET /api/resources/projects": () => ({ projects: F.projects }),
+  // Made up, like every value here.
+  "GET /api/resources/minio/admin-password": () => ({ user: "admin", password: "docs-mock-password" }),
   "GET /api/activity": () => world.status.activity ?? [],
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
@@ -368,13 +380,16 @@ async function api(req, res, u) {
     }
   }
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
+  if (key === "GET /api/resources/minio/admin-password" && world.canMutate === false) {
+    return json(res, 403, { error: "Only cluster-admins can read this through the updater.", errorCode: "forbidden" });
+  }
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/minio/setup") return mutation(res, "setup-minio", "Set up S3 storage", minioSetup);
   if (key === "POST /api/resources/minio/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/pipeline-server/setup") {
     const { project = "dev-project" } = await body(req);
     return mutation(res, "setup-pipeline-server", "Set up pipeline server", () => {
-      world.resources.pipelineServers = [{ ...F.pipelineServer, namespace: project, ready: false, message: "Starting (1/3 ready)" }];
+      world.resources.pipelineServers = [...world.resources.pipelineServers.filter((ps) => ps.namespace !== project), { ...F.pipelineServerStarting, namespace: project }];
       return { success: true, message: "Pipeline server created. It will take 1-3 minutes to become ready.", logs: [] };
     });
   }

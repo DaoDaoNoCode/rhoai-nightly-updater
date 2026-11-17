@@ -1,10 +1,8 @@
 import React from "react";
-import { ActionList, ActionListGroup, Button, Flex, FlexItem, HelperText, HelperTextItem } from "@patternfly/react-core";
+import { Alert, Button, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
 import type { ResourceState } from "../../types";
 import { withImageRefs } from "../ImageRef";
-import { StatusLabel, TagLabel } from "../StatusLabel";
 import { TruncatedText } from "../LongText";
 
 /**
@@ -68,78 +66,48 @@ export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = 
   return null;
 }
 
-const ResourceStatus: React.FC<{ state: ResourceState }> = ({ state }) => {
-  if (isTerminating(state)) return <StatusLabel status="warning">Terminating</StatusLabel>;
-  // Running, but not serving through its Service/Route: Repair fixes it.
-  if (state.deployed && !state.ready && state.terminalError && state.repairNeeded) return <StatusLabel status="warning">Incomplete</StatusLabel>;
-  if (state.ready) return <StatusLabel status="success">Running</StatusLabel>;
-  if (!state.deployed) return <StatusLabel status="neutral">Not deployed</StatusLabel>;
-  const reason = terminalReason(state);
-  if (reason) {
-    const short = state.waitingReason || (reason !== "Failed" && reason.length <= 40 ? reason : "");
-    return <StatusLabel status="danger">{short ? `Failed: ${short}` : "Failed"}</StatusLabel>;
-  }
-  return <StatusLabel status="progress">Starting</StatusLabel>;
-};
-
-/** The resource's message, warnings and next step as helper text under its description. */
-export const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean; teardownBlocked?: string | null; notes?: React.ReactNode[] }> = ({ kind, state, minioReady, teardownBlocked, notes }) => {
-  const step = nextStep(kind, state, minioReady);
-  // The label already says "Starting" / "Terminating": don't repeat it as the message.
-  const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
-  const items: React.ReactNode[] = [];
-  if (showMessage) {
-    items.push(<HelperTextItem key="message" variant={state.repairNeeded && state.message === state.repairNeeded ? "warning" : terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message!)}</TruncatedText></span></HelperTextItem>);
-  }
-  if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
-  if (state.repairNeeded && !(showMessage && state.message === state.repairNeeded)) {
-    items.push(<HelperTextItem key="repair" variant="warning">Needs repair: {state.repairNeeded}</HelperTextItem>);
-  }
-  if (step) items.push(<HelperTextItem key="step">Next step: {step}</HelperTextItem>);
-  if (teardownBlocked) items.push(<HelperTextItem key="blocked" variant="warning">Tear down is blocked: {teardownBlocked}</HelperTextItem>);
-  notes?.forEach((note, i) => items.push(<HelperTextItem key={`note-${i}`}>{note}</HelperTextItem>));
-  return items.length > 0 ? <HelperText className="pf-v6-u-mt-sm">{items}</HelperText> : null;
-};
-
-/** Why the tool leaves an object it did not create alone, appended to the row description. */
-export function unmanagedNote(state: ResourceState | undefined): string {
-  return state?.managedByTool === false && state.teardownBlockedReason ? ` ${state.teardownBlockedReason}` : "";
-}
-
 /**
- * Name, status and category tags of one resource row. status replaces the
- * status derived from state (one status label per row).
+ * Why a resource does not work and what to do, as the drawer's inline
+ * alerts: an error (red) with its next step, a repair reason (orange) with
+ * what Repair does, and a warning (orange).
  */
-export const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; status?: React.ReactNode; extra?: React.ReactNode }> = ({ id, name, state, status, extra }) => (
-  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-    <FlexItem><strong id={id}>{name}</strong></FlexItem>
-    {status ? <FlexItem>{status}</FlexItem> : state && <FlexItem><ResourceStatus state={state} /></FlexItem>}
-    {/* Only for something that exists: the backend also reports managedByTool false when nothing is deployed. */}
-    {state?.managedByTool === false && (state.deployed || isTerminating(state) || !!state.setupBlockedReason) && (
-      <FlexItem><TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel></FlexItem>
-    )}
-    {extra}
-  </Flex>
-);
+export const ProblemAlerts: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean }> = ({ kind, state, minioReady }) => {
+  const step = nextStep(kind, state, minioReady);
+  const reason = terminalReason(state);
+  const alerts: React.ReactNode[] = [];
+  // The next step goes with the repair reason when there is one (Repair is
+  // the step), otherwise with the error.
+  if (reason && !(state.repairNeeded && state.message === state.repairNeeded)) {
+    const title = state.waitingReason || (reason.length <= 60 ? reason : "It cannot start");
+    alerts.push(
+      <Alert key="error" variant="danger" isInline component="p" title={title}>
+        {state.message && state.message !== title && <span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message)}</TruncatedText></span>}
+        {!state.repairNeeded && step && <> {step}</>}
+      </Alert>,
+    );
+  }
+  if (state.repairNeeded) {
+    alerts.push(
+      <Alert key="repair" variant="warning" isInline component="p" title="Needs repair">
+        <span className="pf-v6-u-text-break-word">{withImageRefs(state.repairNeeded)}</span>
+        {step && <> {step}</>}
+      </Alert>,
+    );
+  }
+  if (state.warning) {
+    alerts.push(<Alert key="warning" variant="warning" isInline component="p" title="Warning"><span className="pf-v6-u-text-break-word">{withImageRefs(state.warning)}</span></Alert>);
+  }
+  return alerts.length > 0 ? <Stack hasGutter>{alerts.map((a, i) => <StackItem key={i}>{a}</StackItem>)}</Stack> : null;
+};
+
+/** Who created a resource, for its details. */
+export const createdBy = (state: ResourceState | undefined) => state?.managedByTool === false ? "Not this tool: it is left alone" : "This tool";
 
 /** An external link as a full-size link button, for action rows (isInline is
  *  for links inside running text: it drops the button height, so the link
  *  would sit higher than the buttons beside it). */
 export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
   <Button variant="link" component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
-);
-
-/**
- * The actions of one resource row (ActionListItems): one ActionListGroup,
- * so they get PatternFly's action-to-action spacing; beside the row on wide
- * screens (right-aligned), below it otherwise.
- */
-export const rowActions = (children: React.ReactNode) => (
-  <Flex justifyContent={{ md: "justifyContentFlexEnd" }}>
-    <ActionList>
-      <ActionListGroup>{children}</ActionListGroup>
-    </ActionList>
-  </Flex>
 );
 
 /** A change the user is asked to confirm. */

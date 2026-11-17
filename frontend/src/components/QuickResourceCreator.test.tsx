@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator, terminalReason } from "./QuickResourceCreator";
 import { TooltipButton } from "./TooltipButton";
 import type { ResourcesStatus, ResourceState } from "../types";
@@ -11,9 +12,9 @@ function statusWith(minio: ResourceState): ResourcesStatus {
   return { minio, mlflow: notDeployed, pipelineServers: [] };
 }
 
-function stubResources(get: () => ResourcesStatus) {
+function stubResources(get: () => ResourcesStatus, projects: string[] = []) {
   const fetchMock = vi.fn(async (url: string) => {
-    if (url.includes("/api/resources/projects")) return jsonResponse({ projects: [] });
+    if (url.includes("/api/resources/projects")) return jsonResponse({ projects });
     return jsonResponse(get());
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -21,6 +22,10 @@ function stubResources(get: () => ResourcesStatus) {
 }
 
 const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+function renderAt(path: string, mutateBlocker: string | null = null) {
+  return render(<MemoryRouter initialEntries={[path]}><QuickResourceCreator mutateBlocker={mutateBlocker} /></MemoryRouter>);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -45,7 +50,7 @@ describe("QuickResourceCreator polling (A06-5)", () => {
   it("backs off while a resource starts and stops once it is ready", async () => {
     let minio: ResourceState = { deployed: true, ready: false, message: "Provisioning" };
     const statusCalls = stubResources(() => statusWith(minio));
-    render(<QuickResourceCreator mutateBlocker={null} />);
+    renderAt("/test-resources?tab=cluster");
     await tick();
     expect(statusCalls()).toBe(1);
     await tick(5_000);
@@ -63,7 +68,7 @@ describe("QuickResourceCreator polling (A06-5)", () => {
 
   it("does not poll while the tab is hidden", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "Provisioning" }));
-    render(<QuickResourceCreator mutateBlocker={null} />);
+    renderAt("/test-resources?tab=cluster");
     await tick();
     setDocumentHidden(true);
     await tick(5 * 60_000);
@@ -75,16 +80,16 @@ describe("QuickResourceCreator polling (A06-5)", () => {
 
   it("stops polling and shows a failure for an image that can never be pulled", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "ImagePullBackOff" }));
-    render(<QuickResourceCreator mutateBlocker={null} />);
+    renderAt("/test-resources?tab=cluster");
     await tick();
-    expect(screen.getByText("Failed: ImagePullBackOff")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Storage" })).getByText("Error")).toBeInTheDocument();
     await tick(10 * 60_000);
     expect(statusCalls()).toBe(1);
   });
 
   it("gives up after 10 minutes of settling and offers to check again", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "Provisioning" }));
-    render(<QuickResourceCreator mutateBlocker={null} />);
+    renderAt("/test-resources?tab=cluster");
     await tick();
     await tick(11 * 60_000);
     const calls = statusCalls();
@@ -110,23 +115,23 @@ describe("disabled buttons explain themselves (A06-7)", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("You don't have permission");
   });
 
-  it("'Add to a project' stays focusable and explains why it is disabled (N10)", async () => {
-    stubResources(() => statusWith(notDeployed));
-    render(<QuickResourceCreator mutateBlocker={null} />);
+  it("a pipeline server's Set up stays focusable and explains why it is disabled (N10)", async () => {
+    stubResources(() => statusWith(notDeployed), ["dev-project"]);
+    renderAt("/test-resources?tab=projects&project=dev-project");
     await tick();
-    const toggle = screen.getByRole("button", { name: "Add to a project" });
-    expect(toggle).toHaveAttribute("aria-disabled", "true");
-    expect(toggle).not.toBeDisabled();
-    fireEvent.mouseEnter(toggle);
+    const setUp = within(screen.getByRole("region", { name: "Pipeline server" })).getByRole("button", { name: "Set up" });
+    expect(setUp).toHaveAttribute("aria-disabled", "true");
+    expect(setUp).not.toBeDisabled();
+    fireEvent.mouseEnter(setUp);
     await tick(1000);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Available once the S3 storage is running.");
-    fireEvent.click(toggle);
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Available once the S3 storage is set up (Storage, Cluster tab).");
+    fireEvent.click(setUp);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("read-only users get the reason on the resource buttons", async () => {
     stubResources(() => statusWith(notDeployed));
-    render(<QuickResourceCreator mutateBlocker="Read-only access: changing the cluster through this tool requires the cluster-admin role." />);
+    renderAt("/test-resources?tab=cluster", "Read-only access: changing the cluster through this tool requires the cluster-admin role.");
     await tick();
     const setUp = screen.getAllByRole("button", { name: "Set up" })[0];
     expect(setUp).toHaveAttribute("aria-disabled", "true");

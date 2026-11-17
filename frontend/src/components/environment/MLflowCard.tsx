@@ -2,13 +2,11 @@ import React, { useState } from "react";
 import {
   ActionListItem,
   Alert,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   Content,
-  Flex,
-  FlexItem,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
   Form,
   FormGroup,
   InputGroup,
@@ -16,85 +14,124 @@ import {
   Stack,
   StackItem,
   TextInput,
-  Title,
 } from "@patternfly/react-core";
 import type { ResourceState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
-import { CardList, CardListItem } from "../CardList";
-import { TagLabel } from "../StatusLabel";
+import { ImageRef } from "../ImageRef";
 import {
   type CardActionProps,
   type ConfirmSpec,
   type Pending,
   ExternalLink,
-  RowTitle,
-  StatusDetails,
+  ProblemAlerts,
+  createdBy,
   isTerminating,
   pvcsLost,
-  rowActions,
-  unmanagedNote,
+  terminalReason,
 } from "./resourceRow";
+import { CreatesList, DetailsActions, DetailsStack, HowToUse, ResourceCard } from "./ResourceCard";
+import { envStatus, type EnvStatus } from "./resourceStatus";
 
-/** The MLflow server (CR mlflow), with deploying an opendatahub-io/mlflow PR image and reverting it. */
-export const MLflowCard: React.FC<CardActionProps & { mlflow?: ResourceState }> = ({ mlflow, baseReason, resAction, setPending }) => {
-  const [mlflowPR, setMlflowPR] = useState("");
-  const mlflowPRValid = /^\d+$/.test(mlflowPR) && Number(mlflowPR) > 0;
+export interface MLflowProps extends CardActionProps {
+  mlflow?: ResourceState;
+}
+
+export function mlflowStatus({ mlflow, resAction }: Pick<MLflowProps, "mlflow" | "resAction">): EnvStatus {
+  const busy = resAction === "setup-mlflow" || resAction === "deploy-mlflow-pr" || resAction === "revert-mlflow" ? "setting-up" : resAction === "teardown-mlflow" ? "deleting" : null;
+  return envStatus(mlflow, { busy });
+}
+
+/** The MLflow server (CR mlflow) as a compact card. */
+export const MLflowCard: React.FC<MLflowProps & { onDetails: (opener: HTMLElement) => void; detailsOpen: boolean }> = (props) => {
+  const { mlflow, baseReason, resAction, setPending, onDetails, detailsOpen } = props;
+  let action: React.ReactNode = null;
+  if (mlflow && !mlflow.deployed && !isTerminating(mlflow)) {
+    action = <TooltipButton variant="primary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
+      disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>;
+  } else if (mlflow?.prOverride && terminalReason(mlflow)) {
+    // The PR image broke MLflow: going back is the way out.
+    action = <TooltipButton variant="primary" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>Revert the PR image</TooltipButton>;
+  } else if (mlflow?.ready && mlflow.uiRoute) {
+    action = <ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink>;
+  }
   return (
-    <Card>
-      <CardHeader><CardTitle><Title headingLevel="h3" size="lg">MLflow</Title></CardTitle></CardHeader>
-      <CardBody>
-        <CardList aria-label="MLflow">
-          <CardListItem labelledBy="mlflow-item" actions={rowActions(
-            <>
-              {mlflow?.ready && mlflow.uiRoute && <ActionListItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></ActionListItem>}
-              {mlflow && !mlflow.deployed && (
-                <ActionListItem>
-                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
-                    disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
-                </ActionListItem>
-              )}
-              {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
-                <ActionListItem>
-                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
-                    disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                </ActionListItem>
-              )}
-            </>,
-          )}>
-            <RowTitle id="mlflow-item" name="MLflow server" state={mlflow}
-              extra={mlflow?.prOverride ? <FlexItem><TagLabel color="blue">PR #{mlflow.prNumber ?? "?"}</TagLabel></FlexItem> : undefined} />
-            <Content component="p" className="pf-v6-u-text-color-subtle">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.{unmanagedNote(mlflow)}</Content>
-            {mlflow && <StatusDetails kind="mlflow" state={mlflow} />}
-            {mlflow?.deployed && (
-              <Form className="pf-v6-u-mt-md" onSubmit={(e) => e.preventDefault()}>
-                <FormGroup label="Deploy an opendatahub-io/mlflow PR" fieldId="mlflow-pr">
-                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsFlexStart" }}>
-                    <FlexItem>
-                      <InputGroup>
-                        <InputGroupItem>
-                          <TextInput id="mlflow-pr" type="text" inputMode="numeric" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val.trim())} placeholder="PR number" aria-label="opendatahub-io/mlflow PR number" />
-                        </InputGroupItem>
-                        <InputGroupItem>
-                          <TooltipButton variant="control" onClick={() => setPending({ kind: "deploy-mlflow-pr", pr: Number(mlflowPR) })} isLoading={resAction === "deploy-mlflow-pr"}
-                            disabledReason={baseReason ?? (!mlflowPRValid ? "Enter an opendatahub-io/mlflow PR number first." : null)}>Deploy PR</TooltipButton>
-                        </InputGroupItem>
-                      </InputGroup>
-                    </FlexItem>
-                    {mlflow.prOverride && (
-                      <FlexItem>
-                        <TooltipButton variant="secondary" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>
-                          Revert the PR image
-                        </TooltipButton>
-                      </FlexItem>
-                    )}
-                  </Flex>
-                </FormGroup>
-              </Form>
-            )}
-          </CardListItem>
-        </CardList>
-      </CardBody>
-    </Card>
+    <ResourceCard id="mlflow" title="MLflow" status={mlflowStatus(props)} action={action} onDetails={onDetails} detailsOpen={detailsOpen}
+      needs={mlflow?.prOverride ? `Runs the image of opendatahub-io/mlflow PR #${mlflow.prNumber ?? "?"}.` : undefined}
+      purpose="An MLflow server for tracking experiments, run by the MLflow operator." />
+  );
+};
+
+/** The MLflow server's details, in the drawer: deploying a PR image, Revert and Tear down. */
+export const MLflowDetails: React.FC<MLflowProps> = ({ mlflow, baseReason, resAction, setPending }) => {
+  const [pr, setPr] = useState("");
+  const prValid = /^\d+$/.test(pr) && Number(pr) > 0;
+  const deployed = !!mlflow?.deployed;
+  return (
+    <DetailsStack>
+      {mlflow && <ProblemAlerts kind="mlflow" state={mlflow} />}
+      <DescriptionList isCompact isHorizontal aria-label="MLflow details">
+        <DescriptionListGroup>
+          <DescriptionListTerm>Namespace</DescriptionListTerm>
+          <DescriptionListDescription><code>redhat-ods-applications</code></DescriptionListDescription>
+        </DescriptionListGroup>
+        <DescriptionListGroup>
+          <DescriptionListTerm>MLflow CR</DescriptionListTerm>
+          <DescriptionListDescription><code>mlflow</code></DescriptionListDescription>
+        </DescriptionListGroup>
+        {deployed && mlflow?.currentImage && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Image</DescriptionListTerm>
+            <DescriptionListDescription><ImageRef image={mlflow.currentImage} />{mlflow.prOverride ? ` (PR #${mlflow.prNumber ?? "?"})` : ""}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {deployed && !mlflow?.ready && mlflow?.message && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>State</DescriptionListTerm>
+            <DescriptionListDescription>{mlflow.message}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {deployed && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Created by</DescriptionListTerm>
+            <DescriptionListDescription>{createdBy(mlflow)}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+      </DescriptionList>
+      {deployed && (
+        <Form onSubmit={(e) => e.preventDefault()}>
+          <FormGroup label="Deploy an opendatahub-io/mlflow PR" fieldId="mlflow-pr">
+            <InputGroup>
+              <InputGroupItem isFill>
+                <TextInput id="mlflow-pr" type="text" inputMode="numeric" value={pr} onChange={(_e, v) => setPr(v.trim())} placeholder="PR number" />
+              </InputGroupItem>
+              <InputGroupItem>
+                <TooltipButton variant="control" onClick={() => setPending({ kind: "deploy-mlflow-pr", pr: Number(pr) })} isLoading={resAction === "deploy-mlflow-pr"}
+                  disabledReason={baseReason ?? (!prValid ? "Enter an opendatahub-io/mlflow PR number first." : null)}>Deploy PR</TooltipButton>
+              </InputGroupItem>
+            </InputGroup>
+          </FormGroup>
+        </Form>
+      )}
+      {deployed && (mlflow?.prOverride || (mlflow?.managedByTool !== false && !isTerminating(mlflow))) && (
+        <DetailsActions>
+          {mlflow?.prOverride && (
+            <ActionListItem>
+              <TooltipButton variant="secondary" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>Revert the PR image</TooltipButton>
+            </ActionListItem>
+          )}
+          {mlflow?.managedByTool !== false && !isTerminating(mlflow) && (
+            <ActionListItem>
+              <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
+                disabledReason={baseReason ?? mlflow?.teardownBlockedReason ?? null}>Tear down</TooltipButton>
+            </ActionListItem>
+          )}
+        </DetailsActions>
+      )}
+      {deployed && (
+        <HowToUse text={<p>Open MLflow{mlflow?.uiRoute ? <> at <a href={mlflow.uiRoute} target="_blank" rel="noopener noreferrer">{mlflow.uiRoute.replace(/^https:\/\//, "")}</a></> : ""} with your OpenShift login.</p>} />
+      )}
+      <CreatesList items={[<>MLflow CR <code>mlflow</code>; the MLflow operator deploys the server in <code>redhat-ods-applications</code></>]} />
+    </DetailsStack>
   );
 };
 

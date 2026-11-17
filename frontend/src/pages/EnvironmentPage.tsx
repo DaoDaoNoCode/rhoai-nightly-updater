@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { PageHeader } from "../components/PageHeader";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
-import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
+import { useClusterBusyHandler, useMutationBlocker, usePermissions } from "../state/AppInfo";
 
 /**
  * Environment: one-click setups for developing and reproducing issues (S3
@@ -11,23 +11,25 @@ import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
  */
 export const EnvironmentPage: React.FC = () => {
   const blocker = useMutationBlocker();
+  // Reading a credential (the storage's admin password) needs the same
+  // cluster-admin check as a change, but no free operation slot.
+  const { reason: readBlocker } = usePermissions();
   const onResult = useClusterBusyHandler();
   useEffect(() => {
     document.title = "Environment — RHOAI Nightly Updater";
   }, []);
   return (
-    <>
-      <QuickResourceCreator
-        mutateBlocker={blocker}
-        onResult={onResult}
-        renderHeader={(header) => (
-          <PageHeader
-            title="Environment"
-            description="One-click setups for developing and reproducing issues on this cluster: storage, pipelines, MLflow, models, a Gen AI playground and Models as a Service."
-            {...header}
-          />
-        )}
-      />
-    </>
+    <QuickResourceCreator
+      mutateBlocker={blocker}
+      readBlocker={readBlocker}
+      onResult={onResult}
+      renderHeader={(header) => (
+        <PageHeader
+          title="Environment"
+          description="One-click setups for developing and reproducing issues on this cluster."
+          {...header}
+        />
+      )}
+    />
   );
 };

@@ -11,9 +11,6 @@ import {
   ModalFooter,
   ModalHeader,
   ModalVariant,
-  ProgressStep,
-  ProgressStepper,
-  Spinner,
   Stack,
   StackItem,
   Title,
@@ -22,24 +19,18 @@ import type { LegacyStorageState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import { S3_ENDPOINT, S3_NAMESPACE } from "./StorageCard";
 import { MIGRATE_STEPS, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
+import { StepProgress } from "./StepProgress";
 
 const codes = (items: string[]) => items.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>);
 
-/** The ordered steps of a run as a PatternFly ProgressStepper. */
+/**
+ * The ordered steps of a run. The step that stopped the run shows no text
+ * of its own when the outcome alert says the same.
+ */
 const RunProgress: React.FC<{ run: MigrateRun }> = ({ run }) => (
-  <ProgressStepper isVertical aria-label={run.kind === "migrate" ? "Migrate storage progress" : "Remove old storage progress"}>
-    {MIGRATE_STEPS[run.kind].map(({ id, title }) => {
-      const s = run.steps[id];
-      const running = run.running && s?.status === "running";
-      const variant = !s ? "pending" : s.status === "success" ? "success" : s.status === "failed" ? "danger" : s.status === "skipped" ? "default" : "info";
-      return (
-        <ProgressStep key={id} id={`migrate-${id}`} titleId={`migrate-${id}-title`} variant={variant} isCurrent={running}
-          icon={running ? <Spinner size="sm" aria-label="In progress" /> : undefined} description={s?.message}>
-          {title}
-        </ProgressStep>
-      );
-    })}
-  </ProgressStepper>
+  <StepProgress idPrefix="migrate" aria-label={run.kind === "migrate" ? "Migrate storage progress" : "Remove old storage progress"}
+    steps={MIGRATE_STEPS[run.kind]} states={run.steps} running={run.running}
+    shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} />
 );
 
 /** What Migrate storage does, before it runs. */
@@ -109,26 +100,26 @@ const RemovePlan: React.FC<{ legacy: LegacyStorageState; deleteNamespace: boolea
         </StackItem>
       )}
       <StackItem>
-        <Alert component="p" variant="danger" isInline title="Data is deleted and cannot be recovered">
-          First the run copies and checks any object written to the old storage since the migration. Then it deletes what this tool created in namespace <code>{legacy.namespace}</code>: {codes(legacy.objects)}.
-          {pvcs.length > 0 && <> Deleted with {pvcs.length > 1 ? "them" : "it"}: the data in {codes(pvcs)}.</>}
-          {uncopied.length > 0 && <> {codes(uncopied)} (MinIO&apos;s files from before SeaweedFS) cannot be copied and is deleted.</>}
-        </Alert>
-      </StackItem>
-      <StackItem>
         {legacy.namespaceDeletable ? (
           <Checkbox id="migrate-delete-namespace" label={<>Also delete namespace <code>{legacy.namespace}</code></>}
             description={<>
               Deletes namespace <code>{legacy.namespace}</code> and everything in it, including anything this tool did not create.{" "}
               {(legacy.otherObjects ?? []).length > 0
-                ? <>Besides the objects above, this tool sees there: {codes(legacy.otherObjects ?? [])}.</>
-                : <>Besides the objects above, this tool sees no Deployments or PersistentVolumeClaims there.</>}{" "}
+                ? <>Besides the objects this tool created, it sees there: {codes(legacy.otherObjects ?? [])}.</>
+                : <>Besides the objects this tool created, it sees no Deployments or PersistentVolumeClaims there.</>}{" "}
               It cannot list every kind (Secrets, ConfigMaps and others): check with <code>oc get all,pvc,secret,configmap -n {legacy.namespace}</code>.
             </>}
             isChecked={deleteNamespace} onChange={(_e, v) => setDeleteNamespace(v)} />
         ) : (
           <Content component="p">{legacy.namespaceKeptReason}</Content>
         )}
+      </StackItem>
+      <StackItem>
+        <Alert component="p" variant="danger" isInline title="Data is deleted and cannot be recovered">
+          First the run copies and checks any object written to the old storage since the migration. Then it deletes what this tool created in namespace <code>{legacy.namespace}</code>: {codes(legacy.objects)}.
+          {pvcs.length > 0 && <> Deleted with {pvcs.length > 1 ? "them" : "it"}: the data in {codes(pvcs)}.</>}
+          {uncopied.length > 0 && <> {codes(uncopied)} (MinIO&apos;s files from before SeaweedFS) cannot be copied and is deleted.</>}
+        </Alert>
       </StackItem>
     </Stack>
   );

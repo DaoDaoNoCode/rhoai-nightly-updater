@@ -460,6 +460,22 @@ export const s3States = {
     teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"),
   },
   none: { deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false },
+  starting: {
+    deployed: true, ready: false, message: "0/1 ready", namespace: "seaweedfs", currentImage: SEAWEEDFS, managedByTool: true, uiUser: "admin",
+    dataPVCs: ["seaweedfs-data"],
+  },
+  imagePull: {
+    deployed: true, ready: false, terminalError: true, namespace: "seaweedfs", currentImage: "mirror.example.com/seaweedfs:4.54", managedByTool: true, uiUser: "admin",
+    dataPVCs: ["seaweedfs-data"], waitingReason: "ImagePullBackOff",
+    message: 'ImagePullBackOff: Back-off pulling image "mirror.example.com/seaweedfs:4.54": unauthorized',
+  },
+  // Namespace seaweedfs exists, made by someone else: setup refuses.
+  foreign: {
+    deployed: false, ready: false, namespace: "seaweedfs", managedByTool: false,
+    message: "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.",
+    setupBlockedReason: "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.",
+    teardownBlockedReason: "Namespace 'seaweedfs' was not created by this tool.",
+  },
   // Storage of an earlier version is still in namespace minio: nothing in
   // namespace seaweedfs yet, or (stage "remove") the new storage is running.
   migrationNeeded: {
@@ -475,7 +491,7 @@ export const s3States = {
 /** The pipeline server an earlier version created ("dspa"), on the old storage. */
 export const legacyPipelineServer = {
   deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "dspa", managedByTool: true,
-  apiRoute: `https://ds-pipeline-dspa-dev-project.${APPS}`, dataPVCs: ["mariadb-dspa"],
+  apiRoute: `https://ds-pipeline-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-dspa"],
 };
 
 /** What 2.1 to 2.3 left in namespace minio (pkg/types LegacyStorageState). */
@@ -520,11 +536,25 @@ export function migrateSteps(kind) {
 
 export const pipelineServer = {
   deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "nightly-dspa", managedByTool: true,
-  apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, dataPVCs: ["mariadb-nightly-dspa"],
+  apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-nightly-dspa"],
 };
+
+/** A pipeline server that has just been set up (DSPO is starting it). */
+export const pipelineServerStarting = { ...pipelineServer, ready: false, message: "Starting (1/3 ready)", uiRoute: undefined };
 
 export const mlflowStates = {
   none: { deployed: false, ready: false, message: "Not deployed", managedByTool: false },
+  // Made in the dashboard, not by this tool.
+  foreign: {
+    deployed: true, ready: true, message: "Running", namespace: "redhat-ods-applications", name: "mlflow", managedByTool: false,
+    uiRoute: `https://data-science-gateway.${APPS}/mlflow`, currentImage: `registry.redhat.io/rhoai/odh-mlflow-rhel9@${digest("mlflow")}`,
+    teardownBlockedReason: "This MLflow instance was not created by this tool, so the tool will not delete it.",
+  },
+  // A PR image that cannot be pulled.
+  prBroken: {
+    deployed: true, ready: false, terminalError: true, message: "ImagePullBackOff", waitingReason: "ImagePullBackOff", namespace: "redhat-ods-applications", name: "mlflow",
+    managedByTool: true, prOverride: true, prNumber: 412, revertImage: "", currentImage: `quay.io/opendatahub/mlflow@${digest("mlflow-pr-412")}`, dataPVCs: ["mlflow-pvc"],
+  },
   running: {
     deployed: true, ready: true, message: "Running", namespace: "redhat-ods-applications", name: "mlflow", managedByTool: true,
     uiRoute: `https://data-science-gateway.${APPS}/mlflow`, currentImage: `registry.redhat.io/rhoai/odh-mlflow-rhel9@${digest("mlflow")}`,
