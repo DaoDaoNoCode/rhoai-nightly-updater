@@ -426,19 +426,22 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
       </CardBody>
       <CardFooter>
         <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapMd" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
-          {/* One action group: PatternFly's action-to-action spacing. */}
+          {/* One action group: PatternFly's action-to-action spacing. Full-size
+              buttons only (no isInline, which is for links in running text),
+              so they line up: the main action, the alternative path
+              (secondary), and the read-only preview (link). */}
           <FlexItem>
             <ActionList>
               <ActionListGroup>
                 {primary && <ActionListItem>{primary}</ActionListItem>}
                 {prerequisitesMet && !gitOpsApp && !gitOpsProfile && (
                   <ActionListItem>
-                    <Button variant="link" isInline onClick={onChooseBuild}>Choose another build</Button>
+                    <Button variant="secondary" onClick={onChooseBuild}>Choose another build</Button>
                   </ActionListItem>
                 )}
                 {previewBuild && onPreview && (
                   <ActionListItem>
-                    <Button variant="link" isInline icon={<SearchIcon />} onClick={() => onPreview(previewBuild.image)}>
+                    <Button variant="link" icon={<SearchIcon />} onClick={() => onPreview(previewBuild.image)}>
                       View build contents
                     </Button>
                   </ActionListItem>

@@ -3,7 +3,6 @@ import {
   ActionList,
   ActionListGroup,
   ActionListItem,
-  ActionGroup,
   Alert,
   Button,
   Content,
@@ -187,20 +186,29 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
           </HelperText>
         </FormHelperText>
       </FormGroup>
-      <ActionGroup>
-        <TooltipButton
-          variant={pullSecret.exists ? "danger" : "primary"}
-          onClick={handleSave}
-          isLoading={authLoading || undefined}
-          isDisabled={authLoading}
-          disabledReason={saveReason}
-        >
-          {pullSecret.exists ? "Replace token" : "Create secret"}
-        </TooltipButton>
-        {pullSecret.exists && (
-          <Button variant="link" onClick={cancelReplace} isDisabled={authLoading}>Cancel</Button>
-        )}
-      </ActionGroup>
+      {/* An ActionList, not an ActionGroup: in this one-field form the
+          buttons sit one form row gap below the helper text, without the
+          action group's extra top margin. */}
+      <ActionList>
+        <ActionListGroup>
+          <ActionListItem>
+            <TooltipButton
+              variant={pullSecret.exists ? "danger" : "primary"}
+              onClick={handleSave}
+              isLoading={authLoading || undefined}
+              isDisabled={authLoading}
+              disabledReason={saveReason}
+            >
+              {pullSecret.exists ? "Replace token" : "Create secret"}
+            </TooltipButton>
+          </ActionListItem>
+          {pullSecret.exists && (
+            <ActionListItem>
+              <Button variant="link" onClick={cancelReplace} isDisabled={authLoading}>Cancel</Button>
+            </ActionListItem>
+          )}
+        </ActionListGroup>
+      </ActionList>
     </Form>
   );
 

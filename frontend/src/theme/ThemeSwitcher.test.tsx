@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "./ThemeContext";
-import { ThemeSwitcher } from "./ThemeSwitcher";
+import { Dropdown, MenuToggle } from "@patternfly/react-core";
+import { ThemeMenuGroups, ThemeSwitcher } from "./ThemeSwitcher";
 import { COLOR_SCHEME_KEY, CONTRAST_MODE_KEY, LEGACY_THEME_KEY, MEDIA_QUERIES } from "./themeCore";
 
 /** A matchMedia whose answers can change, firing "change" like a browser does. */
@@ -87,5 +88,32 @@ describe("ThemeSwitcher", () => {
     expect(html().contains("pf-v6-theme-dark")).toBe(true);
     expect(localStorage.getItem(LEGACY_THEME_KEY)).toBeNull();
     expect(screen.getByRole("button", { name: /^Appearance: Dark color scheme/ })).toBeInTheDocument();
+  });
+});
+
+describe("ThemeMenuGroups", () => {
+  it("offers both choices as menu groups with the chosen ones checked, and applies a choice at once", () => {
+    liveSystem({});
+    render(
+      <ThemeProvider>
+        <Dropdown isOpen toggle={(ref) => <MenuToggle ref={ref}>Menu</MenuToggle>}>
+          <ThemeMenuGroups />
+        </Dropdown>
+      </ThemeProvider>,
+    );
+    expect(screen.getByRole("heading", { name: "Color scheme" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Contrast mode" })).toBeInTheDocument();
+    // Both start on System: one checked item per group.
+    expect(screen.getAllByRole("menuitem", { name: /, selected$/ }).map((el) => el.getAttribute("aria-label"))).toEqual(["System, selected", "System, selected"]);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Dark" }));
+    expect(html().contains("pf-v6-theme-dark")).toBe(true);
+    expect(localStorage.getItem(COLOR_SCHEME_KEY)).toBe("dark");
+    expect(screen.getByRole("menuitem", { name: "Dark, selected" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "High contrast" }));
+    expect(html().contains("pf-v6-theme-high-contrast")).toBe(true);
+    expect(localStorage.getItem(CONTRAST_MODE_KEY)).toBe("high-contrast");
+    expect(screen.getByRole("menuitem", { name: "High contrast, selected" })).toBeInTheDocument();
   });
 });

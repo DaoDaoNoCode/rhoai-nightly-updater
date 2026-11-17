@@ -35,6 +35,7 @@ import {
   Truncate,
 } from "@patternfly/react-core";
 import ThIcon from "@patternfly/react-icons/dist/esm/icons/th-icon";
+import EllipsisVIcon from "@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon";
 import BarsIcon from "@patternfly/react-icons/dist/esm/icons/bars-icon";
 import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import {
@@ -60,7 +61,7 @@ import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 import { ThemeProvider } from "./theme/ThemeContext";
-import { ThemeSwitcher } from "./theme/ThemeSwitcher";
+import { ThemeMenuGroups, ThemeSwitcher } from "./theme/ThemeSwitcher";
 
 // Route-level code splitting: each page is its own chunk.
 const StatusPage = lazy(() => import("./pages/StatusPage").then((m) => ({ default: m.StatusPage })));
@@ -132,6 +133,7 @@ const AppLayout: React.FC = () => {
   const offInProfile = (feature: string, element: React.ReactElement) => (gitOpsProfile ? <ProfileOffState feature={feature} /> : element);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
+  const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
 
   const location = useLocation();
 
@@ -182,9 +184,34 @@ const AppLayout: React.FC = () => {
                   </span>
                 </ToolbarItem>
               )}
-              <ToolbarItem>
+              {/* Below md the popover does not fit next to the masthead's
+                  edge: the same choices move into the overflow menu (the
+                  user menu, or the kebab below when there is none). */}
+              <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
                 <ThemeSwitcher />
               </ToolbarItem>
+              {!status && (
+                <ToolbarItem visibility={{ default: "visible", md: "hidden" }}>
+                  <Dropdown
+                    isOpen={overflowMenuOpen}
+                    onSelect={() => setOverflowMenuOpen(false)}
+                    onOpenChange={setOverflowMenuOpen}
+                    popperProps={{ position: "right" }}
+                    toggle={(toggleRef) => (
+                      <MenuToggle
+                        ref={toggleRef}
+                        onClick={() => setOverflowMenuOpen(!overflowMenuOpen)}
+                        isExpanded={overflowMenuOpen}
+                        variant="plain"
+                        aria-label="Appearance"
+                        icon={<EllipsisVIcon />}
+                      />
+                    )}
+                  >
+                    <ThemeMenuGroups />
+                  </Dropdown>
+                </ToolbarItem>
+              )}
               <ToolbarItem>
                 <HelpButton />
               </ToolbarItem>
@@ -242,6 +269,9 @@ const AppLayout: React.FC = () => {
                         <Divider component="li" />
                       </DropdownGroup>
                     )}
+                    {/* The theme button is hidden on small screens; its choices move here. */}
+                    <ThemeMenuGroups className="pf-v6-u-display-none-on-md" />
+                    <Divider className="pf-v6-u-display-none-on-md" />
                     <DropdownGroup label={`Signed in as ${status.cluster.user}`} labelHeadingLevel="h2">
                       <DropdownList>
                         <DropdownItem key="logout" onClick={() => { window.location.href = "/oauth/sign_in"; }}>

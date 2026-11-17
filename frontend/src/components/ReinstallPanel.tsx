@@ -1,5 +1,8 @@
 import React, { useState } from "react";
 import {
+  ActionList,
+  ActionListGroup,
+  ActionListItem,
   Alert,
   Button,
   Checkbox,
@@ -11,6 +14,7 @@ import {
   Flex,
   FlexItem,
   Form,
+  FormAlert,
   FormGroup,
   HelperText,
   HelperTextItem,
@@ -167,162 +171,173 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <FormGroup role="radiogroup" fieldId="reinstall-target" label="Install" isStack>
-          <Radio
-            id="reinstall-stable"
-            name="reinstall-target"
-            label={
-              <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-                <FlexItem>{status?.stableChannelPinned ? "Configured GA channel" : "Latest stable (GA)"}{status?.stableVersion ? ` ${status.stableVersion}` : ""}</FlexItem>
-                {DIRECTION_LABELS[stableDirection] && <FlexItem>{DIRECTION_LABELS[stableDirection]}</FlexItem>}
-              </Flex>
-            }
-            description={
-              status?.stableChannel
-                ? `From ${status.stableSource} / ${status.stableChannel}${stableDirection === "downgrade" ? `; older than the installed ${installedVersion}` : ""}.`
-                : status?.stableDiscoveryError ? "The stable release could not be found in the cluster catalog." : "Looking up the stable release in the cluster catalog..."
-            }
-            isChecked={targetType === "stable"}
-            onChange={() => { setTargetType("stable"); setChannelOverride(""); }}
-            isDisabled={running}
-          />
-          {targetType === "stable" && status?.stableDiscoveryError && (
-            <Alert component="p" variant="warning" title="Could not find the stable release" isInline isPlain>
-              {status.stableDiscoveryError}. Refresh the status after fixing the catalog.
-            </Alert>
-          )}
-          <Radio
-            id="reinstall-nightly"
-            name="reinstall-target"
-            label="A nightly build"
-            description="Pick one of the recent nightly builds."
-            isChecked={targetType === "nightly"}
-            onChange={() => setTargetType("nightly")}
-            isDisabled={running}
-          />
-          <Radio
-            id="reinstall-custom"
-            name="reinstall-target"
-            label="A specific FBC image"
-            description="Any build of quay.io/rhoai/rhoai-fbc-fragment, by tag or digest. A digest pins that exact build."
-            isChecked={targetType === "custom"}
-            onChange={() => setTargetType("custom")}
-            isDisabled={running}
-          />
-        </FormGroup>
-      </StackItem>
+        {/* One Form: PatternFly declares the form spacing (the gap between
+            stacked radios, between groups, before the actions) on
+            .pf-v6-c-form, so form groups outside it get none. */}
+        <Form onSubmit={(e) => e.preventDefault()}>
+          <FormGroup role="radiogroup" fieldId="reinstall-target" label="Install" isStack>
+            <Radio
+              id="reinstall-stable"
+              name="reinstall-target"
+              label={
+                <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                  <FlexItem>{status?.stableChannelPinned ? "Configured GA channel" : "Latest stable (GA)"}{status?.stableVersion ? ` ${status.stableVersion}` : ""}</FlexItem>
+                  {DIRECTION_LABELS[stableDirection] && <FlexItem>{DIRECTION_LABELS[stableDirection]}</FlexItem>}
+                </Flex>
+              }
+              description={
+                status?.stableChannel
+                  ? `From ${status.stableSource} / ${status.stableChannel}${stableDirection === "downgrade" ? `; older than the installed ${installedVersion}` : ""}.`
+                  : status?.stableDiscoveryError ? "The stable release could not be found in the cluster catalog." : "Looking up the stable release in the cluster catalog..."
+              }
+              isChecked={targetType === "stable"}
+              onChange={() => { setTargetType("stable"); setChannelOverride(""); }}
+              isDisabled={running}
+            />
+            {targetType === "stable" && status?.stableDiscoveryError && (
+              <Alert component="p" variant="warning" title="Could not find the stable release" isInline isPlain>
+                {status.stableDiscoveryError}. Refresh the status after fixing the catalog.
+              </Alert>
+            )}
+            <Radio
+              id="reinstall-nightly"
+              name="reinstall-target"
+              label="A nightly build"
+              description="Pick one of the recent nightly builds."
+              isChecked={targetType === "nightly"}
+              onChange={() => setTargetType("nightly")}
+              isDisabled={running}
+            />
+            <Radio
+              id="reinstall-custom"
+              name="reinstall-target"
+              label="A specific FBC image"
+              description="Any build of quay.io/rhoai/rhoai-fbc-fragment, by tag or digest. A digest pins that exact build."
+              isChecked={targetType === "custom"}
+              onChange={() => setTargetType("custom")}
+              isDisabled={running}
+            />
+          </FormGroup>
 
-      {(targetType === "nightly" || targetType === "custom") && (
-        <StackItem>
-          {!prerequisitesMet && (
-            <Alert component="p" variant="warning" title="Finish the cluster setup first" isInline isPlain>
-              Nightly builds need the pull secret and the image mirror.
-            </Alert>
-          )}
-          <Form onSubmit={(e) => e.preventDefault()}>
-            {targetType === "custom" ? (
-              <FormGroup label="FBC image" fieldId="reinstall-custom-image" isRequired>
+          {(targetType === "nightly" || targetType === "custom") && (
+            <>
+              {!prerequisitesMet && (
+                <FormAlert>
+                  <Alert component="p" variant="warning" title="Finish the cluster setup first" isInline isPlain>
+                    Nightly builds need the pull secret and the image mirror.
+                  </Alert>
+                </FormAlert>
+              )}
+              {targetType === "custom" ? (
+                <FormGroup label="FBC image" fieldId="reinstall-custom-image" isRequired>
+                  <TextInput
+                    id="reinstall-custom-image"
+                    value={customImage}
+                    onChange={(_e, value) => setCustomImage(value)}
+                    placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
+                    isDisabled={running}
+                    validated={customImage.trim() && !customImageValid ? "error" : "default"}
+                    aria-describedby="reinstall-custom-image-help"
+                  />
+                  <HelperText id="reinstall-custom-image-help">
+                    <HelperTextItem variant={customImage.trim() && !customImageValid ? "error" : "default"}>
+                      {customImage.trim() && !customImageValid
+                        ? "Only quay.io/rhoai/rhoai-fbc-fragment images, with a tag, a full sha256 digest, or both."
+                        : "The digest is used exactly, even if its tag now points to a newer build."}
+                    </HelperTextItem>
+                  </HelperText>
+                </FormGroup>
+              ) : (
+                <FormGroup label="Nightly build" fieldId="reinstall-nightly-image">
+                  <Select
+                    isOpen={tagSelectOpen}
+                    selected={selectedImage || undefined}
+                    onSelect={(_e, value) => {
+                      if (typeof value === "string") setSelectedImage(value);
+                      setTagSelectOpen(false);
+                    }}
+                    onOpenChange={setTagSelectOpen}
+                    toggle={{
+                      toggleRef: tagToggleRef,
+                      toggleNode: (
+                        <MenuToggle
+                          ref={tagToggleRef}
+                          id="reinstall-nightly-image"
+                          onClick={() => setTagSelectOpen(!tagSelectOpen)}
+                          isExpanded={tagSelectOpen}
+                          isDisabled={running}
+                        >
+                          {tagsLoading ? <><Spinner size="sm" aria-label="Loading builds" /> Loading builds...</> : selectedTagInfo?.tag || "Select a build"}
+                        </MenuToggle>
+                      ),
+                    }}
+                    shouldFocusToggleOnSelect
+                  >
+                    <SelectList aria-label="Nightly builds">
+                      {!tagsLoading && nightlyTags.length === 0 && <SelectOption value="" isDisabled>No builds found</SelectOption>}
+                      {nightlyTags.map((t) => {
+                        const dir = tagDirection(t.tag);
+                        return (
+                          <SelectOption
+                            key={t.image}
+                            value={t.image}
+                            description={`${shortDigest(parseImageRef(t.image).digest) ?? ""}${dir === "downgrade" ? " · older than installed" : ""}`}
+                          >
+                            {t.tag}
+                          </SelectOption>
+                        );
+                      })}
+                    </SelectList>
+                  </Select>
+                  {selectedTag && DIRECTION_LABELS[direction] && (
+                    <HelperText>
+                      <HelperTextItem>
+                        {direction === "downgrade"
+                          ? `Older release line than the installed ${installedVersion}.`
+                          : direction === "same-line"
+                            ? `Same release line as the installed ${installedVersion}; the exact version is checked before anything changes.`
+                            : `Newer than the installed ${installedVersion}.`}
+                      </HelperTextItem>
+                    </HelperText>
+                  )}
+                </FormGroup>
+              )}
+              <FormGroup label="Channel override" fieldId="reinstall-channel-override">
                 <TextInput
-                  id="reinstall-custom-image"
-                  value={customImage}
-                  onChange={(_e, value) => setCustomImage(value)}
-                  placeholder="quay.io/rhoai/rhoai-fbc-fragment:<tag>@sha256:<digest>"
+                  id="reinstall-channel-override"
+                  value={channelOverride}
+                  onChange={(_e, val) => setChannelOverride(val)}
+                  placeholder="Detected from the catalog"
                   isDisabled={running}
-                  validated={customImage.trim() && !customImageValid ? "error" : "default"}
-                  aria-describedby="reinstall-custom-image-help"
+                  validated={channelValid ? "default" : "error"}
+                  aria-describedby="reinstall-channel-help"
                 />
-                <HelperText id="reinstall-custom-image-help">
-                  <HelperTextItem variant={customImage.trim() && !customImageValid ? "error" : "default"}>
-                    {customImage.trim() && !customImageValid
-                      ? "Only quay.io/rhoai/rhoai-fbc-fragment images, with a tag, a full sha256 digest, or both."
-                      : "The digest is used exactly, even if its tag now points to a newer build."}
+                <HelperText id="reinstall-channel-help">
+                  <HelperTextItem variant={channelValid ? "default" : "error"}>
+                    {channelValid ? "Optional. Only set it if the detected channel is wrong." : "Letters, digits, '.', '_' and '-' only."}
                   </HelperTextItem>
                 </HelperText>
               </FormGroup>
-            ) : (
-              <FormGroup label="Nightly build" fieldId="reinstall-nightly-image">
-                <Select
-                  isOpen={tagSelectOpen}
-                  selected={selectedImage || undefined}
-                  onSelect={(_e, value) => {
-                    if (typeof value === "string") setSelectedImage(value);
-                    setTagSelectOpen(false);
-                  }}
-                  onOpenChange={setTagSelectOpen}
-                  toggle={{
-                    toggleRef: tagToggleRef,
-                    toggleNode: (
-                      <MenuToggle
-                        ref={tagToggleRef}
-                        id="reinstall-nightly-image"
-                        onClick={() => setTagSelectOpen(!tagSelectOpen)}
-                        isExpanded={tagSelectOpen}
-                        isDisabled={running}
-                      >
-                        {tagsLoading ? <><Spinner size="sm" aria-label="Loading builds" /> Loading builds...</> : selectedTagInfo?.tag || "Select a build"}
-                      </MenuToggle>
-                    ),
-                  }}
-                  shouldFocusToggleOnSelect
-                >
-                  <SelectList aria-label="Nightly builds">
-                    {!tagsLoading && nightlyTags.length === 0 && <SelectOption value="" isDisabled>No builds found</SelectOption>}
-                    {nightlyTags.map((t) => {
-                      const dir = tagDirection(t.tag);
-                      return (
-                        <SelectOption
-                          key={t.image}
-                          value={t.image}
-                          description={`${shortDigest(parseImageRef(t.image).digest) ?? ""}${dir === "downgrade" ? " · older than installed" : ""}`}
-                        >
-                          {t.tag}
-                        </SelectOption>
-                      );
-                    })}
-                  </SelectList>
-                </Select>
-                {selectedTag && DIRECTION_LABELS[direction] && (
-                  <HelperText>
-                    <HelperTextItem>
-                      {direction === "downgrade"
-                        ? `Older release line than the installed ${installedVersion}.`
-                        : direction === "same-line"
-                          ? `Same release line as the installed ${installedVersion}; the exact version is checked before anything changes.`
-                          : `Newer than the installed ${installedVersion}.`}
-                    </HelperTextItem>
-                  </HelperText>
-                )}
-              </FormGroup>
-            )}
-            <FormGroup label="Channel override" fieldId="reinstall-channel-override">
-              <TextInput
-                id="reinstall-channel-override"
-                value={channelOverride}
-                onChange={(_e, val) => setChannelOverride(val)}
-                placeholder="Detected from the catalog"
-                isDisabled={running}
-                validated={channelValid ? "default" : "error"}
-                aria-describedby="reinstall-channel-help"
-              />
-              <HelperText id="reinstall-channel-help">
-                <HelperTextItem variant={channelValid ? "default" : "error"}>
-                  {channelValid ? "Optional. Only set it if the detected channel is wrong." : "Letters, digits, '.', '_' and '-' only."}
-                </HelperTextItem>
-              </HelperText>
-            </FormGroup>
-          </Form>
-        </StackItem>
-      )}
+            </>
+          )}
 
-      <StackItem>
-        <TooltipButton
-          variant="danger"
-          onClick={() => setConfirmOpen(true)}
-          disabledReason={disabledReason}
-          isLoading={running}
-        >
-          {running ? "Installing..." : "Install..."}
-        </TooltipButton>
+          {/* The form's action row, as in the pull secret form: one form row
+              gap below the last field. */}
+          <ActionList>
+            <ActionListGroup>
+              <ActionListItem>
+                <TooltipButton
+                  variant="danger"
+                  onClick={() => setConfirmOpen(true)}
+                  disabledReason={disabledReason}
+                  isLoading={running}
+                >
+                  {running ? "Installing..." : "Install..."}
+                </TooltipButton>
+              </ActionListItem>
+            </ActionListGroup>
+          </ActionList>
+        </Form>
       </StackItem>
 
       {succeededMessage && (

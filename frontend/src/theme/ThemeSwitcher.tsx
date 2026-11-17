@@ -1,6 +1,10 @@
 import React from "react";
 import {
   Button,
+  Divider,
+  DropdownGroup,
+  DropdownItem,
+  DropdownList,
   HelperText,
   HelperTextItem,
   Popover,
@@ -36,7 +40,7 @@ export const ThemeSwitcher: React.FC = () => {
     <Stack hasGutter>
       <StackItem>
         <Title headingLevel="h3" size="md" id="theme-color-scheme" className="pf-v6-u-mb-sm">Color scheme</Title>
-        <ToggleGroup isCompact aria-labelledby="theme-color-scheme">
+        <ToggleGroup aria-labelledby="theme-color-scheme">
           {(Object.keys(SCHEME_LABELS) as ColorScheme[]).map((s) => (
             <ToggleGroupItem key={s} text={SCHEME_LABELS[s]} buttonId={`theme-scheme-${s}`} isSelected={colorScheme === s} onChange={() => setColorScheme(s)} />
           ))}
@@ -44,7 +48,7 @@ export const ThemeSwitcher: React.FC = () => {
       </StackItem>
       <StackItem>
         <Title headingLevel="h3" size="md" id="theme-contrast-mode" className="pf-v6-u-mb-sm">Contrast mode</Title>
-        <ToggleGroup isCompact aria-labelledby="theme-contrast-mode">
+        <ToggleGroup aria-labelledby="theme-contrast-mode">
           {(Object.keys(CONTRAST_LABELS) as ContrastMode[]).map((m) => (
             <ToggleGroupItem key={m} text={CONTRAST_LABELS[m]} buttonId={`theme-contrast-${m}`} isSelected={contrastMode === m} onChange={() => setContrastMode(m)} />
           ))}
@@ -61,8 +65,47 @@ export const ThemeSwitcher: React.FC = () => {
   );
 
   return (
-    <Popover aria-label="Appearance" bodyContent={body} position="bottom" hasAutoWidth showClose={false}>
+    <Popover aria-label="Appearance" bodyContent={body} position="bottom" hasAutoWidth>
       <Button variant="plain" aria-label={`Appearance: ${SCHEME_LABELS[colorScheme]} color scheme, ${CONTRAST_LABELS[contrastMode]} contrast mode`} icon={icon} />
     </Popover>
+  );
+};
+
+/**
+ * The same two choices as menu groups, for the masthead's overflow (user)
+ * menu on screens too narrow for the popover, where the masthead hides the
+ * ThemeSwitcher (PatternFly's masthead pattern: toolbar items move into the
+ * overflow menu). The chosen item of each group is checked; choosing one
+ * applies it at once. className goes on the groups and the divider between
+ * them, so a menu that is shown at every width can hide them where the
+ * popover shows. The host menu separates them from its other groups.
+ */
+export const ThemeMenuGroups: React.FC<{ className?: string }> = ({ className }) => {
+  const { colorScheme, contrastMode, setColorScheme, setContrastMode } = useTheme();
+  // PatternFly gives a checked menu item a check mark but keeps role
+  // "menuitem", so the accessible name says which one is chosen.
+  const name = (label: string, selected: boolean) => (selected ? `${label}, selected` : label);
+  return (
+    <>
+      <DropdownGroup className={className} label="Color scheme" labelHeadingLevel="h2">
+        <DropdownList>
+          {(Object.keys(SCHEME_LABELS) as ColorScheme[]).map((s) => (
+            <DropdownItem key={s} value={`scheme-${s}`} isSelected={colorScheme === s} aria-label={name(SCHEME_LABELS[s], colorScheme === s)} onClick={() => setColorScheme(s)}>
+              {SCHEME_LABELS[s]}
+            </DropdownItem>
+          ))}
+        </DropdownList>
+      </DropdownGroup>
+      <Divider className={className} />
+      <DropdownGroup className={className} label="Contrast mode" labelHeadingLevel="h2">
+        <DropdownList>
+          {(Object.keys(CONTRAST_LABELS) as ContrastMode[]).map((m) => (
+            <DropdownItem key={m} value={`contrast-${m}`} isSelected={contrastMode === m} aria-label={name(CONTRAST_LABELS[m], contrastMode === m)} onClick={() => setContrastMode(m)}>
+              {CONTRAST_LABELS[m]}
+            </DropdownItem>
+          ))}
+        </DropdownList>
+      </DropdownGroup>
+    </>
   );
 };

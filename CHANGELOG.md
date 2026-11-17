@@ -23,9 +23,9 @@ only accepts a tag whose version is the top dated section. See
 - **New look: PatternFly 6.7's felt theme**, with an appearance button in
   the masthead (it replaces the moon icon). **Color scheme**: System,
   Light or Dark; **Contrast mode**: System, Default, High contrast or
-  Glass. System follows the operating system live: dark mode, "increase
-  contrast" (high contrast) and "reduce transparency" (the solid default
-  instead of glass). Glass and high contrast never combine; high contrast
+  Glass (on narrow screens, in the user menu). System follows the
+  operating system live: dark mode, "increase contrast" (high contrast)
+  and "reduce transparency" (the solid default instead of glass). Glass and high contrast never combine; high contrast
   wins. The choice is kept in the browser; a light or dark choice made
   with the old moon icon carries over. The theme is applied before the
   first paint by a small script file, so the page does not flash, and the
@@ -81,8 +81,17 @@ only accepts a tag whose version is the top dated section. See
   the standard spacing: the Environment cards' rows (Open admin UI,
   Migrate, Repair, Tear down, Set up, Open MLflow, Open pipelines) and the
   Status page's installed-build actions.
+- The installed-build actions on the Status page are full-size buttons in
+  one row: **Choose another build** is a secondary button and **View build
+  contents** a link button, next to the main action (for example **Update
+  to latest**). They were inline links, which sat higher than the button.
 
 ### Fixed
+
+- In **Install a different build**, each choice's description touched the
+  next choice: the choices were not inside a form, and PatternFly sets
+  the space between stacked choices only on forms. The choices, the build
+  fields and the **Install...** button are now one form.
 
 - Links to the RHOAI dashboard (the app launcher's **RHOAI dashboard**,
   Dashboard Dev's **Open the dashboard**, a pipeline server's **Open
