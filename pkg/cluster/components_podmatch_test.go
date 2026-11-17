@@ -43,7 +43,7 @@ func TestPodMatchesDeployment(t *testing.T) {
 		{"deployment whose name is a prefix of another's", pod("feast-operator-controller-manager-846574fbc4", "ReplicaSet", "846574fbc4", feastLabels), types.DeploymentInfo{Name: "feast-operator", MatchLabels: map[string]string{"control-plane": "controller-manager"}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := podMatchesDeployment(tc.pod, tc.dep); got != tc.want {
+			if got := podMatchesDeployment(nil, tc.pod, tc.dep); got != tc.want {
 				t.Errorf("podMatchesDeployment = %v, want %v", got, tc.want)
 			}
 		})

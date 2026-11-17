@@ -640,7 +640,7 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 		"deployment":                "rhods-dashboard",
 	}
 
-	getDashboardPods(client, dashboardDeploymentName, labels)
+	getDashboardPods(client, dashboardDeploymentName, "", labels)
 
 	if capturedRawQuery == "" {
 		t.Fatal("expected pods request to be made, but no query was captured")

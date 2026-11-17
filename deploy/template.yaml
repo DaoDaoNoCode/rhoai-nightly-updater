@@ -202,6 +202,9 @@ objects:
         resources: ["deployments"]
         resourceNames: ["seaweedfs", "minio"]
         verbs: ["delete"]
+      # ReplicaSets: rollout assist, and the controller of a pod's
+      # ReplicaSet when its name is not <deployment>-<hash> (an adopted one;
+      # listed by name with a field selector, no get)
       - apiGroups: ["apps"]
         resources: ["replicasets"]
         verbs: ["list"]

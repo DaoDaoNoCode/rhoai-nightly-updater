@@ -83,6 +83,8 @@ objects:
       - apiGroups: ["apps"]
         resources: ["deployments"]
         verbs: ["get", "list"]
+      # ReplicaSets: the controller of a pod's ReplicaSet when its name is
+      # not <deployment>-<hash> (an adopted one; listed by name, no get)
       - apiGroups: ["apps"]
         resources: ["replicasets"]
         verbs: ["list"]

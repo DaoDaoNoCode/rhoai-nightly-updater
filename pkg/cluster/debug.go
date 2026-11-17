@@ -164,7 +164,8 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 		pod.Age = formatAge(item.Metadata.CreationTimestamp)
 		pod.Labels = item.Metadata.Labels
 		pod.PodTemplateHash = item.Metadata.Labels["pod-template-hash"]
-		pod.OwnerKind, pod.OwnerName = controllerOf(item.Metadata.OwnerReferences)
+		owner := controllerOf(item.Metadata.OwnerReferences)
+		pod.OwnerKind, pod.OwnerName, pod.OwnerUID = owner.Kind, owner.Name, owner.UID
 
 		// Extract scheduling failure reason from pod conditions
 		if item.Status.Phase == "Pending" {

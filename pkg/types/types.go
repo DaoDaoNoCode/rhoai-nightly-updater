@@ -307,6 +307,7 @@ type DeploymentInfo struct {
 	RolloutMessage      string            `json:"rolloutMessage,omitempty"`
 	ChangeStatus        string            `json:"changeStatus,omitempty"` // "updated", "new", or "" (unchanged)
 	MatchLabels         map[string]string `json:"-"`                      // for pod matching, not serialized
+	UID                 string            `json:"-"`                      // for pod matching (adopted ReplicaSets), not serialized
 	Pods                []PodInfo         `json:"pods,omitempty"`
 	GitCommit           string            `json:"gitCommit,omitempty"`
 	GitURL              string            `json:"gitURL,omitempty"`
@@ -412,6 +413,7 @@ type PodInfo struct {
 	Labels            map[string]string `json:"-"` // for matching, not serialized
 	OwnerKind         string            `json:"-"` // for matching, not serialized
 	OwnerName         string            `json:"-"` // the controlling owner's name, for matching
+	OwnerUID          string            `json:"-"` // the controlling owner's UID, for matching
 	PodTemplateHash   string            `json:"podTemplateHash,omitempty"`
 	SchedulingReason  string            `json:"schedulingReason,omitempty"`
 	SchedulingMessage string            `json:"schedulingMessage,omitempty"`

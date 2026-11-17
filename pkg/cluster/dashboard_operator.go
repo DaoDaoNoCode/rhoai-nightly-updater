@@ -764,7 +764,7 @@ func addDashboardRolloutDiagnostics(c *Client, images []types.DashboardDevImage,
 			if pod.Metadata.DeletionTimestamp != "" || !dashboardLabelsMatch(d.Spec.Selector.MatchLabels, pod.Metadata.Labels) {
 				continue
 			}
-			if kind, name := controllerOf(pod.Metadata.OwnerReferences); !ownedByDeployment(images[i].Deployment, pod.Metadata.Labels, kind, name) {
+			if !ownedByDeployment(c, dashboardNamespace, images[i].Deployment, d.Metadata.UID, pod.Metadata.Labels, controllerOf(pod.Metadata.OwnerReferences)) {
 				continue
 			}
 			score := 0

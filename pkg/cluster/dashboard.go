@@ -111,6 +111,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 
 	var deploy struct {
 		Metadata struct {
+			UID         string            `json:"uid"`
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 		Spec struct {
@@ -193,7 +194,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 
 	// Get dashboard pods using the deployment's label selector
-	dashPods := getDashboardPods(c, dashboardDeploymentName, deploy.Spec.Selector.MatchLabels)
+	dashPods := getDashboardPods(c, dashboardDeploymentName, deploy.Metadata.UID, deploy.Spec.Selector.MatchLabels)
 	state.Pods = dashPods
 
 	// Build the expected image for the primary dashboard container from the deployment spec
@@ -832,9 +833,10 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 	return result, nil
 }
 
-// getDashboardPods returns pods matching the given label selector, with
-// pod.Image set to the rhods-dashboard container (not the first container).
-func getDashboardPods(c *Client, deployment string, matchLabels map[string]string) []types.PodInfo {
+// getDashboardPods returns the pods of the Deployment (deploymentUID) that
+// match its label selector, with pod.Image set to the rhods-dashboard
+// container (not the first container).
+func getDashboardPods(c *Client, deployment, deploymentUID string, matchLabels map[string]string) []types.PodInfo {
 	// Build label selector query string
 	var parts []string
 	for k, v := range matchLabels {
@@ -897,7 +899,7 @@ func getDashboardPods(c *Client, deployment string, matchLabels map[string]strin
 	var pods []types.PodInfo
 	for _, item := range podList.Items {
 		// Only the Deployment's own pods: its selector may also match others.
-		if kind, name := controllerOf(item.Metadata.OwnerReferences); !ownedByDeployment(deployment, item.Metadata.Labels, kind, name) {
+		if !ownedByDeployment(c, dashboardNamespace, deployment, deploymentUID, item.Metadata.Labels, controllerOf(item.Metadata.OwnerReferences)) {
 			continue
 		}
 		pod := types.PodInfo{

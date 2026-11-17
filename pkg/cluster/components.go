@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -153,8 +154,8 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	if resp.Deployments == nil {
 		resp.Deployments = []types.DeploymentInfo{}
 	}
-	matchPodsToDeployments(appPods, "redhat-ods-applications", resp.Deployments)
-	matchPodsToDeployments(opPods, "redhat-ods-operator", resp.Deployments)
+	matchPodsToDeployments(c, appPods, "redhat-ods-applications", resp.Deployments)
+	matchPodsToDeployments(c, opPods, "redhat-ods-operator", resp.Deployments)
 
 	// Compare against last snapshot to detect changes
 	if snapshot != nil {
@@ -472,13 +473,13 @@ func imageRepoOf(ref string) string {
 	return ref[slash+1:]
 }
 
-func matchPodsToDeployments(pods []types.PodInfo, namespace string, deployments []types.DeploymentInfo) {
+func matchPodsToDeployments(c *Client, pods []types.PodInfo, namespace string, deployments []types.DeploymentInfo) {
 	for i := range deployments {
 		if deployments[i].Namespace != namespace {
 			continue
 		}
 		for _, pod := range pods {
-			if podMatchesDeployment(pod, deployments[i]) {
+			if podMatchesDeployment(c, pod, deployments[i]) {
 				deployments[i].Pods = append(deployments[i].Pods, pod)
 			}
 		}
@@ -489,45 +490,122 @@ func matchPodsToDeployments(pods []types.PodInfo, namespace string, deployments 
 type ownerRef struct {
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	UID        string `json:"uid"`
 	Controller *bool  `json:"controller"`
 }
 
 // controllerOf returns the controlling owner reference (controller: true),
 // or the first reference when none is marked.
-func controllerOf(refs []ownerRef) (kind, name string) {
+func controllerOf(refs []ownerRef) ownerRef {
+	var first ownerRef
 	for i, ref := range refs {
 		if ref.Controller != nil && *ref.Controller {
-			return ref.Kind, ref.Name
+			return ref
 		}
 		if i == 0 {
-			kind, name = ref.Kind, ref.Name
+			first = ref
 		}
 	}
-	return kind, name
+	return first
 }
 
-// ownedByDeployment reports whether a pod's controlling owner is one of the
-// Deployment's ReplicaSets. The Deployment controller names each ReplicaSet
-// "<deployment>-<pod-template-hash>" and gives its pods that
-// pod-template-hash label (Kubernetes docs, Deployments: "the name of the
-// ReplicaSet is always formatted as [DEPLOYMENT-NAME]-[HASH]"); ReplicaSet
-// names are unique per namespace. A label selector alone is not enough:
-// selectors may overlap (trustyai-operator-module-controller-manager selects
-// only control-plane=controller-manager, which many operators' pods carry).
-func ownedByDeployment(deployment string, podLabels map[string]string, ownerKind, ownerName string) bool {
-	hash := podLabels["pod-template-hash"]
-	return ownerKind == "ReplicaSet" && hash != "" && ownerName == deployment+"-"+hash
+// ownedByDeployment reports whether a pod belongs to the Deployment
+// (deploymentUID, in namespace), given its labels and its controlling owner.
+//
+// The fast path needs no API call: the Deployment controller names each
+// ReplicaSet it creates "<deployment>-<pod-template-hash>" and gives it and
+// its pods that pod-template-hash label (Kubernetes docs, Deployments: "the
+// name of the ReplicaSet is always formatted as [DEPLOYMENT-NAME]-[HASH]").
+// That is a naming convention, not a guarantee: a Deployment also adopts
+// existing ReplicaSets its selector matches, and adoption does not rename
+// them (pkg/controller/deployment/deployment_controller.go:531-556 at
+// v1.35.0 claims them with ClaimReplicaSets; ReplicaSet names cannot
+// change). So a pod whose controller is a ReplicaSet with another name is
+// checked against that ReplicaSet's controller UID (replicaSetController).
+// A label selector alone is not enough: selectors may overlap
+// (trustyai-operator-module-controller-manager selects only
+// control-plane=controller-manager, which many operators' pods carry).
+// When the ReplicaSet cannot be read, the pod is not matched (fail closed).
+func ownedByDeployment(c *Client, namespace, deployment, deploymentUID string, podLabels map[string]string, owner ownerRef) bool {
+	if owner.Kind != "ReplicaSet" {
+		return false
+	}
+	if hash := podLabels["pod-template-hash"]; hash != "" && owner.Name == deployment+"-"+hash {
+		return true
+	}
+	if c == nil || deploymentUID == "" || owner.UID == "" {
+		return false
+	}
+	controller, err := replicaSetController(c, namespace, owner.Name, owner.UID)
+	if err != nil {
+		slog.Debug("pod not matched to its deployment: its ReplicaSet's owner cannot be read", "namespace", namespace, "replicaset", owner.Name, "deployment", deployment, "error", err)
+		return false
+	}
+	return controller == deploymentUID
 }
 
 // podMatchesDeployment reports whether a pod belongs to a Deployment: the
 // selector matches and the pod's controlling ReplicaSet is the Deployment's.
-func podMatchesDeployment(pod types.PodInfo, dep types.DeploymentInfo) bool {
+func podMatchesDeployment(c *Client, pod types.PodInfo, dep types.DeploymentInfo) bool {
 	for k, v := range dep.MatchLabels {
 		if pod.Labels[k] != v {
 			return false
 		}
 	}
-	return ownedByDeployment(dep.Name, pod.Labels, pod.OwnerKind, pod.OwnerName)
+	return ownedByDeployment(c, dep.Namespace, dep.Name, dep.UID, pod.Labels, ownerRef{Kind: pod.OwnerKind, Name: pod.OwnerName, UID: pod.OwnerUID})
+}
+
+// replicaSetOwnerCache maps a ReplicaSet (cluster and UID) to the UID of its
+// controlling Deployment ("" for none, or when it is gone). A ReplicaSet's
+// controller changes only on adoption or release, so a short TTL bounds how
+// long a change goes unseen, while the pods of one ReplicaSet and every
+// poll in that window share one lookup.
+var replicaSetOwnerCache = newLRU[string, string](512)
+
+// ReplicaSetOwnerTTL is how long a ReplicaSet's controller is cached.
+var ReplicaSetOwnerTTL = time.Minute
+
+// replicaSetController returns the UID of the Deployment that controls the
+// ReplicaSet name (uid) in namespace, or "" when none does or it is gone.
+// The ServiceAccount may only list ReplicaSets (deploy/template.yaml and
+// deploy/rbac-gitops.yaml grant "list", not "get"), so it lists with a
+// metadata.name field selector, which every resource type supports
+// (Kubernetes docs, Field Selectors), and checks the UID, so a ReplicaSet
+// recreated under the same name is not mistaken for the pod's.
+func replicaSetController(c *Client, namespace, name, uid string) (string, error) {
+	key := c.baseURL + "/" + uid
+	if owner, ok := replicaSetOwnerCache.Get(key); ok {
+		return owner, nil
+	}
+	q := url.Values{"fieldSelector": {"metadata.name=" + name}}
+	body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, q)
+	if err != nil {
+		return "", err
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				UID             string     `json:"uid"`
+				OwnerReferences []ownerRef `json:"ownerReferences"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return "", fmt.Errorf("parse ReplicaSet %s/%s: %w", namespace, name, err)
+	}
+	owner := ""
+	for _, rs := range list.Items {
+		if rs.Metadata.UID != uid {
+			continue
+		}
+		for _, ref := range rs.Metadata.OwnerReferences {
+			if ref.Controller != nil && *ref.Controller && ref.Kind == "Deployment" {
+				owner = ref.UID
+			}
+		}
+	}
+	replicaSetOwnerCache.Add(key, owner, ReplicaSetOwnerTTL)
+	return owner, nil
 }
 
 // enrichComponentFix adds fix buttons only for cases where the operator's own
@@ -680,6 +758,7 @@ type deploymentList struct {
 	Items []struct {
 		Metadata struct {
 			Name string `json:"name"`
+			UID  string `json:"uid"`
 		} `json:"metadata"`
 		Spec struct {
 			Replicas *int `json:"replicas"`
@@ -751,6 +830,7 @@ func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error)
 			RolloutMessage:      rolloutMessage,
 			Image:               image,
 			MatchLabels:         item.Spec.Selector.MatchLabels,
+			UID:                 item.Metadata.UID,
 		})
 	}
 
