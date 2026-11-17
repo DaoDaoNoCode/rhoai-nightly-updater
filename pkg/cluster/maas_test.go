@@ -325,6 +325,16 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
+	// Back to gateway {}: the refs removed by a merge patch, the gateway
+	// object kept (live: an empty apply nulled it and the API server
+	// refused that with 422).
+	router := mc.f.get(testModelPath)["spec"].(map[string]interface{})["router"].(map[string]interface{})
+	if gw, ok := router["gateway"].(map[string]interface{}); !ok || gw["refs"] != nil || len(gw) != 0 {
+		t.Fatalf("model router after unpublish: %v", router)
+	}
+	if !hasMutation(mc.f, "PATCH "+testModelPath) {
+		t.Fatal("unpublish did not patch the model")
+	}
 	if got := finalSteps(events); got != "check=success maas=success model=success gateway=success" {
 		t.Fatalf("steps = %s", got)
 	}

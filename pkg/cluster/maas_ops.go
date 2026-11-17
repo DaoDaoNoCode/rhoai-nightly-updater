@@ -622,7 +622,8 @@ func applyMaaSObject(c *Client, desc, path, createPath string, obj map[string]in
 
 // setModelGatewayRef adds (on) or removes the MaaS gateway ref on the
 // tool's model, as field manager rhoai-nightly-updater-maas: a server-side
-// apply of only the refs, so removing them reverts exactly this change.
+// apply of only the refs to publish, a merge patch removing only the refs
+// to unpublish, so the model is back as it was.
 //
 // The model keeps its inference gateway: the docs append the MaaS gateway
 // to the model's refs (model-setup.md, "/spec/gateway/refs/-") and the
@@ -634,18 +635,30 @@ func applyMaaSObject(c *Client, desc, path, createPath string, obj map[string]in
 // dashboard-deployed model ends up.
 func setModelGatewayRef(c *Client, project, resourceVersion string, on bool) error {
 	path, _ := toolModelPath(project, maasModelRefName)
+	if !on {
+		// Unpublish: a JSON merge patch that removes only the refs, back to
+		// gateway {} (the default, the inference gateway). Live, an empty
+		// server-side apply by the MaaS field manager left gateway with no
+		// owner, so the API server nulled it and the CRD refused the result
+		// (422 "spec.router.gateway ... must be of type object: null").
+		patch := map[string]interface{}{
+			"metadata": map[string]interface{}{"resourceVersion": resourceVersion},
+			"spec":     map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{"refs": nil}}},
+		}
+		data, _ := json.Marshal(patch)
+		_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", data, url.Values{"fieldManager": {maasModelManager}})
+		return err
+	}
 	obj := map[string]interface{}{
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
 		"metadata":   map[string]interface{}{"name": "qwen25-05b-instruct", "namespace": project, "resourceVersion": resourceVersion},
-	}
-	if on {
-		obj["spec"] = map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{
+		"spec": map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{
 			"refs": []interface{}{
 				map[string]interface{}{"name": inferenceGatewayName, "namespace": inferenceGatewayNamespace},
 				map[string]interface{}{"name": maasGatewayName, "namespace": inferenceGatewayNamespace},
 			},
-		}}}
+		}}},
 	}
 	data, _ := json.Marshal(obj)
 	query := url.Values{"fieldManager": {maasModelManager}, "force": {"true"}}
