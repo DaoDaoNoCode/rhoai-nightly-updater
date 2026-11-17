@@ -1,8 +1,13 @@
 package cluster
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +33,23 @@ type migrateSim struct {
 	result      string
 	jobRunning  bool
 	objectStore string // ObjectStoreAvailable status reported for the new storage
+	mode        string // the COPY_MODE of the last copy Job seen
+}
+
+// jobCopyMode returns a stored copy Job's COPY_MODE.
+func jobCopyMode(job map[string]interface{}) string {
+	tmpl, _ := ensureMap(job, "spec")["template"].(map[string]interface{})
+	spec, _ := tmpl["spec"].(map[string]interface{})
+	ctrs, _ := spec["containers"].([]interface{})
+	for _, ctr := range ctrs {
+		env, _ := ctr.(map[string]interface{})["env"].([]interface{})
+		for _, e := range env {
+			if em := e.(map[string]interface{}); em["name"] == "COPY_MODE" {
+				return fmt.Sprint(em["value"])
+			}
+		}
+	}
+	return ""
 }
 
 func simulateMigrate(f *resourceFake, sim *migrateSim) {
@@ -39,6 +61,7 @@ func simulateMigrate(f *resourceFake, sim *migrateSim) {
 			case k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment:
 				obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
 			case k.plural == "jobs" && k.name == migrateJobName:
+				sim.mode = jobCopyMode(obj)
 				ensureMap(obj, "spec")["selector"] = map[string]interface{}{"matchLabels": map[string]interface{}{"job-name": migrateJobName}}
 				if !sim.jobRunning {
 					obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Complete", "status": "True"}}}
@@ -211,7 +234,7 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 
 func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 	t.Setenv("RCLONE_IMAGE", "")
-	job := migrateJob("SeaweedFS")
+	job := migrateJob("SeaweedFS", copyOverwrite)
 	raw, _ := json.Marshal(job)
 	if strings.Contains(string(raw), legacyKey) || strings.Contains(string(raw), "seaweedfs-key") {
 		t.Fatal("a key value is in the Job")
@@ -283,14 +306,14 @@ func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 		}
 	}
 	if refs != 4 || env["HOME"] != "/tmp" || env["RCLONE_CONFIG_OLD_ENDPOINT"] != "http://minio-service.minio.svc:9000" || env["RCLONE_CONFIG_NEW_ENDPOINT"] != "http://seaweedfs-s3.seaweedfs.svc:8333" ||
-		env["RCLONE_CONFIG_OLD_PROVIDER"] != "SeaweedFS" || env["RCLONE_CONFIG_NEW_REGION"] != s3Region {
+		env["RCLONE_CONFIG_OLD_PROVIDER"] != "SeaweedFS" || env["RCLONE_CONFIG_NEW_REGION"] != s3Region || env["COPY_MODE"] != copyOverwrite {
 		t.Errorf("env = %v (secret refs %d)", env, refs)
 	}
-	if got := migrateJob("MinIO"); !strings.Contains(mustJSON(got), `"RCLONE_CONFIG_OLD_PROVIDER","value":"Minio"`) {
-		t.Error("a MinIO source does not use rclone's Minio provider")
+	if got := migrateJob("MinIO", copyIgnoreExisting); !strings.Contains(mustJSON(got), `"RCLONE_CONFIG_OLD_PROVIDER","value":"Minio"`) || !strings.Contains(mustJSON(got), `"COPY_MODE","value":"ignore-existing"`) {
+		t.Error("a MinIO source does not use rclone's Minio provider, or the copy mode is not set")
 	}
 	script := strings.Join(ctr.Command, " ")
-	for _, want := range []string{"rclone copy old: new: --ignore-existing", "rclone check old: new: --one-way --download", "rclone size old: --json", "/dev/termination-log"} {
+	for _, want := range []string{"overwrite) rclone copy old: new: ||", "ignore-existing) rclone copy old: new: --ignore-existing ||", "rclone check old: new: --one-way --download", "rclone size old: --json", "/dev/termination-log"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q", want)
 		}
@@ -329,26 +352,70 @@ func TestNetworkPolicyAdmitsTheCopyJob(t *testing.T) {
 func TestCopyResultProblem(t *testing.T) {
 	size := func(n, b int64) *copySize { return &copySize{Count: n, Bytes: b} }
 	ok := copyResult{Identical: 4, Source: size(4, 4330), Destination: size(4, 4330)}
+	sample := base64.StdEncoding.EncodeToString([]byte("pipelines/a.txt\npipelines/b.txt\n"))
 	cases := []struct {
-		name   string
-		r      copyResult
-		strict bool
-		want   string
+		name  string
+		r     copyResult
+		mode  string
+		want  string
+		retry bool
 	}{
-		{"complete", ok, true, ""},
-		{"copy failed", copyResult{Copy: 1, Identical: 4, Source: size(4, 4330), Destination: size(4, 4330)}, true, "rclone copy failed"},
-		{"missing", copyResult{Check: 1, Identical: 3, Missing: 1, Source: size(4, 4330), Destination: size(3, 4000)}, true, "1 object missing"},
-		{"different", copyResult{Check: 1, Identical: 3, Differ: 1, Source: size(4, 4330), Destination: size(4, 4330)}, true, "1 object different"},
-		{"no sizes", copyResult{Identical: 4, Source: size(4, 4330)}, true, "could not be read"},
-		{"extra object while nothing uses the new storage", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, true, "the old storage holds 4 objects (4330 bytes), the new one 5 objects (4400 bytes)"},
-		{"extra object once pipeline servers write there", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, false, ""},
-		{"fewer identical than objects", copyResult{Identical: 3, Source: size(4, 4330), Destination: size(4, 4330)}, true, "3 of the 4"},
+		{"complete", ok, copyOverwrite, "", false},
+		{"copy failed", copyResult{Copy: 1, Identical: 4, Source: size(4, 4330), Destination: size(4, 4330)}, copyOverwrite, "rclone copy failed", true},
+		{"missing", copyResult{Check: 1, Identical: 3, Missing: 1, Source: size(4, 4330), Destination: size(3, 4000)}, copyOverwrite, "1 object missing", true},
+		{"changed during an overwriting copy", copyResult{Check: 1, Identical: 3, Differ: 1, Source: size(4, 4330), Destination: size(4, 4330)}, copyOverwrite, "1 object different", true},
+		{"changed after a copy that keeps existing objects", copyResult{Check: 1, Identical: 2, Differ: 2, DifferSample: sample, Source: size(4, 4330), Destination: size(4, 4330)}, copyIgnoreExisting, "2 objects different in the new storage (for example pipelines/a.txt, pipelines/b.txt)", false},
+		{"no source size", copyResult{Identical: 4, Destination: size(4, 4330)}, copyOverwrite, "could not be read", true},
+		{"no destination size is not a problem", copyResult{Identical: 4, Source: size(4, 4330)}, copyOverwrite, "", false},
+		// The one-way check proves every source object is there; the new
+		// storage may hold more, whichever mode.
+		{"extra object while nothing uses the new storage", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, copyOverwrite, "", false},
+		{"extra object once pipeline servers write there", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, copyIgnoreExisting, "", false},
+		{"fewer identical than objects", copyResult{Identical: 3, Source: size(4, 4330), Destination: size(4, 4330)}, copyOverwrite, "3 of the 4", true},
 	}
 	for _, tc := range cases {
-		got := tc.r.problem(tc.strict)
-		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
-			t.Errorf("%s: problem = %q, want %q", tc.name, got, tc.want)
+		p := tc.r.problem(tc.mode)
+		switch {
+		case tc.want == "" && p != nil:
+			t.Errorf("%s: problem = %+v, want none", tc.name, *p)
+		case tc.want != "" && (p == nil || !strings.Contains(p.what, tc.want) || p.retry != tc.retry || (!p.retry && p.fix == "")):
+			t.Errorf("%s: problem = %+v, want %q (retry %v)", tc.name, p, tc.want, tc.retry)
 		}
+	}
+	if got := (copyResult{Source: size(4, 4330), Destination: size(6, 5000)}).extraObjects(); got != 2 {
+		t.Errorf("extraObjects = %d", got)
+	}
+}
+
+func TestDeleteWithUIDPropagation_SendsPreconditionAndPolicy(t *testing.T) {
+	var got map[string]interface{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
+	if _, err := deleteWithUIDPropagation(c, migrateJobPath(), "job-uid", "Foreground"); err != nil {
+		t.Fatal(err)
+	}
+	if got["propagationPolicy"] != "Foreground" || ensureMap(got, "preconditions")["uid"] != "job-uid" {
+		t.Errorf("DeleteOptions = %v", got)
+	}
+}
+
+// Extra objects in the new storage are reported, not a failure.
+func TestMigrate_ExtraObjectsInTheNewStorageAreReported(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	simulateMigrate(f, &migrateSim{result: `{"copy":0,"check":0,"identical":4,"missing":0,"differ":0,"errors":0,"source":{"count":4,"bytes":4330},"destination":{"count":5,"bytes":4400}}`, objectStore: "True"})
+	ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
+	if !ok {
+		t.Fatalf("got %v: %s", ok, msg)
+	}
+	if !hasStep(steps, "copy", "the new storage holds 1 object more than the old one") {
+		t.Error("the extra object is not reported")
 	}
 }
 
@@ -356,9 +423,9 @@ func TestMigrate_CopyMismatchChangesNothingElse(t *testing.T) {
 	fastMigrateTimings(t)
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
-	simulateMigrate(f, &migrateSim{result: `{"copy":0,"check":0,"identical":4,"missing":0,"differ":0,"errors":0,"source":{"count":4,"bytes":4330},"destination":{"count":5,"bytes":4400}}`, objectStore: "True"})
+	simulateMigrate(f, &migrateSim{result: `{"copy":0,"check":1,"identical":3,"missing":1,"differ":0,"errors":0,"source":{"count":4,"bytes":4330},"destination":{"count":3,"bytes":4000}}`, objectStore: "True"})
 	ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
-	if ok || code != "copy_mismatch" || !strings.Contains(msg, "the new one 5 objects") || !strings.Contains(msg, "no pipeline server was moved") {
+	if ok || code != "copy_mismatch" || !strings.Contains(msg, "1 object missing") || !strings.Contains(msg, "no pipeline server was moved") || !strings.Contains(msg, "Run Migrate storage again to retry") {
 		t.Fatalf("got %v %s: %s", ok, code, msg)
 	}
 	noChangeToPipelineServers(t, f)
@@ -366,6 +433,76 @@ func TestMigrate_CopyMismatchChangesNothingElse(t *testing.T) {
 	if f.has(migrateJobPathT) {
 		t.Error("the Job was not deleted after its result was read")
 	}
+}
+
+// While no pipeline server uses the new storage the copy overwrites (an
+// object changed in the old storage is copied again); once one does, it
+// keeps what is there, and a difference then needs the user.
+func TestMigrate_CopyModeFollowsThePipelineServers(t *testing.T) {
+	t.Run("nothing uses the new storage", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		sim := &migrateSim{result: copyOK, objectStore: "True"}
+		simulateMigrate(f, sim)
+		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok || sim.mode != copyOverwrite {
+			t.Fatalf("got %v %s, copy mode %q", ok, msg, sim.mode)
+		}
+	})
+	t.Run("a moved pipeline server writes there", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		f.putJSON(dspaPath("juntao-test", legacyDSPAName), `{"metadata":{"labels":`+toolLabelJSON+`,"generation":2,"creationTimestamp":"`+created+`"},
+			"spec":{"objectStorage":{"externalStorage":{"host":"`+s3Host()+`","scheme":"http","s3CredentialsSecret":{"secretName":"nigh..."}}}},
+			"status":{"conditions":[{"type":"ObjectStoreAvailable","status":"True","observedGeneration":2}]}}`)
+		sample := base64.StdEncoding.EncodeToString([]byte("pipelines/model.bin\n"))
+		sim := &migrateSim{result: `{"copy":0,"check":1,"identical":3,"missing":0,"differ":1,"errors":0,"differSample":"` + sample + `","source":{"count":4,"bytes":4330},"destination":{"count":9,"bytes":9000}}`, objectStore: "True"}
+		simulateMigrate(f, sim)
+		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || code != "copy_mismatch" || sim.mode != copyIgnoreExisting {
+			t.Fatalf("got %v %s: %s (copy mode %q)", ok, code, msg, sim.mode)
+		}
+		for _, want := range []string{"for example pipelines/model.bin", "a retry gives the same result", "copy the old storage's version into the new storage yourself"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("message lacks %q: %s", want, msg)
+			}
+		}
+		if strings.Contains(msg, "to retry") {
+			t.Errorf("the message offers a retry that cannot help: %s", msg)
+		}
+	})
+	t.Run("a running copy with the other mode is replaced", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		f.putJSON(dspaPath("juntao-test", legacyDSPAName), `{"metadata":{"labels":`+toolLabelJSON+`,"generation":2,"creationTimestamp":"`+created+`"},
+			"spec":{"objectStorage":{"externalStorage":{"host":"`+s3Host()+`","scheme":"http","s3CredentialsSecret":{"secretName":"nigh..."}}}},
+			"status":{"conditions":[{"type":"ObjectStoreAvailable","status":"True","observedGeneration":2}]}}`)
+		f.putJSON(migrateJobPathT, `{"metadata":{"uid":"old-job","labels":`+toolLabelJSON+`},"spec":{"template":{"spec":{"containers":[{"name":"rclone","env":[{"name":"COPY_MODE","value":"overwrite"}]}]}}}}`)
+		sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
+		simulateMigrate(f, sim)
+		// The first request after the old Job is deleted lets the new one finish.
+		next := f.beforeServe
+		f.beforeServe = func(method, path string) {
+			if method == "POST" && strings.HasSuffix(path, "/jobs") {
+				f.mu.Lock()
+				sim.jobRunning = false
+				f.mu.Unlock()
+			}
+			next(method, path)
+		}
+		ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
+		if !ok || sim.mode != copyIgnoreExisting || !hasStep(steps, "copy", "with other settings is still running: stopping it") {
+			t.Fatalf("got %v %s (copy mode %q)", ok, msg, sim.mode)
+		}
+		m := strings.Join(f.mutations(), "\n")
+		if del, post := strings.Index(m, "DELETE "+migrateJobPathT), strings.Index(m, "POST /apis/batch/v1/namespaces/seaweedfs/jobs"); del < 0 || post < del {
+			t.Errorf("the running Job was not deleted before the new copy: %s", m)
+		}
+	})
 }
 
 func TestMigrate_CopyFailureOrNoResultStops(t *testing.T) {
@@ -464,7 +601,7 @@ func TestMigrate_ResumesAfterEachStep(t *testing.T) {
 		f, c := newResourceFake(t)
 		putMigrationCase(f)
 		putNewStorageWithLegacyKeys(f)
-		f.putJSON(migrateJobPathT, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+		f.putJSON(migrateJobPathT, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"template":{"spec":{"containers":[{"name":"rclone","env":[{"name":"COPY_MODE","value":"overwrite"}]}]}}}}`)
 		sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
 		simulateMigrate(f, sim)
 		go func() { time.Sleep(30 * time.Millisecond); f.mu.Lock(); sim.jobRunning = false; f.mu.Unlock() }()

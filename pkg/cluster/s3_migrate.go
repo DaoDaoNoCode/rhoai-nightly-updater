@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,31 +74,56 @@ var (
 // RCLONE_CONFIG_* variables (rclone docs, "Config file": environment
 // variables), with the keys from secretKeyRef, so no credential is in the
 // command, the arguments or the operation's output.
-//   - copy --ignore-existing never deletes, and never overwrites an object
-//     that already exists in the new storage (a re-run after pipeline
-//     servers moved could otherwise replace newer data);
+//   - copy never deletes (docs/content/commands/rclone_copy.md at v1.76.0:
+//     "Doesn't delete files from the destination"). COPY_MODE (copyMode)
+//     says whether it may overwrite: "overwrite" transfers every object
+//     that is not identical (by size and modification time or MD5,
+//     rclone_copy.md), so an object changed in the old storage since an
+//     earlier copy is copied again; "ignore-existing" skips every object
+//     that exists in the new storage "no matter the content"
+//     (docs/content/docs.md, --ignore-existing), so it never replaces what
+//     a moved pipeline server wrote there;
 //   - check --one-way --download reads every object of the old storage and
 //     its copy and compares the bytes, so it needs no hash support;
 //     --combined lists each path with = (identical), + (missing in the new
-//     storage), * (different) or ! (unreadable);
+//     storage), * (different) or ! (unreadable); --one-way reports nothing
+//     for objects only in the new storage (fs/operations/check.go DstOnly);
+//     the first three different paths go into differSample (base64, so any
+//     byte of a key is safe in the JSON);
 //   - size --json counts objects and bytes on both sides.
 //
 // The result is one JSON line in /dev/termination-log, which the kubelet
 // puts in the pod status (terminationMessagePath), so no pod-log access is
-// needed. Verified locally with this image against SeaweedFS 4.54 as a
-// non-root UID without capabilities.
+// needed; the kubelet truncates it at 4096 bytes (Kubernetes docs,
+// "Determine the Reason for Pod Failure"), and it stays under 1.2 KB.
+// Verified locally with this image against SeaweedFS 4.54 as a non-root
+// UID without capabilities.
 const migrateScript = `set -u
 copy=0
-rclone copy old: new: --ignore-existing || copy=$?
+case "$COPY_MODE" in
+overwrite) rclone copy old: new: || copy=$? ;;
+ignore-existing) rclone copy old: new: --ignore-existing || copy=$? ;;
+*) echo "unknown COPY_MODE '$COPY_MODE'" >&2; exit 2 ;;
+esac
 check=0
 rclone check old: new: --one-way --download --combined /tmp/combined.txt || check=$?
 count() { n=$(grep -c "^$1 " /tmp/combined.txt 2>/dev/null); echo "${n:-0}"; }
+sample=$(grep '^\* ' /tmp/combined.txt 2>/dev/null | head -n 3 | cut -c3-202 | base64 | tr -d '\n')
 src=$(rclone size old: --json) || src=null
 dst=$(rclone size new: --json) || dst=null
-printf '{"copy":%d,"check":%d,"identical":%s,"missing":%s,"differ":%s,"errors":%s,"source":%s,"destination":%s}' \
-  "$copy" "$check" "$(count =)" "$(count +)" "$(count '\*')" "$(count !)" "${src:-null}" "${dst:-null}" > /dev/termination-log
+printf '{"copy":%d,"check":%d,"identical":%s,"missing":%s,"differ":%s,"errors":%s,"differSample":"%s","source":%s,"destination":%s}' \
+  "$copy" "$check" "$(count =)" "$(count +)" "$(count '\*')" "$(count !)" "$sample" "${src:-null}" "${dst:-null}" > /dev/termination-log
 [ "$copy" -eq 0 ] && [ "$check" -eq 0 ]
 `
+
+// copyMode is the copy Job's COPY_MODE (migrateScript): copyOverwrite while
+// no pipeline server uses the new storage (it holds only copies, so a
+// changed object is copied again), copyIgnoreExisting once moved pipeline
+// servers write there.
+const (
+	copyOverwrite      = "overwrite"
+	copyIgnoreExisting = "ignore-existing"
+)
 
 // rcloneImage returns the copy Job's image, overridable with RCLONE_IMAGE
 // (for example a mirror on a disconnected cluster). An override must be an
@@ -146,7 +172,7 @@ func migrateJobCreatePath() string {
 // seaweedfs-ingress admits port 8333 from every pod in every namespace
 // (namespaceSelector {}), and the old storage's policies do the same for
 // its port.
-func migrateJob(oldServer string) map[string]interface{} {
+func migrateJob(oldServer, mode string) map[string]interface{} {
 	secretEnv := func(name, key string) map[string]interface{} {
 		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": s3Secret, "key": key}}}
 	}
@@ -163,7 +189,7 @@ func migrateJob(oldServer string) map[string]interface{} {
 	}
 	env := append(remote("OLD", rcloneProvider(oldServer), "http://"+legacyS3Host()), remote("NEW", "SeaweedFS", s3Endpoint())...)
 	// The assigned UID has no home directory in the image.
-	env = append(env, map[string]interface{}{"name": "HOME", "value": "/tmp"})
+	env = append(env, map[string]interface{}{"name": "HOME", "value": "/tmp"}, map[string]interface{}{"name": "COPY_MODE", "value": mode})
 	podLabels := map[string]interface{}{"app": migrateAppLabel, managedByLabelKey: managedByLabelValue}
 	return map[string]interface{}{
 		"apiVersion": "batch/v1", "kind": "Job",
@@ -213,31 +239,74 @@ type copyResult struct {
 	Errors      int64     `json:"errors"`
 	Source      *copySize `json:"source"`
 	Destination *copySize `json:"destination"`
+	// DifferSample is the first three paths the check found different,
+	// one per line, base64 encoded (migrateScript).
+	DifferSample string `json:"differSample"`
 }
 
-// problem explains why the copy is not verified, or returns "". Every
-// object of the old storage must be in the new one, byte for byte. With
-// strict (nothing uses the new storage yet, so it holds only copies) both
-// sides must also hold the same number of objects and bytes; once pipeline
-// servers write to the new storage it may hold more.
-func (r copyResult) problem(strict bool) string {
+// differPaths decodes DifferSample.
+func (r copyResult) differPaths() []string {
+	raw, err := base64.StdEncoding.DecodeString(r.DifferSample)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, p := range strings.Split(strings.ToValidUTF8(string(raw), "?"), "\n") {
+		if p = strings.TrimSpace(p); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// copyProblem is why a copy is not verified: what the check found, and
+// whether running again can fix it (retry) or what to do instead (fix).
+type copyProblem struct {
+	what  string
+	retry bool
+	fix   string
+}
+
+// problem explains why the copy is not verified, or returns nil. Every
+// object of the old storage must be in the new one, byte for byte: the
+// one-way check proves that. The new storage may hold more (objects written
+// there directly, or deleted from the old storage after an earlier copy);
+// they are reported, not counted against the copy (extraObjects). mode is
+// the Job's copyMode: with copyIgnoreExisting an object that differs is
+// never copied again, so no retry can fix it.
+func (r copyResult) problem(mode string) *copyProblem {
+	n := func(v int64) string { return countNoun(int(v), "object", "objects") }
 	switch {
 	case r.Copy != 0:
-		return fmt.Sprintf("rclone copy failed (exit code %d)", r.Copy)
-	case r.Source == nil || r.Destination == nil:
-		return "the object counts could not be read"
+		return &copyProblem{what: fmt.Sprintf("rclone copy failed (exit code %d)", r.Copy), retry: true}
+	case r.Differ > 0 && mode != copyOverwrite:
+		what := fmt.Sprintf("the check found %s different in the new storage", n(r.Differ))
+		if paths := r.differPaths(); len(paths) > 0 {
+			what += fmt.Sprintf(" (for example %s)", strings.Join(paths, ", "))
+		}
+		if r.Missing > 0 || r.Errors > 0 {
+			what += fmt.Sprintf(", %s missing and %s unreadable", n(r.Missing), n(r.Errors))
+		}
+		return &copyProblem{what: what, fix: "They changed in the old storage after an earlier copy, and since pipeline servers write to the new storage the copy never overwrites objects there, so a retry gives the same result. For each one, copy the old storage's version into the new storage yourself if that is the one to keep, or delete it from the old storage if the new storage's version is the one to keep; then run it again."}
 	case r.Missing > 0 || r.Differ > 0 || r.Errors > 0:
-		return fmt.Sprintf("the check found %s missing in the new storage, %s different and %s unreadable", countNoun(int(r.Missing), "object", "objects"), countNoun(int(r.Differ), "object", "objects"), countNoun(int(r.Errors), "object", "objects"))
+		return &copyProblem{what: fmt.Sprintf("the check found %s missing in the new storage, %s different and %s unreadable (written or changed in the old storage during the copy, or not readable then)", n(r.Missing), n(r.Differ), n(r.Errors)), retry: true}
 	case r.Check != 0:
-		return fmt.Sprintf("rclone check failed (exit code %d)", r.Check)
+		return &copyProblem{what: fmt.Sprintf("rclone check failed (exit code %d)", r.Check), retry: true}
+	case r.Source == nil:
+		return &copyProblem{what: "the object count of the old storage could not be read", retry: true}
 	case r.Identical != r.Source.Count:
-		return fmt.Sprintf("the check found %d of the %d objects identical", r.Identical, r.Source.Count)
-	case strict && (r.Destination.Count != r.Source.Count || r.Destination.Bytes != r.Source.Bytes):
-		return fmt.Sprintf("the old storage holds %s, the new one %s", sizeText(*r.Source), sizeText(*r.Destination))
-	case r.Destination.Count < r.Source.Count:
-		return fmt.Sprintf("the old storage holds %s, the new one only %s", sizeText(*r.Source), sizeText(*r.Destination))
+		return &copyProblem{what: fmt.Sprintf("the check found %d of the %d objects identical", r.Identical, r.Source.Count), retry: true}
 	}
-	return ""
+	return nil
+}
+
+// extraObjects returns how many more objects the new storage holds than
+// the old one, or 0 (counted by size --json, information only).
+func (r copyResult) extraObjects() int64 {
+	if r.Source == nil || r.Destination == nil || r.Destination.Count <= r.Source.Count {
+		return 0
+	}
+	return r.Destination.Count - r.Source.Count
 }
 
 func sizeText(s copySize) string {
@@ -250,6 +319,11 @@ type migrateRun struct {
 	c    *Client
 	emit func(UpdateStepEvent)
 	logs []string
+	// op is the action that runs this again: "Migrate storage" or "Remove
+	// old storage".
+	op string
+	// kept says what a stop before the end left unchanged.
+	kept string
 }
 
 func (m *migrateRun) step(id, status, msg string) {
@@ -292,7 +366,10 @@ func readLegacyKeys(c *Client) (s3Keys, error) {
 // MigrateS3Storage runs Migrate, or with opts.RemoveOldStorage the removal
 // of the old storage, streaming each step to onStep.
 func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
-	m := &migrateRun{c: c, emit: onStep}
+	m := &migrateRun{c: c, emit: onStep, op: "Migrate storage", kept: "no pipeline server was moved and the old storage is kept"}
+	if opts.RemoveOldStorage {
+		m.op, m.kept = "Remove old storage", "nothing was deleted"
+	}
 	m.step("check", "running", fmt.Sprintf("Checking the storage in namespace '%s'...", legacyNamespace))
 	legacy, err := readLegacyStorage(c)
 	if err != nil {
@@ -415,8 +492,8 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 }
 
 // copyAndVerify runs the copy Job (or waits for one a previous run left
-// running) and verifies its result. The Job is deleted by UID once its
-// result is read.
+// running with the same copyMode) and verifies its result. The Job is
+// deleted by UID once its result is read.
 func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step string) (copyResult, *types.OperationResponse) {
 	c := m.c
 	fail := func(msg, code, activity string) (copyResult, *types.OperationResponse) {
@@ -425,16 +502,18 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 	}
 	m.step(step, "running", fmt.Sprintf("Copying every bucket and object from '%s' to '%s' (Job %s)...", legacyNamespace, s3Namespace, migrateJobName))
 
-	// Whether anything uses the new storage yet decides how strictly the
-	// sizes must match (copyResult.problem).
+	// Whether a pipeline server uses the new storage yet decides whether
+	// the copy may overwrite objects there (copyMode). Data connections and
+	// workbenches cannot be seen; the removal's checklist asks the user to
+	// move them only after the migration.
 	endpoints, err := readS3Endpoints(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot read the new storage's Service; the copy did not start: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "endpoints unreadable")
 	}
-	strict := true
+	mode := copyOverwrite
 	for _, d := range dspas {
 		if endpoints.address.usedBy(d.Meta.Namespace, d.Host) {
-			strict = false
+			mode = copyIgnoreExisting
 		}
 	}
 
@@ -445,15 +524,27 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 	if found && !job.Meta.hasToolLabel() {
 		return fail(fmt.Sprintf("Job %s/%s exists and was not created by this tool, so it was left unchanged and the copy did not start. Delete it, then retry.", s3Namespace, migrateJobName), "not_managed", "foreign job")
 	}
-	if found && !job.Meta.terminating() && !job.finished() {
+	running := found && !job.Meta.terminating() && !job.finished()
+	if running && job.Mode == mode {
 		m.step(step, "running", "A copy started by an earlier run is still running: waiting for it")
 	} else {
 		if found {
 			// A finished Job whose result no run read (the request ended
-			// first): its copy may be out of date, so run a new one.
+			// first): its copy may be out of date, so run a new one. A
+			// running one with another copyMode is stopped first: one that
+			// overwrites must not run once pipeline servers write to the new
+			// storage. Foreground deletion keeps the Job until its pod is
+			// gone (the Job controller sets blockOwnerDeletion on its pods:
+			// job_controller.go:1803 and controller_ref.go:59-67 at
+			// v1.35.0), so the two copies never overlap.
+			policy := "Background"
+			if running {
+				policy = "Foreground"
+				m.step(step, "running", "A copy an earlier run started with other settings is still running: stopping it")
+			}
 			if !job.Meta.terminating() {
-				if _, err := deleteWithUID(c, migrateJobPath(), job.Meta.UID); err != nil && !IsK8sError(err, 404) {
-					return fail(fmt.Sprintf("Cannot delete the finished Job %s/%s of an earlier run: %v.%s", s3Namespace, migrateJobName, err, templateHint(err)), errorCodeFromK8sErr(err), "old job delete failed")
+				if _, err := deleteWithUIDPropagation(c, migrateJobPath(), job.Meta.UID, policy); err != nil && !IsK8sError(err, 404) {
+					return fail(fmt.Sprintf("Cannot delete the Job %s/%s of an earlier run: %v.%s", s3Namespace, migrateJobName, err, templateHint(err)), errorCodeFromK8sErr(err), "old job delete failed")
 				}
 			}
 			gone, err := waitForDeletion(c, migrateJobPath(), S3DeleteTimeout, S3DeletePoll)
@@ -461,7 +552,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 				return fail(fmt.Sprintf("Job %s/%s of an earlier run is still being deleted; retry in a minute.", s3Namespace, migrateJobName), "in_progress", "old job lingering")
 			}
 		}
-		obj := migrateJob(legacy.server)
+		obj := migrateJob(legacy.server, mode)
 		data, _ := json.Marshal(obj)
 		if _, _, err := c.do(http.MethodPost, migrateJobCreatePath(), "application/json", data, url.Values{"dryRun": {"All"}}); err != nil {
 			return fail(fmt.Sprintf("The API server rejects the copy Job: %v. Nothing was changed.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "validation"), "job dry run failed")
@@ -479,19 +570,28 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 	switch {
 	case errors.Is(err, errS3CannotStart):
 		m.deleteMigrateJob(job)
-		return fail(fmt.Sprintf("The copy Job's pod cannot start (%s: %s). Nothing else was changed. Fix the cause (for example set RCLONE_IMAGE to a pullable rclone image), then run Migrate storage again.", issue.Reason, truncateMessage(issue.Message)), "not_ready", "job cannot start")
+		return fail(fmt.Sprintf("The copy Job's pod cannot start (%s: %s). Nothing else was changed. Fix the cause (for example set RCLONE_IMAGE to a pullable rclone image), then run %s again.", issue.Reason, truncateMessage(issue.Message), m.op), "not_ready", "job cannot start")
 	case errors.Is(err, errS3NotReady):
-		return fail(fmt.Sprintf("The copy is still running after %s. Nothing else was changed. Run Migrate storage again to keep waiting for it.", MigrateCopyTimeout), "in_progress", "copy still running")
+		return fail(fmt.Sprintf("The copy is still running after %s. Nothing else was changed. Run %s again to keep waiting for it.", MigrateCopyTimeout, m.op), "in_progress", "copy still running")
 	case err != nil:
 		return fail(fmt.Sprintf("Stopped waiting for the copy Job: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "job wait failed")
 	}
 	result, readErr := readMigrateResult(c, job)
 	m.deleteMigrateJob(job)
 	if readErr != nil {
-		return fail(fmt.Sprintf("The copy Job ended without a readable result (%v). Nothing else was changed; run Migrate storage again.", readErr), "", "no result")
+		return fail(fmt.Sprintf("The copy Job ended without a readable result (%v). Nothing else was changed; run %s again.", readErr, m.op), "", "no result")
 	}
-	if p := result.problem(strict); p != "" {
-		return fail(fmt.Sprintf("The copy is not complete: %s. Nothing else was changed: no pipeline server was moved and the old storage is kept. Run Migrate storage again to retry.", p), "copy_mismatch", "copy mismatch: "+p)
+	if p := result.problem(job.Mode); p != nil {
+		msg := fmt.Sprintf("The copy is not complete: %s. Nothing else was changed: %s.", p.what, m.kept)
+		if p.retry {
+			msg += fmt.Sprintf(" Run %s again to retry.", m.op)
+		} else {
+			msg += " " + p.fix
+		}
+		return fail(msg, "copy_mismatch", "copy mismatch: "+p.what)
+	}
+	if extra := result.extraObjects(); extra > 0 {
+		m.step(step, "running", fmt.Sprintf("Note: the new storage holds %s more than the old one (written there directly, or deleted from the old storage after an earlier copy); they are kept", countNoun(int(extra), "object", "objects")))
 	}
 	m.step(step, "success", fmt.Sprintf("OK: %s copied and checked byte for byte", sizeText(*result.Source)))
 	return result, nil
@@ -514,6 +614,9 @@ type migrateJobInfo struct {
 	// Conditions Complete and Failed end the Job (batch/v1 JobConditionType).
 	Complete, Failed bool
 	FailReason       string
+	// Mode is the copyMode the Job was created with (its COPY_MODE), "" for
+	// a Job without one.
+	Mode string
 }
 
 func (j migrateJobInfo) finished() bool { return j.Complete || j.Failed }
@@ -536,6 +639,17 @@ func parseMigrateJob(body []byte) (migrateJobInfo, error) {
 			Selector struct {
 				MatchLabels map[string]string `json:"matchLabels"`
 			} `json:"selector"`
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name string `json:"name"`
+						Env  []struct {
+							Name  string `json:"name"`
+							Value string `json:"value"`
+						} `json:"env"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
 		} `json:"spec"`
 		Status struct {
 			Conditions []struct {
@@ -550,6 +664,13 @@ func parseMigrateJob(body []byte) (migrateJobInfo, error) {
 		return migrateJobInfo{}, err
 	}
 	j := migrateJobInfo{Meta: obj.Metadata, Selector: obj.Spec.Selector.MatchLabels}
+	for _, ctr := range obj.Spec.Template.Spec.Containers {
+		for _, e := range ctr.Env {
+			if ctr.Name == migrateContainer && e.Name == "COPY_MODE" {
+				j.Mode = e.Value
+			}
+		}
+	}
 	for _, cond := range obj.Status.Conditions {
 		if cond.Status != "True" {
 			continue

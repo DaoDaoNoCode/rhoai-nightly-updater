@@ -178,11 +178,19 @@ func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err er
 // deleteWithUID deletes path only if the object still has the given UID, so a
 // check-then-delete never removes an object recreated in between.
 func deleteWithUID(c *Client, path, uid string) (int, error) {
+	return deleteWithUIDPropagation(c, path, uid, "Background")
+}
+
+// deleteWithUIDPropagation is deleteWithUID with a propagation policy.
+// "Foreground" keeps the object (with a deletionTimestamp) until the garbage
+// collector deleted its dependents that set blockOwnerDeletion (Kubernetes
+// docs, Garbage Collection, "Foreground cascading deletion").
+func deleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"apiVersion":        "v1",
 		"kind":              "DeleteOptions",
 		"preconditions":     map[string]interface{}{"uid": uid},
-		"propagationPolicy": "Background",
+		"propagationPolicy": policy,
 	})
 	_, status, err := c.do(http.MethodDelete, path, "application/json", body, nil)
 	return status, err
