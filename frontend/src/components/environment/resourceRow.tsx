@@ -122,8 +122,11 @@ export const RowTitle: React.FC<{ id: string; name: string; state?: ResourceStat
   </Flex>
 );
 
+/** An external link as a full-size link button, for action rows (isInline is
+ *  for links inside running text: it drops the button height, so the link
+ *  would sit higher than the buttons beside it). */
 export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
-  <Button variant="link" isInline component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
+  <Button variant="link" component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
 );
 
 /**

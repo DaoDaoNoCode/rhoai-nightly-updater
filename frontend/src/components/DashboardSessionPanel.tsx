@@ -1,5 +1,8 @@
 import React from "react";
 import {
+  ActionList,
+  ActionListGroup,
+  ActionListItem,
   Alert,
   Button,
   Card,
@@ -173,27 +176,31 @@ export const DashboardSessionPanel: React.FC<DashboardSessionPanelProps> = ({ ov
         </Stack>
       </CardBody>
       <CardFooter>
-        <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
-          <FlexItem>
-            <TooltipButton variant={o.dashboardDeleting ? "danger" : "primary"} onClick={onRevert} isLoading={reverting} disabledReason={revertDisabledReason}>
-              Revert to default
-            </TooltipButton>
-          </FlexItem>
-          {o.mode === "pr" && o.prNumber ? (
-            <FlexItem>
-              <Button variant="link" isInline component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${o.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
-                PR #{o.prNumber} on GitHub
-              </Button>
-            </FlexItem>
-          ) : null}
-          {dashboardURL && (
-            <FlexItem>
-              <Button variant="link" isInline component="a" href={dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
-                Open the dashboard
-              </Button>
-            </FlexItem>
-          )}
-        </Flex>
+        {/* One action group: PatternFly's action-to-action spacing and full-size
+            buttons (no isInline), so the links line up with Revert. */}
+        <ActionList>
+          <ActionListGroup>
+            <ActionListItem>
+              <TooltipButton variant={o.dashboardDeleting ? "danger" : "primary"} onClick={onRevert} isLoading={reverting} disabledReason={revertDisabledReason}>
+                Revert to default
+              </TooltipButton>
+            </ActionListItem>
+            {o.mode === "pr" && o.prNumber ? (
+              <ActionListItem>
+                <Button variant="link" component="a" href={`https://github.com/opendatahub-io/odh-dashboard/pull/${o.prNumber}`} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+                  PR #{o.prNumber} on GitHub
+                </Button>
+              </ActionListItem>
+            ) : null}
+            {dashboardURL && (
+              <ActionListItem>
+                <Button variant="link" component="a" href={dashboardURL} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
+                  Open the dashboard
+                </Button>
+              </ActionListItem>
+            )}
+          </ActionListGroup>
+        </ActionList>
       </CardFooter>
     </Card>
   );
