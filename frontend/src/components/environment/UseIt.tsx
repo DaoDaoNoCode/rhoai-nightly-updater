@@ -27,7 +27,7 @@ export const CopyableCode: React.FC<{ id: string; code: string; label: string }>
   return (
     <CodeBlock actions={
       <CodeBlockAction>
-        <ClipboardCopyButton id={`${id}-copy`} textId={`${id}-code`} aria-label={`Copy ${label}`} onClick={() => void copy()} exitDelay={copied ? 1500 : 600}
+        <ClipboardCopyButton id={`${id}-copy`} aria-label={`Copy ${label}`} onClick={() => void copy()} exitDelay={copied ? 1500 : 600}
           variant="plain" onTooltipHidden={() => setCopied(false)}>
           {copied ? "Copied" : `Copy ${label}`}
         </ClipboardCopyButton>
