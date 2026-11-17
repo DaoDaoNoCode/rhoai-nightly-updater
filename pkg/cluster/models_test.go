@@ -46,6 +46,8 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 	t.Setenv(vllmImageEnv, "")
 	f, c := newResourceFake(t)
 	mc := &modelsCluster{f: f, c: c, readyAfter: 3}
+	// KServe's workload Deployment for the model, rolled out.
+	putModelDeployment(mc, 1, 1, 1)
 	f.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{
 		"spec":{"components":{"kserve":{"managementState":"Managed"}}},
 		"status":{"conditions":[{"type":"KserveLLMInferenceServiceDependencies","status":"True"}]}}`)
@@ -878,5 +880,80 @@ func putProfiles(mc *modelsCluster, profiles ...string) {
 		}
 		_ = json.Unmarshal([]byte(p), &meta)
 		mc.f.putJSON(testHardwareProfiles+"/"+meta.Metadata.Name, p)
+	}
+}
+
+const testModelDeployment = "/apis/apps/v1/namespaces/proj/deployments/qwen25-05b-instruct-kserve"
+
+// putModelDeployment stores the model's workload Deployment as KServe makes
+// it (its pods' labels) with the given replica counts.
+func putModelDeployment(mc *modelsCluster, replicas, updated, available int) {
+	mc.f.putJSON(testModelDeployment, fmt.Sprintf(`{"metadata":{"name":"qwen25-05b-instruct-kserve","generation":2,
+		"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"spec":{"replicas":1},
+		"status":{"observedGeneration":2,"replicas":%d,"updatedReplicas":%d,"availableReplicas":%d}}`, replicas, updated, available))
+}
+
+// After a change, KServe reports Ready while the old pod still serves and
+// the new one starts (seen live): setup waits for the rollout.
+func TestModelsSetup_WaitsForTheRollout(t *testing.T) {
+	mc := newModelsCluster(t)
+	putModelDeployment(mc, 2, 1, 1) // the new pod starts, the old one serves
+	reads := 0
+	mc.f.beforeServe = func(method, path string) {
+		if method == "GET" && strings.HasSuffix(path, "/namespaces/proj/deployments") {
+			mc.mu.Lock()
+			reads++
+			n := reads
+			mc.mu.Unlock()
+			if n == 3 {
+				putModelDeployment(mc, 1, 1, 1)
+			}
+		}
+	}
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success || !strings.Contains(res.Message, "is ready in proj") {
+		t.Fatalf("setup: %+v", res)
+	}
+	said := false
+	for _, e := range events {
+		said = said || strings.Contains(e.Message, "Rolling out the change")
+	}
+	if !said || reads < 3 {
+		t.Errorf("did not wait for the rollout (said=%v, deployment reads=%d)", said, reads)
+	}
+}
+
+// Ready for an older generation does not count: the change is not seen yet.
+func TestModelsSetup_ReadyMustBeForTheAppliedGeneration(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 1
+	stale := 0
+	next := mc.f.onGet
+	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		next(k, obj)
+		if k.plural != "llminferenceservices" {
+			return
+		}
+		mc.mu.Lock()
+		stale++
+		n := stale
+		mc.mu.Unlock()
+		ensureMap(obj, "metadata")["generation"] = 3.0
+		st := ensureMap(obj, "status")
+		st["conditions"] = []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}
+		st["url"] = "https://inference.apps.example.com/proj/qwen25-05b-instruct"
+		if n <= 4 {
+			st["observedGeneration"] = 2.0
+		} else {
+			st["observedGeneration"] = 3.0
+		}
+	}
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success || !strings.Contains(res.Message, "is ready in proj") {
+		t.Fatalf("setup: %+v", res)
+	}
+	if stale <= 4 {
+		t.Errorf("Ready for an older generation counted: %d reads", stale)
 	}
 }

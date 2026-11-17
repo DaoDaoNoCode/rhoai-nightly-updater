@@ -135,8 +135,9 @@ type llmisvcObject struct {
 		} `json:"template"`
 	} `json:"spec"`
 	Status struct {
-		URL        string         `json:"url"`
-		Conditions []k8sCondition `json:"conditions"`
+		URL                string         `json:"url"`
+		ObservedGeneration int64          `json:"observedGeneration"`
+		Conditions         []k8sCondition `json:"conditions"`
 	} `json:"status"`
 }
 
@@ -1107,6 +1108,49 @@ type modelWait struct {
 	err          error
 }
 
+// modelRolledOut says whether the model's workload Deployments (found by
+// the labels its pods carry) have rolled out, as "oc rollout status" decides:
+// the controller saw the latest spec, and every replica is updated and
+// available, with no old one left. A model without one is not rolled out.
+func modelRolledOut(c *Client, project, name string) (bool, string, error) {
+	q := url.Values{"labelSelector": {modelPodSelector(name)}}
+	body, _, err := c.get(namespacedPath("apps/v1", "deployments", project, "") + "?" + q.Encode())
+	if err != nil {
+		return false, "", err
+	}
+	var list struct {
+		Items []struct {
+			Metadata objectMeta `json:"metadata"`
+			Spec     struct {
+				Replicas *int32 `json:"replicas"`
+			} `json:"spec"`
+			Status struct {
+				ObservedGeneration int64 `json:"observedGeneration"`
+				Replicas           int32 `json:"replicas"`
+				UpdatedReplicas    int32 `json:"updatedReplicas"`
+				AvailableReplicas  int32 `json:"availableReplicas"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return false, "", fmt.Errorf("parse the model's Deployments: %w", err)
+	}
+	if len(list.Items) == 0 {
+		return false, "Waiting for KServe to create the model's Deployment...", nil
+	}
+	for _, d := range list.Items {
+		want := int32(1)
+		if d.Spec.Replicas != nil {
+			want = *d.Spec.Replicas
+		}
+		st := d.Status
+		if st.ObservedGeneration < d.Metadata.Generation || st.UpdatedReplicas < want || st.Replicas > st.UpdatedReplicas || st.AvailableReplicas < st.UpdatedReplicas {
+			return false, "Rolling out the change: the new pod is starting, and the previous one serves until it is ready...", nil
+		}
+	}
+	return true, "", nil
+}
+
 // waitModelReady waits (bounded) until the model reports Ready, reporting
 // progress from its conditions, pods and events. A pull of the preset's
 // image that the registry does not have stops the wait at once
@@ -1129,9 +1173,20 @@ func waitModelReady(c *Client, project, name string, presetImage bool, timeout t
 			res.problem = "the model was deleted while it was starting."
 			return true, nil
 		}
-		if cond, ok := findCondition(model.Status.Conditions, "Ready"); ok && cond.Status == "True" {
-			res.url = model.Status.URL
-			return true, nil
+		// Ready counts only for the spec just applied, and only once the
+		// workload has rolled out: after a change, KServe reports Ready
+		// while the old pod still serves and the new one starts (seen live).
+		if cond, ok := findCondition(model.Status.Conditions, "Ready"); ok && cond.Status == "True" && model.Status.ObservedGeneration >= model.Metadata.Generation {
+			done, msg, err := modelRolledOut(cc, project, name)
+			if err != nil {
+				return false, err
+			}
+			if done {
+				res.url = model.Status.URL
+				return true, nil
+			}
+			say(msg)
+			return false, nil
 		}
 		if cond, ok := findCondition(model.Status.Conditions, "PresetsCombined"); ok && cond.Status == "False" {
 			res.problem = fmt.Sprintf("KServe cannot resolve its preset: %s.", firstNonEmpty(cond.Message, cond.Reason))
