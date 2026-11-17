@@ -259,16 +259,16 @@ type kuadrantState struct {
 }
 
 func readKuadrant(c *Client) (kuadrantState, error) {
-	versions := servedVersions(c, kuadrantGroup, []string{"v1beta1"})
-	if len(versions.Versions) == 0 {
-		return kuadrantState{}, nil
-	}
-	body, _, err := c.get(clusterPath("kuadrant.io/"+versions.Versions[0], "kuadrants", ""))
-	if IsK8sError(err, 404) {
-		return kuadrantState{}, nil
-	}
+	// The group's versions are not the resource's: kuadrant.io serves v1
+	// (AuthPolicy...) first while Kuadrant is only in v1beta1 (RHCL 1.4,
+	// seen live), so list it at each served version until one serves it.
+	read, err := listServed(c, kuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
 	if err != nil {
 		return kuadrantState{}, err
+	}
+	body := read.Body
+	if body == nil {
+		return kuadrantState{}, nil
 	}
 	var list struct {
 		Items []struct {

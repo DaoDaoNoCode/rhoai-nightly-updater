@@ -35,6 +35,9 @@ type resourceFake struct {
 	// onGet may change an object before a GET returns it (for example to
 	// simulate a controller updating status).
 	onGet func(k fakeKey, obj map[string]interface{})
+	// groups holds API discovery documents by path ("/apis/kuadrant.io");
+	// a group without one answers 404, as an unserved group.
+	groups map[string]string
 	// beforeServe runs before a request is handled, outside the lock, so it
 	// can change the stored objects (for example to inject a foreign object
 	// between the tool's check and its write).
@@ -248,9 +251,15 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// API discovery documents (/apis/<group>) are not modelled: 404, as for
-	// a group that is not served, so callers use their fallback versions.
+	// API discovery documents (/apis/<group>): the ones a test set in
+	// groups, else 404, as for a group that is not served, so callers use
+	// their fallback versions.
 	if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); parts[0] == "apis" && len(parts) < 3 {
+		if doc, ok := f.groups[r.URL.Path]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(doc))
+			return
+		}
 		f.status(w, 404, "not found")
 		return
 	}

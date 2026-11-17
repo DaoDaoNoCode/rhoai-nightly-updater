@@ -35,6 +35,12 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	f := mc.f
 	f.putJSON(tMaaSDSC, `{"spec":{"components":{"kserve":{"managementState":"Managed"},"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Removed"}}}}}`)
 	f.putJSON("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant", `{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)
+	// The group's discovery as RHCL 1.4 serves it (live): v1 first, where
+	// AuthPolicy is, while Kuadrant is only in v1beta1.
+	// ...and, as the API server does, 404 for Kuadrant at v1, which does not
+	// serve it (the fake would answer an empty list).
+	f.fail["GET /apis/kuadrant.io/v1/kuadrants"] = 404
+	f.groups = map[string]string{"/apis/kuadrant.io": `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"},{"groupVersion":"kuadrant.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`}
 	f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{"annotations":{"service.beta.openshift.io/serving-cert-secret-name":"authorino-server-cert"}}}`)
 	f.putJSON("/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true}}}}`)
 	f.putJSON("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino", `{"spec":{"template":{"spec":{"containers":[{"name":"authorino","env":[{"name":"SSL_CERT_FILE","value":"/x"}]}]}}}}`)
