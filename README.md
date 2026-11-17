@@ -81,7 +81,7 @@ Three tabs, kept in the address so a link opens the same view: **Overview** (goa
 
 <img src="docs/images/environment-storage-details.png" alt="Cluster tab: the Storage card, Ready, with its details drawer open" width="760">
 
-1. One status per card: Not set up, Setting up, Ready, Needs attention, Error, Deleting or Not managed by this tool.
+1. One health status per card: Not set up, Setting up, Ready, Needs attention, Error, Deleting or Unknown. Something this tool did not create also gets a **Not managed by this tool** label; it can still be Ready, and goals count it, but the tool never changes or deletes it.
 2. The card's one action (here **Open admin UI**); **Details** opens the drawer.
 3. The drawer has the names and addresses (the S3 endpoint is `http://seaweedfs-s3.seaweedfs.svc:8333`).
 4. **Tear down** stays disabled while a pipeline server uses the storage; its tooltip says which one.

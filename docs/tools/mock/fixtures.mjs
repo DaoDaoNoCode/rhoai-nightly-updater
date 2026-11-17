@@ -539,6 +539,13 @@ export const pipelineServer = {
   apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-nightly-dspa"],
 };
 
+/** A pipeline server made in the dashboard, not by this tool (pkg/types UnmanagedPipelineServers). */
+export const foreignPipelineServer = {
+  deployed: true, ready: true, message: "Running", namespace: "fraud-detection", name: "dspa", managedByTool: false,
+  uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/fraud-detection`,
+  teardownBlockedReason: "This pipeline server was not created by this tool, so the tool will not delete it.",
+};
+
 /** A pipeline server that has just been set up (DSPO is starting it). */
 export const pipelineServerStarting = { ...pipelineServer, ready: false, message: "Starting (1/3 ready)", uiRoute: undefined };
 
@@ -548,6 +555,11 @@ export const mlflowStates = {
   foreign: {
     deployed: true, ready: true, message: "Running", namespace: "redhat-ods-applications", name: "mlflow", managedByTool: false,
     uiRoute: `https://data-science-gateway.${APPS}/mlflow`, currentImage: `registry.redhat.io/rhoai/odh-mlflow-rhel9@${digest("mlflow")}`,
+    teardownBlockedReason: "This MLflow instance was not created by this tool, so the tool will not delete it.",
+  },
+  foreignBroken: {
+    deployed: true, ready: false, terminalError: true, message: "CrashLoopBackOff", waitingReason: "CrashLoopBackOff", namespace: "redhat-ods-applications", name: "mlflow",
+    managedByTool: false, currentImage: `registry.redhat.io/rhoai/odh-mlflow-rhel9@${digest("mlflow")}`,
     teardownBlockedReason: "This MLflow instance was not created by this tool, so the tool will not delete it.",
   },
   // A PR image that cannot be pulled.

@@ -24,7 +24,7 @@ import {
 } from "./resourceRow";
 import { CreatesList, DetailsActions, DetailsAlert, DetailsSection, DetailsStack, HowToUse, ResourceCard } from "./ResourceCard";
 import { CopyFromServerButton } from "./CopyFromServerButton";
-import { envStatus, type EnvStatus } from "./resourceStatus";
+import { envStatus, notManaged, type EnvStatus } from "./resourceStatus";
 
 /** The storage's namespace and in-cluster address (pkg/cluster s3Namespace, s3Host). */
 export const S3_NAMESPACE = "seaweedfs";
@@ -63,6 +63,10 @@ export function storageStatus({ minio, legacy, resAction, migrating }: Pick<Stor
 export function storageNotReadyReason(minio: ResourceState | undefined, legacy: LegacyStorageState | null | undefined, migrating: boolean): string | null {
   if (migrating) return "Migrate storage is running. Wait until it has finished.";
   if (legacy?.stage === "migrate") return "Available once Migrate storage has moved the data of an earlier version to the new storage (Storage, Cluster tab).";
+  // Pipeline servers set up here get a copy of the tool's storage keys; it
+  // does not read the keys of storage someone else made (pkg/cluster
+  // SetupPipelineServer).
+  if (notManaged(minio)) return "Pipeline servers set up here use the S3 storage this tool sets up. Namespace seaweedfs was not created by this tool, so it is not used.";
   if (!minio?.ready) return minio?.deployed ? "Available once the S3 storage is ready (Storage, Cluster tab)." : "Available once the S3 storage is set up (Storage, Cluster tab).";
   return null;
 }
@@ -95,7 +99,7 @@ export const StorageCard: React.FC<StorageProps & { onDetails: (opener: HTMLElem
       ? "The data was moved here. The earlier version's storage is kept until you remove it."
       : undefined;
   return (
-    <ResourceCard id="storage" title="Storage" status={storageStatus(props)} action={action} needs={needs} onDetails={onDetails} detailsOpen={detailsOpen}
+    <ResourceCard id="storage" title="Storage" status={storageStatus(props)} unmanaged={notManaged(minio)} action={action} needs={needs} onDetails={onDetails} detailsOpen={detailsOpen}
       purpose="S3 storage (SeaweedFS) for pipeline artifacts and test files." />
   );
 };

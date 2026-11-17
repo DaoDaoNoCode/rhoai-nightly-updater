@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ResourceState } from "../../types";
-import { envStatus } from "./resourceStatus";
+import { envStatus, notManaged } from "./resourceStatus";
 import { useGoalRun } from "./useGoalRun";
 import { copyFetchedText } from "./CopyFromServerButton";
 import { storageNotReadyReason } from "./StorageCard";
@@ -16,15 +16,26 @@ describe("status vocabulary", () => {
     ["cannot start", { ...base, terminalError: true, waitingReason: "ImagePullBackOff" }, {}, "error"],
     ["cannot start, Repair fixes it", { ...base, terminalError: true, repairNeeded: "scaled to 0", message: "scaled to 0" }, {}, "needs-attention"],
     ["terminating", { ...base, terminating: true }, {}, "deleting"],
-    ["someone else's", { ...base, ready: true, managedByTool: false }, {}, "not-managed"],
-    ["a foreign namespace blocks setup", { deployed: false, ready: false, managedByTool: false, setupBlockedReason: "x" }, {}, "not-managed"],
+    // Health, not ownership: someone else's resource reads what it is.
+    ["someone else's, running", { ...base, ready: true, managedByTool: false }, {}, "ready"],
+    ["someone else's, broken", { ...base, managedByTool: false, terminalError: true, waitingReason: "CrashLoopBackOff" }, {}, "error"],
+    ["someone else's, needs a repair the tool does not make", { ...base, managedByTool: false, terminalError: true, repairNeeded: "x", message: "x" }, {}, "error"],
+    ["a foreign namespace blocks setup", { deployed: false, ready: false, managedByTool: false, setupBlockedReason: "x" }, {}, "not-set-up"],
     ["data to migrate", { ...base, ready: true }, { attention: true }, "needs-attention"],
     ["this page sets it up", { deployed: false, ready: false }, { busy: "setting-up" }, "setting-up"],
   ])("%s", (_name, state, opts, want) => {
     expect(envStatus(state, opts)).toBe(want);
   });
 
+  it("ownership is apart from health, and only for something that exists", () => {
+    expect(notManaged({ deployed: true, ready: true, managedByTool: false })).toBe(true);
+    expect(notManaged({ deployed: true, ready: true, managedByTool: true })).toBe(false);
+    expect(notManaged({ deployed: false, ready: false, managedByTool: false })).toBe(false);
+    expect(notManaged({ deployed: false, ready: false, managedByTool: false, setupBlockedReason: "x" })).toBe(true);
+  });
+
   it("pipeline servers wait for the storage and for a migration's copy (follow-up 3)", () => {
+    expect(storageNotReadyReason({ deployed: true, ready: true, managedByTool: false }, null, false)).toMatch(/was not created by this tool/);
     const ready: ResourceState = { deployed: true, ready: true };
     expect(storageNotReadyReason(ready, null, false)).toBeNull();
     expect(storageNotReadyReason(undefined, null, false)).toMatch(/once the S3 storage is set up/);

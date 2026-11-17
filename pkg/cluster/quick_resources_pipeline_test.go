@@ -78,6 +78,18 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 	if strings.Join(st.UnmanagedPipelineProjects, ",") != "dashboard,dashboard-same-spec" {
 		t.Errorf("unmanaged = %v", st.UnmanagedPipelineProjects)
 	}
+	// Their health is reported too: who created a server does not decide
+	// whether it works. Nothing about them invites a change.
+	var foreign []string
+	for _, ps := range st.UnmanagedPipelineServers {
+		foreign = append(foreign, ps.Namespace+"/"+ps.Name)
+		if ps.ManagedByTool || ps.TeardownBlockedReason == "" || len(ps.DataPVCs) != 0 || !ps.Deployed {
+			t.Errorf("unmanaged pipeline server %s: %+v", ps.Namespace, ps)
+		}
+	}
+	if strings.Join(foreign, ",") != "dashboard/dspa,dashboard-same-spec/dspa" {
+		t.Errorf("unmanaged pipeline servers = %v", foreign)
+	}
 	for _, ps := range st.PipelineServers {
 		if ps.Namespace == "mine" {
 			if !strings.Contains(ps.Message, "connection refused") || strings.Contains(ps.Message, "MinimumReplicasAvailable") {

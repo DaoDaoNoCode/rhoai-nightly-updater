@@ -27,20 +27,24 @@ import {
   StackItem,
   Title,
 } from "@patternfly/react-core";
-import { EnvStatusLabel, type EnvStatus } from "./resourceStatus";
+import { EnvStatusLabel, NotManagedLabel, type EnvStatus } from "./resourceStatus";
 
 /** The id of the details drawer panel, for the Details buttons' aria-controls. */
 export const DETAILS_PANEL_ID = "environment-details";
 /** The drawer title's id: it takes the focus when the drawer opens. */
 export const DETAILS_TITLE_ID = "environment-details-title";
 
-/** Title and its one status label, wrapping below the title when narrow. */
-const TitleWithStatus: React.FC<{ id?: string; level: "h2" | "h3"; size: "lg" | "xl"; status: EnvStatus; focusable?: boolean; children: React.ReactNode }> = ({ id, level, size, status, focusable, children }) => (
+/**
+ * Title, its one status label and, for something this tool did not create,
+ * the ownership label after it; the labels wrap below the title when narrow.
+ */
+const TitleWithStatus: React.FC<{ id?: string; level: "h2" | "h3"; size: "lg" | "xl"; status: EnvStatus; unmanaged?: boolean; focusable?: boolean; children: React.ReactNode }> = ({ id, level, size, status, unmanaged, focusable, children }) => (
   <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
     <FlexItem>
       <Title headingLevel={level} size={size} id={id} tabIndex={focusable ? -1 : undefined}>{children}</Title>
     </FlexItem>
     <FlexItem><EnvStatusLabel status={status} /></FlexItem>
+    {unmanaged && <FlexItem><NotManagedLabel /></FlexItem>}
   </Flex>
 );
 
@@ -49,6 +53,8 @@ export interface ResourceCardProps {
   id: string;
   title: string;
   status: EnvStatus;
+  /** This tool did not create it: shown beside the status, which stays its health. */
+  unmanaged?: boolean;
   /** One sentence: what it is for. */
   purpose: React.ReactNode;
   /** What it waits for ("Needs: <link>"), as helper text. */
@@ -65,12 +71,12 @@ export interface ResourceCardProps {
  * needs, and one action beside Details. Names, addresses and every other
  * action are in the details drawer.
  */
-export const ResourceCard: React.FC<ResourceCardProps> = ({ id, title, status, purpose, needs, action, onDetails, detailsOpen }) => {
+export const ResourceCard: React.FC<ResourceCardProps> = ({ id, title, status, unmanaged, purpose, needs, action, onDetails, detailsOpen }) => {
   const headingId = `${id}-title`;
   return (
     <Card isFullHeight component="section" aria-labelledby={headingId}>
       <CardHeader>
-        <CardTitle><TitleWithStatus id={headingId} level="h3" size="lg" status={status}>{title}</TitleWithStatus></CardTitle>
+        <CardTitle><TitleWithStatus id={headingId} level="h3" size="lg" status={status} unmanaged={unmanaged}>{title}</TitleWithStatus></CardTitle>
       </CardHeader>
       <CardBody>
         <Content component="p">{purpose}</Content>
@@ -158,13 +164,14 @@ export const DetailsAlert: React.FC<{ variant: "info" | "warning" | "danger"; ti
 export const DetailsPanel: React.FC<{
   title: string;
   status: EnvStatus;
+  unmanaged?: boolean;
   onClose: () => void;
   children: React.ReactNode;
-}> = ({ title, status, onClose, children }) => (
+}> = ({ title, status, unmanaged, onClose, children }) => (
   <DrawerPanelContent id={DETAILS_PANEL_ID} widths={{ default: "width_100", lg: "width_50", "2xl": "width_33" }}
     onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
     <DrawerHead>
-      <TitleWithStatus id={DETAILS_TITLE_ID} level="h2" size="xl" status={status} focusable>{title}</TitleWithStatus>
+      <TitleWithStatus id={DETAILS_TITLE_ID} level="h2" size="xl" status={status} unmanaged={unmanaged} focusable>{title}</TitleWithStatus>
       <DrawerActions>
         <DrawerCloseButton onClick={onClose} aria-label={`Close ${title} details`} />
       </DrawerActions>

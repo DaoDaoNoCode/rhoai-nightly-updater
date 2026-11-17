@@ -102,6 +102,38 @@ describe("Environment page", () => {
     expect(screen.getByRole("tab", { name: "Cluster" })).toHaveAttribute("aria-selected", "true");
   });
 
+  // A part's readiness is its health; ownership only says whether the tool may change it.
+  const mlflowRunning: ResourceState = { deployed: true, ready: true, message: "Running", namespace: "redhat-ods-applications", uiRoute: "https://mlflow.apps.example.com" };
+  it.each([
+    ["someone else's, running", { ...mlflowRunning, managedByTool: false }, "Cluster: Ready (not managed by this tool)", true, null],
+    ["someone else's, broken", { ...mlflowRunning, managedByTool: false, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff", message: "CrashLoopBackOff" }, "Cluster: Error (not managed by this tool)", false, "Show MLflow"],
+    ["this tool's, running", { ...mlflowRunning, managedByTool: true }, "Cluster: Ready", true, null],
+  ])("the MLflow goal with %s MLflow", async (_name, mlflow, step, done, show) => {
+    stubApi({ "/api/resources/status": { minio: notDeployed, mlflow, pipelineServers: [] }, "/api/resources/projects": { projects: [] } });
+    renderPage("/test-resources");
+    const goal = await screen.findByRole("region", { name: "Track experiments with MLflow" });
+    expect(goal).toHaveTextContent(step as string);
+    if (!(step as string).includes("(")) expect(goal).not.toHaveTextContent("not managed");
+    expect(goal).toHaveTextContent(done ? "1 of 1 ready" : "0 of 1 ready");
+    expect(goal.querySelector(".pf-v6-c-progress-stepper__step")).toHaveClass(done ? "pf-m-success" : "pf-m-danger");
+    if (done) expect(within(goal).getByRole("link", { name: /Open MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    else expect(within(goal).getByRole("button", { name: show as string })).toBeInTheDocument();
+    expect(within(goal).queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
+  });
+
+  it("the pipeline goal on someone else's running storage: the storage counts as ready, the pipeline server is not offered", async () => {
+    stubApi({
+      "/api/resources/status": { minio: { ...readyMinio, managedByTool: false }, mlflow: notDeployed, pipelineServers: [] },
+      "/api/resources/projects": { projects: ["dev-project"] },
+    });
+    renderPage("/test-resources?project=dev-project");
+    const goal = await screen.findByRole("region", { name: "Run a data science pipeline" });
+    expect(goal).toHaveTextContent("Cluster: Ready (not managed by this tool)");
+    expect(goal).toHaveTextContent("1 of 2 ready");
+    expect(within(goal).queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
+    expect(within(goal).getByRole("button", { name: "Show the pipeline server" })).toBeInTheDocument();
+  });
+
   it("the details drawer takes the focus, closes with Escape and gives the focus back", async () => {
     stubApi({ "/api/resources/status": { minio: readyMinio, mlflow: notDeployed, pipelineServers: [] }, "/api/resources/projects": { projects: [] } });
     renderPage("/test-resources?tab=cluster");

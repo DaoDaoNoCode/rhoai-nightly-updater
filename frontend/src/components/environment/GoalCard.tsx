@@ -40,7 +40,10 @@ export interface GoalStep {
   noun: string;
   /** Where it lives: "Cluster" or "Project <name>". */
   scope: string;
+  /** Its health; who created it does not change it. */
   status: EnvStatus;
+  /** This tool did not create it (it may still be Ready and usable). */
+  unmanaged: boolean;
   /** It can be set up as part of the goal (it is not set up yet). */
   canSetUp: boolean;
   /** Shows its card and details. */
@@ -63,14 +66,14 @@ export interface Goal {
 export const stepReady = (s: GoalStep) => s.status === "ready";
 const stepBlocked = (s: GoalStep) => !stepReady(s) && !s.canSetUp && s.status !== "setting-up";
 
-const VARIANT: Record<EnvStatus, "success" | "info" | "pending" | "warning" | "danger"> = {
+const VARIANT: Record<EnvStatus, "success" | "info" | "pending" | "warning" | "danger" | "default"> = {
   ready: "success",
   "setting-up": "info",
   deleting: "info",
   "not-set-up": "pending",
   "needs-attention": "warning",
   error: "danger",
-  "not-managed": "warning",
+  unknown: "default",
 };
 
 /**
@@ -126,7 +129,7 @@ export const GoalCard: React.FC<{
               {goal.steps.map((s) => (
                 <ProgressStep key={s.id} id={`goal-${goal.id}-${s.id}`} titleId={`goal-${goal.id}-${s.id}-title`} variant={VARIANT[s.status]}
                   icon={s.status === "setting-up" || s.status === "deleting" ? <Spinner size="sm" aria-hidden /> : undefined}
-                  description={`${s.scope}: ${envStatusText(s.status)}`}>
+                  description={`${s.scope}: ${envStatusText(s.status)}${s.unmanaged ? " (not managed by this tool)" : ""}`}>
                   {s.title}
                 </ProgressStep>
               ))}

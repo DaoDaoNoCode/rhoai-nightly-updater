@@ -112,27 +112,56 @@ describe("ownership", () => {
     expect(await tooltipOf(within(storage).getByRole("button", { name: "Set up" }))).toMatch(/was not created by this tool/);
   });
 
-  it("a browser-created MLflow is 'not managed by this tool' and has no Tear down", async () => {
-    setup(live());
+  // Health and ownership are two labels: the status is what the resource
+  // is, "Not managed by this tool" only says the tool will not change it.
+  const brokenForeignMlflow: ResourceState = { ...browserMlflow, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff", message: "CrashLoopBackOff", uiRoute: undefined };
+  const ownMlflow: ResourceState = { ...browserMlflow, managedByTool: true, uiRoute: "https://mlflow.apps.example.com", teardownBlockedReason: undefined };
+  it.each([
+    ["someone else's, running", { ...browserMlflow, uiRoute: "https://mlflow.apps.example.com" }, "Ready", true, "Open MLflow"],
+    ["someone else's, broken", brokenForeignMlflow, "Error", true, null],
+    ["this tool's, running", ownMlflow, "Ready", false, "Open MLflow"],
+  ])("MLflow card, %s: health status, ownership apart, and only this tool's has Tear down", async (_name, mlflow, status, foreign, action) => {
+    setup(live({ mlflow: mlflow as ResourceState }));
     renderAt();
-    const mlflow = await card("MLflow");
-    expect(within(mlflow).getByText("Not managed by this tool")).toBeInTheDocument();
+    const card_ = await card("MLflow");
+    expect(within(card_).getByText(status as string)).toBeInTheDocument();
+    if (foreign) expect(within(card_).getByText("Not managed by this tool")).toBeInTheDocument();
+    else expect(within(card_).queryByText("Not managed by this tool")).not.toBeInTheDocument();
+    if (action) expect(within(card_).getByRole("link", { name: new RegExp(action as string) })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    else expect(within(card_).queryByRole("link")).not.toBeInTheDocument();
     const panel = await details("MLflow");
-    expect(panel).toHaveTextContent("Not this tool: it is left alone");
-    expect(within(panel).queryByRole("button", { name: "Tear down" })).not.toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { level: 2, name: "MLflow" }).closest(".pf-v6-c-drawer__head")).toHaveTextContent(`MLflow${status}${foreign ? "Not managed by this tool" : ""}`);
+    expect(panel).toHaveTextContent(foreign ? "Not this tool: it is left alone" : "This tool");
+    if (foreign) expect(within(panel).queryByRole("button", { name: "Tear down" })).not.toBeInTheDocument();
+    else expect(within(panel).getByRole("button", { name: "Tear down" })).toBeInTheDocument();
   });
 
-  it("a project with someone else's pipeline server is not set up again, and says why", async () => {
-    setup(live({ minio: readyMinio }));
+  it("a project with someone else's pipeline server shows its health, is not set up again, and says why", async () => {
+    const foreign: ResourceState = { deployed: true, ready: true, namespace: "team-x", name: "dspa", managedByTool: false, message: "Running", uiRoute: "https://rh-ai.apps.example.com/develop-train/pipelines/definitions/team-x" };
+    setup(live({ minio: readyMinio, unmanagedPipelineServers: [foreign] }));
     renderAt("/test-resources?tab=projects&project=team-x");
     const ps = await card("Pipeline server");
+    expect(within(ps).getByText("Ready")).toBeInTheDocument();
     expect(within(ps).getByText("Not managed by this tool")).toBeInTheDocument();
-    expect(ps).toHaveTextContent("this tool did not create");
+    expect(ps).toHaveTextContent("was not created by this tool");
     expect(within(ps).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
-    // The project picker says what each project has.
+    expect(within(ps).getByRole("link", { name: /Open pipelines/ })).toBeInTheDocument();
+    const panel = await details("Pipeline server");
+    expect(within(panel).queryByRole("button", { name: "Tear down" })).not.toBeInTheDocument();
+    // Its storage is not known: the tool's endpoint is not claimed for it.
+    expect(panel).not.toHaveTextContent("seaweedfs-s3");
+    // The project picker says what each project has, and whose it is.
     fireEvent.click(screen.getByRole("button", { name: "Show projects" }));
     const team = await screen.findByRole("option", { name: /team-x/ });
-    expect(team).toHaveTextContent("Pipeline server: Not managed by this tool");
+    expect(team).toHaveTextContent("Pipeline server: Ready (not managed by this tool)");
+  });
+
+  it("someone else's storage namespace: Not set up, ownership apart, and pipeline servers say why they wait", async () => {
+    const foreign: ResourceState = { deployed: true, ready: true, managedByTool: false, namespace: "seaweedfs", message: "Running" };
+    setup(live({ minio: foreign, pipelineServers: [] }));
+    renderAt("/test-resources?tab=projects&project=fresh");
+    const ps = await card("Pipeline server");
+    expect(await tooltipOf(within(ps).getByRole("button", { name: "Set up" }))).toMatch(/Namespace seaweedfs was not created by this tool/);
   });
 });
 

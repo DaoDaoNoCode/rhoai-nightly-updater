@@ -53,9 +53,12 @@ only accepts a tag whose version is the top dated section. See
     or **Open**. A project goal picks its project on the card.
   - **Cluster**: Storage and MLflow. **Projects**: a project picker (type to
     filter; each project says what it has) and the project's pipeline server.
-  - Compact cards: a title with one status (Not set up, Setting up, Ready,
-    Needs attention, Error, Deleting, Not managed by this tool), one
-    sentence and one action. **Details** opens a drawer with the object
+  - Compact cards: a title with one health status (Not set up, Setting up,
+    Ready, Needs attention, Error, Deleting, Unknown) and, for something
+    this tool did not create, a separate **Not managed by this tool**
+    label: ownership decides only whether the tool may change it, so
+    someone else's running MLflow or pipeline server reads **Ready** and a
+    goal counts it as ready. One sentence and one action. **Details** opens a drawer with the object
     names, addresses, warnings and repair reasons, the other actions (Tear
     down, Deploy PR, Revert), **How to use** and **What this creates**.
 - **Copy admin password** (Storage details, How to use) copies the

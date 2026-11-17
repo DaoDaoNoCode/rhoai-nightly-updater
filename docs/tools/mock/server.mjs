@@ -191,8 +191,14 @@ const scenarios = {
     w.resources = { minio: { ...F.s3States.imagePull, teardownBlockedReason: F.s3States.running.teardownBlockedReason }, mlflow: F.mlflowStates.prBroken, pipelineServers: [F.pipelineServer] };
   },
   "env-foreign": (w) => {
-    w.resources = { minio: F.s3States.foreign, mlflow: F.mlflowStates.foreign, pipelineServers: [], unmanagedPipelineProjects: ["fraud-detection"] };
+    w.resources = {
+      minio: F.s3States.foreign, mlflow: F.mlflowStates.foreign, pipelineServers: [],
+      unmanagedPipelineProjects: ["fraud-detection"], unmanagedPipelineServers: [F.foreignPipelineServer],
+    };
   },
+  // MLflow made in the dashboard (by the MLflow operator), running or broken; the rest is this tool's.
+  "env-mlflow-unmanaged": (w) => { w.resources.mlflow = F.mlflowStates.foreign; },
+  "env-mlflow-unmanaged-broken": (w) => { w.resources.mlflow = F.mlflowStates.foreignBroken; },
   "env-reader": (w) => { w.resources.mlflow = F.mlflowStates.running; w.canMutate = false; },
 };
 for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook"]) {

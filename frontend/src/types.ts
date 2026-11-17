@@ -654,6 +654,8 @@ export interface DashboardNewerBuild {
 export interface ResourcesStatus {
   /** Projects that already have a pipeline server the tool did not create. */
   unmanagedPipelineProjects?: string[] | null;
+  /** The health of those pipeline servers (managedByTool false); the tool never changes them. */
+  unmanagedPipelineServers?: ResourceState[] | null;
 }
 
 export interface ResourceState {

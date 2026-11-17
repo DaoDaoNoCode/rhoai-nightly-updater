@@ -30,7 +30,7 @@ import {
   terminalReason,
 } from "./resourceRow";
 import { CreatesList, DetailsActions, DetailsStack, HowToUse, ResourceCard } from "./ResourceCard";
-import { envStatus, type EnvStatus } from "./resourceStatus";
+import { envStatus, notManaged, type EnvStatus } from "./resourceStatus";
 
 export interface MLflowProps extends CardActionProps {
   mlflow?: ResourceState;
@@ -55,7 +55,7 @@ export const MLflowCard: React.FC<MLflowProps & { onDetails: (opener: HTMLElemen
     action = <ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink>;
   }
   return (
-    <ResourceCard id="mlflow" title="MLflow" status={mlflowStatus(props)} action={action} onDetails={onDetails} detailsOpen={detailsOpen}
+    <ResourceCard id="mlflow" title="MLflow" status={mlflowStatus(props)} unmanaged={notManaged(mlflow)} action={action} onDetails={onDetails} detailsOpen={detailsOpen}
       needs={mlflow?.prOverride ? `Runs the image of opendatahub-io/mlflow PR #${mlflow.prNumber ?? "?"}.` : undefined}
       purpose="An MLflow server for tracking experiments, run by the MLflow operator." />
   );

@@ -6,8 +6,11 @@ import { StatusLabel, TagLabel } from "../StatusLabel";
 import { isTerminating, terminalReason } from "./resourceRow";
 
 /**
- * The Environment page's status vocabulary: one status per resource, the
- * same words on every card, goal step and drawer.
+ * The Environment page's status vocabulary: one health status per
+ * resource, the same words on every card, goal step and drawer. Who
+ * created a resource is not a health: a server someone else made can be
+ * Ready. Ownership is shown apart (NotManagedLabel) and only decides
+ * whether this tool may change or delete it.
  * - not-set-up (grey): nothing of it exists.
  * - setting-up (blue, spinner): it is starting, or this page runs its setup.
  * - deleting (blue, spinner): it is being deleted.
@@ -15,9 +18,9 @@ import { isTerminating, terminalReason } from "./resourceRow";
  * - needs-attention (orange): it needs an action the tool offers (Repair,
  *   Migrate storage); the drawer says why.
  * - error (red): it cannot start without a change; the drawer says why.
- * - not-managed (outline, lock): it exists but this tool did not create it.
+ * - unknown (grey): its health is not reported.
  */
-export type EnvStatus = "not-set-up" | "setting-up" | "deleting" | "ready" | "needs-attention" | "error" | "not-managed";
+export type EnvStatus = "not-set-up" | "setting-up" | "deleting" | "ready" | "needs-attention" | "error" | "unknown";
 
 export interface EnvStatusOptions {
   /** An action from this page is changing it now. */
@@ -31,7 +34,6 @@ export function envStatus(state: ResourceState | undefined, { busy, attention }:
   if (busy) return busy;
   if (!state) return "not-set-up";
   if (isTerminating(state)) return "deleting";
-  if (state.managedByTool === false && (state.deployed || !!state.setupBlockedReason)) return "not-managed";
   if (attention) return "needs-attention";
   if (state.ready) return state.repairNeeded || state.warning ? "needs-attention" : "ready";
   if (!state.deployed) return "not-set-up";
@@ -46,7 +48,7 @@ const TEXT: Record<EnvStatus, string> = {
   ready: "Ready",
   "needs-attention": "Needs attention",
   error: "Error",
-  "not-managed": "Not managed by this tool",
+  unknown: "Unknown",
 };
 
 export const envStatusText = (status: EnvStatus) => TEXT[status];
@@ -66,10 +68,22 @@ export const EnvStatusLabel: React.FC<{ status: EnvStatus }> = ({ status }) => {
       return <StatusLabel status="warning">{TEXT[status]}</StatusLabel>;
     case "error":
       return <StatusLabel status="danger">{TEXT[status]}</StatusLabel>;
-    case "not-managed":
-      return <TagLabel icon={<LockIcon />}>{TEXT[status]}</TagLabel>;
+    case "unknown":
+      return <StatusLabel status="neutral">{TEXT[status]}</StatusLabel>;
   }
 };
+
+/**
+ * Something with the tool's name exists but this tool did not create it
+ * (the backend also says managedByTool false when nothing exists: that is
+ * not shown).
+ */
+export function notManaged(state: ResourceState | undefined): boolean {
+  return state?.managedByTool === false && (state.deployed || isTerminating(state) || !!state.setupBlockedReason);
+}
+
+/** Ownership, beside the status: an outline label, not a status color. */
+export const NotManagedLabel: React.FC = () => <TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel>;
 
 /** A resource that can be used: ready, whoever created it. */
 export function usable(state: ResourceState | undefined): boolean {

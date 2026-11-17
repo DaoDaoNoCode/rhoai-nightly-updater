@@ -699,6 +699,11 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		}
 		if !d.managedByTool() {
 			unmanaged[d.Meta.Namespace] = true
+			foreign := pipelineServerState(d, dashURL)
+			foreign.ManagedByTool = false
+			foreign.DataPVCs = nil
+			foreign.TeardownBlockedReason = "This pipeline server was not created by this tool, so the tool will not delete it."
+			status.UnmanagedPipelineServers = append(status.UnmanagedPipelineServers, foreign)
 			continue
 		}
 		status.PipelineServers = append(status.PipelineServers, pipelineServerState(d, dashURL))
@@ -707,6 +712,13 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		status.UnmanagedPipelineProjects = append(status.UnmanagedPipelineProjects, ns)
 	}
 	sort.Strings(status.UnmanagedPipelineProjects)
+	sort.Slice(status.UnmanagedPipelineServers, func(i, j int) bool {
+		a, b := status.UnmanagedPipelineServers[i], status.UnmanagedPipelineServers[j]
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
 	sort.Slice(status.PipelineServers, func(i, j int) bool {
 		return status.PipelineServers[i].Namespace < status.PipelineServers[j].Namespace
 	})

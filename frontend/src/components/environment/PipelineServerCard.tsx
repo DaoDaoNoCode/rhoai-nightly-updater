@@ -27,7 +27,7 @@ import { S3_ENDPOINT } from "./StorageCard";
 /** What the pipeline server card of one project and its details need. */
 export interface PipelineServerProps extends CardActionProps {
   project: string;
-  /** The project's pipeline server, if it has one. */
+  /** The project's pipeline server, if it has one: this tool's, or (managedByTool false) someone else's. */
   server?: ResourceState;
   /** The project has a pipeline server this tool did not create. */
   unmanaged: boolean;
@@ -45,7 +45,8 @@ export interface PipelineServerProps extends CardActionProps {
 export function pipelineServerStatus({ server, unmanaged, resAction, actionProject, project }: Pick<PipelineServerProps, "server" | "unmanaged" | "resAction" | "actionProject" | "project">): EnvStatus {
   const mine = actionProject === project;
   const busy = mine && resAction === "setup-pipeline-server" ? "setting-up" : mine && resAction === "teardown-pipeline-server" ? "deleting" : null;
-  if (!server && unmanaged && !busy) return "not-managed";
+  // Someone else's server whose health is not reported (an older backend).
+  if (!server && unmanaged && !busy) return "unknown";
   return envStatus(server, { busy });
 }
 
@@ -66,9 +67,9 @@ export const PipelineServerCard: React.FC<PipelineServerProps & { onDetails: (op
     ? <>Needs: <Button variant="link" isInline onClick={onShowStorage}>Storage</Button> on the Cluster tab.</>
     : undefined;
   return (
-    <ResourceCard id="pipeline-server" title="Pipeline server" status={pipelineServerStatus(props)} action={action} needs={needs} onDetails={onDetails} detailsOpen={detailsOpen}
-      purpose={unmanaged && !server
-        ? "This project has a pipeline server this tool did not create; the tool leaves it alone."
+    <ResourceCard id="pipeline-server" title="Pipeline server" status={pipelineServerStatus(props)} unmanaged={unmanaged} action={action} needs={needs} onDetails={onDetails} detailsOpen={detailsOpen}
+      purpose={unmanaged
+        ? "This project's pipeline server was not created by this tool; the tool leaves it alone."
         : "Runs data science pipelines in this project and keeps their artifacts in the S3 storage."} />
   );
 };
@@ -79,7 +80,7 @@ export const PipelineServerDetails: React.FC<PipelineServerProps> = (props) => {
   const old = onOldStorage(server, legacy);
   return (
     <DetailsStack>
-      {unmanaged && !server && (
+      {unmanaged && (
         <DetailsAlert variant="info" title="Not created by this tool">
           Project <code>{project}</code> has a pipeline server this tool did not create, so it does not set up another one or change it.
         </DetailsAlert>
@@ -101,7 +102,8 @@ export const PipelineServerDetails: React.FC<PipelineServerProps> = (props) => {
             <DescriptionListDescription>DataSciencePipelinesApplication <code>{server.name}</code></DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {server && (
+        {/* Only for this tool's servers: someone else's may use any storage (the status does not read it). */}
+        {server && server.managedByTool !== false && (
           <DescriptionListGroup>
             <DescriptionListTerm>Storage</DescriptionListTerm>
             <DescriptionListDescription><code>{old && legacy ? `http://${legacy.endpoint}` : S3_ENDPOINT}</code>, bucket <code>pipelines</code></DescriptionListDescription>

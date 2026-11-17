@@ -599,6 +599,10 @@ type ResourcesStatus struct {
 	// UnmanagedPipelineProjects lists visible projects that already have a
 	// pipeline server this tool did not create. Setup is refused there.
 	UnmanagedPipelineProjects []string `json:"unmanagedPipelineProjects,omitempty"`
+	// UnmanagedPipelineServers is the health of those pipeline servers
+	// (ManagedByTool false): whether a server works does not depend on who
+	// created it. The tool never changes or deletes them.
+	UnmanagedPipelineServers []ResourceState `json:"unmanagedPipelineServers,omitempty"`
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`

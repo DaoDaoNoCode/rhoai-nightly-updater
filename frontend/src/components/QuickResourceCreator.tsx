@@ -47,7 +47,7 @@ import { PageLoading } from "./PageStates";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { type ConfirmSpec, type Pending, isTerminating, terminalReason } from "./environment/resourceRow";
 import { DETAILS_TITLE_ID, DetailsPanel } from "./environment/ResourceCard";
-import { envStatusText } from "./environment/resourceStatus";
+import { envStatusText, notManaged } from "./environment/resourceStatus";
 import { StorageCard, StorageDetails, storageConfirm, storageNotReadyReason, storageStatus, type StorageProps } from "./environment/StorageCard";
 import { PipelineServerCard, PipelineServerDetails, pipelineServerConfirm, pipelineServerStatus, type PipelineServerProps } from "./environment/PipelineServerCard";
 import { MLflowCard, MLflowDetails, mlflowConfirm, mlflowStatus, type MLflowProps } from "./environment/MLflowCard";
@@ -289,7 +289,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   };
   const mlflowProps: MLflowProps = { ...actionProps, mlflow };
   const storageReason = storageNotReadyReason(minio, legacy, migrating);
-  const serverIn = (ns: string) => pipelineServers.find((ps) => ps.namespace === ns);
+  // This tool's pipeline server in a project, else someone else's (its health, never changed here).
+  const serverIn = (ns: string) => pipelineServers.find((ps) => ps.namespace === ns) ?? (resStatus?.unmanagedPipelineServers ?? []).find((ps) => ps.namespace === ns);
   const pipelineProps = (ns: string): PipelineServerProps => ({
     ...actionProps, project: ns, server: serverIn(ns), unmanaged: unmanagedProjects.has(ns),
     storageReason, storageReady: !!minio?.ready, legacy, actionProject,
@@ -300,7 +301,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const projectNames = [...new Set([...(projectList ?? []), ...pipelineServers.map((ps) => ps.namespace ?? "").filter(Boolean)])].sort();
   const projectOptions: ProjectOption[] = projectNames.map((name) => {
     const status = pipelineServerStatus({ server: serverIn(name), unmanaged: unmanagedProjects.has(name), resAction, actionProject, project: name });
-    return { name, description: status === "not-set-up" ? undefined : `Pipeline server: ${envStatusText(status)}` };
+    const foreign = unmanagedProjects.has(name) && !pipelineServers.some((ps) => ps.namespace === name);
+    return { name, description: status === "not-set-up" && !foreign ? undefined : `Pipeline server: ${envStatusText(status)}${foreign ? " (not managed by this tool)" : ""}` };
   });
   const projectKnown = !project || projectList === null || projectNames.includes(project);
 
@@ -310,20 +312,23 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const psProps = project ? pipelineProps(project) : null;
   const psStatus = psProps ? pipelineServerStatus(psProps) : "not-set-up";
   const mStatus = mlflowStatus(mlflowProps);
+  const storageCanSetUp = sStatus === "not-set-up" && !legacy && !minio?.setupBlockedReason;
   const goals: Goal[] = [
     {
       id: "pipelines", title: "Run a data science pipeline", projectScoped: true,
       description: "Pipelines need the cluster's S3 storage and a pipeline server in the project.",
       steps: [
-        { id: "storage", title: "Storage", noun: "the storage", scope: "Cluster", status: sStatus, canSetUp: sStatus === "not-set-up" && !legacy && !minio?.setupBlockedReason, show: showOn("storage") },
-        { id: "pipeline-server", title: "Pipeline server", noun: "the pipeline server", scope: project ? `Project ${project}` : "Project", status: psStatus, canSetUp: psStatus === "not-set-up", show: showOn("pipeline-server") },
+        { id: "storage", title: "Storage", noun: "the storage", scope: "Cluster", status: sStatus, unmanaged: notManaged(minio), canSetUp: storageCanSetUp, show: showOn("storage") },
+        // Set up only on storage this run sets up or that is ready for it (storageNotReadyReason).
+        { id: "pipeline-server", title: "Pipeline server", noun: "the pipeline server", scope: project ? `Project ${project}` : "Project", status: psStatus,
+          unmanaged: !!psProps?.unmanaged, canSetUp: psStatus === "not-set-up" && !psProps?.unmanaged && (storageReason === null || storageCanSetUp), show: showOn("pipeline-server") },
       ],
       open: psProps?.server?.ready && psProps.server.uiRoute ? { label: "Open pipelines", href: psProps.server.uiRoute } : undefined,
     },
     {
       id: "mlflow", title: "Track experiments with MLflow", projectScoped: false,
       description: "Log runs, metrics and models to an MLflow server on the cluster.",
-      steps: [{ id: "mlflow", title: "MLflow", noun: "MLflow", scope: "Cluster", status: mStatus, canSetUp: mStatus === "not-set-up" && !mlflow?.setupBlockedReason, show: showOn("mlflow") }],
+      steps: [{ id: "mlflow", title: "MLflow", noun: "MLflow", scope: "Cluster", status: mStatus, unmanaged: notManaged(mlflow), canSetUp: mStatus === "not-set-up" && !mlflow?.setupBlockedReason, show: showOn("mlflow") }],
       open: mlflow?.ready && mlflow.uiRoute ? { label: "Open MLflow", href: mlflow.uiRoute } : undefined,
     },
   ];
@@ -349,11 +354,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   );
 
   const panel = shownDetails === "storage" ? (
-    <DetailsPanel title="Storage" status={sStatus} onClose={closeDetails}><StorageDetails {...storageProps} /></DetailsPanel>
+    <DetailsPanel title="Storage" status={sStatus} unmanaged={notManaged(minio)} onClose={closeDetails}><StorageDetails {...storageProps} /></DetailsPanel>
   ) : shownDetails === "mlflow" ? (
-    <DetailsPanel title="MLflow" status={mStatus} onClose={closeDetails}><MLflowDetails {...mlflowProps} /></DetailsPanel>
+    <DetailsPanel title="MLflow" status={mStatus} unmanaged={notManaged(mlflow)} onClose={closeDetails}><MLflowDetails {...mlflowProps} /></DetailsPanel>
   ) : shownDetails === "pipeline-server" && psProps ? (
-    <DetailsPanel title={`Pipeline server in ${project}`} status={psStatus} onClose={closeDetails}><PipelineServerDetails {...psProps} /></DetailsPanel>
+    <DetailsPanel title={`Pipeline server in ${project}`} status={psStatus} unmanaged={psProps.unmanaged} onClose={closeDetails}><PipelineServerDetails {...psProps} /></DetailsPanel>
   ) : undefined;
 
   return (
