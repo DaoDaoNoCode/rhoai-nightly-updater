@@ -85,7 +85,7 @@ One tab per feature after an **Overview**, kept in the address so a link opens t
 1. The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
 2. The project picker (type to filter; each project says what it has).
 3. Each part shows its health, its actions and its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket and the admin UI user.
-4. The admin UI password is masked: the eye shows it and the copy button copies it. It is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
+4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket). The secret key is also the admin UI password (user `admin`). It is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
 5. **Open pipelines** (and **Open admin UI**). **What this creates** and **Tear down** are collapsed under the parts; Tear down is offered only for what this tool created.
 
 Storage an earlier version set up in namespace `minio` reads **Needs attention** with **Migrate storage**, which moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).

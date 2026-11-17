@@ -410,7 +410,7 @@ async (page) => {
           { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
           { at: page.getByRole("combobox"), n: 2, pos: "r" },
           { at: row(storage, "Endpoint"), n: 3, pos: "l" },
-          { at: storage.getByRole("button", { name: "Show password" }), n: 4, pos: "r" },
+          { at: storage.getByRole("button", { name: "Show the S3 secret key" }), n: 4, pos: "r" },
           { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 5, pos: "l" },
         ],
         pad: 24,

@@ -13,8 +13,8 @@ func TestS3AdminLogin(t *testing.T) {
 	t.Run("storage the tool set up", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
-		user, password, err := S3AdminLogin(c)
-		if err != nil || user != "admin" || password != "pass" {
+		user, accessKey, password, err := S3AdminLogin(c)
+		if err != nil || user != "admin" || accessKey != "seaweedfs-key" || password != "pass" {
 			t.Fatalf("S3AdminLogin = %q, %q, %v", user, password, err)
 		}
 		if n := len(f.mutations()); n != 0 {
@@ -24,7 +24,7 @@ func TestS3AdminLogin(t *testing.T) {
 
 	unavailable := func(t *testing.T, c *Client, want string) {
 		t.Helper()
-		_, password, err := S3AdminLogin(c)
+		_, _, password, err := S3AdminLogin(c)
 		var u *S3AdminLoginUnavailable
 		if !errors.As(err, &u) || !strings.Contains(u.Reason, want) || password != "" {
 			t.Fatalf("S3AdminLogin = %q, %v; want unavailable with %q", password, err, want)
@@ -71,7 +71,7 @@ func TestS3AdminLogin(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		f.fail["GET "+s3SecretPath] = 403
-		_, _, err := S3AdminLogin(c)
+		_, _, _, err := S3AdminLogin(c)
 		var u *S3AdminLoginUnavailable
 		if err == nil || errors.As(err, &u) || !IsK8sError(err, 403) {
 			t.Fatalf("err = %v; want the API error", err)

@@ -225,8 +225,8 @@ describe("S3 storage (names, login, kept namespace)", () => {
     expect(within(storage).getByText("Needs attention")).toBeInTheDocument();
     expect(within(storage).getByText(warning)).toBeInTheDocument();
     expect(storage).toHaveTextContent("http://seaweedfs-s3.seaweedfs.svc:8333");
-    expect(storage).toHaveTextContent("Admin UI useradmin");
-    expect(within(storage).getByLabelText("Password of admin")).toHaveAttribute("type", "password");
+    expect(storage).toHaveTextContent("Admin UI loginUser admin; the password is the S3 secret key.");
+    expect(within(storage).getByLabelText("S3 secret key")).toHaveAttribute("type", "password");
     expect(within(storage).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", "https://seaweedfs-admin.apps.example.com");
     expect(document.body).not.toHaveTextContent(/oc extract|minio/i);
   });
@@ -240,38 +240,60 @@ describe("S3 storage (names, login, kept namespace)", () => {
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
-    const field = within(storage).getByLabelText("Password of admin") as HTMLInputElement;
+    const field = within(storage).getByLabelText("S3 secret key") as HTMLInputElement;
     const fetched = () => api.calls.filter((c) => c.includes("admin-password")).length;
     expect(fetched()).toBe(0);
     expect(field.value).not.toBe("s3cret-value");
-    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Show password" })); });
+    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Show the S3 secret key" })); });
     await waitFor(() => expect(field.value).toBe("s3cret-value"));
     expect(field).toHaveAttribute("type", "text");
     expect(fetched()).toBe(1);
-    fireEvent.click(within(storage).getByRole("button", { name: "Hide password" }));
+    fireEvent.click(within(storage).getByRole("button", { name: "Hide the S3 secret key" }));
     expect(field.value).not.toBe("s3cret-value");
     expect(field).toHaveAttribute("type", "password");
-    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Copy password" })); });
-    expect(await within(storage).findByText("Copied the password of user admin.")).toBeInTheDocument();
+    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Copy the S3 secret key" })); });
+    expect(await within(storage).findByText("Copied the S3 secret key.")).toBeInTheDocument();
     expect(writes).toEqual(["s3cret-value"]);
     expect(fetched()).toBe(2);
-    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Show password" })); });
+    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Show the S3 secret key" })); });
     await waitFor(() => expect(document.body.innerHTML).toContain("s3cret-value"));
     fireEvent.click(screen.getByRole("tab", { name: "MLflow" }));
     await waitFor(() => expect(document.body.innerHTML).not.toContain("s3cret-value"));
+  });
+
+  it("item 5: the access key shows on demand, and the connection copies as environment variables", async () => {
+    const writes: string[] = [];
+    vi.stubGlobal("ClipboardItem", undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async (t: string) => { writes.push(t); }) }, configurable: true });
+    const api = setup(live({ minio: running, pipelineServers: [] }), {
+      "GET /api/resources/minio/admin-password": { user: "admin", accessKey: "AKEY", password: "s3cret-value" },
+    });
+    renderAt("/test-resources?tab=pipelines&project=fresh");
+    const storage = await part("S3 storage");
+    expect(storage).toHaveTextContent("us-east-1, path-style addressing");
+    expect(storage).toHaveTextContent("the password is the S3 secret key");
+    const key = within(storage).getByLabelText("S3 access key") as HTMLInputElement;
+    expect(key.value).not.toBe("AKEY");
+    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Show the S3 access key" })); });
+    await waitFor(() => expect(key.value).toBe("AKEY"));
+    await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Copy as environment variables" })); });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toContain("AWS_ACCESS_KEY_ID=AKEY\nAWS_SECRET_ACCESS_KEY=s3cret-value\n");
+    expect(document.body).not.toHaveTextContent("s3cret-value");
+    expect(api.calls.filter((c) => c.includes("admin-password"))).toHaveLength(2);
   });
 
   it("a reader is told why the password buttons are off, and nothing is read", async () => {
     const api = setup(live({ minio: running, pipelineServers: [] }));
     renderAt("/test-resources?tab=pipelines&project=fresh", { readBlocker: "Read-only access: changing the cluster through this tool requires the cluster-admin role." });
     const storage = await part("S3 storage");
-    const show = within(storage).getByRole("button", { name: "Show password" });
+    const show = within(storage).getByRole("button", { name: "Show the S3 secret key" });
     expect(show).toHaveAttribute("aria-disabled", "true");
-    expect(within(storage).getByRole("button", { name: "Copy password" })).toHaveAttribute("aria-disabled", "true");
+    expect(within(storage).getByRole("button", { name: "Copy the S3 secret key" })).toHaveAttribute("aria-disabled", "true");
     // A click does nothing. The tooltip with the reason is tested on
     // AdminPassword itself (environment.test.tsx).
     fireEvent.click(show);
-    fireEvent.click(within(storage).getByRole("button", { name: "Copy password" }));
+    fireEvent.click(within(storage).getByRole("button", { name: "Copy the S3 secret key" }));
     expect(api.calls.some((c) => c.includes("admin-password"))).toBe(false);
   });
 

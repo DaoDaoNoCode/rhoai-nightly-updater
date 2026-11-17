@@ -43,30 +43,33 @@ export async function copyFetchedText(fetchText: () => Promise<string>): Promise
 /** What a hidden password field shows: dots, not the password (it is not fetched until asked for). */
 const HIDDEN = "••••••••••";
 
+/** Which credential a field shows (the fields of GET /api/resources/minio/admin-password). */
+export type S3CredentialField = "accessKey" | "password";
+
 /**
- * The storage's admin UI password: masked, with PatternFly's password
- * pattern (a TextInputGroup with an eye toggle) and a copy button. It is
- * fetched from the server only to show or copy it, held only while shown,
- * and gone when hidden or when the page or tab closes (unmount). For a
- * user who cannot read it, both buttons say why.
+ * One of the storage's S3 keys, masked, with PatternFly's password pattern
+ * (a TextInputGroup with an eye toggle) and a copy button. It is fetched
+ * from the server only to show or copy it, held only while shown, and gone
+ * when hidden or when the page or tab closes (unmount). For a user who
+ * cannot read it, both buttons say why.
  */
-export const AdminPassword: React.FC<{ user: string; disabledReason: string | null }> = ({ user, disabledReason }) => {
-  const [password, setPassword] = useState<string | null>(null);
+export const S3SecretField: React.FC<{ id: string; field: S3CredentialField; label: string; disabledReason: string | null }> = ({ id, field, label, disabledReason }) => {
+  const [value, setValue] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
-  const fetchPassword = async () => (await getS3AdminLogin()).password;
+  const fetchValue = async () => (await getS3AdminLogin())[field];
 
   const toggle = async () => {
     setOutcome(null);
-    if (password !== null) {
-      setPassword(null);
+    if (value !== null) {
+      setValue(null);
       return;
     }
     setBusy(true);
     try {
-      setPassword(await fetchPassword());
+      setValue(await fetchValue());
     } catch (e) {
-      setOutcome({ ok: false, text: toApiError(e, "Could not read the password").message });
+      setOutcome({ ok: false, text: toApiError(e, `Could not read the ${label}`).message });
     } finally {
       setBusy(false);
     }
@@ -74,25 +77,24 @@ export const AdminPassword: React.FC<{ user: string; disabledReason: string | nu
   const copy = async () => {
     setOutcome(null);
     try {
-      await copyFetchedText(password !== null ? async () => password : fetchPassword);
-      setOutcome({ ok: true, text: `Copied the password of user ${user}.` });
+      await copyFetchedText(value !== null ? async () => value : fetchValue);
+      setOutcome({ ok: true, text: `Copied the ${label}.` });
     } catch (e) {
       setOutcome({ ok: false, text: toApiError(e, "Could not copy").message });
     }
   };
 
   return (
-    // The description list's "Password" term names the field; the input's
-    // own label says whose it is.
+    // The description list's term names the field; the input has its own label.
     <Form isWidthLimited onSubmit={(e) => e.preventDefault()}>
-      <FormGroup fieldId="storage-admin-password">
+      <FormGroup fieldId={id}>
         <TextInputGroup>
-          <TextInputGroupMain inputId="storage-admin-password" type={password !== null ? "text" : "password"} value={password ?? HIDDEN}
-            inputProps={{ readOnly: true }} aria-label={`Password of ${user}`} />
+          <TextInputGroupMain inputId={id} type={value !== null ? "text" : "password"} value={value ?? HIDDEN}
+            inputProps={{ readOnly: true }} aria-label={label} />
           <TextInputGroupUtilities>
-            <TooltipButton variant="plain" aria-label={password !== null ? "Hide password" : "Show password"} icon={password !== null ? <EyeSlashIcon /> : <EyeIcon />}
+            <TooltipButton variant="plain" aria-label={`${value !== null ? "Hide" : "Show"} the ${label}`} icon={value !== null ? <EyeSlashIcon /> : <EyeIcon />}
               isLoading={busy} disabledReason={disabledReason} onClick={() => void toggle()} />
-            <TooltipButton variant="plain" aria-label="Copy password" icon={<CopyIcon />} disabledReason={disabledReason} onClick={() => void copy()} />
+            <TooltipButton variant="plain" aria-label={`Copy the ${label}`} icon={<CopyIcon />} disabledReason={disabledReason} onClick={() => void copy()} />
           </TextInputGroupUtilities>
         </TextInputGroup>
         {/* The live region exists before its text, so the outcome is announced. */}
@@ -103,5 +105,41 @@ export const AdminPassword: React.FC<{ user: string; disabledReason: string | nu
         </FormHelperText>
       </FormGroup>
     </Form>
+  );
+};
+
+/**
+ * The storage's connection as environment variables, fetched on click and
+ * copied, never shown: what an S3 client (boto3, rclone, the AWS CLI)
+ * reads, plus AWS_S3_BUCKET as the dashboard's data connections name it.
+ */
+export function s3EnvText(endpoint: string, keys: { accessKey: string; password: string }): string {
+  return [
+    `AWS_ENDPOINT_URL=${endpoint}`,
+    `AWS_ACCESS_KEY_ID=${keys.accessKey}`,
+    `AWS_SECRET_ACCESS_KEY=${keys.password}`,
+    "AWS_DEFAULT_REGION=us-east-1",
+    "AWS_S3_BUCKET=pipelines",
+  ].join("\n") + "\n";
+}
+
+export const CopyS3EnvButton: React.FC<{ endpoint: string; disabledReason: string | null }> = ({ endpoint, disabledReason }) => {
+  const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
+  const copy = async () => {
+    setOutcome(null);
+    try {
+      await copyFetchedText(async () => s3EnvText(endpoint, await getS3AdminLogin()));
+      setOutcome({ ok: true, text: "Copied: AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, AWS_S3_BUCKET." });
+    } catch (e) {
+      setOutcome({ ok: false, text: toApiError(e, "Could not copy").message });
+    }
+  };
+  return (
+    <div>
+      <TooltipButton variant="secondary" icon={<CopyIcon />} disabledReason={disabledReason} onClick={() => void copy()}>Copy as environment variables</TooltipButton>
+      <HelperText isLiveRegion className={outcome ? "pf-v6-u-mt-sm" : undefined}>
+        {outcome && <HelperTextItem variant={outcome.ok ? "success" : "error"}>{outcome.text}</HelperTextItem>}
+      </HelperText>
+    </div>
   );
 };

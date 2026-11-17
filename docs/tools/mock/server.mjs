@@ -366,7 +366,7 @@ const routes = {
   "GET /api/resources/status": () => world.resources,
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   // Made up, like every value here.
-  "GET /api/resources/minio/admin-password": () => ({ user: "admin", password: "docs-mock-password" }),
+  "GET /api/resources/minio/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", password: "docs-mock-password" }),
   "GET /api/activity": () => world.status.activity ?? [],
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),

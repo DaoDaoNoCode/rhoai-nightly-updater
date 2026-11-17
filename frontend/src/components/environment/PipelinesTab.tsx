@@ -28,7 +28,7 @@ import {
   terminalReason,
 } from "./resourceRow";
 import { ActionRow, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction } from "./FeatureLayout";
-import { AdminPassword } from "./AdminLogin";
+import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { notManaged } from "./resourceStatus";
 import {
@@ -145,17 +145,33 @@ const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, re
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>Bucket</DescriptionListTerm>
-            <DescriptionListDescription><code>pipelines</code>, region <code>us-east-1</code>, path-style; keys in Secret <code>seaweedfs-s3-credentials</code></DescriptionListDescription>
+            <DescriptionListDescription><ImageRef image="pipelines" what="bucket name" truncate={false} /></DescriptionListDescription>
           </DescriptionListGroup>
-          {minio?.uiUser && !unmanaged && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Region</DescriptionListTerm>
+            <DescriptionListDescription><code>us-east-1</code>, path-style addressing</DescriptionListDescription>
+          </DescriptionListGroup>
+          {!unmanaged && (
             <>
               <DescriptionListGroup>
-                <DescriptionListTerm>Admin UI user</DescriptionListTerm>
-                <DescriptionListDescription><code>{minio.uiUser}</code></DescriptionListDescription>
+                <DescriptionListTerm>Access key</DescriptionListTerm>
+                <DescriptionListDescription><S3SecretField id="storage-access-key" field="accessKey" label="S3 access key" disabledReason={readReason} /></DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
-                <DescriptionListTerm>Password</DescriptionListTerm>
-                <DescriptionListDescription><AdminPassword user={minio.uiUser} disabledReason={readReason} /></DescriptionListDescription>
+                <DescriptionListTerm>Secret key</DescriptionListTerm>
+                <DescriptionListDescription>
+                  <S3SecretField id="storage-secret-key" field="password" label="S3 secret key" disabledReason={readReason} />
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              {minio?.uiUser && (
+                <DescriptionListGroup>
+                  <DescriptionListTerm>Admin UI login</DescriptionListTerm>
+                  <DescriptionListDescription>User <code>{minio.uiUser}</code>; the password is the S3 secret key.</DescriptionListDescription>
+                </DescriptionListGroup>
+              )}
+              <DescriptionListGroup>
+                <DescriptionListTerm>For a client</DescriptionListTerm>
+                <DescriptionListDescription><CopyS3EnvButton endpoint={S3_ENDPOINT} disabledReason={readReason} /></DescriptionListDescription>
               </DescriptionListGroup>
             </>
           )}

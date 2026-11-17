@@ -3,7 +3,7 @@ import { act, fireEvent, render, renderHook, screen } from "@testing-library/rea
 import type { ResourceState } from "../../types";
 import { envStatus, notManaged } from "./resourceStatus";
 import { useGoalRun } from "./useGoalRun";
-import { AdminPassword, copyFetchedText } from "./AdminLogin";
+import { S3SecretField, copyFetchedText, s3EnvText } from "./AdminLogin";
 import { storageNotReadyReason } from "./featureState";
 
 describe("status vocabulary", () => {
@@ -128,16 +128,23 @@ describe("useGoalRun", () => {
   });
 });
 
-describe("AdminPassword", () => {
+describe("S3SecretField", () => {
   it("for a user who cannot read it, both buttons say why and stay focusable", async () => {
-    render(<AdminPassword user="admin" disabledReason="Read-only access: changing the cluster through this tool requires the cluster-admin role." />);
-    const show = screen.getByRole("button", { name: "Show password" });
+    render(<S3SecretField id="k" field="password" label="S3 secret key" disabledReason="Read-only access: changing the cluster through this tool requires the cluster-admin role." />);
+    const show = screen.getByRole("button", { name: "Show the S3 secret key" });
     expect(show).toHaveAttribute("aria-disabled", "true");
     expect(show).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Copy the S3 secret key" })).toHaveAttribute("aria-disabled", "true");
     fireEvent.mouseEnter(show);
     expect((await screen.findByRole("tooltip")).textContent).toMatch(/cluster-admin/);
-    expect(screen.getByLabelText("Password of admin")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("S3 secret key")).toHaveAttribute("type", "password");
+  });
+});
+
+describe("s3EnvText", () => {
+  it("is what an S3 client reads, with the endpoint and both keys", () => {
+    expect(s3EnvText("http://seaweedfs-s3.seaweedfs.svc:8333", { accessKey: "AK", password: "SK" })).toBe(
+      "AWS_ENDPOINT_URL=http://seaweedfs-s3.seaweedfs.svc:8333\nAWS_ACCESS_KEY_ID=AK\nAWS_SECRET_ACCESS_KEY=SK\nAWS_DEFAULT_REGION=us-east-1\nAWS_S3_BUCKET=pipelines\n");
   });
 });
 

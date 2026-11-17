@@ -171,46 +171,47 @@ type S3AdminLoginUnavailable struct{ Reason string }
 
 func (e *S3AdminLoginUnavailable) Error() string { return e.Reason }
 
-// S3AdminLogin returns the SeaweedFS admin UI login: user s3AdminUser and
-// the S3 secret key, which setup passes to the server as the admin password
-// (WEED_ADMIN_PASSWORD, see s3Resources). It reads the storage's Secret on
+// S3AdminLogin returns the S3 storage's credentials: the admin UI user
+// s3AdminUser, the S3 access key, and the S3 secret key, which setup also
+// passes to the server as the admin UI password (WEED_ADMIN_PASSWORD, see
+// s3Resources). It reads the storage's Secret on
 // each call, so the password is never part of the status. It answers only
 // for storage this tool set up: the namespace carries the tool label and
-// the tool wrote the Secret. The caller must keep the password out of logs
+// the tool wrote the Secret. The caller must keep the keys out of logs
 // and caches.
-func S3AdminLogin(c *Client) (user, password string, err error) {
+func S3AdminLogin(c *Client) (user, accessKey, password string, err error) {
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	switch {
 	case !ns.Exists:
-		return "", "", &S3AdminLoginUnavailable{"The S3 storage is not set up."}
+		return "", "", "", &S3AdminLoginUnavailable{"The S3 storage is not set up."}
 	case !ns.Managed:
-		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Namespace '%s' was not created by this tool, so it does not read the password there.", s3Namespace)}
+		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Namespace '%s' was not created by this tool, so it does not read the password there.", s3Namespace)}
 	}
 	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
 	if IsK8sError(err, 404) {
-		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' does not exist in namespace '%s'. Repair re-creates it.", s3Secret, s3Namespace)}
+		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' does not exist in namespace '%s'. Repair re-creates it.", s3Secret, s3Namespace)}
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		return "", "", "", fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	var secret struct {
 		Metadata objectMeta        `json:"metadata"`
 		Data     map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &secret); err != nil {
-		return "", "", fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		return "", "", "", fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	if !storageObjectOwned(secret.Metadata) {
-		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' in namespace '%s' was not created by this tool, so it does not read it.", s3Secret, s3Namespace)}
+		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' in namespace '%s' was not created by this tool, so it does not read it.", s3Secret, s3Namespace)}
 	}
 	password = decodeBase64Field(secret.Data[s3SecretKeyField])
 	if password == "" {
-		return "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' has no %s. Repair writes it again.", s3Secret, s3SecretKeyField)}
+		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' has no %s. Repair writes it again.", s3Secret, s3SecretKeyField)}
 	}
-	return s3AdminUser, password, nil
+	return s3AdminUser, decodeBase64Field(secret.Data[s3AccessKeyField]), password, nil
 }
 
 // s3Credentials returns the keys a setup writes to the storage's Secret.
