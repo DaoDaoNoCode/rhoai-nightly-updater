@@ -5,13 +5,8 @@ import {
   ActionListItem,
   Alert,
   AlertActionLink,
+  Button,
   Content,
-  DataList,
-  DataListAction,
-  DataListCell,
-  DataListItem,
-  DataListItemCells,
-  DataListItemRow,
   Flex,
   FlexItem,
   HelperText,
@@ -20,10 +15,12 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
+import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
+import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import type { MLflowSampleAction, MLflowSampleId, SampleStatus } from "../../types";
 import { getMLflowSamples } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
-import { ExternalLink, type Pending } from "./resourceRow";
+import type { Pending } from "./resourceRow";
 import { EnvStatusLabel, NotManagedLabel } from "./resourceStatus";
 import { TabSection } from "./FeatureLayout";
 import type { FeatureState } from "./featureState";
@@ -46,47 +43,40 @@ const SampleRow: React.FC<{
   const info = SAMPLE_INFO[sample.id];
   const label = sampleLabel(sample, op);
   const note = sampleNote(sample);
-  const titleId = `mlflow-sample-${sample.id}`;
+  const name = info?.name ?? sample.name;
   // Remove is never offered for the demo (the server has no right to delete it); its note says how.
   const actions = (["add", "regenerate", "remove"] as MLflowSampleAction[]).filter((a) => sample.actions.includes(a));
   return (
-    <DataListItem aria-labelledby={titleId}>
-      <DataListItemRow>
-        <DataListItemCells dataListCells={[
-          <DataListCell key="sample" width={3}>
-            <Stack>
-              <StackItem><strong id={titleId}>{info?.name ?? sample.name}</strong></StackItem>
-              <StackItem><Content component="small">{info?.value}</Content></StackItem>
-              {note && (
-                <StackItem className="pf-v6-u-mt-xs">
-                  <HelperText><HelperTextItem variant={sample.state === "partial" ? "warning" : "default"}>{note}</HelperTextItem></HelperText>
-                </StackItem>
-              )}
-            </Stack>
-          </DataListCell>,
-          <DataListCell key="state" width={1}>
-            {label ? <EnvStatusLabel status={label.status} text={label.text} /> : <NotManagedLabel />}
-          </DataListCell>,
-        ]} />
-        {(actions.length > 0 || sample.link) && (
-          <DataListAction id={`${titleId}-actions`} aria-labelledby={`${titleId} ${titleId}-actions`} aria-label={`${info?.name ?? sample.name} actions`}>
-            <ActionList>
-              <ActionListGroup>
-                {actions.map((a) => (
-                  <ActionListItem key={a}>
-                    <TooltipButton variant="secondary" isDanger={a === "remove"} onClick={() => onAction(a, sample.id)} disabledReason={reason}
-                      aria-describedby={reason ? reasonId : undefined} aria-label={`${ACTION_LABEL[a]} ${(info?.name ?? sample.name).toLowerCase()}`}>
-                      {ACTION_LABEL[a]}
-                    </TooltipButton>
-                  </ActionListItem>
-                ))}
-                {sample.link && <ActionListItem><ExternalLink href={sample.link}>Open in MLflow</ExternalLink></ActionListItem>}
-              </ActionListGroup>
-            </ActionList>
-          </DataListAction>
+    <Tr>
+      <Td dataLabel="Sample">
+        <Stack>
+          <StackItem><strong>{name}</strong></StackItem>
+          <StackItem>
+            <Content component="small">
+              {info?.value}
+              {sample.link && <>{" "}<Button variant="link" isInline component="a" href={sample.link} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">Open in MLflow</Button></>}
+            </Content>
+          </StackItem>
+          {note && <StackItem className="pf-v6-u-mt-xs"><Content component="small">{note}</Content></StackItem>}
+        </Stack>
+      </Td>
+      <Td dataLabel="State">{label ? <EnvStatusLabel status={label.status} text={label.text} /> : <NotManagedLabel />}</Td>
+      {/* Actions in a table cell are inline links, as PatternFly puts them there: they sit on the row's text line. */}
+      <Td dataLabel="Actions" modifier="fitContent">
+        {actions.length > 0 && (
+          <Flex gap={{ default: "gapMd" }} flexWrap={{ default: "nowrap" }}>
+            {actions.map((a) => (
+              <FlexItem key={a}>
+                <TooltipButton variant="link" isInline isDanger={a === "remove"} onClick={() => onAction(a, sample.id)} disabledReason={reason}
+                  aria-describedby={reason ? reasonId : undefined} aria-label={`${ACTION_LABEL[a]} ${name.toLowerCase()}`}>
+                  {ACTION_LABEL[a]}
+                </TooltipButton>
+              </FlexItem>
+            ))}
+          </Flex>
         )}
-      </DataListItemRow>
-    </DataListItem>
+      </Td>
+    </Tr>
   );
 };
 
@@ -207,9 +197,18 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
           </StackItem>
         )}
         <StackItem>
-          <DataList aria-label={`Sample data in ${project}`}>
-            {samples.map((s) => <SampleRow key={s.id} sample={s} op={opHere} reason={reason} reasonId={reasonId} onAction={(a, id) => run(a, [id])} />)}
-          </DataList>
+          <Table aria-label={`Sample data in ${project}`}>
+            <Thead>
+              <Tr>
+                <Th width={60}>Sample</Th>
+                <Th width={20}>State</Th>
+                <Th screenReaderText="Actions" />
+              </Tr>
+            </Thead>
+            <Tbody>
+              {samples.map((s) => <SampleRow key={s.id} sample={s} op={opHere} reason={reason} reasonId={reasonId} onAction={(a, id) => run(a, [id])} />)}
+            </Tbody>
+          </Table>
         </StackItem>
       </Stack>
     );

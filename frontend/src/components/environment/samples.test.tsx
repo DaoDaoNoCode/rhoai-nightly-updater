@@ -43,7 +43,7 @@ function renderAt(path: string, props: Partial<React.ComponentProps<typeof Quick
 
 const sse = (...events: object[]) => () => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 const samplesSection = () => screen.getByRole("region", { name: "Sample data" });
-const row = (name: string) => within(samplesSection()).getByText(name, { selector: "strong" }).closest("li") as HTMLElement;
+const row = (name: string) => within(samplesSection()).getByText(name, { selector: "strong" }).closest("tr") as HTMLElement;
 const calls = (api: { calls: string[] }, prefix: string) => api.calls.filter((c) => c.startsWith(prefix)).length;
 
 describe("sample words (samples.tsx)", () => {

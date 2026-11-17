@@ -576,6 +576,82 @@ export const mlflowStates = {
 
 export const projects = ["dev-project", "fraud-detection", "llm-eval"];
 
+// --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleStatus) ---
+// The names, messages and actions are the backend's (pkg/cluster samples_*.go).
+
+const SAMPLE_MARKER = "rhoai-nightly-updater.sample";
+export const SAMPLE_NAMES = {
+  "genai-demo": "Agent and prompt demo",
+  training: "Training experiment and registered model",
+  "mcp-server": "MCP server",
+  skill: "Agent skill",
+};
+export const SAMPLE_IDS = Object.keys(SAMPLE_NAMES);
+const DEMO_REMOVE_HINT = "The updater cannot remove the demo (it holds no right to delete MLflow data it did not name); remove it from the MLflow UI. Clean up leaves it in place.";
+const mlflowLink = (project, id) => `https://data-science-gateway.${APPS}/mlflow/#/experiments/${id}?workspace=${encodeURIComponent(project)}`;
+
+/** One MLflow sample of a project in the given state, as GetMLflowSamplesStatus reports it. */
+export function sampleStatus(project, id, state, extra = {}) {
+  const s = { id, name: SAMPLE_NAMES[id], state, actions: [] };
+  const foreign = { "genai-demo": "", training: "Experiment 'nightly-sample-training'", "mcp-server": "MCP server 'com.deepwiki/rhoai-nightly-sample'", skill: "Skill 'nightly-sample-mcp-builder'" }[id];
+  switch (state) {
+    case "absent":
+      s.actions = ["add"];
+      break;
+    case "removed":
+      s.actions = ["add"];
+      s.message = id === "genai-demo" ? "Removed in MLflow: Add restores the experiment and generates every feature again." : "Removed: the experiment is in MLflow's deleted view. Add restores it.";
+      break;
+    case "present":
+      if (id === "genai-demo") { s.actions = ["regenerate"]; s.message = DEMO_REMOVE_HINT; s.link = mlflowLink(project, 4); }
+      else s.actions = ["remove"];
+      if (id === "training") s.link = mlflowLink(project, 7);
+      if (id === "mcp-server") s.message = "Points at https://mcp.deepwiki.com/mcp; the playground needs internet access to call it.";
+      if (id === "skill") s.message = "Registers https://github.com/anthropics/skills (skills/mcp-builder at e4bb5d960d87); the dashboard's Skills page needs the skillRegistry feature flag.";
+      break;
+    case "partial":
+      if (id === "genai-demo") { s.actions = ["regenerate"]; s.missing = ["evaluation", "issues"]; s.message = "An earlier Add or Regenerate did not finish; Regenerate completes it."; s.link = mlflowLink(project, 4); }
+      else if (id === "training") { s.actions = ["add", "remove"]; s.missing = ["registered model"]; s.link = mlflowLink(project, 7); }
+      else if (id === "mcp-server") { s.actions = ["add", "remove"]; s.missing = ["endpoint"]; }
+      else { s.actions = ["add", "remove"]; s.missing = ["version"]; }
+      break;
+    case "foreign":
+      s.message = `${foreign} exists but was not created by this tool (it lacks the ${SAMPLE_MARKER} tag), so it is left unchanged.`;
+      break;
+    case "unsupported":
+      s.message = id === "skill" ? "This MLflow has no Skill Registry." : "This MLflow has no MCP Server Registry.";
+      break;
+    case "unknown":
+      s.message = "Cannot read the sample's state: MLflow answered 503 Service Unavailable.";
+      break;
+  }
+  return { ...s, ...extra };
+}
+
+/** The MLflow samples of a project: states maps a sample id to its state (absent when not named). */
+export const mlflowSamples = (project, states = {}) => ({
+  project, available: true, mlflowURL: `https://data-science-gateway.${APPS}/mlflow`,
+  samples: SAMPLE_IDS.map((id) => sampleStatus(project, id, states[id] || "absent")),
+});
+
+export const SAMPLE_PIPELINE_IMAGE = `registry.access.redhat.com/ubi9/ubi-minimal@${digest("ubi9-minimal")}`;
+const runsLink = (project) => `${DASHBOARD_URL}/develop-train/pipelines/runs/${project}/runs`;
+
+/** A run of the sample pipeline, started `minutes` before NOW. */
+export function sampleRun(project, state, minutes, extra = {}) {
+  const id = hex(`${project}-${state}-${minutes}`, 8) + "-" + hex(state, 4) + "-4" + hex(project, 3) + "-8" + hex(String(minutes), 3) + "-" + hex(project + state, 12);
+  return {
+    id, state, createdAt: ago(minutes), link: `${runsLink(project)}/${id}`,
+    ...(["SUCCEEDED", "FAILED", "CANCELED", "SKIPPED"].includes(state) ? { finishedAt: ago(Math.max(0, minutes - 2)) } : {}),
+    ...extra,
+  };
+}
+
+/** The sample pipeline of a project with this tool's pipeline server. */
+export const pipelineSample = (project, over = {}) => ({
+  project, available: true, server: "nightly-dspa", image: SAMPLE_PIPELINE_IMAGE, state: "absent", runs: 0, runsLink: runsLink(project), ...over,
+});
+
 // --- Versions and the update check ---------------------------------------------
 
 export const versionInfo = (overrides = {}) => ({
