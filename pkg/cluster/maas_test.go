@@ -308,7 +308,9 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 		"gateway":      {string(gw), `"values":["redhat-ai-gateway-infra","models-as-a-service","proj"]`},
 		// It keeps the inference gateway (live: a lone MaaS ref took the
 		// model off it, and its address and the playground failed).
-		"model": {string(model), `"refs":[{"name":"openshift-ai-inference","namespace":"openshift-ingress"},{"name":"maas-default-gateway","namespace":"openshift-ingress"}]`},
+		// MaaS gateway first: KServe's route update misses a parent removed
+		// from the end of the list (see setModelGatewayRef).
+		"model": {string(model), `"refs":[{"name":"maas-default-gateway","namespace":"openshift-ingress"},{"name":"openshift-ai-inference","namespace":"openshift-ingress"}]`},
 	} {
 		if !strings.Contains(pair[0], pair[1]) {
 			t.Fatalf("%s lacks %s: %s", what, pair[1], pair[0])

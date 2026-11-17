@@ -649,14 +649,23 @@ func setModelGatewayRef(c *Client, project, resourceVersion string, on bool) err
 		_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", data, url.Values{"fieldManager": {maasModelManager}})
 		return err
 	}
+	// The MaaS gateway first. KServe updates a model's HTTPRoute only when
+	// the expected parentRefs are not a prefix of the route's
+	// (router.go semanticHTTPRouteIsEqual: equality.Semantic.DeepDerivative,
+	// which compares a slice element by element up to the expected length;
+	// opendatahub kserve rhoai-3.6). With the MaaS gateway last, unpublishing
+	// leaves [inference gateway], a prefix of the route's [inference, MaaS],
+	// so the route kept the MaaS parent: live, the model then went not Ready
+	// once a new MaaS gateway refused the project. MaaS first, the remaining
+	// [inference gateway] is not a prefix, and KServe rewrites the route.
 	obj := map[string]interface{}{
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
 		"metadata":   map[string]interface{}{"name": "qwen25-05b-instruct", "namespace": project, "resourceVersion": resourceVersion},
 		"spec": map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{
 			"refs": []interface{}{
-				map[string]interface{}{"name": inferenceGatewayName, "namespace": inferenceGatewayNamespace},
 				map[string]interface{}{"name": maasGatewayName, "namespace": inferenceGatewayNamespace},
+				map[string]interface{}{"name": inferenceGatewayName, "namespace": inferenceGatewayNamespace},
 			},
 		}}},
 	}
