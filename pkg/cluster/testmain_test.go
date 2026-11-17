@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 )
 
 func TestMain(m *testing.M) {
@@ -25,6 +27,10 @@ func TestMain(m *testing.M) {
 	CSVSucceededSettle = 30 * time.Millisecond
 	CSVDeletionTimeout = 50 * time.Millisecond
 	CatalogImagePullGrace = 30 * time.Millisecond
+
+	// Every wait runs on a fake clock that moves when the code sleeps, so
+	// no test waits in real time (see useFakeClock for a fresh one).
+	clk = clocktest.NewAutoFake()
 
 	// Skip real Quay credential verification in tests.
 	// Individual tests override this to test rejection behavior.
