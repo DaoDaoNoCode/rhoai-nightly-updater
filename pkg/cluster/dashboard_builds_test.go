@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -41,10 +40,7 @@ func installDashboardBuildsFakes(t *testing.T, published ...string) (*dashboardT
 	g := newFakeGitHub()
 	g.compareRepos[upstreamRepo] = true
 	g.branches[upstreamRepo+":main"] = mainHead
-	server := httptest.NewServer(g)
-	t.Cleanup(server.Close)
-	u, _ := url.Parse(server.URL)
-	quayHTTPClient = &http.Client{Transport: splitTransport{quay: m, github: githubTransport{server: u}}, Timeout: 10 * time.Second}
+	quayHTTPClient = &http.Client{Transport: splitTransport{quay: m, github: githubTransport{github: g}}, Timeout: 10 * time.Second}
 	return m, g
 }
 
@@ -232,15 +228,13 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		closed["state"] = "closed"
 		g.prs[5123] = closed
 		g.compare[prHead+"..."+prHead] = "identical"
-		previous := dashboardPRHeadTTL
-		dashboardPRHeadTTL = time.Nanosecond // 0 would mean "for good"
-		t.Cleanup(func() { dashboardPRHeadTTL = previous })
+		cacheTime := fakeCacheClock(t, dashboardPRCache)
 		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}
 		if d := oneBuild(t, dashboardBuilds(context.Background(), images)).Divergence; d == nil || d.PRState != "closed" || d.Status != "identical" {
 			t.Fatalf("divergence=%+v", d)
 		}
 		newHead := strings.Repeat("e", 40)
-		time.Sleep(time.Millisecond)
+		cacheTime.Advance(dashboardPRHeadTTL)
 		g.mu.Lock()
 		g.prs[5123] = openPR(newHead)
 		g.compare[prHead+"..."+newHead] = "ahead"
@@ -387,24 +381,33 @@ func TestDashboardBuildsLabelProblems(t *testing.T) {
 		}
 	})
 	t.Run("registry-timeout", func(t *testing.T) {
+		// In a synctest bubble the container timeout passes, in fake time,
+		// only once nothing else can run: the other container is done by
+		// then, as it is when the registry answers it in time.
 		original := dashboardBuildContainerTimeout
-		dashboardBuildContainerTimeout = 50 * time.Millisecond
+		dashboardBuildContainerTimeout = 50 * time.Millisecond // before the registry read's own timeout
 		t.Cleanup(func() { dashboardBuildContainerTimeout = original })
-		m, _ := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable", "odh-mod-arch-gen-ai:odh-stable")
-		m.delay("odh-mod-arch-gen-ai", time.Second)
-		resp := dashboardBuilds(context.Background(), []types.DashboardDevImage{
-			runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI),
-			runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, DashboardFlavorRHOAI),
+		synctest.Test(t, func(t *testing.T) {
+			m, _ := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable", "odh-mod-arch-gen-ai:odh-stable")
+			m.stall("odh-mod-arch-gen-ai")
+			start := time.Now()
+			resp := dashboardBuilds(context.Background(), []types.DashboardDevImage{
+				runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI),
+				runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, DashboardFlavorRHOAI),
+			})
+			if d := time.Since(start); d != dashboardBuildContainerTimeout {
+				t.Fatalf("the builds took %s, want the container timeout %s", d, dashboardBuildContainerTimeout)
+			}
+			if len(resp.Builds) != 2 {
+				t.Fatalf("builds=%+v", resp.Builds)
+			}
+			if host := resp.Builds[0]; host.Commit == "" || host.Reason != "" {
+				t.Fatalf("the slow container held up the others: %+v", host)
+			}
+			if slow := resp.Builds[1]; slow.Reason != "registry_error" || slow.Message == "" || slow.Commit != "" {
+				t.Fatalf("slow container=%+v", slow)
+			}
 		})
-		if len(resp.Builds) != 2 {
-			t.Fatalf("builds=%+v", resp.Builds)
-		}
-		if host := resp.Builds[0]; host.Commit == "" || host.Reason != "" {
-			t.Fatalf("the slow container held up the others: %+v", host)
-		}
-		if slow := resp.Builds[1]; slow.Reason != "registry_error" || slow.Message == "" || slow.Commit != "" {
-			t.Fatalf("slow container=%+v", slow)
-		}
 	})
 }
 

@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -29,8 +28,9 @@ func installedCSVBody(almExamples string) string {
 	return string(b)
 }
 
-// componentsAPI serves the reads of GetComponents with a fixed per-request latency.
-func componentsAPI(t *testing.T, latency time.Duration, dscV2, dscV1 mockResponse, almExamples string) (*Client, *atomic.Int32) {
+// componentsAPI serves the reads of GetComponents in memory; with a gate,
+// every read waits at it.
+func componentsAPI(t *testing.T, gate *callGate, dscV2, dscV1 mockResponse, almExamples string) (*Client, *atomic.Int32) {
 	t.Helper()
 	var requests atomic.Int32
 	routes := map[string]mockResponse{
@@ -44,9 +44,11 @@ func componentsAPI(t *testing.T, latency time.Duration, dscV2, dscV1 mockRespons
 		namespacedPath("v1", "pods", "redhat-ods-applications", ""):                                                     {body: `{"items":[{"metadata":{"name":"rhods-dashboard-abc-1","labels":{"app":"rhods-dashboard","pod-template-hash":"abc"},"ownerReferences":[{"kind":"ReplicaSet","name":"rhods-dashboard-abc","controller":true}]},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true}]}}]}`},
 		"/apis/config.openshift.io/v1/consoles/cluster":                                                                 {body: `{"status":{"consoleURL":"https://console"}}`},
 	}
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		time.Sleep(latency)
+		if gate != nil {
+			gate.pass()
+		}
 		resp, ok := routes[r.URL.Path]
 		if !ok {
 			w.WriteHeader(404)
@@ -57,11 +59,10 @@ func componentsAPI(t *testing.T, latency time.Duration, dscV2, dscV1 mockRespons
 			w.WriteHeader(resp.statusCode)
 		}
 		_, _ = fmt.Fprint(w, resp.body)
-	}))
-	t.Cleanup(srv.Close)
+	})
 	consoleURLCache.Purge()
 	t.Cleanup(consoleURLCache.Purge)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, &requests
+	return &Client{baseURL: "https://api.test", httpClient: &http.Client{Transport: handlerTransport{api}}, ctx: context.Background()}, &requests
 }
 
 var notFoundResp = mockResponse{statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`}
@@ -82,7 +83,7 @@ func TestGetComponents_DSCStates(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			installFakeRegistry(t, newFakeRegistry())
-			c, _ := componentsAPI(t, 0, tc.v2, tc.v1, almExamplesJSON)
+			c, _ := componentsAPI(t, nil, tc.v2, tc.v1, almExamplesJSON)
 			resp, err := GetComponents(c, false)
 			if tc.wantErr != 0 {
 				if !IsK8sError(err, tc.wantErr) {
@@ -119,7 +120,7 @@ func TestGetComponents_DSCStates(t *testing.T) {
 
 func TestGetComponents_DeploymentsAndPodsTyped(t *testing.T) {
 	installFakeRegistry(t, newFakeRegistry())
-	c, _ := componentsAPI(t, 0, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
+	c, _ := componentsAPI(t, nil, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
 	resp, err := GetComponents(c, false)
 	if err != nil {
 		t.Fatal(err)
@@ -137,29 +138,32 @@ func TestGetComponents_DeploymentsAndPodsTyped(t *testing.T) {
 }
 
 func TestGetComponents_ReadsRunInParallel(t *testing.T) {
-	installFakeRegistry(t, newFakeRegistry())
-	const latency = 60 * time.Millisecond
-	dsc := mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}]}`}
-	c, requests := componentsAPI(t, latency, dsc, notFoundResp, almExamplesJSON)
-	start := time.Now()
-	if _, err := GetComponents(c, false); err != nil {
-		t.Fatal(err)
-	}
-	elapsed := time.Since(start)
-	// ~10 requests; the longest chain is DSC (1) || Subscription -> CSV (2), then the CRD (1).
-	if n := requests.Load(); n < 9 {
-		t.Fatalf("only %d requests", n)
-	}
-	if elapsed > 6*latency {
-		t.Fatalf("GetComponents took %v (> %v): reads are not parallel", elapsed, 6*latency)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		installFakeRegistry(t, newFakeRegistry())
+		dsc := mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}]}`}
+		gate := newCallGate()
+		c, requests := componentsAPI(t, gate, dsc, notFoundResp, almExamplesJSON)
+		var err error
+		// Each round lets through the reads that are in flight together.
+		rounds := gate.releaseUntilDone(func() { _, err = GetComponents(c, false) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		// ~10 requests; the longest chain is DSC (1) || Subscription -> CSV (2), then the CRD (1).
+		if n := requests.Load(); n < 9 {
+			t.Fatalf("only %d requests", n)
+		}
+		if rounds > 5 {
+			t.Fatalf("GetComponents read in %d rounds of %d requests: reads are not parallel", rounds, requests.Load())
+		}
+	})
 }
 
 func TestGetComponents_UsesCachedLabelsWithoutQuay(t *testing.T) {
 	f := newFakeRegistry()
 	installFakeRegistry(t, f)
 	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
-	c, _ := componentsAPI(t, 0, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
+	c, _ := componentsAPI(t, nil, mockResponse{body: `{"items":[]}`}, notFoundResp, "")
 	resp, err := GetComponents(c, false)
 	if err != nil {
 		t.Fatal(err)

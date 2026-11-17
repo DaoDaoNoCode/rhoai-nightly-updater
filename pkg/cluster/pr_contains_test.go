@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -48,9 +48,7 @@ type fakeGitHub struct {
 	calls        map[string]int
 	queries      []url.Values
 	auth         []string
-	inFlight     atomic.Int32
-	maxIn        atomic.Int32
-	delay        time.Duration
+	gate         *callGate // when set, every call waits at it
 }
 
 func newFakeGitHub() *fakeGitHub {
@@ -87,16 +85,8 @@ func (g *fakeGitHub) count(kind string) int {
 }
 
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	n := g.inFlight.Add(1)
-	defer g.inFlight.Add(-1)
-	for {
-		m := g.maxIn.Load()
-		if n <= m || g.maxIn.CompareAndSwap(m, n) {
-			break
-		}
-	}
-	if g.delay > 0 {
-		time.Sleep(g.delay)
+	if g.gate != nil {
+		g.gate.pass()
 	}
 	kind := "other"
 	switch {
@@ -202,7 +192,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // githubTransport sends api.github.com requests to the fake server. Requests
 // to any other host (quay.io) fail, and are counted when a counter is given.
 type githubTransport struct {
-	server *url.URL
+	github http.Handler // serves api.github.com in memory
 	other  *atomic.Int32
 	// otherURLs collects the URLs of the requests other counts.
 	otherURLs *sync.Map
@@ -218,9 +208,7 @@ func (t githubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 		return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
 	}
-	out := r.Clone(r.Context())
-	out.URL.Scheme, out.URL.Host = t.server.Scheme, t.server.Host
-	return http.DefaultTransport.RoundTrip(out)
+	return handlerTransport{t.github}.RoundTrip(r)
 }
 
 // installFakeGitHub routes GitHub to g and returns a counter of the registry
@@ -228,14 +216,11 @@ func (t githubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // from the caches, see seedBuild).
 func installFakeGitHub(t *testing.T, g *fakeGitHub) *atomic.Int32 {
 	t.Helper()
-	server := httptest.NewServer(g)
-	t.Cleanup(server.Close)
-	u, _ := url.Parse(server.URL)
 	resetRegistryCaches()
 	original := quayHTTPClient
 	registryReads := &atomic.Int32{}
 	registryURLs = &sync.Map{}
-	quayHTTPClient = &http.Client{Transport: githubTransport{server: u, other: registryReads, otherURLs: registryURLs}, Timeout: 10 * time.Second}
+	quayHTTPClient = &http.Client{Transport: githubTransport{github: g, other: registryReads, otherURLs: registryURLs}, Timeout: 10 * time.Second}
 	t.Cleanup(func() {
 		quayHTTPClient = original
 		resetRegistryCaches()
@@ -989,34 +974,42 @@ func TestFindBuildsContainingPR_RepositoryAllowlist(t *testing.T) {
 }
 
 func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
-	g := newFakeGitHub()
-	g.delay = 30 * time.Millisecond
-	installFakeGitHub(t, g)
 	t.Setenv("GITHUB_TOKEN", "ghp_test")
-	g.prs[9938] = mergedPR(mergeSHA)
-	var builds []prBuild
-	for i := 0; i < 12; i++ {
-		commit := fmt.Sprintf("%040d", i+1)
-		g.compare[mergeSHA+"..."+commit] = "ahead"
-		builds = append(builds, prBuild{image: seedBuild(t, 100+i, fmt.Sprintf("rhoai-3.%d", i), forkURL, commit)})
-	}
-	resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(builds...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, b := range resp.Builds {
-		if b.Result != "contains" {
-			t.Errorf("%s: %+v", b.Tag, b)
+	synctest.Test(t, func(t *testing.T) {
+		g := newFakeGitHub()
+		g.gate = newCallGate()
+		installFakeGitHub(t, g)
+		g.prs[9938] = mergedPR(mergeSHA)
+		var builds []prBuild
+		for i := 0; i < 12; i++ {
+			commit := fmt.Sprintf("%040d", i+1)
+			g.compare[mergeSHA+"..."+commit] = "ahead"
+			builds = append(builds, prBuild{image: seedBuild(t, 100+i, fmt.Sprintf("rhoai-3.%d", i), forkURL, commit)})
 		}
-	}
-	if m := g.maxIn.Load(); m > prConcurrency || m < 2 {
-		t.Errorf("max concurrent GitHub calls %d, want 2..%d", m, prConcurrency)
-	}
-	for _, a := range g.auth {
-		if a != "Bearer ghp_test" {
-			t.Errorf("Authorization %q", a)
+		var resp *types.PRContainsResponse
+		var err error
+		// The GitHub calls go through each time all that can run at once
+		// are waiting.
+		g.gate.releaseUntilDone(func() {
+			resp, err = findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(builds...))
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
+		for _, b := range resp.Builds {
+			if b.Result != "contains" {
+				t.Errorf("%s: %+v", b.Tag, b)
+			}
+		}
+		if _, m := g.gate.counts(); m != prConcurrency {
+			t.Errorf("max concurrent GitHub calls %d, want %d", m, prConcurrency)
+		}
+		for _, a := range g.auth {
+			if a != "Bearer ghp_test" {
+				t.Errorf("Authorization %q", a)
+			}
+		}
+	})
 }
 
 func TestFindBuildsContainingPR_Timeout(t *testing.T) {

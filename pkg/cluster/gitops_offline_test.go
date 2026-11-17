@@ -123,7 +123,7 @@ func TestGetComponentsGitOps(t *testing.T) {
 	noOutsideHosts(t)
 	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
 	dsc := mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}]}`}
-	c, _ := componentsAPI(t, 0, dsc, notFoundResp, "")
+	c, _ := componentsAPI(t, nil, dsc, notFoundResp, "")
 	resp, err := GetComponentsGitOps(c)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestGetComponentsGitOps(t *testing.T) {
 	if resp.DSCCompatibility == nil || !strings.Contains(resp.DSCCompatibility.DefaultsError, "the gitops profile does not read the GitHub sample") {
 		t.Fatalf("compatibility = %+v", resp.DSCCompatibility)
 	}
-	c, _ = componentsAPI(t, 0, dsc, notFoundResp, almExamplesJSON)
+	c, _ = componentsAPI(t, nil, dsc, notFoundResp, almExamplesJSON)
 	if resp, err := GetComponentsGitOps(c); err != nil || resp.DSCCompatibility == nil || resp.DSCCompatibility.DefaultsSource != "csv" {
 		t.Fatalf("alm-examples: %+v %v", resp, err)
 	}

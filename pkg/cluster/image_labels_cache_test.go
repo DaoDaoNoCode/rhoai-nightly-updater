@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -21,18 +22,17 @@ func pullSecretCountingClient(t *testing.T) (*Client, *atomic.Int32) {
 	cfg := `{"auths":{"quay.io/rhoai":{"auth":"` + exampleAuth("user:pass") + `"}}}`
 	secret := fmt.Sprintf(`{"data":{".dockerconfigjson":%q}}`, base64.StdEncoding.EncodeToString([]byte(cfg)))
 	var reads atomic.Int32
-	c, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"): {body: secret},
-	})
-	t.Cleanup(cleanup)
-	inner := c.httpClient.Transport
-	c.httpClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(r.URL.Path, "/secrets/additional-pull-secret") {
-			reads.Add(1)
+	// In memory, so the client also works in a synctest bubble.
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret") {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`))
+			return
 		}
-		return inner.RoundTrip(r)
+		reads.Add(1)
+		_, _ = w.Write([]byte(secret))
 	})
-	return c, &reads
+	return &Client{baseURL: "https://api.test", httpClient: &http.Client{Transport: handlerTransport{api}}, ctx: context.Background()}, &reads
 }
 
 func relatedImages(n int, prefix string) []types.RelatedImage {
@@ -84,24 +84,25 @@ func TestResolveRelatedImageLabels_OneSecretReadAndBatchedTokens(t *testing.T) {
 }
 
 func TestResolveRelatedImageLabels_ConcurrentIdenticalRequestsShareFetches(t *testing.T) {
-	f := newFakeRegistry()
-	f.latency = 20 * time.Millisecond
-	labelFixture(f, 10)
-	installFakeRegistry(t, f)
-	c, _ := pullSecretCountingClient(t)
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeRegistry()
+		// The registry answers only once all three requests are waiting.
+		f.gate = newCallGate()
+		labelFixture(f, 10)
+		installFakeRegistry(t, f)
+		c, _ := pullSecretCountingClient(t)
 
-	var wg sync.WaitGroup
-	for k := 0; k < 3; k++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ResolveRelatedImageLabels(context.Background(), c, relatedImages(10, "dup"))
-		}()
-	}
-	wg.Wait()
-	if n := f.count("quay-blob"); n != 10 {
-		t.Fatalf("blob fetches %d, want 10 for 3 concurrent identical requests", n)
-	}
+		f.gate.releaseUntilDone(func() {
+			var wg sync.WaitGroup
+			for k := 0; k < 3; k++ {
+				wg.Go(func() { ResolveRelatedImageLabels(context.Background(), c, relatedImages(10, "dup")) })
+			}
+			wg.Wait()
+		})
+		if n := f.count("quay-blob"); n != 10 {
+			t.Fatalf("blob fetches %d, want 10 for 3 concurrent identical requests", n)
+		}
+	})
 }
 
 func TestImageLabels_NoLabelsIsCachedBrieflyErrorsAreNot(t *testing.T) {

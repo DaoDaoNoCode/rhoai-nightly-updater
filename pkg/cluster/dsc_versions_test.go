@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -226,9 +225,9 @@ func TestClientReturns429WithoutWaitingForRetryAfter(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-	start := time.Now()
+	start := clk.Now()
 	_, status, err := c.get("/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters")
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := clk.Since(start); elapsed != 0 {
 		t.Fatalf("waited %s", elapsed)
 	}
 	if status != 429 || calls != 1 || !isConversionWebhookError(err) {

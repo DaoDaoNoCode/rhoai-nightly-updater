@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -84,6 +85,10 @@ func TestLRUConcurrentUse(t *testing.T) {
 }
 
 func TestFlightGroupCollapsesConcurrentCalls(t *testing.T) {
+	synctest.Test(t, flightGroupCollapsesConcurrentCalls)
+}
+
+func flightGroupCollapsesConcurrentCalls(t *testing.T) {
 	var g flightGroup[int]
 	var calls atomic.Int32
 	release := make(chan struct{})
@@ -104,7 +109,7 @@ func TestFlightGroupCollapsesConcurrentCalls(t *testing.T) {
 			results[i] = v
 		}(i)
 	}
-	time.Sleep(50 * time.Millisecond)
+	synctest.Wait() // every caller is in Do: one runs fn, the rest wait for it
 	close(release)
 	wg.Wait()
 	if calls.Load() != 1 {
@@ -123,6 +128,10 @@ func TestFlightGroupCollapsesConcurrentCalls(t *testing.T) {
 }
 
 func TestFlightGroupWaiterRetriesWhenLeaderCanceled(t *testing.T) {
+	synctest.Test(t, flightGroupWaiterRetriesWhenLeaderCanceled)
+}
+
+func flightGroupWaiterRetriesWhenLeaderCanceled(t *testing.T) {
 	var g flightGroup[string]
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	started := make(chan struct{})
@@ -144,7 +153,7 @@ func TestFlightGroupWaiterRetriesWhenLeaderCanceled(t *testing.T) {
 		}
 		waiter <- v
 	}()
-	time.Sleep(20 * time.Millisecond)
+	synctest.Wait() // the waiter waits for the leader's call
 	cancelLeader()
 	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("leader err %v", err)
@@ -155,13 +164,18 @@ func TestFlightGroupWaiterRetriesWhenLeaderCanceled(t *testing.T) {
 }
 
 func TestFlightGroupWaiterHonorsOwnContext(t *testing.T) {
+	synctest.Test(t, flightGroupWaiterHonorsOwnContext)
+}
+
+func flightGroupWaiterHonorsOwnContext(t *testing.T) {
 	var g flightGroup[int]
 	block := make(chan struct{})
 	defer close(block)
 	go func() {
 		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) { <-block; return 1, nil })
 	}()
-	time.Sleep(10 * time.Millisecond)
+	synctest.Wait() // the leader runs fn
+	// In the bubble the 20ms deadline passes in fake time.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, err, shared := g.Do(ctx, "k", func(context.Context) (int, error) { return 2, nil })

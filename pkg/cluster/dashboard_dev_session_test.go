@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -49,7 +48,7 @@ type dashboardTagMock struct {
 	manifests map[string]bool              // every digest ever published: a manifest outlives its tags
 	labels    map[string]map[string]string // digest -> config labels (none: a config without labels)
 	heads     map[string]int               // HEAD requests per "repo:tag"
-	delays    map[string]time.Duration     // repo -> latency of every request
+	stalled   map[string]bool              // repos whose requests are never answered
 }
 
 // mockDashboardTags publishes exactly the given "repo:tag" builds (repo
@@ -60,7 +59,7 @@ type dashboardTagMock struct {
 // the returned mock before deploying.
 func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 	t.Helper()
-	m := &dashboardTagMock{digests: map[string]string{}, manifests: map[string]bool{}, labels: map[string]map[string]string{}, heads: map[string]int{}, delays: map[string]time.Duration{}}
+	m := &dashboardTagMock{digests: map[string]string{}, manifests: map[string]bool{}, labels: map[string]map[string]string{}, heads: map[string]int{}, stalled: map[string]bool{}}
 	for _, key := range published {
 		digest := fixtureDigest(key)
 		m.digests[key] = digest
@@ -84,19 +83,16 @@ func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 
 func (m *dashboardTagMock) RoundTrip(r *http.Request) (*http.Response, error) {
 	m.mu.Lock()
-	var wait time.Duration
-	for repo, d := range m.delays {
+	stalled := false
+	for repo := range m.stalled {
 		if strings.HasPrefix(r.URL.Path, "/v2/opendatahub/"+repo+"/") {
-			wait = d
+			stalled = true
 		}
 	}
 	m.mu.Unlock()
-	if wait > 0 {
-		select {
-		case <-time.After(wait):
-		case <-r.Context().Done():
-			return nil, r.Context().Err()
-		}
+	if stalled {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -159,11 +155,11 @@ func (m *dashboardTagMock) republish(key, digest string) {
 	m.manifests[digest] = true
 }
 
-// delay makes every request for a repository take d.
-func (m *dashboardTagMock) delay(repo string, d time.Duration) {
+// stall makes the requests for a repository wait until the client gives up.
+func (m *dashboardTagMock) stall(repo string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.delays[repo] = d
+	m.stalled[repo] = true
 }
 
 // setLabels replaces the labels of a digest (nil: a config without labels).
