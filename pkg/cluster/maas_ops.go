@@ -133,6 +133,14 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("Gateway", ""), err, templateHint(err)), errorCodeFromK8sErr(err)
 	}
 	plan.current["Gateway"], plan.found["Gateway"] = meta, ok
+	cm, cmOK, err := readObjectMeta(c, maasObjectPath("ConfigMap", ""))
+	if err != nil {
+		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("ConfigMap", ""), err, templateHint(err)), errorCodeFromK8sErr(err)
+	}
+	if cmOK && !toolOwned(cm) {
+		return nil, fmt.Sprintf("%s exists and was not created by this tool. Nothing was changed.", maasDesc("ConfigMap", "")), "not_managed"
+	}
+	plan.current["ConfigMap"], plan.found["ConfigMap"] = cm, cmOK
 	if ok && meta.terminating() {
 		return nil, fmt.Sprintf("%s is still being deleted. Wait until it is gone, then try again.", maasDesc("Gateway", "")), "terminating"
 	}
@@ -187,10 +195,14 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 			m.logs = append(m.logs, "OK: GatewayClass "+maasGatewayClass+" created")
 		}
 	}
-	for _, kind := range []string{"Gateway"} {
+	for _, kind := range []string{"ConfigMap", "Gateway"} {
 		k := kind
 		read := func() (objectMeta, bool, error) { return readObjectMeta(m.c, maasObjectPath(k, "")) }
-		action, meta, found, err := ensureToolObject(m.c, maasDesc(kind, ""), maasObjectPath(kind, ""), maasCreatePath(kind, ""), plan.objects[kind], plan.current[kind], plan.found[kind], read, gatewayOwned, dryRun)
+		owned := gatewayOwned
+		if kind == "ConfigMap" {
+			owned = toolOwned
+		}
+		action, meta, found, err := ensureToolObject(m.c, maasDesc(kind, ""), maasObjectPath(kind, ""), maasCreatePath(kind, ""), plan.objects[kind], plan.current[kind], plan.found[kind], read, owned, dryRun)
 		plan.current[kind], plan.found[kind] = meta, found
 		if err != nil {
 			if dryRun {
@@ -436,7 +448,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	}
 	var objs []obj
 	owned := 0
-	for _, kind := range []string{"Gateway", "Secret", "Cluster"} {
+	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster"} {
 		meta, found, err := readObjectMeta(c, maasObjectPath(kind, infra))
 		if err != nil && (kind != "Cluster" || !IsK8sError(err, 404)) {
 			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), errorCodeFromK8sErr(err), "read failed")
@@ -516,11 +528,14 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		return true, nil
 	}
 	var kept []string
-	if _, res := del("gateway", objs[0]); res != nil {
-		return res, nil
+	// The Gateway, then its options ConfigMap.
+	for _, o := range objs[:2] {
+		if _, res := del("gateway", o); res != nil {
+			return res, nil
+		}
 	}
 	m.step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer. GatewayClass "+maasGatewayClass+" stays: it is OpenShift's shared class for gateways and costs nothing on its own.")
-	for _, o := range objs[1:] {
+	for _, o := range objs[2:] {
 		if _, res := del("database", o); res != nil {
 			return res, nil
 		}

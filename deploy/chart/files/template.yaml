@@ -669,7 +669,7 @@ objects:
         verbs: ["create"]
       - apiGroups: [""]
         resources: ["configmaps"]
-        resourceNames: ["openshift-ai-inference-options"]
+        resourceNames: ["openshift-ai-inference-options", "maas-gateway-options"]
         verbs: ["get", "patch", "delete"]
       - apiGroups: ["ingress.operator.openshift.io"]
         resources: ["dnsrecords"]

@@ -57,10 +57,16 @@ import (
 // models-as-a-service (docs/samples/maas-system/free/maas).
 
 const (
-	maasAPIGroup          = "maas.opendatahub.io/v1alpha1"
-	maasGatewayName       = "maas-default-gateway"
-	maasGatewayClass      = "openshift-default"
-	maasHostPrefix        = "maas."
+	maasAPIGroup     = "maas.opendatahub.io/v1alpha1"
+	maasGatewayName  = "maas-default-gateway"
+	maasGatewayClass = "openshift-default"
+	maasHostPrefix   = "maas."
+	// The gateway's in-cluster listener: its Service's name
+	// (<gateway>-<class>, as for the inference gateway) with a service-ca
+	// certificate the options ConfigMap asks for (the docs' gateway-patterns
+	// names it maas-gw-service-tls).
+	maasGatewayOptions    = "maas-gateway-options"
+	maasGatewayServiceTLS = "maas-gw-service-tls"
 	maasDBCluster         = "maas-db"
 	maasDBAppSecret       = "maas-db-app"
 	maasDBConfigSecret    = "maas-db-config"
@@ -357,6 +363,8 @@ func maasObjectPath(kind, ns string) string {
 	switch kind {
 	case "Gateway":
 		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "maas-default-gateway")
+	case "ConfigMap":
+		return namespacedPath("v1", "configmaps", "openshift-ingress", "maas-gateway-options")
 	case "Cluster":
 		return namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, "maas-db")
 	case "Secret":
@@ -369,6 +377,8 @@ func maasCreatePath(kind, ns string) string {
 	switch kind {
 	case "Gateway":
 		return withToolFieldManager(namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", ""))
+	case "ConfigMap":
+		return withToolFieldManager(namespacedPath("v1", "configmaps", "openshift-ingress", ""))
 	case "Cluster":
 		return withToolFieldManager(namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, ""))
 	case "Secret":
@@ -383,6 +393,8 @@ func maasDesc(kind, ns string) string {
 		return "GatewayClass " + maasGatewayClass
 	case "Gateway":
 		return "Gateway " + inferenceGatewayNamespace + "/" + maasGatewayName
+	case "ConfigMap":
+		return "ConfigMap " + inferenceGatewayNamespace + "/" + maasGatewayOptions
 	case "Cluster":
 		return "CloudNativePG Cluster " + ns + "/" + maasDBCluster
 	case "Secret":
@@ -453,7 +465,18 @@ func maasGatewayNamespaces(infraNS string, published []string) []string {
 }
 
 // maasGatewayObjects are the gateway objects (setup-gateway.sh
-// loadbalancer mode), by kind.
+// loadbalancer mode), by kind, plus an in-cluster listener.
+//
+// The docs' gateway has one listener, maas.<domain>. Callers inside the
+// cluster that use the gateway's Service name find no listener for it:
+// live, the dashboard's playground proxy called a published model at
+// https://maas-default-gateway-openshift-default.openshift-ingress.svc...
+// and got "upstream unreachable". As RHOAI's inference gateway does, a
+// second listener answers that name with a service-ca certificate, which
+// the options ConfigMap asks for (Gateway API infrastructure.parametersRef;
+// the docs' ClusterIP pattern uses the same annotation and Secret name).
+// The external listener stays as the docs make it, so /v1/tenants keeps
+// its hostname.
 func maasGatewayObjects(domain, certificate string, namespaces []string) map[string]map[string]interface{} {
 	values := make([]interface{}, len(namespaces))
 	for i, n := range namespaces {
@@ -464,7 +487,30 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 	labels["app.kubernetes.io/instance"] = maasGatewayName
 	labels["app.kubernetes.io/component"] = "gateway"
 	labels["opendatahub.io/managed"] = "false"
+	allowed := map[string]interface{}{"namespaces": map[string]interface{}{
+		"from": "Selector",
+		"selector": map[string]interface{}{"matchExpressions": []interface{}{map[string]interface{}{
+			"key": "kubernetes.io/metadata.name", "operator": "In", "values": values,
+		}}},
+	}}
+	listener := func(name, host, cert string) map[string]interface{} {
+		return map[string]interface{}{
+			"name": name, "hostname": host, "port": 443, "protocol": "HTTPS", "allowedRoutes": allowed,
+			"tls": map[string]interface{}{
+				"mode":            "Terminate",
+				"certificateRefs": []interface{}{map[string]interface{}{"group": "", "kind": "Secret", "name": cert}},
+			},
+		}
+	}
 	return map[string]map[string]interface{}{
+		"ConfigMap": {
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": maasGatewayOptions, "namespace": inferenceGatewayNamespace, "labels": toolLabels()},
+			"data": map[string]interface{}{
+				"service": "metadata:\n  annotations:\n    service.beta.openshift.io/serving-cert-secret-name: " + maasGatewayServiceTLS + "\n",
+			},
+		},
 		"GatewayClass": {
 			"apiVersion": gatewayAPIVersion,
 			"kind":       "GatewayClass",
@@ -485,22 +531,13 @@ func maasGatewayObjects(domain, certificate string, namespaces []string) map[str
 			},
 			"spec": map[string]interface{}{
 				"gatewayClassName": maasGatewayClass,
-				"listeners": []interface{}{map[string]interface{}{
-					"name":     "https",
-					"hostname": maasHostPrefix + domain,
-					"port":     443,
-					"protocol": "HTTPS",
-					"allowedRoutes": map[string]interface{}{"namespaces": map[string]interface{}{
-						"from": "Selector",
-						"selector": map[string]interface{}{"matchExpressions": []interface{}{map[string]interface{}{
-							"key": "kubernetes.io/metadata.name", "operator": "In", "values": values,
-						}}},
-					}},
-					"tls": map[string]interface{}{
-						"mode":            "Terminate",
-						"certificateRefs": []interface{}{map[string]interface{}{"group": "", "kind": "Secret", "name": certificate}},
-					},
-				}},
+				"infrastructure": map[string]interface{}{
+					"parametersRef": map[string]interface{}{"group": "", "kind": "ConfigMap", "name": maasGatewayOptions},
+				},
+				"listeners": []interface{}{
+					listener("https", maasHostPrefix+domain, certificate),
+					listener("https-internal", maasGatewayName+"-"+maasGatewayClass+"."+inferenceGatewayNamespace+".svc.cluster.local", maasGatewayServiceTLS),
+				},
 			},
 		},
 	}

@@ -153,8 +153,18 @@ func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 			t.Fatalf("gateway lacks %s: %s", want, gw)
 		}
 	}
-	if strings.Contains(string(gw), "parametersRef") {
-		t.Fatal("loadbalancer mode has no parametersRef")
+	// The docs' external listener, plus an in-cluster one on the gateway's
+	// Service name with a service-ca certificate (live: the dashboard's
+	// playground proxy calls a published model there).
+	for _, want := range []string{`"parametersRef":{"group":"","kind":"ConfigMap","name":"maas-gateway-options"}`,
+		`"hostname":"maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local"`, `"name":"maas-gw-service-tls"`} {
+		if !strings.Contains(string(gw), want) {
+			t.Fatalf("gateway lacks %s: %s", want, gw)
+		}
+	}
+	opts, _ := json.Marshal(mc.f.get("/api/v1/namespaces/openshift-ingress/configmaps/maas-gateway-options"))
+	if !strings.Contains(string(opts), `service.beta.openshift.io/serving-cert-secret-name: maas-gw-service-tls`) {
+		t.Fatalf("options ConfigMap: %s", opts)
 	}
 	dsc, _ := json.Marshal(mc.f.get(tMaaSDSC))
 	if !strings.Contains(string(dsc), `"modelsAsAService":{"managementState":"Managed"}`) {
@@ -196,7 +206,7 @@ func TestMaaSTeardown_ReverseOrderRestoresTheDSCAndKeepsForeignObjects(t *testin
 	if !strings.Contains(string(dsc), `"modelsAsAService":{"managementState":"Removed"}`) {
 		t.Fatalf("dsc not restored: %s", dsc)
 	}
-	if mc.f.has(tMaaSGateway) || mc.f.has(tMaaSDB) || mc.f.has(tMaaSDBConfig) {
+	if mc.f.has(tMaaSGateway) || mc.f.has("/api/v1/namespaces/openshift-ingress/configmaps/maas-gateway-options") || mc.f.has(tMaaSDB) || mc.f.has(tMaaSDBConfig) {
 		t.Fatal("a tool object is left")
 	}
 	if !mc.f.has("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant") {
