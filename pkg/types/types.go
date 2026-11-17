@@ -923,3 +923,90 @@ type DashboardNewerBuild struct {
 	CommitURL string `json:"commitURL,omitempty"`
 	BuildDate string `json:"buildDate,omitempty"`
 }
+
+// Sample resources (Environment page): MLflow samples and a sample pipeline
+// run, per project. See pkg/cluster/samples*.go.
+
+// SampleStatus is one MLflow sample in a project.
+type SampleStatus struct {
+	// ID is "genai-demo", "training", "mcp-server" or "skill".
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// State is "absent", "present", "partial" (Missing names what is
+	// missing), "removed" (soft-deleted; Add restores it), "foreign" (an
+	// object of the sample's name the tool did not create; left alone),
+	// "unsupported" (this MLflow has no such API) or "unknown" (Message
+	// says why).
+	State   string   `json:"state"`
+	Message string   `json:"message,omitempty"`
+	Missing []string `json:"missing,omitempty"`
+	// Link opens the sample in the MLflow UI, when there is one.
+	Link string `json:"link,omitempty"`
+	// Actions the state allows: "add", "remove", "regenerate".
+	Actions []string `json:"actions"`
+}
+
+// MLflowSamplesStatus is GET /api/resources/samples/mlflow?project=.
+type MLflowSamplesStatus struct {
+	Project string `json:"project"`
+	// Available is false while MLflow is not deployed or not ready, or has
+	// no URL; Reason says which, and Samples is empty.
+	Available bool           `json:"available"`
+	Reason    string         `json:"reason,omitempty"`
+	MLflowURL string         `json:"mlflowURL,omitempty"`
+	Samples   []SampleStatus `json:"samples"`
+}
+
+// PipelineSampleRun is a run of the sample pipeline.
+type PipelineSampleRun struct {
+	ID string `json:"id"`
+	// State is KFP's RuntimeState: PENDING, RUNNING, SUCCEEDED, SKIPPED,
+	// FAILED, CANCELING, CANCELED or PAUSED.
+	State      string `json:"state"`
+	CreatedAt  string `json:"createdAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// Link is the run in the RHOAI dashboard ("" when its address is
+	// unknown).
+	Link string `json:"link,omitempty"`
+}
+
+// PipelineSampleStatus is GET /api/resources/samples/pipeline?project=.
+type PipelineSampleStatus struct {
+	Project string `json:"project"`
+	// Available is true when the project has a ready pipeline server that
+	// this tool created (nightly-dspa); Reason says why not otherwise.
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	Server    string `json:"server,omitempty"`
+	// Image is the image both steps run (SAMPLE_PIPELINE_IMAGE overrides
+	// the default).
+	Image string `json:"image"`
+	// State is "absent" (nothing of the sample exists), "present" or
+	// "foreign" (a KFP experiment or pipeline of the sample's name that
+	// the tool did not create; Run and Remove are refused).
+	State     string             `json:"state,omitempty"`
+	Message   string             `json:"message,omitempty"`
+	Runs      int                `json:"runs"`
+	LatestRun *PipelineSampleRun `json:"latestRun,omitempty"`
+	// RunsLink is the project's run list in the RHOAI dashboard.
+	RunsLink string `json:"runsLink,omitempty"`
+}
+
+// MLflowSamplesRequest is the body of POST /api/resources/samples/mlflow/stream.
+type MLflowSamplesRequest struct {
+	Project string `json:"project"`
+	// Action is "add", "remove" or "regenerate" (genai-demo only).
+	Action string `json:"action"`
+	// Samples are SampleStatus IDs, in any order; they run in the order
+	// genai-demo, training, mcp-server, skill (remove: the reverse).
+	Samples []string `json:"samples"`
+}
+
+// PipelineSampleRequest is the body of POST /api/resources/samples/pipeline/stream.
+type PipelineSampleRequest struct {
+	Project string `json:"project"`
+	// Action is "run" (start a new run) or "remove" (delete every run of
+	// the sample, its pipeline and its experiment).
+	Action string `json:"action"`
+}

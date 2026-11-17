@@ -1423,6 +1423,32 @@ var HandleDSProjects = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 	writeJSON(w, map[string]interface{}{"projects": projects}, "ds-projects")
 })
 
+// sampleProject reads and validates the ?project= of a samples status read.
+func sampleProject(w http.ResponseWriter, r *http.Request) (string, bool) {
+	project := r.URL.Query().Get("project")
+	if !namespaceRegex.MatchString(project) {
+		writeError(w, "a valid project is required", http.StatusBadRequest, "validation")
+		return "", false
+	}
+	return project, true
+}
+
+// HandleMLflowSamplesStatus reports the MLflow samples of one project
+// (cluster.GetMLflowSamplesStatus: named reads only, cached briefly).
+var HandleMLflowSamplesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	project, ok := sampleProject(w, r)
+	if !ok {
+		return
+	}
+	st, err := cluster.GetMLflowSamplesStatus(c, project)
+	if err != nil {
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "Cannot read the MLflow samples: "+err.Error(), code, errorCode)
+		return
+	}
+	writeJSON(w, st, "mlflow-samples")
+})
+
 // HandleS3StorageSetup deploys the S3 storage (SeaweedFS in namespace seaweedfs) with a bucket for
 // pipeline artifacts. The route and the operation kind keep their names from earlier versions.
 var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
