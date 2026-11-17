@@ -438,7 +438,7 @@ export function dashboardBuilds(session = dashboardSession()) {
   };
 }
 
-// --- Test resources -----------------------------------------------------------
+// --- Environment (/test-resources) ---------------------------------------------
 
 const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.54")}`;
 const MINIO_OLD = `quay.io/minio/minio@${digest("minio-2025")}`;

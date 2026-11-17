@@ -1,39 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
-import {
-  Alert,
-  AlertActionCloseButton,
-  AlertActionLink,
-  Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
-  Content,
-  EmptyState,
-  EmptyStateBody,
-  Flex,
-  FlexItem,
-  Form,
-  FormGroup,
-  HelperText,
-  HelperTextItem,
-  InputGroup,
-  InputGroupItem,
-  MenuToggle,
-  MenuToggleElement,
-  PageSection,
-  Select,
-  SelectList,
-  SelectOption,
-  Stack,
-  StackItem,
-  TextInput,
-  Title,
-} from "@patternfly/react-core";
-import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import LockIcon from "@patternfly/react-icons/dist/esm/icons/lock-icon";
-import PlusCircleIcon from "@patternfly/react-icons/dist/esm/icons/plus-circle-icon";
-import type { KeptPVC, OperationResponse, ResourceState, ResourcesStatus } from "../types";
+import { Alert, AlertActionCloseButton, AlertActionLink, PageSection, Stack, StackItem, Title } from "@patternfly/react-core";
+import type { OperationResponse, ResourcesStatus } from "../types";
 import {
   getResourcesStatus,
   getDSProjects,
@@ -50,77 +17,15 @@ import {
 } from "../services/api";
 import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
-import { TooltipButton } from "./TooltipButton";
 import { ConfirmActionModal } from "./ConfirmActionModal";
-import { withImageRefs } from "./ImageRef";
-import { CardList, CardListItem } from "./CardList";
-import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TruncatedText } from "./LongText";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
+import { type Pending, isTerminating, terminalReason } from "./environment/resourceRow";
+import { StorageCard, storageConfirm } from "./environment/StorageCard";
+import { PipelineServersCard, pipelineServerConfirm } from "./environment/PipelineServersCard";
+import { MLflowCard, mlflowConfirm } from "./environment/MLflowCard";
 
-/**
- * Container waiting reasons that do not resolve on their own (Kubernetes
- * docs, "Debug Pods": ImagePullBackOff/ErrImagePull, CrashLoopBackOff, and
- * configuration errors). Polling stops for these instead of spinning forever.
- */
-const TERMINAL_REASONS = [
-  "ImagePullBackOff",
-  "ErrImagePull",
-  "InvalidImageName",
-  "CrashLoopBackOff",
-  "CreateContainerConfigError",
-  "CreateContainerError",
-  "FailingToDeploy",
-];
-
-/** Why a deployed resource can't become ready without a change, or null. */
-export function terminalReason(state: ResourceState | undefined): string | null {
-  if (!state || !state.deployed || state.ready) return null;
-  if (state.terminalError) return state.waitingReason || "Failed";
-  const candidates = [state.waitingReason, state.message].filter((v): v is string => !!v);
-  for (const text of candidates) {
-    const reason = TERMINAL_REASONS.find((r) => text.includes(r));
-    if (reason) return state.message && state.message !== reason ? state.message : reason;
-  }
-  return null;
-}
-
-function isTerminating(state: ResourceState | undefined): boolean {
-  return !!state && (!!state.terminating || state.message === "Terminating");
-}
-
-type ResourceKind = "minio" | "mlflow" | "pipeline";
-
-/** What to do about a resource that cannot start (A08-3, A06-5). */
-export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = true): string | null {
-  const managed = state.managedByTool !== false;
-  if (kind === "minio" && managed && state.migrationPending) {
-    return "Migrate to SeaweedFS replaces this MinIO from an earlier version. It starts with an empty bucket; the MinIO data volume is kept.";
-  }
-  if (kind === "minio" && managed && state.repairNeeded) {
-    return "Repair re-runs setup: it applies the SeaweedFS Deployment with the image and settings of this version (scaling it back up if needed), waits for it, points Service minio-service and Route minio-ui at it and removes what is left of the earlier MinIO storage, if anything. Stored data is kept.";
-  }
-  if (!terminalReason(state)) return null;
-  const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;
-  if (/ImagePullBackOff|ErrImagePull|InvalidImageName/.test(text)) {
-    if (kind === "minio" && managed) return "The image cannot be pulled. Repair applies the SeaweedFS Deployment again with the image this updater is configured to use; the stored data is kept.";
-    if (kind === "mlflow" && state.prOverride) return "The PR image cannot be pulled. Revert to the image used before the PR, or deploy another PR.";
-    return "The image cannot be pulled. Check that the image exists and that the cluster pull secret can read it.";
-  }
-  if (/CrashLoopBackOff/.test(text)) {
-    if (kind === "mlflow" && state.prOverride) return "The PR build keeps crashing. Revert to the image used before the PR, or deploy another PR.";
-    return "The container keeps crashing. Read its logs in the OpenShift console.";
-  }
-  if (/CreateContainerConfigError|CreateContainerError/.test(text)) {
-    return "A Secret or ConfigMap the pod needs is missing or invalid. The message above names it.";
-  }
-  if (kind === "pipeline") {
-    return minioReady
-      ? "The pipeline server did not become ready within 5 minutes. Check its conditions in the project's Pipelines page."
-      : "The pipeline server cannot reach the S3 storage. Fix the storage first; the pipeline server recovers once it serves requests.";
-  }
-  return null;
-}
+export { nextStep, terminalReason } from "./environment/resourceRow";
 
 const BUSY_REASON = "Another operation is in progress";
 
@@ -136,66 +41,11 @@ interface QuickResourceCreatorProps {
   renderHeader?: (header: { loading: boolean; lastRefreshed: Date | null; onRefresh: () => void }) => React.ReactNode;
 }
 
-const ResourceStatus: React.FC<{ state: ResourceState }> = ({ state }) => {
-  if (isTerminating(state)) return <StatusLabel status="warning">Terminating</StatusLabel>;
-  // Running, but not serving through its Service/Route: Repair fixes it.
-  if (state.deployed && !state.ready && state.terminalError && state.repairNeeded) return <StatusLabel status="warning">Incomplete</StatusLabel>;
-  if (state.ready) return <StatusLabel status="success">Running</StatusLabel>;
-  if (!state.deployed) return <StatusLabel status="neutral">Not deployed</StatusLabel>;
-  const reason = terminalReason(state);
-  if (reason) {
-    const short = state.waitingReason || (reason !== "Failed" && reason.length <= 40 ? reason : "");
-    return <StatusLabel status="danger">{short ? `Failed: ${short}` : "Failed"}</StatusLabel>;
-  }
-  return <StatusLabel status="progress">Starting</StatusLabel>;
-};
-
-/** The resource's message, warnings and next step as helper text under its description. */
-const StatusDetails: React.FC<{ kind: ResourceKind; state: ResourceState; minioReady?: boolean; teardownBlocked?: string | null; notes?: React.ReactNode[] }> = ({ kind, state, minioReady, teardownBlocked, notes }) => {
-  const step = nextStep(kind, state, minioReady);
-  // The label already says "Starting" / "Terminating": don't repeat it as the message.
-  const showMessage = state.deployed && !state.ready && !!state.message && !["Terminating", "Starting"].includes(state.message);
-  const items: React.ReactNode[] = [];
-  if (showMessage) {
-    items.push(<HelperTextItem key="message" variant={state.repairNeeded && state.message === state.repairNeeded ? "warning" : terminalReason(state) ? "error" : "default"}><span className="pf-v6-u-text-break-word"><TruncatedText>{withImageRefs(state.message!)}</TruncatedText></span></HelperTextItem>);
-  }
-  if (state.warning) items.push(<HelperTextItem key="warning" variant="warning">{state.warning}</HelperTextItem>);
-  if (state.repairNeeded && !(showMessage && state.message === state.repairNeeded)) {
-    items.push(<HelperTextItem key="repair" variant="warning">Needs repair: {state.repairNeeded}</HelperTextItem>);
-  }
-  if (step) items.push(<HelperTextItem key="step">Next step: {step}</HelperTextItem>);
-  if (teardownBlocked) items.push(<HelperTextItem key="blocked" variant="warning">Tear down is blocked: {teardownBlocked}</HelperTextItem>);
-  notes?.forEach((note, i) => items.push(<HelperTextItem key={`note-${i}`}>{note}</HelperTextItem>));
-  return items.length > 0 ? <HelperText className="pf-v6-u-mt-sm">{items}</HelperText> : null;
-};
-
-/** Why the tool leaves an object it did not create alone, appended to the row description. */
-function unmanagedNote(state: ResourceState | undefined): string {
-  return state?.managedByTool === false && state.teardownBlockedReason ? ` ${state.teardownBlockedReason}` : "";
-}
-
-/** Name, status and category tags of one resource row. */
-const RowTitle: React.FC<{ id: string; name: string; state?: ResourceState; extra?: React.ReactNode }> = ({ id, name, state, extra }) => (
-  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-    <FlexItem><strong id={id}>{name}</strong></FlexItem>
-    {state && <FlexItem><ResourceStatus state={state} /></FlexItem>}
-    {/* Only for something that exists: the backend also reports managedByTool false when nothing is deployed. */}
-    {state?.managedByTool === false && (state.deployed || isTerminating(state) || !!state.setupBlockedReason) && (
-      <FlexItem><TagLabel icon={<LockIcon />}>Not managed by this tool</TagLabel></FlexItem>
-    )}
-    {extra}
-  </Flex>
-);
-
-const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
-  <Button variant="link" isInline component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
-);
-
-type Pending =
-  | { kind: "setup-minio" | "repair-minio" | "migrate-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
-  | { kind: "deploy-mlflow-pr"; pr: number }
-  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
-
+/**
+ * The Environment page's one-click setups: it loads and polls their status,
+ * runs the confirmed actions and shows their result. Each card renders one
+ * setup (environment/*Card.tsx).
+ */
 export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, onResult, renderHeader }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
   const [resAction, setResAction] = useState<string | null>(null);
@@ -204,8 +54,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [lastMinIOTeardown, setLastMinIOTeardown] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [projectList, setProjectList] = useState<string[]>([]);
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [mlflowPR, setMlflowPR] = useState("");
 
   const [resError, setResError] = useState<string | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -302,8 +150,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const baseReason = mutateBlocker ?? (resAction ? BUSY_REASON : null);
   const unmanagedProjects = new Set(resStatus?.unmanagedPipelineProjects ?? []);
   const availableProjects = projectList.filter((p) => !pipelineServers.some((ps) => ps.namespace === p) && !unmanagedProjects.has(p));
-  const mlflowPRValid = /^\d+$/.test(mlflowPR) && Number(mlflowPR) > 0;
-  const minioReady = !!minio?.ready;
   // After a teardown the namespace stays (deployed:false, managedByTool:true).
   // Offer Tear down again while tool objects are still reported (the data
   // PVC, a Route) or the last teardown from this tab did not finish.
@@ -311,147 +157,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute ||
     (lastMinIOTeardown !== null && ["partial_failure", "delete_failed", "in_progress", "forbidden", "unauthorized", "network"].includes(lastMinIOTeardown))
   );
-  // N10: every cause is a tooltip on the toggle, which stays focusable (aria-disabled).
-  const addPipelineReason = baseReason ?? (!minioReady ? "Available once the S3 storage is running." : null);
-  const keptPVCs = minio?.keptPVCs ?? [];
-  const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size})` : ""}</>;
-  const pvcList = (state: ResourceState | undefined) => (state?.dataPVCs ?? []);
+  const actionProps = { baseReason, resAction, setPending };
 
-  const modal = (() => {
-    if (!pending) return null;
-    const pvcs = (s: ResourceState | undefined, what: string) => pvcList(s).length > 0
-      ? <>PersistentVolumeClaim{pvcList(s).length > 1 ? "s" : ""} {pvcList(s).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)}, with {what}.</>
-      : undefined;
-    switch (pending.kind) {
-      case "setup-minio":
-      case "repair-minio":
-        return {
-          title: pending.kind === "repair-minio" ? "Repair S3 storage?" : "Set up S3 storage?",
-          confirm: pending.kind === "repair-minio" ? "Repair S3 storage" : "Set up S3 storage",
-          changes: [
-            <>Namespace <code>minio</code> {pending.kind === "repair-minio" || minio?.managedByTool ? "is kept and reused" : "is created"}, labelled as managed by this tool.</>,
-            <>SeaweedFS: Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-pvc</code>, Secret <code>minio-secret</code> and NetworkPolicy <code>seaweedfs-ingress</code> are applied with the image the server is configured to use.</>,
-            <>Once SeaweedFS is ready: Service <code>minio-service</code> (the S3 endpoint pipeline servers use; its name is kept from earlier versions), the admin UI Route <code>minio-ui</code> and the bucket <code>pipelines</code>.</>,
-            <>Route <code>minio-api</code> (the S3 API outside the cluster) is removed if it exists; pipeline servers use the in-cluster service.</>,
-          ],
-          extra: <Content component="p">The server waits up to 90 seconds for SeaweedFS to become ready and reports the pod&apos;s reason if it cannot start.{pending.kind === "repair-minio" ? " Stored data is kept." : ""}</Content>,
-        };
-      case "migrate-minio":
-        return {
-          title: "Replace MinIO with SeaweedFS?",
-          confirm: "Migrate and start fresh",
-          changes: [
-            <>SeaweedFS is deployed next to MinIO: Deployment <code>seaweedfs</code>, a new PersistentVolumeClaim <code>seaweedfs-pvc</code> and NetworkPolicy <code>seaweedfs-ingress</code>. It uses the credentials already in Secret <code>minio-secret</code> and creates the bucket <code>pipelines</code>.</>,
-            <>Once SeaweedFS is ready, Service <code>minio-service</code> and the admin UI Route <code>minio-ui</code> switch to it. Pipeline servers keep their settings and need no edits.</>,
-            <>Deployment <code>minio</code> and NetworkPolicy <code>minio-ingress</code> are removed. PersistentVolumeClaim {pvcList(minio).includes("minio-pvc") ? <code>minio-pvc</code> : <>minio-pvc</>} is kept, unused, for a rollback or a manual copy; Tear down deletes it later.</>,
-            <>Route <code>minio-api</code> is removed if it exists and no pipeline server uses it.</>,
-          ],
-          extra: (
-            <Stack hasGutter>
-              <StackItem>
-                <Alert component="p" variant="warning" isInline title="Start fresh: stored objects are not copied">
-                  SeaweedFS starts with an empty bucket. Artifacts, logs and cached outputs of earlier pipeline runs return 404; their files stay on <code>minio-pvc</code>. New runs work. If a cached step fails because its outputs are gone, run it again with caching disabled.
-                </Alert>
-              </StackItem>
-              <StackItem><Content component="p">Until SeaweedFS is ready (up to 90 seconds), MinIO keeps serving; if SeaweedFS cannot start, nothing is switched and MinIO stays.</Content></StackItem>
-            </Stack>
-          ),
-        };
-      case "teardown-minio":
-        return {
-          title: "Tear down S3 storage?", confirm: "Tear down S3 storage", danger: true,
-          changes: [
-            <>The S3 storage objects this tool created in <code>{minio?.namespace || "minio"}</code> are deleted: Deployment <code>seaweedfs</code>, NetworkPolicy <code>seaweedfs-ingress</code>, Routes <code>minio-ui</code> and <code>minio-api</code>, Service <code>minio-service</code>, Secret <code>minio-secret</code> and PersistentVolumeClaim <code>seaweedfs-pvc</code>, and what is left of MinIO from an earlier version (Deployment <code>minio</code>, NetworkPolicy <code>minio-ingress</code>, PersistentVolumeClaim <code>minio-pvc</code>). Objects with these names that the tool did not create are kept.</>,
-            <>Namespace <code>{minio?.namespace || "minio"}</code> is kept. Delete it yourself with <code>oc delete project minio</code> once it is empty.</>,
-          ],
-          dataLoss: pvcs(minio, pvcList(minio).includes("minio-pvc")
-            ? "every object stored in them (pipeline artifacts, uploaded files, and the data of the earlier MinIO storage)"
-            : "every object stored in them (pipeline artifacts, uploaded files)") ?? <>Every object stored in the S3 storage (pipeline artifacts, uploaded files).</>,
-          extra: <Content component="p">The server refuses while a pipeline server still uses the storage; the message names it. If some objects cannot be deleted, run Tear down again.</Content>,
-        };
-      case "setup-mlflow":
-        return {
-          title: "Set up MLflow?", confirm: "Set up MLflow",
-          changes: [<>MLflow CR <code>mlflow</code> is created; the MLflow operator deploys the server in <code>redhat-ods-applications</code> with its default (RHOAI) image.</>],
-        };
-      case "teardown-mlflow":
-        return {
-          title: "Tear down MLflow?", confirm: "Tear down MLflow", danger: true,
-          changes: [<>MLflow CR <code>mlflow</code> is deleted; the operator removes the server.</>],
-          dataLoss: pvcs(mlflow, "every experiment, run and artifact stored in it") ?? <>Every experiment, run and artifact stored in MLflow.</>,
-        };
-      case "deploy-mlflow-pr":
-        return {
-          title: `Deploy MLflow PR #${pending.pr}?`, confirm: `Deploy PR #${pending.pr}`,
-          changes: [
-            <>MLflow CR <code>mlflow</code>: <code>spec.image.image</code> is set to <code>quay.io/opendatahub/mlflow:odh-pr-{pending.pr}</code>, pinned to its current digest.</>,
-            ...(!mlflow?.prOverride ? [<>The image in use now is saved on the CR so Revert can restore it.</>] : []),
-          ],
-          extra: (
-            <Stack hasGutter>
-              <StackItem><Content component="p">The MLflow server restarts; it is unavailable until the new pod is ready.</Content></StackItem>
-              {mlflow?.managedByTool === false && (
-                <StackItem><Alert component="p" variant="warning" isInline title="This MLflow instance was not created by this tool">Someone else may rely on it. Revert restores its current image.</Alert></StackItem>
-              )}
-            </Stack>
-          ),
-        };
-      case "revert-mlflow":
-        return {
-          title: "Revert MLflow?", confirm: "Revert MLflow",
-          changes: [mlflow?.revertImage
-            ? <>MLflow CR <code>mlflow</code>: <code>spec.image.image</code> goes back to <code>{mlflow.revertImage}</code>, the image used before the PR.</>
-            : <>MLflow CR <code>mlflow</code>: <code>spec.image.image</code> is removed, so the operator&apos;s default (RHOAI) image is used again.</>],
-          extra: <Content component="p">The MLflow server restarts.</Content>,
-        };
-      case "setup-pipeline-server":
-        return {
-          title: `Set up a pipeline server in ${pending.project}?`, confirm: "Set up",
-          changes: [
-            <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, storing artifacts in the S3 storage (Service <code>minio-service</code>).</>,
-          ],
-          extra: <Content component="p">The pipeline server takes 1 to 3 minutes to become ready.</Content>,
-        };
-      case "teardown-pipeline-server": {
-        const ps = pipelineServers.find((p) => p.namespace === pending.project);
-        return {
-          title: `Tear down the pipeline server in ${pending.project}?`, confirm: "Tear down", danger: true,
-          changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || "nightly-dspa"}</code> and its S3 credentials Secret are deleted. The project stays.</>],
-          dataLoss: pvcs(ps, "the pipeline database (runs, experiments and their history)") ?? <>The pipeline database (runs, experiments and their history).</>,
-        };
-      }
-    }
-  })();
-
-  const addPipelineControl = addPipelineReason ? (
-    <TooltipButton variant="secondary" icon={<PlusCircleIcon />} disabledReason={addPipelineReason}>Add to a project</TooltipButton>
-  ) : (
-    <Select
-      isOpen={addProjectOpen}
-      onOpenChange={setAddProjectOpen}
-      onSelect={(_e, val) => {
-        setAddProjectOpen(false);
-        if (val) setPending({ kind: "setup-pipeline-server", project: val as string });
-      }}
-      popperProps={{ position: "right" }}
-      toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
-        <MenuToggle ref={toggleRef} variant="secondary" icon={<PlusCircleIcon />} isExpanded={addProjectOpen} onClick={() => setAddProjectOpen(!addProjectOpen)}>
-          {resAction === "setup-pipeline-server" ? "Setting up..." : "Add to a project"}
-        </MenuToggle>
-      )}
-    >
-      <SelectList aria-label="Data science projects">
-        {availableProjects.map((p) => <SelectOption key={p} value={p}>{p}</SelectOption>)}
-        {availableProjects.length === 0 && <SelectOption isDisabled value="">No project without a pipeline server</SelectOption>}
-      </SelectList>
-    </Select>
-  );
-
-  const rowActions = (children: React.ReactNode) => (
-    <>
-      <Flex columnGap={{ default: "columnGapLg" }} rowGap={{ default: "rowGapSm" }} alignItems={{ default: "alignItemsCenter" }} justifyContent={{ md: "justifyContentFlexEnd" }} flexWrap={{ default: "wrap" }}>{children}</Flex>
-    </>
-  );
+  const modal = pending
+    ? storageConfirm(pending, minio) ?? mlflowConfirm(pending, mlflow) ?? pipelineServerConfirm(pending, pipelineServers)
+    : null;
 
   return (
     <>
@@ -490,179 +200,30 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
             </StackItem>
           )}
 
-          {/* Storage */}
           <StackItem>
-            <Card>
-              <CardHeader><CardTitle><Title headingLevel="h2" size="lg">Storage</Title></CardTitle></CardHeader>
-              <CardBody>
-                <CardList aria-label="Storage">
-                  <CardListItem labelledBy="minio-item" actionsBesideFrom="xl" actions={rowActions(
-                            <>
-                              {minio?.ready && minio.uiRoute && <FlexItem><ExternalLink href={minio.uiRoute}>{minio.migrationPending ? "Open MinIO console" : "Open admin UI"}</ExternalLink></FlexItem>}
-                              {minio && !minio.deployed && !isTerminating(minio) && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-minio" })} isLoading={resAction === "setup-minio"}
-                                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Set up</TooltipButton>
-                                </FlexItem>
-                              )}
-                              {minio?.migrationPending && minio.managedByTool !== false && !isTerminating(minio) && (
-                                <FlexItem>
-                                  <TooltipButton variant="primary" onClick={() => setPending({ kind: "migrate-minio" })} isLoading={resAction === "setup-minio"}
-                                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Migrate to SeaweedFS</TooltipButton>
-                                </FlexItem>
-                              )}
-                              {minio?.deployed && !minio.migrationPending && minio.managedByTool !== false && (!!terminalReason(minio) || !!minio.repairNeeded) && !isTerminating(minio) && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "repair-minio" })} isLoading={resAction === "setup-minio"}
-                                    disabledReason={baseReason ?? minio.setupBlockedReason ?? null}>Repair</TooltipButton>
-                                </FlexItem>
-                              )}
-                              {minio && minio.managedByTool !== false && !isTerminating(minio) && (minio.deployed || minioLeftovers) && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-minio" })} isLoading={resAction === "teardown-minio"}
-                                    disabledReason={baseReason ?? minio.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                                </FlexItem>
-                              )}
-                            </>,
-                  )}>
-                            <RowTitle id="minio-item" name="S3 storage" state={minio}
-                              extra={minio?.deployed ? <FlexItem><TagLabel>{minio.migrationPending ? "MinIO (migration pending)" : "SeaweedFS"}</TagLabel></FlexItem> : undefined} />
-                            <Content component="p" className="pf-v6-u-text-color-subtle">
-                              S3 storage (SeaweedFS) for pipeline artifacts and test files, in namespace <code>minio</code>, behind Service <code>minio-service</code>.{unmanagedNote(minio)}
-                            </Content>
-                            {minio && (
-                              <StatusDetails
-                                kind="minio"
-                                state={minio}
-                                teardownBlocked={(minio.deployed || pvcList(minio).length > 0) && minio.managedByTool !== false ? minio.teardownBlockedReason : null}
-                                notes={[
-                                  ...(minio.deployed && minio.uiUser ? [<React.Fragment key="login">Admin UI login: user <code>{minio.uiUser}</code>, password in Secret <code>minio-secret</code> (key <code>minio_root_password</code>): <code>oc extract -n minio secret/minio-secret --keys=minio_root_password --to=-</code></React.Fragment>] : []),
-                                  ...keptPVCs.map((p) => <React.Fragment key={p.name}>Data volume from the earlier MinIO storage (PersistentVolumeClaim {pvcWithSize(p)}), kept for a rollback or a manual copy (RUNBOOK §10.1); SeaweedFS does not use it. Tear down deletes it.</React.Fragment>),
-                                ]}
-                              />
-                            )}
-                  </CardListItem>
-                </CardList>
-              </CardBody>
-            </Card>
-          </StackItem>
-
-          {/* MLflow */}
-          <StackItem>
-            <Card>
-              <CardHeader><CardTitle><Title headingLevel="h2" size="lg">MLflow</Title></CardTitle></CardHeader>
-              <CardBody>
-                <CardList aria-label="MLflow">
-                  <CardListItem labelledBy="mlflow-item" actions={rowActions(
-                            <>
-                              {mlflow?.ready && mlflow.uiRoute && <FlexItem><ExternalLink href={mlflow.uiRoute}>Open MLflow</ExternalLink></FlexItem>}
-                              {mlflow && !mlflow.deployed && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" onClick={() => setPending({ kind: "setup-mlflow" })} isLoading={resAction === "setup-mlflow"}
-                                    disabledReason={baseReason ?? mlflow.setupBlockedReason ?? null}>Set up</TooltipButton>
-                                </FlexItem>
-                              )}
-                              {mlflow?.deployed && mlflow.managedByTool !== false && !isTerminating(mlflow) && (
-                                <FlexItem>
-                                  <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-mlflow" })} isLoading={resAction === "teardown-mlflow"}
-                                    disabledReason={baseReason ?? mlflow.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                                </FlexItem>
-                              )}
-                            </>,
-                  )}>
-                            <RowTitle id="mlflow-item" name="MLflow server" state={mlflow}
-                              extra={mlflow?.prOverride ? <FlexItem><TagLabel color="blue">PR #{mlflow.prNumber ?? "?"}</TagLabel></FlexItem> : undefined} />
-                            <Content component="p" className="pf-v6-u-text-color-subtle">An MLflow instance in <code>redhat-ods-applications</code>, managed by the MLflow operator.{unmanagedNote(mlflow)}</Content>
-                            {mlflow && <StatusDetails kind="mlflow" state={mlflow} />}
-                            {mlflow?.deployed && (
-                              <Form className="pf-v6-u-mt-md" onSubmit={(e) => e.preventDefault()}>
-                                <FormGroup label="Deploy an opendatahub-io/mlflow PR" fieldId="mlflow-pr">
-                                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsFlexStart" }}>
-                                    <FlexItem>
-                                      <InputGroup>
-                                        <InputGroupItem>
-                                          <TextInput id="mlflow-pr" type="text" inputMode="numeric" value={mlflowPR} onChange={(_e, val) => setMlflowPR(val.trim())} placeholder="PR number" aria-label="opendatahub-io/mlflow PR number" />
-                                        </InputGroupItem>
-                                        <InputGroupItem>
-                                          <TooltipButton variant="control" onClick={() => setPending({ kind: "deploy-mlflow-pr", pr: Number(mlflowPR) })} isLoading={resAction === "deploy-mlflow-pr"}
-                                            disabledReason={baseReason ?? (!mlflowPRValid ? "Enter an opendatahub-io/mlflow PR number first." : null)}>Deploy PR</TooltipButton>
-                                        </InputGroupItem>
-                                      </InputGroup>
-                                    </FlexItem>
-                                    {mlflow.prOverride && (
-                                      <FlexItem>
-                                        <TooltipButton variant="secondary" onClick={() => setPending({ kind: "revert-mlflow" })} isLoading={resAction === "revert-mlflow"} disabledReason={baseReason}>
-                                          Revert the PR image
-                                        </TooltipButton>
-                                      </FlexItem>
-                                    )}
-                                  </Flex>
-                                </FormGroup>
-                              </Form>
-                            )}
-                  </CardListItem>
-                </CardList>
-              </CardBody>
-            </Card>
-          </StackItem>
-
-          {/* Pipelines */}
-          <StackItem>
-            <Card>
-              <CardHeader actions={{ actions: addPipelineControl, hasNoOffset: true }}>
-                <CardTitle><Title headingLevel="h2" size="lg">Pipeline servers</Title></CardTitle>
-              </CardHeader>
-              <CardBody>
-                <Stack hasGutter>
-                  {resStatus && !minioReady && (
-                    <StackItem>
-                      <Alert
-                        variant="warning"
-                        title={minio?.deployed ? `Pipeline servers need the S3 storage, which is not ready${minio.waitingReason ? ` (${minio.waitingReason})` : ""}` : "Pipeline servers need the S3 storage: set up storage first"}
-                        isInline
-                        component="p"
-                      />
-                    </StackItem>
-                  )}
-                  <StackItem>
-                    {pipelineServers.length === 0 ? (
-                      <EmptyState headingLevel="h3" titleText="No pipeline servers" variant="xs">
-                        <EmptyStateBody>Add one to a data science project with the button above.</EmptyStateBody>
-                      </EmptyState>
-                    ) : (
-                      <CardList aria-label="Pipeline servers">
-                        {pipelineServers.map((ps) => (
-                          <CardListItem key={ps.namespace} labelledBy={`ps-${ps.namespace}`} actions={rowActions(
-                                    <>
-                                      {ps.ready && ps.uiRoute && <FlexItem><ExternalLink href={ps.uiRoute}>Open pipelines</ExternalLink></FlexItem>}
-                                      {ps.managedByTool !== false && !isTerminating(ps) && (
-                                        <FlexItem>
-                                          <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name })}
-                                            isLoading={resAction === "teardown-pipeline-server"} disabledReason={baseReason ?? ps.teardownBlockedReason ?? null}>Tear down</TooltipButton>
-                                        </FlexItem>
-                                      )}
-                                    </>,
-                          )}>
-                                    <RowTitle id={`ps-${ps.namespace}`} name={ps.namespace ?? ""} state={ps} />
-                                    {ps.name && <Content component="p" className="pf-v6-u-text-color-subtle">DataSciencePipelinesApplication <code>{ps.name}</code>.{unmanagedNote(ps)}</Content>}
-                                    <StatusDetails kind="pipeline" state={ps} minioReady={minioReady} />
-                          </CardListItem>
-                        ))}
-                      </CardList>
-                    )}
-                  </StackItem>
-                  {unmanagedProjects.size > 0 && (
-                    <StackItem>
-                      <HelperText>
-                        <HelperTextItem>
-                          Not offered because they already have a pipeline server this tool did not create: {[...unmanagedProjects].join(", ")}.
-                        </HelperTextItem>
-                      </HelperText>
-                    </StackItem>
-                  )}
-                </Stack>
-              </CardBody>
-            </Card>
+            <section aria-labelledby="environment-data-pipelines">
+              <Stack hasGutter>
+                <StackItem>
+                  <Title headingLevel="h2" size="xl" id="environment-data-pipelines">Data &amp; pipelines</Title>
+                </StackItem>
+                <StackItem>
+                  <StorageCard minio={minio} minioLeftovers={minioLeftovers} {...actionProps} />
+                </StackItem>
+                <StackItem>
+                  <PipelineServersCard
+                    statusLoaded={!!resStatus}
+                    minio={minio}
+                    pipelineServers={pipelineServers}
+                    availableProjects={availableProjects}
+                    unmanagedProjects={unmanagedProjects}
+                    {...actionProps}
+                  />
+                </StackItem>
+                <StackItem>
+                  <MLflowCard mlflow={mlflow} {...actionProps} />
+                </StackItem>
+              </Stack>
+            </section>
           </StackItem>
         </Stack>
       </PageSection>
@@ -672,14 +233,14 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           isOpen
           title={modal.title}
           changes={modal.changes}
-          dataLoss={"dataLoss" in modal ? modal.dataLoss : undefined}
+          dataLoss={modal.dataLoss}
           confirmLabel={modal.confirm}
-          confirmVariant={"danger" in modal && modal.danger ? "danger" : "primary"}
+          confirmVariant={modal.danger ? "danger" : "primary"}
           isLoading={!!resAction}
           onConfirm={() => pending && execute(pending)}
           onCancel={() => setPending(null)}
         >
-          {"extra" in modal ? modal.extra : undefined}
+          {modal.extra}
         </ConfirmActionModal>
       )}
     </>

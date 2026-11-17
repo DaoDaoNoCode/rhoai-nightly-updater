@@ -4,7 +4,7 @@
 
 <h1 align="center">RHOAI Nightly Updater</h1>
 
-The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test resources (S3 storage, pipeline servers, MLflow) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
+The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
 
 <p align="center">
   <picture>
@@ -69,7 +69,7 @@ Every nightly tag on Quay: filter, see the contents of a build, compare it with 
 
 It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI builds (`pr-<N>`, `main`). **Deploy latest main** pins the build under its commit tag (`:<commit>@sha256:...`), so the cluster names the commit it runs even after the `main` or `odh-stable` tag has moved on.
 
-### Test resources: S3 storage, pipeline servers, MLflow
+### Environment: S3 storage, pipeline servers, MLflow
 
 <img src="docs/images/s3-running.png" alt="The Storage card: S3 storage, Running, on SeaweedFS" width="760">
 
@@ -93,7 +93,7 @@ Diagnostics scans on load and only reads the cluster. Each problem shows what wa
 | Components | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-components-dark.png"><img src="docs/images/page-components-light.png" alt="Components page" width="640"></picture> |
 | Build Explorer | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-build-explorer-dark.png"><img src="docs/images/page-build-explorer-light.png" alt="Build Explorer page" width="640"></picture> |
 | Dashboard Dev | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-dashboard-dev-dark.png"><img src="docs/images/page-dashboard-dev-light.png" alt="Dashboard Dev page" width="640"></picture> |
-| Test resources | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-test-resources-dark.png"><img src="docs/images/page-test-resources-light.png" alt="Test resources page" width="640"></picture> |
+| Environment | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-test-resources-dark.png"><img src="docs/images/page-test-resources-light.png" alt="Environment page" width="640"></picture> |
 | Diagnostics | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-diagnostics-dark.png"><img src="docs/images/page-diagnostics-light.png" alt="Diagnostics page" width="640"></picture> |
 
 The app follows your system theme; the moon icon in the masthead switches it. All screenshots come from a mock backend with made-up data (`make docs-screenshots`, see [docs/tools](docs/tools/README.md)).
@@ -104,7 +104,7 @@ The app follows your system theme; the moon icon in the masthead switches it. Al
 
 | Doc | For |
 |---|---|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Install, one-time setup, first update, test resources |
+| [QUICKSTART.md](docs/QUICKSTART.md) | Install, one-time setup, first update, the Environment page |
 | [UPGRADING.md](docs/UPGRADING.md) | Which version you run, installs from before releases, moving between releases |
 | [GITOPS.md](docs/GITOPS.md) | Deploying with Argo CD: the Helm chart, its values, upgrades and removal |
 | [RUNBOOK.md](RUNBOOK.md) | Troubleshooting: what the app shows, and the fix |

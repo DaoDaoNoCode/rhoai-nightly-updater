@@ -13,7 +13,7 @@ Before your first change, read **[How the tool keeps your cluster safe](../READM
 | [4](#4-install-rhoai) | Install the latest RHOAI nightly | 5–8 min |
 | [5](#5-create-the-datasciencecluster) | Create the DataScienceCluster | 1 min |
 | [6](#6-check-that-rhoai-is-healthy) | Check that RHOAI is healthy | 2 min |
-| [7](#7-test-resources-s3-storage-and-a-pipeline-server) | Optional: S3 storage and a pipeline server | 3 min |
+| [7](#7-environment-s3-storage-and-a-pipeline-server) | Optional: S3 storage and a pipeline server | 3 min |
 
 ## 0. Before you start
 
@@ -160,9 +160,9 @@ Open **Components**, then **Diagnostics**.
 - **Components:** DataScienceCluster `default-dsc` is **Ready** and every enabled component is ready. Right after step 5, some deployments are still rolling out; refresh after a few minutes.
 - **Diagnostics:** **All 15 checks passed, no issues detected**. If a problem is listed, open it: it shows what was observed and the fix. [RUNBOOK §11.7](../RUNBOOK.md#117-datasciencecluster-not-ready) explains each one.
 
-## 7. Test resources: S3 storage and a pipeline server
+## 7. Environment: S3 storage and a pipeline server
 
-Optional, for testing pipelines in the dashboard. Open **Test resources**.
+Optional, for testing pipelines in the dashboard. Open **Environment**.
 
 <img src="images/s3-setup.png" alt="The Storage card: S3 storage Not deployed, with Set up" width="760">
 
@@ -182,7 +182,7 @@ Optional, for testing pipelines in the dashboard. Open **Test resources**.
 | Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator...** |
 | Switch to stable, another nightly, or an exact older build | Status → Recovery → **Reinstall...** (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |
-| S3 storage (SeaweedFS), pipeline servers, MLflow | Test resources |
+| S3 storage (SeaweedFS), pipeline servers, MLflow | Environment |
 | Which nightly contains PR #N? | Build Explorer → search `#123` ([Build Explorer search](../README.md#build-explorer-search)) |
 | Something looks wrong | Diagnostics → open the problem; automatic fixes ask for confirmation. [RUNBOOK](../RUNBOOK.md) |
 

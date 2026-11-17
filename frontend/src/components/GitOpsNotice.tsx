@@ -73,7 +73,7 @@ export const GitOpsProfileNotice: React.FC = () => {
         <p>
           Argo CD or an ACM policy manages RHOAI on this cluster from Git, so the updater only installs the build the managed catalog serves, and shows
           Status, Components and Diagnostics to cluster-admins. Reinstall, Re-deploy, the cluster setup, Build Explorer, Dashboard Dev,
-          Test resources, DataScienceCluster changes and Diagnostics fixes are off: make those changes in Git.
+          the Environment setups, DataScienceCluster changes and Diagnostics fixes are off: make those changes in Git.
         </p>
       </Alert>
     </Stack>

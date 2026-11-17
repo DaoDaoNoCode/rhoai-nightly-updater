@@ -54,7 +54,7 @@ export function activityLabel(entry: ActivityEntry): string {
 const FILTERS: { id: string; label: string }[] = [
   { id: "operator", label: "Operator" },
   { id: "dashboard-dev", label: "Dashboard Dev" },
-  { id: "test-resources", label: "Test resources" },
+  { id: "test-resources", label: "Environment" },
   { id: "setup", label: "Setup" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "all", label: "All" },

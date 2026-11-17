@@ -4,14 +4,16 @@ import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 
 /**
- * Test resources (S3 storage, MLflow, pipeline servers), at /test-resources
- * (A08-15). The old /dashboard-dev?tab=resources link redirects here.
+ * Environment: one-click setups for developing and reproducing issues (S3
+ * storage, pipeline servers, MLflow), at /test-resources, its path from when
+ * it was called Test resources (A08-15), so links keep working. The old
+ * /dashboard-dev?tab=resources link redirects here.
  */
-export const TestResourcesPage: React.FC = () => {
+export const EnvironmentPage: React.FC = () => {
   const blocker = useMutationBlocker();
   const onResult = useClusterBusyHandler();
   useEffect(() => {
-    document.title = "Test resources — RHOAI Nightly Updater";
+    document.title = "Environment — RHOAI Nightly Updater";
   }, []);
   return (
     <>
@@ -20,8 +22,8 @@ export const TestResourcesPage: React.FC = () => {
         onResult={onResult}
         renderHeader={(header) => (
           <PageHeader
-            title="Test resources"
-            description="Storage, MLflow and pipeline servers for testing the dashboard, with defaults that work on a fresh cluster."
+            title="Environment"
+            description="One-click setups for developing and reproducing issues on this cluster: storage, pipelines, MLflow, models, a Gen AI playground and Models as a Service."
             {...header}
           />
         )}

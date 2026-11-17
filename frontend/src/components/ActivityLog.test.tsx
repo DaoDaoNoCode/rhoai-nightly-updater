@@ -34,7 +34,7 @@ describe("ActivityLog", () => {
     expect(screen.queryByRole("button", { name: /Activity type/ })).toBeNull();
   });
 
-  it("files quick resources under Test resources", () => {
+  it("files quick resources under Environment", () => {
     expect(activityCategory({ ...refused, action: "teardown-minio", category: undefined })).toBe("test-resources");
     expect(activityCategory({ ...refused, action: "deploy-dashboard-main", category: undefined })).toBe("dashboard-dev");
     render(
@@ -44,7 +44,7 @@ describe("ActivityLog", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Activity type: All" }));
-    fireEvent.click(screen.getByRole("option", { name: /Test resources/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Environment/ }));
     expect(screen.getByText("MinIO set up")).toBeTruthy();
   });
 });

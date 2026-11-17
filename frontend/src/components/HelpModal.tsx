@@ -82,7 +82,7 @@ export const HelpButton: React.FC = () => {
               offer to revert it first.
             </Content>
 
-            <Content component={ContentVariants.h3}>Test resources</Content>
+            <Content component={ContentVariants.h3}>Environment</Content>
             <Content component={ContentVariants.p}>
               Sets up S3 storage (SeaweedFS), MLflow and pipeline servers with defaults that work on a fresh cluster, and
               tears down only what this tool created. The storage serves S3 through Service <code>minio-service</code>, a name

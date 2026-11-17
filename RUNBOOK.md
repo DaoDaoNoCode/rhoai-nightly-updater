@@ -18,7 +18,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy` | [§5](#5-operations-busy-stuck-interrupted) |
 | **Operator failed**, **No Subscription**, a failed Update or Reinstall step | [§6](#6-update--reinstall-failed) |
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
-| S3 storage on "MinIO (migration pending)", **Incomplete**, Tear down disabled | [§10](#10-test-resources) |
+| S3 storage on "MinIO (migration pending)", **Incomplete**, Tear down disabled | [§10](#10-environment-page) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
 | "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
 | "Argo CD manages ...", **Install pending**, **OLM installing**, `gitops_managed`, `install_mismatch`, "sets the image of CatalogSource ... in Git" | [§13](#13-clusters-managed-by-argo-cd) |
@@ -271,9 +271,9 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 - **"A newer ... build exists" or "Newer build available" under a container:** the tag the build was deployed from (`odh-stable`, `main`, `odh-pr-N`, `pr-N`) now points to another image. Nothing changed on the cluster: the container keeps its digest-pinned image. **Deploy latest main** or **Deploy PR** again to switch; main builds are then written under their commit tag ([CLUSTER_CHANGES §7](docs/CLUSTER_CHANGES.md#7-dashboard-dev)).
 - **Revert fails, or the UI is down:** §11.1.
 
-## 10. Test resources
+## 10. Environment page
 
-The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from earlier versions (which deployed MinIO). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-test-resources).
+The S3 storage is SeaweedFS (Deployment `seaweedfs`, PVC `seaweedfs-pvc`) behind Service `minio-service`, a name kept from earlier versions (which deployed MinIO). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
 <img src="docs/images/s3-incomplete.png" alt="S3 storage Incomplete: Deployment seaweedfs is scaled to 0 replicas, with Repair" width="760">
 
@@ -443,9 +443,9 @@ oc -n minio patch svc minio-service --type=merge -p '{"spec":{"selector":{"app":
 oc -n minio scale deploy/seaweedfs --replicas=0
 ```
 
-Pipeline servers reach MinIO again with no edits, and the `minio-ui` Route host serves the MinIO console. The Test resources page shows the storage as **Incomplete** ("scaled to 0 replicas"). **Do not press Repair while you rely on the rollback**: Repair switches back to SeaweedFS.
+Pipeline servers reach MinIO again with no edits, and the `minio-ui` Route host serves the MinIO console. The Environment page shows the storage as **Incomplete** ("scaled to 0 replicas"). **Do not press Repair while you rely on the rollback**: Repair switches back to SeaweedFS.
 
-To go forward again, press **Repair** on Test resources (it scales SeaweedFS back to 1, waits for it, and points `minio-service` and `minio-ui` at it). Wait until the storage shows Running, then remove the temporary MinIO (the three commands above, policy last).
+To go forward again, press **Repair** on the Environment page (it scales SeaweedFS back to 1, waits for it, and points `minio-service` and `minio-ui` at it). Wait until the storage shows Running, then remove the temporary MinIO (the three commands above, policy last).
 
 ## 11. Manual recovery for operator deadlocks
 
@@ -504,7 +504,7 @@ Fix (MANUAL ADMIN STEP): `oc annotate deploy/<name> -n <ns> opendatahub.io/manag
 oc get mlflows.mlflow.opendatahub.io
 ```
 
-Fix: **Tear down** MLflow on Test resources. For an MLflow CR the tool didn't create (MANUAL ADMIN STEP): `oc delete mlflows.mlflow.opendatahub.io <name>`.
+Fix: **Tear down** MLflow on the Environment page. For an MLflow CR the tool didn't create (MANUAL ADMIN STEP): `oc delete mlflows.mlflow.opendatahub.io <name>`.
 
 **D8.** Only the pipelines operator (DSPO) removes the DSPA finalizer. If pipelines were disabled, or DSPO is gone, a DSPA and its project hang in Terminating.
 
@@ -660,7 +660,7 @@ On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for examp
 | A newer nightly in Quay | The Status page shows it with the image reference to put in Git; nothing happens on the cluster until Git changes. The gitops profile does not look it up (it contacts no registry): its *Latest* row says that a newer nightly arrives as a change in Git ([GITOPS.md §11](docs/GITOPS.md#no-registry-access)) |
 | Re-deploy, Reinstall | Off: they delete the Subscription for minutes. Update installs the catalog's build again instead |
 | DSC repairs, Diagnostics *disable component* | Off when Argo CD manages the DSC: change the DSC in Git |
-| Dashboard Dev, test resources, other Diagnostics fixes | Unchanged: they touch objects Argo CD does not manage |
+| Dashboard Dev, the Environment setups, other Diagnostics fixes | Unchanged: they touch objects Argo CD does not manage |
 
 The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/last-applied-configuration` among them) and the labels onto the recreated Subscription. Argo CD may notice the recreation and run one automated self-heal sync of the Subscription; it finds it unchanged.
 

@@ -67,7 +67,7 @@ const StatusPage = lazy(() => import("./pages/StatusPage").then((m) => ({ defaul
 const ComponentsPage = lazy(() => import("./pages/ComponentsPage").then((m) => ({ default: m.ComponentsPage })));
 const BuildExplorerPage = lazy(() => import("./pages/BuildExplorerPage").then((m) => ({ default: m.BuildExplorerPage })));
 const DashboardDevPage = lazy(() => import("./pages/DashboardDevPage").then((m) => ({ default: m.DashboardDevPage })));
-const TestResourcesPage = lazy(() => import("./pages/TestResourcesPage").then((m) => ({ default: m.TestResourcesPage })));
+const EnvironmentPage = lazy(() => import("./pages/EnvironmentPage").then((m) => ({ default: m.EnvironmentPage })));
 const TroubleshootingPage = lazy(() => import("./pages/TroubleshootingPage").then((m) => ({ default: m.TroubleshootingPage })));
 
 const MAIN_CONTENT_ID = "main-content";
@@ -102,7 +102,7 @@ const RouterNavLink = React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttrib
 );
 RouterNavLink.displayName = "RouterNavLink";
 
-/** /dashboard-dev?tab=resources was the Test resources tab; it now has its own page. */
+/** /dashboard-dev?tab=resources was the Test resources tab; it is now the Environment page. */
 export const DashboardDevRoute: React.FC = () => {
   const [searchParams] = useSearchParams();
   return searchParams.get("tab") === "resources" ? <Navigate to="/test-resources" replace /> : <DashboardDevPage />;
@@ -345,7 +345,7 @@ const AppLayout: React.FC = () => {
             <Route path="/components" element={<ComponentsPage />} />
             <Route path="/builds" element={offInProfile("Build Explorer", <BuildExplorerPage />)} />
             <Route path="/dashboard-dev" element={offInProfile("Dashboard Dev", <DashboardDevRoute />)} />
-            <Route path="/test-resources" element={offInProfile("Test resources", <TestResourcesPage />)} />
+            <Route path="/test-resources" element={offInProfile("The Environment page", <EnvironmentPage />)} />
             <Route path="/diagnostics" element={<TroubleshootingPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

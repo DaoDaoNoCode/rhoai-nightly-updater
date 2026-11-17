@@ -606,7 +606,7 @@ profile from `GET /api/version` and hides what the profile refuses.
 
 | Profile | For | What the updater does | RBAC |
 |---|---|---|---|
-| `full` (default of the Template, `install.sh` and `make`) | the dashboard team's development clusters | everything: Update, Reinstall, Re-deploy, the cluster setup, Build Explorer, Dashboard Dev, Test resources, DataScienceCluster changes, Diagnostics fixes | the Template's (`deploy/template.yaml`) |
+| `full` (default of the Template, `install.sh` and `make`) | the dashboard team's development clusters | everything: Update, Reinstall, Re-deploy, the cluster setup, Build Explorer, Dashboard Dev, the Environment page, DataScienceCluster changes, Diagnostics fixes | the Template's (`deploy/template.yaml`) |
 | `gitops` (default of the chart) | clusters where Argo CD (or, for the catalog, an ACM policy) manages RHOAI from Git, including clusters that serve tenants | Update's Argo CD path only: install the build the catalog Git manages serves (or the same build again), plus its dry run and the Status, Components and Diagnostics reads | `deploy/rbac-gitops.yaml` (with the chart) |
 
 The chart defaults to `gitops` because it is the Argo CD install: on such a

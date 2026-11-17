@@ -20,6 +20,12 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **Test resources is now the Environment page**: one-click setups for
+  developing and reproducing issues on the cluster. Its address stays
+  `/test-resources`, so bookmarks and links keep working. Storage,
+  Pipeline servers and MLflow are grouped under **Data & pipelines**, with
+  Pipeline servers now right after the storage they use; the cards work as
+  before.
 - S3 storage: SeaweedFS 4.48 → 4.54, pinned by digest. SeaweedFS 4.49 moved
   its admin UI from port 23646 to 12535 (the old port put the admin's gRPC
   port in Linux's ephemeral range, where it could be taken at startup), so

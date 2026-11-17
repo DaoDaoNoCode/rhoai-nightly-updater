@@ -55,7 +55,7 @@ function useNow(active: boolean): number {
 /** Where to follow an operation of this backend type, as [path, link text]. */
 function followLink(type: string): [string, string] | null {
   if (operationKindForServerType(type)) return ["/", "View progress"];
-  if (type.includes("minio") || type.includes("mlflow") || type.includes("pipeline")) return ["/test-resources", "Open Test resources"];
+  if (type.includes("minio") || type.includes("mlflow") || type.includes("pipeline")) return ["/test-resources", "Open Environment"];
   if (type.includes("dashboard")) return ["/dashboard-dev", "Open Dashboard Dev"];
   if (type === "diagnostics-fix" || type === "assist-rollout") return ["/diagnostics", "Open Diagnostics"];
   if (type === "repair-dsc") return ["/components", "Open Components"];

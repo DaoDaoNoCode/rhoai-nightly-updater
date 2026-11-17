@@ -67,6 +67,6 @@ export const NAV_ITEMS = [
   { path: "/components", label: "Components" },
   { path: "/builds", label: "Build Explorer" },
   { path: "/dashboard-dev", label: "Dashboard Dev" },
-  { path: "/test-resources", label: "Test resources" },
+  { path: "/test-resources", label: "Environment" },
   { path: "/diagnostics", label: "Diagnostics" },
 ] as const;
