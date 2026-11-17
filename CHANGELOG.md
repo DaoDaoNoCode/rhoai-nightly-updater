@@ -55,7 +55,8 @@ only accepts a tag whose version is the top dated section. See
   tool created, waiting until each reaches the new storage. The old
   storage is removed only in a separate, confirmed last step, after a
   checklist for references the tool did not create; deleting namespace
-  `minio` is a separate choice, offered only when the tool created it.
+  `minio` (and everything in it) is a separate, unticked choice, offered
+  when it carries the tool's label.
   Each run resumes where the last stopped. Until then the Storage card
   reads **Migration needed**, with the old storage's objects under
   **Details**, and the in-place MinIO-to-SeaweedFS replacement of 2.x is

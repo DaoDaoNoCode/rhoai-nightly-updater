@@ -345,7 +345,7 @@ Before you remove the old storage, update what this tool did not create (data co
 
 <img src="docs/images/s3-remove-dialog.png" alt="Dialog: Remove the old storage?, with the checklist, what is deleted, and the choice to delete namespace minio" width="760">
 
-**Remove old storage** deletes the old objects; **Also delete namespace minio** is offered only when the namespace's metadata shows the tool created it, and deletes anything else in it.
+**Remove old storage** deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
 
 Check the result:
 

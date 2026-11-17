@@ -118,7 +118,13 @@ const RemovePlan: React.FC<{ legacy: LegacyStorageState; deleteNamespace: boolea
       <StackItem>
         {legacy.namespaceDeletable ? (
           <Checkbox id="migrate-delete-namespace" label={<>Also delete namespace <code>{legacy.namespace}</code></>}
-            description={<>Deleting the namespace also deletes anything else in it, including objects this tool did not create.</>}
+            description={<>
+              Deletes namespace <code>{legacy.namespace}</code> and everything in it, including anything this tool did not create.{" "}
+              {(legacy.otherObjects ?? []).length > 0
+                ? <>Besides the objects above, this tool sees there: {codes(legacy.otherObjects ?? [])}.</>
+                : <>Besides the objects above, this tool sees no Deployments or PersistentVolumeClaims there.</>}{" "}
+              It cannot list every kind (Secrets, ConfigMaps and others): check with <code>oc get all,pvc,secret,configmap -n {legacy.namespace}</code>.
+            </>}
             isChecked={deleteNamespace} onChange={(_e, v) => setDeleteNamespace(v)} />
         ) : (
           <Content component="p">{legacy.namespaceKeptReason}</Content>

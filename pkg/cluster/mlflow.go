@@ -80,7 +80,7 @@ func (m mlflowCR) image() string {
 // from the console or dashboard is never claimed, because the MLflow CRD only
 // allows the single name "mlflow" and deleting it garbage-collects mlflow-pvc.
 func (m mlflowCR) managedByTool() bool {
-	return m.Metadata.hasToolLabel() || m.Metadata.createdByToolApply()
+	return m.Metadata.hasToolLabel() || m.Metadata.ownsFieldPath([]string{toolFieldManager}, "f:spec")
 }
 
 func prNumberFromImage(image string) int {

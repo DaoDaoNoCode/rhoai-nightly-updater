@@ -374,8 +374,10 @@ export interface LegacyStorageState {
   notMoved?: string[] | null;
   /** Why the old storage cannot be removed yet. */
   removeBlockedReason?: string;
-  /** True when this tool created namespace minio, so removing the old storage may delete it. */
+  /** True when namespace minio carries this tool's label and the tool wrote it: removing the old storage offers to delete it. */
   namespaceDeletable: boolean;
+  /** Deployments and PVCs in the namespace this tool did not create (it cannot list every kind). */
+  otherObjects?: string[] | null;
   /** Why the namespace is not offered for deletion. */
   namespaceKeptReason?: string;
 }

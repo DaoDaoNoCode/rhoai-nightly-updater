@@ -658,11 +658,11 @@ func TestRemoveOldStorage(t *testing.T) {
 			t.Fatalf("got %v: %s", ok, msg)
 		}
 	})
-	t.Run("keeps a namespace it cannot prove it created", func(t *testing.T) {
+	t.Run("keeps a labelled namespace the tool never wrote", func(t *testing.T) {
 		f, c := migrated(t)
-		// The label alone (putLegacySeaweedFS) is not proof.
+		// The label alone (putLegacySeaweedFS has no managedFields) is not enough.
 		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true, DeleteNamespace: true})
-		if !ok || !strings.Contains(msg, "does not show that this tool created it") || !f.has(legacyNSPath) {
+		if !ok || !strings.Contains(msg, "show no write by this tool") || !f.has(legacyNSPath) {
 			t.Fatalf("got %v: %s", ok, msg)
 		}
 		if hasExactMutation(f, "DELETE "+legacyNSPath) {
@@ -693,27 +693,153 @@ func TestRemoveOldStorage(t *testing.T) {
 	})
 }
 
-func TestLegacyNamespaceOwned(t *testing.T) {
+// The live namespace minio: created by OpenShift's controllers' applies at
+// creation, labelled later by an earlier version of this tool (a plain
+// PATCH, so Go-http-client, at a later time).
+const liveMinioNamespace = `{"metadata":{"uid":"ns-uid","creationTimestamp":"2026-08-27T21:30:55Z",
+	"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater","kubernetes.io/metadata.name":"minio"},
+	"managedFields":[
+	  {"manager":"cluster-policy-controller","operation":"Apply","time":"2026-08-27T21:30:55Z","fieldsType":"FieldsV1","fieldsV1":{"f:metadata":{"f:annotations":{}}}},
+	  {"manager":"pod-security-admission-label-synchronization-controller","operation":"Apply","time":"2026-08-27T21:30:55Z","fieldsType":"FieldsV1","fieldsV1":{"f:metadata":{"f:labels":{}}}},
+	  {"manager":"Go-http-client","operation":"Update","time":"2026-10-06T03:49:35Z","fieldsType":"FieldsV1","fieldsV1":{"f:metadata":{"f:labels":{"f:app.kubernetes.io/managed-by":{}}}}}]},
+	"status":{"phase":"Active"}}`
+
+func TestLegacyNamespaceDeletable(t *testing.T) {
 	label := map[string]string{managedByLabelKey: managedByLabelValue}
-	at := func(manager, op string) []managedFieldsEntry {
-		return []managedFieldsEntry{{Manager: manager, Operation: op, Time: created}}
+	at := func(manager, op, time string) []managedFieldsEntry {
+		return []managedFieldsEntry{{Manager: manager, Operation: op, Time: time}}
 	}
 	cases := []struct {
-		name string
-		meta objectMeta
-		want bool
+		name   string
+		meta   objectMeta
+		want   bool
+		reason string
 	}{
-		{"created by this version with its label", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(toolFieldManager, "Update")}, true},
-		{"created by the earliest POST, labelled later", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(legacyPostManager, "Update")}, true},
-		{"label only", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at("kubectl-create", "Update")}, false},
-		{"created by the tool, label removed", objectMeta{CreationTimestamp: created, ManagedFields: at(toolFieldManager, "Update")}, false},
-		{"nothing", objectMeta{CreationTimestamp: created}, false},
+		{"created by this version", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(toolFieldManager, "Update", created)}, true, ""},
+		{"labelled later by an earlier version", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(legacyPostManager, "Update", "2026-10-06T03:49:35Z")}, true, ""},
+		{"label only", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at("kubectl-label", "Update", created)}, false, "show no write by this tool"},
+		{"no label", objectMeta{CreationTimestamp: created, ManagedFields: at(toolFieldManager, "Update", created)}, false, "does not carry this tool's label"},
+		{"a subresource write only", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: []managedFieldsEntry{{Manager: toolFieldManager, Operation: "Update", Subresource: "status"}}}, false, "show no write by this tool"},
 	}
 	for _, tc := range cases {
-		if got, why := legacyNamespaceOwned(tc.meta); got != tc.want || (!got && why == "") {
-			t.Errorf("%s: owned = %v, reason %q", tc.name, got, why)
+		got, why := legacyNamespaceDeletable(tc.meta)
+		if got != tc.want || !strings.Contains(why, tc.reason) {
+			t.Errorf("%s: deletable = %v, reason %q", tc.name, got, why)
 		}
 	}
+}
+
+// The live namespace (a later tool update, OpenShift's controllers at
+// creation) is offered for deletion and deleted only after consent.
+func TestRemoveOldStorage_LiveNamespaceIsDeletableAfterConsent(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	f.putJSON(legacyNSPath, liveMinioNamespace)
+	delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
+	f.putJSON("/apis/apps/v1/namespaces/minio/deployments/notes-app", `{"metadata":{"labels":{"app":"notes"}}}`)
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+		t.Fatal(msg)
+	}
+	status, err := GetResourcesStatus(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := status.LegacyStorage; !l.NamespaceDeletable || strings.Join(l.OtherObjects, ",") != "Deployment notes-app" {
+		t.Fatalf("legacy = %+v", l)
+	}
+	// Not ticked: kept.
+	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true}); !ok || !strings.Contains(msg, "kept, as chosen") || !f.has(legacyNSPath) {
+		t.Fatalf("got %v: %s", ok, msg)
+	}
+}
+
+func TestRemoveOldStorage_LiveNamespaceDeletedWhenTicked(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	f.putJSON(legacyNSPath, liveMinioNamespace)
+	delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+		t.Fatal(msg)
+	}
+	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true, DeleteNamespace: true})
+	if !ok || !hasExactMutation(f, "DELETE "+legacyNSPath) || f.has(legacyNSPath) {
+		t.Fatalf("got %v: %s", ok, msg)
+	}
+}
+
+func TestRemoveOldStorage_NamespaceWithoutLabelIsKept(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	f.putJSON(legacyNSPath, strings.Replace(liveMinioNamespace, `"app.kubernetes.io/managed-by":"rhoai-nightly-updater",`, "", 1))
+	delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+		t.Fatal(msg)
+	}
+	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true, DeleteNamespace: true})
+	if !ok || !strings.Contains(msg, "does not carry this tool's label") || hasExactMutation(f, "DELETE "+legacyNSPath) {
+		t.Fatalf("got %v: %s", ok, msg)
+	}
+}
+
+// DSPAs named like an earlier version's, told apart by who owns their
+// object storage fields.
+func TestManagedByTool_FieldOwnership(t *testing.T) {
+	storage := `{"f:spec":{"f:objectStorage":{"f:externalStorage":{"f:host":{},"f:s3CredentialsSecret":{"f:secretName":{}}}}}}`
+	entry := func(manager, op, time, fields string) string {
+		return `{"manager":"` + manager + `","operation":"` + op + `","time":"` + time + `","fieldsType":"FieldsV1","fieldsV1":` + fields + `}`
+	}
+	dspa := func(entries ...string) dspaInfo {
+		var meta objectMeta
+		raw := `{"name":"dspa","namespace":"juntao-test","creationTimestamp":"2026-09-02T22:32:19Z","managedFields":[` + strings.Join(entries, ",") + `]}`
+		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+			t.Fatal(err)
+		}
+		return dspaInfo{Meta: meta, Host: legacyS3Host(), Scheme: "http", SecretName: legacyDSPASecretName}
+	}
+	dspo := entry("manager", "Update", "2026-09-02T22:33:01Z", `{"f:metadata":{"f:finalizers":{}}}`)
+	annotate := entry("kubectl-annotate", "Update", "2026-10-06T03:00:00Z", `{"f:metadata":{"f:annotations":{}}}`)
+	cases := []struct {
+		name string
+		d    dspaInfo
+		want bool
+	}{
+		// The live juntao-test/dspa.
+		{"created by an earlier version", dspa(entry(legacyPostManager, "Update", "2026-09-02T22:32:19Z", storage), dspo, annotate), true},
+		{"re-written later by the tool", dspa(entry(legacyPostManager, "Update", "2026-10-20T08:00:00Z", storage), dspo, annotate), true},
+		{"created by server-side apply", dspa(entry(toolFieldManager, "Apply", "2026-11-01T08:00:00Z", storage)), true},
+		// odh-dashboard: its Node backend sends no User-Agent (empty
+		// manager), its Go BFF forwards the browser's ("Mozilla").
+		{"created by the dashboard's Node backend", dspa(entry("", "Update", "2026-09-02T22:32:19Z", storage), dspo), false},
+		{"created by the dashboard's BFF", dspa(entry("Mozilla", "Update", "2026-09-02T22:32:19Z", storage), dspo), false},
+		{"the tool wrote only metadata", dspa(entry(legacyPostManager, "Update", "2026-09-02T22:32:19Z", `{"f:metadata":{"f:labels":{}}}`), entry("Mozilla", "Update", "2026-09-03T00:00:00Z", storage)), false},
+	}
+	for _, tc := range cases {
+		if got := tc.d.managedByTool(); got != tc.want {
+			t.Errorf("%s: managedByTool = %v", tc.name, got)
+		}
+	}
+}
+
+// A dashboard-created DSPA with the earlier version's names is listed for
+// the user, never patched.
+func TestMigrate_DashboardCreatedDSPAIsListedNotPatched(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putLegacySeaweedFS(f)
+	f.putJSON(dspaPath("dash-project", legacyDSPAName), `{"metadata":{"generation":1,"creationTimestamp":"`+created+`","managedFields":[{"manager":"Mozilla","operation":"Update","time":"`+created+`","fieldsType":"FieldsV1","fieldsV1":`+ownedContentJSON+`}]},
+		"spec":{"objectStorage":{"externalStorage":{"host":"`+legacyS3Host()+`","scheme":"http","bucket":"pipelines","s3CredentialsSecret":{"secretName":"dashboard-dspa-secret","accessKey":"AWS_ACCESS_KEY_ID","secretKey":"AWS_SECRET_ACCESS_KEY"}}}}}`)
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
+	if !ok || !strings.Contains(msg, "dash-project/dspa (not created by this tool)") {
+		t.Fatalf("got %v: %s", ok, msg)
+	}
+	noChangeToPipelineServers(t, f)
 }
 
 func TestGetResourcesStatus_MigrationPlan(t *testing.T) {

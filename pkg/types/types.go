@@ -653,9 +653,14 @@ type LegacyStorageState struct {
 	// RemoveBlockedReason explains why the old storage cannot be removed
 	// yet (a pipeline server still uses it).
 	RemoveBlockedReason string `json:"removeBlockedReason,omitempty"`
-	// NamespaceDeletable is true when this tool created namespace minio, so
-	// removing the old storage may also delete it (the user's choice).
+	// NamespaceDeletable is true when namespace minio carries this tool's
+	// label and the tool's managers wrote it: removing the old storage then
+	// offers to delete it, as the user's informed choice.
 	NamespaceDeletable bool `json:"namespaceDeletable"`
+	// OtherObjects are the Deployments and PVCs in the namespace this tool
+	// did not create, which deleting the namespace would delete too (the
+	// tool cannot list every kind).
+	OtherObjects []string `json:"otherObjects,omitempty"`
 	// NamespaceKeptReason says why the namespace is not offered for
 	// deletion.
 	NamespaceKeptReason string `json:"namespaceKeptReason,omitempty"`

@@ -76,19 +76,23 @@ type dspaCondition struct {
 
 // managedByTool reports whether this tool created the DSPA. Current versions
 // label it. Older versions named it "dspa", pointed it at the tool's storage
-// in namespace minio (legacyS3Host) with secret "dashboard-dspa-secret",
-// and created it either by server-side apply (fieldManager
-// rhoai-nightly-updater) or, when that apply failed, by a POST without
-// User-Agent (manager "Go-http-client"). odh-dashboard creates
-// its "dspa" from the browser, so neither manager matches it.
+// in namespace minio (legacyS3Host) with secret "dashboard-dspa-secret", and
+// set no label (pipeline_server.go:235 at 5051672). odh-dashboard creates
+// its pipeline server with the same names, so the proof is who wrote the
+// object storage: the tool's managers (toolManagers) must own both
+// spec.objectStorage.externalStorage.host and its s3CredentialsSecret's
+// secretName. A DSPA the dashboard created, or whose storage someone else
+// changed since, is not the tool's.
 func (d dspaInfo) managedByTool() bool {
 	if d.Meta.hasToolLabel() {
 		return true
 	}
+	storage := []string{"f:spec", "f:objectStorage", "f:externalStorage"}
 	return d.Meta.Name == legacyDSPAName &&
 		d.Host == legacyS3Host() &&
 		d.SecretName == legacyDSPASecretName &&
-		(d.Meta.createdByToolApply() || d.Meta.createdBy(legacyPostManager, "Update"))
+		d.Meta.ownsFieldPath(toolManagers, append(storage, "f:host")...) &&
+		d.Meta.ownsFieldPath(toolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
 }
 
 func (d dspaInfo) hasFinalizer() bool {
@@ -704,7 +708,8 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 	if err != nil {
 		return fmt.Sprintf(" The credentials secret '%s' could not be parsed and was left in place.", name)
 	}
-	if !meta.hasToolLabel() && !meta.createdByToolApply() && !meta.createdBy(legacyPostManager, "Update") {
+	// The tool's label, or an earlier version's managers own its keys.
+	if !meta.hasToolLabel() && !meta.ownsFieldPath(toolManagers, "f:data") && !meta.ownsFieldPath(toolManagers, "f:stringData") {
 		*logs = append(*logs, fmt.Sprintf("Kept secret '%s': it was not created by this tool", name))
 		return ""
 	}

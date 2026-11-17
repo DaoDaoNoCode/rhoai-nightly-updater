@@ -144,6 +144,10 @@ type legacyStorage struct {
 	// replica.
 	server string
 	ready  bool
+	// others are the Deployments and PVCs in the namespace this tool did
+	// not create ("Deployment name"): what deleting the namespace would
+	// also delete, as far as the tool can see (it cannot list every kind).
+	others []string
 	// address is how pipeline servers may reach it; addressErr is set when
 	// its Routes or Service could not be read.
 	address    storageAddress
@@ -183,11 +187,13 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 	}
 	results := make([]result, len(legacyStorageObjects))
 	var (
-		wg      sync.WaitGroup
-		pvcs    []storagePVC
-		pvcErr  error
-		address storageAddress
-		addrErr error
+		wg        sync.WaitGroup
+		pvcs      []storagePVC
+		pvcErr    error
+		address   storageAddress
+		addrErr   error
+		deploys   []objectMeta
+		deployErr error
 	)
 	for i, o := range legacyStorageObjects {
 		if o.kind == "PersistentVolumeClaim" {
@@ -208,8 +214,9 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 			}
 		}(i, o.kind, o.name)
 	}
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); pvcs, pvcErr = listPVCs(c, legacyNamespace) }()
+	go func() { defer wg.Done(); deploys, deployErr = listDeploymentMetas(c, legacyNamespace) }()
 	go func() { defer wg.Done(); address, addrErr = readLegacyAddress(c) }()
 	wg.Wait()
 
@@ -246,6 +253,24 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 	if len(l.objects) == 0 {
 		return nil, nil
 	}
+	tool := map[string]bool{}
+	for _, o := range l.objects {
+		tool[o.kind+" "+o.name] = true
+	}
+	for _, p := range pvcs {
+		if name := "PersistentVolumeClaim " + p.Meta.Name; !tool[name] {
+			l.others = append(l.others, name)
+		}
+	}
+	if deployErr != nil {
+		l.others = append(l.others, "(the Deployments could not be listed: "+deployErr.Error()+")")
+	}
+	for _, d := range deploys {
+		if name := "Deployment " + d.Name; !tool[name] {
+			l.others = append(l.others, name)
+		}
+	}
+	sort.Strings(l.others)
 	switch {
 	case hasKey(deployments, s3Deployment):
 		l.server, l.ready = "SeaweedFS", deployments[s3Deployment].Status.ReadyReplicas >= 1
@@ -253,6 +278,27 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 		l.server, l.ready = "MinIO", deployments[legacyMinIODeployment].Status.ReadyReplicas >= 1
 	}
 	return l, nil
+}
+
+// listDeploymentMetas lists the metadata of a namespace's Deployments.
+func listDeploymentMetas(c *Client, namespace string) ([]objectMeta, error) {
+	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, ""))
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Items []struct {
+			Metadata objectMeta `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, err
+	}
+	out := make([]objectMeta, 0, len(list.Items))
+	for _, item := range list.Items {
+		out = append(out, item.Metadata)
+	}
+	return out, nil
 }
 
 func hasKey[V any](m map[string]V, k string) bool {
@@ -345,6 +391,7 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady bool) *type
 		state.Stage = "remove"
 		state.RemoveBlockedReason = s3TeardownBlocker(dspas, l.address)
 	}
-	state.NamespaceDeletable, state.NamespaceKeptReason = legacyNamespaceOwned(l.nsMeta)
+	state.NamespaceDeletable, state.NamespaceKeptReason = legacyNamespaceDeletable(l.nsMeta)
+	state.OtherObjects = l.others
 	return state
 }

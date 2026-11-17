@@ -207,10 +207,12 @@ func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
 }
 
 // storageObjectOwned reports whether the tool created a storage object: it
-// carries the ownership label, or an earlier version created it by
-// server-side apply (see createdBy).
+// carries the ownership label, or (an earlier version's unlabelled object)
+// the tool's field manager owns its content, spec or data (see
+// ownsFieldPath).
 func storageObjectOwned(m objectMeta) bool {
-	return m.hasToolLabel() || m.createdByToolApply()
+	tool := []string{toolFieldManager}
+	return m.hasToolLabel() || m.ownsFieldPath(tool, "f:spec") || m.ownsFieldPath(tool, "f:data") || m.ownsFieldPath(tool, "f:stringData")
 }
 
 // storagePVC is a PVC of a storage namespace and the size of its volume.

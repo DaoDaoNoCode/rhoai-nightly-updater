@@ -139,7 +139,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 		raw, _ := json.Marshal(map[string]interface{}{"metadata": cur})
 		f.putJSON(path, string(raw))
 		got, err := upgradeToolFieldOwnership(c, path, cur)
-		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.createdByToolApply() {
+		if err != nil || len(got.ManagedFields) != 1 || got.ManagedFields[0].Operation != "Apply" || !got.ownsFieldPath([]string{toolFieldManager}, "f:spec", "f:ports") {
 			t.Fatalf("after = %+v, %v", got, err)
 		}
 	})

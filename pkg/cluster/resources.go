@@ -78,26 +78,57 @@ func (m objectMeta) terminating() bool {
 	return m.DeletionTimestamp != ""
 }
 
-// createdBy reports whether manager wrote the object at creation time with the
-// given operation. An entry's time is the last time that manager changed the
-// object, so a later edit by the same manager makes this false; that errs on
-// the side of not claiming the object.
-func (m objectMeta) createdBy(manager, operation string) bool {
-	if m.CreationTimestamp == "" {
-		return false
-	}
-	for _, f := range m.ManagedFields {
-		if f.Manager == manager && f.Operation == operation && f.Subresource == "" && f.Time == m.CreationTimestamp {
+// toolManagers are the field managers this tool's versions wrote with:
+// "rhoai-nightly-updater" (server-side apply and POSTs with fieldManager),
+// and "Go-http-client", which the API server derives from the User-Agent of
+// the earliest versions' plain POSTs and patches (Go's default; the first
+// version applied with fieldManager rhoai-nightly-updater and fell back to
+// such a POST, pkg/cluster/client.go:193 and pipeline_server.go:262-266 at
+// 5051672). odh-dashboard never writes as Go-http-client: its Node backend
+// sends no User-Agent (backend/src/utils/directCallUtils.ts), its Go BFF
+// forwards the browser's (distributions/core-bff, httputil.ReverseProxy).
+var toolManagers = []string{toolFieldManager, legacyPostManager}
+
+// ownsFieldPath reports whether one of managers owns the field at path, a
+// chain of fieldsV1 keys such as "f:spec", "f:objectStorage", through the
+// object itself (not a subresource). The API server gives a field to
+// whoever last set it to a new value, so a field the tool still owns is one
+// the tool wrote and nobody has changed since: proof of who made the
+// object's content that, unlike an entry's time (the manager's last write),
+// does not break when the tool updates the object again.
+func (m objectMeta) ownsFieldPath(managers []string, path ...string) bool {
+	for _, e := range m.ManagedFields {
+		if e.Subresource != "" || !containsString(managers, e.Manager) || len(path) == 0 {
+			continue
+		}
+		raw, ok := e.FieldsV1[path[0]]
+		for _, key := range path[1:] {
+			if !ok {
+				break
+			}
+			var node map[string]json.RawMessage
+			if json.Unmarshal(raw, &node) != nil {
+				ok = false
+				break
+			}
+			raw, ok = node[key]
+		}
+		if ok {
 			return true
 		}
 	}
 	return false
 }
 
-// createdByToolApply reports whether an older version of the tool created the
-// object with server-side apply.
-func (m objectMeta) createdByToolApply() bool {
-	return m.createdBy(toolFieldManager, "Apply")
+// hasManager reports whether one of managers wrote the object itself at
+// any time (any operation, not a subresource).
+func (m objectMeta) hasManager(managers []string) bool {
+	for _, e := range m.ManagedFields {
+		if e.Subresource == "" && containsString(managers, e.Manager) {
+			return true
+		}
+	}
+	return false
 }
 
 // ownsField reports whether manager owns the top-level field (a fieldsV1

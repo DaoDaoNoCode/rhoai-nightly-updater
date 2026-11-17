@@ -246,7 +246,7 @@ describe("storage from an earlier version", () => {
     dataPVCs: [{ name: "seaweedfs-pvc", size: "20Gi" }, { name: "minio-pvc", size: "20Gi" }],
     uncopiedPVCs: ["minio-pvc"], usedBy: ["juntao-test/dspa", "team-x/dspa"],
     stage: "migrate", repoint: ["juntao-test/dspa"], notMoved: ["team-x/dspa (not created by this tool)"],
-    namespaceDeletable: false, namespaceKeptReason: "Namespace 'minio' is kept: its metadata does not show that this tool created it (it may hold other things).",
+    namespaceDeletable: false, namespaceKeptReason: "Namespace 'minio' is kept: it does not carry this tool's label (app.kubernetes.io/managed-by=rhoai-nightly-updater).",
   };
   const blocked = "2 pipeline servers use this S3 storage: juntao-test/dspa, team-x/dspa. Tear them down first.";
   const notDeployed: ResourceState = {
@@ -315,7 +315,7 @@ describe("storage from an earlier version", () => {
   });
 
   it("removal: the namespace is a separate choice, and is sent only when ticked", async () => {
-    const removable: LegacyStorageState = { ...legacy, stage: "remove", repoint: [], notMoved: [], usedBy: [], namespaceDeletable: true, namespaceKeptReason: undefined };
+    const removable: LegacyStorageState = { ...legacy, stage: "remove", repoint: [], notMoved: [], usedBy: [], namespaceDeletable: true, namespaceKeptReason: undefined, otherObjects: ["Deployment notes-app"] };
     const ready: ResourceState = { deployed: true, ready: true, namespace: "seaweedfs", managedByTool: true, message: "Running", migrationPending: true };
     const api = setup(live({ minio: ready, legacyStorage: removable, pipelineServers: [] }), {
       "POST /api/resources/minio/migrate/stream": sse({ step: "operation_complete", status: "success", message: "The old storage in namespace 'minio' was removed.", elapsedMs: 1 }),
@@ -326,7 +326,8 @@ describe("storage from an earlier version", () => {
     fireEvent.click(within(storage).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: /Remove the old storage\?/ })).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("Deleting the namespace also deletes anything else in it");
+    expect(dialog).toHaveTextContent("Deletes namespace minio and everything in it, including anything this tool did not create.");
+    expect(dialog).toHaveTextContent("Besides the objects above, this tool sees there: Deployment notes-app.");
     const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace minio" });
     expect(box).not.toBeChecked();
     fireEvent.click(box);

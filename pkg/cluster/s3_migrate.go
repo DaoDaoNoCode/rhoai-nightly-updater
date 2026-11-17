@@ -892,22 +892,22 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 	}
 }
 
-// legacyNamespaceOwned reports whether this tool created namespace minio:
-// it carries the tool's label and its creation was recorded for one of the
-// managers this tool's versions used (a POST with fieldManager
-// rhoai-nightly-updater, or the earliest POSTs without User-Agent,
-// "Go-http-client"; see createdBy). A label alone is not enough: anyone who
-// can patch the namespace can add it. reason says why when it is not.
-func legacyNamespaceOwned(meta objectMeta) (bool, string) {
-	created := meta.createdBy(toolFieldManager, "Update") || meta.createdBy(legacyPostManager, "Update") || meta.createdByToolApply()
+// legacyNamespaceDeletable reports whether removing the old storage may
+// offer to delete namespace minio: it carries the tool's label and one of
+// the tool's managers wrote it (earlier versions created it, or labelled
+// one they had created). Who created a namespace cannot be proven from its
+// metadata (an entry's time is the manager's last write), so the deletion
+// is the user's informed choice: the dialog says it deletes everything in
+// the namespace, lists what the tool can see there, and starts unticked.
+// reason says why it is not offered.
+func legacyNamespaceDeletable(meta objectMeta) (bool, string) {
 	switch {
-	case meta.hasToolLabel() && created:
-		return true, ""
-	case created:
-		return false, fmt.Sprintf("Namespace '%s' does not carry this tool's label, so it is kept.", legacyNamespace)
-	default:
-		return false, fmt.Sprintf("Namespace '%s' is kept: its metadata does not show that this tool created it (it may hold other things).", legacyNamespace)
+	case !meta.hasToolLabel():
+		return false, fmt.Sprintf("Namespace '%s' is kept: it does not carry this tool's label (%s=%s).", legacyNamespace, managedByLabelKey, managedByLabelValue)
+	case !meta.hasManager(toolManagers):
+		return false, fmt.Sprintf("Namespace '%s' is kept: it carries this tool's label, but its managedFields show no write by this tool.", legacyNamespace)
 	}
+	return true, ""
 }
 
 // readLegacyNamespace reads namespace minio's metadata.
@@ -1020,7 +1020,7 @@ func (m *migrateRun) removeNamespace(requested bool) string {
 	case !found:
 		return ""
 	}
-	owned, reason := legacyNamespaceOwned(meta)
+	owned, reason := legacyNamespaceDeletable(meta)
 	switch {
 	case !requested && owned:
 		m.step("namespace", "skipped", fmt.Sprintf("Namespace '%s' is kept, as chosen", legacyNamespace))

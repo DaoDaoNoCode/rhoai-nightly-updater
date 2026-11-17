@@ -40,10 +40,14 @@ func fastS3Timings(t *testing.T) *int {
 	return &calls
 }
 
+// ownedContentJSON is the fieldsV1 of a manager that wrote an object's
+// content: labels, the spec (with a DSPA's object storage) and data.
+const ownedContentJSON = `{"f:metadata":{"f:labels":{}},"f:spec":{"f:objectStorage":{"f:externalStorage":{"f:host":{},"f:s3CredentialsSecret":{"f:secretName":{}}}}},"f:data":{}}`
+
 // managedFieldsJSON builds a managedFields array with one entry at the
-// creation time.
+// creation time, owning the object's content.
 func managedFieldsJSON(manager, op string) string {
-	return `[{"manager":"` + manager + `","operation":"` + op + `","time":"` + created + `"}]`
+	return `[{"manager":"` + manager + `","operation":"` + op + `","time":"` + created + `","fieldsType":"FieldsV1","fieldsV1":` + ownedContentJSON + `}]`
 }
 
 func hasMutation(f *resourceFake, prefix string) bool {
