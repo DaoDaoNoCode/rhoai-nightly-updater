@@ -30,6 +30,7 @@ import {
   streamMLflowSamples,
   streamPipelineSample,
   streamModels,
+  streamPlayground,
   toApiError,
   type StreamDoneHandler,
   type StreamDetachHandler,
@@ -41,8 +42,10 @@ import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
 import { PageLoading } from "./PageStates";
 import { errorResult } from "../outcomes";
-import { type ConfirmSpec, type ModelsPending, type Pending, type ResourcePending, type SamplePending, isModelsPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { ModelsTab, modelsConfirm, modelsSteps } from "./environment/ModelsTab";
+import { PlaygroundTab, playgroundConfirm, playgroundSteps } from "./environment/PlaygroundTab";
+import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
 import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
@@ -67,6 +70,10 @@ import {
   mlflowState,
   modelsState,
   type ModelsOp,
+  type PlaygroundOp,
+  defaultPlaygroundProject,
+  playgroundIn,
+  playgroundState,
   pipelineServerIn,
   pipelineServerStatus,
   pipelineServerUnmanaged,
@@ -95,9 +102,9 @@ export function readyCheck(kind: ResourceKind, state: ResourceState | undefined)
 const BUSY_REASON = "Another operation is in progress";
 
 /** The tabs, in the URL as ?tab= (overview is the default and is left out). */
-export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models"] as const;
+export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models", "playground"] as const;
 export type EnvironmentTab = (typeof ENVIRONMENT_TABS)[number];
-const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models" };
+const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "Playground" };
 /** Tabs of the earlier layout: links to them open Pipelines. */
 const OLD_TABS = ["cluster", "projects"];
 
@@ -289,6 +296,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // The Models operation running now (its parts show it), and the last one (for the run dialog's next step).
   const [modelsOp, setModelsOp] = useState<ModelsOp | null>(null);
   const [modelsRun, setModelsRun] = useState<ModelsOp | null>(null);
+  // The Playground operation running now, the last one, and a key that reads its state again.
+  const [playgroundOp, setPlaygroundOp] = useState<PlaygroundOp | null>(null);
+  const [playgroundRun, setPlaygroundRun] = useState<PlaygroundOp | null>(null);
+  const [playgroundRefresh, setPlaygroundRefresh] = useState(0);
+  // The Playground tab's default project, once the playgrounds are known.
+  const [playgroundDefault, setPlaygroundDefault] = useState<string | null>(null);
+  const playgroundProjectParam = searchParams.has("project") ? urlProject : playgroundDefault;
+  const playgroundRead = usePlaygroundStatus(tab === "playground" ? playgroundProjectParam : null, playgroundRefresh, !!playgroundOp, tab === "overview" || tab === "playground" || !!cleanupScope);
+  const pg = playgroundRead.data;
+  useEffect(() => {
+    if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
+  }, [pg, searchParams]);
 
   const request = (p: ResourcePending): [string, () => Promise<OperationResponse>, string | null] => {
     switch (p.kind) {
@@ -303,7 +322,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? samplesConfirm(p);
 
   /** A confirmed Models change: one streamed request whose steps the run dialog shows. */
   const startModels = (p: ModelsPending) => {
@@ -329,6 +348,29 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       ...(op.gateway ? { gateway: true } : {}),
       ...(op.project ? { project: op.project } : {}),
       ...(p.kind === "setup-models" && p.releasedImage ? { releasedImage: true } : {}),
+    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
+  };
+
+  /** A confirmed Playground change: one streamed request whose steps the run dialog shows. */
+  const startPlayground = (p: PlaygroundPending) => {
+    if (run.run?.running) return;
+    const spec = playgroundConfirm(p, pg);
+    const op: PlaygroundOp = { action: p.kind === "setup-playground" ? "setup" : "teardown", project: p.project };
+    setPending(null);
+    setSampleRun(null);
+    setModelsRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setPlaygroundOp(op);
+    setPlaygroundRun(op);
+    const end = () => {
+      setPlaygroundOp(null);
+      setPlaygroundRefresh((n) => n + 1);
+    };
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, playgroundSteps(p), (onStep, onDone, onDetach) => streamPlayground({
+      action: op.action,
+      project: op.project,
+      ...(p.kind === "setup-playground" && p.models?.length ? { models: p.models } : {}),
     }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
 
@@ -372,8 +414,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       startModels(p);
       return;
     }
+    if (isPlaygroundPending(p)) {
+      startPlayground(p);
+      return;
+    }
     setSampleRun(null);
     setModelsRun(null);
+    setPlaygroundRun(null);
     const spec = confirmOf(p);
     const [action, fn, target] = request(p);
     const title = spec?.runTitle ?? spec?.title ?? action;
@@ -391,10 +438,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setPending(models);
       return;
     }
+    const playground = setup.find(isPlaygroundPending);
+    if (playground) {
+      setPending(playground);
+      return;
+    }
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = request(p);
@@ -420,15 +472,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     setCleanupScope(null);
     setSampleRun(null);
     setModelsRun(null);
+    setPlaygroundRun(null);
     setRunOpen(true);
     trackFeature("cleanup");
     setPollGaveUp(false);
     setPollRound((n) => n + 1);
     run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, onStep, (success, error, apiError) => {
       void fetchResources();
+      setPlaygroundRefresh((n) => n + 1);
       onDone(success, error, apiError);
     }, (reason) => {
       void fetchResources();
+      setPlaygroundRefresh((n) => n + 1);
       onDetach(reason);
     }));
   };
@@ -445,7 +500,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   }, [run.run?.running, runOpen]);
 
   const runningSomething = !!resAction || migrating || !!run.run?.running;
-  const busy: Busy = { resAction, actionProject, migrating, models: modelsOp };
+  const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // After a deletion the namespace stays (deployed:false, managedByTool:true).
   // Offer Delete again while tool objects are still reported (the data
@@ -495,6 +550,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
     : modelsState(resStatus, modelsProject, projectNames, busy);
   const modelsSummary = modelsState(resStatus, null, projectNames, busy);
+  const playgroundProject = missingProject ? null : playgroundProjectParam;
+  const playgroundNow: FeatureState = cleared
+    ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
+    : playgroundState(resStatus, pg, playgroundProject, busy);
+  const playgroundSummary = playgroundState(resStatus, pg, null, busy);
+  const playgroundOptions: ProjectOption[] = projectNames.map((name) => {
+    const i = playgroundIn(pg, name);
+    return { name, description: i?.deployed ? `Playground: ${i.ready ? "Ready" : i.terminating ? "Deleting" : "Not ready"}${i.managedByTool ? "" : " · not managed by this tool"}` : undefined };
+  });
   // Once a feature works, its samples are the natural next step: the
   // sample pipeline only on a pipeline server this tool set up.
   const summaryServer = pipelinesSummary.project ? pipelineServerIn(resStatus, pipelinesSummary.project) : undefined;
@@ -513,21 +577,28 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       id: "models", name: "Models", gives: "Serve a small chat model on CPU; call it or use the playground", state: modelsSummary,
       href: `?tab=models${modelsSummary.project ? `&project=${encodeURIComponent(modelsSummary.project)}` : ""}`,
     },
+    {
+      id: "playground", name: "Playground", gives: "Chat with a project's models in the dashboard's Gen AI playground", state: playgroundSummary,
+      href: `?tab=playground${playgroundSummary.project ? `&project=${encodeURIComponent(playgroundSummary.project)}` : ""}`,
+    },
   ];
   const anythingToClean = !!resStatus && (() => {
-    const c = cleanupCandidates(resStatus, "all", minioLeftovers);
-    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway;
+    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg);
+    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway || c.playgrounds.length > 0;
   })();
 
   // The run's "what next" and main action, from the feature it set up.
   // A sample run: after adding MLflow samples, open the project's workspace.
-  const runFeature = modelsRun ? "models" : run.run?.title.includes("MLflow") ? "mlflow" : "pipelines";
+  const runFeature = playgroundRun ? "playground" : modelsRun ? "models" : run.run?.title.includes("MLflow") ? "mlflow" : "pipelines";
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
     ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowWorkspaceHref(mlflow.uiRoute, sampleRun.project) }
     : null;
   const modelsNext = modelsRun?.project ? modelsState(resStatus, modelsRun.project, projectNames, busy).next : null;
-  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : sampleNext;
-  const whatNext = run.run?.kind === "setup" && runFeature === "models"
+  const playgroundNext = playgroundRun ? playgroundState(resStatus, pg, playgroundRun.project, busy).next : null;
+  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : sampleNext;
+  const whatNext = run.run?.kind === "setup" && runFeature === "playground"
+    ? <Content component="p">{`Open the playground in ${playgroundRun?.project}, choose a model and ask it something. On the Playground tab, Use it also has a chat request to run from a terminal.`}</Content>
+    : run.run?.kind === "setup" && runFeature === "models"
     ? <Content component="p">{modelsRun?.project
       ? `On the Models tab, Use it has the model's address and commands that call it with your OpenShift token. In the dashboard, ${modelsRun.project} lists the model, and Gen AI studio offers it in the playground.`
       : "Choose a project on the Models tab and set up a model there: it routes through this gateway."}</Content>
@@ -623,6 +694,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                     setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")} />
                 )}
+                {tab === "playground" && (
+                  <PlaygroundTab status={resStatus} playground={pg} playgroundError={playgroundRead.error} project={playgroundProject} projects={playgroundOptions} projectsLoaded={projectList !== null}
+                    onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                    state={playgroundNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
+                    setPending={setPending} onSetUp={(setup) => setUp("Playground", setup)} onCleanup={() => setCleanupScope("playground")}
+                    onModels={() => navigate({ tab: "models", ...(playgroundProject ? { project: playgroundProject } : {}) })} />
+                )}
               </StackItem>
             )}
           </Stack>
@@ -676,7 +754,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       )}
 
       {cleanupScope && resStatus && (
-        <CleanupModal scope={cleanupScope} status={resStatus} minioLeftovers={minioLeftovers} baseReason={baseReason}
+        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} minioLeftovers={minioLeftovers} baseReason={baseReason}
           onConfirm={startCleanup} onCancel={() => setCleanupScope(null)} />
       )}
 

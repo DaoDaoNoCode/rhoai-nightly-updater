@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -652,6 +652,8 @@ export interface CleanupRequest {
   models?: string[];
   /** The inference gateway, after the models. */
   inferenceGateway?: boolean;
+  /** The projects whose playground (this tool's) goes, before the models. */
+  playgrounds?: string[];
 }
 
 /**
@@ -682,6 +684,29 @@ export function streamModels(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/models/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/**
+ * The Gen AI playground feature: what it needs, the playgrounds in the
+ * projects, and the models a project's playground can use (cached on the
+ * server for 10 s).
+ */
+export function getPlayground(project: string | null): Promise<PlaygroundStatus> {
+  return request(`/api/resources/playground${project ? `?project=${encodeURIComponent(project)}` : ''}`);
+}
+
+/**
+ * The playground: sets it up or deletes it through the RHOAI dashboard's
+ * gen-ai API, streaming "check", "install", "ready" (teardown: "delete",
+ * "gone").
+ */
+export function streamPlayground(
+  req: PlaygroundRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/playground/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /** The MLflow samples of one project (named reads only; cached on the server for 15 s). */

@@ -1010,3 +1010,54 @@ export interface PRContainsResponse {
   rateLimited?: boolean;
   retryAfterSeconds?: number;
 }
+
+/** The Gen AI playground feature (GET /api/resources/playground; pkg/types PlaygroundStatus). */
+export interface PlaygroundStatus {
+  /** Why no playground can be set up (its operator's component is off). */
+  blocked?: ComponentBlock;
+  /** The DataScienceCluster's readiness condition of that component: "True", "False", or absent (unknown). */
+  operatorReady?: string;
+  operatorMessage?: string;
+  /** The dashboard's Gen AI studio backend: "available", "unavailable", "missing", or absent (unknown). */
+  genAiUi?: string;
+  /** Why the dashboard's gen-ai API cannot be used now. */
+  apiProblem?: string;
+  apiCode?: string;
+  /** The playgrounds in the data science projects, and the projects this tool requested one in. */
+  items?: PlaygroundState[];
+  /** The project the models are listed for. */
+  project?: string;
+  models?: PlaygroundModel[];
+  modelsProblem?: string;
+  truncated?: boolean;
+}
+
+/** A project's playground (namespace); managedByTool when this tool requested it. */
+export interface PlaygroundState extends ResourceState {
+  phase?: string;
+  requested?: boolean;
+}
+
+/** A model the dashboard offers the playground. */
+export interface PlaygroundModel {
+  name: string;
+  displayName?: string;
+  /** "namespace" (deployed in the project) or "maas" (Models as a Service). */
+  source: "namespace" | "maas";
+  status?: string;
+  ready: boolean;
+  /** False for an embedding model. */
+  chat: boolean;
+}
+
+export interface PlaygroundModelRef {
+  name: string;
+  source: "namespace" | "maas";
+}
+
+/** The body of POST /api/resources/playground/stream. */
+export interface PlaygroundRequest {
+  action: "setup" | "teardown";
+  project: string;
+  models?: PlaygroundModelRef[];
+}

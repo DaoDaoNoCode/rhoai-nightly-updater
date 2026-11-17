@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MLflowSampleAction, MLflowSampleId, ResourceState } from "../../types";
+import type { MLflowSampleAction, MLflowSampleId, PlaygroundModelRef, ResourceState } from "../../types";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
 
@@ -36,9 +36,9 @@ export function isTerminating(state: ResourceState | undefined): boolean {
   return !!state && (!!state.terminating || state.message === "Terminating");
 }
 
-export type ResourceKind = "minio" | "mlflow" | "pipeline" | "gateway" | "model";
+export type ResourceKind = "minio" | "mlflow" | "pipeline" | "gateway" | "model" | "playground";
 
-const SUBJECT: Record<ResourceKind, string> = { minio: "The S3 storage", mlflow: "MLflow", pipeline: "The pipeline server", gateway: "The inference gateway", model: "The model" };
+const SUBJECT: Record<ResourceKind, string> = { minio: "The S3 storage", mlflow: "MLflow", pipeline: "The pipeline server", gateway: "The inference gateway", model: "The model", playground: "The playground" };
 
 const rawText = (state: ResourceState) => `${state.waitingReason ?? ""} ${state.message ?? ""}`;
 const imagePull = (state: ResourceState) => /ImagePullBackOff|ErrImagePull|InvalidImageName/.test(rawText(state));
@@ -215,13 +215,19 @@ export type Pending =
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
   | { kind: "setup-models"; gateway: boolean; project: string | null; releasedImage?: boolean }
   | { kind: "teardown-model"; project: string }
-  | { kind: "teardown-gateway" };
+  | { kind: "teardown-gateway" }
+  /** The Gen AI playground in a project, through the dashboard's API (one streamed operation). */
+  | { kind: "setup-playground"; project: string; models?: PlaygroundModelRef[] }
+  | { kind: "teardown-playground"; project: string };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" | "pipeline-sample" }>;
 /** A Models change: one streamed request (pkg/api HandleModelsStream). */
 export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-model" | "teardown-gateway" }>;
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending>;
+/** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
+export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending>;
+export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples" || p.kind === "pipeline-sample";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway";
 

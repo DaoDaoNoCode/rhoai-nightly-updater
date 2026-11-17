@@ -1,4 +1,4 @@
-import type { ModelState, ResourceState, ResourcesStatus } from "../../types";
+import type { ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 
@@ -19,6 +19,14 @@ export interface Busy {
   migrating: boolean;
   /** A Models operation runs from this page: what it changes. */
   models?: ModelsOp | null;
+  /** A Playground operation runs from this page: its action and project. */
+  playground?: PlaygroundOp | null;
+}
+
+/** What a running Playground operation changes. */
+export interface PlaygroundOp {
+  action: "setup" | "teardown";
+  project: string;
 }
 
 /** What a running Models operation changes. */
@@ -353,5 +361,119 @@ export function modelsState(status: ResourcesStatus | null, project: string | nu
   const summary = acrossProjects(states, running);
   if (summary) return summary;
   if (MOVING.includes(gateway)) return { status: gateway, label: gateway === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
+  return { status: "not-set-up", label: "Not set up in any project", next: { kind: "choose-project" }, project: null };
+}
+
+// --- Playground: the model(s) it uses and the dashboard's playground (project) ----------
+
+/** The project's playground, as the dashboard reports it (or this tool's record of one). */
+export function playgroundIn(pg: PlaygroundStatus | null, project: string): PlaygroundState | undefined {
+  return (pg?.items ?? []).find((i) => i.namespace === project);
+}
+
+/** The project's models the playground can chat with: ready, not embedding. */
+export function playgroundChatModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && m.chat) : [];
+}
+
+/** What Set up uses by default, as the dashboard's dialog: the project's own ready chat models (MaaS only when chosen). */
+export function defaultPlaygroundModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return playgroundChatModels(pg, project).filter((m) => m.source === "namespace");
+}
+
+/** Models deployed for Gen AI in the project that are not ready: the dashboard's install fails while one is. */
+export function playgroundModelsNotReady(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.source === "namespace" && !m.ready) : [];
+}
+
+const playgroundBusy = (busy: Busy, project: string): "setting-up" | "deleting" | null => {
+  const op = busy.playground;
+  if (!op || op.project !== project) return null;
+  return op.action === "setup" ? "setting-up" : "deleting";
+};
+
+export function playgroundStatusOf(pg: PlaygroundStatus | null, project: string, busy: Busy): EnvStatus {
+  const item = playgroundIn(pg, project);
+  // A record of a playground that no longer exists is not a playground.
+  return envStatus(item?.deployed || item?.terminating ? item : undefined, { busy: playgroundBusy(busy, project) });
+}
+
+/** The model part: ready when the project has a ready chat model; unknown until its models are read. */
+export function playgroundModelStatus(pg: PlaygroundStatus | null, project: string): EnvStatus {
+  if (pg?.project !== project || pg.modelsProblem) return "unknown";
+  return playgroundChatModels(pg, project).length > 0 ? "ready" : "not-set-up";
+}
+
+/** The parts of Playground in a project, in dependency order. */
+export function playgroundParts(pg: PlaygroundStatus | null, project: string, busy: Busy): PartState[] {
+  const item = playgroundIn(pg, project);
+  return [
+    { id: "playground-models", status: playgroundModelStatus(pg, project), unmanaged: false },
+    { id: "playground", status: playgroundStatusOf(pg, project, busy), unmanaged: !!item?.deployed && item.managedByTool === false },
+  ];
+}
+
+/** The dashboard's playground page of a project (odh-dashboard packages/gen-ai routes: /gen-ai-studio/playground/<ns>). */
+export function playgroundHref(dashboardUrl: string | undefined, project: string): string | undefined {
+  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/gen-ai-studio/playground/${encodeURIComponent(project)}` : undefined;
+}
+
+/** Why no playground can be set up now (cluster or API), or null. Unknown is not a reason. */
+export function playgroundClusterReason(pg: PlaygroundStatus | null): string | null {
+  if (!pg) return "The playground's state is still loading.";
+  if (pg.blocked) return pg.blocked.reason;
+  if (pg.genAiUi === "missing") return "The dashboard's Gen AI studio is not deployed on this cluster. A cluster-admin turns it on in the dashboard's settings.";
+  if (pg.genAiUi === "unavailable") return "The dashboard's Gen AI studio is not running yet. Wait until it is.";
+  if (pg.operatorReady === "False") return `The playground's operator is not ready${pg.operatorMessage ? `: ${pg.operatorMessage}` : ""}.`;
+  return pg.apiProblem ?? null;
+}
+
+function playgroundInProject(status: ResourcesStatus | null, pg: PlaygroundStatus | null, project: string, busy: Busy): FeatureState {
+  const parts = playgroundParts(pg, project, busy);
+  const [models, playground] = parts;
+  const item = playgroundIn(pg, project);
+  const suffix = playground.unmanaged ? NOT_MANAGED : "";
+  if (PROBLEM.includes(playground.status)) return { status: playground.status, label: `${envStatusText(playground.status)} in ${project}${suffix}`, next: { kind: "show-issue", part: "playground" }, project };
+  if (playground.status === "ready") {
+    const href = playgroundHref(status?.dashboardUrl, project);
+    return { status: "ready", label: `Ready in ${project}${suffix}`, next: href ? { kind: "open", label: `Open the playground in ${project}`, href } : null, project };
+  }
+  if (MOVING.includes(playground.status)) return { status: playground.status, label: playground.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
+  if (playground.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${suffix}`, next: null, project };
+  if (item?.deployed) return { status: "unknown", label: `Unknown in ${project}${suffix}`, next: null, project };
+  let reason = playgroundClusterReason(pg);
+  const notReady = playgroundModelsNotReady(pg, project);
+  if (!reason && models.status === "unknown") reason = pg?.modelsProblem ?? "The project's models are still loading.";
+  if (!reason && notReady.length > 0) reason = `Not every model in ${project} is ready (${notReady.map((m) => m.name).join(", ")}); the dashboard's install needs all of them ready.`;
+  if (!reason && models.status === "not-set-up") reason = `Needs: Models. ${project} has no ready chat model; set one up on the Models tab first.`;
+  return {
+    status: "not-set-up",
+    label: `Not set up in ${project}`,
+    next: { kind: "set-up", label: `Set up the playground in ${project}`, setup: [{ kind: "setup-playground", project }], reason },
+    project,
+  };
+}
+
+/** The project the Playground tab opens with: the URL's; else the first with a playground, preferring a ready one. */
+export function defaultPlaygroundProject(pg: PlaygroundStatus | null, fromUrl: string | null): string | null {
+  if (fromUrl) return fromUrl;
+  const items = (pg?.items ?? []).filter((i) => i.deployed);
+  return items.find((i) => i.ready)?.namespace ?? items[0]?.namespace ?? null;
+}
+
+/**
+ * Playground: in a project (the tab), or summarised across the projects
+ * that have one (the Overview), as pipelinesState does. pg is the
+ * playground status (GET /api/resources/playground), null while it loads.
+ */
+export function playgroundState(status: ResourcesStatus | null, pg: PlaygroundStatus | null, project: string | null, busy: Busy = IDLE): FeatureState {
+  if (project) return playgroundInProject(status, pg, project, busy);
+  if (!pg) return { status: "unknown", label: "Checking", next: null, project: null };
+  const projects = [...new Set((pg.items ?? []).filter((i) => i.deployed || i.terminating).map((i) => i.namespace!))];
+  const states = projects.map((p) => playgroundInProject(status, pg, p, busy));
+  const running = busy.playground ? playgroundInProject(status, pg, busy.playground.project, busy) : null;
+  const summary = acrossProjects(states, running);
+  if (summary) return summary;
+  if (pg.apiProblem) return { status: "unknown", label: "Unknown: the dashboard's gen-ai API cannot be used", next: null, project: null };
   return { status: "not-set-up", label: "Not set up in any project", next: { kind: "choose-project" }, project: null };
 }
