@@ -37,18 +37,18 @@ Token rules (pkg/api/identity.go, handlers.go):
 | `kube-system` | Secret `additional-pull-secret`: `get`, `patch` |
 | `openshift-marketplace` | CatalogSources: `get list create patch delete`; PackageManifests: `list` |
 
-**Cluster-wide (ClusterRole).** The operator namespaces (`redhat-ods-*`, `minio`) and the user's pipeline projects do not exist when the template is applied, so these rules are cluster-wide. Wherever the API allows it, they are limited to fixed object names. `create` cannot be limited by name.
+**Cluster-wide (ClusterRole).** The operator namespaces (`redhat-ods-*`, `seaweedfs`) and the user's pipeline projects do not exist when the template is applied, so these rules are cluster-wide. Wherever the API allows it, they are limited to fixed object names. `create` cannot be limited by name.
 
 | What | Verbs | Limited to names? |
 |---|---|---|
 | Secrets | `create` | no (pipeline projects are user-chosen) |
-| Secrets | `get patch delete` | `minio-secret`; `nightly-dspa-s3` (`get delete patch`); legacy `dashboard-dspa-secret` (`get delete`) |
-| Namespaces | `get list create`; `patch` | `patch` only `redhat-ods-operator`, `minio`. Nothing is ever deleted |
-| Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` and `minio` (the MinIO of earlier versions, removed by the migration) |
-| Services | `get create`; `patch delete` | `patch delete` only `minio-service` |
-| PVCs | `list create`; `patch delete` | `patch delete` only `seaweedfs-pvc`; `delete` only `minio-pvc` (the kept MinIO volume) |
-| Routes | `create`; `get` | `get` on `rhods-dashboard`, `mlflow`, `minio-api`, `minio-ui`; `patch delete` on `minio-api`, `minio-ui` |
-| NetworkPolicies | `create`; `get patch delete` | the second set only on `seaweedfs-ingress`; `get delete` on `minio-ingress` (the MinIO policy the migration removes) |
+| Secrets | `get patch delete` | `seaweedfs-s3-credentials`; `nightly-dspa-s3` (`get delete patch`); the earlier storage's `minio-secret` and legacy `dashboard-dspa-secret` (`get delete`) |
+| Namespaces | `get list create`; `patch` | `patch` only `redhat-ods-operator`. Nothing is ever deleted |
+| Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` (the S3 storage, and the SeaweedFS earlier versions ran in namespace `minio`) and `minio` (MinIO of earlier versions) |
+| Services | `get create`; `patch delete` | `patch delete` only `seaweedfs-s3`; `delete` only `minio-service` (the earlier storage's) |
+| PVCs | `list create`; `patch delete` | `patch delete` only `seaweedfs-data`; `delete` only `seaweedfs-pvc` and `minio-pvc` (the earlier storage's data) |
+| Routes | `create`; `get` | `get` on `rhods-dashboard`, `mlflow`, `seaweedfs-admin`, `minio-api`, `minio-ui`; `patch delete` on `seaweedfs-admin`; `delete` on `minio-api`, `minio-ui` (the earlier storage's) |
+| NetworkPolicies | `create`; `get patch delete` | the second set only on `seaweedfs-ingress` (the name in both storage namespaces); `get delete` on `minio-ingress` (MinIO's policy of earlier versions) |
 | Pods, ReplicaSets, Events, EndpointSlices, Nodes | `list` | read-only |
 | Subscriptions | `create`; `get patch delete` | the second set only on `rhods-operator` |
 | OperatorGroups | `create list`; `patch` | `patch` only `rhods-operator` |
@@ -66,6 +66,19 @@ Token rules (pkg/api/identity.go, handlers.go):
 | cert-manager `Certificates` | `list` | read-only; Certificates name Secrets but hold no key material (template revision 4) |
 
 There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read arbitrary Secrets.
+
+**Audit: template revision 5 (3.0.0), the S3 storage's new names.** The storage moved from the MinIO-era names in namespace `minio` to its own names in namespace `seaweedfs`. Storage an earlier version left in `minio` is only detected, read for the migration, and deleted.
+
+| Rule | What it allows | Worst case if the SA token leaks | Why nothing narrower works |
+|---|---|---|---|
+| Secrets `get patch delete` on `seaweedfs-s3-credentials` (replaces `minio-secret` for these verbs) | read, change and delete the storage's S3 keys | read or change any Secret named `seaweedfs-s3-credentials` in any namespace: the same reach as the `minio-secret` rule it replaces, under a name only this tool uses | the namespace is created by the tool after the template is applied, so the rule cannot be a Role; RBAC cannot limit a ClusterRole rule to one namespace |
+| Secrets on `minio-secret`: `patch` removed, `get delete` kept | read the earlier storage's keys (the migration gives the new storage the same keys) and delete it with that storage | narrower than before | `get` is needed to keep the keys, `delete` to clean up |
+| Services `patch delete` on `seaweedfs-s3`; `minio-service` down to `delete` | apply and remove the storage's Service | change or delete a Service of that name anywhere; `minio-service` can no longer be changed, only deleted | as above |
+| PVCs `patch delete` on `seaweedfs-data`; `seaweedfs-pvc` down to `delete` (next to `minio-pvc`) | apply and remove the storage's data volume, delete the earlier storage's | delete a PVC of one of those names anywhere, and its data: the reach of the earlier rules | as above; PVCs are still listed, never read by name |
+| Routes `get patch delete` on `seaweedfs-admin`; `minio-api`, `minio-ui` down to `get delete` | the admin UI Route; read the earlier Routes' hosts (a pipeline server may use one, so teardown checks them) and delete them | expose or remove the admin UI Route of that name; the earlier Routes can no longer be changed | as above |
+| Namespaces `patch` on `minio` removed | — | narrower | the tool no longer relabels the earlier namespace |
+
+No verb was added on any resource type; every new name replaces an old one, and the old names keep only `get` and `delete` where the migration and teardown need them.
 
 **Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
 
@@ -96,7 +109,7 @@ There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read 
 
 - The pull-secret token is never logged, returned, or written to the activity log. Only the `quay.io/rhoai` entry of `kube-system/additional-pull-secret` is replaced; other registries are kept.
 - The Quay token is derived from the cluster pull secret on the server and never sent to the browser.
-- The S3 storage's access key and secret key are random per install and stored in `minio/minio-secret`. The secret key is also the SeaweedFS admin UI password; it reaches the pod through the environment (`WEED_ADMIN_PASSWORD`), not the command line.
+- The S3 storage's access key and secret key are random per install (or set with `SEAWEEDFS_ACCESS_KEY_ID` and `SEAWEEDFS_SECRET_ACCESS_KEY` on a first setup) and stored in `seaweedfs/seaweedfs-s3-credentials`. The secret key is also the SeaweedFS admin UI password; it reaches the pod through the environment (`WEED_ADMIN_PASSWORD`), not the command line.
 - `GITHUB_TOKEN` (optional) is sent only to `api.github.com`. Use a read-only token with public-repository access.
 
 ## Local development (`DEV_MODE=true`)
@@ -114,9 +127,9 @@ There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read 
   - NetworkPolicy `seaweedfs-ingress`: only the S3 port 8333 from pods in any namespace and the admin UI port 12535 only from the router; every other port is unreachable from the pod network. The admin's compatibility listener on the old port 23646 is turned off (`-admin.port.legacy=0`);
   - no Route to the S3 API;
   - credentials random per install; the admin UI requires a login (user `admin`, password from the Secret);
-  - the admin password is passed as an environment variable, not an argument, so `ps` does not show it. Anyone who can `oc exec` into the pod or read `minio/minio-secret` can still read it.
+  - the admin password is passed as an environment variable, not an argument, so `ps` does not show it. Anyone who can `oc exec` into the pod or read `seaweedfs/seaweedfs-s3-credentials` can still read it.
   - logs: at startup SeaweedFS logs the S3 access key ID once ("Added admin identity from AWS environment variables: name=…, accessKey=…", `weed/s3api/auth_credentials.go:611` at 4.54). The access key ID is an identifier, not a secret, like an AWS access key ID; the secret key and the admin password are not logged (checked live on 4.48; the logging code is unchanged in 4.54). The pinned version could avoid that line only by loading the identity from an `-s3.config` JSON file (identities are then logged at verbosity 2 only), which would put the secret key into a second, tool-generated Secret; that is not worth it for an identifier.
 
-  Any pod in the cluster that knows the access key can still reach the S3 API. The storage is meant for test data only. After a migration, the old MinIO volume `minio-pvc` stays until teardown; no MinIO process reads it.
+  Any pod in the cluster that knows the access key can still reach the S3 API. The storage is meant for test data only. Storage an earlier version left in namespace `minio` (SeaweedFS behind the MinIO-era names, or MinIO itself) keeps running, with its own policies, until it is migrated or torn down.
 - **Restarts.** A running operation delays a pod restart by up to ~17 minutes (see [README: cluster safety](README.md#how-the-tool-keeps-your-cluster-safe)). A SIGKILL or node loss still interrupts it. There is no durable job queue; the next start reports the interrupted operation. A replacement pod that starts while the old one drains refuses changes until the old operation ends (lease in the operation ConfigMap, no new RBAC).
 - **Mirror visibility.** The GitHub mirror contains team-internal links (Bitwarden collection, Slack channels, the IPA realm and AWS SAML alias). They are access-controlled, but internal. Decide with the team whether the mirror should be private.

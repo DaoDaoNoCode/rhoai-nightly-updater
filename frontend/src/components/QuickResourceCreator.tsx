@@ -136,7 +136,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     switch (p.kind) {
       case "setup-minio": return handleResourceAction("setup-minio", setupMinIO);
       case "repair-minio": return handleResourceAction("setup-minio", setupMinIO);
-      case "migrate-minio": return handleResourceAction("setup-minio", setupMinIO);
       case "teardown-minio": return handleResourceAction("teardown-minio", teardownMinIO);
       case "setup-mlflow": return handleResourceAction("setup-mlflow", setupMLflow);
       case "teardown-mlflow": return handleResourceAction("teardown-mlflow", teardownMLflow);
@@ -158,9 +157,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     (lastMinIOTeardown !== null && ["partial_failure", "delete_failed", "in_progress", "forbidden", "unauthorized", "network"].includes(lastMinIOTeardown))
   );
   const actionProps = { baseReason, resAction, setPending };
+  // Teardown keeps the storage namespaces and names them with the command
+  // that deletes them (pkg/cluster s3KeptNamespaceHint).
+  const keptNamespaces = [...(resResult?.message ?? "").matchAll(/`oc delete project ([a-z0-9-]+)`/g)].map((m) => m[1]);
 
   const modal = pending
-    ? storageConfirm(pending, minio) ?? mlflowConfirm(pending, mlflow) ?? pipelineServerConfirm(pending, pipelineServers)
+    ? storageConfirm(pending, minio, resStatus?.legacyStorage) ?? mlflowConfirm(pending, mlflow) ?? pipelineServerConfirm(pending, pipelineServers)
     : null;
 
   return (
@@ -193,8 +195,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
               >
                 {resResult.success ? undefined : resResult.message}
                 {resResult.errorCode === "in_progress" ? " This page keeps checking." : ""}
-                {/oc delete project minio/.test(resResult.message ?? "") && (
-                  <> Namespace <code>minio</code> was kept: run <code>oc delete project minio</code> once you have checked it is empty.</>
+                {keptNamespaces.length > 0 && (
+                  <> {keptNamespaces.length > 1 ? "Namespaces" : "Namespace"} {keptNamespaces.map((n, i) => <React.Fragment key={n}>{i > 0 ? " and " : ""}<code>{n}</code></React.Fragment>)} {keptNamespaces.length > 1 ? "were" : "was"} kept: run {keptNamespaces.map((n, i) => <React.Fragment key={n}>{i > 0 ? " and " : ""}<code>oc delete project {n}</code></React.Fragment>)} once you have checked {keptNamespaces.length > 1 ? "they are" : "it is"} empty.</>
                 )}
               </Alert>
             </StackItem>
@@ -207,7 +209,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   <Title headingLevel="h2" size="xl" id="environment-data-pipelines">Data &amp; pipelines</Title>
                 </StackItem>
                 <StackItem>
-                  <StorageCard minio={minio} minioLeftovers={minioLeftovers} {...actionProps} />
+                  <StorageCard minio={minio} legacy={resStatus?.legacyStorage} minioLeftovers={minioLeftovers} {...actionProps} />
                 </StackItem>
                 <StackItem>
                   <PipelineServersCard

@@ -627,14 +627,17 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		dspas       []dspaInfo
 		dspasErr    error
 		dashURL     string
-		minioEP     minioEndpoints
-		minioEPErr  error
+		s3EP        s3Endpoints
+		s3EPErr     error
+		legacy      *legacyStorage
+		legacyErr   error
 		status      = &types.ResourcesStatus{}
 	)
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); projects, projectsErr = GetDSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
-	go func() { defer wg.Done(); status.MinIO, minioEP, minioEPErr = minioStatusAndEndpoints(c) }()
+	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = s3StatusAndEndpoints(c) }()
+	go func() { defer wg.Done(); legacy, legacyErr = readLegacyStorage(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
 	go func() { defer wg.Done(); dashURL = dashboardBaseURL(c) }()
 	wg.Wait()
@@ -668,12 +671,35 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		return status.PipelineServers[i].Namespace < status.PipelineServers[j].Namespace
 	})
 
-	// Also for a storage that is gone but left its data PVCs (the kept MinIO
-	// volume): teardown deletes them under the same guard.
-	if status.MinIO.ManagedByTool && (status.MinIO.Deployed || len(status.MinIO.DataPVCs) > 0) {
-		if minioEPErr != nil && len(dspas) > 0 {
-			status.MinIO.TeardownBlockedReason = "Cannot verify which pipeline servers use the S3 storage: " + minioEPErr.Error()
-		} else if reason := minioTeardownBlocker(dspas, minioEP); reason != "" {
+	// Storage an earlier version left in namespace minio: Migrate storage
+	// replaces Set up and Repair while it is there (SetupS3Storage refuses),
+	// and teardown removes it with the current storage.
+	switch {
+	case legacyErr != nil:
+		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace '%s' for storage from an earlier version: %v. %s", legacyNamespace, legacyErr, status.MinIO.Warning))
+	case legacy != nil:
+		status.LegacyStorage = legacyStorageState(legacy, dspas)
+		status.MinIO.MigrationPending = true
+	}
+
+	// Also for a storage that is gone but left its data PVC: teardown
+	// deletes it under the same guard.
+	current := status.MinIO.ManagedByTool && (status.MinIO.Deployed || len(status.MinIO.DataPVCs) > 0)
+	if current || legacy != nil {
+		var addresses []storageAddress
+		var addrErr error
+		if current {
+			addresses, addrErr = append(addresses, s3EP.address), s3EPErr
+		}
+		if legacy != nil {
+			addresses = append(addresses, legacy.address)
+			if addrErr == nil {
+				addrErr = legacy.addressErr
+			}
+		}
+		if addrErr != nil && len(dspas) > 0 {
+			status.MinIO.TeardownBlockedReason = "Cannot verify which pipeline servers use the S3 storage: " + addrErr.Error()
+		} else if reason := s3TeardownBlocker(dspas, addresses...); reason != "" {
 			status.MinIO.TeardownBlockedReason = reason
 		}
 	}

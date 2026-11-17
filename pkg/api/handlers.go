@@ -1423,15 +1423,16 @@ var HandleDSProjects = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 	writeJSON(w, map[string]interface{}{"projects": projects}, "ds-projects")
 })
 
-// HandleMinIOSetup deploys the S3 storage (SeaweedFS) with a bucket for pipeline artifacts, replacing the MinIO of earlier versions.
-var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+// HandleS3StorageSetup deploys the S3 storage (SeaweedFS in namespace seaweedfs) with a bucket for
+// pipeline artifacts. The route and the operation kind keep their names from earlier versions.
+var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
 	beginOperation(w, "")
 	slog.Info("mutation", "op", "setup-minio")
-	result, err := cluster.SetupMinIO(c)
+	result, err := cluster.SetupS3Storage(c)
 	if err != nil {
 		slog.Error("setup-minio failed", "error", err)
 		writeError(w, "S3 storage setup failed", http.StatusInternalServerError)
@@ -1440,15 +1441,16 @@ var HandleMinIOSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 	writeOperationResult(w, result, "setup-minio")
 })
 
-// HandleMinIOTeardown deletes the S3 storage objects this tool created; the minio namespace is kept.
-var HandleMinIOTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+// HandleS3StorageTeardown deletes the S3 storage objects this tool created, including those an earlier
+// version left in namespace minio; the namespaces are kept.
+var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
 	beginOperation(w, "")
 	slog.Info("mutation", "op", "teardown-minio")
-	result, err := cluster.TeardownMinIO(c)
+	result, err := cluster.TeardownS3Storage(c)
 	if err != nil {
 		slog.Error("teardown-minio failed", "error", err)
 		writeError(w, "S3 storage teardown failed", http.StatusInternalServerError)

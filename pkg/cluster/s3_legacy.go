@@ -1,0 +1,331 @@
+package cluster
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"sync"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// Storage from earlier versions, in namespace minio: MinIO (up to 2.0), or
+// SeaweedFS behind the MinIO-era names (2.1 to 2.3). Its names are used only
+// to detect it, to read its keys and address for Migrate storage, and to
+// delete what the tool created there. Nothing new is ever created in it.
+const (
+	legacyNamespace   = "minio"
+	legacyService     = "minio-service"
+	legacyServicePort = 9000
+	legacySecret      = "minio-secret"
+	// The keys of minio-secret: MinIO's root user and password, which were
+	// the S3 access key and secret key.
+	legacyAccessKeyField = "minio_root_user"
+	legacySecretKeyField = "minio_root_password"
+	legacyUIRoute        = "minio-ui"
+	// legacyAPIRoute exposed the S3 API outside the cluster (before 2.0).
+	legacyAPIRoute = "minio-api"
+	// The SeaweedFS of 2.1 to 2.3 used the names s3Deployment ("seaweedfs")
+	// and s3NetworkPolicy ("seaweedfs-ingress") in namespace minio, and
+	// legacySeaweedFSPVC for its data.
+	legacySeaweedFSPVC = "seaweedfs-pvc"
+	// MinIO's objects. 2.1 replaced the Deployment and kept the PVC (MinIO's
+	// on-disk format, which only a MinIO server can read).
+	legacyMinIODeployment    = "minio"
+	legacyMinIOPVC           = "minio-pvc"
+	legacyMinIONetworkPolicy = "minio-ingress"
+)
+
+// legacyS3Host is the in-cluster S3 endpoint of the earlier storage.
+func legacyS3Host() string {
+	return fmt.Sprintf("%s.%s.svc:%d", legacyService, legacyNamespace, legacyServicePort)
+}
+
+// legacyStorageObjects are the objects earlier versions created in
+// namespace minio, in the order they are deleted: the Deployments first, so
+// their pods release the PVCs (whose kubernetes.io/pvc-protection finalizer
+// waits for that).
+var legacyStorageObjects = []struct{ kind, name string }{
+	{"Deployment", s3Deployment},
+	{"Deployment", legacyMinIODeployment},
+	{"NetworkPolicy", s3NetworkPolicy},
+	{"NetworkPolicy", legacyMinIONetworkPolicy},
+	{"Route", legacyUIRoute},
+	{"Route", legacyAPIRoute},
+	{"Service", legacyService},
+	{"Secret", legacySecret},
+	{"PersistentVolumeClaim", legacySeaweedFSPVC},
+	{"PersistentVolumeClaim", legacyMinIOPVC},
+}
+
+// legacyGetPath returns the path a named object of the earlier storage is
+// read at. The literal names keep the RBAC rules limited to them. PVCs are
+// listed, not read by name.
+func legacyGetPath(kind, name string) (string, bool) {
+	switch {
+	case kind == "Secret" && name == legacySecret:
+		return namespacedPath("v1", "secrets", legacyNamespace, legacySecret), true
+	case kind == "Deployment" && name == s3Deployment:
+		return namespacedPath("apps/v1", "deployments", legacyNamespace, s3Deployment), true
+	case kind == "Deployment" && name == legacyMinIODeployment:
+		return namespacedPath("apps/v1", "deployments", legacyNamespace, legacyMinIODeployment), true
+	case kind == "Service" && name == legacyService:
+		return namespacedPath("v1", "services", legacyNamespace, legacyService), true
+	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, s3NetworkPolicy), true
+	case kind == "NetworkPolicy" && name == legacyMinIONetworkPolicy:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, legacyMinIONetworkPolicy), true
+	case kind == "Route" && name == legacyUIRoute:
+		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyUIRoute), true
+	case kind == "Route" && name == legacyAPIRoute:
+		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyAPIRoute), true
+	}
+	return "", false
+}
+
+// legacyDeletePath returns the path of an object of the earlier storage
+// that teardown (or the end of Migrate storage) may delete.
+func legacyDeletePath(kind, name string) (string, bool) {
+	switch {
+	case kind == "PersistentVolumeClaim" && name == legacySeaweedFSPVC:
+		return namespacedPath("v1", "persistentvolumeclaims", legacyNamespace, legacySeaweedFSPVC), true
+	case kind == "PersistentVolumeClaim" && name == legacyMinIOPVC:
+		return namespacedPath("v1", "persistentvolumeclaims", legacyNamespace, legacyMinIOPVC), true
+	case kind == "Secret" && name == legacySecret:
+		return namespacedPath("v1", "secrets", legacyNamespace, legacySecret), true
+	case kind == "Deployment" && name == s3Deployment:
+		return namespacedPath("apps/v1", "deployments", legacyNamespace, s3Deployment), true
+	case kind == "Deployment" && name == legacyMinIODeployment:
+		return namespacedPath("apps/v1", "deployments", legacyNamespace, legacyMinIODeployment), true
+	case kind == "Service" && name == legacyService:
+		return namespacedPath("v1", "services", legacyNamespace, legacyService), true
+	case kind == "NetworkPolicy" && name == s3NetworkPolicy:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, s3NetworkPolicy), true
+	case kind == "NetworkPolicy" && name == legacyMinIONetworkPolicy:
+		return namespacedPath("networking.k8s.io/v1", "networkpolicies", legacyNamespace, legacyMinIONetworkPolicy), true
+	case kind == "Route" && name == legacyUIRoute:
+		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyUIRoute), true
+	case kind == "Route" && name == legacyAPIRoute:
+		return namespacedPath("route.openshift.io/v1", "routes", legacyNamespace, legacyAPIRoute), true
+	}
+	return "", false
+}
+
+// readLegacyObject reads one named object of the earlier storage.
+func readLegacyObject(c *Client, kind, name string) (objectMeta, bool, error) {
+	if kind == "PersistentVolumeClaim" {
+		p, found, err := findPVC(c, legacyNamespace, name)
+		return p.Meta, found, err
+	}
+	path, ok := legacyGetPath(kind, name)
+	if !ok {
+		return objectMeta{}, false, fmt.Errorf("internal error: unexpected object %s %s of the earlier storage", kind, name)
+	}
+	return readObjectMeta(c, path)
+}
+
+// legacyObject is an object of the earlier storage that this tool created.
+type legacyObject struct {
+	kind, name string
+	meta       objectMeta
+}
+
+// legacyStorage is the storage an earlier version left in namespace minio.
+type legacyStorage struct {
+	terminating bool // the namespace is being deleted
+	// objects are the objects this tool created there, in
+	// legacyStorageObjects order.
+	objects []legacyObject
+	// pvcs are the data PVCs among them, with their sizes.
+	pvcs []storagePVC
+	// server is the server that runs there ("SeaweedFS" or "MinIO"), or ""
+	// when neither Deployment is left; ready is true when it has a ready
+	// replica.
+	server string
+	ready  bool
+	// address is how pipeline servers may reach it; addressErr is set when
+	// its Routes or Service could not be read.
+	address    storageAddress
+	addressErr error
+}
+
+// readLegacyStorage reports the storage an earlier version left in
+// namespace minio, or nil when there is none: no such namespace, or none of
+// the names in legacyStorageObjects belongs to an object this tool created
+// (the ownership label, or an earlier version's server-side apply). The
+// namespace itself is not judged: an object's own markers say who created
+// it. Any read error is returned (fail closed), except for the addresses,
+// which only the dependency checks need (addressErr).
+func readLegacyStorage(c *Client) (*legacyStorage, error) {
+	body, _, err := c.get("/api/v1/namespaces/" + legacyNamespace)
+	if IsK8sError(err, 404) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read namespace %s: %w", legacyNamespace, err)
+	}
+	var nsObj struct {
+		Metadata objectMeta `json:"metadata"`
+		Status   struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(body, &nsObj); err != nil {
+		return nil, fmt.Errorf("parse namespace %s: %w", legacyNamespace, err)
+	}
+
+	type result struct {
+		meta  objectMeta
+		found bool
+		body  []byte
+		err   error
+	}
+	results := make([]result, len(legacyStorageObjects))
+	var (
+		wg      sync.WaitGroup
+		pvcs    []storagePVC
+		pvcErr  error
+		address storageAddress
+		addrErr error
+	)
+	for i, o := range legacyStorageObjects {
+		if o.kind == "PersistentVolumeClaim" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, kind, name string) {
+			defer wg.Done()
+			path, _ := legacyGetPath(kind, name)
+			b, _, err := c.get(path)
+			switch {
+			case IsK8sError(err, 404):
+			case err != nil:
+				results[i].err = err
+			default:
+				results[i].meta, results[i].err = parseObjectMeta(b)
+				results[i].found, results[i].body = results[i].err == nil, b
+			}
+		}(i, o.kind, o.name)
+	}
+	wg.Add(2)
+	go func() { defer wg.Done(); pvcs, pvcErr = listPVCs(c, legacyNamespace) }()
+	go func() { defer wg.Done(); address, addrErr = readLegacyAddress(c) }()
+	wg.Wait()
+
+	if pvcErr != nil {
+		return nil, fmt.Errorf("list PVCs in namespace %s: %w", legacyNamespace, pvcErr)
+	}
+	l := &legacyStorage{terminating: nsObj.Metadata.terminating() || nsObj.Status.Phase == "Terminating", address: address, addressErr: addrErr}
+	deployments := map[string]s3DeploymentSpec{}
+	for i, o := range legacyStorageObjects {
+		r := results[i]
+		if o.kind == "PersistentVolumeClaim" {
+			for _, p := range pvcs {
+				if p.Meta.Name == o.name && storageObjectOwned(p.Meta) {
+					l.objects = append(l.objects, legacyObject{o.kind, o.name, p.Meta})
+					l.pvcs = append(l.pvcs, p)
+				}
+			}
+			continue
+		}
+		if r.err != nil {
+			return nil, fmt.Errorf("read %s %s/%s: %w", o.kind, legacyNamespace, o.name, r.err)
+		}
+		if !r.found || !storageObjectOwned(r.meta) {
+			continue
+		}
+		l.objects = append(l.objects, legacyObject{o.kind, o.name, r.meta})
+		if o.kind == "Deployment" {
+			var d s3DeploymentSpec
+			if json.Unmarshal(r.body, &d) == nil {
+				deployments[o.name] = d
+			}
+		}
+	}
+	if len(l.objects) == 0 {
+		return nil, nil
+	}
+	switch {
+	case hasKey(deployments, s3Deployment):
+		l.server, l.ready = "SeaweedFS", deployments[s3Deployment].Status.ReadyReplicas >= 1
+	case hasKey(deployments, legacyMinIODeployment):
+		l.server, l.ready = "MinIO", deployments[legacyMinIODeployment].Status.ReadyReplicas >= 1
+	}
+	return l, nil
+}
+
+func hasKey[V any](m map[string]V, k string) bool {
+	_, ok := m[k]
+	return ok
+}
+
+// readLegacyAddress reads the addresses of the earlier storage besides its
+// service DNS names: the hosts of its Routes and the ClusterIP of its
+// Service. Missing objects are not errors.
+func readLegacyAddress(c *Client) (storageAddress, error) {
+	a := storageAddress{service: legacyService, namespace: legacyNamespace}
+	api, err := readRoute(c, legacyNamespace, legacyAPIRoute)
+	if err != nil {
+		return a, err
+	}
+	ui, err := readRoute(c, legacyNamespace, legacyUIRoute)
+	if err != nil {
+		return a, err
+	}
+	a.routeHosts = []string{api.host, ui.host}
+	svc, err := readService(c, legacyNamespace, legacyService)
+	if err != nil {
+		return a, err
+	}
+	a.clusterIP = svc.clusterIP
+	return a, nil
+}
+
+// hasPVC reports whether the earlier storage holds the named data PVC.
+func (l *legacyStorage) hasPVC(name string) bool {
+	for _, p := range l.pvcs {
+		if p.Meta.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// uncopiable returns the data PVCs whose objects no server of the earlier
+// storage serves, so a copy through its Service cannot reach them: MinIO's
+// volume once SeaweedFS replaced MinIO (2.1 to 2.3 kept it, unused).
+func (l *legacyStorage) uncopiable() []string {
+	if l.server != "MinIO" && l.hasPVC(legacyMinIOPVC) {
+		return []string{legacyMinIOPVC}
+	}
+	return nil
+}
+
+// legacyStorageState converts the earlier storage into its status entry;
+// dspas are the pipeline servers, to name those that still use it.
+func legacyStorageState(l *legacyStorage, dspas []dspaInfo) *types.LegacyStorageState {
+	if l == nil {
+		return nil
+	}
+	state := &types.LegacyStorageState{
+		Namespace:    legacyNamespace,
+		Server:       l.server,
+		Ready:        l.ready,
+		Endpoint:     legacyS3Host(),
+		Terminating:  l.terminating,
+		UncopiedPVCs: l.uncopiable(),
+	}
+	for _, o := range l.objects {
+		state.Objects = append(state.Objects, o.kind+" "+o.name)
+	}
+	for _, p := range l.pvcs {
+		state.DataPVCs = append(state.DataPVCs, types.KeptPVC{Name: p.Meta.Name, Size: p.Size})
+	}
+	for _, d := range dspas {
+		if l.address.usedBy(d.Meta.Namespace, d.Host) && !d.Meta.terminating() {
+			state.UsedBy = append(state.UsedBy, d.Meta.Namespace+"/"+d.Meta.Name)
+		}
+	}
+	sort.Strings(state.UsedBy)
+	return state
+}

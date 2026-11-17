@@ -8,16 +8,17 @@ import (
 
 const seaweedfs448 = "ghcr.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
 
-// putSeaweedFS23x turns the objects of a fresh setup into what 2.3.x left on
-// a cluster (seen live): SeaweedFS 4.48 with its admin UI on 23646 in the
-// Deployment, minio-service and the NetworkPolicy, and every object created
-// with POST and later re-applied, so the tool's manager has two
+// putOlderToolObjects turns the objects of a fresh setup into objects an
+// older version of the tool created and re-applied, shaped like what 2.3.x
+// left on a cluster (seen live): SeaweedFS 4.48 with its admin UI on 23646
+// in the Deployment, the Service and the NetworkPolicy, and every object
+// created with POST and later re-applied, so the tool's manager has two
 // managedFields entries, operation Update (the create) and operation Apply
 // (the re-run), that both own the container ports. Another manager's entry
 // is added too, which the upgrade must leave alone.
-func putSeaweedFS23x(t *testing.T, f *resourceFake) {
+func putOlderToolObjects(t *testing.T, f *resourceFake) {
 	t.Helper()
-	for _, path := range []string{s3DeployPath, minioSvcPath, s3NPPath} {
+	for _, path := range []string{s3DeployPath, s3SvcPath, s3NPPath} {
 		raw, _ := json.Marshal(f.get(path))
 		old := strings.ReplaceAll(string(raw), "12535", "23646")
 		old = strings.ReplaceAll(old, `,"-admin.port=23646","-admin.port.legacy=0"`, "")
@@ -53,23 +54,23 @@ func deploymentAdminPorts(f *resourceFake) []string {
 
 // Bug seen live: Repair of a 2.3.x SeaweedFS failed with 422
 // "spec.template.spec.containers[0].ports[2].name: Duplicate value: admin",
-// because the tool's Update entry still owned the old admin port, so the
-// apply kept it next to the new one. Setup now upgrades the tool's field
-// ownership to server-side apply first (csaupgrade semantics), so the old
-// port is removed.
-func TestSetupMinIO_RemovesThePortTheToolNoLongerApplies(t *testing.T) {
+// because the tool's Update entry (its create) still owned the old admin
+// port, so the apply kept it next to the new one. Setup upgrades the tool's
+// field ownership to server-side apply first (csaupgrade semantics), so a
+// field the tool no longer applies is removed.
+func TestSetupS3Storage_RemovesAFieldTheToolNoLongerApplies(t *testing.T) {
 	t.Setenv("SEAWEEDFS_IMAGE", "")
-	fastMinIOTimings(t)
+	fastS3Timings(t)
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
-	if resp, _ := SetupMinIO(c); !resp.Success {
+	if resp, _ := SetupS3Storage(c); !resp.Success {
 		t.Fatalf("setup = %+v", resp)
 	}
-	putSeaweedFS23x(t, f)
+	putOlderToolObjects(t, f)
 
-	resp, _ := SetupMinIO(c)
+	resp, _ := SetupS3Storage(c)
 	if !resp.Success {
-		t.Fatalf("repair of a 2.3.x storage = %s (%s)", resp.Message, resp.ErrorCode)
+		t.Fatalf("repair = %s (%s)", resp.Message, resp.ErrorCode)
 	}
 	if got := strings.Join(deploymentAdminPorts(f), " "); got != `k:{"containerPort":8333,"protocol":"TCP"} k:{"containerPort":12535,"protocol":"TCP"}` {
 		t.Errorf("container ports after the repair = %s", got)
@@ -102,7 +103,7 @@ func TestUpgradeToolFieldOwnership(t *testing.T) {
 		raw, _ := json.Marshal(spec)
 		return map[string]json.RawMessage{"f:spec": raw}
 	}
-	path := "/apis/apps/v1/namespaces/minio/deployments/seaweedfs"
+	path := "/apis/apps/v1/namespaces/seaweedfs/deployments/seaweedfs"
 
 	t.Run("folds Update into Apply and keeps other entries", func(t *testing.T) {
 		f, c := newResourceFake(t)
@@ -193,23 +194,23 @@ func specsOf(f *resourceFake, paths ...string) string {
 // PVC, Secret and NetworkPolicy were applied before the Deployment apply
 // failed, and the NetworkPolicy then blocked the admin UI SeaweedFS still
 // served).
-func TestSetupMinIO_DryRunFailureChangesNothing(t *testing.T) {
+func TestSetupS3Storage_DryRunFailureChangesNothing(t *testing.T) {
 	t.Setenv("SEAWEEDFS_IMAGE", "")
-	fastMinIOTimings(t)
+	fastS3Timings(t)
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
-	if resp, _ := SetupMinIO(c); !resp.Success {
+	if resp, _ := SetupS3Storage(c); !resp.Success {
 		t.Fatalf("setup = %+v", resp)
 	}
-	putSeaweedFS23x(t, f)
-	paths := []string{s3PVCPath, "/api/v1/namespaces/minio/secrets/minio-secret", s3NPPath, s3DeployPath, minioSvcPath, minioUIRoute}
+	putOlderToolObjects(t, f)
+	paths := []string{s3PVCPath, s3SecretPath, s3NPPath, s3DeployPath, s3SvcPath, s3RoutePath}
 	before := specsOf(f, paths...)
 	f.failDryRun["PATCH "+s3DeployPath] = 422
 	f.mu.Lock()
 	f.requests = nil
 	f.mu.Unlock()
 
-	resp, _ := SetupMinIO(c)
+	resp, _ := SetupS3Storage(c)
 	if resp.Success || !strings.Contains(resp.Message, "The API server rejects Deployment") || !strings.Contains(resp.Message, "Nothing was changed") {
 		t.Fatalf("setup = %s (%s)", resp.Message, resp.ErrorCode)
 	}
@@ -222,94 +223,8 @@ func TestSetupMinIO_DryRunFailureChangesNothing(t *testing.T) {
 	for _, r := range f.mutations() {
 		writes = append(writes, r[strings.LastIndex(r, "/")+1:])
 	}
-	if got := strings.Join(writes, " "); got != "seaweedfs-pvc minio-secret seaweedfs-ingress seaweedfs" {
+	if got := strings.Join(writes, " "); got != "seaweedfs-data seaweedfs-s3-credentials seaweedfs-ingress seaweedfs" {
 		t.Errorf("real writes = %v", f.mutations())
-	}
-}
-
-// While the admin UI moves from 23646 to 12535, the NetworkPolicy allows
-// both until the Deployment is ready on the new port and minio-service
-// follows; then the old port is dropped.
-func TestSetupMinIO_KeepsTheOldAdminPortOpenUntilTheMove(t *testing.T) {
-	t.Setenv("SEAWEEDFS_IMAGE", "")
-	fastMinIOTimings(t)
-	f, c := newResourceFake(t)
-	readyAfterApply(f)
-	if resp, _ := SetupMinIO(c); !resp.Success {
-		t.Fatalf("setup = %+v", resp)
-	}
-	putSeaweedFS23x(t, f)
-	npAdminPorts := func() string {
-		raw, _ := json.Marshal(f.get(s3NPPath)["spec"].(map[string]interface{})["ingress"].([]interface{})[1].(map[string]interface{})["ports"])
-		return string(raw)
-	}
-	svcUI := func() string {
-		raw, _ := json.Marshal(f.get(minioSvcPath)["spec"])
-		return string(raw)
-	}
-
-	// The new pod does not become ready: the old admin port stays allowed
-	// and the Service is not switched.
-	notReadyAfterApply(f)
-	if resp, _ := SetupMinIO(c); resp.Success || resp.ErrorCode != "timeout" {
-		t.Fatalf("setup = %s (%s)", resp.Message, resp.ErrorCode)
-	}
-	if got := npAdminPorts(); got != `[{"port":12535,"protocol":"TCP"},{"port":23646,"protocol":"TCP"}]` {
-		t.Errorf("NetworkPolicy admin ports while SeaweedFS starts = %s", got)
-	}
-	if !strings.Contains(svcUI(), `"targetPort":23646`) {
-		t.Errorf("Service switched before SeaweedFS was ready: %s", svcUI())
-	}
-
-	// Once it is ready, a re-run switches the Service and closes 23646.
-	readyAfterApply(f)
-	resp, _ := SetupMinIO(c)
-	if !resp.Success {
-		t.Fatalf("re-run = %s (%s)", resp.Message, resp.ErrorCode)
-	}
-	if got := npAdminPorts(); got != `[{"port":12535,"protocol":"TCP"}]` {
-		t.Errorf("NetworkPolicy admin ports after the move = %s", got)
-	}
-	if !strings.Contains(svcUI(), `"targetPort":12535`) {
-		t.Errorf("Service after the move: %s", svcUI())
-	}
-}
-
-// In one run that goes through: the transitional NetworkPolicy is applied
-// before the Deployment, and narrowed only after the Service follows.
-func TestSetupMinIO_NarrowsTheNetworkPolicyLast(t *testing.T) {
-	t.Setenv("SEAWEEDFS_IMAGE", "")
-	fastMinIOTimings(t)
-	f, c := newResourceFake(t)
-	readyAfterApply(f)
-	if resp, _ := SetupMinIO(c); !resp.Success {
-		t.Fatalf("setup = %+v", resp)
-	}
-	putSeaweedFS23x(t, f)
-	f.mu.Lock()
-	f.requests = nil
-	f.mu.Unlock()
-	resp, _ := SetupMinIO(c)
-	if !resp.Success {
-		t.Fatalf("setup = %s", resp.Message)
-	}
-	var order []string
-	for _, r := range f.requests {
-		for _, p := range []string{s3NPPath, s3DeployPath, minioSvcPath} {
-			if r == "PATCH "+p {
-				order = append(order, p[strings.LastIndex(p, "/")+1:])
-			}
-		}
-	}
-	// The dry-run phase upgrades the field ownership of each object (one
-	// PATCH each); then the NetworkPolicy (with both admin ports), the
-	// Deployment and, once ready, the Service are applied, and last the
-	// NetworkPolicy without the old port.
-	if got := strings.Join(order, " "); got != "seaweedfs-ingress seaweedfs minio-service seaweedfs-ingress seaweedfs minio-service seaweedfs-ingress" {
-		t.Errorf("write order = %s", got)
-	}
-	if !strings.Contains(strings.Join(resp.Logs, "\n"), "NetworkPolicy no longer allows the old admin UI port 23646") {
-		t.Errorf("logs = %v", resp.Logs)
 	}
 }
 
@@ -317,7 +232,7 @@ func TestSetupMinIO_NarrowsTheNetworkPolicyLast(t *testing.T) {
 // credentials Secret behind: both writes are dry-run before either is made.
 func TestSetupPipelineServer_DryRunFailureChangesNothing(t *testing.T) {
 	f, c := newResourceFake(t)
-	putReadyManagedMinIO(f)
+	putReadyManagedS3(f)
 	f.putJSON("/api/v1/namespaces/team-a", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 	f.failDryRun["POST /apis/"+dspaAPIGroup+"/namespaces/team-a/datasciencepipelinesapplications"] = 422
 

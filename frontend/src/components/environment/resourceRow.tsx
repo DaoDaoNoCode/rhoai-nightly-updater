@@ -43,11 +43,8 @@ export type ResourceKind = "minio" | "mlflow" | "pipeline";
 /** What to do about a resource that cannot start (A08-3, A06-5). */
 export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = true): string | null {
   const managed = state.managedByTool !== false;
-  if (kind === "minio" && managed && state.migrationPending) {
-    return "Migrate to SeaweedFS replaces this MinIO from an earlier version. It starts with an empty bucket; the MinIO data volume is kept.";
-  }
   if (kind === "minio" && managed && state.repairNeeded) {
-    return "Repair re-runs setup: it applies the SeaweedFS Deployment with the image and settings of this version (scaling it back up if needed), waits for it, points Service minio-service and Route minio-ui at it and removes what is left of the earlier MinIO storage, if anything. Stored data is kept.";
+    return "Repair re-runs setup: it applies the SeaweedFS Deployment with the image and settings of this version (scaling it back up if needed), waits for it, and points Service seaweedfs-s3 and Route seaweedfs-admin at it. Stored data is kept.";
   }
   if (!terminalReason(state)) return null;
   const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;
@@ -141,7 +138,7 @@ export const rowActions = (children: React.ReactNode) => (
 
 /** A change the user is asked to confirm. */
 export type Pending =
-  | { kind: "setup-minio" | "repair-minio" | "migrate-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
+  | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-minio" | "teardown-mlflow" }
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
 

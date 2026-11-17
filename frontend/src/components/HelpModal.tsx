@@ -85,10 +85,10 @@ export const HelpButton: React.FC = () => {
             <Content component={ContentVariants.h3}>Environment</Content>
             <Content component={ContentVariants.p}>
               Sets up S3 storage (SeaweedFS), MLflow and pipeline servers with defaults that work on a fresh cluster, and
-              tears down only what this tool created. The storage serves S3 through Service <code>minio-service</code>, a name
-              kept from earlier versions, so existing pipeline servers keep working. Where an earlier version still runs MinIO,
-              the page offers to replace it with SeaweedFS (it starts fresh and keeps the old volume).
-              Teardown keeps the <code>minio</code> namespace; delete it with <code>oc delete project minio</code> once it is empty.
+              tears down only what this tool created. The storage is in namespace <code>seaweedfs</code>; pipeline servers
+              reach it through Service <code>seaweedfs-s3</code>. Where an earlier version of this tool left its storage in
+              namespace <code>minio</code>, the page shows it with the Storage card. Teardown keeps the storage namespaces;
+              delete them with <code>oc delete project</code> once they are empty.
             </Content>
 
             <Content component={ContentVariants.h3}>One-time cluster setup</Content>

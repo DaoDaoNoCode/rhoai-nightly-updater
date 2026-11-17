@@ -338,9 +338,30 @@ export interface DashboardDevImage {
 }
 
 export interface ResourcesStatus {
+  /** The S3 storage (SeaweedFS in namespace seaweedfs); the key is kept from earlier versions. */
   minio: ResourceState;
   mlflow: ResourceState;
   pipelineServers: ResourceState[] | null;
+  /** Storage an earlier version of this tool left in namespace minio, until it is migrated or torn down. */
+  legacyStorage?: LegacyStorageState | null;
+}
+
+/** The S3 storage an earlier version set up in namespace minio (pkg/types LegacyStorageState). */
+export interface LegacyStorageState {
+  namespace: string;
+  /** "SeaweedFS" or "MinIO", or absent when neither server is left. */
+  server?: string;
+  ready: boolean;
+  /** Its in-cluster S3 address, for example minio-service.minio.svc:9000. */
+  endpoint: string;
+  /** The objects this tool created there ("Deployment seaweedfs", ...). */
+  objects: string[];
+  dataPVCs?: KeptPVC[] | null;
+  /** Data volumes no server serves, so their objects cannot be copied. */
+  uncopiedPVCs?: string[] | null;
+  /** Pipeline servers (namespace/name) that still point at it. */
+  usedBy?: string[] | null;
+  terminating?: boolean;
 }
 
 export interface ResourceState {
@@ -353,7 +374,7 @@ export interface ResourceState {
   currentImage?: string;
   /** Planned backend field: a container waiting reason such as ImagePullBackOff. */
   waitingReason?: string;
-  /** A notice that needs action but does not stop the resource (another S3 storage image, MinIO not yet migrated, exposed S3 Route). */
+  /** A notice that needs action but does not stop the resource (for example another S3 storage image). */
   warning?: string;
 }
 
@@ -636,10 +657,8 @@ export interface ResourceState {
   revertImage?: string;
   /** Login name of the resource's web UI (the SeaweedFS admin UI: "admin"). */
   uiUser?: string;
-  /** The S3 storage still runs the MinIO of an earlier version; setup replaces it and starts fresh. */
+  /** Storage from an earlier version is left in namespace minio (ResourcesStatus.legacyStorage); Migrate storage moves it. */
   migrationPending?: boolean;
-  /** Data volumes kept on purpose after the migration (the old MinIO PVC); teardown deletes them. */
-  keptPVCs?: KeptPVC[] | null;
   /**
    * What re-running setup (Repair) would fix: the server does not serve
    * through its Service or Route, is scaled to zero, or a migration left

@@ -67,9 +67,9 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
-			putReadyManagedMinIO(f)
+			putReadyManagedS3(f)
 			putDSProject(f, "team-a")
-			putDSPA(f, "team-a", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
+			putDSPA(f, "team-a", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
 			tc.setup(f)
 			st, err := GetResourcesStatus(c)
 			if err != nil {

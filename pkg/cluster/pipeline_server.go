@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -50,13 +48,6 @@ var (
 	errDSPACRDMissing = errors.New("the DataSciencePipelinesApplication CRD is not installed")
 )
 
-// minioS3Host is the in-cluster S3 endpoint of the tool's S3 storage. It is
-// the MinIO Service address of earlier versions, kept so their pipeline
-// servers keep working; the Service now routes to SeaweedFS.
-func minioS3Host() string {
-	return fmt.Sprintf("%s.%s.svc:%d", minioServiceName, minioNamespace, minioServiceAPIPort)
-}
-
 // dspaInfo is the part of a DataSciencePipelinesApplication the tool reads.
 type dspaInfo struct {
 	Meta       objectMeta
@@ -73,17 +64,18 @@ type dspaCondition struct {
 }
 
 // managedByTool reports whether this tool created the DSPA. Current versions
-// label it. Older versions named it "dspa", pointed it at the tool's MinIO
-// with secret "dashboard-dspa-secret", and created it either by server-side
-// apply (fieldManager rhoai-nightly-updater) or, when that apply failed, by a
-// POST without User-Agent (manager "Go-http-client"). odh-dashboard creates
+// label it. Older versions named it "dspa", pointed it at the tool's storage
+// in namespace minio (legacyS3Host) with secret "dashboard-dspa-secret",
+// and created it either by server-side apply (fieldManager
+// rhoai-nightly-updater) or, when that apply failed, by a POST without
+// User-Agent (manager "Go-http-client"). odh-dashboard creates
 // its "dspa" from the browser, so neither manager matches it.
 func (d dspaInfo) managedByTool() bool {
 	if d.Meta.hasToolLabel() {
 		return true
 	}
 	return d.Meta.Name == legacyDSPAName &&
-		d.Host == minioS3Host() &&
+		d.Host == legacyS3Host() &&
 		d.SecretName == legacyDSPASecretName &&
 		(d.Meta.createdByToolApply() || d.Meta.createdBy(legacyPostManager, "Update"))
 }
@@ -183,103 +175,6 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	return out, nil
 }
 
-// minioEndpoints are the addresses of the tool's S3 storage besides its
-// service DNS names: the hosts of its Routes and the ClusterIP of
-// minio-service. It also records where minio-service and Route minio-ui
-// send traffic, for the status (see s3ServingProblem).
-type minioEndpoints struct {
-	apiHost   string // Route minio-api (earlier versions)
-	uiHost    string // Route minio-ui
-	clusterIP string
-
-	svcFound     bool
-	svcSelector  string // "key=value" pairs, sorted, comma-separated
-	svcAPITarget string // targetPort of port 9000
-	svcUITarget  string // targetPort of port "ui"
-	uiFound      bool
-	uiService    string // spec.to.name of Route minio-ui
-	uiPort       string // spec.port.targetPort of Route minio-ui
-}
-
-// s3ServingProblem explains why minio-service or Route minio-ui does not
-// send traffic to SeaweedFS, whose admin UI listens on adminPort, or
-// returns "".
-func (e minioEndpoints) s3ServingProblem(adminPort int) string {
-	switch {
-	case !e.svcFound:
-		return "Service minio-service is missing, so pipeline servers cannot reach SeaweedFS."
-	case e.svcSelector != s3AppSelector:
-		return fmt.Sprintf("Service minio-service selects %s instead of SeaweedFS (%s), so pipeline servers do not reach SeaweedFS.", firstNonEmpty(e.svcSelector, "no pods"), s3AppSelector)
-	case e.svcAPITarget != strconv.Itoa(s3Port):
-		return fmt.Sprintf("Service minio-service port %d forwards to %s instead of SeaweedFS's S3 port %d.", minioServiceAPIPort, firstNonEmpty(e.svcAPITarget, "nothing"), s3Port)
-	case e.svcUITarget != strconv.Itoa(adminPort):
-		return fmt.Sprintf("Service minio-service port ui forwards to %s instead of SeaweedFS's admin UI port %d.", firstNonEmpty(e.svcUITarget, "nothing"), adminPort)
-	case !e.uiFound:
-		return "Route minio-ui (the admin UI) is missing."
-	case e.uiService != minioServiceName || e.uiPort != "ui":
-		return "Route minio-ui does not point at port ui of Service minio-service."
-	}
-	return ""
-}
-
-// readMinIOEndpoints reads the Route hosts and the service ClusterIP. A
-// missing object (404) is skipped: the service DNS names still match. Any
-// other read or parse error is returned, because a caller that deletes
-// MinIO's data or its Route must not miss a pipeline server that uses one
-// of these addresses; it refuses instead (fail closed).
-func readMinIOEndpoints(c *Client) (minioEndpoints, error) {
-	var e minioEndpoints
-	var err error
-	if e.apiHost, err = readRouteHost(c, minioNamespace, "minio-api"); err != nil {
-		return minioEndpoints{}, err
-	}
-	ui, err := readRoute(c, minioNamespace, "minio-ui")
-	if err != nil {
-		return minioEndpoints{}, err
-	}
-	e.uiHost, e.uiFound, e.uiService, e.uiPort = ui.host, ui.found, ui.toService, ui.targetPort
-	body, _, err := c.get(namespacedPath("v1", "services", minioNamespace, minioServiceName))
-	switch {
-	case IsK8sError(err, 404):
-		return e, nil
-	case err != nil:
-		return minioEndpoints{}, fmt.Errorf("read Service %s: %w", minioServiceName, err)
-	}
-	var svc struct {
-		Spec struct {
-			ClusterIP string            `json:"clusterIP"`
-			Selector  map[string]string `json:"selector"`
-			Ports     []struct {
-				Name       string          `json:"name"`
-				Port       int             `json:"port"`
-				TargetPort json.RawMessage `json:"targetPort"`
-			} `json:"ports"`
-		} `json:"spec"`
-	}
-	if err := json.Unmarshal(body, &svc); err != nil {
-		return minioEndpoints{}, fmt.Errorf("parse Service %s: %w", minioServiceName, err)
-	}
-	if svc.Spec.ClusterIP != "None" {
-		e.clusterIP = svc.Spec.ClusterIP
-	}
-	e.svcFound = true
-	pairs := make([]string, 0, len(svc.Spec.Selector))
-	for k, v := range svc.Spec.Selector {
-		pairs = append(pairs, k+"="+v)
-	}
-	sort.Strings(pairs)
-	e.svcSelector = strings.Join(pairs, ",")
-	for _, p := range svc.Spec.Ports {
-		switch {
-		case p.Port == minioServiceAPIPort:
-			e.svcAPITarget = intOrString(p.TargetPort)
-		case p.Name == "ui":
-			e.svcUITarget = intOrString(p.TargetPort)
-		}
-	}
-	return e, nil
-}
-
 // intOrString returns a JSON IntOrString (a port number or name) as text.
 func intOrString(raw json.RawMessage) string {
 	var s string
@@ -324,13 +219,6 @@ func readRoute(c *Client, namespace, name string) (routeSpec, error) {
 	return routeSpec{found: true, host: route.Spec.Host, toService: route.Spec.To.Name, targetPort: intOrString(route.Spec.Port.TargetPort)}, nil
 }
 
-// readRouteHost returns a Route's spec.host, "" when the Route (or the Route
-// API) does not exist, or the read or parse error.
-func readRouteHost(c *Client, namespace, name string) (string, error) {
-	r, err := readRoute(c, namespace, name)
-	return r.host, err
-}
-
 // endpointHostname returns the lower-case host name of an S3 endpoint given
 // as "host", "host:port" or "scheme://host[:port][/path]".
 func endpointHostname(raw string) string {
@@ -357,68 +245,6 @@ func endpointHostname(raw string) string {
 		s = s[:i]
 	}
 	return strings.TrimSuffix(strings.ToLower(strings.Trim(s, "[]")), ".")
-}
-
-// usesMinIO reports whether a pipeline server in namespace dspaNamespace with
-// object-storage host host talks to the tool's MinIO, whatever form the
-// address takes: the service DNS name in any of its forms
-// (https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#namespaces-of-services),
-// with or without scheme and port, the ClusterIP, or a Route host.
-func (e minioEndpoints) usesMinIO(dspaNamespace, host string) bool {
-	h := endpointHostname(host)
-	if h == "" {
-		return false
-	}
-	svc := minioServiceName + "." + minioNamespace
-	switch h {
-	case svc, svc + ".svc", svc + ".svc.cluster.local":
-		return true
-	case minioServiceName:
-		// A bare service name resolves in the client's own namespace: the
-		// pod DNS search path starts with <namespace>.svc.cluster.local.
-		return dspaNamespace == minioNamespace
-	}
-	if e.clusterIP != "" && h == e.clusterIP {
-		return true
-	}
-	for _, r := range []string{e.apiHost, e.uiHost} {
-		if r != "" && h == strings.TrimSuffix(strings.ToLower(r), ".") {
-			return true
-		}
-	}
-	return false
-}
-
-// minioTeardownBlocker explains why the S3 storage cannot be torn down because of
-// pipeline servers, or returns "". Any DSPA that stores artifacts in the
-// tool's S3 storage (see usesMinIO), or lives in the minio namespace, blocks it,
-// whoever created it. Terminating ones block too: only a running
-// data-science-pipelines operator removes their finalizer (DSPO
-// dspipeline_controller.go), so the storage waits until they are really gone
-// (teardown order DSPA, then S3 storage).
-func minioTeardownBlocker(dspas []dspaInfo, endpoints minioEndpoints) string {
-	var live, deleting []string
-	for _, d := range dspas {
-		if !endpoints.usesMinIO(d.Meta.Namespace, d.Host) && d.Meta.Namespace != minioNamespace {
-			continue
-		}
-		name := d.Meta.Namespace + "/" + d.Meta.Name
-		if d.Meta.terminating() {
-			deleting = append(deleting, name)
-		} else {
-			live = append(live, name)
-		}
-	}
-	sort.Strings(live)
-	sort.Strings(deleting)
-	var parts []string
-	if len(live) > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s this S3 storage: %s. Tear %s down first.", countNoun(len(live), "pipeline server", "pipeline servers"), verb(len(live), "uses", "use"), strings.Join(live, ", "), verb(len(live), "it", "them")))
-	}
-	if len(deleting) > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s still being deleted: %s. Wait until %s gone; the data-science-pipelines operator must be running to finish the cleanup.", countNoun(len(deleting), "pipeline server", "pipeline servers"), verb(len(deleting), "is", "are"), strings.Join(deleting, ", "), verb(len(deleting), "it is", "they are")))
-	}
-	return strings.Join(parts, " ")
 }
 
 // pipelineServerState converts a tool-owned DSPA into its status entry.
@@ -481,9 +307,9 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
-	minio := getMinIOStatus(c)
-	if !minio.Deployed || !minio.ManagedByTool || !minio.Ready {
-		return fail("The S3 storage is not deployed or not ready. Set up S3 storage first.", "prerequisites", "S3 storage not ready")
+	storage := getS3Status(c)
+	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {
+		return fail("The S3 storage is not deployed or not ready. Set it up first (or, with storage from an earlier version, migrate it).", "prerequisites", "S3 storage not ready")
 	}
 
 	// Never add a second pipeline server next to one this tool did not
@@ -556,20 +382,12 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 
 	// Step 2: Read the S3 credentials
 	logs = append(logs, "Reading S3 storage credentials...")
-	secretBody, _, err := c.get(namespacedPath("v1", "secrets", minioNamespace, "minio-secret"))
+	keys, found, err := readS3Keys(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Failed to read the S3 storage secret minio-secret: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "S3 secret read failed")
+		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "S3 secret read failed")
 	}
-	var minioSecret struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(secretBody, &minioSecret); err != nil {
-		return fail("Failed to parse the S3 storage secret minio-secret", "", "S3 secret parse failed")
-	}
-	accessKey := decodeBase64Field(minioSecret.Data["minio_root_user"])
-	secretKey := decodeBase64Field(minioSecret.Data["minio_root_password"])
-	if accessKey == "" || secretKey == "" {
-		return fail("The S3 credentials are empty. Check that minio-secret has fields: minio_root_user, minio_root_password.", "prerequisites", "S3 credentials empty")
+	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
+		return fail(fmt.Sprintf("The S3 credentials are empty. Check that Secret %s in namespace %s has the keys %s and %s, or repair the S3 storage.", s3Secret, s3Namespace, s3AccessKeyField, s3SecretKeyField), "prerequisites", "S3 credentials empty")
 	}
 	logs = append(logs, "OK: S3 storage credentials read")
 
@@ -603,8 +421,8 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			"labels":    toolLabels(),
 		},
 		"stringData": map[string]interface{}{
-			"AWS_ACCESS_KEY_ID":     accessKey,
-			"AWS_SECRET_ACCESS_KEY": secretKey,
+			s3AccessKeyField: keys.AccessKey,
+			s3SecretKeyField: keys.SecretKey,
 		},
 	}
 	// Step 4 prepares the DSPA; both writes are dry-run first (below).
@@ -623,13 +441,13 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			"dspVersion": "v2",
 			"objectStorage": map[string]interface{}{
 				"externalStorage": map[string]interface{}{
-					"host":   minioS3Host(),
+					"host":   s3Host(),
 					"scheme": "http",
-					"bucket": minioBucket,
-					"region": "us-east-1",
+					"bucket": s3Bucket,
+					"region": s3Region,
 					"s3CredentialsSecret": map[string]interface{}{
-						"accessKey":  "AWS_ACCESS_KEY_ID",
-						"secretKey":  "AWS_SECRET_ACCESS_KEY",
+						"accessKey":  s3AccessKeyField,
+						"secretKey":  s3SecretKeyField,
 						"secretName": dspaSecretName,
 					},
 				},

@@ -30,13 +30,6 @@ func putDSProject(f *resourceFake, ns string) {
 	f.putJSON("/api/v1/namespaces/"+ns, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 }
 
-func putReadyManagedMinIO(f *resourceFake) {
-	putNamespace(f, toolLabelJSON, toolFieldManager)
-	putS3Deployment(f, 1)
-	putS3Serving(f)
-	f.putJSON("/api/v1/namespaces/minio/secrets/minio-secret", `{"data":{"minio_root_user":"`+exampleAuth("minio")+`","minio_root_password":"`+exampleAuth("pass")+`"}}`)
-}
-
 func putDSPO(f *resourceFake, ready int) {
 	f.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/data-science-pipelines-operator-controller-manager",
 		`{"metadata":{"labels":{"app.kubernetes.io/name":"data-science-pipelines-operator"}},"status":{"readyReplicas":`+itoa(ready)+`}}`)
@@ -51,19 +44,22 @@ func fastPipelineTimings(t *testing.T) {
 
 func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 	f, c := newResourceFake(t)
-	putReadyManagedMinIO(f)
+	putReadyManagedS3(f)
+	// The DSPAs of earlier versions point at the storage they left in
+	// namespace minio.
+	putLegacySeaweedFS(f)
 	for _, ns := range []string{"mine", "legacy-apply", "legacy-post", "dashboard", "dashboard-same-spec"} {
 		putDSProject(f, ns)
 	}
-	notReady := `{"conditions":[{"type":"Ready","status":"False","reason":"MinimumReplicasAvailable","message":"Could not connect to (minio-service.minio.svc:9000): connection refused"}]}`
-	putDSPA(f, "mine", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", notReady)
-	putDSPA(f, "legacy-apply", "dspa", `{}`, toolFieldManager, "Apply", minioS3Host(), legacyDSPASecretName, "", "")
-	putDSPA(f, "legacy-post", "dspa", `{}`, legacyPostManager, "Update", minioS3Host(), legacyDSPASecretName, "", "")
+	notReady := `{"conditions":[{"type":"Ready","status":"False","reason":"MinimumReplicasAvailable","message":"Could not connect to (seaweedfs-s3.seaweedfs.svc:8333): connection refused"}]}`
+	putDSPA(f, "mine", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", notReady)
+	putDSPA(f, "legacy-apply", "dspa", `{}`, toolFieldManager, "Apply", legacyS3Host(), legacyDSPASecretName, "", "")
+	putDSPA(f, "legacy-post", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 	// Created from the RHOAI dashboard: same name, secret and even host.
-	putDSPA(f, "dashboard-same-spec", "dspa", `{}`, "unknown", "Update", minioS3Host(), legacyDSPASecretName, "", "")
+	putDSPA(f, "dashboard-same-spec", "dspa", `{}`, "unknown", "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 	putDSPA(f, "dashboard", "dspa", `{}`, "Mozilla", "Update", "s3.amazonaws.com", legacyDSPASecretName, "", "")
 	// A tool DSPA in a project the user cannot see.
-	putDSPA(f, "hidden", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
+	putDSPA(f, "hidden", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 
 	st, err := GetResourcesStatus(c)
 	if err != nil {
@@ -95,21 +91,21 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 			}
 		}
 	}
-	// Every live DSPA on the tool's MinIO blocks its teardown, including
-	// the dashboard-created one and the one in a hidden project.
+	// Every live DSPA on the tool's storages blocks their teardown,
+	// including the dashboard-created one and the one in a hidden project.
 	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this S3 storage: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
-		t.Errorf("MinIO teardown reason = %q", st.MinIO.TeardownBlockedReason)
+		t.Errorf("S3 storage teardown reason = %q", st.MinIO.TeardownBlockedReason)
 	}
 }
 
 func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
 	count := func(projects int) int {
 		f, c := newResourceFake(t)
-		putReadyManagedMinIO(f)
+		putReadyManagedS3(f)
 		for i := 0; i < projects; i++ {
 			ns := "p" + itoa(i)
 			putDSProject(f, ns)
-			putDSPA(f, ns, dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
+			putDSPA(f, ns, dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
 		}
 		if _, err := GetResourcesStatus(c); err != nil {
 			t.Fatal(err)
@@ -140,7 +136,7 @@ func TestGetResourcesStatus_DSPAListErrorFails(t *testing.T) {
 
 func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T) {
 	f, c := newResourceFake(t)
-	putReadyManagedMinIO(f)
+	putReadyManagedS3(f)
 
 	resp, _ := SetupPipelineServer(c, "new-project")
 	if !resp.Success {
@@ -176,28 +172,32 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 		setup    func(f *resourceFake)
 		wantCode string
 	}{
-		{"MinIO missing", func(f *resourceFake) {}, "prerequisites"},
-		{"MinIO not created by the tool", func(f *resourceFake) {
-			putNamespace(f, `{}`, "kubectl-create")
-			putMinIODeployment(f, "kubectl-client-side-apply", 1)
+		{"S3 storage missing", func(f *resourceFake) {}, "prerequisites"},
+		{"S3 storage not created by the tool", func(f *resourceFake) {
+			putS3Namespace(f, `{}`)
+			putS3Deployment(f, 1)
+			putS3Serving(f)
+		}, "prerequisites"},
+		{"only storage from an earlier version", func(f *resourceFake) {
+			putLegacySeaweedFS(f)
 		}, "prerequisites"},
 		{"project has a dashboard pipeline server", func(f *resourceFake) {
-			putReadyManagedMinIO(f)
+			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", minioS3Host(), legacyDSPASecretName, "", "")
+			putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 		}, "not_managed"},
 		{"project has a pipeline server from an earlier version", func(f *resourceFake) {
-			putReadyManagedMinIO(f)
+			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", minioS3Host(), legacyDSPASecretName, "", "")
+			putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 		}, "validation"},
 		{"secret name taken by someone else", func(f *resourceFake) {
-			putReadyManagedMinIO(f)
+			putReadyManagedS3(f)
 			putDSProject(f, "proj")
 			f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{}}`)
 		}, "not_managed"},
 		{"no DSPA CRD", func(f *resourceFake) {
-			putReadyManagedMinIO(f)
+			putReadyManagedS3(f)
 			f.fail["GET /apis/"+dspaAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 404
 		}, "prerequisites"},
 	}
@@ -220,7 +220,7 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 
 func TestSetupPipelineServer_RerunIsIdempotent(t *testing.T) {
 	f, c := newResourceFake(t)
-	putReadyManagedMinIO(f)
+	putReadyManagedS3(f)
 	for i := 0; i < 2; i++ {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d failed: %+v", i, resp)
@@ -244,7 +244,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "tool pipeline server",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
+				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 			},
 			wantOK: true, wantDeleted: []string{dspaPath("proj", dspaName), secretPath("proj", dspaSecretName)}, wantMsg: "mariadb-" + dspaName,
@@ -252,7 +252,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "dashboard pipeline server is never deleted",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", minioS3Host(), legacyDSPASecretName, "", "")
+				putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{}}`)
 			},
 			wantCode: "not_managed", wantNoDeletes: true,
@@ -260,7 +260,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "legacy pipeline server and secret",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", minioS3Host(), legacyDSPASecretName, "", "")
+				putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
 				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`}}`)
 			},
 			wantOK: true, wantDeleted: []string{dspaPath("proj", "dspa"), secretPath("proj", legacyDSPASecretName)},
@@ -268,7 +268,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "legacy pipeline server whose secret someone else created",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", "dspa", `{}`, toolFieldManager, "Apply", minioS3Host(), legacyDSPASecretName, "", "")
+				putDSPA(f, "proj", "dspa", `{}`, toolFieldManager, "Apply", legacyS3Host(), legacyDSPASecretName, "", "")
 				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON("unknown", "Update")+`}}`)
 			},
 			wantOK: true, wantDeleted: []string{dspaPath("proj", "dspa")}, wantKept: []string{secretPath("proj", legacyDSPASecretName)},
@@ -276,7 +276,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "finalizer and operator not running",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, withFinalizer, "")
+				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, withFinalizer, "")
 				putDSPO(f, 0)
 			},
 			wantCode: "prerequisites", wantNoDeletes: true,
@@ -284,7 +284,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "finalizer and operator running",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, withFinalizer, "")
+				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, withFinalizer, "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				putDSPO(f, 1)
 				f.finalizeOnGet = true
@@ -294,7 +294,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "finalizer never completes",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, withFinalizer, "")
+				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, withFinalizer, "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				putDSPO(f, 1)
 			},
@@ -303,8 +303,8 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "secret shared with another live pipeline server",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
-				putDSPA(f, "proj", "other", `{}`, "unknown", "Update", minioS3Host(), dspaSecretName, "", "")
+				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+				putDSPA(f, "proj", "other", `{}`, "unknown", "Update", s3Host(), dspaSecretName, "", "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 			},
 			wantOK: true, wantDeleted: []string{dspaPath("proj", dspaName)}, wantKept: []string{secretPath("proj", dspaSecretName), dspaPath("proj", "other")},
@@ -312,7 +312,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "secret delete fails",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName, "", "")
+				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				f.fail["DELETE "+secretPath("proj", dspaSecretName)] = 500
 			},
@@ -366,7 +366,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 func TestTeardownPipelineServer_RerunWhileTerminatingDoesNotDeleteAgain(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", minioS3Host(), dspaSecretName,
+	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName,
 		`,"deletionTimestamp":"`+created+`","finalizers":["`+dspaFinalizer+`"]`, "")
 	resp, _ := TeardownPipelineServer(c, "proj")
 	if resp.Success || resp.ErrorCode != "in_progress" {

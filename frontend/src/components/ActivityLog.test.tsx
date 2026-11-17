@@ -39,12 +39,12 @@ describe("ActivityLog", () => {
     expect(activityCategory({ ...refused, action: "deploy-dashboard-main", category: undefined })).toBe("dashboard-dev");
     render(
       <ActivityLog
-        activity={[{ ...refused, action: "setup-minio", success: true, label: "MinIO set up", category: "test-resources", reason: undefined }]}
+        activity={[{ ...refused, action: "setup-minio", success: true, label: "S3 storage set up", category: "test-resources", reason: undefined }]}
         defaultCategory="all"
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Activity type: All" }));
     fireEvent.click(screen.getByRole("option", { name: /Environment/ }));
-    expect(screen.getByText("MinIO set up")).toBeTruthy();
+    expect(screen.getByText("S3 storage set up")).toBeTruthy();
   });
 });

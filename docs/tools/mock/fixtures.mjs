@@ -494,7 +494,7 @@ export const projects = ["dev-project", "fraud-detection", "llm-eval"];
 
 export const versionInfo = (overrides = {}) => ({
   version: "v2.0.0", commit: hex("v2.0.0", 40), buildDate: "2026-10-06T09:00:00Z", goVersion: "go1.25.1",
-  templateRevision: "4", expectedTemplateRevision: "4", templateOutdated: false, ...overrides,
+  templateRevision: "5", expectedTemplateRevision: "5", templateOutdated: false, ...overrides,
 });
 
 export const noUpdate = { current: "v2.0.0", latest: "v2.0.0", updateAvailable: false, majorUpgrade: false };

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestMinIOTeardownDependencyFailure(t *testing.T) {
+func TestS3TeardownDependencyFailure(t *testing.T) {
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" && r.URL.Path == "/api/v1/namespaces" {
@@ -17,16 +17,16 @@ func TestMinIOTeardownDependencyFailure(t *testing.T) {
 			io.WriteString(w, `{"message":"namespace lookup forbidden","code":403}`)
 			return
 		}
-		if r.Method == "DELETE" && r.URL.Path == "/api/v1/namespaces/minio" {
+		if r.Method == "DELETE" {
 			deleted = true
 		}
 		io.WriteString(w, `{}`)
 	}))
 	defer server.Close()
 	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
-	result, err := TeardownMinIO(c)
+	result, err := TeardownS3Storage(c)
 	if err != nil || result.Success || deleted {
-		t.Fatalf("dependency lookup failed but result success=%v namespaceDeleted=%v error=%v", result.Success, deleted, err)
+		t.Fatalf("dependency lookup failed but result success=%v deleted=%v error=%v", result.Success, deleted, err)
 	}
 }
 

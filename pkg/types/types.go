@@ -596,6 +596,37 @@ type ResourcesStatus struct {
 	// UnmanagedPipelineProjects lists visible projects that already have a
 	// pipeline server this tool did not create. Setup is refused there.
 	UnmanagedPipelineProjects []string `json:"unmanagedPipelineProjects,omitempty"`
+	// LegacyStorage is the S3 storage an earlier version of this tool left
+	// in namespace minio, until Migrate storage (or teardown) removes it.
+	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
+}
+
+// LegacyStorageState describes the S3 storage an earlier version of this
+// tool set up in namespace minio: MinIO, or SeaweedFS behind the MinIO-era
+// names. Only objects this tool created there are listed.
+type LegacyStorageState struct {
+	Namespace string `json:"namespace"`
+	// Server is the server that runs there, "SeaweedFS" or "MinIO", or ""
+	// when neither Deployment is left.
+	Server string `json:"server,omitempty"`
+	// Ready is true when the server has a ready replica.
+	Ready bool `json:"ready"`
+	// Endpoint is the in-cluster S3 address its clients use.
+	Endpoint string `json:"endpoint"`
+	// Objects are the objects this tool created there ("Deployment
+	// seaweedfs", ...), which migration and teardown delete.
+	Objects []string `json:"objects"`
+	// DataPVCs are its data volumes among them, with their sizes.
+	DataPVCs []KeptPVC `json:"dataPVCs,omitempty"`
+	// UncopiedPVCs are data volumes no running server serves, so their
+	// objects cannot be copied (MinIO's volume kept after SeaweedFS
+	// replaced MinIO).
+	UncopiedPVCs []string `json:"uncopiedPVCs,omitempty"`
+	// UsedBy are the pipeline servers (namespace/name) whose object storage
+	// still points at it.
+	UsedBy []string `json:"usedBy,omitempty"`
+	// Terminating is true while namespace minio is being deleted.
+	Terminating bool `json:"terminating,omitempty"`
 }
 
 // ResourceState describes the deployment state of a single resource group.
@@ -638,20 +669,16 @@ type ResourceState struct {
 	RevertImage string `json:"revertImage,omitempty"`
 	// Warning is a security or upgrade notice that needs the user's action
 	// but does not stop the resource from working (for example the S3
-	// storage running another image than this version deploys, or its S3
-	// API exposed through a Route).
+	// storage running another image than this version deploys).
 	Warning string `json:"warning,omitempty"`
 	// UIUser is the login name of the resource's web UI, when it has a
 	// fixed one (the SeaweedFS admin UI).
 	UIUser string `json:"uiUser,omitempty"`
-	// MigrationPending is true while the MinIO server an earlier version of
-	// this tool deployed still runs; re-running setup replaces it with
-	// SeaweedFS and starts with an empty bucket.
+	// MigrationPending is true on the S3 storage while storage from an
+	// earlier version of this tool is left in namespace minio (see
+	// ResourcesStatus.LegacyStorage): Migrate storage moves its data and
+	// pipeline servers, and then removes it.
 	MigrationPending bool `json:"migrationPending,omitempty"`
-	// KeptPVCs are data volumes kept on purpose after a migration (the old
-	// MinIO volume), for a rollback or a manual copy. Teardown deletes them;
-	// they are also listed in DataPVCs.
-	KeptPVCs []KeptPVC `json:"keptPVCs,omitempty"`
 	// RepairNeeded explains what re-running setup (Repair) would fix: the
 	// server does not serve through its Service or Route, is scaled to
 	// zero, or a migration left cleanup undone. With Ready false the
@@ -659,7 +686,7 @@ type ResourceState struct {
 	RepairNeeded string `json:"repairNeeded,omitempty"`
 }
 
-// KeptPVC is a PersistentVolumeClaim kept on purpose, and its size.
+// KeptPVC is a PersistentVolumeClaim and its size.
 type KeptPVC struct {
 	Name string `json:"name"`
 	Size string `json:"size,omitempty"`
