@@ -607,21 +607,10 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			"AWS_SECRET_ACCESS_KEY": secretKey,
 		},
 	}
-	// POST when absent, resourceVersion-guarded apply when owned, so a
-	// secret someone creates after the check above is never overwritten.
-	secretAction, err := ensureToolObject(c, fmt.Sprintf("Secret %s/%s", project, dspaSecretName), dspaSecretPath,
-		withToolFieldManager(namespacedPath("v1", "secrets", project, "")), dspaSecret, secretMeta, secretFound, readSecret, objectMeta.hasToolLabel)
-	if err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
-		return fail(msg, code, "secret write failed")
-	}
-	logs = append(logs, "OK: Secret "+secretAction)
-
-	// Step 4: Create DSPA. fieldValidation=Strict (and server-side apply,
-	// which always validates strictly) rejects fields the CRD does not
-	// declare, so a manifest that drifts from the CRD fails here instead of
-	// being silently pruned.
-	logs = append(logs, "Creating pipeline server (DSPA)...")
+	// Step 4 prepares the DSPA; both writes are dry-run first (below).
+	// fieldValidation=Strict (and server-side apply, which always validates
+	// strictly) rejects fields the CRD does not declare, so a manifest that
+	// drifts from the CRD fails instead of being silently pruned.
 	dspa := map[string]interface{}{
 		"apiVersion": dspaAPIGroup,
 		"kind":       "DataSciencePipelinesApplication",
@@ -664,9 +653,41 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		meta, perr := parseObjectMeta(body)
 		return meta, true, perr
 	}
-	dspaAction, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
-		withToolFieldManager(namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
-		dspa, dspaMeta, dspaFound, readDSPA, objectMeta.hasToolLabel)
+	// POST when absent, resourceVersion-guarded apply when owned, so an
+	// object someone creates after the checks above is never overwritten.
+	// Both writes are sent as server-side dry runs first, so a pipeline
+	// server the API server rejects leaves no secret behind.
+	writeSecret := func(dryRun bool) (string, error) {
+		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("Secret %s/%s", project, dspaSecretName), dspaSecretPath,
+			withToolFieldManager(namespacedPath("v1", "secrets", project, "")), dspaSecret, secretMeta, secretFound, readSecret, objectMeta.hasToolLabel, dryRun)
+		secretMeta, secretFound = meta, found
+		return action, err
+	}
+	writeDSPA := func(dryRun bool) (string, error) {
+		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
+			withToolFieldManager(namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
+			dspa, dspaMeta, dspaFound, readDSPA, objectMeta.hasToolLabel, dryRun)
+		dspaMeta, dspaFound = meta, found
+		return action, err
+	}
+	logs = append(logs, "Checking the secret and the pipeline server with the API server (dry run)...")
+	if _, err := writeSecret(true); err != nil {
+		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
+		return fail(msg+" Nothing was changed.", code, "secret dry run failed")
+	}
+	if _, err := writeDSPA(true); err != nil {
+		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
+		return fail(msg+" Nothing was changed.", code, "DSPA dry run failed")
+	}
+	secretAction, err := writeSecret(false)
+	if err != nil {
+		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
+		return fail(msg, code, "secret write failed")
+	}
+	logs = append(logs, "OK: Secret "+secretAction)
+
+	logs = append(logs, "Creating pipeline server (DSPA)...")
+	dspaAction, err := writeDSPA(false)
 	if err != nil {
 		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
 		return fail(fmt.Sprintf("%s The credentials secret '%s' is in place; re-run setup, or tear down to clean up.", msg, dspaSecretName), code, "DSPA write failed")

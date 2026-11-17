@@ -130,7 +130,7 @@ Revert is safe to repeat and works without a saved session.
 
 ### S3 storage: SeaweedFS (namespace `minio`)
 
-The namespace, Service, Secret and bucket keep the names earlier versions used for MinIO, so pipeline servers pointed at `minio-service.minio.svc:9000` keep working with no edits. Setup creates or updates the following, in this order. Updates are guarded by resourceVersion; a foreign object refuses.
+The namespace, Service, Secret and bucket keep the names earlier versions used for MinIO, so pipeline servers pointed at `minio-service.minio.svc:9000` keep working with no edits. Setup creates or updates the following, in this order. Updates are guarded by resourceVersion; a foreign object refuses. Every create and update is first sent as a server-side dry run (`?dryRun=All`), and none is made unless all pass. Before updating an object it created, setup moves its own field ownership from client-side to server-side apply in `metadata.managedFields` (as `kubectl apply --server-side` does), so a field it no longer sets is removed; other managers' entries are not touched. While the admin UI moves from port 23646 (SeaweedFS before 4.49) to 12535, the NetworkPolicy allows both until SeaweedFS is ready and `minio-service` points at the new port.
 
 | Object | Notes |
 |---|---|

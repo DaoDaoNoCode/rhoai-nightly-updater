@@ -674,8 +674,11 @@ type minioResource struct {
 
 // s3Resources returns the objects SetupMinIO creates or updates, in order.
 // Only the admin UI gets a Route: the S3 API stays inside the cluster, where
-// pipeline servers reach it through minio-service.
-func s3Resources(user, password string) []minioResource {
+// pipeline servers reach it through minio-service. The NetworkPolicy lets
+// the router reach the admin UI on s3AdminPort and on the extra
+// oldAdminPorts: the port a running SeaweedFS still serves while setup moves
+// it to s3AdminPort (see SetupMinIO).
+func s3Resources(user, password string, oldAdminPorts ...int) []minioResource {
 	meta := func(name string) map[string]interface{} {
 		return map[string]interface{}{"name": name, "namespace": minioNamespace, "labels": toolLabels()}
 	}
@@ -683,6 +686,12 @@ func s3Resources(user, password string) []minioResource {
 		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": "minio-secret", "key": key}}}
 	}
 	podLabels := map[string]interface{}{"app": s3AppLabel}
+	adminPorts := []map[string]interface{}{{"protocol": "TCP", "port": s3AdminPort}}
+	for _, p := range oldAdminPorts {
+		if p != s3AdminPort {
+			adminPorts = append(adminPorts, map[string]interface{}{"protocol": "TCP", "port": p})
+		}
+	}
 	return []minioResource{
 		// A new PVC: SeaweedFS cannot read MinIO's on-disk format, so the
 		// MinIO volume (minio-pvc) is left alone.
@@ -741,7 +750,7 @@ func s3Resources(user, password string) []minioResource {
 							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/ingress": ""}}},
 							{"namespaceSelector": map[string]interface{}{"matchLabels": map[string]interface{}{"policy-group.network.openshift.io/host-network": ""}}},
 						},
-						"ports": []map[string]interface{}{{"protocol": "TCP", "port": s3AdminPort}},
+						"ports": adminPorts,
 					},
 				},
 			},
@@ -879,7 +888,9 @@ func templateHint(err error) string {
 // repairs a partial setup. It never changes an object it did not create:
 // every object is checked first, absent ones are created with POST, and
 // updates are guarded by the resourceVersion that was checked (see
-// ensureToolObject).
+// ensureToolObject). Every create and apply is sent as a server-side dry run
+// before any is made, so an object the API server rejects changes nothing
+// (the namespace, which the dry runs need, is created before them).
 //
 // When an earlier version's MinIO is deployed, setup replaces it and starts
 // fresh: SeaweedFS gets a new PVC, minio-service is switched to it only once
@@ -989,19 +1000,50 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	if credErr != nil {
 		return fail(fmt.Sprintf("Cannot determine the S3 credentials: %v.%s", credErr, templateHint(credErr)), errorCodeFromK8sErr(credErr), "credentials")
 	}
+	// A SeaweedFS set up by an earlier version may serve its admin UI on
+	// another port (23646 before SeaweedFS 4.49 moved it; see s3AdminPort).
+	// Until it runs on the new port, the NetworkPolicy lets the router reach
+	// both, so the admin UI is never cut off before the workload has moved;
+	// the old port is dropped after the Service follows (step 5).
+	oldAdminPort := 0
+	if existing["Deployment/"+s3Deployment].found {
+		body, _, err := c.get(namespacedPath("apps/v1", "deployments", minioNamespace, s3Deployment))
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot read Deployment %s/%s; nothing was changed: %v.%s", minioNamespace, s3Deployment, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
+		}
+		var deploy minioDeployment
+		if err := json.Unmarshal(body, &deploy); err == nil && deploy.adminPort() != s3AdminPort {
+			oldAdminPort = deploy.adminPort()
+		}
+	}
+	resources := s3Resources(user, password)
+	var finalPolicy *minioResource
+	if oldAdminPort != 0 {
+		for i, r := range resources {
+			if r.kind == "NetworkPolicy" {
+				finalPolicy = &resources[i]
+			}
+		}
+		resources = s3Resources(user, password, oldAdminPort)
+	}
+
 	var applied []string
-	apply := func(r minioResource) (*types.OperationResponse, error) {
-		logs = append(logs, fmt.Sprintf("Applying %s...", r.name))
+	write := func(r minioResource, dryRun bool) (*types.OperationResponse, error) {
+		if !dryRun {
+			logs = append(logs, fmt.Sprintf("Applying %s...", r.name))
+		}
 		path, ok := minioApplyPath(r.obj)
 		createPath, createOK := minioCreatePath(r.kind)
 		if !ok || !createOK {
 			return fail(fmt.Sprintf("Internal error: unexpected S3 storage object %s %v", r.kind, r.obj["metadata"]), "internal", "unknown object")
 		}
 		name, _ := r.obj["metadata"].(map[string]interface{})["name"].(string)
-		cur := existing[r.kind+"/"+name]
+		key := r.kind + "/" + name
+		cur := existing[key]
 		kind := r.kind
 		read := func() (objectMeta, bool, error) { return readMinIOObject(c, kind, name) }
-		action, err := ensureToolObject(c, fmt.Sprintf("%s %s/%s", r.kind, minioNamespace, name), path, createPath, r.obj, cur.meta, cur.found, read, minioObjectOwned)
+		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("%s %s/%s", r.kind, minioNamespace, name), path, createPath, r.obj, cur.meta, cur.found, read, minioObjectOwned, dryRun)
+		existing[key] = current{meta, found}
 		if err != nil {
 			done := "nothing"
 			if len(applied) > 0 {
@@ -1015,20 +1057,44 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 			if errors.Is(err, errObjectChanged) || IsK8sError(err, 409) {
 				code = "conflict"
 			}
+			if dryRun {
+				return fail(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", r.name, err, templateHint(err)), code, "dry run "+r.name+" failed")
+			}
 			return fail(fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. Re-run setup to retry, or tear down to remove it.%s", r.name, err, done, templateHint(err)), code, "apply "+r.name+" failed")
 		}
-		applied = append(applied, r.name)
-		logs = append(logs, fmt.Sprintf("OK: %s %s", r.name, action))
+		if !dryRun {
+			applied = append(applied, r.name)
+			logs = append(logs, fmt.Sprintf("OK: %s %s", r.name, action))
+		}
 		return nil, nil
 	}
-	resources := s3Resources(user, password)
+
+	// Every write is first sent as a server-side dry run, so an object the
+	// API server rejects (validation, admission, the apply merge) stops
+	// setup before anything changed: the check-before-write rule above,
+	// extended to what only the API server can check.
+	logs = append(logs, "Checking every change with the API server (dry run)...")
+	dryRuns := resources
+	if finalPolicy != nil {
+		dryRuns = append(append([]minioResource{}, resources...), *finalPolicy)
+	}
+	for _, r := range dryRuns {
+		if resp, err := write(r, true); resp != nil || err != nil {
+			return resp, err
+		}
+	}
+	logs = append(logs, "OK: The API server accepts every change")
+
 	for _, r := range resources {
 		if r.frontDoor {
 			continue
 		}
-		if resp, err := apply(r); resp != nil || err != nil {
+		if resp, err := write(r, false); resp != nil || err != nil {
 			return resp, err
 		}
+	}
+	if oldAdminPort != 0 {
+		logs = append(logs, fmt.Sprintf("The admin UI moves from port %d to %d; the NetworkPolicy allows both until the Service has followed.", oldAdminPort, s3AdminPort))
 	}
 
 	// Step 4: Wait for the pod. Stop early when it cannot start.
@@ -1063,14 +1129,21 @@ func SetupMinIO(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: SeaweedFS is running")
 
 	// Step 5: Route traffic to it: minio-service (the address pipeline
-	// servers use) and the admin UI Route.
+	// servers use) and the admin UI Route. Then the NetworkPolicy stops
+	// allowing an old admin UI port, which nothing serves any more.
 	for _, r := range resources {
 		if !r.frontDoor {
 			continue
 		}
-		if resp, err := apply(r); resp != nil || err != nil {
+		if resp, err := write(r, false); resp != nil || err != nil {
 			return resp, err
 		}
+	}
+	if finalPolicy != nil {
+		if resp, err := write(*finalPolicy, false); resp != nil || err != nil {
+			return resp, err
+		}
+		logs = append(logs, fmt.Sprintf("OK: NetworkPolicy no longer allows the old admin UI port %d", oldAdminPort))
 	}
 
 	// Step 6: Create the bucket through the Service, as pipeline servers

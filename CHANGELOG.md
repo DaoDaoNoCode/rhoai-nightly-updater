@@ -46,6 +46,23 @@ only accepts a tag whose version is the top dated section. See
   object names `minio`, `minio-service`, `minio-secret` and `minio-pvc`
   stay, so pipeline servers need no edits.
 
+### Fixed
+
+- Re-running a setup (Repair) on objects an earlier version created could
+  never remove a field or list item the tool stopped setting: the create
+  (a POST) left an `Update` entry of the tool in `managedFields` that kept
+  owning it. Repairing a SeaweedFS from 2.3.x failed with 422 "ports[2].name:
+  Duplicate value: admin". Before updating its own object, setup now moves
+  the tool's field ownership to server-side apply (the `csaupgrade`
+  semantics `kubectl apply --server-side` uses; other managers' entries are
+  untouched).
+- A setup the API server rejects part-way no longer leaves the cluster
+  half-changed: the S3 storage and pipeline server setups send every create
+  and update as a server-side dry run first and make none unless all pass.
+  While the admin UI moves to its new port, the NetworkPolicy allows the old
+  and the new port until SeaweedFS is ready and `minio-service` follows, so
+  the admin UI is never blocked while the old pod still serves it.
+
 ## [2.3.3] - 2026-11-16
 
 ### Fixed
