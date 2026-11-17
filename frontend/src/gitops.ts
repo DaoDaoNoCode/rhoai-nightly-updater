@@ -86,7 +86,7 @@ export function gitOpsInstallWaitReason(state: GitOpsInstallState | null): strin
 }
 
 /** Why Re-deploy or Reinstall is off while Argo CD manages the operator, or an ACM policy the catalog, or null. */
-export function gitOpsOperatorReason(status: StatusResponse | null | undefined, action: "Re-deploy" | "Reinstall"): string | null {
+export function gitOpsOperatorReason(status: StatusResponse | null | undefined, action: "Re-deploy" | "Install a different build"): string | null {
   const app = operatorGitOpsApp(status);
   if (app) {
     return `Argo CD application "${app}" manages the operator. ${action} deletes the Subscription for minutes, and Argo CD would recreate it from Git meanwhile. Use Update, which installs the build the catalog serves.`;

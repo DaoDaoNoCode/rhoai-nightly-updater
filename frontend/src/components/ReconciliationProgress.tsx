@@ -54,7 +54,7 @@ interface Step {
 const STARTED_LABELS: Record<OperationType, string> = {
   update: "Update applied",
   refresh: "Re-deploy applied",
-  reinstall: "Reinstall applied",
+  reinstall: "Different build installed",
 };
 
 /** OLM's side after the tool's steps: the CSV phases it moves through. */

@@ -114,16 +114,16 @@ export const STEP_SETS: Record<OperationKind, PipelineStepDef[]> = {
 /** Map operation type to a human-readable pipeline title. */
 export const PIPELINE_TITLES: Record<OperationKind, string> = {
   update: "Update",
-  reinstall_stable: "Reinstall (stable)",
-  reinstall_nightly: "Reinstall (nightly)",
+  reinstall_stable: "Install a different build (GA release)",
+  reinstall_nightly: "Install a different build (nightly)",
   refresh: "Re-deploy operator",
 };
 
 /** Short operation names for status messages. */
 export const OPERATION_NAMES: Record<OperationKind, string> = {
   update: "Update",
-  reinstall_stable: "Reinstall (stable)",
-  reinstall_nightly: "Reinstall (nightly)",
+  reinstall_stable: "Install a different build (GA release)",
+  reinstall_nightly: "Install a different build (nightly)",
   refresh: "Operator re-deploy",
 };
 

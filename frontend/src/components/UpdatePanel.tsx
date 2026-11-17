@@ -376,7 +376,7 @@ export const UpdatePanel: React.FC<UpdatePanelProps> = ({ status, latest, onRequ
     ?? (!prerequisitesMet ? "Finish the one-time cluster setup first (pull secret and image mirror)." : null)
     ?? (!trimmed ? (gitImage !== null ? "The nightly catalog has no image in Git." : "Enter an FBC image, or click Fetch latest.") : null)
     ?? gitOpsInstallWaitReason(gitOpsState)
-    ?? (olderLine ? `This build (${ref?.tag}) is from an older release line than the installed ${status?.csv.version}. Update can't go back; use Reinstall.` : null);
+    ?? (olderLine ? `This build (${ref?.tag}) is from an older release line than the installed ${status?.csv.version}. Update can't go back; use Install a different build under Recovery.` : null);
 
   // Warn when someone else changed the operator in the last 10 minutes.
   const recentUpdateByOther = useMemo(() => {

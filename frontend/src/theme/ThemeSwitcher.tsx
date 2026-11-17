@@ -36,7 +36,7 @@ export const ThemeSwitcher: React.FC = () => {
     <Stack hasGutter>
       <StackItem>
         <Title headingLevel="h3" size="md" id="theme-color-scheme" className="pf-v6-u-mb-sm">Color scheme</Title>
-        <ToggleGroup aria-labelledby="theme-color-scheme">
+        <ToggleGroup isCompact aria-labelledby="theme-color-scheme">
           {(Object.keys(SCHEME_LABELS) as ColorScheme[]).map((s) => (
             <ToggleGroupItem key={s} text={SCHEME_LABELS[s]} buttonId={`theme-scheme-${s}`} isSelected={colorScheme === s} onChange={() => setColorScheme(s)} />
           ))}
@@ -44,7 +44,7 @@ export const ThemeSwitcher: React.FC = () => {
       </StackItem>
       <StackItem>
         <Title headingLevel="h3" size="md" id="theme-contrast-mode" className="pf-v6-u-mb-sm">Contrast mode</Title>
-        <ToggleGroup aria-labelledby="theme-contrast-mode">
+        <ToggleGroup isCompact aria-labelledby="theme-contrast-mode">
           {(Object.keys(CONTRAST_LABELS) as ContrastMode[]).map((m) => (
             <ToggleGroupItem key={m} text={CONTRAST_LABELS[m]} buttonId={`theme-contrast-${m}`} isSelected={contrastMode === m} onChange={() => setContrastMode(m)} />
           ))}
@@ -61,7 +61,7 @@ export const ThemeSwitcher: React.FC = () => {
   );
 
   return (
-    <Popover aria-label="Appearance" bodyContent={body} position="bottom-end" hasAutoWidth>
+    <Popover aria-label="Appearance" bodyContent={body} position="bottom" hasAutoWidth showClose={false}>
       <Button variant="plain" aria-label={`Appearance: ${SCHEME_LABELS[colorScheme]} color scheme, ${CONTRAST_LABELS[contrastMode]} contrast mode`} icon={icon} />
     </Popover>
   );

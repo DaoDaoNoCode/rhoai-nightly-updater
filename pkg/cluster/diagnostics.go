@@ -456,7 +456,7 @@ func (s subscriptionState) settled(now time.Time) bool {
 // UnsafeFailForward upgrades": a failed CSV blocks upgrades until it is
 // deleted). The Update, Refresh operator and Reinstall flows do that with a
 // saved Subscription and restore on failure; a one-click fix here would not.
-const recoveryGuidance = "Use Update on the Status page to move to a newer nightly (the usual fix for a broken build), or Refresh operator to reinstall the same build. Both delete and recreate the CSV, InstallPlan and Subscription and keep the DSC, DSCI and workloads."
+const recoveryGuidance = "Use Update on the Status page to move to a newer nightly (the usual fix for a broken build), or Re-deploy operator to install the same build again. Both delete and recreate the CSV, InstallPlan and Subscription and keep the DSC, DSCI and workloads."
 
 func checkSubscriptionHealth(c *Client) checkOutput {
 	const name = "Subscription health"
@@ -476,8 +476,8 @@ func checkSubscriptionHealth(c *Client) checkOutput {
 				ID:          "subscription-missing",
 				Severity:    "warning",
 				Title:       "The operator has no Subscription",
-				Description: fmt.Sprintf("%s is installed, but the %s Subscription does not exist, so OLM will not update or repair the operator. This happens when an update or reinstall stopped part-way.", csv.Name, SubName),
-				Fix:         "Use Update on the Status page to install a nightly; it recreates the Subscription. Reinstall Operator also works.",
+				Description: fmt.Sprintf("%s is installed, but the %s Subscription does not exist, so OLM will not update or repair the operator. This happens when an update or an install of a different build stopped part-way.", csv.Name, SubName),
+				Fix:         "Use Update on the Status page to install a nightly; it recreates the Subscription. Install a different build (Recovery on the Status page) also works.",
 			})
 			return out
 		}
@@ -676,7 +676,7 @@ func checkCSVHealth(c *Client) checkOutput {
 			ID:          "operator-installing",
 			Severity:    "info",
 			Title:       "The operator is being installed",
-			Description: fmt.Sprintf("The operator %s is currently being installed. This is normal after an update or reinstall.", csv.Name),
+			Description: fmt.Sprintf("The operator %s is currently being installed. This is normal after an update or an install of a different build.", csv.Name),
 			Evidence:    []string{fmt.Sprintf("Operator: %s, Phase: Installing", csv.Name)},
 			Fix:         "Wait a few minutes for the installation to complete, then check again.",
 		})
@@ -869,7 +869,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 				ID:          "installplan-installing",
 				Severity:    "info",
 				Title:       "An install plan is in progress",
-				Description: "OLM is currently executing an install plan. This is normal during an update or reinstall.",
+				Description: "OLM is currently executing an install plan. This is normal during an update or an install of a different build.",
 				Evidence:    []string{fmt.Sprintf("Install plan: %s, Phase: Installing", latest.Metadata.Name)},
 				Fix:         "Wait for the installation to complete. This typically takes 1-5 minutes.",
 			}},

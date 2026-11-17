@@ -39,7 +39,7 @@ Conventions:
 
 ## 4. Operator lifecycle (Status page)
 
-Common to Update, Re-deploy and Reinstall:
+Common to Update, Re-deploy and Install a different build:
 - They refuse, with *Nothing was changed*, when any of these holds: a prerequisite fails, the image or version check fails, a second rhods-operator Subscription exists, an OperatorGroup is unusable, or a Dashboard Dev session is active (unless you chose *Revert Dashboard Dev and continue*, which first runs the [Dashboard Dev revert](#7-dashboard-dev)).
 - Namespace `redhat-ods-operator` (SSA) and OperatorGroup `rhods-operator` (SSA, global) are **created only if missing**. With 2+ OperatorGroups, or a non-global one, the operation refuses instead.
 - **Verification catalog:** before any change, a temporary CatalogSource `rhoai-catalog-dev-verify-<id>` in `openshift-marketplace` (labelled `managed-by` + `rhoai-nightly-updater/purpose=catalog-verification`) checks the exact image. It is deleted afterwards. Leftovers older than 15 minutes (from a killed pod) are deleted by the next operation.
@@ -72,12 +72,12 @@ When CatalogSource `rhoai-catalog-dev` or Subscription `rhods-operator` has Argo
 | 4 | Subscription `rhods-operator` | re-read; if Argo CD manages it and its source, channel or `startingCSV` pin changed meanwhile, stop (`conflict`): the restore below recreates it from Git's current spec. Else delete (by the UID just read), then at once SSA from the live spec with the **same channel** and settings and `startingCSV` set to the verified head CSV (a pin Git sets must already be that head; an unmanaged Subscription takes the build's channel, as in any Update), so OLM installs exactly that CSV or reports `ResolutionFailed` when the catalog does not have it, plus its annotations (Argo CD's tracking and last-applied among them) and labels (a self-heal sync that follows finds it unchanged) |
 | 5 | — | wait up to 8 min for the CSV to reach `Succeeded`, then check that its `containerImage` and `createdAt` annotations are the verified build's (`install_mismatch` otherwise, also when it has none; the running operator is kept). When the CSV cannot be read, the result says the build was not confirmed |
 
-The restore after a failure deletes only the Subscription Update created (by UID; one that replaced it is left alone and reported) and re-applies the previous Subscription with those annotations and `startingCSV` set to the CSV Update removed: OLM installs that CSV from Git's catalog again, or nothing when the catalog no longer has it (never an older build). Re-deploy and Reinstall refuse while Argo CD manages the catalog or the Subscription, and so does *Create the DataScienceCluster* (Git creates it).
+The restore after a failure deletes only the Subscription Update created (by UID; one that replaced it is left alone and reported) and re-applies the previous Subscription with those annotations and `startingCSV` set to the CSV Update removed: OLM installs that CSV from Git's catalog again, or nothing when the catalog no longer has it (never an older build). Re-deploy and Install a different build refuse while Argo CD manages the catalog or the Subscription, and so does *Create the DataScienceCluster* (Git creates it).
 
 ### Re-deploy the same version
 Delete the Subscription, delete the CSV, wait for it to go, recreate the Subscription with the same source and channel. With Manual approval `startingCSV` is pinned to the installed CSV. With Automatic approval it refuses if the channel head is no longer the installed CSV.
 
-### Reinstall (stable, nightly or custom FBC image)
+### Install a different build (GA release, nightly or custom FBC image)
 | # | Object | Change | Condition |
 |---|---|---|---|
 | 1 | CatalogSource `rhoai-catalog-dev` | delete | |

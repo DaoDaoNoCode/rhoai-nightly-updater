@@ -47,8 +47,8 @@ export const GitOpsNotice: React.FC<{ status: StatusResponse }> = ({ status }) =
             catalog serves. To move to another build, change the catalog image in the policy.
           </ListItem>
         )}
-        {operatorApp && <ListItem>Re-deploy and Reinstall are off: they delete objects that Argo CD would recreate from Git.</ListItem>}
-        {!operatorApp && acmCatalog && <ListItem>Re-deploy and Reinstall are off while the policy manages the catalog.</ListItem>}
+        {operatorApp && <ListItem>Re-deploy and Install a different build are off: they delete objects that Argo CD would recreate from Git.</ListItem>}
+        {!operatorApp && acmCatalog && <ListItem>Re-deploy and Install a different build are off while the policy manages the catalog.</ListItem>}
         {dscApp && <ListItem>Changes to the DataScienceCluster are off: make them in Git.</ListItem>}
       </List>
     </Alert>

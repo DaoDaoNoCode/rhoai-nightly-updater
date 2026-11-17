@@ -29,19 +29,19 @@ import { useClusterStatus, useOperation } from "../state/AppState";
 const COMPLETE_TITLES: Record<ReconcileKind, string> = {
   update: "Update complete",
   refresh: "Re-deploy complete",
-  reinstall: "Reinstall complete",
+  reinstall: "Different build installed",
 };
 
 const UNKNOWN_TITLES: Record<ReconcileKind, string> = {
   update: "Update finished (outcome unknown, see the activity log)",
   refresh: "Re-deploy finished (outcome unknown, see the activity log)",
-  reinstall: "Reinstall finished (outcome unknown, see the activity log)",
+  reinstall: "Install finished (outcome unknown, see the activity log)",
 };
 
 const FAILED_TITLES: Record<ReconcileKind, string> = {
   update: "The operator did not come up after the update",
   refresh: "The operator did not come up after the re-deploy",
-  reinstall: "The operator did not come up after the reinstall",
+  reinstall: "The operator did not come up after the install",
 };
 
 /** True when the progress card has something to show. */

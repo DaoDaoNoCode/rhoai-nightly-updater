@@ -199,7 +199,7 @@ func TestRollback_AlreadyOnStable(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got failure: %s", result.Message)
 	}
-	if result.Message != "Already on stable. Nothing to reinstall." {
+	if result.Message != "Already on the GA release. Nothing to install." {
 		t.Errorf("unexpected message: %s", result.Message)
 	}
 }
@@ -889,7 +889,7 @@ func TestReinstall_Subscription404(t *testing.T) {
 	defer cleanup()
 
 	result, err := Reinstall(client, "stable", "", "")
-	if err != nil || result.Success || !strings.Contains(result.Message, "Cannot determine the stable reinstall target") {
+	if err != nil || result.Success || !strings.Contains(result.Message, "Cannot determine the GA release to install") {
 		t.Fatalf("result = %+v, %v", result, err)
 	}
 }
@@ -949,8 +949,8 @@ func TestReinstall_StableCSVSucceeded(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got failure: %s", result.Message)
 	}
-	if result.Message != "Already on stable. Nothing to reinstall." {
-		t.Errorf("expected 'Already on stable' message, got: %s", result.Message)
+	if result.Message != "Already on the GA release. Nothing to install." {
+		t.Errorf("expected the already-on-GA message, got: %s", result.Message)
 	}
 }
 

@@ -439,7 +439,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 	switch {
 	case len(failures) > 0:
 		status = "failed"
-		message = fmt.Sprintf("Automatic operator recovery failed: %s. Restore the previous Subscription/catalog before retrying, or re-run Update or Reinstall.", strings.Join(failures, "; "))
+		message = fmt.Sprintf("Automatic operator recovery failed: %s. Restore the previous Subscription/catalog before retrying, or re-run Update or Install a different build.", strings.Join(failures, "; "))
 		if len(stillDeleting) > 0 {
 			message += " " + stillDeletingNote(stillDeleting)
 		}

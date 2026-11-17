@@ -89,7 +89,7 @@ There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read 
 
 - Mutations: one accepted request per user and endpoint per 30 s, taken when the request is accepted. Rejected requests (4xx/5xx, including 409 busy) and dry runs do not use the slot. One cluster operation at a time (409 `cluster_busy`). A 15-minute deadline applies, independent of the browser.
 - Mutation bodies are capped at 4096 bytes (`/api/pageview` at 256), and the read timeout is 15 s.
-- Images must match `quay.io/rhoai/` or `registry.redhat.io/rhoai/`. A custom Reinstall accepts only `quay.io/rhoai/rhoai-fbc-fragment` with a tag and/or digest. PR numbers, DSC names, channels and namespaces are validated before use. The static file server is protected against path traversal.
+- Images must match `quay.io/rhoai/` or `registry.redhat.io/rhoai/`. A custom build to install accepts only `quay.io/rhoai/rhoai-fbc-fragment` with a tag and/or digest. PR numbers, DSC names, channels and namespaces are validated before use. The static file server is protected against path traversal.
 - `/api/pageview` stores only aggregate counters, with labels limited to known page/feature names. No user identity is stored.
 
 ## Credentials

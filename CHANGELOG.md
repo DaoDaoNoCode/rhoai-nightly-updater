@@ -63,6 +63,20 @@ only accepts a tag whose version is the top dated section. See
   form is open; the form ends with **Replace token** (red, enabled once a
   token is pasted) and **Cancel**. Focus moves to the token field, and
   back to **Replace token** on Cancel.
+- **Reinstall is now "Install a different build"** (Status → Recovery),
+  named by what it does: it uninstalls the operator and installs the build
+  you choose, the GA release, any nightly build (older ones too) or a
+  custom catalog image; it is also the last resort when Update and
+  Re-deploy cannot recover the operator. Its button reads **Choose a
+  build...**, the form's choice **Install**, and the confirmation asks you
+  to type `install`. Messages, the activity log, help and docs use the new
+  name; the API and metrics names stay.
+- Rows in cards (Recovery, Environment, Cluster setup) are separated by
+  equal space above and below each divider.
+- The pull secret form is a standard form: the field is labelled **Auth
+  token for quay.io/rhoai**, and where to get the token and where it is
+  saved are its helper text.
+- The appearance popover's arrow points at the appearance button.
 - Action rows use one PatternFly action group each, so related actions get
   the standard spacing: the Environment cards' rows (Open admin UI,
   Migrate, Repair, Tear down, Set up, Open MLflow, Open pipelines) and the

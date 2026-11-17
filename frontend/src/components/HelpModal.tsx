@@ -70,9 +70,9 @@ export const HelpButton: React.FC = () => {
             <List>
               <ListItem><strong>Operator Failed after a nightly:</strong> update to a newer build; that is the usual fix.</ListItem>
               <ListItem><strong>Re-deploy operator:</strong> deletes and recreates the Subscription and CSV for the same version (images are pinned by digest, so it never fetches a newer build).</ListItem>
-              <ListItem><strong>Reinstall:</strong> uninstalls and installs again, to GA, to an older build or when nothing else helps. Older versions need an explicit confirmation.</ListItem>
+              <ListItem><strong>Install a different build:</strong> uninstalls the operator and installs the build you choose: the GA release, any nightly build (older ones too) or a custom catalog image; also the last resort when nothing else helps. Older versions need an explicit confirmation.</ListItem>
               <ListItem><strong>Diagnostics:</strong> read-only checks with explanations; fixes only run after you confirm them.</ListItem>
-              <ListItem>A failed Update, Re-deploy or Reinstall restores the previous state; all three can be run again safely.</ListItem>
+              <ListItem>A failed Update, Re-deploy or Install a different build restores the previous state; all three can be run again safely.</ListItem>
             </List>
 
             <Content component={ContentVariants.h3}>Dashboard Dev</Content>

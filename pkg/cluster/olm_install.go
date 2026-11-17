@@ -305,7 +305,7 @@ func waitForOperatorInstall(c *Client, step string, emit func(UpdateStepEvent), 
 		}
 		msg := fmt.Sprintf("%s (last state: %s).", why, state)
 		if keep {
-			msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Reinstall if it does not finish."
+			msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Install a different build if it does not finish."
 		}
 		*logs = append(*logs, msg)
 		return installOutcome{csv: csvName, message: msg, errorCode: code, keepNewInstall: keep}
@@ -649,7 +649,7 @@ func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (block
 	if !csvInstalled(installed) {
 		return "", "No RHOAI operator is installed; no downgrade check needed"
 	}
-	const unknown = "Cannot rule out a downgrade: %s. OLM does not support downgrades, so Update refuses to continue. Nothing was changed. Use Reinstall, which asks you to confirm."
+	const unknown = "Cannot rule out a downgrade: %s. OLM does not support downgrades, so Update refuses to continue. Nothing was changed. Use Install a different build (Recovery), which asks you to confirm."
 	current, ok := installedCSVVersion(installed)
 	if !ok {
 		_, reason := compareWithInstalled(installed, targetCSV)
@@ -658,7 +658,7 @@ func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (block
 	if targetCSV != "" {
 		switch verdict, _ := compareWithInstalled(installed, targetCSV); verdict {
 		case verdictOlder:
-			return fmt.Sprintf("Downgrade detected: the selected build installs %s, which is older than the installed %s. OLM does not support downgrades. Use Reinstall instead.", targetCSV, installed.Name), ""
+			return fmt.Sprintf("Downgrade detected: the selected build installs %s, which is older than the installed %s. OLM does not support downgrades. Use Install a different build (Recovery) instead.", targetCSV, installed.Name), ""
 		case verdictNotOlder:
 			return "", fmt.Sprintf("Target operator version: %s (installed: %s)", targetCSV, installed.Name)
 		}
@@ -671,7 +671,7 @@ func downgradeCheck(installed types.CSVInfo, targetTag, targetCSV string) (block
 		target.patch = current.patch
 	}
 	if compareTags(target, current) < 0 {
-		return fmt.Sprintf("Downgrade detected: target %s is older than the installed %s. OLM does not support downgrades. Use Reinstall instead.", targetTag, installed.Name), ""
+		return fmt.Sprintf("Downgrade detected: target %s is older than the installed %s. OLM does not support downgrades. Use Install a different build (Recovery) instead.", targetTag, installed.Name), ""
 	}
 	return "", fmt.Sprintf("Warning: the bundle version of %s is unknown; compared the release tag only", targetTag)
 }

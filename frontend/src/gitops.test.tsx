@@ -29,8 +29,8 @@ describe("GitOps helpers", () => {
   it("name the Argo CD application, or nothing without one", () => {
     expect(operatorGitOpsApp(managed)).toBe("rhai-on-openshift");
     expect(operatorGitOpsApp(nightlyStatus())).toBeUndefined();
-    expect(gitOpsOperatorReason(nightlyStatus(), "Reinstall")).toBeNull();
-    expect(gitOpsOperatorReason(managed, "Reinstall")).toMatch(/^Argo CD application "rhai-on-openshift" manages the operator\. Reinstall/);
+    expect(gitOpsOperatorReason(nightlyStatus(), "Install a different build")).toBeNull();
+    expect(gitOpsOperatorReason(managed, "Install a different build")).toMatch(/^Argo CD application "rhai-on-openshift" manages the operator\. Install a different build/);
     expect(gitOpsDSCReason(managed)).toMatch(/Change the DataScienceCluster in Git/);
     expect(gitOpsCreateDSCReason(managed)).toMatch(/creates the DataScienceCluster from Git/);
     expect(gitOpsCreateDSCReason(base)).toBeNull();
@@ -67,14 +67,14 @@ describe("GitOpsNotice", () => {
     expect(screen.getByText(/Git picks the nightly build/)).toBeInTheDocument();
     expect(screen.getByText(/keeps the channel Git sets \(beta\)/)).toBeInTheDocument();
     expect(screen.queryByText(/ignoreDifferences/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Re-deploy and Reinstall are off/)).toBeInTheDocument();
+    expect(screen.getByText(/Re-deploy and Install a different build are off/)).toBeInTheDocument();
     expect(screen.getByText(/Changes to the DataScienceCluster are off/)).toBeInTheDocument();
   });
 
   it("only mentions the DSC when only the DSC is managed", () => {
     render(<GitOpsNotice status={nightlyStatus({ dscManagedBy: "dsc-app" })} />);
     expect(screen.getByText("Argo CD manages the DataScienceCluster")).toBeInTheDocument();
-    expect(screen.queryByText(/Re-deploy and Reinstall are off/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Re-deploy and Install a different build are off/)).not.toBeInTheDocument();
   });
 });
 
@@ -92,13 +92,13 @@ describe("ComponentsPage under Argo CD", () => {
 });
 
 describe("StatusPage under Argo CD", () => {
-  it("shows the notice and turns off Re-deploy and Reinstall with the reason", async () => {
+  it("shows the notice and turns off Re-deploy and Install a different build with the reason", async () => {
     stubApi({ "/api/latest-nightly": { latest: managed.nightly?.latest }, "/api/nightly-tags": { tags: [] } });
     renderPage(<StatusPage />, "/", { status: async () => managed });
     expect(await screen.findByText(/Argo CD manages the operator Subscription/)).toBeInTheDocument();
     const recovery = screen.getByRole("list", { name: "Recovery actions" });
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "Re-deploy operator..." })).toHaveAttribute("aria-disabled", "true"));
-    expect(within(recovery).getByRole("button", { name: "Reinstall..." })).toHaveAttribute("aria-disabled", "true");
+    expect(within(recovery).getByRole("button", { name: "Choose a build..." })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("does not offer to create the DataScienceCluster, which Git creates", async () => {
@@ -112,7 +112,7 @@ describe("StatusPage under Argo CD", () => {
     stubApi({ "/api/latest-nightly": { latest: managed.nightly?.latest }, "/api/nightly-tags": { tags: [] } });
     renderPage(<StatusPage />, "/", { status: async () => nightlyStatus() });
     const recovery = await screen.findByRole("list", { name: "Recovery actions" });
-    await waitFor(() => expect(within(recovery).getByRole("button", { name: "Reinstall..." })).not.toHaveAttribute("aria-disabled"));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "Choose a build..." })).not.toHaveAttribute("aria-disabled"));
     expect(screen.queryByText(/Argo CD manages/)).not.toBeInTheDocument();
   });
 });
@@ -218,7 +218,7 @@ describe("A catalog an ACM policy manages", () => {
       expect(catalogImageSetter(s)).toBe("an ACM policy (config-policy-controller)");
       expect(gitOpsInstallState(s)).toBe("pending");
     }
-    expect(gitOpsOperatorReason(acmOnly, "Reinstall")).toMatch(/^An ACM policy \(config-policy-controller\) manages the nightly catalog .* Reinstall is off/);
+    expect(gitOpsOperatorReason(acmOnly, "Install a different build")).toMatch(/^An ACM policy \(config-policy-controller\) manages the nightly catalog .* Install a different build is off/);
     // Only Argo CD renders the DSC from Git.
     expect(gitOpsCreateDSCReason(acmOnly)).toBeNull();
     // Argo CD on the catalog wins over an ACM entry, and nothing is managed without either.
@@ -235,7 +235,7 @@ describe("A catalog an ACM policy manages", () => {
     cleanup();
     render(<GitOpsNotice status={acmOnly} />);
     expect(screen.getByText("An ACM policy manages the nightly catalog")).toBeInTheDocument();
-    expect(screen.getByText(/Re-deploy and Reinstall are off while the policy manages the catalog/)).toBeInTheDocument();
+    expect(screen.getByText(/Re-deploy and Install a different build are off while the policy manages the catalog/)).toBeInTheDocument();
     expect(screen.queryByText(/Argo CD/)).not.toBeInTheDocument();
   });
 

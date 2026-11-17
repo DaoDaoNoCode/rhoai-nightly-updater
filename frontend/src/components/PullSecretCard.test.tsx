@@ -25,7 +25,7 @@ const StartButton: React.FC = () => {
 afterEach(() => vi.unstubAllGlobals());
 
 async function saveButton(): Promise<HTMLElement> {
-  fireEvent.change(await screen.findByLabelText("quay.io/rhoai auth token"), { target: { value: token } });
+  fireEvent.change(await screen.findByLabelText(/Auth token for quay.io\/rhoai/), { target: { value: token } });
   return screen.getByRole("button", { name: "Create secret" });
 }
 
@@ -79,7 +79,7 @@ describe("PullSecretSetup actions of an existing secret", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Replace token" }));
 
     // The toggle is hidden while the form is open; Test with Quay stays.
-    const input = screen.getByLabelText("quay.io/rhoai auth token");
+    const input = screen.getByLabelText(/Auth token for quay.io\/rhoai/);
     expect(input).toHaveFocus();
     expect(screen.getByRole("button", { name: "Test with Quay" })).toBeInTheDocument();
     const submit = screen.getByRole("button", { name: "Replace token" });
@@ -94,7 +94,7 @@ describe("PullSecretSetup actions of an existing secret", () => {
     const cancel = screen.getByRole("button", { name: "Cancel" });
     expect(cancel).toHaveClass("pf-m-link");
     fireEvent.click(cancel);
-    expect(screen.queryByLabelText("quay.io/rhoai auth token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Auth token for quay.io\/rhoai/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Replace token" })).toHaveFocus();
   });
 });

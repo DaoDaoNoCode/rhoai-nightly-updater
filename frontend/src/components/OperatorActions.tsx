@@ -188,7 +188,7 @@ export function useOperatorActions(): {
         <ModalBody id="downgrade-confirm-body">
           <Stack hasGutter>
             <StackItem>
-              <Alert variant="warning" isInline isPlain component="p" title="The reinstall did not start; nothing was changed." />
+              <Alert variant="warning" isInline isPlain component="p" title="The install did not start; nothing was changed." />
             </StackItem>
             <StackItem>
               <Content component="p">{downgrade?.message}</Content>
@@ -213,7 +213,7 @@ export function useOperatorActions(): {
               if (pending) runOperator(pending.request, { ...pending.options, allowDowngrade: true });
             }}
           >
-            Reinstall the older version
+            Install the older version
           </Button>
           <Button variant="link" onClick={() => setDowngrade(null)}>Cancel</Button>
         </ModalFooter>

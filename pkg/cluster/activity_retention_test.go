@@ -58,8 +58,8 @@ func TestDescribeActivity(t *testing.T) {
 		action, detail, label, category, build string
 	}{
 		{"update", "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + digest, "Updated to nightly", "operator", "rhoai-3.6 · b772df9a0123"},
-		{"reinstall", "to nightly quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5", "Operator reinstalled", "operator", "rhoai-3.5"},
-		{"reinstall", "to latest GA from redhat-operators", "Operator reinstalled", "operator", ""},
+		{"reinstall", "to nightly quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5", "Different build installed", "operator", "rhoai-3.5"},
+		{"reinstall", "to latest GA from redhat-operators", "Different build installed", "operator", ""},
 		{"refresh", "rhods-operator.3.6.0", "Operator refreshed", "operator", ""},
 		{"repair-dsc", "default-dsc: removed", "DataScienceCluster repaired", "setup", ""},
 		{"deploy-dashboard-main", "x", "Dashboard main deployed", "dashboard-dev", ""},

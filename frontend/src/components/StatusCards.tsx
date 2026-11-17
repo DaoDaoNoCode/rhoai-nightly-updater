@@ -418,7 +418,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
                   ? ` OLM is installing the build Git set${status.installPlan ? ` (InstallPlan ${status.installPlan.name} is ${status.installPlan.phase})` : ""}; wait for it to finish. Diagnostics shows why if it is stuck.`
                   : gitOpsApp
                     ? " Installing the build the catalog serves recreates the Subscription, which usually unblocks OLM; Diagnostics shows why it is stuck."
-                    : " Update or Reinstall creates a fresh install; Diagnostics shows why OLM is stuck."}
+                    : " Update or Install a different build creates a fresh install; Diagnostics shows why OLM is stuck."}
               </Alert>
             </StackItem>
           )}

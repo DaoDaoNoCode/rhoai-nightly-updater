@@ -1057,10 +1057,10 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	}
 
 	// --- Step 1: validate_target ---
-	emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Validating reinstall target..."})
+	emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Validating the build to install..."})
 	if targetType != "stable" && targetType != "nightly" && targetType != "custom" {
 		recordActivity = false
-		return fail("Invalid reinstall target", "validation")
+		return fail("Invalid build to install", "validation")
 	}
 	if isNightly && image == "" {
 		recordActivity = false
@@ -1068,11 +1068,11 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	}
 	if g, err := readOperatorGitOps(c); err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", errorCodeFromK8sErr(err))
-	} else if msg := g.refusal("Reinstall", "the Subscription and the catalog for several minutes"); msg != "" {
+	} else if msg := g.refusal("Install a different build", "the Subscription and the catalog for several minutes"); msg != "" {
 		recordActivity = false
 		return fail(msg+" Update works with Argo CD: it installs the build the catalog serves and keeps the channel Git sets.", ErrorCodeGitOpsManaged)
 	}
-	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Reinstall")
+	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Install a different build")
 	if guardErr != nil {
 		return fail(guardErr.Error(), errorCodeFromK8sErr(guardErr))
 	}
@@ -1124,11 +1124,11 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 		// stable catalog, and the Subscription settings recorded before the
 		// last operation (if any) are carried over.
 		if sub.State == "Not Installed" {
-			logs = append(logs, "No operator Subscription exists; Reinstall creates one for the stable channel")
+			logs = append(logs, "No operator Subscription exists; installing creates one for the stable channel")
 		}
 		target, discoveryErr := resolveStableTarget(c)
 		if discoveryErr != nil {
-			return fail(fmt.Sprintf("Cannot determine the stable reinstall target: %v", discoveryErr), "validation")
+			return fail(fmt.Sprintf("Cannot determine the GA release to install: %v", discoveryErr), "validation")
 		}
 		stableSource, stableChannel = target.Source, target.Channel
 		activityTarget = stableSource + "/" + stableChannel
@@ -1149,12 +1149,12 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	if !isNightly && sub.Source == stableSource && sub.Channel == stableChannel {
 		if csv.Phase == "Succeeded" && (csv.Version == "" || csv.Version == strings.TrimPrefix(targetCSV, SubName+".")) {
 			recordActivity = false
-			msg := "Already on stable. Nothing to reinstall."
+			msg := "Already on the GA release. Nothing to install."
 			logs = append(logs, fmt.Sprintf("Subscription is already %s / %s and %s is Succeeded", stableSource, stableChannel, csv.Name))
 			emit(UpdateStepEvent{Step: "validate_target", Status: "skipped", Message: msg})
 			return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 		}
-		logs = append(logs, fmt.Sprintf("Already subscribed to %s / %s, but the operator is not a healthy %s (CSV %q, phase %s); reinstalling it",
+		logs = append(logs, fmt.Sprintf("Already subscribed to %s / %s, but the operator is not a healthy %s (CSV %q, phase %s); installing it again",
 			stableSource, stableChannel, strings.TrimPrefix(targetCSV, SubName+"."), csv.Name, csv.Phase))
 	}
 
@@ -1165,11 +1165,11 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	}
 
 	if isNightly {
-		logs = append(logs, fmt.Sprintf("Reinstalling to nightly: %s", image))
+		logs = append(logs, fmt.Sprintf("Installing the nightly build: %s", image))
 	} else {
-		logs = append(logs, fmt.Sprintf("Reinstalling to stable: %s/%s -> %s/%s", sub.Source, sub.Channel, stableSource, stableChannel))
+		logs = append(logs, fmt.Sprintf("Installing the GA release: %s/%s -> %s/%s", sub.Source, sub.Channel, stableSource, stableChannel))
 	}
-	validated := "Reinstall target validated"
+	validated := "Build to install validated"
 	verdict, reason := compareWithInstalled(csv, targetCSV)
 	// crdWarning is shown in the downgrade confirmation and the result.
 	crdWarning := ""
@@ -1204,7 +1204,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	case verdictOlder:
 		if !opts.AllowDowngrade {
 			recordActivity = false
-			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Reinstall would remove the operator and install the older version. %s Nothing was changed. Confirm the downgrade to continue.%s", targetCSV, csv.Name, downgradeCRDEffects, spaced(crdWarning)), errorCodeDowngrade)
+			return fail(fmt.Sprintf("The target %s is older than the installed %s. OLM cannot downgrade an operator: Install a different build would remove the operator and install the older version. %s Nothing was changed. Confirm the downgrade to continue.%s", targetCSV, csv.Name, downgradeCRDEffects, spaced(crdWarning)), errorCodeDowngrade)
 		}
 		downgraded = true
 		logs = append(logs, fmt.Sprintf("Warning: downgrade confirmed: %s -> %s. %s", csv.Name, targetCSV, downgradeCRDEffects))
@@ -1230,7 +1230,7 @@ func ReinstallStreamWithOptions(c *Client, targetType, image, channelOverride st
 	if revertDashboard {
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Ending the Dashboard Dev session..."})
 		if err := RevertDashboardDevForOperation(c); err != nil {
-			return fail("Could not end the Dashboard Dev session, so the reinstall was not started: "+err.Error(), errorCodeDashboardDevActive)
+			return fail("Could not end the Dashboard Dev session, so the install was not started: "+err.Error(), errorCodeDashboardDevActive)
 		}
 		logs = append(logs, "OK: Dashboard Dev session ended; dashboard-operator is running again")
 	}
@@ -1468,10 +1468,10 @@ func createSubscriptionAndWait(c *Client, source, channel, kind, approveCSV stri
 		return &types.OperationResponse{Success: false, Message: outcome.message, Logs: logs, ErrorCode: outcome.errorCode}, nil
 	}
 	emit(UpdateStepEvent{Step: "verify_installplan", Status: "success", Message: fmt.Sprintf("Operator installed: %s", outcome.csv), Detail: outcome.csv})
-	logs = append(logs, "Reinstall complete. The operator now reconciles the DataScienceCluster; component rollouts can take a few more minutes.")
+	logs = append(logs, "Install complete. The operator now reconciles the DataScienceCluster; component rollouts can take a few more minutes.")
 	return &types.OperationResponse{
 		Success: true,
-		Message: strings.TrimSpace(fmt.Sprintf("Reinstall to %s complete: %s is installed. %s", kind, outcome.csv, outcome.note)),
+		Message: strings.TrimSpace(fmt.Sprintf("Install of the %s build complete: %s is installed. %s", kind, outcome.csv, outcome.note)),
 		Logs:    logs,
 	}, nil
 }
@@ -1690,7 +1690,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 			return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 		case recorded == nil || recorded.InstalledCSV == "":
 			recordActivity = false
-			return fail("No RHOAI operator is installed and no previous Subscription is recorded, so there is nothing to refresh. Nothing was changed. Use Reinstall or Update to install the operator.", "prerequisites")
+			return fail("No RHOAI operator is installed and no previous Subscription is recorded, so there is nothing to refresh. Nothing was changed. Use Update or Install a different build to install the operator.", "prerequisites")
 		}
 		target = recorded.InstalledCSV
 		logs = append(logs, fmt.Sprintf("No Subscription and no CSV exist (an earlier operation was interrupted). Re-installing %s with the Subscription recorded at %s.", target, recorded.RecordedAt))
@@ -1733,7 +1733,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	if sub.Source == "" || sub.Channel == "" {
 		// Refresh recreates the Subscription from its own source and channel;
 		// without them it would leave the operator uninstalled.
-		return fail("The operator Subscription is missing or has no source/channel, and none was recorded, so it cannot be recreated. Nothing was changed; use Reinstall instead.", "prerequisites")
+		return fail("The operator Subscription is missing or has no source/channel, and none was recorded, so it cannot be recreated. Nothing was changed; use Install a different build instead.", "prerequisites")
 	}
 	logs = append(logs, fmt.Sprintf("Subscription: source=%s, channel=%s", sub.Source, sub.Channel))
 
@@ -1766,7 +1766,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 			return fail(fmt.Sprintf("Cannot check which version channel %s of %s would install, so Refresh cannot confirm it re-deploys %s: %v. Nothing was changed.", sub.Channel, sub.Source, target, headErr), "prerequisites")
 		case head != target:
 			recordActivity = false
-			return fail(fmt.Sprintf("Refresh re-deploys %s, but channel %s of %s now installs %s, so recreating the Subscription would change the version. Nothing was changed. Use Update or Reinstall to move to %s.", target, sub.Channel, sub.Source, nonEmpty(head, "nothing"), nonEmpty(head, "another version")), "validation")
+			return fail(fmt.Sprintf("Refresh re-deploys %s, but channel %s of %s now installs %s, so recreating the Subscription would change the version. Nothing was changed. Use Update or Install a different build to move to %s.", target, sub.Channel, sub.Source, nonEmpty(head, "nothing"), nonEmpty(head, "another version")), "validation")
 		}
 		logs = append(logs, fmt.Sprintf("OK: channel %s still installs %s", sub.Channel, target))
 	}

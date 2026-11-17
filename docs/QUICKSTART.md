@@ -140,7 +140,7 @@ To install another build, use **Choose another build**, or paste an image from [
 
 **What you should see:** eight steps, from **Check prerequisites** to **Wait for the operator install**, each with a green check. OLM gets up to 8 minutes to install the operator. You can leave the page: the operation keeps running, and every page shows a banner until it ends. Then **Update complete** appears, the card says **Up to date**, and a **Create the DataScienceCluster** card appears.
 
-If a step fails, the card says which one and why. A failed install restores the previous state; see [RUNBOOK §6](../RUNBOOK.md#6-update--reinstall-failed).
+If a step fails, the card says which one and why. A failed install restores the previous state; see [RUNBOOK §6](../RUNBOOK.md#6-update--install-a-different-build-failed).
 
 ## 5. Create the DataScienceCluster
 
@@ -180,7 +180,7 @@ Optional, for testing pipelines in the dashboard. Open **Environment**.
 |---|---|
 | Update to a new nightly | Status → **Update to latest**, or **Update to a specific build** ([what it looks like](images/update.gif)) |
 | Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator...** |
-| Switch to stable, another nightly, or an exact older build | Status → Recovery → **Reinstall...** (downgrades need a confirmation checkbox) |
+| Switch to stable, another nightly, or an exact older build | Status → Recovery → **Choose a build...** (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |
 | S3 storage (SeaweedFS), pipeline servers, MLflow | Environment |
 | Which nightly contains PR #N? | Build Explorer → search `#123` ([Build Explorer search](../README.md#build-explorer-search)) |

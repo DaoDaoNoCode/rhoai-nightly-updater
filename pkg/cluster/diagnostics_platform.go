@@ -376,7 +376,7 @@ func channelHeadBehind(c *Client, sub subscriptionState) *Problem {
 			ID:          "subscription-channel-behind",
 			Severity:    "warning",
 			Title:       fmt.Sprintf("Channel %s offers %s, older than the installed %s", sub.Channel, head, sub.InstalledCSV),
-			Description: "OLM never downgrades an operator. With this channel the Subscription cannot move to the catalog's version, and a reinstall from it would be a downgrade.",
+			Description: "OLM never downgrades an operator. With this channel the Subscription cannot move to the catalog's version, and an install from it would be a downgrade.",
 			Evidence:    []string{fmt.Sprintf("Subscription source %s, channel %s, head %s, installed %s", sub.Source, sub.Channel, head, sub.InstalledCSV)},
 			Fix:         "Update to a nightly of the installed version or newer.",
 		}

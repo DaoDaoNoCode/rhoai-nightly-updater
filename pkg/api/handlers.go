@@ -41,7 +41,7 @@ func validateReinstallRequest(req *types.ReinstallRequest) error {
 	}
 	if req.TargetType != "stable" {
 		if req.Image == "" {
-			return fmt.Errorf("image is required for nightly or custom reinstall")
+			return fmt.Errorf("image is required to install a nightly or custom build")
 		}
 		if req.TargetType == "custom" {
 			match := customFBCImageRegex.FindStringSubmatch(req.Image)

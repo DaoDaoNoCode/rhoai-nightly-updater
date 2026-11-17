@@ -38,7 +38,7 @@ var activityRetention = map[string]int{
 var activityActions = map[string][2]string{
 	"update":                        {"operator", "Updated to nightly"},
 	"refresh":                       {"operator", "Operator refreshed"},
-	"reinstall":                     {"operator", "Operator reinstalled"},
+	"reinstall":                     {"operator", "Different build installed"},
 	"rollback":                      {"operator", "Rolled back to stable"},
 	"deploy-pr":                     {"dashboard-dev", "Dashboard PR deployed"},
 	"deploy-dashboard-pr":           {"dashboard-dev", "Dashboard PR deployed"},
@@ -69,7 +69,7 @@ var activityActions = map[string][2]string{
 var activityFailedLabels = map[string]string{
 	"update":                   "Update to nightly failed",
 	"refresh":                  "Operator refresh failed",
-	"reinstall":                "Operator reinstall failed",
+	"reinstall":                "Installing a different build failed",
 	"deploy-dashboard-pr":      "Dashboard PR deploy failed",
 	"deploy-dashboard-main":    "Dashboard main deploy failed",
 	"revert-dashboard":         "Dashboard revert failed",

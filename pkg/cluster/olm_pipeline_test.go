@@ -422,7 +422,7 @@ func TestReinstallStableTargets(t *testing.T) {
 		wantCode, wantMsg              string
 		wantWrites                     bool
 	}{
-		{name: "healthy stable", installed: "rhods-operator.3.5.1", phase: "Succeeded", source: "redhat-operators", wantSuccess: true, wantMsg: "Already on stable"},
+		{name: "healthy stable", installed: "rhods-operator.3.5.1", phase: "Succeeded", source: "redhat-operators", wantSuccess: true, wantMsg: "Already on the GA release"},
 		{name: "failed stable is reinstalled", installed: "rhods-operator.3.5.1", phase: "Failed", source: "redhat-operators", wantSuccess: true, wantMsg: "is installed", wantWrites: true},
 		{name: "nightly to older GA refused", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: CatalogName, wantCode: errorCodeDowngrade, wantMsg: "older than the installed"},
 		{name: "nightly to older GA confirmed", installed: "rhods-operator.3.6.0", phase: "Succeeded", source: CatalogName, allow: true, wantSuccess: true, wantMsg: "is installed", wantWrites: true},

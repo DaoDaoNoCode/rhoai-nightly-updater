@@ -91,7 +91,7 @@ var gitOpsRoutes = map[string]http.HandlerFunc{
 // table, so a new route is off in the gitops profile until it is added
 // to gitOpsRoutes on purpose.
 var gitOpsRefused = map[string]string{
-	"POST /api/rollback/stream":                    "Reinstall",
+	"POST /api/rollback/stream":                    "Install a different build",
 	"POST /api/components/dsc/repair":              "Repairing the DataScienceCluster",
 	"POST /api/refresh/stream":                     "Re-deploy",
 	"POST /api/assist-rollout":                     "Rollout assist",

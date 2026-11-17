@@ -179,7 +179,7 @@ type Operation struct {
 var operationTypes = map[string][2]string{
 	"/api/update":                             {"update-dry-run", "Dry run of a nightly update"},
 	"/api/update/stream":                      {"update", "Update to nightly"},
-	"/api/rollback/stream":                    {"reinstall", "Reinstall operator"},
+	"/api/rollback/stream":                    {"reinstall", "Install a different build"},
 	"/api/refresh/stream":                     {"refresh", "Refresh operator"},
 	"/api/components/dsc/repair":              {"repair-dsc", "Repair DataScienceCluster"},
 	"/api/assist-rollout":                     {"assist-rollout", "Assist stuck rollouts"},

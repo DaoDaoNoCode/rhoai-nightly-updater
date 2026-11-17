@@ -6,7 +6,7 @@ This document captures every OpenShift-specific behavior that affects the RHOAI 
 
 **What:** OpenShift Routes have a default HAProxy timeout of 30 seconds. Any HTTP response that takes longer is terminated with a 504.
 
-**Impact:** SSE streams from mutation endpoints (Update, Reinstall, Refresh) can run for up to 15 minutes. SSE handlers replace the ordinary 180s response deadline with a short per-write deadline; accepted operations have an independent 15-minute lifetime. The default 30s Route timeout would kill the SSE connection mid-stream. The Route must support long-lived connections for SSE.
+**Impact:** SSE streams from mutation endpoints (Update, Install a different build, Refresh) can run for up to 15 minutes. SSE handlers replace the ordinary 180s response deadline with a short per-write deadline; accepted operations have an independent 15-minute lifetime. The default 30s Route timeout would kill the SSE connection mid-stream. The Route must support long-lived connections for SSE.
 
 **Fix:** `haproxy.router.openshift.io/timeout: 960s` annotation on the Route. The oauth-proxy upstream timeout is also 960s, exceeding the operation deadline.
 
@@ -134,7 +134,7 @@ The exact sequences are in [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md#4-operator-li
 
 ## 12. SSE Streaming Through Route + OAuth Proxy
 
-**What:** SSE (Server-Sent Events) streams progress from mutation endpoints (Update, Reinstall, Refresh) through the OpenShift Route and oauth-proxy to the browser.
+**What:** SSE (Server-Sent Events) streams progress from mutation endpoints (Update, Install a different build, Refresh) through the OpenShift Route and oauth-proxy to the browser.
 
 **How it works:** SSE uses standard HTTP -- not WebSocket. The server sets:
 - `Content-Type: text/event-stream`

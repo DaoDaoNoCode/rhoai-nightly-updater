@@ -116,7 +116,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   const knownDowngrade = direction === "downgrade";
 
   const targetReason = (() => {
-    if (!targetType) return "Choose what to reinstall first.";
+    if (!targetType) return "Choose what to install first.";
     if (targetType === "stable") {
       return status?.stableChannel && !status.stableDiscoveryError ? null : "The stable release could not be found in the cluster catalog.";
     }
@@ -156,9 +156,9 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
       : targetImage;
   const modalTitle = knownDowngrade
     ? targetType === "stable"
-      ? `Reinstall RHOAI ${status?.stableVersion} (downgrade from ${installedVersion})?`
-      : `Reinstall an older release (${selectedTag}) over ${installedVersion}?`
-    : "Reinstall the RHOAI operator?";
+      ? `Install RHOAI ${status?.stableVersion} (downgrade from ${installedVersion})?`
+      : `Install an older release (${selectedTag}) over ${installedVersion}?`
+    : "Install a different build?";
   const steps = STEP_SETS[targetType === "stable" ? "reinstall_stable" : "reinstall_nightly"];
 
   const tagToggleRef = React.useRef<HTMLButtonElement>(null);
@@ -167,7 +167,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <FormGroup role="radiogroup" fieldId="reinstall-target" label="Reinstall to" isStack>
+        <FormGroup role="radiogroup" fieldId="reinstall-target" label="Install" isStack>
           <Radio
             id="reinstall-stable"
             name="reinstall-target"
@@ -321,7 +321,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
           disabledReason={disabledReason}
           isLoading={running}
         >
-          {running ? "Reinstalling..." : "Reinstall operator..."}
+          {running ? "Installing..." : "Install..."}
         </TooltipButton>
       </StackItem>
 
@@ -403,7 +403,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
             </StackItem>
             <StackItem>
               <Form onSubmit={(e) => e.preventDefault()}>
-                <FormGroup label='Type "reinstall" to confirm' fieldId="reinstall-confirm-input" isRequired>
+                <FormGroup label='Type "install" to confirm' fieldId="reinstall-confirm-input" isRequired>
                   <TextInput
                     id="reinstall-confirm-input"
                     value={confirmText}
@@ -420,10 +420,10 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
           <TooltipButton
             variant="danger"
             onClick={handleReinstall}
-            isDisabled={confirmText !== "reinstall" || (knownDowngrade && !downgradeAck)}
+            isDisabled={confirmText !== "install" || (knownDowngrade && !downgradeAck)}
             disabledReason={disabledReason}
           >
-            {knownDowngrade ? "Reinstall older version" : "Reinstall"}
+            {knownDowngrade ? "Install older version" : "Install"}
           </TooltipButton>
           <Button variant="link" onClick={closeConfirm}>Cancel</Button>
         </ModalFooter>

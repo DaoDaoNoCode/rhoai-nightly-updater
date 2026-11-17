@@ -143,24 +143,26 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
     ?? (!authValue.trim() ? "Paste the auth token first." : null)
     ?? (tokenInvalid ? "This is not a base64 user:password token." : null);
 
-  // One PatternFly form: the token field and its actions. For an existing
-  // secret it is the confirmation step of Replace token; replacing
-  // overwrites a credential that may work, so its action is danger.
+  // A standard PatternFly form: one labelled field, its helper text (where
+  // to get the token, and where it is saved), then the actions. All spacing
+  // comes from the Form's own tokens. For an existing secret it is the
+  // confirmation step of Replace token; replacing overwrites a credential
+  // that may work, so its action is danger.
+  const fieldId = pullSecret.exists ? "update-pull-secret" : "create-pull-secret";
   const form = (
     <Form onSubmit={(e) => e.preventDefault()}>
-      <Content component="p" className="pf-v6-u-font-size-sm">{CREDENTIALS_HELP}</Content>
-      <FormGroup fieldId={pullSecret.exists ? "update-pull-secret" : "create-pull-secret"}>
+      <FormGroup label="Auth token for quay.io/rhoai" fieldId={fieldId} isRequired>
         <InputGroup>
           <InputGroupItem isFill>
             <TextInput
               ref={tokenInputRef}
-              id={pullSecret.exists ? "update-pull-secret" : "create-pull-secret"}
+              id={fieldId}
               type={showSecret ? "text" : "password"}
               value={authValue}
               onChange={(_e, val) => setAuthValue(val)}
-              placeholder="base64 auth token"
+              placeholder="base64 user:password"
               isDisabled={authLoading}
-              aria-label="quay.io/rhoai auth token"
+              isRequired
               validated={tokenInvalid ? "error" : "default"}
               aria-describedby="pull-secret-token-help"
               autoComplete="off"
@@ -177,9 +179,11 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
         </InputGroup>
         <FormHelperText>
           <HelperText id="pull-secret-token-help">
-            <HelperTextItem variant={tokenInvalid ? "error" : "default"}>
-              {tokenInvalid ? "Expected base64 of user:password (the \"auth\" value of a Docker config)." : "Saved as additional-pull-secret in kube-system."}
-            </HelperTextItem>
+            {tokenInvalid ? (
+              <HelperTextItem variant="error">Expected base64 of user:password (the &quot;auth&quot; value of a Docker config).</HelperTextItem>
+            ) : (
+              <HelperTextItem>{CREDENTIALS_HELP} Saved as additional-pull-secret in kube-system.</HelperTextItem>
+            )}
           </HelperText>
         </FormHelperText>
       </FormGroup>

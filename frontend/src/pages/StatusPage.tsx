@@ -420,13 +420,13 @@ export const StatusPage: React.FC = () => {
                       onClick={() => setReinstallExpanded(!reinstallExpanded)}
                       aria-expanded={reinstallExpanded}
                       aria-controls="recovery-reinstall-content"
-                      disabledReason={gitOpsOperatorReason(status, "Reinstall")}
+                      disabledReason={gitOpsOperatorReason(status, "Install a different build")}
                     >
-                      {reinstallExpanded ? "Hide reinstall options" : "Reinstall..."}
+                      {reinstallExpanded ? "Hide build options" : "Choose a build..."}
                     </TooltipButton>
                   }
                   expanded={
-                    <section id="recovery-reinstall-content" aria-label="Reinstall options" className="pf-v6-u-mt-lg" hidden={!reinstallExpanded}>
+                    <section id="recovery-reinstall-content" aria-label="Build options" className="pf-v6-u-mt-lg" hidden={!reinstallExpanded}>
                       <ReinstallPanel
                         status={status}
                         nightlyTags={nightlyTags}
@@ -437,11 +437,11 @@ export const StatusPage: React.FC = () => {
                     </section>
                   }
                 >
-                  <Title headingLevel="h3" size="md" id="recovery-reinstall">Reinstall the operator</Title>
+                  <Title headingLevel="h3" size="md" id="recovery-reinstall">Install a different build</Title>
                   <Content component="p" className="pf-v6-u-text-color-subtle">
-                    Uninstalls the operator and installs it again from the target you choose: the GA release, an older
-                    build, or when Update and Re-deploy can&apos;t recover it. RHOAI can&apos;t be changed for 5-10 minutes;
-                    running workloads keep running.
+                    Uninstalls the operator and installs the build you choose: the GA release, any nightly build (older ones
+                    too), or a custom catalog image. Also the last resort when Update and Re-deploy can&apos;t recover it.
+                    RHOAI can&apos;t be changed for 5–10 minutes; running workloads keep running.
                   </Content>
                 </CardListItem>
               </CardList>

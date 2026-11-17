@@ -1,14 +1,27 @@
 import React from "react";
-import { Flex, FlexItem, List, ListItem } from "@patternfly/react-core";
+import { Divider, Flex, FlexItem, Stack, StackItem } from "@patternfly/react-core";
 
 /**
- * Rows inside a card: a plain bordered list (PF List isPlain isBordered),
- * so row content lines up with the card title and dividers sit only
- * between rows, never under the last one.
+ * Rows inside a card: a list laid out as a PatternFly Stack with gutter,
+ * with a Divider item between rows (never under the last one). The gutter
+ * sits on both sides of each divider, so the space from a row's last line
+ * to the divider equals the space from the divider to the next row's
+ * title. (A bordered PF List puts its gap above the border and its padding
+ * below it; with the rows' own bottom padding the two sides differed.)
  */
-export const CardList: React.FC<{ "aria-label": string; children: React.ReactNode }> = ({ "aria-label": ariaLabel, children }) => (
-  <List isPlain isBordered aria-label={ariaLabel}>{children}</List>
-);
+export const CardList: React.FC<{ "aria-label": string; children: React.ReactNode }> = ({ "aria-label": ariaLabel, children }) => {
+  const rows = React.Children.toArray(children).filter(React.isValidElement);
+  return (
+    <Stack hasGutter component="ul" aria-label={ariaLabel} role="list">
+      {rows.map((row, i) => (
+        <React.Fragment key={row.key ?? i}>
+          {i > 0 && <Divider component="li" />}
+          {row}
+        </React.Fragment>
+      ))}
+    </Stack>
+  );
+};
 
 interface CardListItemProps {
   /** id of the row's title, for aria-labelledby. */
@@ -27,7 +40,7 @@ interface CardListItemProps {
 }
 
 export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions, actionsBesideFrom = "md", children, expanded }) => (
-  <ListItem aria-labelledby={labelledBy} className="pf-v6-u-pb-sm">
+  <StackItem component="li" aria-labelledby={labelledBy}>
     <div className="pf-v6-u-w-100">
       <Flex
         direction={{ default: "column", [actionsBesideFrom]: "row" }}
@@ -41,5 +54,5 @@ export const CardListItem: React.FC<CardListItemProps> = ({ labelledBy, actions,
       </Flex>
       {expanded}
     </div>
-  </ListItem>
+  </StackItem>
 );

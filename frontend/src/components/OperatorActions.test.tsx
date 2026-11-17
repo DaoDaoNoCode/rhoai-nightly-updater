@@ -137,19 +137,19 @@ describe("Reinstall downgrades (A07-6, §8 #8)", () => {
     renderPanel();
     for (const radio of screen.getAllByRole("radio")) expect(radio).not.toBeChecked();
     expect(screen.getByText("Downgrade")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Reinstall operator/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: /^Install\.\.\./ })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("requires the typed confirmation and an explicit downgrade acknowledgement before sending allowDowngrade", async () => {
     const runOperator = renderPanel();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Reinstall operator/ })).toHaveAttribute("aria-disabled", "true"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Install\.\.\./ })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(screen.getByLabelText(/Latest stable \(GA\)/));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Reinstall operator/ })).not.toHaveAttribute("aria-disabled", "true"));
-    fireEvent.click(screen.getByRole("button", { name: /Reinstall operator/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Install\.\.\./ })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(screen.getByRole("button", { name: /^Install\.\.\./ }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Reinstall RHOAI 3.5.1 (downgrade from 3.6.0)?")).toBeInTheDocument();
-    const confirm = within(dialog).getByRole("button", { name: "Reinstall older version" });
-    fireEvent.change(within(dialog).getByLabelText(/Type "reinstall" to confirm/), { target: { value: "reinstall" } });
+    expect(within(dialog).getByText("Install RHOAI 3.5.1 (downgrade from 3.6.0)?")).toBeInTheDocument();
+    const confirm = within(dialog).getByRole("button", { name: "Install older version" });
+    fireEvent.change(within(dialog).getByLabelText(/Type "install" to confirm/), { target: { value: "install" } });
     expect(confirm).toBeDisabled();
     fireEvent.click(within(dialog).getByLabelText(/I understand and want to install the older version/));
     expect(confirm).not.toBeDisabled();
@@ -170,7 +170,7 @@ describe("Reinstall downgrades (A07-6, §8 #8)", () => {
     fireEvent.click(screen.getByText("go"));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(message)).toBeInTheDocument();
-    const confirm = within(dialog).getByRole("button", { name: "Reinstall the older version" });
+    const confirm = within(dialog).getByRole("button", { name: "Install the older version" });
     expect(confirm).toBeDisabled();
     fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(confirm);

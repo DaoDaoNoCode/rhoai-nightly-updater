@@ -16,7 +16,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 |---|---|
 | "vX.Y.Z is available", "this updater's deployment is out of date" | [§2](#2-upgrade-roll-back-or-remove-the-updater) |
 | "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy` | [§5](#5-operations-busy-stuck-interrupted) |
-| **Operator failed**, **No Subscription**, a failed Update or Reinstall step | [§6](#6-update--reinstall-failed) |
+| **Operator failed**, **No Subscription**, a failed Update or Install a different build step | [§6](#6-update--install-a-different-build-failed) |
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
 | S3 storage on "MinIO (migration pending)", **Incomplete**, Tear down disabled | [§10](#10-environment-page) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
@@ -90,7 +90,7 @@ What `make rollback` does:
 
 **`oc rollout undo` does not work.** `install.sh` (and `make deploy`/`upgrade`) delete old ReplicaSets after a successful rollout, because their pod templates may hold the old plaintext cookie secret. Use `make rollback`.
 
-**Restarts wait for operations.** If an Update/Reinstall is running, the old pod finishes it first (drain up to 980 s, `terminationGracePeriodSeconds: 1020`, `Recreate`). oauth-proxy exits at once, so the UI is unreachable for up to ~17 minutes. `make upgrade`/`rollback` wait up to `ROLLOUT_TIMEOUT=20m`. A direct `oc delete pod` or an eviction is different: the ReplicaSet starts a replacement at once, which shows the old pod's operation as running "on updater pod …" and refuses changes until it ends (§5). Check whether something is running before you restart (`operation` is the marker, `lock` the lease):
+**Restarts wait for operations.** If an Update/Install a different build is running, the old pod finishes it first (drain up to 980 s, `terminationGracePeriodSeconds: 1020`, `Recreate`). oauth-proxy exits at once, so the UI is unreachable for up to ~17 minutes. `make upgrade`/`rollback` wait up to `ROLLOUT_TIMEOUT=20m`. A direct `oc delete pod` or an eviction is different: the ReplicaSet starts a replacement at once, which shows the old pod's operation as running "on updater pod …" and refuses changes until it ends (§5). Check whether something is running before you restart (`operation` is the marker, `lock` the lease):
 
 ```bash
 oc get cm rhoai-nightly-updater-operation -n $NS -o jsonpath='{.data}'; echo
@@ -139,7 +139,7 @@ An operation whose pod stopped before it finished:
 - **"… on updater pod *P*" (a remote operation):** another updater pod runs it. This happens when the pod is deleted or evicted (node drain, cluster upgrade, autoscaler): the ReplicaSet starts a replacement at once while the old pod still drains its operation (up to 980 s). The replacement reads the old pod's lease, shows the operation with its latest step, refuses new changes with 409 `cluster_busy`, and shows the result (`lastCompleted`) when it ends. There is no live step stream for it; the page polls.
 - **The lease:** every operation records a lease (key `lock` in ConfigMap `rhoai-nightly-updater-operation`) and renews its heartbeat every 10 s, also while the pod drains at shutdown. A lease whose heartbeat is older than **45 s** is free: that is how long a crashed pod's operation blocks a new one. A lease of an earlier container of the same pod (kubelet restart) is free at once. The lock fails closed: a lease of another pod refuses with 409 `cluster_busy`, and a lease that cannot be read or written (API errors, or write conflicts through every retry) refuses with **503 `lock_unavailable`** ("Cannot verify that no other updater pod is running an operation"). Nothing was changed; retry after a few seconds (`Retry-After`). If it persists, check that the updater can reach the API and patch ConfigMap `rhoai-nightly-updater-operation`.
 - **"Stopped: another updater pod took over" (`lock_lost`):** while an operation runs, a renewal found another pod's lease, or renewals failed for 35 s (the TTL minus one heartbeat) so the lease may have expired. The operation stops at once and makes no further change, **not even the automatic restore**, because the other pod may be changing the same Subscription and catalog. Check the cluster state, wait for the other operation, then re-run.
-- **"*X* was interrupted":** the operation's marker is still recorded and the process that wrote it holds no live lease: the pod or its container stopped mid-operation (SIGKILL, node loss, OOM), or an updater version without leases left it. An operation that still runs in another pod is not reported as interrupted. Check the operator status, then run the same operation again. Every step is safe to repeat; Update and Reinstall recreate a missing Subscription with the settings recorded before the last operation. For Dashboard Dev, run **Revert**.
+- **"*X* was interrupted":** the operation's marker is still recorded and the process that wrote it holds no live lease: the pod or its container stopped mid-operation (SIGKILL, node loss, OOM), or an updater version without leases left it. An operation that still runs in another pod is not reported as interrupted. Check the operator status, then run the same operation again. Every step is safe to repeat; Update and Install a different build recreate a missing Subscription with the settings recorded before the last operation. For Dashboard Dev, run **Revert**.
 - **Operation deadline:** 15 minutes. OLM gets 8 minutes to reach `Succeeded`, and the CSV must then stay `Succeeded` for 20 seconds: right after an install OLM can briefly move it back to `Pending` (NeedsReinstall) while its webhooks come up. A failure restores the previous catalog and Subscription within about 1 minute.
 
 The cross-pod lock, when a pod is evicted during an update:
@@ -165,7 +165,7 @@ sequenceDiagram
   Note over A: If A's renewals fail for 35 s or find another pod's lease,<br>A stops at once (lock_lost) and does not restore.
 ```
 
-## 6. Update / Reinstall failed
+## 6. Update / Install a different build failed
 
 A successful update, for reference: each step turns green, then **Update complete**.
 
@@ -200,11 +200,11 @@ What the Status page shows when the operator is broken:
 
 <img src="docs/images/status-no-subscription.png" alt="Alert: The operator has no Subscription" width="760">
 
-**The operator has no Subscription**: usually an interrupted Update or Reinstall. Update or Reinstall recreates the Subscription with the settings recorded before the last operation.
+**The operator has no Subscription**: usually an interrupted Update or Install a different build. Update or Install a different build recreates the Subscription with the settings recorded before the last operation.
 
-<img src="docs/images/status-recovery.png" alt="The Recovery card: Re-deploy the operator and Reinstall the operator" width="760">
+<img src="docs/images/status-recovery.png" alt="The Recovery card: Re-deploy the operator and Install a different build" width="760">
 
-**Recovery** on the Status page: **Re-deploy operator...** installs the same version again; **Reinstall...** removes the operator and installs the target you choose (stable, a nightly, an exact build).
+**Recovery** on the Status page: **Re-deploy operator...** installs the same version again; **Choose a build...** removes the operator and installs the target you choose (stable, a nightly, an exact build).
 
 Read the step that failed and its log in the UI first. Then:
 
@@ -218,20 +218,20 @@ oc get installplan,csv -n redhat-ods-operator
 | Message / state | Fix |
 |---|---|
 | "Replacement catalog validation failed", `catalog_image_pull` | Pull secret or IDMS problem, or a bad image. Nothing was changed. Test the pull secret on the Status page |
-| "older than the installed" | Update never downgrades. Use Reinstall and tick the confirmation (see "Downgrades" below) |
+| "older than the installed" | Update never downgrades. Use Install a different build and tick the confirmation (see "Downgrades" below) |
 | Succeeded, but "an upgrade gate holds it" | The operator waits for an admin acknowledgement (set its key to "true" in ConfigMap `odh-upgrade-acks` in `redhat-ods-operator`) or cannot resolve a gate because it is older than the resources it found. The note reads the Platform and every DataScienceCluster condition |
 | Diagnostics: "Objects the operator cannot update" | Upgrade leftovers; see §11.6 |
-| "cannot read the installed CSV version" | Use Reinstall and confirm |
+| "cannot read the installed CSV version" | Use Install a different build and confirm |
 | A second rhods-operator Subscription exists | Delete the extra one yourself; the tool refuses to guess which one is right |
 | Namespace has 2+ OperatorGroups / a non-global one | Keep one global OperatorGroup in `redhat-ods-operator` |
 | Re-deploy refuses: "channel head moved" (Automatic approval) | Use Update (it changes the version) |
 | `BundleUnpackFailed` keeps recurring | See §11.5 |
 | Webhook "connection refused / no endpoints" errors | Diagnostics → stale webhooks. For a CRD conversion webhook see §11.2 |
 
-**Downgrades.** OLM cannot downgrade, so a confirmed Reinstall to an older version removes the operator and installs the older bundle. OLM applies every CRD in that bundle, so the CRDs it ships are **replaced by their older versions**:
+**Downgrades.** OLM cannot downgrade, so a confirmed install of an older version removes the operator and installs the older bundle. OLM applies every CRD in that bundle, so the CRDs it ships are **replaced by their older versions**:
 - fields only the newer version knows can be pruned from stored objects such as the DataScienceCluster, and are not restored by going back;
 - a same-named CRD that the newer version no longer ships stays at the older schema after you go back with Update, and the newer operator then fails on it (§11.6, schema mismatch);
-- the older operator may refuse to manage, or stop at upgrade gates for, resources the newer version created (DSC `Ready: Error … upgrade gate`, `ModulesReady: AdminAckRequired`). The result of the Reinstall says so; check Components and Diagnostics. Go back to the newer version with **Update**.
+- the older operator may refuse to manage, or stop at upgrade gates for, resources the newer version created (DSC `Ready: Error … upgrade gate`, `ModulesReady: AdminAckRequired`). The result of the install says so; check Components and Diagnostics. Go back to the newer version with **Update**.
 
 ## 7. Metrics and alerts
 
@@ -480,7 +480,7 @@ oc get svc -n <namespace> <service>          # NotFound = stale
 
 Recovery (MANUAL ADMIN STEP), in order of preference:
 1. **Bring the producer back.** If the module was set to `Removed` in the DSC, set it to `Managed` again, wait for its operator and Service, migrate or delete the affected CRs, then remove the module again.
-2. **DSC/DSCI CRDs** while the RHOAI operator is not installed: Reinstall from the UI does this safely (it switches conversion to `None` only when no RHOAI CSV exists and the Service is missing).
+2. **DSC/DSCI CRDs** while the RHOAI operator is not installed: Install a different build from the UI does this safely (it switches conversion to `None` only when no RHOAI CSV exists and the Service is missing).
 3. **Last resort, lossy:** `None` converts no fields; reads at another version return the stored shape. Only for CRDs whose objects you can lose, and the owning operator may revert it:
    ```bash
    oc patch crd <name> --type=merge -p '{"spec":{"conversion":{"strategy":"None","webhook":null}}}'
@@ -520,14 +520,14 @@ Fix (MANUAL ADMIN STEP):
 
 Removing the finalizer by hand (`oc patch dspa <name> -n <ns> --type=merge -p '{"metadata":{"finalizers":null}}'`) skips DSPO's cleanup and leaves its resources behind. Use it only if the project is being deleted anyway.
 
-Stuck **module CRs** (`components.platform.opendatahub.io`): Diagnostics shows the owning operator and why it isn't finishing. Start that operator rather than stripping the finalizer. Reinstall strips one only after 10 minutes, and only when the operator Deployment is gone.
+Stuck **module CRs** (`components.platform.opendatahub.io`): Diagnostics shows the owning operator and why it isn't finishing. Start that operator rather than stripping the finalizer. Install a different build strips one only after 10 minutes, and only when the operator Deployment is gone.
 
 ### 11.5 Recurring `BundleUnpackFailed`
 
 OLM's documented recovery ("Refreshing failing subscriptions"), as a MANUAL ADMIN STEP:
-1. Delete the Subscription and CSV. Reinstall in the UI does this.
+1. Delete the Subscription and CSV. Install a different build in the UI does this.
 2. Delete the failing bundle-unpack **Job and ConfigMap** in `openshift-marketplace`: `oc get job,cm -n openshift-marketplace | grep <bundle-hash>`. The tool never deletes these.
-3. Reinstall.
+3. Install a different build (Recovery on the Status page).
 
 ### 11.6 Upgrade leftovers the operator cannot fix itself
 
@@ -658,7 +658,7 @@ On a cluster where Argo CD (OpenShift GitOps) installs RHOAI from Git, for examp
 |---|---|
 | Update | Installs the build the catalog serves: the catalog stays as Git sets it, the channel the Subscription has in Git is kept, and the Subscription is recreated with Argo CD's tracking ([what it changes](docs/CLUSTER_CHANGES.md#update-when-argo-cd-manages-the-operator)). Any other image is refused: change the image in Git. The catalog's image must have the Subscription's channel |
 | A newer nightly in Quay | The Status page shows it with the image reference to put in Git; nothing happens on the cluster until Git changes. The gitops profile does not look it up (it contacts no registry): its *Latest* row says that a newer nightly arrives as a change in Git ([GITOPS.md §11](docs/GITOPS.md#no-registry-access)) |
-| Re-deploy, Reinstall | Off: they delete the Subscription for minutes. Update installs the catalog's build again instead |
+| Re-deploy, Install a different build | Off: they delete the Subscription for minutes. Update installs the catalog's build again instead |
 | DSC repairs, Diagnostics *disable component* | Off when Argo CD manages the DSC: change the DSC in Git |
 | Dashboard Dev, the Environment setups, other Diagnostics fixes | Unchanged: they touch objects Argo CD does not manage |
 
@@ -678,7 +678,7 @@ The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/l
 
 **"OLM installed ..., but it is not the build that was verified"** (`install_mismatch`): the catalog switched to another build (a Git change) between the check and the install. The running operator is kept; run Update again to install what the catalog serves now.
 
-**"The catalog did not serve ... within ..."** after a change in Git: OLM replaces the catalog pod when the image changes; check the pod in `openshift-marketplace` (`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`) and [§6](#6-update--reinstall-failed) (`catalog_image_pull`) for pull problems.
+**"The catalog did not serve ... within ..."** after a change in Git: OLM replaces the catalog pod when the image changes; check the pod in `openshift-marketplace` (`oc get pods -n openshift-marketplace -l olm.catalogSource=rhoai-catalog-dev`) and [§6](#6-update--install-a-different-build-failed) (`catalog_image_pull`) for pull problems.
 
 **Checking what Argo CD tracks.** Which Application renders the catalog and the Subscription, and its sync policy:
 
@@ -686,7 +686,7 @@ The tool copies the annotations (Argo CD's tracking and `kubectl.kubernetes.io/l
 oc get applications.argoproj.io -A -o json | jq -r '.items[] | select(any(.status.resources[]?; .kind=="CatalogSource" and .name=="rhoai-catalog-dev")) | "\(.metadata.namespace)/\(.metadata.name): syncPolicy=\(.spec.syncPolicy // {} | tostring)"'
 ```
 
-**A catalog an ACM policy enforces.** On some clusters an ACM ConfigurationPolicy (`remediationAction: enforce`), not Argo CD, applies CatalogSource `rhoai-catalog-dev`; a hub Argo CD application may apply the Policy, but the catalog on the cluster has no Argo CD annotation. The tool recognises it by its `managedFields`: manager `config-policy-controller` owns `f:spec`. It then treats the catalog as above: the image stays as the policy sets it, Update installs the build the catalog serves, Re-deploy and Reinstall are off, and messages name `an ACM policy (config-policy-controller)` instead of an Argo CD application. To move to another build, change the image in the policy. The Subscription can still be Argo CD's; messages about it name its application. Check the managers with:
+**A catalog an ACM policy enforces.** On some clusters an ACM ConfigurationPolicy (`remediationAction: enforce`), not Argo CD, applies CatalogSource `rhoai-catalog-dev`; a hub Argo CD application may apply the Policy, but the catalog on the cluster has no Argo CD annotation. The tool recognises it by its `managedFields`: manager `config-policy-controller` owns `f:spec`. It then treats the catalog as above: the image stays as the policy sets it, Update installs the build the catalog serves, Re-deploy and Install a different build are off, and messages name `an ACM policy (config-policy-controller)` instead of an Argo CD application. To move to another build, change the image in the policy. The Subscription can still be Argo CD's; messages about it name its application. Check the managers with:
 
 ```bash
 oc get catalogsource rhoai-catalog-dev -n openshift-marketplace --show-managed-fields -o json | jq -r '.metadata.managedFields[] | "\(.manager) \(.operation) \(.fieldsV1 | keys)"'
