@@ -43,7 +43,6 @@ const MultiLineCommand: React.FC<{ children: string; label: string; id: string }
         <CodeBlockAction>
           <ClipboardCopyButton
             id={`copy-${id}`}
-            textId={id}
             aria-label={`Copy the ${label}`}
             onClick={() => {
               void navigator.clipboard?.writeText(children).then(() => setCopied(true)).catch(() => {});

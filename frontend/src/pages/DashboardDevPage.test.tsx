@@ -120,7 +120,8 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     expect(within(dialog).getByText(/All 2 dashboard containers are updated/)).toBeInTheDocument();
     expect(api.calls.some((c) => c.startsWith("POST"))).toBe(false);
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // PatternFly 6.7 keeps a closing modal in the DOM for its close animation.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(api.calls.some((c) => c.startsWith("POST /api/dashboard"))).toBe(false);
   });
 
@@ -190,6 +191,7 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     const assist = await screen.findByRole("button", { name: "Assist rollout" });
     expect(assist).not.toHaveAttribute("aria-disabled");
     // Deploying again still waits for this rollout.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Deploy latest main" })).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -205,6 +207,7 @@ describe("Dashboard Dev deploy confirmations (A04-4, A08-4) and flavor (A04-3)",
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Deploy latest main" }));
     expect(await screen.findByText("A dashboard container cannot start")).toBeInTheDocument();
     expect(screen.queryByText(/Waiting for the dashboard pods to roll out/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Deploy latest main" })).not.toHaveAttribute("aria-disabled");
   });
 
