@@ -35,8 +35,6 @@ import {
   Truncate,
 } from "@patternfly/react-core";
 import ThIcon from "@patternfly/react-icons/dist/esm/icons/th-icon";
-import SunIcon from "@patternfly/react-icons/dist/esm/icons/sun-icon";
-import MoonIcon from "@patternfly/react-icons/dist/esm/icons/moon-icon";
 import BarsIcon from "@patternfly/react-icons/dist/esm/icons/bars-icon";
 import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import {
@@ -61,6 +59,8 @@ import { AppInfoProvider, useGitOpsProfile, usePermissions, useSessionExpired, u
 import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
+import { ThemeProvider } from "./theme/ThemeContext";
+import { ThemeSwitcher } from "./theme/ThemeSwitcher";
 
 // Route-level code splitting: each page is its own chunk.
 const StatusPage = lazy(() => import("./pages/StatusPage").then((m) => ({ default: m.StatusPage })));
@@ -118,17 +118,6 @@ const PAGE_VIEW_NAMES: Record<string, string> = {
   "/diagnostics": "diagnostics",
 };
 
-function initialDarkMode(): boolean {
-  try {
-    const stored = localStorage.getItem("pf-theme");
-    if (stored === "dark") return true;
-    if (stored === "light") return false;
-  } catch {
-    // localStorage may be disabled
-  }
-  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
-}
-
 /** The RHOAI dashboard route next to the console route (same cluster apps domain). */
 export function rhoaiDashboardURL(consoleURL: string): string {
   return consoleURL.replace("console-openshift-console", "data-science-gateway");
@@ -148,7 +137,6 @@ const AppLayout: React.FC = () => {
   const offInProfile = (feature: string, element: React.ReactElement) => (gitOpsProfile ? <ProfileOffState feature={feature} /> : element);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [appLauncherOpen, setAppLauncherOpen] = useState(false);
-  const [isDark, setIsDark] = useState(initialDarkMode);
 
   const location = useLocation();
 
@@ -157,13 +145,6 @@ const AppLayout: React.FC = () => {
     const page = PAGE_VIEW_NAMES[location.pathname];
     if (page) trackPageView(page);
   }, [location.pathname]);
-
-  // Dark mode: toggle CSS class on <html> and persist preference
-  useEffect(() => {
-    const htmlEl = document.documentElement;
-    htmlEl.classList.toggle("pf-v6-theme-dark", isDark);
-    try { localStorage.setItem("pf-theme", isDark ? "dark" : "light"); } catch { /* localStorage may be disabled */ }
-  }, [isDark]);
 
   const consoleURL = status?.consoleURL?.startsWith("https://") ? status.consoleURL : "";
 
@@ -204,13 +185,7 @@ const AppLayout: React.FC = () => {
                 </ToolbarItem>
               )}
               <ToolbarItem>
-                <Button
-                  variant="plain"
-                  aria-label="Dark mode"
-                  aria-pressed={isDark}
-                  onClick={() => setIsDark((prev) => !prev)}
-                  icon={isDark ? <SunIcon /> : <MoonIcon />}
-                />
+                <ThemeSwitcher />
               </ToolbarItem>
               <ToolbarItem>
                 <HelpButton />
@@ -360,13 +335,15 @@ export const App: React.FC = () => {
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        <LiveAnnouncerProvider>
-          <AppStateProvider>
-            <AppInfoProvider>
-              <AppLayout />
-            </AppInfoProvider>
-          </AppStateProvider>
-        </LiveAnnouncerProvider>
+        <ThemeProvider>
+          <LiveAnnouncerProvider>
+            <AppStateProvider>
+              <AppInfoProvider>
+                <AppLayout />
+              </AppInfoProvider>
+            </AppStateProvider>
+          </LiveAnnouncerProvider>
+        </ThemeProvider>
       </ErrorBoundary>
     </BrowserRouter>
   );

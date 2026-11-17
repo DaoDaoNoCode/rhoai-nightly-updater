@@ -7,6 +7,8 @@
 #
 # Needs node (22+), playwright-cli, ffmpeg and ImageMagick 7 (magick).
 # SKIP_BUILD=1 reuses frontend/dist; PORT picks the mock's port (18181).
+# The themes job (not run by default) captures every page in every color
+# scheme and contrast mode into THEMES_DIR (default tmp/themes), for review.
 set -euo pipefail
 shopt -s nullglob
 
@@ -55,7 +57,7 @@ cd "$WORK"
 playwright-cli -s="$SESSION" open --config="$WORK/cli.config.json" "http://127.0.0.1:$PORT/__docs/state" >/dev/null
 
 RAW="$WORK/raw"
-mkdir -p "$RAW/full" "$RAW/crop" "$RAW/frames"
+mkdir -p "$RAW/full" "$RAW/crop" "$RAW/frames" "$RAW/themes"
 for job in "${JOBS[@]}"; do
   echo "Capturing $job..."
   curl -fsS -X POST "http://127.0.0.1:$PORT/__docs/job?name=$job&out=$RAW" >/dev/null
@@ -66,6 +68,17 @@ for job in "${JOBS[@]}"; do
     exit 1
   fi
 done
+
+# Theme review images (themes job): scaled like full pages, not docs images.
+themes=("$RAW"/themes/*.png)
+if [ ${#themes[@]} -gt 0 ]; then
+  THEMES_DIR=${THEMES_DIR:-$ROOT/tmp/themes}
+  mkdir -p "$THEMES_DIR"
+  for f in "${themes[@]}"; do
+    magick "$f" -filter Lanczos -resize 1440x "$THEMES_DIR/$(basename "$f")"
+  done
+  echo "Theme review images: $THEMES_DIR"
+fi
 
 # A full run replaces every image, so none is left that the docs no longer use.
 if [ $# -eq 0 ]; then

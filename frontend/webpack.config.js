@@ -33,6 +33,16 @@ module.exports = (env, argv) => {
           exclude: [/node_modules/, /\.test\.tsx?$/],
         },
         {
+          // Loaded as its own file from index.html's <head> (the CSP allows
+          // no inline script); the template's require() gives its URL. Not
+          // content-hashed: the minifier rewrites the file after the HTML
+          // was generated, so a hash in the name would no longer match it.
+          // Unhashed names are served with no-cache (pkg/middleware/static.go).
+          test: /[\\/]public[\\/]theme-init\.js$/,
+          type: 'asset/resource',
+          generator: { filename: 'js/[name][ext]' },
+        },
+        {
           test: /\.css$/,
           use: [isProd ? MiniCssExtractPlugin.loader : 'style-loader', 'css-loader'],
         },

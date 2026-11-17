@@ -35,12 +35,21 @@ async (page) => {
     await wait(500);
   }
 
-  /** Opens path in scenario sc, in the light or dark theme, with clean storage. */
-  async function open(path, sc, { dark = false, height = H, width = vw } = {}) {
+  /**
+   * Opens path in scenario sc, in the light or dark color scheme and a
+   * contrast mode (docs images use "default"), with clean storage. The keys
+   * are src/theme/themeCore.ts COLOR_SCHEME_KEY and CONTRAST_MODE_KEY.
+   */
+  async function open(path, sc, { dark = false, contrast = "default", height = H, width = vw } = {}) {
     if (sc) await scenario(sc);
     await page.setViewportSize({ width, height });
     await page.goto(origin + "/__docs/state");
-    await page.evaluate((t) => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("pf-theme", t); }, dark ? "dark" : "light");
+    await page.evaluate(([scheme, mode]) => {
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem("rhoai-updater.color-scheme", scheme);
+      localStorage.setItem("rhoai-updater.contrast-mode", mode);
+    }, [dark ? "dark" : "light", contrast]);
     await page.goto(origin + path);
     // Same pixels on every run: no animation, no blinking caret, no hover.
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
@@ -233,6 +242,20 @@ async (page) => {
         for (const [sc, path, name] of PAGES) {
           await open(path, sc, { dark });
           await fullPage(`${name}-${dark ? "dark" : "light"}`);
+        }
+      }
+    },
+
+    // Not a docs image: every page in every color scheme and contrast mode,
+    // to check a theme change by eye (screenshots.sh themes, THEMES_DIR).
+    async themes() {
+      for (const [sc, path, name] of PAGES) {
+        for (const dark of [false, true]) {
+          for (const contrast of ["default", "high-contrast", "glass"]) {
+            await open(path, sc, { dark, contrast });
+            await fit();
+            await page.screenshot({ path: `${out}/themes/${name}-${dark ? "dark" : "light"}-${contrast}.png` });
+          }
         }
       }
     },
@@ -522,7 +545,7 @@ async (page) => {
     },
   };
 
-  if (job !== "pages") vw = CW;
+  if (job !== "pages" && job !== "themes") vw = CW;
   if (!jobs[job]) throw new Error(`unknown job ${job}; jobs: ${Object.keys(jobs).join(" ")}`);
   await jobs[job]();
   await page.setViewportSize({ width: W, height: H });

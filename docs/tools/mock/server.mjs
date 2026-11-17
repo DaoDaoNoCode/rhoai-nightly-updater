@@ -400,7 +400,12 @@ async function file(res, path) {
   if (full !== DIST && !full.startsWith(DIST + sep)) return false;
   try {
     if (!(await stat(full)).isFile()) return false;
-    res.writeHead(200, { "Content-Type": TYPES[extname(full)] || "application/octet-stream" });
+    // The app's own CSP (pkg/middleware/security.go), so the docs show what
+    // the browser allows there: an inline script would not run here either.
+    res.writeHead(200, {
+      "Content-Type": TYPES[extname(full)] || "application/octet-stream",
+      "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+    });
     res.end(await readFile(full));
     return true;
   } catch {

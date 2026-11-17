@@ -28,6 +28,12 @@ export default defineConfig(
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   {
+    // Served as-is to the browser before the bundle (public/theme-init.js).
+    files: ["public/**/*.js"],
+    languageOptions: { globals: globals.browser, sourceType: "script", ecmaVersion: 5 },
+    rules: { "@typescript-eslint/no-unused-vars": ["error", { caughtErrors: "none" }] },
+  },
+  {
     files: ["*.mjs", "*.config.ts"],
     languageOptions: { globals: globals.node },
   },

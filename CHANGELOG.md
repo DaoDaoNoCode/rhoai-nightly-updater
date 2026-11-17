@@ -20,6 +20,16 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **New look: PatternFly 6.7's felt theme**, with an appearance button in
+  the masthead (it replaces the moon icon). **Color scheme**: System,
+  Light or Dark; **Contrast mode**: System, Default, High contrast or
+  Glass. System follows the operating system live: dark mode, "increase
+  contrast" (high contrast) and "reduce transparency" (the solid default
+  instead of glass). Glass and high contrast never combine; high contrast
+  wins. The choice is kept in the browser; a light or dark choice made
+  with the old moon icon carries over. The theme is applied before the
+  first paint by a small script file, so the page does not flash, and the
+  Content-Security-Policy stays `default-src 'self'` (no inline script).
 - **Test resources is now the Environment page**: one-click setups for
   developing and reproducing issues on the cluster. Its address stays
   `/test-resources`, so bookmarks and links keep working. Storage,
