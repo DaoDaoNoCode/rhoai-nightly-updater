@@ -418,7 +418,7 @@ objects:
       # CPU preset, whose name is found at run time (read-only)
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceservices"]
-        verbs: ["list", "create"]
+        verbs: ["create"]
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceservices"]
         resourceNames: ["qwen25-05b-instruct"]
@@ -431,6 +431,42 @@ objects:
       - apiGroups: ["infrastructure.opendatahub.io"]
         resources: ["hardwareprofiles"]
         verbs: ["list"]
+      # The Gen AI playground: the RHOAI dashboard's gen-ai API acts with the
+      # caller's token (this ServiceAccount's). Its only gate is an access
+      # review "list ogxservers in the project"; it then lists the project's
+      # models (inferenceservices, llminferenceservices: get, list; the
+      # list also finds the models that use the inference gateway), creates
+      # OGXServer lsd-genai-playground and its ConfigMaps (create cannot be
+      # limited by name), sets ownerReferences on them (which needs delete),
+      # labels odh-trusted-ca-bundle ogx.io/watch=true (update), reads the
+      # optional custom-endpoints ConfigMap, and deletes the server. The
+      # pgvector database and the router CA are the dashboard's own
+      # ServiceAccount's. SECURITY.md audits each rule.
+      - apiGroups: ["ogx.io"]
+        resources: ["ogxservers"]
+        verbs: ["list", "create"]
+      - apiGroups: ["ogx.io"]
+        resources: ["ogxservers"]
+        resourceNames: ["lsd-genai-playground"]
+        verbs: ["get", "delete"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["llama-stack-config", "ogx-office-mime-types", "ogx-router-ca-bundle", "ogx-trusted-ca-bundle"]
+        verbs: ["get", "update", "delete"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["odh-trusted-ca-bundle"]
+        verbs: ["get", "update"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["gen-ai-aa-custom-model-endpoints"]
+        verbs: ["get"]
+      - apiGroups: ["serving.kserve.io"]
+        resources: ["inferenceservices", "llminferenceservices"]
+        verbs: ["get", "list"]
 
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding

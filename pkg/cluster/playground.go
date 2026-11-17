@@ -1,0 +1,1027 @@
+package cluster
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// The Gen AI playground (Environment page, Playground tab) is the RHOAI
+// dashboard's own: this tool asks the installed dashboard's gen-ai API to
+// set it up, report it and delete it, exactly as a click in the dashboard's
+// Gen AI studio does. The dashboard then writes whatever this RHOAI
+// release's playground is made of (an OGXServer, its configuration
+// ConfigMaps, a pgvector database), so no playground configuration is
+// copied here and nothing depends on the release.
+//
+// The calls (odh-dashboard packages/gen-ai, the frontend's own contract),
+// all on the dashboard's address with a bearer token the API layer chooses
+// (pkg/api genAIToken) and passes in as a plain string:
+//
+//	GET    /gen-ai/api/v1/aaa/models?namespace=<ns>   the project's models
+//	GET    /gen-ai/api/v1/maas/models?namespace=<ns>  Models as a Service (404 or empty when off)
+//	GET    /gen-ai/api/v1/lsd/status?namespace=<ns>   {"data":{"name","phase",...}} or {"data":null}
+//	POST   /gen-ai/api/v1/lsd/install?namespace=<ns>  {"models":[...],...}
+//	DELETE /gen-ai/api/v1/lsd/delete?namespace=<ns>   {"name":"<server>"}
+//
+// The dashboard's API acts with the caller's token, here the app's
+// ServiceAccount's: deploy/template.yaml grants what it needs for that
+// (SECURITY.md audits it). The tool records the projects it requested a
+// playground in, in its own namespace; a playground it did not request is
+// shown but never deleted.
+
+const genAIAPIPrefix = "/gen-ai/api/v1"
+
+// Waits of a playground operation, bounded and on the clock (tests shorten
+// nothing: the clock is fake).
+var (
+	// PlaygroundInstallRetryTimeout bounds retrying an install the
+	// dashboard answers 409: the previous playground's database is still
+	// being removed.
+	PlaygroundInstallRetryTimeout = 3 * time.Minute
+	PlaygroundInstallRetryPoll    = 10 * time.Second
+	// PlaygroundReadyTimeout bounds the wait for the playground to report
+	// Ready (60-100 s live, more on the first pull of its image).
+	PlaygroundReadyTimeout = 6 * time.Minute
+	PlaygroundPoll         = 5 * time.Second
+	// PlaygroundDeleteTimeout bounds the wait until the dashboard no
+	// longer reports the playground.
+	PlaygroundDeleteTimeout = 3 * time.Minute
+)
+
+// playgroundStatusMaxProjects bounds the projects a status reads (one
+// gen-ai call each, a few at a time).
+const (
+	playgroundStatusMaxProjects = 100
+	playgroundStatusParallel    = 6
+	playgroundStatusTTL         = 10 * time.Second
+	playgroundMaxModels         = 50
+)
+
+// genAIBaseURL is the dashboard's address ("" when unknown). Tests replace it.
+var genAIBaseURL = dashboardBaseURL
+
+// genAIHTTPClient sends the gen-ai calls; it trusts the same certificates
+// as the samples' calls to the same gateway. Tests replace it.
+var genAIHTTPClient = samplesHTTPClient
+
+// genAIAPI is the dashboard's gen-ai API for one request.
+type genAIAPI struct {
+	ctx   context.Context
+	base  string
+	token string
+}
+
+func (a genAIAPI) with(ctx context.Context) genAIAPI {
+	a.ctx = ctx
+	return a
+}
+
+// genAIError is a non-2xx answer of the gen-ai API: the HTTP status, the
+// call, and the API's own message. It never holds the token, which is
+// only ever sent in the Authorization header.
+type genAIError struct {
+	Status  int
+	Method  string
+	Path    string
+	Code    string
+	Message string
+}
+
+func (e *genAIError) Error() string {
+	msg := firstNonEmpty(e.Message, http.StatusText(e.Status))
+	return fmt.Sprintf("the dashboard's gen-ai API answered %d to %s %s: %s", e.Status, e.Method, e.Path, msg)
+}
+
+func asGenAIError(err error) (*genAIError, bool) {
+	var e *genAIError
+	ok := errors.As(err, &e)
+	return e, ok
+}
+
+func genAIStatus(err error) int {
+	if e, ok := asGenAIError(err); ok {
+		return e.Status
+	}
+	return 0
+}
+
+const maxGenAIErrorMessage = 400
+
+// parseGenAIError reads the BFF's {"error":{"code","message"}}, else a
+// {"message"} or {"error":"..."}, else the text.
+func parseGenAIError(method, path string, status int, body []byte) *genAIError {
+	e := &genAIError{Status: status, Method: method, Path: path}
+	var nested struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	var flat struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+	}
+	switch {
+	case json.Unmarshal(body, &nested) == nil && nested.Error.Message != "":
+		e.Code, e.Message = nested.Error.Code, nested.Error.Message
+	case json.Unmarshal(body, &flat) == nil && (flat.Message != "" || flat.Error != ""):
+		e.Message = firstNonEmpty(flat.Message, flat.Error)
+	default:
+		e.Message = strings.TrimSpace(string(body))
+	}
+	if len(e.Message) > maxGenAIErrorMessage {
+		e.Message = e.Message[:maxGenAIErrorMessage] + "..."
+	}
+	return e
+}
+
+// call makes one request to path (below /gen-ai/api/v1) in namespace ns.
+func (a genAIAPI) call(method, path, ns string, in, out interface{}) error {
+	u := a.base + genAIAPIPrefix + path + "?" + url.Values{"namespace": {ns}}.Encode()
+	var body io.Reader
+	if in != nil {
+		data, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(a.ctx, method, u, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Accept", "application/json")
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := genAIHTTPClient.Do(req)
+	if err != nil {
+		// url.Error names the URL, which holds no secret.
+		return fmt.Errorf("cannot reach the dashboard's gen-ai API: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return fmt.Errorf("read the answer of the dashboard's gen-ai API: %w", err)
+	}
+	if resp.StatusCode >= 300 {
+		return parseGenAIError(method, genAIAPIPrefix+path, resp.StatusCode, data)
+	}
+	if out != nil && len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return fmt.Errorf("parse the answer of the dashboard's gen-ai API to %s %s: %w", method, genAIAPIPrefix+path, err)
+		}
+	}
+	return nil
+}
+
+// genAIServer is the playground as lsd/status reports it.
+type genAIServer struct {
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+}
+
+// playgroundStatus returns the project's playground, or nil when it has
+// none ({"data":null}, or 404 for a server that is not found).
+func (a genAIAPI) playgroundStatus(ns string) (*genAIServer, error) {
+	var out struct {
+		Data *genAIServer `json:"data"`
+	}
+	err := a.call(http.MethodGet, "/lsd/status", ns, nil, &out)
+	if genAIStatus(err) == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// namespaceModel is one entry of aaa/models (unknown fields ignored).
+type namespaceModel struct {
+	ModelName    string   `json:"model_name"`
+	ModelID      string   `json:"model_id"`
+	DisplayName  string   `json:"display_name"`
+	Status       string   `json:"status"`
+	Usecase      string   `json:"usecase"`
+	ModelType    string   `json:"model_type"`
+	Capabilities []string `json:"capabilities"`
+}
+
+type maasModel struct {
+	ID           string   `json:"id"`
+	DisplayName  string   `json:"display_name"`
+	Ready        bool     `json:"ready"`
+	Capabilities []string `json:"capabilities"`
+	ModelType    string   `json:"model_type"`
+	Usecase      string   `json:"usecase"`
+}
+
+// chatModel: not an embedding model. The dashboard's models carry
+// capabilities (text-generation by default), a use case and sometimes a
+// model type; any of them naming embedding makes it one.
+func chatModel(capabilities []string, usecase, modelType string) bool {
+	for _, s := range append([]string{usecase, modelType}, capabilities...) {
+		if strings.Contains(strings.ToLower(s), "embedding") {
+			return false
+		}
+	}
+	return true
+}
+
+// listPlaygroundModels lists the project's models (an error means the API
+// cannot be used) and its Models as a Service (any error is none: MaaS is
+// optional and may be off).
+func (a genAIAPI) listPlaygroundModels(ns string) ([]types.PlaygroundModel, error) {
+	var own struct {
+		Data []namespaceModel `json:"data"`
+	}
+	if err := a.call(http.MethodGet, "/aaa/models", ns, nil, &own); err != nil {
+		return nil, err
+	}
+	var out []types.PlaygroundModel
+	for _, m := range own.Data {
+		name := firstNonEmpty(m.ModelName, m.ModelID)
+		if name == "" {
+			continue
+		}
+		out = append(out, types.PlaygroundModel{
+			Name: name, DisplayName: m.DisplayName, Source: "namespace", Status: firstNonEmpty(m.Status, "unknown"),
+			Ready: m.Status == "Running", Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
+		})
+	}
+	var maas struct {
+		Data []maasModel `json:"data"`
+	}
+	if err := a.call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
+		slog.Debug("no Models as a Service for the playground", "project", ns, "error", err)
+	} else {
+		for _, m := range maas.Data {
+			if m.ID == "" {
+				continue
+			}
+			st := "Not ready"
+			if m.Ready {
+				st = "Ready"
+			}
+			out = append(out, types.PlaygroundModel{
+				Name: m.ID, DisplayName: m.DisplayName, Source: "maas", Status: st, Ready: m.Ready,
+				Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
+			})
+		}
+	}
+	if len(out) > playgroundMaxModels {
+		out = out[:playgroundMaxModels]
+	}
+	return out, nil
+}
+
+// --- what this tool requested --------------------------------------------------------
+
+// The projects this tool requested a playground in are recorded in its own
+// namespace, in the snapshot ConfigMap's data key "playgrounds", written by
+// server-side apply under a field manager of its own (as the recorded
+// operator Subscription is, snapshot.go): the RBAC is that ConfigMap's
+// existing patch grant, and create when it does not exist yet.
+const (
+	playgroundRecordKey     = "playgrounds"
+	playgroundRecordManager = "rhoai-nightly-updater-playgrounds"
+)
+
+// playgroundRecord is one project's entry.
+type playgroundRecord struct {
+	RequestedAt string `json:"requestedAt"`
+	By          string `json:"by,omitempty"`
+}
+
+// readPlaygroundRecords returns the recorded projects (none when nothing is
+// recorded).
+func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
+	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
+	if IsK8sError(err, 404) {
+		return map[string]playgroundRecord{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read this tool's playground records: %w", err)
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &cm); err != nil {
+		return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
+	}
+	out := map[string]playgroundRecord{}
+	if raw := cm.Data[playgroundRecordKey]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			return nil, fmt.Errorf("parse this tool's playground records: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// writePlaygroundRecords applies the whole record (operations hold the
+// cluster lock, so read-change-write does not race another writer).
+func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) error {
+	data, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+	ns := getActivityNamespace()
+	cm, _ := json.Marshal(map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
+		"data":       map[string]interface{}{playgroundRecordKey: string(data)},
+	})
+	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
+	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+		return fmt.Errorf("record this tool's playgrounds: %w", err)
+	}
+	return nil
+}
+
+func setPlaygroundRecord(c *Client, project string, requested bool) error {
+	records, err := readPlaygroundRecords(c)
+	if err != nil {
+		return err
+	}
+	if _, has := records[project]; has == requested {
+		return nil
+	}
+	if requested {
+		records[project] = playgroundRecord{RequestedAt: time.Now().UTC().Format(time.RFC3339), By: getUser(c)}
+	} else {
+		delete(records, project)
+	}
+	return writePlaygroundRecords(c, records)
+}
+
+// --- cluster parts (ServiceAccount reads) -------------------------------------------
+
+// playgroundComponent is the DataScienceCluster component that runs the
+// playground's server operator: ogx, called llamastackoperator before the
+// rename. Whichever the DataScienceCluster names is used.
+var playgroundComponent = featureComponent{feature: "The Gen AI playground", keys: []string{"ogx", "llamastackoperator"}}
+
+// componentReadyCondition reads the DataScienceCluster's "<component>Ready"
+// condition (OGXReady, LlamaStackOperatorReady) of the first component key
+// it reports: "True", "False" or "" (not reported), with its message.
+func componentReadyCondition(dsc map[string]interface{}, keys []string) (string, string) {
+	status, _ := dsc["status"].(map[string]interface{})
+	conds, _ := status["conditions"].([]interface{})
+	for _, key := range keys {
+		for _, raw := range conds {
+			cond, _ := raw.(map[string]interface{})
+			if t, _ := cond["type"].(string); !strings.EqualFold(t, key+"Ready") {
+				continue
+			}
+			s, _ := cond["status"].(string)
+			msg, _ := cond["message"].(string)
+			if s != "True" && s != "False" {
+				s = ""
+			}
+			return s, msg
+		}
+	}
+	return "", ""
+}
+
+// genAIUIDeployment is the dashboard's Gen AI studio backend, which serves
+// the gen-ai API.
+const genAIUIDeployment = "gen-ai-ui"
+
+// genAIUIState reads Deployment gen-ai-ui: "available", "unavailable",
+// "missing", or "" when it cannot be read.
+func genAIUIState(c *Client) string {
+	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", appsNamespace(c), genAIUIDeployment))
+	if IsK8sError(err, 404) {
+		return "missing"
+	}
+	if err != nil {
+		slog.Debug("cannot read the gen-ai-ui Deployment", "error", err)
+		return ""
+	}
+	var d struct {
+		Status struct {
+			Conditions []k8sCondition `json:"conditions"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(body, &d) != nil {
+		return ""
+	}
+	if cond, ok := findCondition(d.Status.Conditions, "Available"); ok {
+		if cond.Status == "True" {
+			return "available"
+		}
+		return "unavailable"
+	}
+	return ""
+}
+
+// playgroundClusterParts fills what the ServiceAccount reads.
+func playgroundClusterParts(c *Client, st *types.PlaygroundStatus) {
+	if dsc, err := readFirstDSC(c); err == nil {
+		st.Blocked = componentBlock(dsc, playgroundComponent)
+		st.OperatorReady, st.OperatorMessage = componentReadyCondition(dsc.Object, playgroundComponent.keys)
+	} else {
+		slog.Debug("cannot read the DataScienceCluster for the playground", "error", err)
+	}
+	st.GenAIUI = genAIUIState(c)
+}
+
+// --- status --------------------------------------------------------------------------
+
+var playgroundStatusCache = newLRU[string, *types.PlaygroundStatus](64)
+
+// playgroundStatusGen is part of every cache key: a change bumps it, so
+// the next status reads afresh.
+var playgroundStatusGen atomic.Int64
+
+// PurgePlaygroundStatus drops cached playground status (after a change).
+func PurgePlaygroundStatus() { playgroundStatusGen.Add(1) }
+
+func tokenKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:8])
+}
+
+// apiProblem explains an error of the gen-ai API for people, with its kind.
+func apiProblem(err error) (string, string) {
+	if e, ok := asGenAIError(err); ok {
+		switch e.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return fmt.Sprintf("The dashboard's gen-ai API refused the request (HTTP %d: %s).", e.Status, firstNonEmpty(e.Message, http.StatusText(e.Status))), "forbidden"
+		case http.StatusNotFound:
+			return fmt.Sprintf("This RHOAI release's dashboard gen-ai API differs from the one this tool knows: %s %s answered 404 (%s). Use the playground from the dashboard's Gen AI studio instead.", e.Method, e.Path, firstNonEmpty(e.Message, "not found")), "api_missing"
+		}
+		return fmt.Sprintf("The dashboard's gen-ai API answered an error: %v.", err), "api_error"
+	}
+	return fmt.Sprintf("The dashboard's gen-ai API cannot be reached: %v.", err), "unreachable"
+}
+
+// playgroundAPI is the API for a request, or why it cannot be used.
+func playgroundAPI(c *Client, token string) (genAIAPI, string, string) {
+	if token == "" {
+		return genAIAPI{}, "No token is available to call the dashboard's gen-ai API with (the updater's ServiceAccount token could not be read).", "no_token"
+	}
+	base := genAIBaseURL(c)
+	if base == "" {
+		return genAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
+	}
+	return genAIAPI{ctx: c.ctx, base: base, token: token}, "", ""
+}
+
+// playgroundItem is a playground (srv, nil for none) in a project as the
+// page shows it.
+func playgroundItem(project string, srv *genAIServer, requested bool) types.PlaygroundState {
+	s := types.PlaygroundState{Requested: requested}
+	s.Namespace = project
+	s.ManagedByTool = requested
+	if srv == nil {
+		return s
+	}
+	s.Name = srv.Name
+	s.Phase = srv.Phase
+	s.Deployed = true
+	switch srv.Phase {
+	case "Ready":
+		s.Ready = true
+		s.Message = "Ready"
+	case "Failed":
+		s.TerminalError = true
+		s.Message = "The playground's server failed to start (phase Failed). The events of project " + project + " and its playground pods say why; delete it and set it up again."
+	case "Terminating":
+		s.Terminating = true
+		s.Message = "Terminating"
+	case "Pending", "Initializing":
+		s.Message = "Starting (phase " + srv.Phase + ")"
+	case "":
+		s.HealthUnknown = true
+		s.Message = "The dashboard reports no phase for it"
+	default:
+		s.HealthUnknown = true
+		s.Message = "The dashboard reports phase " + srv.Phase
+	}
+	return s
+}
+
+// GetPlaygroundStatus reports the playground feature: the cluster parts,
+// the playgrounds in the data science projects, and, for project, the
+// models it can use. token is what the gen-ai API is called with.
+func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundStatus, error) {
+	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(token), project)
+	if st, ok := playgroundStatusCache.Get(key); ok {
+		return st, nil
+	}
+	st := &types.PlaygroundStatus{Project: project}
+	projects, err := GetDSProjects(c)
+	if err != nil {
+		return nil, err
+	}
+	if project != "" && !containsString(projects, project) {
+		return nil, fmt.Errorf("project '%s' is not a data science project", project)
+	}
+	records, err := readPlaygroundRecords(c)
+	if err != nil {
+		return nil, err
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); playgroundClusterParts(c, st) }()
+	api, problem, code := playgroundAPI(c, token)
+	if problem != "" {
+		st.APIProblem, st.APICode = problem, code
+		wg.Wait()
+		for p := range records {
+			st.Items = append(st.Items, playgroundItem(p, nil, true))
+		}
+		sortPlaygrounds(st.Items)
+		return st, nil
+	}
+	// The selected project first: its answer says whether the API works.
+	sort.SliceStable(projects, func(i, j int) bool { return projects[i] == project && projects[j] != project })
+	if len(projects) > playgroundStatusMaxProjects {
+		projects, st.Truncated = projects[:playgroundStatusMaxProjects], true
+	}
+	var mu sync.Mutex
+	servers := map[string]*genAIServer{}
+	var firstErr error
+	sem := make(chan struct{}, playgroundStatusParallel)
+	var pwg sync.WaitGroup
+	for _, p := range projects {
+		pwg.Add(1)
+		go func() {
+			defer pwg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			srv, err := api.playgroundStatus(p)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				// A project the caller may not see answers 403: no
+				// playground to show there.
+				if s := genAIStatus(err); (s != http.StatusForbidden && s != http.StatusUnauthorized) || p == project {
+					if firstErr == nil {
+						firstErr = err
+					}
+				}
+				return
+			}
+			servers[p] = srv
+		}()
+	}
+	if project != "" {
+		pwg.Add(1)
+		go func() {
+			defer pwg.Done()
+			models, err := api.listPlaygroundModels(project)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				st.ModelsProblem, _ = apiProblem(err)
+				if genAIStatus(err) == http.StatusNotFound {
+					st.APIProblem, st.APICode = apiProblem(err)
+				}
+				return
+			}
+			st.Models = models
+		}()
+	}
+	pwg.Wait()
+	wg.Wait()
+	if firstErr != nil && st.APIProblem == "" {
+		st.APIProblem, st.APICode = apiProblem(firstErr)
+	}
+	seen := map[string]bool{}
+	for p, srv := range servers {
+		_, requested := records[p]
+		if srv != nil || requested {
+			st.Items = append(st.Items, playgroundItem(p, srv, requested))
+			seen[p] = true
+		}
+	}
+	for p := range records {
+		if !seen[p] && containsString(projects, p) {
+			if _, read := servers[p]; !read {
+				// Its state could not be read: unknown, not absent.
+				item := playgroundItem(p, &genAIServer{}, true)
+				item.Message = "Its state could not be read from the dashboard"
+				st.Items = append(st.Items, item)
+			}
+		}
+	}
+	sortPlaygrounds(st.Items)
+	playgroundStatusCache.Add(key, st, playgroundStatusTTL)
+	return st, nil
+}
+
+func sortPlaygrounds(items []types.PlaygroundState) {
+	sort.Slice(items, func(i, j int) bool { return items[i].Namespace < items[j].Namespace })
+}
+
+// --- the operation -------------------------------------------------------------------
+
+var playgroundProjectRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// ValidatePlaygroundRequest returns why req cannot run, or "".
+func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
+	switch req.Action {
+	case "setup", "teardown":
+	default:
+		return "action must be setup or teardown"
+	}
+	if !playgroundProjectRegex.MatchString(req.Project) {
+		return "invalid project name"
+	}
+	if req.Action == "teardown" && len(req.Models) > 0 {
+		return "a teardown takes no models"
+	}
+	if len(req.Models) > playgroundMaxModels {
+		return fmt.Sprintf("at most %d models", playgroundMaxModels)
+	}
+	seen := map[string]bool{}
+	for _, m := range req.Models {
+		if m.Source != "namespace" && m.Source != "maas" {
+			return "a model's source must be namespace or maas"
+		}
+		if m.Name == "" || len(m.Name) > 253 || strings.ContainsAny(m.Name, " \t\n\"'\\") {
+			return "invalid model name"
+		}
+		if seen[m.Source+"/"+m.Name] {
+			return "a model is listed twice"
+		}
+		seen[m.Source+"/"+m.Name] = true
+	}
+	return ""
+}
+
+// playgroundRun is one streamed playground operation.
+type playgroundRun struct {
+	c       *Client
+	api     genAIAPI
+	emit    func(UpdateStepEvent)
+	logs    []string
+	project string
+	action  string
+}
+
+func (p *playgroundRun) step(id, status, msg string) {
+	p.logs = append(p.logs, msg)
+	if p.emit != nil {
+		p.emit(UpdateStepEvent{Step: id, Status: status, Message: msg})
+	}
+}
+
+func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationResponse, error) {
+	if p.emit != nil {
+		p.emit(UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
+	}
+	p.logs = append(p.logs, msg)
+	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project, "user", getUser(p.c))
+	p.record(fmt.Sprintf("project=%s (%s)", p.project, activity), false)
+	return &types.OperationResponse{Success: false, Message: msg, Logs: p.logs, ErrorCode: code}, nil
+}
+
+func (p *playgroundRun) record(detail string, success bool) {
+	RecordActivity(p.c, types.ActivityEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		User:      getUser(p.c),
+		Action:    p.action + "-playground",
+		Detail:    detail,
+		Success:   success,
+	})
+}
+
+// RunPlayground sets up or deletes the Gen AI playground in a project
+// through the dashboard's gen-ai API, as one operation with streamed
+// steps: setup "check", "install", "ready"; teardown "delete", "gone".
+// token is what the gen-ai API is called with.
+func RunPlayground(c *Client, req types.PlaygroundRequest, token string, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+	defer PurgePlaygroundStatus()
+	p := &playgroundRun{c: c, emit: onStep, project: req.Project, action: req.Action}
+	first := "check"
+	if req.Action == "teardown" {
+		first = "delete"
+	}
+	if problem := ValidatePlaygroundRequest(req); problem != "" {
+		return p.fail(first, problem, "validation", "invalid request")
+	}
+	api, problem, code := playgroundAPI(c, token)
+	if problem != "" {
+		return p.fail(first, problem, code, code)
+	}
+	p.api = api
+	if req.Action == "teardown" {
+		return p.teardown()
+	}
+	return p.setup(req.Models)
+}
+
+// TeardownPlayground deletes the playground this tool requested in project
+// (Clean up).
+func TeardownPlayground(c *Client, project, token string) (*types.OperationResponse, error) {
+	return RunPlayground(c, types.PlaygroundRequest{Action: "teardown", Project: project}, token, nil)
+}
+
+// failAPI stops on a gen-ai API error with its explanation.
+func (p *playgroundRun) failAPI(id string, err error, activity string) (*types.OperationResponse, error) {
+	msg, code := apiProblem(err)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		code = "cancelled"
+	}
+	return p.fail(id, msg, code, activity)
+}
+
+// checkPlayground is the setup's first step: everything the dashboard's
+// install needs, checked before anything is written. It returns the
+// models to install.
+func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]types.PlaygroundModelRef, *genAIServer, *types.OperationResponse) {
+	stop := func(msg, code, activity string) ([]types.PlaygroundModelRef, *genAIServer, *types.OperationResponse) {
+		res, _ := p.fail("check", msg, code, activity)
+		return nil, nil, res
+	}
+	if _, msg, code := projectNamespace(p.c, p.project); msg != "" {
+		return stop(strings.Replace(msg, "would not show a model there", "would not offer a playground there", 1), code, "project")
+	}
+	var st types.PlaygroundStatus
+	playgroundClusterParts(p.c, &st)
+	if st.Blocked != nil {
+		return stop(st.Blocked.Reason, "component_off", "component off")
+	}
+	if st.OperatorReady == "False" {
+		return stop(fmt.Sprintf("The playground's operator is not ready: the DataScienceCluster reports it not ready (%s). The dashboard cannot create a playground until it is; the Components page shows the details.", firstNonEmpty(st.OperatorMessage, "no message")), "component_not_ready", "operator not ready")
+	}
+	switch st.GenAIUI {
+	case "missing":
+		return stop("The dashboard's Gen AI studio is not deployed on this cluster (no Deployment gen-ai-ui), so it has no playground to set up. A cluster-admin turns Gen AI studio on in the dashboard's settings (OdhDashboardConfig genAiStudio).", "component_off", "gen-ai-ui missing")
+	case "unavailable":
+		return stop("The dashboard's Gen AI studio backend (Deployment gen-ai-ui) is not available. Wait until it is running; the Components page shows its pods.", "component_not_ready", "gen-ai-ui unavailable")
+	}
+	var notes []string
+	if st.OperatorReady == "" {
+		notes = append(notes, "the playground operator's readiness is not reported (unknown)")
+	}
+	if st.GenAIUI == "" {
+		notes = append(notes, "the Gen AI studio backend's state could not be read")
+	}
+	srv, err := p.api.playgroundStatus(p.project)
+	if err != nil {
+		msg, code := apiProblem(err)
+		return stop(msg, code, "status")
+	}
+	if srv != nil {
+		records, err := readPlaygroundRecords(p.c)
+		if err != nil {
+			return stop(fmt.Sprintf("Cannot read this tool's records: %v.", err), errorCodeFromK8sErr(err), "records")
+		}
+		if _, ours := records[p.project]; !ours {
+			return stop(fmt.Sprintf("Project %s already has a playground (%s), which this tool did not set up. Use it from the dashboard's Gen AI studio; this tool does not change it.", p.project, firstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
+		}
+		if srv.Phase == "Terminating" {
+			return stop(fmt.Sprintf("The playground in %s is being deleted. Wait until it is gone, then set it up again.", p.project), "terminating", "terminating")
+		}
+	}
+	models, err := p.api.listPlaygroundModels(p.project)
+	if err != nil {
+		msg, code := apiProblem(err)
+		return stop(msg, code, "models")
+	}
+	var notReady []string
+	for _, m := range models {
+		if m.Source == "namespace" && !m.Ready {
+			notReady = append(notReady, fmt.Sprintf("%s (%s)", m.Name, m.Status))
+		}
+	}
+	if len(notReady) > 0 {
+		return stop(fmt.Sprintf("Not every model deployed for Gen AI in %s is ready: %s. The dashboard's install checks each of them and fails while one is not ready. Wait until they are ready, or delete the ones you do not need; then set up again.", p.project, strings.Join(notReady, ", ")), "model_not_ready", "model not ready")
+	}
+	var chosen []types.PlaygroundModelRef
+	if len(wanted) == 0 {
+		for _, m := range models {
+			if m.Source == "namespace" && m.Ready && m.Chat {
+				chosen = append(chosen, types.PlaygroundModelRef{Name: m.Name, Source: m.Source})
+			}
+		}
+	} else {
+		for _, w := range wanted {
+			var found *types.PlaygroundModel
+			for i := range models {
+				if models[i].Name == w.Name && models[i].Source == w.Source {
+					found = &models[i]
+				}
+			}
+			switch {
+			case found == nil:
+				return stop(fmt.Sprintf("The dashboard does not offer model %s in %s. Reload the page and choose again.", w.Name, p.project), "validation", "unknown model")
+			case !found.Ready:
+				return stop(fmt.Sprintf("Model %s is not ready (%s). Choose a ready model.", w.Name, found.Status), "model_not_ready", "model not ready")
+			case !found.Chat:
+				return stop(fmt.Sprintf("Model %s is an embedding model; the playground chats with chat models only.", w.Name), "validation", "embedding model")
+			}
+			chosen = append(chosen, w)
+		}
+	}
+	if len(chosen) == 0 {
+		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first (or choose a Models as a Service model, if you have a subscription).", p.project), "no_model", "no model")
+	}
+	names := make([]string, len(chosen))
+	for i, m := range chosen {
+		names[i] = m.Name
+	}
+	msg := fmt.Sprintf("Ready to set up: %s with %s.", p.project, strings.Join(names, ", "))
+	if len(notes) > 0 {
+		msg += " Note: " + strings.Join(notes, "; ") + "."
+	}
+	p.step("check", "success", msg)
+	return chosen, srv, nil
+}
+
+// alreadyExists finds `"<name>" already exists` in a dashboard message.
+var alreadyExistsName = regexp.MustCompile(`"([a-z0-9][-a-z0-9.]*)" already exists`)
+
+func (p *playgroundRun) installError(err error) (*types.OperationResponse, error) {
+	e, ok := asGenAIError(err)
+	if !ok || e.Status != http.StatusBadRequest || !strings.Contains(strings.ToLower(e.Message), "already exists") {
+		return p.failAPI("install", err, "install failed")
+	}
+	if strings.Contains(e.Message, "OGXServer already exists") || strings.Contains(strings.ToLower(e.Message), "server already exists") {
+		return p.fail("install", fmt.Sprintf("Project %s has a playground server the dashboard cannot reuse (made by hand, or by an earlier release): %s. Delete it in the dashboard's Gen AI studio, then set up again.", p.project, e.Message), "conflict", "server exists")
+	}
+	cmd := fmt.Sprintf("oc get configmap -n %s -l opendatahub.io/dashboard=true", p.project)
+	if m := alreadyExistsName.FindStringSubmatch(e.Message); m != nil {
+		cmd = fmt.Sprintf("oc delete configmap -n %s %s", p.project, m[1])
+	}
+	return p.fail("install", fmt.Sprintf("An earlier playground in %s left objects behind without its server, and the dashboard cannot install over them (it answered: %s). This tool did not create them, so it does not delete them. Someone with edit rights in %s removes them, for example: %s (repeat for each one the dashboard names), then set up again.", p.project, e.Message, p.project, cmd), "leftovers", "leftovers")
+}
+
+func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.OperationResponse, error) {
+	models, existing, stopped := p.checkPlayground(wanted)
+	if stopped != nil {
+		return stopped, nil
+	}
+	if existing == nil {
+		// Recorded before the install, so a playground whose install
+		// outlives this process is still known as this tool's.
+		if err := setPlaygroundRecord(p.c, p.project, true); err != nil {
+			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "record")
+		}
+		body := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}}
+		list := make([]map[string]string, len(models))
+		for i, m := range models {
+			list[i] = map[string]string{"model_name": m.Name, "model_source_type": m.Source, "model_type": "llm"}
+		}
+		body["models"] = list
+		p.step("install", "running", fmt.Sprintf("Asking the dashboard to set up the playground in %s...", p.project))
+		// Each attempt runs to its end; the retries stop at the bound.
+		var installErr error
+		deadline := clk.Now().Add(PlaygroundInstallRetryTimeout)
+		said := false
+		for {
+			installErr = p.api.call(http.MethodPost, "/lsd/install", p.project, body, nil)
+			if genAIStatus(installErr) != http.StatusConflict || !clk.Now().Before(deadline) {
+				break
+			}
+			if !said {
+				said = true
+				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, PlaygroundInstallRetryPoll, clockText(PlaygroundInstallRetryTimeout)))
+			}
+			if err := clk.Sleep(p.c.ctx, PlaygroundInstallRetryPoll); err != nil {
+				installErr = err
+				break
+			}
+		}
+		if installErr != nil {
+			if genAIStatus(installErr) == http.StatusConflict {
+				p.forgetIfAbsent()
+				return p.fail("install", fmt.Sprintf("The previous playground's database in %s was still being removed after %s, so the dashboard did not set up a new one. Set up again once it is gone.", p.project, clockText(PlaygroundInstallRetryTimeout)), "in_progress", "still removing")
+			}
+			p.forgetIfAbsent()
+			return p.installError(installErr)
+		}
+		p.step("install", "success", fmt.Sprintf("The dashboard is setting up the playground in %s.", p.project))
+	} else {
+		p.step("install", "success", fmt.Sprintf("The playground in %s exists (phase %s); waiting for it.", p.project, firstNonEmpty(existing.Phase, "unknown")))
+	}
+	p.step("ready", "running", "Waiting until the playground is ready (typically 1 to 2 minutes)...")
+	var last, problem string
+	var srv *genAIServer
+	ready, err := waitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
+		s, err := p.api.with(cc.ctx).playgroundStatus(p.project)
+		if err != nil {
+			return false, err
+		}
+		srv = s
+		switch {
+		case s == nil:
+			problem = "the playground disappeared while it was starting (someone deleted it)."
+			return true, nil
+		case s.Phase == "Ready":
+			return true, nil
+		case s.Phase == "Failed":
+			problem = "the playground's server reports phase Failed. The events of project " + p.project + " and its playground pods say why; delete it and set it up again."
+			return true, nil
+		}
+		if msg := fmt.Sprintf("The playground is starting (phase %s)...", firstNonEmpty(s.Phase, "not reported")); msg != last {
+			last = msg
+			p.step("ready", "running", msg)
+		}
+		return false, nil
+	})
+	switch {
+	case err != nil:
+		return p.failAPI("ready", err, "wait failed")
+	case problem != "":
+		return p.fail("ready", "The dashboard set up the playground, but "+problem, "not_ready", "not ready")
+	case !ready:
+		return p.fail("ready", fmt.Sprintf("The playground in %s is not ready after %s (phase %s). It may still start: the tab shows its state.", p.project, clockText(PlaygroundReadyTimeout), firstNonEmpty(srvPhase(srv), "unknown")), "timeout", "timeout")
+	}
+	p.step("ready", "success", fmt.Sprintf("The playground in %s is ready.", p.project))
+	p.record("project="+p.project, true)
+	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The playground in %s is ready. Open it in the dashboard's Gen AI studio.", p.project), Logs: p.logs}, nil
+}
+
+func srvPhase(s *genAIServer) string {
+	if s == nil {
+		return ""
+	}
+	return s.Phase
+}
+
+// forgetIfAbsent clears the record after a failed install that left no
+// playground.
+func (p *playgroundRun) forgetIfAbsent() {
+	if srv, err := p.api.playgroundStatus(p.project); err == nil && srv == nil {
+		if err := setPlaygroundRecord(p.c, p.project, false); err != nil {
+			slog.Warn("cannot clear the playground record", "project", p.project, "error", err)
+		}
+	}
+}
+
+func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
+	records, err := readPlaygroundRecords(p.c)
+	if err != nil {
+		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), errorCodeFromK8sErr(err), "records")
+	}
+	_, ours := records[p.project]
+	srv, err := p.api.playgroundStatus(p.project)
+	if err != nil {
+		return p.failAPI("delete", err, "status")
+	}
+	if srv == nil {
+		if ours {
+			if err := setPlaygroundRecord(p.c, p.project, false); err != nil {
+				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %v.", p.project, err), errorCodeFromK8sErr(err), "record")
+			}
+		}
+		p.record("project="+p.project+" (none)", true)
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No playground in %s; nothing to delete.", p.project), Logs: p.logs}, nil
+	}
+	if !ours {
+		return p.fail("delete", fmt.Sprintf("The playground in %s was not set up by this tool, so it was not deleted. Delete it in the dashboard's Gen AI studio if you no longer need it.", p.project), "not_managed", "not managed")
+	}
+	if srv.Name == "" {
+		return p.fail("delete", fmt.Sprintf("The dashboard reports a playground in %s without a name, so it cannot be deleted through its API. Delete it in the dashboard's Gen AI studio.", p.project), "unknown", "no name")
+	}
+	if srv.Phase != "Terminating" {
+		p.step("delete", "running", fmt.Sprintf("Asking the dashboard to delete the playground %s in %s...", srv.Name, p.project))
+		if err := p.api.call(http.MethodDelete, "/lsd/delete", p.project, map[string]string{"name": srv.Name}, nil); err != nil {
+			return p.failAPI("delete", err, "delete failed")
+		}
+	}
+	p.step("delete", "success", fmt.Sprintf("The dashboard is deleting the playground in %s.", p.project))
+	p.step("gone", "running", "Waiting until the playground is gone...")
+	gone, err := waitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
+		s, err := p.api.with(cc.ctx).playgroundStatus(p.project)
+		return err == nil && s == nil, err
+	})
+	if err != nil {
+		return p.failAPI("gone", err, "wait failed")
+	}
+	if !gone {
+		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, clockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
+	}
+	if err := setPlaygroundRecord(p.c, p.project, false); err != nil {
+		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, templateHint(err)), errorCodeFromK8sErr(err), "record")
+	}
+	p.step("gone", "success", fmt.Sprintf("The playground in %s is gone.", p.project))
+	p.record("project="+p.project, true)
+	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Playground deleted from %s: the dashboard removed its server, configuration and database. The project and its models stay.", p.project), Logs: p.logs}, nil
+}

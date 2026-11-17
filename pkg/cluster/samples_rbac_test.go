@@ -43,7 +43,7 @@ func otherServerRequests() []rbacRequest {
 	for _, rt := range kfpFakeRoutes {
 		out = append(out, rbacRequest{Verb: rt.verb, Group: "datasciencepipelinesapplications.opendatahub.io", Resource: "datasciencepipelinesapplications/api", Namespace: anyNS, Name: dspaName, NamedReview: true, Site: "KFP " + rt.method + " " + rt.pattern})
 	}
-	return out
+	return append(out, playgroundServerRequests()...)
 }
 
 // templateAllow decides an access review with deploy/template.yaml's rules.

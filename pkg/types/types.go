@@ -723,6 +723,89 @@ type ModelsRequest struct {
 	ReleasedImage bool `json:"releasedImage,omitempty"`
 }
 
+// PlaygroundStatus is what the Gen AI playground feature needs and the
+// playgrounds in data science projects (GET /api/resources/playground).
+// The cluster parts are read with the app's ServiceAccount; everything about
+// a project's playground and models comes from the RHOAI dashboard's own
+// gen-ai API.
+type PlaygroundStatus struct {
+	// Blocked says why no playground can be set up (the DataScienceCluster
+	// does not run the playground's operator), or is nil.
+	Blocked *ComponentBlock `json:"blocked,omitempty"`
+	// OperatorReady is the DataScienceCluster's readiness condition of that
+	// component: "True", "False", or "" when not reported (unknown).
+	OperatorReady string `json:"operatorReady,omitempty"`
+	// OperatorMessage is that condition's message.
+	OperatorMessage string `json:"operatorMessage,omitempty"`
+	// GenAIUI is the dashboard's Gen AI studio backend (Deployment
+	// gen-ai-ui): "available", "unavailable", "missing", or "" (unknown).
+	GenAIUI string `json:"genAiUi,omitempty"`
+	// APIProblem says why the dashboard's gen-ai API cannot be used now (no
+	// dashboard address, the API answered something unexpected, it refused
+	// the request), or is "".
+	APIProblem string `json:"apiProblem,omitempty"`
+	// APICode is the problem's kind: "no_token", "no_dashboard",
+	// "api_missing", "forbidden", "unreachable", or "".
+	APICode string `json:"apiCode,omitempty"`
+	// Items are the playgrounds in the data science projects, and the
+	// projects where this tool requested one.
+	Items []PlaygroundState `json:"items,omitempty"`
+	// Project is the project Models are listed for ("" for none).
+	Project string `json:"project,omitempty"`
+	// Models are the project's models the playground can use, as the
+	// dashboard lists them (its own models, then Models as a Service).
+	Models []PlaygroundModel `json:"models,omitempty"`
+	// ModelsProblem says why the project's models could not be listed.
+	ModelsProblem string `json:"modelsProblem,omitempty"`
+	// Truncated is true when the cluster has more data science projects than
+	// the status reads; the playgrounds of the others are not shown.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// PlaygroundState is the playground in a project (Namespace), as the
+// dashboard reports it. ManagedByTool is true when this tool requested it.
+type PlaygroundState struct {
+	ResourceState
+	// Phase is the phase the dashboard reports ("Ready", "Initializing",
+	// "Failed", ...), or "" when it reports none.
+	Phase string `json:"phase,omitempty"`
+	// Requested is true when this tool's record says it requested a
+	// playground in the project (also when none exists any more).
+	Requested bool `json:"requested,omitempty"`
+}
+
+// PlaygroundModel is a model the dashboard offers the playground.
+type PlaygroundModel struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName,omitempty"`
+	// Source is "namespace" (a model deployed in the project) or "maas"
+	// (Models as a Service).
+	Source string `json:"source"`
+	// Status is the dashboard's word for a project model ("Running", ...);
+	// MaaS models report only ready or not.
+	Status string `json:"status,omitempty"`
+	Ready  bool   `json:"ready"`
+	// Chat is false for an embedding model, which the playground cannot
+	// chat with.
+	Chat bool `json:"chat"`
+}
+
+// PlaygroundModelRef is a model a playground setup uses.
+type PlaygroundModelRef struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+}
+
+// PlaygroundRequest is the body of POST /api/resources/playground/stream.
+type PlaygroundRequest struct {
+	// Action is "setup" or "teardown".
+	Action  string `json:"action"`
+	Project string `json:"project"`
+	// Models (setup only) are the models to use; none means every ready
+	// chat model deployed in the project.
+	Models []PlaygroundModelRef `json:"models,omitempty"`
+}
+
 // ComponentBlock is a DataScienceCluster component a feature needs that is
 // not turned on.
 type ComponentBlock struct {
@@ -753,6 +836,9 @@ type CleanupRequest struct {
 	// InferenceGateway deletes the inference gateway after them.
 	Models           []string `json:"models,omitempty"`
 	InferenceGateway bool     `json:"inferenceGateway,omitempty"`
+	// Playgrounds are the projects whose playground (requested by this
+	// tool) goes, before the models it uses.
+	Playgrounds []string `json:"playgrounds,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/minio/teardown.

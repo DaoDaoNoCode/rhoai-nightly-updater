@@ -17,7 +17,7 @@ func fakeCleanUp(t *testing.T, run func(req types.CleanupRequest, onStep func(cl
 	orig := runCleanUp
 	t.Cleanup(func() { runCleanUp = orig })
 	var got []types.CleanupRequest
-	runCleanUp = func(_ *cluster.Client, req types.CleanupRequest, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+	runCleanUp = func(_ *cluster.Client, req types.CleanupRequest, _ string, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		got = append(got, req)
 		return run(req, onStep), nil
 	}
@@ -31,15 +31,17 @@ func TestCleanupStream_RefusesBadRequestsBeforeAnything(t *testing.T) {
 		return &types.OperationResponse{Success: true}
 	})
 	for name, body := range map[string]string{
-		"nothing selected":          `{}`,
-		"invalid project":           `{"pipelineServers":["Bad_Name"]}`,
-		"a project twice":           `{"pipelineServers":["a","a"]}`,
-		"namespace without storage": `{"mlflow":true,"deleteNamespace":true}`,
-		"not JSON":                  `{`,
-		"too many pipeline servers": `{"pipelineServers":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
-		"invalid model project":     `{"models":["Bad_Name"]}`,
-		"a model project twice":     `{"models":["a","a"],"inferenceGateway":true}`,
-		"too many models":           `{"models":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
+		"nothing selected":           `{}`,
+		"invalid project":            `{"pipelineServers":["Bad_Name"]}`,
+		"a project twice":            `{"pipelineServers":["a","a"]}`,
+		"namespace without storage":  `{"mlflow":true,"deleteNamespace":true}`,
+		"not JSON":                   `{`,
+		"too many pipeline servers":  `{"pipelineServers":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
+		"invalid model project":      `{"models":["Bad_Name"]}`,
+		"a model project twice":      `{"models":["a","a"],"inferenceGateway":true}`,
+		"too many models":            `{"models":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
+		"invalid playground project": `{"playgrounds":["Bad_Name"]}`,
+		"a playground project twice": `{"playgrounds":["a","a"]}`,
 	} {
 		w := httptest.NewRecorder()
 		HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:"+strings.ReplaceAll(name, " ", "-"), body))

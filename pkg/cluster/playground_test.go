@@ -1,0 +1,499 @@
+package cluster
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+const testGenAIToken = "genai-secret-token"
+
+// genAIFake is the RHOAI dashboard's gen-ai API, with the response shapes
+// seen live on RHOAI 3.6: aaa/models {"data":[...]}, maas/models
+// {"object":"list","data":[...]}, lsd/status {"data":null} or
+// {"data":{"name","phase"}}, errors {"error":{"code","message"}}.
+type genAIFake struct {
+	t  *testing.T
+	mu sync.Mutex
+	// servers is each project's playground (absent: none).
+	servers map[string]*genAIServer
+	models  map[string]string // project -> aaa/models body
+	maas    string            // maas/models body ("" answers 404)
+	// startingReads is how many status reads a new playground reports
+	// Initializing before Ready; failPhase makes it report Failed instead.
+	startingReads int
+	failPhase     bool
+	reads         map[string]int
+	// conflicts is how many installs answer 409 first.
+	conflicts int
+	// installFail answers every install with this status and message.
+	installFail    int
+	installMessage string
+	// missing answers 404 to every path (an API that differs).
+	missing  bool
+	installs []map[string]interface{}
+	deletes  []string
+	auth     []string
+}
+
+func newGenAIFake(t *testing.T) *genAIFake {
+	return &genAIFake{t: t, servers: map[string]*genAIServer{}, models: map[string]string{}, reads: map[string]int{}, startingReads: 2}
+}
+
+func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.auth = append(g.auth, r.Header.Get("Authorization"))
+	ns := r.URL.Query().Get("namespace")
+	fail := func(status int, msg string) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": map[string]string{"code": http.StatusText(status), "message": msg}})
+	}
+	if g.missing {
+		fail(http.StatusNotFound, "the requested resource could not be found")
+		return
+	}
+	switch r.Method + " " + r.URL.Path {
+	case "GET /gen-ai/api/v1/aaa/models":
+		_, _ = io.WriteString(w, firstNonEmpty(g.models[ns], `{"data":[]}`))
+	case "GET /gen-ai/api/v1/maas/models":
+		if g.maas == "" {
+			fail(http.StatusNotFound, "not found")
+			return
+		}
+		_, _ = io.WriteString(w, g.maas)
+	case "GET /gen-ai/api/v1/lsd/status":
+		srv := g.servers[ns]
+		if srv == nil {
+			_, _ = io.WriteString(w, `{"data":null}`)
+			return
+		}
+		g.reads[ns]++
+		switch {
+		case srv.Phase == "Terminating":
+			delete(g.servers, ns)
+		case srv.Phase == "Initializing" && g.reads[ns] > g.startingReads:
+			srv.Phase = "Ready"
+			if g.failPhase {
+				srv.Phase = "Failed"
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]string{"name": srv.Name, "phase": srv.Phase, "version": "v1"}})
+	case "POST /gen-ai/api/v1/lsd/install":
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g.installs = append(g.installs, body)
+		if g.conflicts > 0 {
+			g.conflicts--
+			fail(http.StatusConflict, "previous pgvector resources are still being removed")
+			return
+		}
+		if g.installFail != 0 {
+			fail(g.installFail, g.installMessage)
+			return
+		}
+		g.servers[ns] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
+		_, _ = io.WriteString(w, `{"data":{"name":"lsd-genai-playground","httpStatus":"200"}}`)
+	case "DELETE /gen-ai/api/v1/lsd/delete":
+		var body struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g.deletes = append(g.deletes, body.Name)
+		if srv := g.servers[ns]; srv != nil && srv.Name == body.Name {
+			srv.Phase = "Terminating"
+		}
+		_, _ = io.WriteString(w, `{"data":"deleted"}`)
+	default:
+		fail(http.StatusNotFound, "no route "+r.URL.Path)
+	}
+}
+
+// playgroundEnv is a fake cluster with what a playground needs (the OGX
+// component Managed and ready, gen-ai-ui available, data science project
+// "proj" with a ready chat model) and the fake gen-ai API.
+type playgroundEnv struct {
+	k8s *resourceFake
+	c   *Client
+	g   *genAIFake
+}
+
+const (
+	testQwenModels = `{"data":[{"model_name":"qwen25-05b-instruct","model_id":"qwen25-05b-instruct","serving_runtime":"Distributed inference with llm-d","api_protocol":"REST","usecase":"chat","endpoints":["internal: https://x.svc.cluster.local/"],"status":"Running","display_name":"Qwen2.5 0.5B Instruct (CPU)","model_source_type":"namespace","capabilities":["text-generation"]}]}`
+	testMaaSModels = `{"object":"list","data":[{"id":"gpt-oss-20b","object":"model","ready":true,"capabilities":["text-generation"]},{"id":"publishers/llm/models/facebook/opt-125m","ready":false,"display_name":"Facebook OPT 125M (Simulated)"}]}`
+	testRecordPath = "/api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-snapshot"
+)
+
+func newPlaygroundEnv(t *testing.T) *playgroundEnv {
+	t.Helper()
+	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
+	PurgePlaygroundStatus()
+	k8s, c := newResourceFake(t)
+	g := newGenAIFake(t)
+	g.models["proj"] = testQwenModels
+	srv := httptest.NewTLSServer(http.HandlerFunc(g.serve))
+	t.Cleanup(srv.Close)
+	origBase, origClient := genAIBaseURL, genAIHTTPClient
+	genAIBaseURL = func(*Client) string { return srv.URL }
+	genAIHTTPClient = srv.Client()
+	t.Cleanup(func() { genAIBaseURL, genAIHTTPClient = origBase, origClient; PurgePlaygroundStatus() })
+	k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{
+		"spec":{"components":{"ogx":{"managementState":"Managed"}}},
+		"status":{"conditions":[{"type":"OGXReady","status":"True"}]}}`)
+	k8s.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/gen-ai-ui", `{"status":{"conditions":[{"type":"Available","status":"True"}]}}`)
+	k8s.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	k8s.putJSON("/api/v1/namespaces/other", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	return &playgroundEnv{k8s: k8s, c: c, g: g}
+}
+
+func (e *playgroundEnv) run(t *testing.T, req types.PlaygroundRequest) (*types.OperationResponse, []UpdateStepEvent) {
+	t.Helper()
+	var steps []UpdateStepEvent
+	res, err := RunPlayground(e.c, req, testGenAIToken, func(s UpdateStepEvent) { steps = append(steps, s) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range steps {
+		if strings.Contains(s.Message, testGenAIToken) {
+			t.Errorf("step %s shows the token: %s", s.Step, s.Message)
+		}
+	}
+	if strings.Contains(res.Message, testGenAIToken) || strings.Contains(strings.Join(res.Logs, "\n"), testGenAIToken) {
+		t.Errorf("the result shows the token: %+v", res)
+	}
+	return res, steps
+}
+
+func (e *playgroundEnv) records(t *testing.T) map[string]playgroundRecord {
+	t.Helper()
+	r, err := readPlaygroundRecords(e.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func setup(project string) types.PlaygroundRequest {
+	return types.PlaygroundRequest{Action: "setup", Project: project}
+}
+
+// Setup asks the dashboard to install with the project's ready chat models
+// (MaaS models are offered, not chosen by default), records the request,
+// and waits until the playground reports Ready; every call carries the
+// token it was given.
+func TestPlayground_SetupInstallsThroughTheDashboardAndWaitsForReady(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.maas = testMaaSModels
+	res, steps := e.run(t, setup("proj"))
+	if !res.Success {
+		t.Fatalf("got %+v", res)
+	}
+	if len(e.g.installs) != 1 {
+		t.Fatalf("installs: %d", len(e.g.installs))
+	}
+	body, _ := json.Marshal(e.g.installs[0])
+	if want := `{"enable_guardrails":false,"enable_tracing":false,"models":[{"model_name":"qwen25-05b-instruct","model_source_type":"namespace","model_type":"llm"}],"vector_stores":[]}`; string(body) != want {
+		t.Errorf("install body\n got %s\nwant %s", body, want)
+	}
+	for _, a := range e.g.auth {
+		if a != "Bearer "+testGenAIToken {
+			t.Fatalf("authorization %q", a)
+		}
+	}
+	if _, ok := e.records(t)["proj"]; !ok {
+		t.Error("the request is not recorded")
+	}
+	var ids []string
+	for _, s := range steps {
+		if s.Status == "success" {
+			ids = append(ids, s.Step)
+		}
+	}
+	if strings.Join(ids, " ") != "check install ready" {
+		t.Errorf("steps: %v", ids)
+	}
+}
+
+// A MaaS model is used when chosen.
+func TestPlayground_SetupWithAChosenMaaSModel(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.maas = testMaaSModels
+	req := setup("proj")
+	req.Models = []types.PlaygroundModelRef{{Name: "gpt-oss-20b", Source: "maas"}}
+	if res, _ := e.run(t, req); !res.Success {
+		t.Fatalf("got %+v", res)
+	}
+	models, _ := e.g.installs[0]["models"].([]interface{})
+	if m, _ := models[0].(map[string]interface{}); len(models) != 1 || m["model_name"] != "gpt-oss-20b" || m["model_source_type"] != "maas" {
+		t.Errorf("models %v", models)
+	}
+	// A MaaS model that is not ready is refused before the install.
+	PurgePlaygroundStatus()
+	delete(e.g.servers, "proj")
+	req.Models = []types.PlaygroundModelRef{{Name: "publishers/llm/models/facebook/opt-125m", Source: "maas"}}
+	res, _ := e.run(t, req)
+	if res.Success || res.ErrorCode != "model_not_ready" || len(e.g.installs) != 1 {
+		t.Fatalf("got %+v, installs %d", res, len(e.g.installs))
+	}
+}
+
+// While the previous playground's database is still being removed the
+// dashboard answers 409: the install is retried on the clock.
+func TestPlayground_SetupRetriesWhileThePreviousDatabaseIsRemoved(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.conflicts = 2
+	res, steps := e.run(t, setup("proj"))
+	if !res.Success || len(e.g.installs) != 3 {
+		t.Fatalf("got %+v after %d installs", res, len(e.g.installs))
+	}
+	found := false
+	for _, s := range steps {
+		found = found || strings.Contains(s.Message, "still being removed; trying again")
+	}
+	if !found {
+		t.Error("the retry is not reported")
+	}
+}
+
+// A 409 that does not clear stops the setup after the bound, and the
+// request is no longer recorded.
+func TestPlayground_SetupGivesUpOnAPersistentConflict(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.conflicts = 1 << 20
+	res, _ := e.run(t, setup("proj"))
+	if res.Success || res.ErrorCode != "in_progress" {
+		t.Fatalf("got %+v", res)
+	}
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("a request that created nothing is still recorded")
+	}
+}
+
+// Orphaned ConfigMaps of an earlier playground make the dashboard answer 400
+// "already exists": explained, with the command that removes the one it
+// names, and nothing deleted by this tool.
+func TestPlayground_SetupExplainsLeftovers(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.installFail, e.g.installMessage = http.StatusBadRequest, `failed to create ConfigMap: configmaps "llama-stack-config" already exists`
+	res, _ := e.run(t, setup("proj"))
+	if res.Success || res.ErrorCode != "leftovers" || !strings.Contains(res.Message, "oc delete configmap -n proj llama-stack-config") {
+		t.Fatalf("got %+v", res)
+	}
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("a failed install is still recorded")
+	}
+	for _, r := range e.k8s.requests {
+		if strings.HasPrefix(r, "DELETE") {
+			t.Errorf("deleted something: %s", r)
+		}
+	}
+}
+
+// The dashboard's install checks every model deployed for Gen AI in the
+// project: one that is not ready stops the setup before it.
+func TestPlayground_SetupNeedsEveryProjectModelReady(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.models["proj"] = `{"data":[` + strings.TrimSuffix(strings.TrimPrefix(testQwenModels, `{"data":[`), `]}`) + `,{"model_name":"deepseek","status":"Failed"}]}`
+	res, _ := e.run(t, setup("proj"))
+	if res.Success || res.ErrorCode != "model_not_ready" || !strings.Contains(res.Message, "deepseek (Failed)") || len(e.g.installs) != 0 {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+// No ready chat model (an embedding model does not count): the setup
+// points at the Models tab.
+func TestPlayground_SetupNeedsAChatModel(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.models["proj"] = `{"data":[{"model_name":"granite-embedding","status":"Running","usecase":"embedding","capabilities":["embedding"]}]}`
+	e.g.maas = testMaaSModels
+	res, _ := e.run(t, setup("proj"))
+	if res.Success || res.ErrorCode != "no_model" || !strings.Contains(res.Message, "Models tab") || len(e.g.installs) != 0 {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+// A playground this tool did not request is used as it is: setup and
+// delete refuse, and nothing is sent to change it.
+func TestPlayground_LeavesAPlaygroundItDidNotRequest(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+	if res, _ := e.run(t, setup("proj")); res.Success || res.ErrorCode != "not_managed" {
+		t.Fatalf("setup: %+v", res)
+	}
+	if res, _ := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"}); res.Success || res.ErrorCode != "not_managed" {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if len(e.g.installs)+len(e.g.deletes) != 0 {
+		t.Errorf("installs %d, deletes %v", len(e.g.installs), e.g.deletes)
+	}
+}
+
+// Delete asks the dashboard to delete the server it reports, waits until it
+// is gone, and clears the record.
+func TestPlayground_TeardownDeletesThroughTheDashboard(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup("proj")); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	res, steps := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"})
+	if !res.Success || strings.Join(e.g.deletes, ",") != "lsd-genai-playground" {
+		t.Fatalf("got %+v, deletes %v", res, e.g.deletes)
+	}
+	if e.g.servers["proj"] != nil {
+		t.Error("the playground is still there")
+	}
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("the record is still there")
+	}
+	if last := steps[len(steps)-1]; last.Step != "gone" || last.Status != "success" {
+		t.Errorf("last step %+v", last)
+	}
+	// Again: nothing left, nothing deleted.
+	if res, _ := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"}); !res.Success || len(e.g.deletes) != 1 {
+		t.Fatalf("second teardown: %+v", res)
+	}
+}
+
+// A playground that fails to start stops the wait with the reason.
+func TestPlayground_SetupReportsAFailedPlayground(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.failPhase = true
+	res, _ := e.run(t, setup("proj"))
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "phase Failed") {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+// What the setup needs on the cluster, each with its explanation.
+func TestPlayground_SetupChecksTheCluster(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(e *playgroundEnv)
+		code   string
+	}{
+		"operator off": {func(e *playgroundEnv) {
+			e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{"spec":{"components":{"ogx":{"managementState":"Removed"}}}}`)
+		}, "component_off"},
+		"operator not ready": {func(e *playgroundEnv) {
+			e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{"spec":{"components":{"ogx":{"managementState":"Managed"}}},"status":{"conditions":[{"type":"OGXReady","status":"False","message":"webhook down"}]}}`)
+		}, "component_not_ready"},
+		"no gen-ai-ui": {func(e *playgroundEnv) {
+			e.k8s.mu.Lock()
+			k, _ := parseFakePath("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/gen-ai-ui")
+			delete(e.k8s.objects, k)
+			e.k8s.mu.Unlock()
+		}, "component_off"},
+		"not a dashboard project": {func(e *playgroundEnv) {
+			e.k8s.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{}},"status":{"phase":"Active"}}`)
+		}, "validation"},
+		"API differs": {func(e *playgroundEnv) { e.g.missing = true }, "api_missing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newPlaygroundEnv(t)
+			tc.change(e)
+			res, _ := e.run(t, setup("proj"))
+			if res.Success || res.ErrorCode != tc.code || len(e.g.installs) != 0 {
+				t.Fatalf("got %+v", res)
+			}
+		})
+	}
+}
+
+// Readiness the DataScienceCluster does not report is a note, not a stop.
+func TestPlayground_UnknownOperatorReadinessIsANote(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{"spec":{"components":{"ogx":{"managementState":"Managed"}}}}`)
+	res, steps := e.run(t, setup("proj"))
+	if !res.Success || !strings.Contains(steps[0].Message, "not reported (unknown)") {
+		t.Fatalf("got %+v, %+v", res, steps[0])
+	}
+}
+
+func TestPlayground_NoToken(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	res, err := RunPlayground(e.c, setup("proj"), "", nil)
+	if err != nil || res.Success || res.ErrorCode != "no_token" || len(e.g.auth) != 0 {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+}
+
+// The status: the playgrounds in the projects with their owner, and the
+// selected project's models (MaaS listed, its 404 meaning none).
+func TestPlayground_Status(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup("proj")); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	e.g.servers["other"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
+	e.g.startingReads = 1 << 20
+	PurgePlaygroundStatus()
+	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Blocked != nil || st.OperatorReady != "True" || st.GenAIUI != "available" || st.APIProblem != "" {
+		t.Fatalf("cluster parts %+v", st)
+	}
+	if len(st.Items) != 2 {
+		t.Fatalf("items %+v", st.Items)
+	}
+	other, proj := st.Items[0], st.Items[1]
+	if other.Namespace != "other" || other.ManagedByTool || other.Ready || !other.Deployed || other.Phase != "Initializing" {
+		t.Errorf("other %+v", other)
+	}
+	if proj.Namespace != "proj" || !proj.ManagedByTool || !proj.Ready || proj.Name != "lsd-genai-playground" {
+		t.Errorf("proj %+v", proj)
+	}
+	if len(st.Models) != 1 || st.Models[0].Name != "qwen25-05b-instruct" || !st.Models[0].Ready || !st.Models[0].Chat || st.Models[0].DisplayName != "Qwen2.5 0.5B Instruct (CPU)" {
+		t.Errorf("models %+v", st.Models)
+	}
+	// Cached: a second read makes no call.
+	calls := len(e.g.auth)
+	if _, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj"); err != nil || len(e.g.auth) != calls {
+		t.Errorf("not cached: %d calls, %v", len(e.g.auth)-calls, err)
+	}
+}
+
+// An API that answers 404 is reported as one that differs, with the call.
+func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.missing = true
+	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.APICode != "api_missing" || !strings.Contains(st.APIProblem, "/gen-ai/api/v1/aaa/models answered 404") {
+		t.Fatalf("got %q %q", st.APICode, st.APIProblem)
+	}
+}
+
+func TestPlayground_StatusWithoutToken(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	st, err := GetPlaygroundStatus(e.c, "", "")
+	if err != nil || st.APICode != "no_token" || len(e.g.auth) != 0 {
+		t.Fatalf("got %+v, %v", st, err)
+	}
+}
+
+func TestValidatePlaygroundRequest(t *testing.T) {
+	for _, req := range []types.PlaygroundRequest{
+		{Action: "remove", Project: "p"},
+		{Action: "setup", Project: "Bad_Name"},
+		{Action: "teardown", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "namespace"}}},
+		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "custom"}}},
+		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "a b", Source: "maas"}}},
+		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "maas"}, {Name: "m", Source: "maas"}}},
+	} {
+		if ValidatePlaygroundRequest(req) == "" {
+			t.Errorf("accepted %+v", req)
+		}
+	}
+	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "publishers/llm/models/x", Source: "maas"}}}); p != "" {
+		t.Errorf("refused: %s", p)
+	}
+}
