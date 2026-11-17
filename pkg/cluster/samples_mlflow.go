@@ -219,6 +219,7 @@ func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStat
 // InvalidateSamplesStatus drops the cached samples status of project.
 func InvalidateSamplesStatus(project string) {
 	mlflowSamplesCache.Remove(project)
+	pipelineSampleCache.Remove(project)
 }
 
 // ValidateMLflowSamplesRequest checks a request before the operation

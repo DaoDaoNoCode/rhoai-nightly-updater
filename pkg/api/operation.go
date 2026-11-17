@@ -199,6 +199,7 @@ var operationTypes = map[string][2]string{
 	"/api/resources/mlflow/revert":            {"revert-mlflow", "Revert MLflow"},
 	"/api/resources/cleanup/stream":           {"cleanup", "Clean up the environment"},
 	"/api/resources/samples/mlflow/stream":    {"mlflow-samples", "MLflow samples"},
+	"/api/resources/samples/pipeline/stream":  {"pipeline-sample", "Sample pipeline"},
 	"/api/diagnostics/fix":                    {"diagnostics-fix", "Apply diagnostics fix"},
 }
 

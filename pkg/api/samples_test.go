@@ -12,7 +12,7 @@ import (
 
 func TestSamplesStatusNeedsAValidProject(t *testing.T) {
 	setupDevMode(t)
-	for _, h := range []http.HandlerFunc{HandleMLflowSamplesStatus} {
+	for _, h := range []http.HandlerFunc{HandleMLflowSamplesStatus, HandlePipelineSampleStatus} {
 		for _, q := range []string{"", "?project=", "?project=Bad_Name", "?project=a/b"} {
 			req := httptest.NewRequest(http.MethodGet, "/api/resources/samples/x"+q, nil)
 			rec := httptest.NewRecorder()
@@ -29,6 +29,31 @@ func stubMLflowSamples(t *testing.T, fn func(*cluster.Client, types.MLflowSample
 	orig := runMLflowSamples
 	runMLflowSamples = fn
 	t.Cleanup(func() { runMLflowSamples = orig })
+}
+
+func TestPipelineSampleStream(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	orig := runPipelineSample
+	t.Cleanup(func() { runPipelineSample = orig })
+	var got types.PipelineSampleRequest
+	runPipelineSample = func(_ *cluster.Client, req types.PipelineSampleRequest, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		got = req
+		emit(cluster.UpdateStepEvent{Step: "run", Status: "success", Message: "Started run r1"})
+		return &types.OperationResponse{Success: true, Message: "started"}, nil
+	}
+	for _, body := range []string{`{`, `{"project":"p","action":"delete"}`, `{"project":"","action":"run"}`} {
+		w := httptest.NewRecorder()
+		HandlePipelineSampleStream(w, postJSON("/api/resources/samples/pipeline/stream", "tok", body))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
+		}
+	}
+	w := httptest.NewRecorder()
+	HandlePipelineSampleStream(w, postJSON("/api/resources/samples/pipeline/stream", "tok", `{"project":"p","action":"run"}`))
+	if out := w.Body.String(); w.Code != http.StatusOK || !strings.Contains(out, `"step":"run"`) || !strings.Contains(out, `"step":"operation_complete"`) || got.Action != "run" || got.Project != "p" {
+		t.Errorf("%d %s %+v", w.Code, out, got)
+	}
 }
 
 func TestMLflowSamplesStream(t *testing.T) {
