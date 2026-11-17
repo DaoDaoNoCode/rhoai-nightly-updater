@@ -41,6 +41,7 @@ type objectMeta struct {
 	Namespace         string               `json:"namespace"`
 	UID               string               `json:"uid"`
 	ResourceVersion   string               `json:"resourceVersion"`
+	Generation        int64                `json:"generation"`
 	CreationTimestamp string               `json:"creationTimestamp"`
 	DeletionTimestamp string               `json:"deletionTimestamp"`
 	Labels            map[string]string    `json:"labels"`
@@ -678,7 +679,8 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	case legacyErr != nil:
 		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace '%s' for storage from an earlier version: %v. %s", legacyNamespace, legacyErr, status.MinIO.Warning))
 	case legacy != nil:
-		status.LegacyStorage = legacyStorageState(legacy, dspas)
+		newReady := status.MinIO.Ready && status.MinIO.ManagedByTool && status.MinIO.RepairNeeded == ""
+		status.LegacyStorage = legacyStorageState(legacy, dspas, newReady)
 		status.MinIO.MigrationPending = true
 	}
 

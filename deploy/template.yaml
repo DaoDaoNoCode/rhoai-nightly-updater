@@ -109,8 +109,11 @@ objects:
         resources: ["events"]
         verbs: ["list"]
       # Namespaces: list DS projects; create redhat-ods-operator, seaweedfs
-      # and pipeline projects. None is ever deleted: S3 storage teardown
-      # removes only the tool's own objects and keeps the namespaces.
+      # and pipeline projects. S3 storage teardown removes only the tool's
+      # own objects and keeps the namespaces. Only minio, the namespace of
+      # the storage earlier versions set up, may be deleted: at the end of
+      # Migrate storage, when the user chooses it and its metadata shows the
+      # tool created it (UID precondition).
       - apiGroups: [""]
         resources: ["namespaces"]
         verbs: ["get", "list", "create"]
@@ -118,6 +121,10 @@ objects:
         resources: ["namespaces"]
         resourceNames: ["redhat-ods-operator"]
         verbs: ["patch"]
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        resourceNames: ["minio"]
+        verbs: ["delete"]
       # Secrets: no list and no general read. The S3 storage's keys, the
       # keys of the storage earlier versions left in namespace minio (read
       # for the migration, deleted with it), and the pipeline-server
@@ -216,6 +223,15 @@ objects:
       - apiGroups: ["route.openshift.io"]
         resources: ["routes"]
         verbs: ["create"]
+      # Migrate storage: the copy Job in namespace seaweedfs (create cannot
+      # be limited by name), read and deleted only by its fixed name
+      - apiGroups: ["batch"]
+        resources: ["jobs"]
+        verbs: ["create"]
+      - apiGroups: ["batch"]
+        resources: ["jobs"]
+        resourceNames: ["seaweedfs-migrate"]
+        verbs: ["get", "delete"]
       # The S3 storage's ingress policy (S3 port from cluster pods, admin UI
       # from the router), created with SeaweedFS and removed by its teardown;
       # earlier versions used the same name in namespace minio, and
@@ -303,9 +319,11 @@ objects:
         resources: ["datasciencepipelinesapplications"]
         resourceNames: ["nightly-dspa", "dspa"]
         verbs: ["get", "delete"]
+      # patch dspa: Migrate storage moves a pipeline server an earlier
+      # version created (proven by its managedFields) to the new storage
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]
-        resourceNames: ["nightly-dspa"]
+        resourceNames: ["nightly-dspa", "dspa"]
         verbs: ["patch"]
       - apiGroups: ["mlflow.opendatahub.io"]
         resources: ["mlflows"]

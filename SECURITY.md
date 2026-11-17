@@ -43,7 +43,7 @@ Token rules (pkg/api/identity.go, handlers.go):
 |---|---|---|
 | Secrets | `create` | no (pipeline projects are user-chosen) |
 | Secrets | `get patch delete` | `seaweedfs-s3-credentials`; `nightly-dspa-s3` (`get delete patch`); the earlier storage's `minio-secret` and legacy `dashboard-dspa-secret` (`get delete`) |
-| Namespaces | `get list create`; `patch` | `patch` only `redhat-ods-operator`. Nothing is ever deleted |
+| Namespaces | `get list create`; `patch`; `delete` | `patch` only `redhat-ods-operator`; `delete` only `minio`, the earlier storage's namespace, at the end of Migrate storage when the user chooses it and its metadata shows the tool created it (UID precondition) |
 | Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` (the S3 storage, and the SeaweedFS earlier versions ran in namespace `minio`) and `minio` (MinIO of earlier versions) |
 | Services | `get create`; `patch delete` | `patch delete` only `seaweedfs-s3`; `delete` only `minio-service` (the earlier storage's) |
 | PVCs | `list create`; `patch delete` | `patch delete` only `seaweedfs-data`; `delete` only `seaweedfs-pvc` and `minio-pvc` (the earlier storage's data) |
@@ -59,7 +59,8 @@ Token rules (pkg/api/identity.go, handlers.go):
 | DataScienceClusters | `get list patch create` | no |
 | DSCInitializations, Platforms | `list` (`get` Platform `default`) | read-only |
 | `components.platform.opendatahub.io/*` (module CRs) | `list patch` | no; the kinds change between releases and are discovered |
-| DSPAs | `list create`; `get delete` | `get delete` only `nightly-dspa` and legacy `dspa`; `patch` only `nightly-dspa` |
+| DSPAs | `list create`; `get patch delete` | only `nightly-dspa` and legacy `dspa` (Migrate storage moves a `dspa` an earlier version created to the new storage) |
+| Jobs | `create`; `get delete` | `get delete` only `seaweedfs-migrate`, Migrate storage's copy Job in namespace `seaweedfs` |
 | MLflows | `create`; `get patch delete` | the second set only on `mlflow` |
 | ClusterVersion, Console, IDMS, ConfigMap `odh-upgrade-acks` | read | — |
 | `operator.openshift.io/*` (prerequisite operands such as `JobSetOperator/cluster`) | `get` | only objects named `cluster`; the kind comes from the prerequisite's CSV. This group also holds OpenShift's own operator configs (`console/cluster`, …), which become readable; they hold no secrets (template revision 4) |
@@ -79,6 +80,17 @@ There is no cluster-wide `list` or general `get` on Secrets. The SA cannot read 
 | Namespaces `patch` on `minio` removed | — | narrower | the tool no longer relabels the earlier namespace |
 
 No verb was added on any resource type; every new name replaces an old one, and the old names keep only `get` and `delete` where the migration and teardown need them.
+
+**Audit: template revision 5 (3.0.0), Migrate storage.** Moving the earlier storage's data and pipeline servers to the new storage, and removing the old storage afterwards, needs three grants.
+
+| Rule | What it allows | Worst case if the SA token leaks | Why nothing narrower works |
+|---|---|---|---|
+| Jobs (`batch`) `create` | start the copy Job `seaweedfs-migrate` (rclone, pinned by digest; `RCLONE_IMAGE` overrides it) in namespace `seaweedfs` | create a Job with any image in any namespace. Its pods run as that namespace's `default` ServiceAccount under the namespace's SCC admission, so they gain no API access the token does not already have; this is the reach of the Deployment `create` the SA already holds | `create` cannot be limited by name (the collection POST carries none), and the namespace is created by the tool, so a Role cannot hold it. The copy has to run inside the cluster network: the backend could only stream every object through its own pod |
+| Jobs `get delete` on `seaweedfs-migrate` | read the Job's state and delete it (by UID) once its result is read | read or delete a Job of that name in any namespace | as above; the result comes back in the pod's termination message, read with the existing pod `list`, so no `pods/log` grant is added |
+| DSPAs `patch` on `dspa` (next to `nightly-dspa`) | move a pipeline server an earlier version created to the new storage, and label it | change any DSPA named `dspa`, which is also the name odh-dashboard gives the pipeline server it creates. The code patches one only after proving the tool created it (its name, the old storage's address, its secret name and the creating managedFields manager, `dspaInfo.managedByTool`), with a `resourceVersion` precondition; others are listed for the user, never changed | RBAC cannot tell who created an object; the older versions used this name |
+| Namespaces `delete` on `minio` | delete namespace `minio` after Migrate storage removed the old storage, when the user ticks it and the namespace carries the tool label and a creation-time managedFields entry of one of the tool's managers (UID precondition) | delete a namespace named `minio` and everything in it | the name is fixed; the user is told that deleting the namespace deletes anything else in it, and a namespace the tool cannot prove it created is never offered |
+
+The copy Job's pod: `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities dropped, seccomp `RuntimeDefault`, no UID (restricted-v2 assigns one), `automountServiceAccountToken: false`, CPU and memory requests and limits, `backoffLimit: 0`, `activeDeadlineSeconds: 3600`, `ttlSecondsAfterFinished: 86400`. The S3 keys reach it only through `secretKeyRef` to `seaweedfs/seaweedfs-s3-credentials`, never in its command, arguments or the operation's output. It needs no NetworkPolicy change: `seaweedfs-ingress` admits the S3 port from every pod, and so do the earlier storage's policies.
 
 **Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
 

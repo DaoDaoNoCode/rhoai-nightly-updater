@@ -132,7 +132,8 @@ type legacyObject struct {
 
 // legacyStorage is the storage an earlier version left in namespace minio.
 type legacyStorage struct {
-	terminating bool // the namespace is being deleted
+	terminating bool       // the namespace is being deleted
+	nsMeta      objectMeta // the namespace's metadata
 	// objects are the objects this tool created there, in
 	// legacyStorageObjects order.
 	objects []legacyObject
@@ -215,7 +216,7 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 	if pvcErr != nil {
 		return nil, fmt.Errorf("list PVCs in namespace %s: %w", legacyNamespace, pvcErr)
 	}
-	l := &legacyStorage{terminating: nsObj.Metadata.terminating() || nsObj.Status.Phase == "Terminating", address: address, addressErr: addrErr}
+	l := &legacyStorage{terminating: nsObj.Metadata.terminating() || nsObj.Status.Phase == "Terminating", nsMeta: nsObj.Metadata, address: address, addressErr: addrErr}
 	deployments := map[string]s3DeploymentSpec{}
 	for i, o := range legacyStorageObjects {
 		r := results[i]
@@ -302,8 +303,9 @@ func (l *legacyStorage) uncopiable() []string {
 }
 
 // legacyStorageState converts the earlier storage into its status entry;
-// dspas are the pipeline servers, to name those that still use it.
-func legacyStorageState(l *legacyStorage, dspas []dspaInfo) *types.LegacyStorageState {
+// dspas are the pipeline servers, to name those that still use it, and
+// newReady tells whether the new storage is ready (see MigrateS3Storage).
+func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady bool) *types.LegacyStorageState {
 	if l == nil {
 		return nil
 	}
@@ -322,10 +324,27 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo) *types.LegacyStorage
 		state.DataPVCs = append(state.DataPVCs, types.KeptPVC{Name: p.Meta.Name, Size: p.Size})
 	}
 	for _, d := range dspas {
-		if l.address.usedBy(d.Meta.Namespace, d.Host) && !d.Meta.terminating() {
-			state.UsedBy = append(state.UsedBy, d.Meta.Namespace+"/"+d.Meta.Name)
+		if !l.address.usedBy(d.Meta.Namespace, d.Host) {
+			continue
+		}
+		name := d.Meta.Namespace + "/" + d.Meta.Name
+		if !d.Meta.terminating() {
+			state.UsedBy = append(state.UsedBy, name)
+		}
+		if why, ok := repointable(d); ok {
+			state.Repoint = append(state.Repoint, name)
+		} else {
+			state.NotMoved = append(state.NotMoved, name+" ("+why+")")
 		}
 	}
 	sort.Strings(state.UsedBy)
+	sort.Strings(state.Repoint)
+	sort.Strings(state.NotMoved)
+	state.Stage = "migrate"
+	if newReady && len(state.Repoint) == 0 {
+		state.Stage = "remove"
+		state.RemoveBlockedReason = s3TeardownBlocker(dspas, l.address)
+	}
+	state.NamespaceDeletable, state.NamespaceKeptReason = legacyNamespaceOwned(l.nsMeta)
 	return state
 }

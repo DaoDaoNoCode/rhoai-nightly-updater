@@ -601,6 +601,18 @@ type ResourcesStatus struct {
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
 }
 
+// MigrateStorageRequest is the body of POST
+// /api/resources/minio/migrate/stream.
+type MigrateStorageRequest struct {
+	// RemoveOldStorage runs the last part: removing the old storage once the
+	// migration is done. Without it Migrate storage sets up the new storage,
+	// copies the objects and moves the pipeline servers.
+	RemoveOldStorage bool `json:"removeOldStorage,omitempty"`
+	// DeleteNamespace also deletes namespace minio (with RemoveOldStorage,
+	// and only when this tool created it).
+	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
+}
+
 // LegacyStorageState describes the S3 storage an earlier version of this
 // tool set up in namespace minio: MinIO, or SeaweedFS behind the MinIO-era
 // names. Only objects this tool created there are listed.
@@ -627,6 +639,26 @@ type LegacyStorageState struct {
 	UsedBy []string `json:"usedBy,omitempty"`
 	// Terminating is true while namespace minio is being deleted.
 	Terminating bool `json:"terminating,omitempty"`
+	// Stage is the next part of Migrate storage: "migrate" (set up the new
+	// storage, copy the objects, move the pipeline servers) or "remove"
+	// (the new storage is ready and no pipeline server of this tool uses
+	// the old one: delete it).
+	Stage string `json:"stage"`
+	// Repoint are the pipeline servers (namespace/name) this tool created
+	// that use the old storage: Migrate storage moves them.
+	Repoint []string `json:"repoint,omitempty"`
+	// NotMoved are the other pipeline servers on the old storage, each with
+	// why the tool leaves it ("ns/name (not created by this tool)").
+	NotMoved []string `json:"notMoved,omitempty"`
+	// RemoveBlockedReason explains why the old storage cannot be removed
+	// yet (a pipeline server still uses it).
+	RemoveBlockedReason string `json:"removeBlockedReason,omitempty"`
+	// NamespaceDeletable is true when this tool created namespace minio, so
+	// removing the old storage may also delete it (the user's choice).
+	NamespaceDeletable bool `json:"namespaceDeletable"`
+	// NamespaceKeptReason says why the namespace is not offered for
+	// deletion.
+	NamespaceKeptReason string `json:"namespaceKeptReason,omitempty"`
 }
 
 // ResourceState describes the deployment state of a single resource group.

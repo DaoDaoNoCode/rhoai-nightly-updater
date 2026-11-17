@@ -1,0 +1,750 @@
+package cluster
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	migrateJobPathT = "/apis/batch/v1/namespaces/seaweedfs/jobs/seaweedfs-migrate"
+	migratePodPath  = "/api/v1/namespaces/seaweedfs/pods/seaweedfs-migrate-x7k2p"
+	// The old storage's keys (putLegacySeaweedFS).
+	legacyKeyID = "minio-abc"
+	legacyKey   = "old-pass"
+)
+
+// copyOK is the Job result of a complete copy of 4 objects (4,330 bytes).
+const copyOK = `{"copy":0,"check":0,"identical":4,"missing":0,"differ":0,"errors":0,"source":{"count":4,"bytes":4330,"sizeless":0},"destination":{"count":4,"bytes":4330,"sizeless":0}}`
+
+// migrateSim plays the controllers Migrate storage waits for, acting on the
+// stored objects before every request: the deployment controller (the new
+// SeaweedFS is ready), the Job controller (the copy Job completes and its
+// pod's termination message is result) and DSPO (ObjectStoreAvailable for
+// pipeline servers on the new storage).
+type migrateSim struct {
+	result      string
+	jobRunning  bool
+	objectStore string // ObjectStoreAvailable status reported for the new storage
+}
+
+func simulateMigrate(f *resourceFake, sim *migrateSim) {
+	f.beforeServe = func(method, path string) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for k, obj := range f.objects {
+			switch {
+			case k.plural == "deployments" && k.ns == s3Namespace && k.name == s3Deployment:
+				obj["status"] = map[string]interface{}{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
+			case k.plural == "jobs" && k.name == migrateJobName:
+				ensureMap(obj, "spec")["selector"] = map[string]interface{}{"matchLabels": map[string]interface{}{"job-name": migrateJobName}}
+				if !sim.jobRunning {
+					obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Complete", "status": "True"}}}
+					pod := fakeKey{gv: "v1", ns: s3Namespace, plural: "pods", name: "seaweedfs-migrate-x7k2p"}
+					f.objects[pod] = map[string]interface{}{
+						"metadata": map[string]interface{}{"name": pod.name, "namespace": s3Namespace, "labels": map[string]interface{}{"job-name": migrateJobName}},
+						"status": map[string]interface{}{"phase": "Succeeded", "containerStatuses": []interface{}{map[string]interface{}{
+							"name": migrateContainer, "state": map[string]interface{}{"terminated": map[string]interface{}{"exitCode": 0, "reason": "Completed", "message": sim.result}},
+						}}},
+					}
+				}
+			case k.plural == "datasciencepipelinesapplications":
+				es, _ := ensureMap(ensureMap(obj, "spec"), "objectStorage")["externalStorage"].(map[string]interface{})
+				if es != nil && es["host"] == s3Host() && sim.objectStore != "" {
+					gen := ensureMap(obj, "metadata")["generation"]
+					obj["status"] = map[string]interface{}{"conditions": []interface{}{map[string]interface{}{
+						"type": "ObjectStoreAvailable", "status": sim.objectStore, "observedGeneration": gen, "message": "Object Store connectivity successfully verified",
+					}}}
+				}
+			}
+		}
+	}
+}
+
+func fastMigrateTimings(t *testing.T) {
+	t.Helper()
+	fastS3Timings(t)
+	oldCopy, oldPoll, oldRepoint := MigrateCopyTimeout, MigratePoll, MigrateRepointTimeout
+	MigrateCopyTimeout, MigratePoll, MigrateRepointTimeout = 200*time.Millisecond, 5*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { MigrateCopyTimeout, MigratePoll, MigrateRepointTimeout = oldCopy, oldPoll, oldRepoint })
+	t.Setenv("RCLONE_IMAGE", "")
+}
+
+// putMigrationCase is the user's cluster: the storage 2.1 to 2.3 left in
+// namespace minio, the pipeline server an earlier version created
+// (juntao-test/dspa, recognised by its managedFields), one this version
+// created (labelled) and one made by hand, all three on the old storage.
+func putMigrationCase(f *resourceFake) {
+	putLegacySeaweedFS(f)
+	putDSPAOn(f, "juntao-test", legacyDSPAName, `{}`, legacyPostManager, legacyDSPASecretName)
+	putDSPAOn(f, "team-a", dspaName, toolLabelJSON, toolFieldManager, dspaSecretName)
+	f.putJSON(secretPath("team-a", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth(legacyKeyID)+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth(legacyKey)+`"}}`)
+	putDSPAOn(f, "hand-made", legacyDSPAName, `{}`, "Mozilla", "my-secret")
+}
+
+// putDSPAOn stores a DSPA on the old storage, as earlier versions wrote it.
+func putDSPAOn(f *resourceFake, ns, name, labels, manager, secret string) {
+	f.putJSON(dspaPath(ns, name), `{"metadata":{"labels":`+labels+`,"generation":1,"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(manager, "Update")+`},
+		"spec":{"objectStorage":{"externalStorage":{"host":"`+legacyS3Host()+`","scheme":"http","bucket":"pipelines","region":"us-east-1",
+		"s3CredentialsSecret":{"secretName":"`+secret+`","accessKey":"AWS_ACCESS_KEY_ID","secretKey":"AWS_SECRET_ACCESS_KEY"}}}},
+		"status":{"conditions":[{"type":"ObjectStoreAvailable","status":"True","observedGeneration":1}]}}`)
+}
+
+// putNewStorageWithLegacyKeys puts a ready new storage set up with the old keys.
+func putNewStorageWithLegacyKeys(f *resourceFake) {
+	putReadyManagedS3(f)
+	f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth(legacyKeyID)+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth(legacyKey)+`"}}`)
+}
+
+func runMigrate(t *testing.T, c *Client, opts MigrateOptions) (bool, string, string, []UpdateStepEvent) {
+	t.Helper()
+	var steps []UpdateStepEvent
+	res, err := MigrateS3Storage(c, opts, func(e UpdateStepEvent) { steps = append(steps, e) })
+	if err != nil {
+		t.Fatalf("MigrateS3Storage: %v", err)
+	}
+	return res.Success, res.Message, res.ErrorCode, steps
+}
+
+func externalStorage(t *testing.T, f *resourceFake, ns, name string) map[string]interface{} {
+	t.Helper()
+	obj := f.get(dspaPath(ns, name))
+	if obj == nil {
+		t.Fatalf("DSPA %s/%s is gone", ns, name)
+	}
+	return ensureMap(ensureMap(obj, "spec"), "objectStorage")["externalStorage"].(map[string]interface{})
+}
+
+func secretValue(t *testing.T, f *resourceFake, path, key string) string {
+	t.Helper()
+	obj := f.get(path)
+	if obj == nil {
+		t.Fatalf("no secret %s", path)
+	}
+	if sd, ok := obj["stringData"].(map[string]interface{}); ok {
+		if v, ok := sd[key].(string); ok {
+			return v
+		}
+	}
+	data, _ := obj["data"].(map[string]interface{})
+	v, _ := data[key].(string)
+	return decodeBase64Field(v)
+}
+
+// noChangeToPipelineServers fails when any pipeline server or project
+// secret was written.
+func noChangeToPipelineServers(t *testing.T, f *resourceFake) {
+	t.Helper()
+	for _, m := range f.mutations() {
+		if strings.Contains(m, "datasciencepipelinesapplications") || (strings.Contains(m, "/secrets") && !strings.Contains(m, "/namespaces/seaweedfs/")) {
+			t.Errorf("unexpected pipeline server change: %s", m)
+		}
+	}
+}
+
+func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+
+	ok, msg, code, steps := runMigrate(t, c, MigrateOptions{})
+	if !ok {
+		t.Fatalf("migrate failed: %s (%s)", msg, code)
+	}
+	for _, want := range []string{"4 objects (4330 bytes)", "2 pipeline servers now use it: juntao-test/dspa, team-a/nightly-dspa", "hand-made/dspa (not created by this tool)", "kept until you remove it"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q: %s", want, msg)
+		}
+	}
+	// 1. The new storage has the old keys.
+	if secretValue(t, f, s3SecretPath, s3AccessKeyField) != legacyKeyID || secretValue(t, f, s3SecretPath, s3SecretKeyField) != legacyKey {
+		t.Error("the new storage does not have the old keys")
+	}
+	// 2. The Job ran and is gone.
+	if !hasMutation(f, "POST /apis/batch/v1/namespaces/seaweedfs/jobs") || f.has(migrateJobPathT) {
+		t.Error("the copy Job was not created, or not deleted after its result was read")
+	}
+	// 3. Both tool pipeline servers point at the new storage with the
+	// standard secret; the earlier version's one is now labelled.
+	for _, ps := range [][2]string{{"juntao-test", legacyDSPAName}, {"team-a", dspaName}} {
+		es := externalStorage(t, f, ps[0], ps[1])
+		if es["host"] != s3Host() || ensureMap(es, "s3CredentialsSecret")["secretName"] != dspaSecretName || es["bucket"] != "pipelines" || es["scheme"] != "http" {
+			t.Errorf("%s/%s external storage = %v", ps[0], ps[1], es)
+		}
+		if secretValue(t, f, secretPath(ps[0], dspaSecretName), s3AccessKeyField) != legacyKeyID {
+			t.Errorf("%s has no credentials secret with the same keys", ps[0])
+		}
+	}
+	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]interface{})
+	if labels[managedByLabelKey] != managedByLabelValue {
+		t.Error("the earlier version's pipeline server did not get the tool label")
+	}
+	// The hand-made one is untouched, and nothing old was deleted.
+	if es := externalStorage(t, f, "hand-made", legacyDSPAName); es["host"] != legacyS3Host() {
+		t.Error("a pipeline server this tool did not create was changed")
+	}
+	noWritesIn(t, f, legacyNamespace)
+	noWritesIn(t, f, "hand-made")
+	// Every write was dry-run first.
+	dry := strings.Join(f.requests, "\n")
+	for _, want := range []string{"DRYRUN POST /apis/batch/v1/namespaces/seaweedfs/jobs", "DRYRUN PATCH " + dspaPath("juntao-test", "dspa"), "DRYRUN PATCH " + dspaPath("team-a", "nightly-dspa"), "DRYRUN POST /api/v1/namespaces/juntao-test/secrets"} {
+		if !strings.Contains(dry, want) {
+			t.Errorf("no dry run %q", want)
+		}
+	}
+	// Each step reported success.
+	done := map[string]bool{}
+	for _, s := range steps {
+		if s.Status == "success" {
+			done[s.Step] = true
+		}
+	}
+	for _, s := range []string{"check", "storage", "copy", "repoint"} {
+		if !done[s] {
+			t.Errorf("step %s did not succeed", s)
+		}
+	}
+}
+
+func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
+	t.Setenv("RCLONE_IMAGE", "")
+	job := migrateJob("SeaweedFS")
+	raw, _ := json.Marshal(job)
+	if strings.Contains(string(raw), legacyKey) || strings.Contains(string(raw), "seaweedfs-key") {
+		t.Fatal("a key value is in the Job")
+	}
+	var j struct {
+		Spec struct {
+			BackoffLimit          *int `json:"backoffLimit"`
+			ActiveDeadlineSeconds int  `json:"activeDeadlineSeconds"`
+			Template              struct {
+				Metadata struct {
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
+				Spec struct {
+					RestartPolicy                string `json:"restartPolicy"`
+					AutomountServiceAccountToken *bool  `json:"automountServiceAccountToken"`
+					Containers                   []struct {
+						Image   string   `json:"image"`
+						Command []string `json:"command"`
+						Env     []struct {
+							Name      string          `json:"name"`
+							Value     string          `json:"value"`
+							ValueFrom json.RawMessage `json:"valueFrom"`
+						} `json:"env"`
+						Resources struct {
+							Limits, Requests map[string]string
+						} `json:"resources"`
+						SecurityContext map[string]interface{} `json:"securityContext"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &j); err != nil {
+		t.Fatal(err)
+	}
+	if j.Spec.BackoffLimit == nil || *j.Spec.BackoffLimit != 0 || j.Spec.ActiveDeadlineSeconds <= 0 {
+		t.Errorf("backoffLimit/activeDeadlineSeconds = %v/%d", j.Spec.BackoffLimit, j.Spec.ActiveDeadlineSeconds)
+	}
+	ps := j.Spec.Template.Spec
+	if ps.RestartPolicy != "Never" || ps.AutomountServiceAccountToken == nil || *ps.AutomountServiceAccountToken {
+		t.Errorf("pod spec = %+v", ps)
+	}
+	if j.Spec.Template.Metadata.Labels["app"] != migrateAppLabel {
+		t.Errorf("pod labels = %v", j.Spec.Template.Metadata.Labels)
+	}
+	ctr := ps.Containers[0]
+	if ctr.Image != rcloneDefaultImage || !strings.Contains(ctr.Image, "@sha256:") {
+		t.Errorf("image = %s", ctr.Image)
+	}
+	sc := ctr.SecurityContext
+	if sc["runAsNonRoot"] != true || sc["allowPrivilegeEscalation"] != false || sc["seccompProfile"].(map[string]interface{})["type"] != "RuntimeDefault" {
+		t.Errorf("securityContext = %v", sc)
+	}
+	if drop := sc["capabilities"].(map[string]interface{})["drop"].([]interface{}); len(drop) != 1 || drop[0] != "ALL" {
+		t.Errorf("capabilities = %v", sc["capabilities"])
+	}
+	if ctr.Resources.Limits["cpu"] == "" || ctr.Resources.Limits["memory"] == "" || ctr.Resources.Requests["cpu"] == "" || ctr.Resources.Requests["memory"] == "" {
+		t.Errorf("resources = %+v", ctr.Resources)
+	}
+	env := map[string]string{}
+	refs := 0
+	for _, e := range ctr.Env {
+		env[e.Name] = e.Value
+		if strings.Contains(e.Name, "KEY") {
+			if !strings.Contains(string(e.ValueFrom), `"secretKeyRef":{"key":"AWS_`) || e.Value != "" {
+				t.Errorf("%s is not a secretKeyRef: %s", e.Name, e.ValueFrom)
+			}
+			refs++
+		}
+	}
+	if refs != 4 || env["HOME"] != "/tmp" || env["RCLONE_CONFIG_OLD_ENDPOINT"] != "http://minio-service.minio.svc:9000" || env["RCLONE_CONFIG_NEW_ENDPOINT"] != "http://seaweedfs-s3.seaweedfs.svc:8333" ||
+		env["RCLONE_CONFIG_OLD_PROVIDER"] != "SeaweedFS" || env["RCLONE_CONFIG_NEW_REGION"] != s3Region {
+		t.Errorf("env = %v (secret refs %d)", env, refs)
+	}
+	if got := migrateJob("MinIO"); !strings.Contains(mustJSON(got), `"RCLONE_CONFIG_OLD_PROVIDER","value":"Minio"`) {
+		t.Error("a MinIO source does not use rclone's Minio provider")
+	}
+	script := strings.Join(ctr.Command, " ")
+	for _, want := range []string{"rclone copy old: new: --ignore-existing", "rclone check old: new: --one-way --download", "rclone size old: --json", "/dev/termination-log"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q", want)
+		}
+	}
+	if strings.Contains(script, " sync ") || strings.Contains(script, "delete") {
+		t.Error("the script must never delete objects")
+	}
+	t.Setenv("RCLONE_IMAGE", "mirror.example.com/rclone@sha256:abc")
+	if rcloneImage() != "mirror.example.com/rclone@sha256:abc" {
+		t.Error("RCLONE_IMAGE is not honoured")
+	}
+}
+
+func mustJSON(v interface{}) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// The copy Job runs in namespace seaweedfs; the storage's policy admits S3
+// from every pod in every namespace, so its pods reach it without a rule
+// of their own.
+func TestNetworkPolicyAdmitsTheCopyJob(t *testing.T) {
+	for _, r := range s3Resources(s3Keys{AccessKey: "a", SecretKey: "b"}) {
+		if r.kind != "NetworkPolicy" {
+			continue
+		}
+		raw := mustJSON(r.obj)
+		if !strings.Contains(raw, `{"from":[{"namespaceSelector":{}}],"ports":[{"port":8333,"protocol":"TCP"}]}`) {
+			t.Errorf("the S3 port is not open to every pod: %s", raw)
+		}
+		return
+	}
+	t.Fatal("no NetworkPolicy")
+}
+
+func TestCopyResultProblem(t *testing.T) {
+	size := func(n, b int64) *copySize { return &copySize{Count: n, Bytes: b} }
+	ok := copyResult{Identical: 4, Source: size(4, 4330), Destination: size(4, 4330)}
+	cases := []struct {
+		name   string
+		r      copyResult
+		strict bool
+		want   string
+	}{
+		{"complete", ok, true, ""},
+		{"copy failed", copyResult{Copy: 1, Identical: 4, Source: size(4, 4330), Destination: size(4, 4330)}, true, "rclone copy failed"},
+		{"missing", copyResult{Check: 1, Identical: 3, Missing: 1, Source: size(4, 4330), Destination: size(3, 4000)}, true, "1 object missing"},
+		{"different", copyResult{Check: 1, Identical: 3, Differ: 1, Source: size(4, 4330), Destination: size(4, 4330)}, true, "1 object different"},
+		{"no sizes", copyResult{Identical: 4, Source: size(4, 4330)}, true, "could not be read"},
+		{"extra object while nothing uses the new storage", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, true, "the old storage holds 4 objects (4330 bytes), the new one 5 objects (4400 bytes)"},
+		{"extra object once pipeline servers write there", copyResult{Identical: 4, Source: size(4, 4330), Destination: size(5, 4400)}, false, ""},
+		{"fewer identical than objects", copyResult{Identical: 3, Source: size(4, 4330), Destination: size(4, 4330)}, true, "3 of the 4"},
+	}
+	for _, tc := range cases {
+		got := tc.r.problem(tc.strict)
+		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: problem = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestMigrate_CopyMismatchChangesNothingElse(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	simulateMigrate(f, &migrateSim{result: `{"copy":0,"check":0,"identical":4,"missing":0,"differ":0,"errors":0,"source":{"count":4,"bytes":4330},"destination":{"count":5,"bytes":4400}}`, objectStore: "True"})
+	ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
+	if ok || code != "copy_mismatch" || !strings.Contains(msg, "the new one 5 objects") || !strings.Contains(msg, "no pipeline server was moved") {
+		t.Fatalf("got %v %s: %s", ok, code, msg)
+	}
+	noChangeToPipelineServers(t, f)
+	noWritesIn(t, f, legacyNamespace)
+	if f.has(migrateJobPathT) {
+		t.Error("the Job was not deleted after its result was read")
+	}
+}
+
+func TestMigrate_CopyFailureOrNoResultStops(t *testing.T) {
+	for name, result := range map[string]string{
+		"check found a difference": `{"copy":0,"check":1,"identical":3,"missing":0,"differ":1,"errors":0,"source":{"count":4,"bytes":4330},"destination":{"count":4,"bytes":4330}}`,
+		"no termination message":   ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fastMigrateTimings(t)
+			f, c := newResourceFake(t)
+			putMigrationCase(f)
+			simulateMigrate(f, &migrateSim{result: result, objectStore: "True"})
+			if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); ok {
+				t.Fatalf("migrate succeeded: %s", msg)
+			}
+			noChangeToPipelineServers(t, f)
+			noWritesIn(t, f, legacyNamespace)
+		})
+	}
+}
+
+func TestMigrate_PipelineServerNotReadyStops(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "False"})
+	ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
+	if ok || code != "not_ready" || !strings.Contains(msg, "juntao-test/dspa was moved to the new storage, but after") || !strings.Contains(msg, "The old storage is kept") {
+		t.Fatalf("got %v %s: %s", ok, code, msg)
+	}
+	// The second one was not moved; nothing old was deleted.
+	if es := externalStorage(t, f, "team-a", dspaName); es["host"] != legacyS3Host() {
+		t.Error("the next pipeline server was moved after one failed")
+	}
+	noWritesIn(t, f, legacyNamespace)
+
+	// Removing the old storage is refused while it does not reach the new one.
+	ok, msg, _, _ = runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
+	if ok || !strings.Contains(msg, "still in use") {
+		t.Fatalf("remove: %v %s", ok, msg)
+	}
+	noWritesIn(t, f, legacyNamespace)
+}
+
+func TestMigrate_DryRunRejectionChangesNothing(t *testing.T) {
+	t.Run("pipeline server", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		f.failDryRun["PATCH "+dspaPath("team-a", dspaName)] = 422
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || !strings.Contains(msg, "rejects the change to pipeline server team-a/nightly-dspa") || !strings.Contains(msg, "No pipeline server was moved") {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+		noChangeToPipelineServers(t, f)
+	})
+	t.Run("copy Job", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		f.failDryRun["POST /apis/batch/v1/namespaces/seaweedfs/jobs"] = 403
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || !strings.Contains(msg, "rejects the copy Job") || !strings.Contains(msg, "make upgrade") {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+		if len(f.mutations()) != 0 {
+			t.Errorf("writes after a rejected dry run: %v", f.mutations())
+		}
+	})
+}
+
+func TestMigrate_ResumesAfterEachStep(t *testing.T) {
+	t.Run("new storage already set up", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
+		if !ok {
+			t.Fatal(msg)
+		}
+		if hasMutation(f, "POST /apis/apps/v1/namespaces/seaweedfs/deployments") || hasMutation(f, "PATCH "+s3DeployPath) {
+			t.Error("the ready storage was set up again")
+		}
+		if !hasStep(steps, "storage", "already set up") {
+			t.Error("the step does not say it was already done")
+		}
+	})
+	t.Run("a copy from an earlier run still running", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		f.putJSON(migrateJobPathT, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+		sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
+		simulateMigrate(f, sim)
+		go func() { time.Sleep(30 * time.Millisecond); f.mu.Lock(); sim.jobRunning = false; f.mu.Unlock() }()
+		ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
+		if !ok {
+			t.Fatal(msg)
+		}
+		if hasMutation(f, "POST /apis/batch/v1/namespaces/seaweedfs/jobs") {
+			t.Error("a second copy was started next to the running one")
+		}
+		if !hasStep(steps, "copy", "still running: waiting for it") {
+			t.Error("the run does not say it waits for the earlier copy")
+		}
+	})
+	t.Run("a finished copy nobody read", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		f.putJSON(migrateJobPathT, `{"metadata":{"uid":"old-job","labels":`+toolLabelJSON+`}}`)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+			t.Fatal(msg)
+		}
+		m := strings.Join(f.mutations(), "\n")
+		del, post := strings.Index(m, "DELETE "+migrateJobPathT), strings.Index(m, "POST /apis/batch/v1/namespaces/seaweedfs/jobs")
+		if del < 0 || post < 0 || del > post {
+			t.Errorf("the old Job was not deleted before a new copy: %s", m)
+		}
+	})
+	t.Run("copy still running at the bound", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True", jobRunning: true})
+		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || code != "in_progress" || !strings.Contains(msg, "Run Migrate storage again to keep waiting") {
+			t.Fatalf("got %v %s: %s", ok, code, msg)
+		}
+		if !f.has(migrateJobPathT) {
+			t.Error("the running copy was deleted")
+		}
+		noChangeToPipelineServers(t, f)
+	})
+	t.Run("some pipeline servers already moved", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		f.putJSON(dspaPath("juntao-test", legacyDSPAName), `{"metadata":{"labels":`+toolLabelJSON+`,"generation":2,"creationTimestamp":"`+created+`"},
+			"spec":{"objectStorage":{"externalStorage":{"host":"`+s3Host()+`","scheme":"http","s3CredentialsSecret":{"secretName":"nightly-dspa-s3"}}}},
+			"status":{"conditions":[{"type":"ObjectStoreAvailable","status":"True","observedGeneration":2}]}}`)
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
+		if !ok || !strings.Contains(msg, "1 pipeline server now uses it: team-a/nightly-dspa") {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+		if hasMutation(f, "PATCH "+dspaPath("juntao-test", legacyDSPAName)) {
+			t.Error("a moved pipeline server was patched again")
+		}
+	})
+	t.Run("everything done, then removed: nothing to do", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		f.put(dspaPath("hand-made", legacyDSPAName), map[string]interface{}{"metadata": map[string]interface{}{}}) // pointed elsewhere by its owner
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+			t.Fatal(msg)
+		}
+		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true}); !ok {
+			t.Fatal(msg)
+		}
+		before := len(f.mutations())
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
+		if !ok || !strings.HasPrefix(msg, "Nothing to do") || len(f.mutations()) != before {
+			t.Fatalf("re-run: %v %s, writes %v", ok, msg, f.mutations()[before:])
+		}
+	})
+}
+
+func hasExactMutation(f *resourceFake, want string) bool {
+	for _, m := range f.mutations() {
+		if m == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasStep(steps []UpdateStepEvent, id, text string) bool {
+	for _, s := range steps {
+		if s.Step == id && strings.Contains(s.Message, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestMigrate_Refusals(t *testing.T) {
+	t.Run("new storage with other keys", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putReadyManagedS3(f) // other keys
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || code != "conflict" || !strings.Contains(msg, "other keys") {
+			t.Fatalf("got %v %s: %s", ok, code, msg)
+		}
+		if len(f.mutations()) != 0 {
+			t.Errorf("writes: %v", f.mutations())
+		}
+	})
+	t.Run("old server not running", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		f.putJSON(legacyS3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},"status":{"readyReplicas":0}}`)
+		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || code != "prerequisites" || !strings.Contains(msg, "SeaweedFS in namespace 'minio' is not running") {
+			t.Fatalf("got %v %s: %s", ok, code, msg)
+		}
+		if len(f.mutations()) != 0 {
+			t.Errorf("writes: %v", f.mutations())
+		}
+	})
+	t.Run("someone else's Job of that name", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		f.putJSON(migrateJobPathT, `{"metadata":{}}`)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		ok, _, code, _ := runMigrate(t, c, MigrateOptions{})
+		if ok || code != "not_managed" || !f.has(migrateJobPathT) {
+			t.Fatalf("got %v %s", ok, code)
+		}
+	})
+	t.Run("a pipeline server with its own port is listed, not moved", func(t *testing.T) {
+		d := dspaInfo{Meta: objectMeta{Name: dspaName, Namespace: "p", Labels: map[string]string{managedByLabelKey: managedByLabelValue}}, Host: legacyS3Host(), Scheme: "http", Port: "9000"}
+		if why, ok := repointable(d); ok || !strings.Contains(why, "port") {
+			t.Errorf("repointable = %v %q", ok, why)
+		}
+	})
+}
+
+func TestRemoveOldStorage(t *testing.T) {
+	migrated := func(t *testing.T) (*resourceFake, *Client) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		delete(f.objects, fakeKey{gv: dspaAPIGroup, ns: "hand-made", plural: "datasciencepipelinesapplications", name: legacyDSPAName})
+		f.putJSON(secretPath("juntao-test", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(legacyPostManager, "Update")+`}}`)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+			t.Fatal(msg)
+		}
+		return f, c
+	}
+	ownedNS := `{"metadata":{"uid":"ns-uid","labels":` + toolLabelJSON + `,"creationTimestamp":"` + created + `","managedFields":` + managedFieldsJSON(toolFieldManager, "Update") + `},"status":{"phase":"Active"}}`
+	t.Run("keeps the namespace unless asked", func(t *testing.T) {
+		f, c := migrated(t)
+		f.putJSON(legacyNSPath, ownedNS)
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
+		if !ok || !strings.Contains(msg, "kept, as chosen") {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+		for _, p := range []string{legacyS3DeployPath, legacySvcPath, legacySecretPath, legacyUIRoutePath, legacyS3PVCPath, legacyMinIOPVCPath, legacyS3NPPath, secretPath("juntao-test", legacyDSPASecretName)} {
+			if f.has(p) {
+				t.Errorf("%s is left", p)
+			}
+		}
+		if !f.has(legacyNSPath) || !f.has(s3DeployPath) {
+			t.Error("the namespace or the new storage was deleted")
+		}
+		// A last copy and check ran first.
+		m := strings.Join(f.mutations(), "\n")
+		if strings.LastIndex(m, "POST /apis/batch/v1/namespaces/seaweedfs/jobs") > strings.Index(m, "DELETE "+legacyS3DeployPath) {
+			t.Error("the old storage was deleted before the last copy")
+		}
+		if hasExactMutation(f, "DELETE "+legacyNSPath) {
+			t.Error("the namespace was deleted")
+		}
+	})
+	t.Run("deletes the namespace the tool created when asked", func(t *testing.T) {
+		f, c := migrated(t)
+		f.putJSON(legacyNSPath, ownedNS)
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true, DeleteNamespace: true})
+		if !ok || !strings.Contains(msg, "is being deleted, with everything else in it") || f.has(legacyNSPath) {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+	})
+	t.Run("keeps a namespace it cannot prove it created", func(t *testing.T) {
+		f, c := migrated(t)
+		// The label alone (putLegacySeaweedFS) is not proof.
+		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true, DeleteNamespace: true})
+		if !ok || !strings.Contains(msg, "does not show that this tool created it") || !f.has(legacyNSPath) {
+			t.Fatalf("got %v: %s", ok, msg)
+		}
+		if hasExactMutation(f, "DELETE "+legacyNSPath) {
+			t.Error("the namespace was deleted")
+		}
+	})
+	t.Run("refused while a pipeline server uses the old storage", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		putNewStorageWithLegacyKeys(f)
+		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
+		if ok || code != "prerequisites" || !strings.Contains(msg, "hand-made/dspa") {
+			t.Fatalf("got %v %s: %s", ok, code, msg)
+		}
+		if len(f.mutations()) != 0 {
+			t.Errorf("writes: %v", f.mutations())
+		}
+	})
+	t.Run("a new mismatch stops before anything is deleted", func(t *testing.T) {
+		f, c := migrated(t)
+		simulateMigrate(f, &migrateSim{result: `{"copy":0,"check":1,"identical":4,"missing":1,"differ":0,"errors":0,"source":{"count":5,"bytes":5000},"destination":{"count":4,"bytes":4330}}`, objectStore: "True"})
+		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
+		if ok || code != "copy_mismatch" || !f.has(legacyS3DeployPath) {
+			t.Fatalf("got %v %s: %s", ok, code, msg)
+		}
+	})
+}
+
+func TestLegacyNamespaceOwned(t *testing.T) {
+	label := map[string]string{managedByLabelKey: managedByLabelValue}
+	at := func(manager, op string) []managedFieldsEntry {
+		return []managedFieldsEntry{{Manager: manager, Operation: op, Time: created}}
+	}
+	cases := []struct {
+		name string
+		meta objectMeta
+		want bool
+	}{
+		{"created by this version with its label", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(toolFieldManager, "Update")}, true},
+		{"created by the earliest POST, labelled later", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at(legacyPostManager, "Update")}, true},
+		{"label only", objectMeta{CreationTimestamp: created, Labels: label, ManagedFields: at("kubectl-create", "Update")}, false},
+		{"created by the tool, label removed", objectMeta{CreationTimestamp: created, ManagedFields: at(toolFieldManager, "Update")}, false},
+		{"nothing", objectMeta{CreationTimestamp: created}, false},
+	}
+	for _, tc := range cases {
+		if got, why := legacyNamespaceOwned(tc.meta); got != tc.want || (!got && why == "") {
+			t.Errorf("%s: owned = %v, reason %q", tc.name, got, why)
+		}
+	}
+}
+
+func TestGetResourcesStatus_MigrationPlan(t *testing.T) {
+	fastMigrateTimings(t)
+	f, c := newResourceFake(t)
+	putMigrationCase(f)
+	for _, ns := range []string{"juntao-test", "team-a", "hand-made"} {
+		putDSProject(f, ns)
+	}
+	status, err := GetResourcesStatus(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := status.LegacyStorage
+	if l == nil || l.Stage != "migrate" || strings.Join(l.Repoint, ",") != "juntao-test/dspa,team-a/nightly-dspa" ||
+		strings.Join(l.NotMoved, ",") != "hand-made/dspa (not created by this tool)" || l.NamespaceDeletable || l.NamespaceKeptReason == "" {
+		t.Fatalf("legacy = %+v", l)
+	}
+
+	// After the migration: the stage is "remove", blocked while the
+	// hand-made server still uses the old storage.
+	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
+	if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+		t.Fatal(msg)
+	}
+	status, err = GetResourcesStatus(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l = status.LegacyStorage
+	if l.Stage != "remove" || len(l.Repoint) != 0 || !strings.Contains(l.RemoveBlockedReason, "hand-made/dspa") {
+		t.Fatalf("legacy = %+v", l)
+	}
+}

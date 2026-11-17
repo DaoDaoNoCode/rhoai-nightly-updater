@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -148,6 +149,20 @@ func (f *resourceFake) mutations() []string {
 		}
 	}
 	return out
+}
+
+// foldStringData merges a Secret's stringData into data (base64), as the
+// API server does on every write; stringData is never returned.
+func foldStringData(obj map[string]interface{}) {
+	sd, ok := obj["stringData"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	data := ensureMap(obj, "data")
+	for k, v := range sd {
+		data[k] = base64.StdEncoding.EncodeToString([]byte(fmt.Sprint(v)))
+	}
+	delete(obj, "stringData")
 }
 
 func ensureMap(obj map[string]interface{}, key string) map[string]interface{} {
@@ -299,6 +314,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			f.status(w, 422, msg)
 			return
 		}
+		foldStringData(obj)
 		if !dryRun {
 			f.objects[k] = obj
 		}
@@ -328,6 +344,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				f.addManagedField(meta, manager, "Apply")
 				entries := meta["managedFields"].([]interface{})
 				setOwnedPorts(entries[len(entries)-1].(map[string]interface{}), containerPorts(obj))
+				foldStringData(obj)
 				if !dryRun {
 					f.objects[k] = obj
 				}
@@ -359,6 +376,10 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			applySSAPorts(obj, next, manager)
+			if _, ok := next["stringData"]; ok {
+				delete(next, "data")
+				foldStringData(next)
+			}
 			if msg := duplicatePortName(k, next); msg != "" {
 				f.status(w, 422, msg)
 				return
@@ -384,9 +405,20 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				delete(pm, "resourceVersion")
 			}
 		}
-		mergePatch(obj, patch)
-		f.bumpRV(meta)
-		f.write(w, 200, obj)
+		// A merge patch: a dry run persists nothing, and a change to spec
+		// bumps metadata.generation, as on a real API server.
+		next := deepCopyObject(obj)
+		mergePatch(next, patch)
+		nextMeta := ensureMap(next, "metadata")
+		f.bumpRV(nextMeta)
+		if _, ok := patch["spec"]; ok {
+			n, _ := strconv.Atoi(fmt.Sprint(nextMeta["generation"]))
+			nextMeta["generation"] = n + 1
+		}
+		if !dryRun {
+			f.objects[k] = next
+		}
+		f.write(w, 200, next)
 
 	case http.MethodDelete:
 		obj := f.objects[k]

@@ -1441,6 +1441,63 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 	writeOperationResult(w, result, "setup-minio")
 })
 
+// runMigrateStorage runs Migrate storage; tests replace it.
+var runMigrateStorage = cluster.MigrateS3Storage
+
+// HandleS3StorageMigrateStream moves the S3 storage an earlier version left
+// in namespace minio to namespace seaweedfs (Migrate storage), or with
+// removeOldStorage removes the old storage afterwards, streaming each step
+// via SSE.
+var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in migrate-storage handler", "error", rec)
+		}
+	}()
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.MigrateStorageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if req.DeleteNamespace && !req.RemoveOldStorage {
+		writeError(w, "deleteNamespace needs removeOldStorage", http.StatusBadRequest, "validation")
+		return
+	}
+
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	defer sseWriter.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	target := "migrate"
+	if req.RemoveOldStorage {
+		target = "remove old storage"
+		if req.DeleteNamespace {
+			target += " and namespace minio"
+		}
+	}
+	beginOperation(w, target)
+	slog.Info("mutation", "op", "migrate-storage", "target", target)
+
+	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace}, forwardSteps(sseWriter))
+	sendOperationResult(sseWriter, result, migrateErr)
+	if migrateErr != nil {
+		slog.Error("migrate-storage failed", "error", migrateErr)
+	}
+})
+
 // HandleS3StorageTeardown deletes the S3 storage objects this tool created, including those an earlier
 // version left in namespace minio; the namespaces are kept.
 var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {

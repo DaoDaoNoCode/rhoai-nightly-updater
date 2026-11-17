@@ -50,17 +50,28 @@ var (
 
 // dspaInfo is the part of a DataSciencePipelinesApplication the tool reads.
 type dspaInfo struct {
-	Meta       objectMeta
-	Host       string
+	Meta objectMeta
+	Host string
+	// Scheme and Port of the external object storage. DSPO appends Port to
+	// Host when it is set (controllers/storage.go joinHostPort); the tool
+	// never sets it and puts the port in Host.
+	Scheme     string
+	Port       string
 	SecretName string
 	ExternalDB bool
 	Ready      *dspaCondition
+	// ObjectStore is DSPO's ObjectStoreAvailable condition: True once its
+	// connection check to the object storage passed (or was skipped by the
+	// DSPA's own settings), for the generation in ObservedGeneration
+	// (controllers/dspastatus/dspa_status.go, rhoai-3.6).
+	ObjectStore *dspaCondition
 }
 
 type dspaCondition struct {
-	Status  string `json:"status"`
-	Reason  string `json:"reason"`
-	Message string `json:"message"`
+	Status             string `json:"status"`
+	Reason             string `json:"reason"`
+	Message            string `json:"message"`
+	ObservedGeneration int64  `json:"observedGeneration"`
 }
 
 // managedByTool reports whether this tool created the DSPA. Current versions
@@ -137,6 +148,8 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 				ObjectStorage struct {
 					ExternalStorage *struct {
 						Host                string `json:"host"`
+						Scheme              string `json:"scheme"`
+						Port                string `json:"port"`
 						S3CredentialsSecret struct {
 							SecretName string `json:"secretName"`
 						} `json:"s3CredentialsSecret"`
@@ -161,13 +174,16 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	for _, item := range list.Items {
 		d := dspaInfo{Meta: item.Metadata, ExternalDB: item.Spec.Database.ExternalDB != nil}
 		if es := item.Spec.ObjectStorage.ExternalStorage; es != nil {
-			d.Host = es.Host
+			d.Host, d.Scheme, d.Port = es.Host, es.Scheme, es.Port
 			d.SecretName = es.S3CredentialsSecret.SecretName
 		}
 		for _, cond := range item.Status.Conditions {
-			if cond.Type == "Ready" {
-				cc := cond.dspaCondition
+			cc := cond.dspaCondition
+			switch cond.Type {
+			case "Ready":
 				d.Ready = &cc
+			case dspaObjectStoreCondition:
+				d.ObjectStore = &cc
 			}
 		}
 		out = append(out, d)
