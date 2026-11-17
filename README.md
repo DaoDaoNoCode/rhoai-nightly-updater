@@ -78,7 +78,9 @@ One tab per feature after an **Overview**, kept in the address so a link opens t
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready · not managed by this tool** when it works: ownership never counts as not ready. A project-scoped feature summarises its projects ("Ready in juntao-test", "Ready in 2 of 5 projects", "Not set up in any project").
-4. The next step: **Open**, **Set up** (confirm, then the missing parts in order with their progress), or **Show issue** (opens the tab at that part).
+4. The next step: **Open**, **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
+
+Under the table, **Clean up everything** deletes what this tool created (the pipeline servers, the S3 storage, MLflow) in one confirmed operation, with a checkbox per part.
 
 <img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, S3 storage with endpoint and masked admin password, and the pipeline server with Open pipelines" width="760">
 
@@ -86,16 +88,20 @@ One tab per feature after an **Overview**, kept in the address so a link opens t
 2. The project picker (type to filter; each project says what it has).
 3. Each part shows its health, its actions and its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket and the admin UI user.
 4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket). The secret key is also the admin UI password (user `admin`). It is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
-5. **Open pipelines** (and **Open admin UI**). **What this creates** and **Tear down** are collapsed under the parts; Tear down is offered only for what this tool created.
+5. **Open pipelines** (and **Open admin UI**). Each part's menu (⋮) has **Delete** (and **Repair** when it applies), only for what this tool created; a disabled entry says why.
 
-Storage an earlier version set up in namespace `minio` reads **Needs attention** with **Migrate storage**, which moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+Before **Set up**, the tab shows what it needs: a DataScienceCluster component that is not Managed (with **Open Components**), no data science project (with a link to the dashboard's Projects page), or a namespace `seaweedfs` that is someone else's. Set up stays disabled, with the reason under it. Once the pipeline server is ready, **Use it** shows where its runs are, its API endpoint and a KFP SDK snippet, followed by **What next**. Problems read in plain words, with the fix (Repair, Revert, View logs) on the alert and the pod's reasons under **Technical details**. Every change runs in one dialog with its steps and outcome; if you close it, a notification brings the outcome back.
+
+Storage an earlier version set up in namespace `minio` reads **Needs attention**; a warning at the top of the tab says why and offers **Migrate storage**, which moves it, with its data and pipeline servers, and ends there. **Delete old storage** is a separate, later action in the storage's menu ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
 
 <img src="docs/images/environment-mlflow.png" alt="MLflow tab: the MLflow server Ready and Not managed by this tool, with its image, address and Deploy PR" width="760">
 
 1. The **MLflow** tab: the server's health.
-2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow, Deploy PR, Revert), but the tool does not tear it down.
+2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow, a PR build, Revert), but the tool does not delete it.
 
-Every setup has its removal on the same tab: **Tear down** (under the parts) for the storage, the pipeline server and MLflow, each confirmed with what is deleted and what is kept; **Revert** for a deployed PR image; **Remove old storage** after Migrate storage. For what this tool did not create, Tear down says it is not touched.
+MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (`<address>/#/experiments?workspace=<project>`), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
+
+Every setup has its removal on the same tab: **Delete** in the part's menu for the storage, the pipeline server and MLflow, each confirmed with the outcome first and the objects under Details; **Revert** for a deployed PR image; **Delete old storage** after Migrate storage; and **Clean up** at the bottom of each tab. What this tool did not create has no Delete.
 
 ### Diagnostics: what is wrong, and how to fix it
 

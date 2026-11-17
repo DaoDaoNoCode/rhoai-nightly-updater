@@ -18,7 +18,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy` | [§5](#5-operations-busy-stuck-interrupted) |
 | **Operator failed**, **No Subscription**, a failed Update or Install a different build step | [§6](#6-update--install-a-different-build-failed) |
 | A PR shows "Does not contain" in Build Explorer | [§8](#8-build-explorer-quay-and-github) |
-| Storage **Needs attention** (Migrate storage or Repair), **Error**, Tear down disabled | [§10](#10-environment-page) |
+| Storage **Needs attention** (Migrate storage or Repair), **Error**, Delete disabled | [§10](#10-environment-page) |
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
 | "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
 | "Argo CD manages ...", **Install pending**, **OLM installing**, `gitops_managed`, `install_mismatch`, "sets the image of CatalogSource ... in Git" | [§13](#13-clusters-managed-by-argo-cd) |
@@ -275,7 +275,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PVC `seaweedfs-data`, Service `seaweedfs-s3`, Route `seaweedfs-admin`). Storage an earlier version set up in namespace `minio` is moved with **Migrate storage** (§10.1). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
-The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server) and **MLflow**. The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair); **What this creates** and **Tear down** are collapsed under the parts. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Tear down or Repair.
+The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server) and **MLflow**. The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): the pipeline servers, then the storage, then MLflow, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, a notification brings it back.
 
 <img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
 
@@ -291,7 +291,7 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 2. The project.
 3. The S3 endpoint and the bucket.
 4. The admin UI password, masked: show or copy it (cluster-admins only; it is read from the server only then).
-5. **Open pipelines**. Under the parts, **Tear down**: the storage's stays disabled while a pipeline server uses it; its tooltip names it.
+5. **Open pipelines**. In the storage's menu, **Delete** stays disabled while a pipeline server uses it, and says which.
 
 | Problem | Fix |
 |---|---|
@@ -300,22 +300,25 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | Storage "Needs attention" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
 | Migrate storage stopped: "The copy is not complete" | Nothing else changed. The message says what differs and whether a retry can help. Objects missing, unreadable, or changed while nothing used the new storage: run it again (the copy never deletes, and copies changed objects again). Objects "different in the new storage" once pipeline servers write there: the copy never overwrites them, so a retry gives the same result; for each path named, copy the old version into `seaweedfs` yourself or delete it from `minio`, then run it again. Extra objects in `seaweedfs` are only reported |
 | Migrate storage: "The copy is still running" | A large storage: the Job keeps running (up to an hour). Run Migrate storage again to wait for it |
-| Remove old storage: "The final copy and check did not finish" | Nothing was deleted and the copy was stopped: the removal always starts a new copy, so objects written since an earlier one are included. The check reads every object, so a retry takes about as long; retry when the cluster is less busy |
+| Delete old storage: "The final copy and check did not finish" | Nothing was deleted and the copy was stopped: the removal always starts a new copy, so objects written since an earlier one are included. The check reads every object, so a retry takes about as long; retry when the cluster is less busy |
 | Migrate storage: "Not enough time is left in this run" | The run stopped before moving the next pipeline server, so none is left moved but unchecked. Run Migrate storage again to continue |
 | Migrate storage: "does not reach the new storage" | The pipeline server was moved but DSPO reports `ObjectStoreAvailable` False. The old storage is kept. `oc get dspa -n <project> <name> -o jsonpath='{.status.conditions}'`, fix the cause, run Migrate storage again |
-| Migrate storage: "other keys" | Namespace `seaweedfs` already has a storage with other keys; the tool never changes the keys of a storage that may hold data. Not Tear down: it also deletes the old storage in `minio`. If the new storage holds nothing you need, delete it by hand (`oc delete -n seaweedfs deployment/seaweedfs service/seaweedfs-s3 route/seaweedfs-admin networkpolicy/seaweedfs-ingress secret/seaweedfs-s3-credentials pvc/seaweedfs-data`), then migrate |
-| Remove old storage stopped part-way | Run **Remove old storage** again: it continues where it stopped. Until the server's Deployment is deleted it copies and checks again first; after that the old storage's data volumes are already being deleted and it finishes without a copy |
-| Remove old storage: "cannot be copied from ... not being deleted" | The old server is gone (or not running) but its data volume was never deleted by a removal, so it may hold objects that were never copied: nothing is deleted. Start the server again, or once you have checked `seaweedfs` holds what you need, delete the volume as the message says and run Remove old storage again |
+| Migrate storage: "other keys" | Namespace `seaweedfs` already has a storage with other keys; the tool never changes the keys of a storage that may hold data. Not Delete: it also deletes the old storage in `minio`. If the new storage holds nothing you need, delete it by hand (`oc delete -n seaweedfs deployment/seaweedfs service/seaweedfs-s3 route/seaweedfs-admin networkpolicy/seaweedfs-ingress secret/seaweedfs-s3-credentials pvc/seaweedfs-data`), then migrate |
+| Delete old storage stopped part-way | Run **Delete old storage** again: it continues where it stopped. Until the server's Deployment is deleted it copies and checks again first; after that the old storage's data volumes are already being deleted and it finishes without a copy |
+| Delete old storage: "cannot be copied from ... not being deleted" | The old server is gone (or not running) but its data volume was never deleted by a removal, so it may hold objects that were never copied: nothing is deleted. Start the server again, or once you have checked `seaweedfs` holds what you need, delete the volume as the message says and run Delete old storage again |
 | Copy Job cannot start (ImagePullBackOff) | Set `RCLONE_IMAGE` to a pullable rclone 1.x image (a mirror), then run Migrate storage again |
 | Storage "Needs attention" with **Repair** ("Needs repair" in the details) | SeaweedFS runs but `seaweedfs-s3`/`seaweedfs-admin` do not point at it, or it is scaled to 0. Press **Repair** (re-runs setup) |
 | "Needs repair: SeaweedFS runs ..., not the image this version deploys" | Expected after `SEAWEEDFS_IMAGE` changed. **Repair** updates the Deployment in place; the data PVC and the credentials are kept. S3 is unavailable while the pod restarts (`Recreate`) |
 | SeaweedFS not ready / ImagePullBackOff | Fix the cause (for example `SEAWEEDFS_IMAGE` to a mirror) and **Repair** again. `oc logs -n seaweedfs deploy/seaweedfs` |
-| S3 storage teardown refused | A pipeline server still uses the storage (the message names it). Tear that down first. After a partial teardown, run Tear down again |
-| Namespace left after teardown | Tear down keeps namespace `seaweedfs` unless you tick **Also delete namespace seaweedfs (created by this tool)**; it is offered only when the namespace carries the tool label and the tool wrote it, and deletes everything in it. Otherwise `oc delete project seaweedfs` (or `minio`) once `oc get all,pvc,secret -n <namespace>` is empty |
+| S3 storage deletion refused | A pipeline server still uses the storage (the message names it). Delete that first, or select it in **Clean up**. After a partial deletion, run Delete again |
+| "Data Science Pipelines (or MLflow) is turned off on this cluster" | The DataScienceCluster's component (`aipipelines`, `datasciencepipelines` on DSC v1, `mlflowoperator`) is not Managed: the operator keeps the CRD, so a pipeline server or MLflow would be created and never start. Set up refuses before changing anything. A cluster-admin sets the component to Managed (`oc edit datasciencecluster <name>`), waits for it to be ready on the Components page, then sets up |
+| Clean up stopped | The message names the part that failed and what was not done. Fix that part's cause (the same as for its own Delete) and run Clean up again: parts already deleted are no longer offered |
+| "Project ... no longer exists" | The address names a project that was deleted (or is no longer a data science project). Choose another; Set up is not offered for it, since it would create the project again |
+| Namespace left after deletion | Delete keeps namespace `seaweedfs` unless you tick **Also delete namespace seaweedfs (created by this tool)**; it is offered only when the namespace carries the tool label and the tool wrote it, and deletes everything in it. Otherwise `oc delete project seaweedfs` (or `minio`) once `oc get all,pvc,secret -n <namespace>` is empty |
 | Pipelines tab: the project picker is empty after clearing it | Expected: a clear is kept in the address (`project=` with no value), so the default project does not come back; choose a project, or open the tab without `project=` for the default |
 | Reach the S3 API from your laptop | `oc port-forward -n seaweedfs svc/seaweedfs-s3 8333`, endpoint `http://localhost:8333`, path-style, region `us-east-1`. Keys: `oc extract secret/seaweedfs-s3-credentials -n seaweedfs --to=-` |
 | Admin UI login | **Open admin UI**; user `admin`. The password is on the Pipelines tab under S3 storage: the eye shows it, the copy button copies it (cluster-admins only; it is the S3 secret key). Disabled with "Read-only access": you are not a cluster-admin |
-| **Set up** disabled: "Available once ..." | The storage is not ready, or Migrate storage has not copied the old storage yet, or namespace `seaweedfs` is not this tool's; the tooltip says which |
+| **Set up** disabled: "Available once ..." | The storage is not ready, or Migrate storage has not copied the old storage yet, or namespace `seaweedfs` is not this tool's; the reason is under the button |
 | The Pipelines tab opens another project | Without `?project=` it opens the first project with a ready pipeline server (else the first with one). Pick the project; the address keeps it |
 | Pipeline server: "already has a pipeline server" | Projects get one DSPA; the existing one was left unchanged |
 | Old pipeline run artifacts return 404 after Migrate storage | They were written to MinIO before an earlier version replaced it with SeaweedFS, so they are on `minio-pvc`, which cannot be copied automatically. Copy them by hand before you remove the old storage (§10.1). If a cached step fails because its outputs are gone, re-run with caching disabled |
@@ -346,7 +349,7 @@ flowchart TD
   C --> D["Move this tool's pipeline servers, one at a time"]
   D -->|"not ObjectStoreAvailable in 2 minutes"| Y["Stop: the old storage is kept"]
   D --> E["Summary and checklist"]
-  E --> F["Remove old storage (confirm, optionally namespace minio)"]
+  E --> F["Later: Delete old storage (confirm, optionally namespace minio)"]
   F --> G["Copy and check once more, then delete the old objects by UID"]
 ```
 
@@ -356,17 +359,17 @@ Before you remove the old storage, update what this tool did not create (data co
 
 <img src="docs/images/s3-remove-dialog.png" alt="Dialog: Remove the old storage?, with the checklist, what is deleted, and the choice to delete namespace minio" width="760">
 
-After a migration the Storage card offers **Remove old storage**. It deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
+After a migration the S3 storage's menu offers **Delete old storage**, a separate dialog (the migration's own dialog ends with its outcome). It deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
 
 Check the result:
 
 ```sh
 oc get deploy,svc,pvc,route -n seaweedfs
 oc get dspa -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,HOST:.spec.objectStorage.externalStorage.host
-oc get all,pvc,secret -n minio      # after Remove old storage
+oc get all,pvc,secret -n minio      # after Delete old storage
 ```
 
-#### Recover MinIO's files from `minio-pvc` (optional, before Remove old storage)
+#### Recover MinIO's files from `minio-pvc` (optional, before Delete old storage)
 
 `minio-pvc` holds what MinIO stored before an earlier version replaced it with SeaweedFS (artifacts of the oldest pipeline runs). Only a MinIO server reads that format, so Migrate storage cannot copy it. To keep those objects, start a temporary MinIO on the volume and copy them into the new storage before the removal. The tool does not manage these objects (no tool label).
 
@@ -501,7 +504,7 @@ Fix (MANUAL ADMIN STEP): `oc annotate deploy/<name> -n <ns> opendatahub.io/manag
 oc get mlflows.mlflow.opendatahub.io
 ```
 
-Fix: **Tear down** MLflow on the Environment page. For an MLflow CR the tool didn't create (MANUAL ADMIN STEP): `oc delete mlflows.mlflow.opendatahub.io <name>`.
+Fix: **Delete MLflow** (the MLflow server's menu) on the Environment page. For an MLflow CR the tool didn't create (MANUAL ADMIN STEP): `oc delete mlflows.mlflow.opendatahub.io <name>`.
 
 **D8.** Only the pipelines operator (DSPO) removes the DSPA finalizer. If pipelines were disabled, or DSPO is gone, a DSPA and its project hang in Terminating.
 

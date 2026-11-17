@@ -20,6 +20,44 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **Environment page, for someone new to it.** What a feature needs shows
+  before Set up: a DataScienceCluster component that is not Managed (with
+  Open Components), no data science project (with a link to the
+  dashboard's Projects page), or a namespace `seaweedfs` that is someone
+  else's; Set up stays disabled with the reason under it, and every Set
+  up first checks all its parts, so it never creates half a feature. The
+  backend refuses the same way (the operator keeps a removed component's
+  CRD, so a pipeline server or MLflow would be created and never start).
+  Set up names what it sets up ("Set up Pipelines in dev-project"), its
+  confirmation leads with the outcome ("On the cluster: S3 storage (20
+  GiB)... Takes 1 to 3 minutes") with the objects under Details, and every
+  change (Set up, Delete, Repair, a PR deploy, Clean up) runs in one
+  dialog with its steps and outcome; closed early, a notification brings
+  it back. Problems read in words ("The S3 storage's image can't be
+  downloaded"), with the fix and View logs on the alert and the pod's
+  reasons under Technical details.
+- **Clean up.** Each tab, and the Overview ("Clean up everything"),
+  deletes what this tool created as one confirmed operation with a
+  checkbox per part: the pipeline servers in every project, the S3
+  storage (optionally namespace `seaweedfs`), MLflow. It runs on the
+  server as one operation (`POST /api/resources/cleanup/stream`, one
+  lock and one rate-limit slot) and stops at the first part that fails.
+  Per-part Delete and Repair moved from the collapsed Tear down section
+  to each part's menu. "Delete" replaces "Tear down" and "Remove".
+- **Using what was set up.** Pipelines: where the runs are, the pipeline
+  server's API endpoint and a KFP SDK snippet. MLflow: workspaces
+  explained, a project picker, Open MLflow in the project's workspace,
+  and the client settings (`MLFLOW_TRACKING_URI`,
+  `MLFLOW_TRACKING_TOKEN`, `MLFLOW_WORKSPACE`); deploying a PR build
+  moved to "Test an MLflow PR build". A "What next" list follows.
+- **Migrate storage** says why at the top of the Pipelines tab, and a
+  successful migration ends with its outcome: Delete old storage is a
+  separate, later action in the storage's menu.
+- Readers see who can help ("ask a cluster-admin") instead of disabled
+  changes and key fields. A project deleted elsewhere leaves the picker
+  on the next refresh or poll. The Overview's next-step buttons line up
+  with the row's text.
+
 - "Open MLflow" uses the address the MLflow operator reports (the MLflow
   CR's `status.url`, on current releases `https://rh-ai.<apps>/mlflow`
   through the data-science gateway). It looked for a Route named `mlflow`,

@@ -171,7 +171,7 @@ Optional, for testing pipelines in the dashboard. Open **Environment**.
 
 <img src="images/environment-pipelines.png" alt="Pipelines tab: Ready in the project, with the storage's endpoint and admin login, and Open pipelines" width="760">
 
-**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes) and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). Tear down the pipeline servers before the storage (**Tear down**, under the parts): the storage's stays disabled while one uses it.
+**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes) and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). To remove it all, use **Clean up Pipelines** at the bottom of the tab (or **Delete** in a part's menu: the storage's stays disabled while a pipeline server uses it).
 
 ## Day to day
 
