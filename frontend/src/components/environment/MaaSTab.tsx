@@ -286,7 +286,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
     case "setup-maas":
       return {
         title: "Set up Models as a Service?", confirm: "Set up", runTitle: "Set up Models as a Service",
-        summary: <Content component="p">Sets up the MaaS platform in the order the MaaS install docs give. It takes about 5 minutes. The database is a small one for development and test.</Content>,
+        summary: <Content component="p">Sets up the MaaS platform in the order the MaaS install docs give. It takes about 5 minutes. The database is a small one for development and test. The gateway creates a cloud load balancer, which costs money while it exists.</Content>,
         changes: [
           <>Namespace <code>{m?.platform.namespace ?? "the AI gateway's"}</code>: a one-instance CloudNativePG database <code>maas-db</code> (1 GiB volume) and Secret <code>maas-db-config</code> with its address.</>,
           <>Namespace <code>openshift-ingress</code>: Gateway <code>maas-default-gateway</code> with an external load balancer (cloud cost) at <code>{m?.url ?? "maas.<apps domain>"}</code>; GatewayClass <code>openshift-default</code> only if the cluster has none.</>,
