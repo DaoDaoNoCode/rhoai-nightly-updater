@@ -174,8 +174,8 @@ func mlflowSamples() map[string]mlflowSample {
 	return map[string]mlflowSample{
 		SampleGenAIDemo: {status: demoStatus, add: addGenAIDemo, regenerate: regenerateGenAIDemo},
 		SampleTraining:  {status: trainingStatus, add: addTraining, remove: removeTraining},
-		SampleMCPServer: {status: mcpStatus},
-		SampleSkill:     {status: skillStatus},
+		SampleMCPServer: {status: mcpStatus, add: addMCP, remove: removeMCP},
+		SampleSkill:     {status: skillStatus, add: addSkill, remove: removeSkill},
 	}
 }
 
