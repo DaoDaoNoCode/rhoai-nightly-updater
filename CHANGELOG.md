@@ -58,7 +58,9 @@ only accepts a tag whose version is the top dated section. See
 - Status page, Cluster setup: **Replace token** of the pull secret is a
   button like **Test with Quay** next to it, outlined in red because it
   overwrites a credential that may work; the form it opens is still the
-  confirmation, and the same button then reads **Cancel replacing**.
+  confirmation, and the same button then reads **Cancel replacing**. The
+  two buttons are one action group, with PatternFly's normal spacing
+  between them instead of the wide gap between groups.
 
 ### Fixed
 

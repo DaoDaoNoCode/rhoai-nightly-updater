@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   ActionList,
+  ActionListGroup,
   ActionListItem,
   Alert,
   Button,
@@ -198,20 +199,23 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
       {readOnly ? null : pullSecret.exists ? (
         <>
           <StackItem>
+            {/* One group: related actions get PatternFly's action-to-action gap (md), not the group-to-group gap (2xl). */}
             <ActionList>
-              <ActionListItem>
-                <Button variant="secondary" onClick={handleTest} isLoading={testLoading} isDisabled={testLoading}>
-                  Test with Quay
-                </Button>
-              </ActionListItem>
-              <ActionListItem>
-                {/* Danger: replacing overwrites a credential that may work. The
-                    form below is the confirmation; while it is open the same
-                    button cancels, so focus stays on it. */}
-                <Button variant="secondary" isDanger={!replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
-                  {replaceOpen ? "Cancel replacing" : "Replace token"}
-                </Button>
-              </ActionListItem>
+              <ActionListGroup>
+                <ActionListItem>
+                  <Button variant="secondary" onClick={handleTest} isLoading={testLoading} isDisabled={testLoading}>
+                    Test with Quay
+                  </Button>
+                </ActionListItem>
+                <ActionListItem>
+                  {/* Danger: replacing overwrites a credential that may work. The
+                      form below is the confirmation; while it is open the same
+                      button cancels, so focus stays on it. */}
+                  <Button variant="secondary" isDanger={!replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
+                    {replaceOpen ? "Cancel replacing" : "Replace token"}
+                  </Button>
+                </ActionListItem>
+              </ActionListGroup>
             </ActionList>
           </StackItem>
           {testResult && (
