@@ -232,7 +232,7 @@ async (page) => {
     ["healthy", "/components", "page-components"],
     ["healthy", "/builds", "page-build-explorer"],
     ["dashboard-session", "/dashboard-dev", "page-dashboard-dev"],
-    ["env-ready", "/test-resources?project=dev-project", "page-test-resources"],
+    ["env-live", "/test-resources", "page-test-resources"],
     ["diag-prerequisite-missing", "/diagnostics", "page-diagnostics"],
   ];
 
@@ -386,78 +386,77 @@ async (page) => {
       });
     },
 
-    // The Environment page. Drawer images use the full width: below
-    // PatternFly's xl breakpoint the details drawer covers the cards.
+    // The Environment page: the Overview, then one tab per feature.
     async resources() {
-      const tabCard = (title) => page.getByRole("region", { name: title, exact: true });
-      const drawer = () => page.locator("#environment-details");
-      const openDetails = async (title) => {
-        await tabCard(title).getByRole("button", { name: `${title} details` }).click();
-        await wait(500);
-      };
+      const part = (name) => page.getByRole("listitem", { name: new RegExp(`^${name} \\(`) });
+      const panel = () => page.getByRole("tabpanel");
 
-      await open("/test-resources?project=dev-project", "s3-none");
-      const goal = tabCard("Run a data science pipeline");
-      await crop("environment-goals", [goal, tabCard("Track experiments with MLflow")], {
+      await open("/test-resources", "env-live");
+      const table = page.getByRole("grid", { name: "Features" });
+      await crop("environment-overview", [page.getByRole("heading", { name: "Overview", level: 2 }), table], {
         notes: [
-          { at: goal.locator(".pf-v6-c-progress-stepper"), n: 1, pos: "l" },
-          { at: goal.getByText(/of 2 ready/), n: 2, pos: "r" },
-          { at: goal.getByRole("button", { name: /^Set up/ }), n: 3, pos: "r" },
+          { at: page.getByText(/^\d+ of \d+ ready$/), n: 1, pos: "r" },
+          { at: table.getByRole("link", { name: "Pipelines", exact: true }), n: 2, pos: "l" },
+          { at: label(table, "Ready · not managed by this tool"), n: 3, pos: "r" },
+          { at: table.getByRole("link", { name: /Open MLflow/ }), n: 4, pos: "r" },
         ],
-        pad: 12, // less than the 16 px gutter to the heading above the cards
+        pad: 24,
       });
 
-      await open("/test-resources?tab=cluster", "s3-running", { width: W });
-      await openDetails("Storage");
-      await drawer().getByRole("button", { name: "How to use" }).click();
+      await open("/test-resources?tab=pipelines", "env-live");
+      const storage = part("S3 storage");
+      await crop("environment-pipelines", [panel().getByRole("heading", { name: "Pipelines", level: 2 }), part("Pipeline server")], {
+        notes: [
+          { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
+          { at: page.getByRole("combobox"), n: 2, pos: "r" },
+          { at: row(storage, "Endpoint"), n: 3, pos: "l" },
+          { at: storage.getByRole("button", { name: "Show password" }), n: 4, pos: "r" },
+          { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 5, pos: "l" },
+        ],
+        pad: 24,
+      });
+
+      await open("/test-resources?tab=mlflow", "env-live");
+      await crop("environment-mlflow", [panel().getByRole("heading", { name: "MLflow", level: 2 }), part("MLflow server")], {
+        notes: [
+          { at: label(part("MLflow server"), "Ready"), n: 1, pos: "r" },
+          { at: label(part("MLflow server"), "Not managed by this tool"), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+
+      await open("/test-resources?tab=pipelines", "s3-migrate");
+      const old = part("S3 storage");
+      await old.getByRole("button", { name: "Storage of an earlier version" }).click();
       await wait(400);
-      const storage = tabCard("Storage");
-      await crop("environment-storage-details", [storage, drawer()], {
-        notes: [
-          { at: label(storage, "Ready"), n: 1, pos: "r" },
-          { at: storage.getByRole("link", { name: /Open admin UI/ }), n: 2, pos: "l" },
-          { at: row(drawer(), "S3 endpoint"), n: 3, pos: "l" },
-          { at: drawer().getByRole("button", { name: "Tear down" }), n: 4, pos: "r" },
-          { at: drawer().getByRole("button", { name: "Copy admin password" }), n: 5, pos: "r" },
-        ],
-        pad: 16,
-      });
-
-      await open("/test-resources?tab=projects&project=dev-project", "s3-running");
-      await crop("environment-projects", [page.locator("form").first(), tabCard("Pipeline server")], { pad: 16 });
-
-      await open("/test-resources?tab=cluster", "s3-migrate", { width: W });
-      await openDetails("Storage");
-      const old = tabCard("Storage");
-      await crop("s3-migration-needed", [old, drawer().getByRole("heading", { name: "Storage", exact: true }), drawer().getByText("Data volumes", { exact: true })], {
+      await crop("s3-migration-needed", old, {
         notes: [
           { at: label(old, "Needs attention"), n: 1, pos: "r" },
           { at: old.getByRole("button", { name: "Migrate storage" }), n: 2, pos: "l" },
-          { at: drawer().getByRole("heading", { name: "Storage of an earlier version" }), n: 3, pos: "l" },
+          { at: old.getByRole("button", { name: "Storage of an earlier version" }), n: 3, pos: "l" },
         ],
-        pad: 16,
+        pad: 24,
       });
       await old.getByRole("button", { name: "Migrate storage" }).click();
       await wait(800);
       await crop("s3-migrate-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
-      await open("/test-resources?tab=cluster", "s3-migrate-remove");
-      await tabCard("Storage").getByRole("button", { name: "Remove old storage" }).click();
+      await open("/test-resources?tab=pipelines", "s3-migrate-remove");
+      await part("S3 storage").getByRole("button", { name: "Remove old storage" }).click();
       await wait(800);
       await crop("s3-remove-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
-      await open("/test-resources?tab=cluster", "s3-incomplete", { width: W });
-      await openDetails("Storage");
-      const inc = tabCard("Storage");
-      await crop("s3-incomplete", [inc, drawer().locator(".pf-v6-c-alert").first()], {
+      await open("/test-resources?tab=pipelines", "s3-incomplete");
+      const inc = part("S3 storage");
+      await crop("s3-incomplete", inc, {
         notes: [
           { at: label(inc, "Needs attention"), n: 1, pos: "r" },
-          { at: drawer().locator(".pf-v6-c-alert").first(), n: 2, pos: "l" },
+          { at: inc.locator(".pf-v6-c-alert").first(), n: 2, pos: "l" },
           { at: inc.getByRole("button", { name: "Repair" }), n: 3, pos: "l" },
         ],
-        pad: 16,
+        pad: 24,
       });
     },
 
@@ -503,10 +502,10 @@ async (page) => {
     },
 
     async "gif-migrate"() {
-      await open("/test-resources?tab=cluster", "s3-migrate");
+      await open("/test-resources?tab=pipelines", "s3-migrate");
       gif("s3-migrate", await mainClip());
       await frame(1200);
-      await clickShown(page.getByRole("region", { name: "Storage", exact: true }).getByRole("button", { name: "Migrate storage" }));
+      await clickShown(page.getByRole("listitem", { name: /^S3 storage \(/ }).getByRole("button", { name: "Migrate storage" }));
       await wait(700);
       await hidePointer();
       await frame(2600);
@@ -528,10 +527,10 @@ async (page) => {
     },
 
     async "gif-repair"() {
-      await open("/test-resources?tab=cluster", "s3-incomplete");
+      await open("/test-resources?tab=pipelines", "s3-incomplete");
       gif("s3-repair", await mainClip());
       await frame(1200);
-      await clickShown(page.getByRole("region", { name: "Storage", exact: true }).getByRole("button", { name: "Repair" }));
+      await clickShown(page.getByRole("listitem", { name: /^S3 storage \(/ }).getByRole("button", { name: "Repair" }));
       await wait(700);
       await hidePointer();
       await frame(2200);

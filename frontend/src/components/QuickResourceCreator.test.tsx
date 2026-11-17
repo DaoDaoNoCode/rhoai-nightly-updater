@@ -50,7 +50,7 @@ describe("QuickResourceCreator polling (A06-5)", () => {
   it("backs off while a resource starts and stops once it is ready", async () => {
     let minio: ResourceState = { deployed: true, ready: false, message: "Provisioning" };
     const statusCalls = stubResources(() => statusWith(minio));
-    renderAt("/test-resources?tab=cluster");
+    renderAt("/test-resources?tab=pipelines");
     await tick();
     expect(statusCalls()).toBe(1);
     await tick(5_000);
@@ -68,7 +68,7 @@ describe("QuickResourceCreator polling (A06-5)", () => {
 
   it("does not poll while the tab is hidden", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "Provisioning" }));
-    renderAt("/test-resources?tab=cluster");
+    renderAt("/test-resources?tab=pipelines");
     await tick();
     setDocumentHidden(true);
     await tick(5 * 60_000);
@@ -80,16 +80,16 @@ describe("QuickResourceCreator polling (A06-5)", () => {
 
   it("stops polling and shows a failure for an image that can never be pulled", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "ImagePullBackOff" }));
-    renderAt("/test-resources?tab=cluster");
+    renderAt("/test-resources?tab=pipelines");
     await tick();
-    expect(within(screen.getByRole("region", { name: "Storage" })).getByText("Error")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: /^S3 storage/ })).getByText("Error")).toBeInTheDocument();
     await tick(10 * 60_000);
     expect(statusCalls()).toBe(1);
   });
 
   it("gives up after 10 minutes of settling and offers to check again", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "Provisioning" }));
-    renderAt("/test-resources?tab=cluster");
+    renderAt("/test-resources?tab=pipelines");
     await tick();
     await tick(11 * 60_000);
     const calls = statusCalls();
@@ -115,23 +115,24 @@ describe("disabled buttons explain themselves (A06-7)", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("You don't have permission");
   });
 
-  it("a pipeline server's Set up stays focusable and explains why it is disabled (N10)", async () => {
-    stubResources(() => statusWith(notDeployed), ["dev-project"]);
-    renderAt("/test-resources?tab=projects&project=dev-project");
+  it("Set up stays focusable and explains why it is disabled (N10)", async () => {
+    const blocked = "Namespace 'seaweedfs' exists but was not created by this tool, so setup will not modify it.";
+    stubResources(() => statusWith({ deployed: false, ready: false, managedByTool: false, setupBlockedReason: blocked }), ["dev-project"]);
+    renderAt("/test-resources?tab=pipelines&project=dev-project");
     await tick();
-    const setUp = within(screen.getByRole("region", { name: "Pipeline server" })).getByRole("button", { name: "Set up" });
+    const setUp = within(screen.getByRole("tabpanel")).getByRole("button", { name: "Set up" });
     expect(setUp).toHaveAttribute("aria-disabled", "true");
     expect(setUp).not.toBeDisabled();
     fireEvent.mouseEnter(setUp);
     await tick(1000);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Available once the S3 storage is set up (Storage, Cluster tab).");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(blocked);
     fireEvent.click(setUp);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("read-only users get the reason on the resource buttons", async () => {
     stubResources(() => statusWith(notDeployed));
-    renderAt("/test-resources?tab=cluster", "Read-only access: changing the cluster through this tool requires the cluster-admin role.");
+    renderAt("/test-resources?tab=pipelines&project=dev-project", "Read-only access: changing the cluster through this tool requires the cluster-admin role.");
     await tick();
     const setUp = screen.getAllByRole("button", { name: "Set up" })[0];
     expect(setUp).toHaveAttribute("aria-disabled", "true");

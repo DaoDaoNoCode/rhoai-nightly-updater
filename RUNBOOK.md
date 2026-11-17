@@ -275,7 +275,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PVC `seaweedfs-data`, Service `seaweedfs-s3`, Route `seaweedfs-admin`). Storage an earlier version set up in namespace `minio` is moved with **Migrate storage** (§10.1). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
-The page has three tabs: **Overview** (goals: what a task needs and **Set up the rest**), **Cluster** (Storage, MLflow) and **Projects** (pick a project; its pipeline server). The tab and the project are in the address. Each card has one status and one action; **Details** opens a drawer with the object names, the reason for an error or a repair, the other actions (Tear down, Deploy PR, Revert) and **How to use**.
+The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server) and **MLflow**. The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair); **What this creates** and **Tear down** are collapsed under the parts. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Tear down or Repair.
 
 <img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
 
@@ -285,13 +285,13 @@ The page has three tabs: **Overview** (goals: what a task needs and **Set up the
 
 <img src="docs/images/s3-repair.gif" alt="Repair, confirm Repair S3 storage, the storage is Running again" width="760">
 
-<img src="docs/images/environment-storage-details.png" alt="Storage Ready, with the details: endpoint, Tear down disabled, Copy admin password" width="760">
+<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, S3 storage with endpoint and masked admin password, pipeline server with Open pipelines" width="760">
 
-1. **Ready**.
-2. **Open admin UI** (user `admin`).
-3. The S3 endpoint and the other names.
-4. **Tear down** is disabled while a pipeline server uses the storage; its tooltip names it.
-5. **Copy admin password** copies the admin UI password (cluster-admins only).
+1. The state in the selected project.
+2. The project.
+3. The S3 endpoint and the bucket.
+4. The admin UI password, masked: show or copy it (cluster-admins only; it is read from the server only then).
+5. **Open pipelines**. Under the parts, **Tear down**: the storage's stays disabled while a pipeline server uses it; its tooltip names it.
 
 | Problem | Fix |
 |---|---|
@@ -308,13 +308,14 @@ The page has three tabs: **Overview** (goals: what a task needs and **Set up the
 | Remove old storage: "cannot be copied from ... not being deleted" | The old server is gone (or not running) but its data volume was never deleted by a removal, so it may hold objects that were never copied: nothing is deleted. Start the server again, or once you have checked `seaweedfs` holds what you need, delete the volume as the message says and run Remove old storage again |
 | Copy Job cannot start (ImagePullBackOff) | Set `RCLONE_IMAGE` to a pullable rclone 1.x image (a mirror), then run Migrate storage again |
 | Storage "Needs attention" with **Repair** ("Needs repair" in the details) | SeaweedFS runs but `seaweedfs-s3`/`seaweedfs-admin` do not point at it, or it is scaled to 0. Press **Repair** (re-runs setup) |
-| Details: "Needs repair: SeaweedFS runs ..., not the image this version deploys" | Expected after `SEAWEEDFS_IMAGE` changed. **Repair** updates the Deployment in place; the data PVC and the credentials are kept. S3 is unavailable while the pod restarts (`Recreate`) |
+| "Needs repair: SeaweedFS runs ..., not the image this version deploys" | Expected after `SEAWEEDFS_IMAGE` changed. **Repair** updates the Deployment in place; the data PVC and the credentials are kept. S3 is unavailable while the pod restarts (`Recreate`) |
 | SeaweedFS not ready / ImagePullBackOff | Fix the cause (for example `SEAWEEDFS_IMAGE` to a mirror) and **Repair** again. `oc logs -n seaweedfs deploy/seaweedfs` |
 | S3 storage teardown refused | A pipeline server still uses the storage (the message names it). Tear that down first. After a partial teardown, run Tear down again |
 | Namespace left after teardown | Expected: `oc delete project seaweedfs` (or `minio`) once `oc get all,pvc,secret -n <namespace>` is empty |
 | Reach the S3 API from your laptop | `oc port-forward -n seaweedfs svc/seaweedfs-s3 8333`, endpoint `http://localhost:8333`, path-style, region `us-east-1`. Keys: `oc extract secret/seaweedfs-s3-credentials -n seaweedfs --to=-` |
-| Admin UI login | **Open admin UI**; user `admin`. Storage details, **How to use**, **Copy admin password** copies the password (cluster-admins only; it is the S3 secret key). "Only cluster-admins can read this": you are not one; ask one |
-| Pipeline server **Set up** disabled: "Available once ..." | The storage is not ready, or Migrate storage has not copied the old storage yet; **Needs: Storage** links to it |
+| Admin UI login | **Open admin UI**; user `admin`. The password is on the Pipelines tab under S3 storage: the eye shows it, the copy button copies it (cluster-admins only; it is the S3 secret key). Disabled with "Read-only access": you are not a cluster-admin |
+| **Set up** disabled: "Available once ..." | The storage is not ready, or Migrate storage has not copied the old storage yet, or namespace `seaweedfs` is not this tool's; the tooltip says which |
+| The Pipelines tab opens another project | Without `?project=` it opens the first project with a ready pipeline server (else the first with one). Pick the project; the address keeps it |
 | Pipeline server: "already has a pipeline server" | Projects get one DSPA; the existing one was left unchanged |
 | Old pipeline run artifacts return 404 after Migrate storage | They were written to MinIO before an earlier version replaced it with SeaweedFS, so they are on `minio-pvc`, which cannot be copied automatically. Copy them by hand before you remove the old storage (§10.1). If a cached step fails because its outputs are gone, re-run with caching disabled |
 | DSPA or project stuck Terminating | §11.4 |
@@ -324,11 +325,11 @@ The page has three tabs: **Overview** (goals: what a task needs and **Set up the
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:
 
-<img src="docs/images/s3-migration-needed.png" alt="Storage Needs attention, with Migrate storage, and the details of the old storage in the drawer" width="760">
+<img src="docs/images/s3-migration-needed.png" alt="S3 storage Needs attention, with Migrate storage, and the old storage's objects in its section" width="760">
 
 1. **Needs attention**: the old storage still holds the data and serves its pipeline servers.
 2. **Migrate storage** opens the plan; nothing changes until you confirm.
-3. The details name the old storage's objects and volumes (the only place with MinIO-era names).
+3. **Storage of an earlier version** names the old storage's objects and volumes (the only place with MinIO-era names).
 
 <img src="docs/images/s3-migrate-dialog.png" alt="Dialog: Migrate storage, with the three steps, the pipeline server it moves and the volume that cannot be copied" width="760">
 

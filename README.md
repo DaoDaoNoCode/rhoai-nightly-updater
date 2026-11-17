@@ -71,23 +71,31 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 ### Environment: S3 storage, pipeline servers, MLflow
 
-Three tabs, kept in the address so a link opens the same view: **Overview** (goals), **Cluster** (Storage, MLflow) and **Projects** (a project's pipeline server; `?tab=projects&project=<name>`).
+One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`).
 
-<img src="docs/images/environment-goals.png" alt="Overview: the goal cards Run a data science pipeline and Track experiments with MLflow, with their parts and Set up" width="760">
+<img src="docs/images/environment-overview.png" alt="Overview: 2 of 2 ready; Pipelines Ready in dev-project with Open pipelines; MLflow Ready, not managed by this tool, with Open MLflow" width="760">
 
-1. What the goal needs, in order, with each part's status. A project goal picks its project on the card.
-2. How many parts are ready.
-3. **Set up** (or **Set up the rest**) lists every change, then sets up the missing parts one after another and shows their progress. A part that needs attention gets **Show** instead; a finished goal gets **Open**.
+1. How many features are ready.
+2. Each feature links to its tab (a project-scoped one with its project).
+3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready · not managed by this tool** when it works: ownership never counts as not ready. A project-scoped feature summarises its projects ("Ready in juntao-test", "Ready in 2 of 5 projects", "Not set up in any project").
+4. The next step: **Open**, **Set up** (confirm, then the missing parts in order with their progress), or **Show issue** (opens the tab at that part).
 
-<img src="docs/images/environment-storage-details.png" alt="Cluster tab: the Storage card, Ready, with its details drawer open" width="760">
+<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, S3 storage with endpoint and masked admin password, and the pipeline server with Open pipelines" width="760">
 
-1. One health status per card: Not set up, Setting up, Ready, Needs attention, Error, Deleting or Unknown. Something this tool did not create also gets a **Not managed by this tool** label; it can still be Ready, and goals count it, but the tool never changes or deletes it.
-2. The card's one action (here **Open admin UI**); **Details** opens the drawer.
-3. The drawer has the names and addresses (the S3 endpoint is `http://seaweedfs-s3.seaweedfs.svc:8333`).
-4. **Tear down** stays disabled while a pipeline server uses the storage; its tooltip says which one.
-5. **How to use** has **Copy admin password**: it copies the SeaweedFS admin UI password (user `admin`) from the server when you click it. Only cluster-admins can.
+1. The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
+2. The project picker (type to filter; each project says what it has).
+3. Each part shows its health, its actions and its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket and the admin UI user.
+4. The admin UI password is masked: the eye shows it and the copy button copies it. It is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
+5. **Open pipelines** (and **Open admin UI**). **What this creates** and **Tear down** are collapsed under the parts; Tear down is offered only for what this tool created.
 
-Storage an earlier version set up in namespace `minio` shows **Needs attention** with **Migrate storage**, which moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+Storage an earlier version set up in namespace `minio` reads **Needs attention** with **Migrate storage**, which moves it, with its data and pipeline servers ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+
+<img src="docs/images/environment-mlflow.png" alt="MLflow tab: the MLflow server Ready and Not managed by this tool, with its image, address and Deploy PR" width="760">
+
+1. The **MLflow** tab: the server's health.
+2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow, Deploy PR, Revert), but the tool does not tear it down.
+
+Every setup has its removal on the same tab: **Tear down** (under the parts) for the storage, the pipeline server and MLflow, each confirmed with what is deleted and what is kept; **Revert** for a deployed PR image; **Remove old storage** after Migrate storage. For what this tool did not create, Tear down says it is not touched.
 
 ### Diagnostics: what is wrong, and how to fix it
 

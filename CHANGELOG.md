@@ -41,30 +41,34 @@ only accepts a tag whose version is the top dated section. See
   Content-Security-Policy stays `default-src 'self'` (no inline script).
 - **Test resources is now the Environment page**: one-click setups for
   developing and reproducing issues on the cluster. Its address stays
-  `/test-resources`, so bookmarks and links keep working. It has three
-  tabs, kept in the address (`?tab=cluster`, `?tab=projects&project=<name>`),
-  so links, reloads and the browser's back and forward buttons open the
-  same view:
-  - **Overview** asks "What do you want to do?": one card per goal (run a
-    data science pipeline; track experiments with MLflow) with the parts it
-    needs and their status, "N of M ready", and one action: **Set up** or
-    **Set up the rest** (confirmed, then the missing parts run one after
-    another in a progress dialog), **Show** the part that needs attention,
-    or **Open**. A project goal picks its project on the card.
-  - **Cluster**: Storage and MLflow. **Projects**: a project picker (type to
-    filter; each project says what it has) and the project's pipeline server.
-  - Compact cards: a title with one health status (Not set up, Setting up,
-    Ready, Needs attention, Error, Deleting, Unknown) and, for something
-    this tool did not create, a separate **Not managed by this tool**
-    label: ownership decides only whether the tool may change it, so
-    someone else's running MLflow or pipeline server reads **Ready** and a
-    goal counts it as ready. One sentence and one action. **Details** opens a drawer with the object
-    names, addresses, warnings and repair reasons, the other actions (Tear
-    down, Deploy PR, Revert), **How to use** and **What this creates**.
-- **Copy admin password** (Storage details, How to use) copies the
-  SeaweedFS admin UI password from the server on click, instead of an
-  `oc extract` command on the card. Only cluster-admins get it; it is never
-  part of the status, never cached and never logged.
+  `/test-resources`, so bookmarks and links keep working. One tab per
+  feature after an **Overview**, kept in the address (`?tab=pipelines&project=<name>`,
+  `?tab=mlflow`; links to the earlier `?tab=cluster` and `?tab=projects` open
+  Pipelines), so links, reloads and back and forward open the same view:
+  - **Overview**: "N of M ready" and one row per feature with what it
+    gives you, its state and the next step (**Open**, **Set up**, **Show
+    issue**). A project-scoped feature summarises its projects ("Ready in
+    juntao-test", "Ready in 2 of 5 projects"). The state comes from the
+    same function the feature's tab uses, so the two cannot disagree.
+  - **Pipelines**: S3 storage (cluster) and the project's pipeline server,
+    each with its health, its actions and its details inline: the S3
+    endpoint, the bucket and the admin UI login, with the password masked
+    behind an eye toggle and a copy button. **Set up** confirms every change
+    and then sets up the missing parts in order with their progress. **What
+    this creates** and **Tear down** are collapsed under the parts. Without
+    a project in the address it opens the first project with a ready
+    pipeline server.
+  - **MLflow**: the MLflow server with Open MLflow, Deploy PR and Revert.
+  - Health and ownership are separate: the status is health only (Not set
+    up, Setting up, Ready, Needs attention, Error, Deleting, Unknown), and
+    something this tool did not create gets a **Not managed by this tool**
+    label beside it. It can be Ready and counts as ready; it only gets no
+    Tear down or Repair. The status also reports the health of pipeline
+    servers this tool did not create.
+- The admin UI password is read from the server only when you show or copy
+  it, instead of an `oc extract` command on the page. Only cluster-admins
+  get it; it is never part of the status, never cached and never logged,
+  and it is gone when you hide it or leave the tab.
 - New pipeline servers wait until Migrate storage has copied the old
   storage: the copy's check compares both sides, and a server writing to the
   new storage first would make it fail. Migrate storage tells you to run

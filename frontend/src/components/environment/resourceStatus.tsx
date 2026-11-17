@@ -53,23 +53,23 @@ const TEXT: Record<EnvStatus, string> = {
 
 export const envStatusText = (status: EnvStatus) => TEXT[status];
 
-/** The one status label of a resource. */
-export const EnvStatusLabel: React.FC<{ status: EnvStatus }> = ({ status }) => {
+/** The one status label of a resource; text replaces the status word (for example "Ready in juntao-test"). */
+export const EnvStatusLabel: React.FC<{ status: EnvStatus; text?: string }> = ({ status, text }) => {
   switch (status) {
     case "not-set-up":
-      return <StatusLabel status="neutral">{TEXT[status]}</StatusLabel>;
+      return <StatusLabel status="neutral">{text ?? TEXT[status]}</StatusLabel>;
     case "setting-up":
     case "deleting":
       // The label's text names the state; the spinner only shows it moves.
-      return <StatusLabel status="progress" icon={<Spinner isInline aria-hidden />}>{TEXT[status]}</StatusLabel>;
+      return <StatusLabel status="progress" icon={<Spinner isInline aria-hidden />}>{text ?? TEXT[status]}</StatusLabel>;
     case "ready":
-      return <StatusLabel status="success">{TEXT[status]}</StatusLabel>;
+      return <StatusLabel status="success">{text ?? TEXT[status]}</StatusLabel>;
     case "needs-attention":
-      return <StatusLabel status="warning">{TEXT[status]}</StatusLabel>;
+      return <StatusLabel status="warning">{text ?? TEXT[status]}</StatusLabel>;
     case "error":
-      return <StatusLabel status="danger">{TEXT[status]}</StatusLabel>;
+      return <StatusLabel status="danger">{text ?? TEXT[status]}</StatusLabel>;
     case "unknown":
-      return <StatusLabel status="neutral">{TEXT[status]}</StatusLabel>;
+      return <StatusLabel status="neutral">{text ?? TEXT[status]}</StatusLabel>;
   }
 };
 

@@ -164,14 +164,14 @@ Open **Components**, then **Diagnostics**.
 
 Optional, for testing pipelines in the dashboard. Open **Environment**.
 
-<img src="images/environment-goals.png" alt="Overview: Run a data science pipeline needs Storage and a Pipeline server, with Set up" width="760">
+<img src="images/environment-overview.png" alt="Overview: each feature with its state and next step" width="760">
 
-1. On **Run a data science pipeline**, pick a data science project.
-2. Click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then a pipeline server in the project that uses it, and shows each step. (If Storage reads **Needs attention**, an earlier version's storage is still in namespace `minio`: **Show the storage**, then **Migrate storage**.)
+1. On the **Overview**, **Pipelines** reads **Not set up in any project**: click **Set up in a project**, or open the **Pipelines** tab.
+2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then a pipeline server in the project that uses it, and shows each step. (If S3 storage reads **Needs attention**, an earlier version's storage is still in namespace `minio`: click **Migrate storage**.)
 
-<img src="images/environment-projects.png" alt="Projects tab: dev-project with its pipeline server Ready and Open pipelines" width="760">
+<img src="images/environment-pipelines.png" alt="Pipelines tab: Ready in the project, with the storage's endpoint and admin login, and Open pipelines" width="760">
 
-**What you should see:** the goal reads **2 of 2 ready** and offers **Open pipelines**. The **Projects** tab shows the project's pipeline server **Ready** (after 1–3 minutes); **Cluster** shows Storage **Ready** with **Open admin UI** (user `admin`; **Details**, **How to use**, **Copy admin password**). Tear down the pipeline servers before the storage: **Tear down** of the storage stays disabled while one uses it.
+**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes) and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). Tear down the pipeline servers before the storage (**Tear down**, under the parts): the storage's stays disabled while one uses it.
 
 ## Day to day
 

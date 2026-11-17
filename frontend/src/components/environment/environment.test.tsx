@@ -3,8 +3,8 @@ import { act, renderHook } from "@testing-library/react";
 import type { ResourceState } from "../../types";
 import { envStatus, notManaged } from "./resourceStatus";
 import { useGoalRun } from "./useGoalRun";
-import { copyFetchedText } from "./CopyFromServerButton";
-import { storageNotReadyReason } from "./StorageCard";
+import { copyFetchedText } from "./AdminLogin";
+import { storageNotReadyReason } from "./featureState";
 
 describe("status vocabulary", () => {
   const base: ResourceState = { deployed: true, ready: false, managedByTool: true };

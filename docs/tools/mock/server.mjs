@@ -199,6 +199,12 @@ const scenarios = {
   // MLflow made in the dashboard (by the MLflow operator), running or broken; the rest is this tool's.
   "env-mlflow-unmanaged": (w) => { w.resources.mlflow = F.mlflowStates.foreign; },
   "env-mlflow-unmanaged-broken": (w) => { w.resources.mlflow = F.mlflowStates.foreignBroken; },
+  // Like the live cluster on 2026-11-17: an empty project sorts first, the
+  // pipeline server is in a later one, and MLflow was made in the dashboard.
+  "env-live": (w) => {
+    w.projects = ["a-test-project", ...F.projects];
+    w.resources.mlflow = F.mlflowStates.foreign;
+  },
   "env-reader": (w) => { w.resources.mlflow = F.mlflowStates.running; w.canMutate = false; },
 };
 for (const name of ["healthy", "prerequisite-missing", "operand-missing", "module-backoff", "certificate-stale", "apply-failures", "upgrade-gates", "conversion-webhook"]) {
@@ -354,7 +360,7 @@ const routes = {
   "GET /api/dashboard/state": () => world.dashboard,
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
   "GET /api/resources/status": () => world.resources,
-  "GET /api/resources/projects": () => ({ projects: F.projects }),
+  "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   // Made up, like every value here.
   "GET /api/resources/minio/admin-password": () => ({ user: "admin", password: "docs-mock-password" }),
   "GET /api/activity": () => world.status.activity ?? [],
