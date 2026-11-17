@@ -264,6 +264,7 @@ func newPipelineEnv(t *testing.T) (*samplesEnv, *kfpFake) {
 	t.Helper()
 	env := newSamplesEnv(t)
 	k := newKFPFake(t)
+	k.allow = templateAllow(t)
 	env.mux.HandleFunc("/apis/v2beta1/", k.serve)
 	orig := runsInCluster
 	runsInCluster = func() bool { return true }

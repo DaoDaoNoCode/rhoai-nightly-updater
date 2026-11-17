@@ -125,6 +125,12 @@ func selectorName(e ast.Expr) string {
 type rbacRequest struct {
 	Verb, Group, Resource, Namespace, Name string
 	Site                                   string
+	// NamedReview: an access review another server sends with the
+	// object's name for every verb (a DSPA's kube-rbac-proxy). RBAC then
+	// matches resourceNames for create too (k8s pkg/apis/rbac/v1/
+	// evaluation_helpers.go ResourceNameMatches); a Kubernetes collection
+	// POST carries no name, so create never matches a named rule there.
+	NamedReview bool
 	// Func is the function that makes the call, as "file:line" of its
 	// declaration (funcPos).
 	Func string
@@ -935,7 +941,7 @@ func (g grant) allows(r rbacRequest) bool {
 	if len(g.rule.ResourceNames) > 0 {
 		// Conservatively, as documented: "You cannot restrict create or
 		// deletecollection requests by their resource name."
-		if r.Verb == "create" || r.Name == "" || r.Name == anyNS {
+		if (r.Verb == "create" && !r.NamedReview) || r.Name == "" || r.Name == anyNS {
 			return false
 		}
 		found := false
@@ -968,6 +974,9 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 	}
 	grants := templateGrants(t)
 	missing := map[string][]string{}
+	// The access reviews MLflow and the DSPA proxy make for the samples
+	// (samples_rbac_test.go).
+	reqs = append(reqs, otherServerRequests()...)
 	for _, r := range reqs {
 		ok := false
 		for _, g := range grants {
@@ -992,6 +1001,7 @@ func TestTemplateRBACCoversEveryServiceAccountCall(t *testing.T) {
 
 func TestTemplateRBACGrantsNothingTheCodeDoesNotUse(t *testing.T) {
 	reqs, _ := serviceAccountRequests(t)
+	reqs = append(reqs, otherServerRequests()...)
 	for _, g := range templateGrants(t) {
 		if g.source == "built-in basic-user" {
 			continue

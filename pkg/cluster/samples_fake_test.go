@@ -775,6 +775,8 @@ func newSamplesEnv(t *testing.T) *samplesEnv {
 	t.Helper()
 	k8s, c := newResourceFake(t)
 	env := &samplesEnv{k8s: k8s, c: c, mlflow: newMLflowFake(t), mux: http.NewServeMux()}
+	// MLflow decides every access review with the template's rules.
+	env.mlflow.allow = templateAllow(t)
 	env.mux.HandleFunc("/mlflow/", env.mlflow.serve)
 	env.srv = httptest.NewTLSServer(env.mux)
 	t.Cleanup(env.srv.Close)
