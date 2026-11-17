@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Timestamp, TimestampTooltipVariant, Tooltip } from "@patternfly/react-core";
 import { formatRelativeTime } from "../utils";
 
@@ -31,16 +31,19 @@ interface RelativeTimeProps {
  */
 export const RelativeTime: React.FC<RelativeTimeProps> = ({ date, prefix = "", size = "sm" }) => {
   useTick(30_000);
+  const timeRef = useRef<HTMLTimeElement>(null);
   const d = typeof date === "string" ? new Date(date) : date;
   if (Number.isNaN(d.getTime())) return <span className="pf-v6-u-text-color-subtle">Unknown</span>;
   const text = `${prefix}${formatRelativeTime(d.toISOString())}`;
   if (size === "inherit") {
     // A plain <time> inherits the sentence's font; PF Timestamp sets its own size.
+    // The tooltip is attached by triggerRef: wrapping the <time> in <Tooltip>
+    // makes PF's Popper add a <div style="display: contents"> around it, which
+    // is invalid inside the <p> this variant is used in.
     return (
       <>
-        <Tooltip content={d.toLocaleString()}>
-          <time dateTime={d.toISOString()} className="pf-v6-u-text-nowrap">{text}</time>
-        </Tooltip>
+        <time ref={timeRef} dateTime={d.toISOString()} className="pf-v6-u-text-nowrap">{text}</time>
+        <Tooltip content={d.toLocaleString()} triggerRef={timeRef} />
         <span className="pf-v6-screen-reader"> ({d.toLocaleString()})</span>
       </>
     );
@@ -56,12 +59,16 @@ export const RelativeTime: React.FC<RelativeTimeProps> = ({ date, prefix = "", s
  * A value the build did not record (no commit, date or version label): a
  * muted em dash, named for screen readers and explained in a tooltip.
  */
-export const NotRecorded: React.FC<{ what?: string }> = ({ what = "Not recorded in the image labels" }) => (
-  <>
-    {/* Not focusable: a table can hold dozens of these; screen readers get the text below. */}
-    <Tooltip content={what}>
-      <span className="pf-v6-u-text-color-subtle" aria-hidden="true">—</span>
-    </Tooltip>
-    <span className="pf-v6-screen-reader">{what}</span>
-  </>
-);
+export const NotRecorded: React.FC<{ what?: string }> = ({ what = "Not recorded in the image labels" }) => {
+  // triggerRef, not a wrapping <Tooltip>: Popper's wrapper <div> is invalid
+  // inside text (see RelativeTime).
+  const dashRef = useRef<HTMLSpanElement>(null);
+  return (
+    <>
+      {/* Not focusable: a table can hold dozens of these; screen readers get the text below. */}
+      <span ref={dashRef} className="pf-v6-u-text-color-subtle" aria-hidden="true">—</span>
+      <Tooltip content={what} triggerRef={dashRef} />
+      <span className="pf-v6-screen-reader">{what}</span>
+    </>
+  );
+};
