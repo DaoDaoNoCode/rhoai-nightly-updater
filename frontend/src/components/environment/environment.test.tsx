@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { ResourceState } from "../../types";
 import { envStatus, notManaged } from "./resourceStatus";
 import { useGoalRun } from "./useGoalRun";
-import { copyFetchedText } from "./AdminLogin";
+import { AdminPassword, copyFetchedText } from "./AdminLogin";
 import { storageNotReadyReason } from "./featureState";
 
 describe("status vocabulary", () => {
@@ -89,6 +89,19 @@ describe("useGoalRun", () => {
     await act(async () => { finish({ success: true, message: "ok", logs: [] }); await first; });
     act(() => result.current.reset());
     expect(result.current.run).toBeNull();
+  });
+});
+
+describe("AdminPassword", () => {
+  it("for a user who cannot read it, both buttons say why and stay focusable", async () => {
+    render(<AdminPassword user="admin" disabledReason="Read-only access: changing the cluster through this tool requires the cluster-admin role." />);
+    const show = screen.getByRole("button", { name: "Show password" });
+    expect(show).toHaveAttribute("aria-disabled", "true");
+    expect(show).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.mouseEnter(show);
+    expect((await screen.findByRole("tooltip")).textContent).toMatch(/cluster-admin/);
+    expect(screen.getByLabelText("Password of admin")).toHaveAttribute("type", "password");
   });
 });
 

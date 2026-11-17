@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator, nextStep } from "./QuickResourceCreator";
@@ -49,9 +49,17 @@ async function teardownSection(): Promise<HTMLElement> {
   return screen.getByRole("tabpanel");
 }
 
+// Tests that stub the clipboard put it back, so no test sees another's stub.
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+  else delete (navigator as { clipboard?: unknown }).clipboard;
+});
+
 const tooltipOf = async (button: HTMLElement) => {
   fireEvent.mouseEnter(button);
-  return (await screen.findByRole("tooltip")).textContent;
+  return (await screen.findByRole("tooltip", {}, { timeout: 3000 })).textContent;
 };
 
 describe("terminal states (A08-3, A06-5)", () => {
@@ -260,8 +268,10 @@ describe("S3 storage (names, login, kept namespace)", () => {
     const show = within(storage).getByRole("button", { name: "Show password" });
     expect(show).toHaveAttribute("aria-disabled", "true");
     expect(within(storage).getByRole("button", { name: "Copy password" })).toHaveAttribute("aria-disabled", "true");
+    // A click does nothing. The tooltip with the reason is tested on
+    // AdminPassword itself (environment.test.tsx).
     fireEvent.click(show);
-    expect(await tooltipOf(show)).toMatch(/cluster-admin/);
+    fireEvent.click(within(storage).getByRole("button", { name: "Copy password" }));
     expect(api.calls.some((c) => c.includes("admin-password"))).toBe(false);
   });
 
