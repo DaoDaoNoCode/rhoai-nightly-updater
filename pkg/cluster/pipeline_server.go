@@ -422,7 +422,7 @@ func minioTeardownBlocker(dspas []dspaInfo, endpoints minioEndpoints) string {
 }
 
 // pipelineServerState converts a tool-owned DSPA into its status entry.
-func pipelineServerState(d dspaInfo, dashboardHost string) types.ResourceState {
+func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 	state := types.ResourceState{
 		Namespace:     d.Meta.Namespace,
 		Name:          d.Meta.Name,
@@ -447,8 +447,8 @@ func pipelineServerState(d dspaInfo, dashboardHost string) types.ResourceState {
 	case d.Ready.Status == "True":
 		state.Ready = true
 		state.Message = "Running"
-		if dashboardHost != "" {
-			state.UIRoute = "https://" + dashboardHost + "/develop-train/pipelines/definitions/" + d.Meta.Namespace
+		if dashboardURL != "" {
+			state.UIRoute = dashboardURL + "/develop-train/pipelines/definitions/" + d.Meta.Namespace
 		}
 	default:
 		// The Ready reason is often a success-sounding word such as

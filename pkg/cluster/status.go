@@ -223,6 +223,13 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		mu.Unlock()
 	})
 
+	run(func() {
+		dashboardURL := cachedDashboardURL(c)
+		mu.Lock()
+		status.DashboardURL = dashboardURL
+		mu.Unlock()
+	})
+
 	wg.Wait()
 
 	// Cached per installed catalog image; only the first poll after an image
@@ -279,6 +286,23 @@ func cachedConsoleURL(c *Client) string {
 	if u != "" {
 		consoleURLCache.Add(c.baseURL, u, time.Hour)
 	}
+	return u
+}
+
+// The dashboard's address changes only when RHOAI does (an upgrade can move
+// it behind the gateway), so the status, which is polled, reads it at most
+// every few minutes. The status serves both profiles, and the gitops
+// profile's RBAC (deploy/rbac-gitops.yaml) has no Route read, so it uses
+// the Dashboard CR only (dashboardURLFromComponent): on a release without
+// status.url the app launcher shows no dashboard link rather than a guess.
+var dashboardURLCache = newLRU[string, string](8)
+
+func cachedDashboardURL(c *Client) string {
+	if u, ok := dashboardURLCache.Get(c.baseURL); ok {
+		return u
+	}
+	u := dashboardURLFromComponent(c)
+	dashboardURLCache.Add(c.baseURL, u, 5*time.Minute)
 	return u
 }
 

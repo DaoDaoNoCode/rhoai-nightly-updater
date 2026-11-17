@@ -1,8 +1,9 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { App, DashboardDevRoute, rhoaiDashboardURL } from "./App";
+import { App, DashboardDevRoute } from "./App";
+import { nightlyStatus } from "./test/providers";
 import { NAV_ITEMS } from "./constants";
 
 const Where: React.FC = () => <span data-testid="where">{useLocation().pathname + useLocation().search}</span>;
@@ -47,8 +48,26 @@ describe("App shell", () => {
     expect(screen.queryByRole("heading", { name: "Status" })).not.toBeInTheDocument();
   });
 
-  it("links the RHOAI dashboard next to the console route", () => {
-    expect(rhoaiDashboardURL("https://console-openshift-console.apps.example.com"))
-      .toBe("https://data-science-gateway.apps.example.com");
+  // The RHOAI dashboard link is the address the backend discovered
+  // (status.dashboardURL), never a host guessed from the console's.
+  it.each([
+    ["the discovered dashboard URL", "https://rh-ai.apps.example.com", ["OpenShift console", "RHOAI dashboard"]],
+    ["no dashboard link when its address is unknown", undefined, ["OpenShift console"]],
+    ["no dashboard link for a non-https address", "http://rh-ai.apps.example.com", ["OpenShift console"]],
+  ])("app launcher: %s", async (_name, dashboardURL, items) => {
+    const status = nightlyStatus({ consoleURL: "https://console-openshift-console.apps.example.com", dashboardURL });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const body = String(url).includes("/api/status") ? status
+        : String(url).includes("/api/permissions") ? { canMutate: true, user: "me" }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Applications" }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent?.trim())).toEqual(items);
+    if (dashboardURL?.startsWith("https://")) {
+      expect(within(menu).getByRole("menuitem", { name: /RHOAI dashboard/ })).toHaveAttribute("href", dashboardURL);
+    }
   });
 });

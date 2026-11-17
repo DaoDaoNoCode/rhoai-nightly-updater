@@ -70,6 +70,18 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- Links to the RHOAI dashboard (the app launcher's **RHOAI dashboard**,
+  Dashboard Dev's **Open the dashboard**, a pipeline server's **Open
+  pipelines**) went to the retired `rhods-dashboard-redhat-ods-applications`
+  host, which on current releases only shows "OpenShift AI has a new
+  address", or, in the launcher, to a host guessed from the console's.
+  They now use the address the Dashboard component CR reports
+  (`status.url`, for example `https://rh-ai.<apps domain>`, the same as
+  the OpenShift ConsoleLink), at whichever API version is served. Releases
+  without it fall back to the `rhods-dashboard` Route (Dashboard Dev and
+  pipeline links); the launcher, which the gitops profile shows too and
+  whose RBAC has no Route read, then shows no dashboard item rather than a
+  guess. No RBAC change.
 - Re-running a setup (Repair) on objects an earlier version created could
   never remove a field or list item the tool stopped setting: the create
   (a POST) left an `Update` entry of the tool in `managedFields` that kept

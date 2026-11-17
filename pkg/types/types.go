@@ -85,6 +85,7 @@ type StatusResponse struct {
 	CatalogPod           *CatalogPodInfo   `json:"catalogPod,omitempty"`
 	StableSource         string            `json:"stableSource"`
 	ConsoleURL           string            `json:"consoleURL,omitempty"`
+	DashboardURL         string            `json:"dashboardURL,omitempty"`
 	StableChannel        string            `json:"stableChannel"`
 	StableVersion        string            `json:"stableVersion,omitempty"`
 	StableChannelPinned  bool              `json:"stableChannelPinned,omitempty"`

@@ -24,6 +24,8 @@ const hex = (seed, n) => createHash("sha1").update(seed).digest("hex").slice(0, 
 export const USER = "dev-user";
 const APPS = "apps.example-cluster.example.com";
 export const CONSOLE_URL = `https://console-openshift-console.${APPS}`;
+// The Dashboard CR's status.url on a release behind the data-science gateway.
+export const DASHBOARD_URL = `https://rh-ai.${APPS}`;
 const FBC = "quay.io/rhoai/rhoai-fbc-fragment";
 const fbc = (tag, seed) => `${FBC}:${tag}@${digest(seed)}`;
 
@@ -74,6 +76,7 @@ export function healthyStatus(updatedMinutesAgo = 60 * 10) {
     catalogPod: { name: "rhoai-catalog-dev-q8z4n", phase: "Running", ready: true, restartCount: 0 },
     stableSource: "redhat-operators",
     consoleURL: CONSOLE_URL,
+    dashboardURL: DASHBOARD_URL,
     stableChannel: "stable-3.x",
     stableVersion: "3.5.1",
     dscExists: true,
@@ -374,7 +377,7 @@ export function dashboardIdle() {
     operatorAvailable: true, operatorPaused: false, isDevMode: false, devImages: images, allDevImagesReady: true,
     devImagesMatchTarget: false, defaultImagesRestored: true, currentImage: images[0].currentImage, deploymentMode: "operator",
     isCustomPR: false, managed: true, podStatus: "Running", podReady: true, containersReady: 5, containersTotal: 5,
-    rolloutPending: false, canAssistRollout: false, dashboardURL: `https://data-science-gateway.${APPS}`,
+    rolloutPending: false, canAssistRollout: false, dashboardURL: DASHBOARD_URL,
     override: { active: false, operatorPaused: false, sessionRecorded: false, stale: false, dashboardDeleting: false },
     defaultFlavor: "rhoai", availableFlavors: ["rhoai", "odh"], rolloutStuck: false,
   };

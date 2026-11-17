@@ -280,19 +280,8 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 		state.CanAssistRollout = hasSchedulingFailure && hasReadyPod
 	}
 
-	// Get dashboard URL from the route
-	routePath := namespacedPath("route.openshift.io/v1", "routes", dashboardNamespace, "rhods-dashboard")
-	routeBody, _, routeErr := c.get(routePath)
-	if routeErr == nil {
-		var route struct {
-			Spec struct {
-				Host string `json:"host"`
-			} `json:"spec"`
-		}
-		if json.Unmarshal(routeBody, &route) == nil && route.Spec.Host != "" {
-			state.DashboardURL = "https://" + route.Spec.Host
-		}
-	}
+	// The dashboard's address: the Dashboard CR's status.url, else the Route.
+	state.DashboardURL = dashboardBaseURL(c)
 
 	populateDashboardDevStateWithOperator(c, state, operator, operatorErr)
 	return state, nil

@@ -626,7 +626,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		projectsErr error
 		dspas       []dspaInfo
 		dspasErr    error
-		dashHost    string
+		dashURL     string
 		minioEP     minioEndpoints
 		minioEPErr  error
 		status      = &types.ResourcesStatus{}
@@ -636,7 +636,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
 	go func() { defer wg.Done(); status.MinIO, minioEP, minioEPErr = minioStatusAndEndpoints(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
-	go func() { defer wg.Done(); dashHost = routeHost(c, dashboardNamespace, "rhods-dashboard") }()
+	go func() { defer wg.Done(); dashURL = dashboardBaseURL(c) }()
 	wg.Wait()
 	if projectsErr != nil {
 		return nil, projectsErr
@@ -658,7 +658,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 			unmanaged[d.Meta.Namespace] = true
 			continue
 		}
-		status.PipelineServers = append(status.PipelineServers, pipelineServerState(d, dashHost))
+		status.PipelineServers = append(status.PipelineServers, pipelineServerState(d, dashURL))
 	}
 	for ns := range unmanaged {
 		status.UnmanagedPipelineProjects = append(status.UnmanagedPipelineProjects, ns)

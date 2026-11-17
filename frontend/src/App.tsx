@@ -118,11 +118,6 @@ const PAGE_VIEW_NAMES: Record<string, string> = {
   "/diagnostics": "diagnostics",
 };
 
-/** The RHOAI dashboard route next to the console route (same cluster apps domain). */
-export function rhoaiDashboardURL(consoleURL: string): string {
-  return consoleURL.replace("console-openshift-console", "data-science-gateway");
-}
-
 const AppLayout: React.FC = () => {
   const { status, error: statusError } = useClusterStatus();
   const { state: operationState } = useOperation();
@@ -147,6 +142,9 @@ const AppLayout: React.FC = () => {
   }, [location.pathname]);
 
   const consoleURL = status?.consoleURL?.startsWith("https://") ? status.consoleURL : "";
+  // The RHOAI dashboard's address as the backend discovered it (the Dashboard CR's
+  // status.url, else its Route); unknown means no link, never a guessed host.
+  const dashboardURL = status?.dashboardURL?.startsWith("https://") ? status.dashboardURL : "";
 
   const header = (
     <Masthead display={{ default: "inline" }}>
@@ -190,7 +188,7 @@ const AppLayout: React.FC = () => {
               <ToolbarItem>
                 <HelpButton />
               </ToolbarItem>
-              {consoleURL && (
+              {(consoleURL || dashboardURL) && (
                 <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
                   <Dropdown
                     isOpen={appLauncherOpen}
@@ -209,8 +207,8 @@ const AppLayout: React.FC = () => {
                     )}
                   >
                     <DropdownList>
-                      <DropdownItem key="console" to={consoleURL} isExternalLink>OpenShift console</DropdownItem>
-                      <DropdownItem key="rhoai-dashboard" to={rhoaiDashboardURL(consoleURL)} isExternalLink>RHOAI dashboard</DropdownItem>
+                      {consoleURL && <DropdownItem key="console" to={consoleURL} isExternalLink>OpenShift console</DropdownItem>}
+                      {dashboardURL && <DropdownItem key="rhoai-dashboard" to={dashboardURL} isExternalLink>RHOAI dashboard</DropdownItem>}
                     </DropdownList>
                   </Dropdown>
                 </ToolbarItem>
@@ -234,12 +232,12 @@ const AppLayout: React.FC = () => {
                       </MenuToggle>
                     )}
                   >
-                    {consoleURL && (
+                    {(consoleURL || dashboardURL) && (
                       // The app launcher is hidden on small screens; its links move here.
                       <DropdownGroup className="pf-v6-u-display-none-on-md" label="Applications" labelHeadingLevel="h2">
                         <DropdownList>
-                          <DropdownItem key="console-mobile" to={consoleURL} isExternalLink>OpenShift console</DropdownItem>
-                          <DropdownItem key="rhoai-dashboard-mobile" to={rhoaiDashboardURL(consoleURL)} isExternalLink>RHOAI dashboard</DropdownItem>
+                          {consoleURL && <DropdownItem key="console-mobile" to={consoleURL} isExternalLink>OpenShift console</DropdownItem>}
+                          {dashboardURL && <DropdownItem key="rhoai-dashboard-mobile" to={dashboardURL} isExternalLink>RHOAI dashboard</DropdownItem>}
                         </DropdownList>
                         <Divider component="li" />
                       </DropdownGroup>

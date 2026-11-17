@@ -233,6 +233,12 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// API discovery documents (/apis/<group>) are not modelled: 404, as for
+	// a group that is not served, so callers use their fallback versions.
+	if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); parts[0] == "apis" && len(parts) < 3 {
+		f.status(w, 404, "not found")
+		return
+	}
 	k, isList := parseFakePath(r.URL.Path)
 
 	switch r.Method {

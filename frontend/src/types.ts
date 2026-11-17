@@ -26,6 +26,8 @@ export interface StatusResponse {
   pullSecret: PullSecretInfo;
   imageMirror: ImageMirrorInfo;
   consoleURL?: string;
+  /** The RHOAI dashboard's address (Dashboard CR status.url, else its Route); absent when unknown. */
+  dashboardURL?: string;
   stableSource: string;
   stableChannel: string;
   stableVersion?: string;
