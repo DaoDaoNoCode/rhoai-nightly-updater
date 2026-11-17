@@ -344,6 +344,24 @@ export interface ResourcesStatus {
   pipelineServers: ResourceState[] | null;
   /** Storage an earlier version of this tool left in namespace minio, until it is migrated or torn down. */
   legacyStorage?: LegacyStorageState | null;
+  /** Why Pipelines cannot be set up on this cluster (its DataScienceCluster component is off), or absent. */
+  pipelinesBlocked?: ComponentBlock | null;
+  /** Why MLflow cannot be set up on this cluster, or absent. */
+  mlflowBlocked?: ComponentBlock | null;
+  /** The RHOAI dashboard's address, when known. */
+  dashboardUrl?: string;
+}
+
+/** A DataScienceCluster component a feature needs that is not turned on (pkg/types ComponentBlock). */
+export interface ComponentBlock {
+  /** Its key in spec.components ("aipipelines"). */
+  component: string;
+  /** The DataScienceCluster's name; absent without one. */
+  dsc?: string;
+  /** Its managementState as read ("Removed"). */
+  state?: string;
+  /** In plain words, with who can fix it. */
+  reason: string;
 }
 
 /** The S3 storage an earlier version set up in namespace minio (pkg/types LegacyStorageState). */
@@ -666,6 +684,8 @@ export interface ResourceState {
   terminating?: boolean;
   setupBlockedReason?: string;
   teardownBlockedReason?: string;
+  /** The S3 storage: the pipeline servers ("namespace/name") that store artifacts in it, whoever created them. */
+  usedBy?: string[] | null;
   /** The resource can't become ready without a change (for example ImagePullBackOff). */
   terminalError?: boolean;
   /** PVCs deleted with the resource. */

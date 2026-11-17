@@ -1,10 +1,11 @@
 import React from "react";
-import { Button, Content, Flex, FlexItem, Stack, StackItem, Title } from "@patternfly/react-core";
+import { Button, Content, Flex, FlexItem, HelperText, HelperTextItem, Stack, StackItem, Title } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import { Link } from "react-router-dom";
 import { TooltipButton } from "../TooltipButton";
 import { ExternalLink } from "./resourceRow";
 import { EnvStatusLabel } from "./resourceStatus";
+import { CleanupSection } from "./FeatureLayout";
 import type { FeatureState, NextStep } from "./featureState";
 import type { Pending } from "./resourceRow";
 
@@ -21,30 +22,46 @@ export interface OverviewRow {
 }
 
 /**
- * The Overview: how many features are ready, then one row per feature in
- * dependency order with its state and next step. No endpoints, logins or
- * teardown: those are on the feature's tab.
+ * The Overview: what the page is for, how many features are ready, then
+ * one row per feature in dependency order with its state and next step,
+ * and Clean up for everything. No endpoints or logins: those are on the
+ * feature's tab.
  */
 export const Overview: React.FC<{
   rows: OverviewRow[];
   baseReason: string | null;
+  /** Why Set up is not available to this user (read-only), or null. */
+  setUpReason: string | null;
   onSetUp: (row: OverviewRow, setup: Pending[]) => void;
   /** Opens the feature's tab at the part that needs attention. */
   onShowIssue: (row: OverviewRow, part: string) => void;
   /** Opens the feature's tab (to choose a project). */
   onOpenTab: (row: OverviewRow) => void;
-}> = ({ rows, baseReason, onSetUp, onShowIssue, onOpenTab }) => {
+  onMigrate: () => void;
+  /** Clean up everything, or null when there is nothing of this tool's (or the user may only read). */
+  onCleanup: (() => void) | null;
+}> = ({ rows, baseReason, setUpReason, onSetUp, onShowIssue, onOpenTab, onMigrate, onCleanup }) => {
   const ready = rows.filter((r) => r.state.status === "ready").length;
   const next = (row: OverviewRow, step: NextStep | null) => {
     switch (step?.kind) {
       case "open":
-        return <ExternalLink href={step.href}>{step.label}</ExternalLink>;
-      case "set-up":
-        return <TooltipButton variant="secondary" onClick={() => onSetUp(row, step.setup)} disabledReason={baseReason ?? step.reason}>{step.label}</TooltipButton>;
+        return <ExternalLink href={step.href} variant="secondary">{step.label}</ExternalLink>;
+      case "set-up": {
+        const reason = setUpReason ?? baseReason ?? step.reason;
+        const reasonId = `overview-${row.id}-reason`;
+        return (
+          <Stack>
+            <StackItem><TooltipButton variant="secondary" onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}</TooltipButton></StackItem>
+            {reason && <StackItem><HelperText id={reasonId}><HelperTextItem>{reason}</HelperTextItem></HelperText></StackItem>}
+          </Stack>
+        );
+      }
       case "show-issue":
-        return <Button variant="link" onClick={() => onShowIssue(row, step.part)}>Show issue</Button>;
+        return <Button variant="secondary" onClick={() => onShowIssue(row, step.part)}>Show issue</Button>;
+      case "migrate":
+        return setUpReason ? <Button variant="secondary" onClick={() => onShowIssue(row, "storage")}>Show issue</Button> : <Button variant="secondary" onClick={onMigrate}>Migrate storage</Button>;
       case "choose-project":
-        return <Button variant="link" onClick={() => onOpenTab(row)}>Set up in a project</Button>;
+        return <Button variant="secondary" onClick={() => onOpenTab(row)}>Choose a project</Button>;
       default:
         return null;
     }
@@ -56,6 +73,9 @@ export const Overview: React.FC<{
           <FlexItem><Title headingLevel="h2" size="xl">Overview</Title></FlexItem>
           <FlexItem><Content component="p">{ready} of {rows.length} ready</Content></FlexItem>
         </Flex>
+      </StackItem>
+      <StackItem>
+        <Content component="p">Set up what you need to develop or reproduce an issue on this cluster: each feature takes a few minutes and asks before it changes anything. Its tab shows how to use it.</Content>
       </StackItem>
       <StackItem>
         <Table variant="compact" aria-label="Features">
@@ -79,6 +99,12 @@ export const Overview: React.FC<{
           </Tbody>
         </Table>
       </StackItem>
+      {onCleanup && (
+        <StackItem>
+          <CleanupSection id="overview-cleanup" label="Clean up everything…" onClick={onCleanup} reason={baseReason}
+            text="Deletes everything this tool created on this cluster: the pipeline servers, the S3 storage and MLflow. You choose what goes, then it runs as one operation." />
+        </StackItem>
+      )}
     </Stack>
   );
 };

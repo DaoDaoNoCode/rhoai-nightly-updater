@@ -640,6 +640,31 @@ export function streamMigrateStorage(
   return streamSSE('/api/resources/minio/migrate/stream', options, onStep, onDone, onConnectionDrop);
 }
 
+/** What a clean-up deletes (pkg/types CleanupRequest), in this order. */
+export interface CleanupRequest {
+  /** The projects whose pipeline server goes. */
+  pipelineServers?: string[];
+  storage?: boolean;
+  /** Also delete namespace seaweedfs (needs storage). */
+  deleteNamespace?: boolean;
+  mlflow?: boolean;
+}
+
+/**
+ * Clean up: one operation on the server (one lock, one rate-limit slot)
+ * that deletes the pipeline servers, then the S3 storage, then MLflow,
+ * streaming one step per part ("pipeline-server:<project>", "storage",
+ * "mlflow"); the first part that fails stops it.
+ */
+export function streamCleanup(
+  req: CleanupRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/cleanup/stream', req, onStep, onDone, onConnectionDrop);
+}
+
 /**
  * Unblock stuck rollouts. With a target only that Deployment is changed.
  * "Nothing to do" is a 422 with errorCode nothing_to_do, returned as a

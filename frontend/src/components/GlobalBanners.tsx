@@ -55,7 +55,7 @@ function useNow(active: boolean): number {
 /** Where to follow an operation of this backend type, as [path, link text]. */
 function followLink(type: string): [string, string] | null {
   if (operationKindForServerType(type)) return ["/", "View progress"];
-  if (type.includes("minio") || type.includes("mlflow") || type.includes("pipeline")) return ["/test-resources", "Open Environment"];
+  if (type.includes("minio") || type.includes("mlflow") || type.includes("pipeline") || type === "migrate-storage" || type === "cleanup") return ["/test-resources", "Open Environment"];
   if (type.includes("dashboard")) return ["/dashboard-dev", "Open Dashboard Dev"];
   if (type === "diagnostics-fix" || type === "assist-rollout") return ["/diagnostics", "Open Diagnostics"];
   if (type === "repair-dsc") return ["/components", "Open Components"];
@@ -87,7 +87,7 @@ const BuildId: React.FC<{ target: string }> = ({ target }) => (
   <code className="pf-v6-u-text-nowrap" title={target}>{shortTarget(target)}</code>
 );
 
-function useOperationNotice(onStatusPage: boolean): Notice | null {
+function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null {
   const { run, server } = useOperation();
   const { status } = useClusterStatus();
   const navigate = useNavigate();
@@ -137,7 +137,9 @@ function useOperationNotice(onStatusPage: boolean): Notice | null {
   const step = serverOperationStep(op);
   const started = Date.parse(op.startedAt);
   const elapsed = Number.isFinite(started) ? ` (${formatElapsed(started, now)})` : "";
-  const link = followLink(op.type);
+  // No link to the page the user is on (the Environment page shows its own progress).
+  const followed = followLink(op.type);
+  const link = followed && followed[0] !== pathname ? followed : null;
   return {
     key: "operation",
     priority: 1,
@@ -406,7 +408,7 @@ export const GlobalBanners: React.FC = () => {
   const { pathname } = useLocation();
   const [showAll, setShowAll] = useState(false);
   const notices = [
-    useOperationNotice(pathname === "/"),
+    useOperationNotice(pathname === "/", pathname),
     usePermissionNotice(),
     useInterruptedNotice(),
     useReconcileTimeoutNotice(),

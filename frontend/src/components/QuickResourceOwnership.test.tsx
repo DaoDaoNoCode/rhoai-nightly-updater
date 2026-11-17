@@ -41,12 +41,14 @@ function renderAt(path = "/test-resources?tab=pipelines&project=juntao-test", pr
 }
 
 /** A part of a feature, by its name ("S3 storage", "Pipeline server", "MLflow server"). */
-const part = (name: string) => screen.findByRole("listitem", { name: new RegExp(`^${name} \\(`) });
+const part = (name: string) => screen.findByRole("listitem", { name: new RegExp(`^${name}$`) });
 
-/** Opens a feature's Tear down section; returns the tab panel. */
-async function teardownSection(): Promise<HTMLElement> {
-  fireEvent.click(await screen.findByRole("button", { name: "Tear down" }));
-  return screen.getByRole("tabpanel");
+/** A part's menu item, or null when the part has no menu or no such item. */
+async function menuItem(name: string, label: string | RegExp): Promise<HTMLElement | null> {
+  const toggle = within(await part(name)).queryByRole("button", { name: `${name} actions` });
+  if (!toggle) return null;
+  fireEvent.click(toggle);
+  return within(await screen.findByRole("menu")).queryByRole("menuitem", { name: label });
 }
 
 // Tests that stub the clipboard put it back, so no test sees another's stub.
@@ -57,23 +59,36 @@ afterEach(() => {
   else delete (navigator as { clipboard?: unknown }).clipboard;
 });
 
-const tooltipOf = async (button: HTMLElement) => {
-  fireEvent.mouseEnter(button);
-  return (await screen.findByRole("tooltip", {}, { timeout: 3000 })).textContent;
-};
+/** The dialog footer's Close button (the header's X is also named Close). */
+const footerClose = (dialog: HTMLElement) => within(dialog).getAllByRole("button", { name: "Close" }).find((b) => b.textContent === "Close")!;
 
 describe("terminal states (A08-3, A06-5)", () => {
-  it("S3 storage in ImagePullBackOff reads Error, offers Repair, says why and what to do; Tear down says why it is off", async () => {
+  it("S3 storage in ImagePullBackOff reads Error, says it in words with Repair in the alert, raw reasons in Technical details; Delete says why it is off", async () => {
     setup(live());
     renderAt();
     const storage = await part("S3 storage");
     expect(within(storage).getByText("Error")).toBeInTheDocument();
+    // Item 6: the title in words, the fix as the alert's own action, the pod reason only in the details.
+    expect(within(storage).getByText("The S3 storage's image can't be downloaded")).toBeInTheDocument();
+    expect(storage).toHaveTextContent(/Repair applies it again with the image this updater uses/);
     expect(within(storage).getByRole("button", { name: "Repair" })).toBeInTheDocument();
-    expect(within(storage).getByText("ImagePullBackOff")).toBeInTheDocument();
-    expect(storage).toHaveTextContent(/Repair applies the SeaweedFS Deployment again/);
-    const teardown = within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" });
-    expect(teardown).toHaveAttribute("aria-disabled", "true");
-    expect(await tooltipOf(teardown)).toMatch(/1 pipeline server uses this S3 storage/);
+    expect(within(storage).queryByText("ImagePullBackOff")).not.toBeVisible();
+    fireEvent.click(within(storage).getByRole("button", { name: "Technical details" }));
+    expect(within(storage).getByText("ImagePullBackOff")).toBeVisible();
+    // Item 4: Delete is in the part's menu, with why it is off.
+    const del = await menuItem("S3 storage", /Delete S3 storage/);
+    expect(del).toHaveAttribute("aria-disabled", "true");
+    expect(del).toHaveTextContent(/1 pipeline server uses this S3 storage/);
+  });
+
+  it("with the console's address, a crash offers its pod logs", async () => {
+    const crashing: ResourceState = { ...browserMlflow, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff", message: "CrashLoopBackOff" };
+    setup(live({ mlflow: crashing }));
+    renderAt("/test-resources?tab=mlflow", { consoleURL: "https://console.apps.example.com" });
+    const server = await part("MLflow server");
+    expect(within(server).getByText("MLflow keeps crashing")).toBeInTheDocument();
+    expect(server).toHaveTextContent(/created outside this tool .* ask its owner/);
+    expect(within(server).getByRole("link", { name: /View logs/ })).toHaveAttribute("href", "https://console.apps.example.com/k8s/ns/redhat-ods-applications/deployments/mlflow/pods");
   });
 
   it("a pipeline server that cannot reach the storage says so instead of spinning", async () => {
@@ -101,17 +116,39 @@ describe("health and ownership are separate", () => {
     const storage = await part("S3 storage");
     expect(within(storage).getByText("Not set up")).toBeInTheDocument();
     expect(screen.queryByText("Not managed by this tool")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Set up" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toBeInTheDocument();
   });
 
-  it("someone else's storage namespace: ownership apart, Set up says why", async () => {
+  it("someone else's storage namespace: ownership apart; the block shows before Set up, inline", async () => {
     const foreign: ResourceState = { deployed: false, ready: false, managedByTool: false, message: "Namespace exists", setupBlockedReason: "Namespace 'seaweedfs' exists but was not created by this tool." };
     setup(live({ minio: foreign, pipelineServers: [] }));
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
     expect(within(storage).getByText("Not set up")).toBeInTheDocument();
     expect(within(storage).getByText("Not managed by this tool")).toBeInTheDocument();
-    expect(await tooltipOf(screen.getByRole("button", { name: "Set up" }))).toMatch(/was not created by this tool/);
+    expect(within(storage).getByText("The S3 storage can't be set up: namespace seaweedfs belongs to someone else")).toBeInTheDocument();
+    expect(storage).toHaveTextContent("oc delete project seaweedfs");
+    const setUp = screen.getByRole("button", { name: "Set up Pipelines in fresh" });
+    expect(setUp).toHaveAttribute("aria-disabled", "true");
+    // Item 8: the reason is under the primary action, not only in a tooltip.
+    expect(setUp).toHaveAccessibleDescription(/was not created by this tool/);
+  });
+
+  it("a component that is off shows before Set up, with the way to the fix, and blocks Set up", async () => {
+    const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
+    setup(live({ minio: none, pipelineServers: [], pipelinesBlocked: { component: "aipipelines", dsc: "default-dsc", state: "Removed", reason: "Data Science Pipelines is turned off on this cluster: component aipipelines is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." } }));
+    renderAt("/test-resources?tab=pipelines&project=fresh");
+    const alert = (await screen.findByText("Data Science Pipelines is turned off on this cluster")).closest(".pf-v6-c-alert") as HTMLElement;
+    expect(within(alert).getByRole("button", { name: "Open Components" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toHaveAccessibleDescription(/component aipipelines is Removed/);
+  });
+
+  it("no data science project: says where to make one", async () => {
+    setup(live({ minio: readyMinio, pipelineServers: [], unmanagedPipelineProjects: [], dashboardUrl: "https://rh-ai.apps.example.com" }), { "/api/resources/projects": { projects: [] } });
+    renderAt("/test-resources?tab=pipelines");
+    expect(await screen.findByText("There are no data science projects yet")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Create a project in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects");
+    expect(await part("Pipeline server")).toHaveTextContent("Choose a project above");
   });
 
   const brokenForeignMlflow: ResourceState = { ...browserMlflow, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff", message: "CrashLoopBackOff" };
@@ -120,22 +157,34 @@ describe("health and ownership are separate", () => {
     ["someone else's, running", browserMlflow, "Ready", true, true],
     ["someone else's, broken", brokenForeignMlflow, "Error", true, false],
     ["this tool's, running", ownMlflow, "Ready", false, true],
-  ])("MLflow tab, %s: health, ownership apart, Open when ready, Tear down only for this tool's", async (_name, mlflow, status, foreign, open) => {
+  ])("MLflow tab, %s: health, ownership apart, Open when ready (in the project's workspace), Delete only for this tool's", async (_name, mlflow, status, foreign, open) => {
     setup(live({ mlflow: mlflow as ResourceState }));
-    renderAt("/test-resources?tab=mlflow");
+    renderAt("/test-resources?tab=mlflow&project=juntao-test");
     const server = await part("MLflow server");
     expect(within(server).getByText(status as string)).toBeInTheDocument();
     if (foreign) expect(within(server).getByText("Not managed by this tool")).toBeInTheDocument();
     else expect(within(server).queryByText("Not managed by this tool")).not.toBeInTheDocument();
-    if (open) expect(within(server).getByRole("link", { name: /Open MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    if (open) expect(within(server).getByRole("link", { name: /Open MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com/#/experiments?workspace=juntao-test");
     else expect(within(server).queryByRole("link", { name: /Open MLflow/ })).not.toBeInTheDocument();
-    const panel = await teardownSection();
     if (foreign) {
-      expect(within(panel).queryByRole("button", { name: "Tear down MLflow" })).not.toBeInTheDocument();
-      expect(panel).toHaveTextContent("was not created by this tool, so it is not torn down here");
+      expect(await menuItem("MLflow server", /Delete MLflow/)).toBeNull();
+      expect(server).toHaveTextContent("created outside this tool");
     } else {
-      expect(within(panel).getByRole("button", { name: "Tear down MLflow" })).toBeInTheDocument();
+      expect(await menuItem("MLflow server", /Delete MLflow/)).not.toHaveAttribute("aria-disabled", "true");
     }
+  });
+
+  it("MLflow ready: workspaces explained, the project's link and the client settings", async () => {
+    setup(live());
+    renderAt("/test-resources?tab=mlflow&project=juntao-test");
+    const use = await screen.findByRole("region", { name: "Use it" });
+    expect(use).toHaveTextContent("a project is an MLflow workspace");
+    expect(within(use).getByRole("link", { name: /Open juntao-test in MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com/#/experiments?workspace=juntao-test");
+    expect(use).toHaveTextContent("export MLFLOW_TRACKING_URI=https://mlflow.apps.example.com");
+    expect(use).toHaveTextContent("export MLFLOW_TRACKING_TOKEN=$(oc whoami -t)");
+    expect(use).toHaveTextContent("export MLFLOW_WORKSPACE=juntao-test");
+    // The PR deploy is a developer's tool: in its own collapsed section.
+    expect(screen.getByRole("button", { name: "Test an MLflow PR build" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("a project with someone else's pipeline server shows its health and Open, is not set up again, and keeps its storage unclaimed", async () => {
@@ -145,13 +194,12 @@ describe("health and ownership are separate", () => {
     const ps = await part("Pipeline server");
     expect(within(ps).getByText("Ready")).toBeInTheDocument();
     expect(within(ps).getByText("Not managed by this tool")).toBeInTheDocument();
-    expect(ps).toHaveTextContent("was not created by this tool");
-    expect(ps).not.toHaveTextContent("S3 storage above");
+    expect(ps).toHaveTextContent("Created outside this tool");
+    expect(ps).not.toHaveTextContent("keeps their artifacts in the S3 storage");
     expect(within(ps).getByRole("link", { name: /Open pipelines/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
     expect(screen.getByText("Ready in team-x · not managed by this tool")).toBeInTheDocument();
-    const panel = await teardownSection();
-    expect(within(panel).queryByRole("button", { name: "Tear down the pipeline server" })).not.toBeInTheDocument();
+    expect(within(ps).queryByRole("button", { name: "Pipeline server actions" })).not.toBeInTheDocument();
     // The project picker says what each project has, and whose it is.
     fireEvent.click(screen.getByRole("button", { name: "Show projects" }));
     expect(await screen.findByRole("option", { name: /team-x/ })).toHaveTextContent("Pipeline server: Ready · not managed by this tool");
@@ -164,37 +212,49 @@ describe("MLflow PR override (A04-5)", () => {
     renderAt("/test-resources?tab=mlflow");
     const server = await part("MLflow server");
     expect(server).toHaveTextContent("opendatahub-io/mlflow PR #399");
-    expect(within(server).getByRole("button", { name: "Deploy PR" })).toBeInTheDocument();
-    fireEvent.click(within(server).getByRole("button", { name: "Revert the PR image" }));
+    expect(within(server).getByText("MLflow keeps crashing")).toBeInTheDocument();
+    // The fix is in the alert, and on the part.
+    expect(within(server).getAllByRole("button", { name: "Revert the PR image" })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Test an MLflow PR build" }));
+    expect(screen.getByRole("button", { name: "Deploy PR" })).toBeInTheDocument();
+    fireEvent.click(within(server).getAllByRole("button", { name: "Revert the PR image" })[0]);
     const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
     expect(within(dialog).getByText(/so the operator's default \(RHOAI\) image is used again/)).toBeInTheDocument();
   });
 
-  it("deploying a PR on an MLflow the tool did not create warns in the confirmation", async () => {
+  it("deploying a PR checks the number on submit, and warns in the confirmation on an MLflow the tool did not create", async () => {
     setup(live());
     renderAt("/test-resources?tab=mlflow");
-    const server = await part("MLflow server");
-    fireEvent.change(within(server).getByRole("textbox", { name: /Deploy an opendatahub-io\/mlflow PR/ }), { target: { value: "42" } });
-    fireEvent.click(within(server).getByRole("button", { name: "Deploy PR" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Test an MLflow PR build" }));
+    const field = screen.getByRole("textbox", { name: "Pull request number" });
+    fireEvent.click(screen.getByRole("button", { name: "Deploy PR" }));
+    expect(field).toHaveAccessibleDescription(/Enter the number of an opendatahub-io\/mlflow pull request/);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.change(field, { target: { value: "42" } });
+    fireEvent.click(screen.getByRole("button", { name: "Deploy PR" }));
     const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("This MLflow server was not created by this tool")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
     expect(within(dialog).getByText("quay.io/opendatahub/mlflow:odh-pr-42")).toBeInTheDocument();
-    expect(within(dialog).getByText("This MLflow instance was not created by this tool")).toBeInTheDocument();
   });
 });
 
 describe("teardown confirmations state the data loss", () => {
-  it("pipeline server teardown names the DSPA and the database PVC; in_progress is info and keeps checking", async () => {
+  it("pipeline server Delete: the outcome first, the database volume in the data loss; in_progress ends as still deleting, in the run dialog", async () => {
     const api = setup(live({ minio: readyMinio }), {
       "POST /api/resources/pipeline-server/teardown": () => jsonResponse({ success: false, message: "The DSPA is still being deleted by the pipelines operator.", logs: [], errorCode: "in_progress" }, 422),
     });
     renderAt();
-    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the pipeline server" }));
-    const dialog = await screen.findByRole("dialog");
+    fireEvent.click((await menuItem("Pipeline server", /Delete pipeline server/))!);
+    const dialog = await screen.findByRole("dialog", { name: /Delete the pipeline server in juntao-test\?/ });
+    expect(dialog).toHaveTextContent("Deletes the pipeline server in juntao-test, with its runs and experiments.");
     expect(within(dialog).getByText("Data is deleted and cannot be recovered")).toBeInTheDocument();
     expect(within(dialog).getByText("mariadb-dspa")).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down" }));
-    expect(await screen.findByText("Still in progress")).toBeInTheDocument();
-    expect(screen.getByText(/This page keeps checking/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    const run = await screen.findByRole("dialog", { name: "Delete the pipeline server in juntao-test" });
+    expect(await within(run).findByText("Still deleting")).toBeInTheDocument();
+    expect(run).toHaveTextContent("The DSPA is still being deleted by the pipelines operator.");
     expect(api.bodies["POST /api/resources/pipeline-server/teardown"]).toEqual([{ project: "juntao-test" }]);
   });
 
@@ -203,12 +263,13 @@ describe("teardown confirmations state the data loss", () => {
       "POST /api/resources/minio/teardown": () => jsonResponse({ success: false, errorCode: "prerequisites", logs: [], message: "Refusing to delete namespace seaweedfs: CRD mcpservers.mcp.x-k8s.io has a conversion webhook whose Service redhat-ods-applications/mcp-lifecycle-operator-webhook-service is missing." }, 422),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getAllByText("seaweedfs/seaweedfs-data").length).toBeGreaterThan(0);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
-    expect(await screen.findByText("Blocked: prerequisites not met")).toBeInTheDocument();
-    expect(screen.getByText(/mcpservers.mcp.x-k8s.io has a conversion webhook/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    const run = await screen.findByRole("dialog", { name: "Delete the S3 storage" });
+    expect(await within(run).findByText("Delete the S3 storage: stopped")).toBeInTheDocument();
+    expect(within(run).getByText(/mcpservers.mcp.x-k8s.io has a conversion webhook/)).toBeInTheDocument();
   });
 });
 
@@ -223,7 +284,8 @@ describe("S3 storage (names, login, kept namespace)", () => {
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
     expect(within(storage).getByText("Needs attention")).toBeInTheDocument();
-    expect(within(storage).getByText(warning)).toBeInTheDocument();
+    expect(storage).toHaveTextContent("SeaweedFS runs mirror.example.com/seaweedfs:4.54, not the image this version deploys.");
+    expect(storage).toHaveTextContent("Re-run setup to update it; the data PVC is kept.");
     expect(storage).toHaveTextContent("http://seaweedfs-s3.seaweedfs.svc:8333");
     expect(storage).toHaveTextContent("Admin UI loginUser admin; the password is the S3 secret key.");
     expect(within(storage).getByLabelText("S3 secret key")).toHaveAttribute("type", "password");
@@ -283,21 +345,20 @@ describe("S3 storage (names, login, kept namespace)", () => {
     expect(api.calls.filter((c) => c.includes("admin-password"))).toHaveLength(2);
   });
 
-  it("a reader is told why the password buttons are off, and nothing is read", async () => {
+  it("a reader sees who can help instead of keys and changes, and nothing is read", async () => {
     const api = setup(live({ minio: running, pipelineServers: [] }));
     renderAt("/test-resources?tab=pipelines&project=fresh", { readBlocker: "Read-only access: changing the cluster through this tool requires the cluster-admin role." });
     const storage = await part("S3 storage");
-    const show = within(storage).getByRole("button", { name: "Show the S3 secret key" });
-    expect(show).toHaveAttribute("aria-disabled", "true");
-    expect(within(storage).getByRole("button", { name: "Copy the S3 secret key" })).toHaveAttribute("aria-disabled", "true");
-    // A click does nothing. The tooltip with the reason is tested on
-    // AdminPassword itself (environment.test.tsx).
-    fireEvent.click(show);
-    fireEvent.click(within(storage).getByRole("button", { name: "Copy the S3 secret key" }));
+    expect(within(storage).queryByRole("button", { name: "Show the S3 secret key" })).not.toBeInTheDocument();
+    expect(storage).toHaveTextContent("Only cluster-admins can read the S3 keys here. Ask one for them.");
+    // Item 8: no menu of changes; Set up says who can help, inline.
+    expect(within(storage).queryByRole("button", { name: "S3 storage actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Clean up" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up the pipeline server in fresh" })).toHaveAccessibleDescription(/Ask one to set it up for you/);
     expect(api.calls.some((c) => c.includes("admin-password"))).toBe(false);
   });
 
-  it("after a teardown the kept namespace reads Not set up with Set up, and the result names oc delete project", async () => {
+  it("after a deletion the kept namespace reads Not set up with Set up, and the run's outcome names oc delete project", async () => {
     let status: ResourceState = running;
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
@@ -305,22 +366,25 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "POST /api/resources/minio/teardown": () => { status = afterTeardown; return jsonResponse({ success: true, message: kept, logs: [] }); },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent(/Namespace seaweedfs is kept: delete it yourself with oc delete project seaweedfs once empty/);
+    expect(dialog).toHaveTextContent(/Deletes the S3 storage with every file in it. Namespace seaweedfs is kept./);
     expect(dialog).not.toHaveTextContent(/minio/i);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
-    expect((await screen.findByText(/^S3 storage removed/)).closest(".pf-v6-c-alert")).toHaveTextContent(/Namespace seaweedfs was kept: run oc delete project seaweedfs once you have checked it is empty/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    const run = await screen.findByRole("dialog", { name: "Delete the S3 storage" });
+    // The outcome is what the request said, specific, with the kept namespace's command.
+    await waitFor(() => expect(run.querySelector(".pf-v6-c-alert__title")).toHaveTextContent(/S3 storage removed\. .*oc delete project seaweedfs/));
+    fireEvent.click(footerClose(run));
     const storage = await part("S3 storage");
     expect(await within(storage).findByText("Not set up")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Set up" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toBeInTheDocument();
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(1);
   });
 
   it.each([
-    ["partial_failure", "Partly done", "Some S3 storage objects could not be removed: Secret seaweedfs/seaweedfs-s3-credentials: forbidden. Re-run teardown to retry."],
-    ["in_progress", "Still in progress", "The S3 storage objects were deleted, but PVC seaweedfs/seaweedfs-data is still terminating after 1m0s; re-run teardown to check again."],
-  ])("a %s teardown keeps Tear down available", async (code, title, message) => {
+    ["partial_failure", "Delete the S3 storage: stopped", "Some S3 storage objects could not be removed: Secret seaweedfs/seaweedfs-s3-credentials: forbidden. Re-run teardown to retry."],
+    ["in_progress", "Still deleting", "The S3 storage objects were deleted, but PVC seaweedfs/seaweedfs-data is still terminating after 1m0s; re-run teardown to check again."],
+  ])("a %s deletion keeps Delete available", async (code, title, message) => {
     let status: ResourceState = running;
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
@@ -328,13 +392,14 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "POST /api/resources/minio/teardown": () => { status = afterTeardown; return jsonResponse({ success: false, errorCode: code, message, logs: [] }, 422); },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    const panel = await teardownSection();
-    fireEvent.click(within(panel).getByRole("button", { name: "Tear down the S3 storage" }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down S3 storage" }));
-    expect(await screen.findByText(title)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Set up" })).toBeInTheDocument());
-    fireEvent.click(within(panel).getByRole("button", { name: "Tear down the S3 storage" }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tear down S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    const run = await screen.findByRole("dialog", { name: "Delete the S3 storage" });
+    expect(await within(run).findByText(title)).toBeInTheDocument();
+    fireEvent.click(footerClose(run));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toBeInTheDocument());
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(2));
   });
 });
@@ -379,10 +444,13 @@ describe("storage from an earlier version", () => {
     renderAt("/test-resources?tab=pipelines&project=fresh");
     expect(await part("S3 storage")).toHaveTextContent("Needs attention");
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Migrate storage" })).toBeInTheDocument();
+    // Item 7: why, at the top of the tab, with the action.
+    const why = screen.getByText("Your pipeline data is in storage from an earlier version").closest(".pf-v6-c-alert") as HTMLElement;
+    expect(why).toHaveTextContent("Your pipeline servers keep working on the old storage meanwhile.");
+    expect(within(why).getByRole("button", { name: "Migrate storage" })).toBeInTheDocument();
   });
 
-  it("Migrate storage shows the plan, runs as a stream, then offers the removal with the checklist", async () => {
+  it("Migrate storage shows the plan, runs as a stream, and ends with its outcome: no removal in the same dialog", async () => {
     const api = setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }), {
       "POST /api/resources/minio/migrate/stream": sse(
         { step: "check", status: "success", message: "OK: SeaweedFS in namespace 'minio' is running", elapsedMs: 1 },
@@ -396,11 +464,16 @@ describe("storage from an earlier version", () => {
     fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("juntao-test/dspa");
+    // The data that cannot move is a warning, not a remark.
+    expect(within(dialog).getByText("Data from before SeaweedFS can't be moved")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
-    expect(await within(dialog).findByText("Migrated")).toBeInTheDocument();
+    expect(await within(dialog).findByText("The data is in the new storage")).toBeInTheDocument();
     expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{}]);
-    expect(dialog).toHaveTextContent("Endpoint: http://seaweedfs-s3.seaweedfs.svc:8333 instead of http://minio-service.minio.svc:9000.");
-    expect(within(dialog).getByRole("button", { name: "Remove old storage" })).toHaveClass("pf-m-danger");
+    // Item 7: success ends there; the removal is a later, separate decision.
+    expect(screen.getByRole("dialog", { name: "Migrate storage" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /Delete old storage|Remove old storage/ })).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("The old storage is kept; delete it later from the S3 storage's menu");
+    expect(footerClose(dialog)).toHaveClass("pf-m-primary");
   });
 
   it("a failed run shows its reason once, in the outcome (follow-up 1)", async () => {
@@ -426,79 +499,86 @@ describe("storage from an earlier version", () => {
       "POST /api/resources/minio/migrate/stream": sse({ step: "operation_complete", status: "success", message: "The old storage in namespace 'minio' was removed.", elapsedMs: 1 }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    const storage = await part("S3 storage");
-    expect(storage).toHaveTextContent(/kept until you remove it/);
-    fireEvent.click(within(storage).getByRole("button", { name: "Remove old storage" }));
-    const dialog = await screen.findByRole("dialog");
+    expect(await screen.findByText(/The old storage can be deleted/)).toBeInTheDocument();
+    fireEvent.click((await menuItem("S3 storage", /Delete old storage/))!);
+    const dialog = await screen.findByRole("dialog", { name: /Delete the old storage\?/ });
     const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace minio" });
     const danger = within(dialog).getByText("Data is deleted and cannot be recovered");
     expect(box.compareDocumentPosition(danger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(box);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Remove old storage" }));
-    expect(await within(dialog).findByText("Old storage removed")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete old storage" }));
+    expect(await within(dialog).findByText("The old storage was deleted")).toBeInTheDocument();
     expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{ removeOldStorage: true, deleteNamespace: true }]);
   });
 
-  it("Tear down covers the earlier storage too, and names its data", async () => {
+  it("Delete covers the earlier storage too, and names its data", async () => {
     setup(live({ minio: { ...notDeployed, teardownBlockedReason: undefined }, legacyStorage: { ...legacy, usedBy: [] }, pipelineServers: [] }));
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
     expect(dialog).toHaveTextContent("The storage an earlier version left in namespace minio is deleted");
     expect(within(dialog).getByText("Data is deleted and cannot be recovered").closest(".pf-v6-c-alert")).toHaveTextContent(
-      "PersistentVolumeClaims minio/seaweedfs-pvc, minio/minio-pvc, with every object stored in them (pipeline artifacts, uploaded files, and the data of earlier versions).");
+      "Every object stored in it: pipeline artifacts and uploaded files, and the data of earlier versions (volumes minio/seaweedfs-pvc, minio/minio-pvc).");
   });
 });
 
-// Every setup the page offers has its removal on the same tab: Tear down
-// (confirmed with what is deleted and what is kept), Revert for a PR image,
-// Remove old storage after a migration; for what the tool did not create,
-// Tear down says it is not touched.
+// Every setup the page offers has its removal on the same tab: Delete in
+// the part's menu (confirmed with what is deleted and what is kept), Revert
+// for a PR image, Delete old storage after a migration; what the tool did
+// not create has no menu and says so.
 describe("every setup has its removal on the same tab", () => {
   const ownMlflow: ResourceState = { ...browserMlflow, managedByTool: true, teardownBlockedReason: undefined };
   const runningDspa: ResourceState = { deployed: true, ready: true, namespace: "juntao-test", name: "nightly-dspa", managedByTool: true, message: "Running", dataPVCs: ["mariadb-nightly-dspa"] };
 
   it.each([
-    ["the storage and the pipeline server", "/test-resources?tab=pipelines&project=juntao-test", { minio: readyMinio, pipelineServers: [runningDspa] }, ["Tear down the pipeline server", "Tear down the S3 storage"], []],
-    ["the storage alone", "/test-resources?tab=pipelines&project=fresh", { minio: readyMinio, pipelineServers: [] }, ["Tear down the S3 storage"], []],
-    ["a broken storage", "/test-resources?tab=pipelines&project=fresh", { minio: { ...brokenMinio, teardownBlockedReason: undefined }, pipelineServers: [] }, ["Tear down the S3 storage"], []],
-    ["MLflow", "/test-resources?tab=mlflow", { mlflow: ownMlflow }, ["Tear down MLflow"], []],
-    ["someone else's MLflow", "/test-resources?tab=mlflow", { mlflow: browserMlflow }, [], ["This MLflow server was not created by this tool, so it is not torn down here."]],
+    ["the storage and the pipeline server", "/test-resources?tab=pipelines&project=juntao-test", { minio: readyMinio, pipelineServers: [runningDspa] }, [["Pipeline server", /Delete pipeline server/], ["S3 storage", /Delete S3 storage/]], []],
+    ["the storage alone", "/test-resources?tab=pipelines&project=fresh", { minio: readyMinio, pipelineServers: [] }, [["S3 storage", /Delete S3 storage/]], []],
+    ["a broken storage", "/test-resources?tab=pipelines&project=fresh", { minio: { ...brokenMinio, teardownBlockedReason: undefined }, pipelineServers: [] }, [["S3 storage", /Delete S3 storage/]], []],
+    ["MLflow", "/test-resources?tab=mlflow", { mlflow: ownMlflow }, [["MLflow server", /Delete MLflow/]], []],
+    ["someone else's MLflow", "/test-resources?tab=mlflow", { mlflow: browserMlflow }, [], [["MLflow server", "created outside this tool"]]],
     ["someone else's pipeline server and storage namespace", "/test-resources?tab=pipelines&project=team-x",
       { minio: { deployed: false, ready: false, managedByTool: false, setupBlockedReason: "x" }, pipelineServers: [], unmanagedPipelineServers: [{ ...runningDspa, namespace: "team-x", name: "dspa", managedByTool: false }] }, [],
-      ["The pipeline server in team-x was not created by this tool, so it is not torn down here.", "Namespace seaweedfs was not created by this tool, so it is not torn down here."]],
-  ])("%s: Tear down offers the removal, or says what is not touched", async (_name, path, over, buttons, texts) => {
+      [["Pipeline server", "Created outside this tool"], ["S3 storage", "belongs to someone else"]]],
+  ])("%s: the part's menu offers Delete, or the part says it is not this tool's", async (_name, path, over, items, texts) => {
     setup(live(over as Partial<ResourcesStatus>));
     renderAt(path);
-    const panel = await teardownSection();
-    for (const b of buttons as string[]) expect(within(panel).getByRole("button", { name: b })).toBeInTheDocument();
-    for (const t of texts as string[]) expect(panel).toHaveTextContent(t);
-    if ((buttons as string[]).length === 0) expect(within(panel).queryByRole("button", { name: /^Tear down / })).not.toBeInTheDocument();
+    for (const [name, label] of items as [string, RegExp][]) {
+      expect(await menuItem(name, label)).not.toBeNull();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    }
+    for (const [name, text] of texts as [string, string][]) {
+      const p = await part(name);
+      expect(p).toHaveTextContent(text);
+      expect(within(p).queryByRole("button", { name: `${name} actions` })).not.toBeInTheDocument();
+    }
   });
 
-  it("each Tear down confirms what is deleted and what is kept", async () => {
+  it("each Delete confirms what is deleted and what is kept, with the objects under Details", async () => {
     setup(live({ minio: readyMinio, pipelineServers: [runningDspa], mlflow: ownMlflow }));
     renderAt();
-    const panel = await teardownSection();
-    fireEvent.click(within(panel).getByRole("button", { name: "Tear down the pipeline server" }));
+    fireEvent.click((await menuItem("Pipeline server", /Delete pipeline server/))!);
     let dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("The project and the S3 storage stay.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
     expect(dialog).toHaveTextContent("DataSciencePipelinesApplication nightly-dspa and its S3 credentials Secret are deleted. The project stays.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    fireEvent.click(within(panel).getByRole("button", { name: "Tear down the S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("Deployment seaweedfs, NetworkPolicy seaweedfs-ingress, Route seaweedfs-admin, Service seaweedfs-s3, Secret seaweedfs-s3-credentials and PersistentVolumeClaim seaweedfs-data");
     expect(dialog).toHaveTextContent("Namespace seaweedfs is kept");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
+    expect(dialog).toHaveTextContent("Deployment seaweedfs, NetworkPolicy seaweedfs-ingress, Route seaweedfs-admin, Service seaweedfs-s3, Secret seaweedfs-s3-credentials and PersistentVolumeClaim seaweedfs-data");
   });
 
   // Follow-up 8: the storage's namespace, which this tool created, can go
   // with it, as the user's informed choice.
-  it("storage Tear down offers namespace seaweedfs, unticked, above the data loss, and sends it only when ticked", async () => {
+  it("storage Delete offers namespace seaweedfs, unticked, above the data loss, and sends it only when ticked", async () => {
     const own: ResourceState = { ...readyMinio, dataPVCs: ["seaweedfs-data"], namespaceDeletable: true, otherObjects: ["Deployment notes-app"] };
     const api = setup(live({ minio: own, pipelineServers: [] }), {
       "POST /api/resources/minio/teardown": () => jsonResponse({ success: true, message: "S3 storage removed. Namespace 'seaweedfs' is being deleted, with everything else in it.", logs: [] }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace seaweedfs (created by this tool)" });
     expect(box).not.toBeChecked();
@@ -510,7 +590,7 @@ describe("every setup has its removal on the same tab", () => {
     fireEvent.click(box);
     expect(await within(dialog).findByText(/Then namespace/)).toHaveTextContent("Then namespace seaweedfs is deleted, with everything in it.");
     expect(dialog).not.toHaveTextContent("Namespace seaweedfs is kept");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/minio/teardown"]).toEqual([{ deleteNamespace: true }]));
   });
 
@@ -520,19 +600,20 @@ describe("every setup has its removal on the same tab", () => {
       "POST /api/resources/minio/teardown": () => jsonResponse({ success: true, message: "S3 storage removed.", logs: [] }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    fireEvent.click(within(await teardownSection()).getByRole("button", { name: "Tear down the S3 storage" }));
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(dialog).toHaveTextContent("its managedFields show no write by this tool");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Tear down S3 storage" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/minio/teardown"]).toEqual([{}]));
   });
 
-  it("a deployed PR image is removed with Revert, and storage of an earlier version with Remove old storage", async () => {
+  it("a deployed PR image is removed with Revert, and storage of an earlier version with Delete old storage", async () => {
     const legacy: LegacyStorageState = { namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000", objects: ["Deployment seaweedfs"], stage: "remove", namespaceDeletable: false, usedBy: [] };
     setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: legacy, pipelineServers: [], mlflow: { ...ownMlflow, prOverride: true, prNumber: 7 } }));
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    expect(within(await part("S3 storage")).getByRole("button", { name: "Remove old storage" })).toBeInTheDocument();
+    expect(await menuItem("S3 storage", /Delete old storage/)).not.toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("tab", { name: "MLflow" }));
     expect(within(await part("MLflow server")).getByRole("button", { name: "Revert the PR image" })).toBeInTheDocument();
   });
@@ -554,11 +635,12 @@ describe("status from the serving configuration (Repair)", () => {
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
     expect(within(storage).getByText(label)).toBeInTheDocument();
-    expect(within(storage).getByText("Needs repair")).toBeInTheDocument();
+    expect(within(storage).getByText("The S3 storage needs a repair")).toBeInTheDocument();
     expect(storage).toHaveTextContent(text);
-    expect(storage).toHaveTextContent(/Repair re-runs setup/);
+    expect(storage).toHaveTextContent(/Repair sets it up again with this version's settings and starts it. Stored data is kept./);
+    // The fix is the alert's own action.
     fireEvent.click(within(storage).getByRole("button", { name: "Repair" }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Repair S3 storage" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Repair" }));
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/setup"))).toHaveLength(1));
   });
 

@@ -28,6 +28,8 @@ export type NextStep =
   | { kind: "set-up"; label: string; setup: Pending[]; reason: string | null }
   /** A part needs attention: show it. */
   | { kind: "show-issue"; part: string }
+  /** Storage of an earlier version holds the data: Migrate storage moves it. */
+  | { kind: "migrate" }
   /** A project-scoped feature with no project chosen. */
   | { kind: "choose-project" };
 
@@ -127,7 +129,7 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   const [storage, server] = parts;
   const unmanaged = parts.some((p) => p.unmanaged);
   const problem = parts.find((p) => PROBLEM.includes(p.status));
-  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}${problem.unmanaged ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: problem.id }, project };
+  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}${problem.unmanaged ? NOT_MANAGED : ""}`, next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   // Ready when the pipeline server is, on ready storage; someone else's server keeps its
   // artifacts in storage of its own, so this tool's storage is not its dependency.
@@ -141,16 +143,37 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   if (storageSetUp) setup.push({ kind: "setup-minio" });
   const storageReason = storageNotReadyReason(status?.minio, status?.legacyStorage, busy.migrating);
   if (server.status === "not-set-up" && !server.unmanaged && (storageReason === null || storageSetUp)) setup.push({ kind: "setup-pipeline-server", project });
+  const status_: EnvStatus = moving ? "setting-up" : "not-set-up";
+  const label = moving ? `Setting up in ${project}` : `Not set up in ${project}`;
+  // Every part exists and one is still starting: nothing is left to set up.
+  if (moving && parts.every((p) => p.status !== "not-set-up")) return { status: status_, label, next: null, project };
   let reason: string | null = null;
-  if (moving) reason = `${moving.id === "storage" ? "The S3 storage" : "The pipeline server"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is ready.`;
+  if (server.status === "not-set-up" && status?.pipelinesBlocked) reason = status.pipelinesBlocked.reason;
+  else if (moving) reason = `${moving.id === "storage" ? "The S3 storage" : "The pipeline server"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is ready.`;
   else if (setup.length === 0) reason = storage.status === "not-set-up" ? (status?.minio?.setupBlockedReason ?? "The S3 storage cannot be set up here.") : storageReason ?? "Nothing can be set up here.";
-  const anyReady = parts.some((p) => p.status === "ready");
+  // Name what Set up sets up: the whole feature, or the one part missing.
+  const onlyServer = setup.length === 1 && setup[0].kind === "setup-pipeline-server";
   return {
-    status: moving ? "setting-up" : "not-set-up",
-    label: moving ? `Setting up in ${project}` : `Not set up in ${project}`,
-    next: { kind: "set-up", label: anyReady ? "Set up the rest" : "Set up", setup, reason },
+    status: status_,
+    label,
+    next: { kind: "set-up", label: onlyServer ? `Set up the pipeline server in ${project}` : `Set up Pipelines in ${project}`, setup, reason },
     project,
   };
+}
+
+/** The next step for a part that needs attention: Migrate storage for storage of an earlier version, else show it. */
+function issueStep(status: ResourcesStatus | null, part: string): NextStep {
+  return part === "storage" && status?.legacyStorage?.stage === "migrate" ? { kind: "migrate" } : { kind: "show-issue", part };
+}
+
+/**
+ * Why the set-up a run is about to start cannot run on the latest status,
+ * or null: its first check, so that no part is created when a later part
+ * cannot be (a component that is off, storage that is gone).
+ */
+export function setUpBlocked(state: FeatureState): string | null {
+  if (state.next?.kind !== "set-up") return "There is nothing left to set up here; the page shows the current state.";
+  return state.next.reason;
 }
 
 /**
@@ -161,7 +184,7 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
 export function pipelinesState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE): FeatureState {
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
-  if (PROBLEM.includes(storage)) return { status: storage, label: `${envStatusText(storage)}${notManaged(status?.minio) ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: "storage" }, project: defaultProject(status, projects, null) };
+  if (PROBLEM.includes(storage)) return { status: storage, label: `${envStatusText(storage)}${notManaged(status?.minio) ? NOT_MANAGED : ""}`, next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
   const withServers = projectsWithServers(status, projects);
   const states = withServers.map((p) => pipelinesIn(status, p, busy));
   const ready = states.filter((s) => s.status === "ready");
@@ -199,7 +222,7 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
     case "deleting":
       return { status: s, label: s === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
     case "not-set-up":
-      return { status: s, label: "Not set up", next: { kind: "set-up", label: "Set up", setup: [{ kind: "setup-mlflow" }], reason: mlflow?.setupBlockedReason ?? null }, project: null };
+      return { status: s, label: "Not set up", next: { kind: "set-up", label: "Set up MLflow", setup: [{ kind: "setup-mlflow" }], reason: status?.mlflowBlocked?.reason ?? mlflow?.setupBlockedReason ?? null }, project: null };
     default:
       return { status: s, label: `Unknown${suffix}`, next: null, project: null };
   }

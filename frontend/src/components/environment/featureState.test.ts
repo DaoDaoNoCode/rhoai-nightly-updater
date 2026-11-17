@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, mlflowState, pipelinesState } from "./featureState";
+import { defaultProject, mlflowState, pipelinesState, setUpBlocked } from "./featureState";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const storage: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running" };
@@ -78,13 +78,31 @@ describe("pipelinesState and mlflowState", () => {
   });
 
   it("Set up sets up only what is missing, in dependency order, and a dependency it cannot set up blocks it with the reason", () => {
-    expect(pipelinesState(FIXTURES.none, "a-test-project", projects).next).toEqual({ kind: "set-up", label: "Set up", setup: [{ kind: "setup-minio" }, { kind: "setup-pipeline-server", project: "a-test-project" }], reason: null });
-    expect(pipelinesState(FIXTURES.storageOnly, "a-test-project", projects).next).toEqual({ kind: "set-up", label: "Set up the rest", setup: [{ kind: "setup-pipeline-server", project: "a-test-project" }], reason: null });
+    // Item 9: Set up names what it sets up, and where.
+    expect(pipelinesState(FIXTURES.none, "a-test-project", projects).next).toEqual({ kind: "set-up", label: "Set up Pipelines in a-test-project", setup: [{ kind: "setup-minio" }, { kind: "setup-pipeline-server", project: "a-test-project" }], reason: null });
+    expect(pipelinesState(FIXTURES.storageOnly, "a-test-project", projects).next).toEqual({ kind: "set-up", label: "Set up the pipeline server in a-test-project", setup: [{ kind: "setup-pipeline-server", project: "a-test-project" }], reason: null });
     const blocked = pipelinesState(FIXTURES.foreign, "a-test-project", projects).next;
     expect(blocked).toMatchObject({ kind: "set-up", setup: [], reason: "Namespace 'seaweedfs' exists but was not created by this tool." });
     // Someone else's running storage: the storage is Ready, a pipeline server here is not offered.
     const foreignReady: ResourcesStatus = { minio: { ...storage, managedByTool: false }, mlflow: none, pipelineServers: [] };
     const s = pipelinesState(foreignReady, "a-test-project", projects);
     expect(s.next).toMatchObject({ kind: "set-up", setup: [], reason: expect.stringMatching(/was not created by this tool/) });
+  });
+
+  // Item 3: a component that is off blocks Set up before anything is created.
+  it("a component that is off blocks Set up with its reason, and setUpBlocked reads it on fresh data", () => {
+    const off = "Data Science Pipelines is turned off on this cluster.";
+    const s = pipelinesState({ ...FIXTURES.none, pipelinesBlocked: { component: "aipipelines", reason: off } }, "a-test-project", projects);
+    expect(s.next).toMatchObject({ kind: "set-up", reason: off });
+    expect(setUpBlocked(s)).toBe(off);
+    expect(setUpBlocked(pipelinesState(FIXTURES.none, "a-test-project", projects))).toBeNull();
+    const m = mlflowState({ ...FIXTURES.none, mlflowBlocked: { component: "mlflowoperator", reason: "MLflow is turned off." } });
+    expect(m.next).toMatchObject({ kind: "set-up", label: "Set up MLflow", reason: "MLflow is turned off." });
+  });
+
+  it("nothing is offered while every part exists and one is starting; storage of an earlier version points at Migrate storage", () => {
+    const starting: ResourcesStatus = { ...FIXTURES.storageOnly, pipelineServers: [{ deployed: true, ready: false, managedByTool: true, namespace: "a-test-project", name: "nightly-dspa", message: "Provisioning" }] };
+    expect(pipelinesState(starting, "a-test-project", projects)).toMatchObject({ status: "setting-up", next: null });
+    expect(setUpBlocked(pipelinesState(starting, "a-test-project", projects))).toMatch(/nothing left to set up/);
   });
 });

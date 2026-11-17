@@ -28,7 +28,7 @@ const codes = (items: string[]) => items.map((n, i) => <React.Fragment key={n}>{
  * of its own when the outcome alert says the same.
  */
 const RunProgress: React.FC<{ run: MigrateRun }> = ({ run }) => (
-  <StepProgress idPrefix="migrate" aria-label={run.kind === "migrate" ? "Migrate storage progress" : "Remove old storage progress"}
+  <StepProgress idPrefix="migrate" aria-label={run.kind === "migrate" ? "Migrate storage progress" : "Delete old storage progress"}
     steps={MIGRATE_STEPS[run.kind]} states={run.steps} running={run.running}
     shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} />
 );
@@ -63,13 +63,13 @@ const MigratePlan: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
       )}
       {uncopied.length > 0 && (
         <StackItem>
-          <Content component="p">
-            {codes(uncopied)} holds MinIO&apos;s files from before SeaweedFS replaced it. No running server reads {uncopied.length > 1 ? "them" : "it"}, so {uncopied.length > 1 ? "they" : "it"} cannot be copied; only a MinIO server could read that format.
-          </Content>
+          <Alert component="p" variant="warning" isInline title="Data from before SeaweedFS can't be moved">
+            {codes(uncopied)} holds MinIO&apos;s files from before SeaweedFS replaced it. No running server reads {uncopied.length > 1 ? "them" : "it"}, so {uncopied.length > 1 ? "they" : "it"} cannot be copied, and {uncopied.length > 1 ? "they are" : "it is"} deleted when you delete the old storage later.
+          </Alert>
         </StackItem>
       )}
       <StackItem>
-        <Content component="p">The old storage is kept. You remove it in the last step, after reading the summary.</Content>
+        <Content component="p">Each pipeline server it moves restarts on the new storage; the others keep running. How long the copy takes depends on how much data there is. The old storage is kept: you delete it later, from the S3 storage&apos;s menu, once nothing else uses it.</Content>
       </StackItem>
     </Stack>
   );
@@ -126,47 +126,52 @@ const RemovePlan: React.FC<{ legacy: LegacyStorageState; deleteNamespace: boolea
 };
 
 /**
- * Migrate storage: one dialog for the whole move. It shows what the next
- * part does (Migrate, then Remove the old storage), runs it with streamed
- * progress, and shows the outcome. Closing it does not stop a run.
+ * Migrate storage, or deleting the old storage afterwards: each its own
+ * dialog, opened from its own action. It shows what the run does, runs it
+ * with streamed progress, and ends with the outcome. A successful
+ * migration ends there: deleting the old storage is a separate, later
+ * decision, never offered in the same breath. Closing it does not stop a
+ * run.
  */
 export const MigrateStorageModal: React.FC<{
   isOpen: boolean;
+  /** What this dialog does: migrate, or delete the old storage. */
+  kind: MigrateKind;
   legacy: LegacyStorageState | null | undefined;
   run: MigrateRun | null;
   /** Why changes are disabled now, or null. */
   baseReason: string | null;
   onStart: (kind: MigrateKind, deleteNamespace: boolean) => void;
   onClose: () => void;
-}> = ({ isOpen, legacy, run, baseReason, onStart, onClose }) => {
+}> = ({ isOpen, kind, legacy, run, baseReason, onStart, onClose }) => {
   const [deleteNamespace, setDeleteNamespace] = useState(false);
   const titleId = React.useId();
-  // After a successful Migrate the next part is the removal, even before
-  // the status has reloaded.
-  const stage: MigrateKind = run?.kind === "migrate" && run.result?.success ? "remove" : legacy?.stage === "remove" ? "remove" : "migrate";
-  const finished = !!run && !run.running && !!run.result;
-  const removed = run?.kind === "remove" && run.result?.success;
-  // The action for the next part, unless a run is going or all is done;
-  // its plan unless that part just failed (the outcome says why).
-  const showAction = !!legacy && !run?.running && !removed;
-  const showPlan = showAction && !(finished && !run?.result?.success && run?.kind === stage);
+  const stage = kind;
+  // A run of the other kind is not this dialog's.
+  const ownRun = run?.kind === stage ? run : null;
+  const finished = !!ownRun && !ownRun.running && !!ownRun.result;
+  const succeeded = finished && !!ownRun?.result?.success;
+  // The action until a run starts, and again after a failure (the outcome says why).
+  const showAction = !!legacy && !ownRun?.running && !succeeded;
+  const showPlan = showAction && !finished;
   const blocked = baseReason ?? (stage === "remove" ? legacy?.removeBlockedReason || null : null);
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={onClose}>
-      <ModalHeader title={stage === "remove" && !removed ? "Remove the old storage?" : "Migrate storage"} labelId={titleId}
-        titleIconVariant={stage === "remove" && !removed ? "warning" : undefined} />
+      <ModalHeader title={stage === "remove" ? (succeeded ? "Delete the old storage" : "Delete the old storage?") : "Migrate storage"} labelId={titleId}
+        titleIconVariant={stage === "remove" && !succeeded ? "warning" : undefined} />
       <ModalBody>
         <Stack hasGutter>
-          {run && (
+          {ownRun && (
             <StackItem>
-              <RunProgress run={run} />
+              <RunProgress run={ownRun} />
             </StackItem>
           )}
-          {run?.result && (
+          {ownRun?.result && (
             <StackItem>
-              <Alert component="p" isInline isLiveRegion variant={run.result.success ? "success" : run.result.errorCode === "in_progress" || run.result.errorCode === "detached" ? "info" : "danger"}
-                title={run.result.success ? (run.kind === "migrate" ? "Migrated" : "Old storage removed") : run.result.errorCode === "in_progress" || run.result.errorCode === "detached" ? "Still running" : "Stopped"}>
-                {run.result.message}
+              <Alert component="p" isInline isLiveRegion variant={ownRun.result.success ? "success" : ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached" ? "info" : "danger"}
+                title={ownRun.result.success ? (ownRun.kind === "migrate" ? "The data is in the new storage" : "The old storage was deleted") : ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached" ? "Still running" : "Stopped"}>
+                {ownRun.result.message}
+                {ownRun.result.success && ownRun.kind === "migrate" && " The old storage is kept; delete it later from the S3 storage's menu, once nothing else uses it."}
               </Alert>
             </StackItem>
           )}
@@ -181,10 +186,10 @@ export const MigrateStorageModal: React.FC<{
         {showAction && legacy && (
           <TooltipButton variant={stage === "remove" ? "danger" : "primary"} disabledReason={blocked}
             onClick={() => onStart(stage, stage === "remove" && legacy.namespaceDeletable && deleteNamespace)}>
-            {stage === "remove" ? "Remove old storage" : "Migrate storage"}
+            {stage === "remove" ? "Delete old storage" : "Migrate storage"}
           </TooltipButton>
         )}
-        <Button variant="link" onClick={onClose}>{run?.running || finished ? "Close" : "Cancel"}</Button>
+        <Button variant={showAction ? "link" : "primary"} onClick={onClose}>{ownRun?.running || finished ? "Close" : "Cancel"}</Button>
       </ModalFooter>
     </Modal>
   );

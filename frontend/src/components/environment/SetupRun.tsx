@@ -12,25 +12,47 @@ import {
   StackItem,
 } from "@patternfly/react-core";
 import { StepProgress } from "./StepProgress";
-import type { GoalRun } from "./useGoalRun";
+import type { GoalRun, GoalRunKind } from "./useGoalRun";
 import type { NextStep } from "./featureState";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 
+const RUNNING_NOTE: Record<GoalRunKind, string> = {
+  setup: "Each part is created, then checked until it works. You can close this dialog: the setup goes on, and the tab shows each part's state.",
+  delete: "You can close this dialog: the deletion goes on, and the tab shows each part's state.",
+  change: "You can close this dialog: the change goes on, and the tab shows its state.",
+};
+
+const STILL: Record<GoalRunKind, string> = { setup: "Still starting", delete: "Still deleting", change: "Still in progress" };
+
+/** The outcome's variant and title, the same in the dialog and in the toast. */
+export function runOutcome(run: GoalRun): { variant: "success" | "info" | "danger"; title: string } | null {
+  const r = run.result;
+  if (!r) return null;
+  if (r.success) return { variant: "success", title: r.message };
+  if (r.errorCode === "in_progress") return { variant: "info", title: STILL[run.kind] };
+  if (r.errorCode === "detached") return { variant: "info", title: "Still running" };
+  return { variant: "danger", title: `${run.title}: stopped` };
+}
+
 /**
- * The progress of a feature's Set up: one step per part, its state and
- * message (a part counts only once it works), then the outcome, and the
+ * The progress of any operation on the Environment page (Set up, Delete,
+ * Repair, Clean up, a PR deploy): one step per part, its state and message
+ * (a set-up part counts only once it works), then the outcome, and the
  * feature's main action once it is ready. Closing it does not stop the run.
  */
-export const SetupRunModal: React.FC<{
+export const RunModal: React.FC<{
   run: GoalRun | null;
   isOpen: boolean;
   onClose: () => void;
-  /** The feature's next step after the run, from its state function: an Open link becomes the primary button. */
+  /** The feature's next step after a successful run: an Open link becomes the primary button. */
   open: NextStep | null;
-}> = ({ run, isOpen, onClose, open }) => {
+  /** What to do next, under a successful outcome. */
+  whatNext?: React.ReactNode;
+}> = ({ run, isOpen, onClose, open, whatNext }) => {
   const titleId = React.useId();
   if (!run) return null;
-  const starting = run.result?.errorCode === "in_progress";
+  const outcome = runOutcome(run);
+  const success = !!run.result?.success;
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={onClose}>
       <ModalHeader title={run.title} labelId={titleId} />
@@ -42,24 +64,23 @@ export const SetupRunModal: React.FC<{
           </StackItem>
           {run.running && (
             <StackItem>
-              <Content component="p">Each part is created, then checked until it works. You can close this dialog: the setup goes on, and the tab shows each part&apos;s state.</Content>
+              <Content component="p">{RUNNING_NOTE[run.kind]}</Content>
             </StackItem>
           )}
-          {run.result && (
+          {outcome && (
             <StackItem>
-              <Alert component="p" isInline isLiveRegion variant={run.result.success ? "success" : starting ? "info" : "danger"}
-                title={run.result.success ? run.result.message : starting ? "Still starting" : "Stopped"}>
-                {run.result.success ? undefined : run.result.message}
+              <Alert component="p" isInline isLiveRegion variant={outcome.variant} title={outcome.title}>
+                {success ? whatNext : run.result?.message}
               </Alert>
             </StackItem>
           )}
         </Stack>
       </ModalBody>
       <ModalFooter>
-        {open?.kind === "open" && (
+        {success && open?.kind === "open" && (
           <Button variant="primary" component="a" href={open.href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{open.label}</Button>
         )}
-        <Button variant="link" onClick={onClose}>Close</Button>
+        <Button variant={success && open?.kind === "open" ? "link" : "primary"} onClick={onClose}>Close</Button>
       </ModalFooter>
     </Modal>
   );

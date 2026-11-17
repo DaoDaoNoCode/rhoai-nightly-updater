@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Content,
+  ExpandableSection,
   List,
   ListItem,
   Modal,
@@ -19,6 +20,11 @@ export interface ConfirmActionModalProps {
   title: string;
   /** Exactly what changes on the cluster, one item per object or effect. */
   changes: React.ReactNode[];
+  /**
+   * The outcome in words, shown first. With it, the object list moves into
+   * a collapsed "Details" section: the facts stay one click away.
+   */
+  summary?: React.ReactNode;
   /** Optional extra text (who is affected, how to undo). */
   children?: React.ReactNode;
   /** Data that is lost, shown as a danger alert. */
@@ -40,20 +46,24 @@ export interface ConfirmActionModalProps {
  * of them; Cancel is always available and Escape closes the dialog.
  */
 export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
-  isOpen, title, changes, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, onConfirm, onCancel,
+  isOpen, title, changes, summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, onConfirm, onCancel,
 }) => {
   const titleId = React.useId();
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const changeList = (
+    <>
+      <Content component="p">This changes the shared cluster:</Content>
+      <List>
+        {changes.map((change, i) => <ListItem key={i}>{change}</ListItem>)}
+      </List>
+    </>
+  );
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={() => !isLoading && onCancel()}>
       <ModalHeader title={title} labelId={titleId} titleIconVariant={confirmVariant === "danger" ? "warning" : undefined} />
       <ModalBody>
         <Stack hasGutter>
-          <StackItem>
-            <Content component="p">This changes the shared cluster:</Content>
-            <List>
-              {changes.map((change, i) => <ListItem key={i}>{change}</ListItem>)}
-            </List>
-          </StackItem>
+          <StackItem>{summary ?? changeList}</StackItem>
           {choice && <StackItem>{choice}</StackItem>}
           {dataLoss && (
             <StackItem>
@@ -61,6 +71,11 @@ export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
             </StackItem>
           )}
           {children && <StackItem>{children}</StackItem>}
+          {summary && changes.length > 0 && (
+            <StackItem>
+              <ExpandableSection toggleText="Details" isExpanded={detailsOpen} onToggle={(_e, v) => setDetailsOpen(v)}>{changeList}</ExpandableSection>
+            </StackItem>
+          )}
         </Stack>
       </ModalBody>
       <ModalFooter>

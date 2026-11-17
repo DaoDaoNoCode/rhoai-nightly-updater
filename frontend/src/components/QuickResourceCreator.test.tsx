@@ -120,7 +120,9 @@ describe("disabled buttons explain themselves (A06-7)", () => {
     stubResources(() => statusWith({ deployed: false, ready: false, managedByTool: false, setupBlockedReason: blocked }), ["dev-project"]);
     renderAt("/test-resources?tab=pipelines&project=dev-project");
     await tick();
-    const setUp = within(screen.getByRole("tabpanel")).getByRole("button", { name: "Set up" });
+    const setUp = within(screen.getByRole("tabpanel")).getByRole("button", { name: "Set up Pipelines in dev-project" });
+    // Item 8: the reason is also under the button, not only in the tooltip.
+    expect(setUp).toHaveAccessibleDescription(blocked);
     expect(setUp).toHaveAttribute("aria-disabled", "true");
     expect(setUp).not.toBeDisabled();
     fireEvent.mouseEnter(setUp);
@@ -131,10 +133,10 @@ describe("disabled buttons explain themselves (A06-7)", () => {
   });
 
   it("read-only users get the reason on the resource buttons", async () => {
-    stubResources(() => statusWith(notDeployed));
+    stubResources(() => statusWith(notDeployed), ["dev-project"]);
     renderAt("/test-resources?tab=pipelines&project=dev-project", "Read-only access: changing the cluster through this tool requires the cluster-admin role.");
     await tick();
-    const setUp = screen.getAllByRole("button", { name: "Set up" })[0];
+    const setUp = screen.getAllByRole("button", { name: "Set up Pipelines in dev-project" })[0];
     expect(setUp).toHaveAttribute("aria-disabled", "true");
     fireEvent.mouseEnter(setUp);
     await tick(1000);

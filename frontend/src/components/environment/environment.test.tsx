@@ -57,7 +57,7 @@ describe("useGoalRun", () => {
     ]));
     expect(order).toEqual(["a", "b"]);
     expect(result.current.run?.running).toBe(false);
-    expect(result.current.run?.result).toEqual({ success: true, message: "All 2 parts are set up and working." });
+    expect(result.current.run?.result).toEqual({ success: true, message: "All 2 parts are done." });
     expect(result.current.run?.states.a.status).toBe("success");
     expect(result.current.run?.states.a.message).toMatch(/^A done \(\d+:\d\d\)$/);
   });
@@ -74,7 +74,7 @@ describe("useGoalRun", () => {
     await act(() => result.current.start("Goal", [{
       id: "a", title: "A", run: ok("created"), readyMessage: "A is ready.",
       waitReady: { typical: "1 to 3 minutes", check: () => { checks += 1; return checks < 4 ? { state: "starting" } : { state: "ready" }; } },
-    }], "Goal is ready."));
+    }], { doneMessage: "Goal is ready." }));
     expect(result.current.run?.result).toEqual({ success: true, message: "Goal is ready." });
     expect(result.current.run?.states.a).toEqual({ status: "success", message: "A is ready. (0:06)" });
   });
@@ -108,6 +108,48 @@ describe("useGoalRun", () => {
     expect(second).not.toHaveBeenCalled();
     expect(result.current.run?.result).toEqual({ success: false, message: "Storage refused", errorCode: "not_managed" });
     expect(result.current.run?.states.b).toBeUndefined();
+  });
+
+  // Item 3: every part's prerequisites are checked before the first part is created.
+  it("a preflight that finds a missing prerequisite changes nothing", async () => {
+    const first = vi.fn(ok("A"));
+    const { result } = renderHook(() => useGoalRun());
+    await act(() => result.current.start("Goal", [{ id: "a", title: "A", run: first }, { id: "b", title: "B", run: ok("B") }],
+      { preflight: async () => "Data Science Pipelines is turned off on this cluster." }));
+    expect(first).not.toHaveBeenCalled();
+    expect(result.current.run?.steps.map((s) => s.id)).toEqual(["check", "a", "b"]);
+    expect(result.current.run?.result).toEqual({ success: false, message: "Data Science Pipelines is turned off on this cluster. Nothing was changed.", errorCode: "prerequisites" });
+  });
+  it("a preflight that passes runs the steps after its own", async () => {
+    const { result } = renderHook(() => useGoalRun());
+    await act(() => result.current.start("Goal", [{ id: "a", title: "A", run: ok("A") }], { preflight: async () => null, kind: "setup" }));
+    expect(result.current.run?.states.check.status).toBe("success");
+    expect(result.current.run?.result?.success).toBe(true);
+  });
+  it("an operation still in progress keeps its step running, not failed", async () => {
+    const { result } = renderHook(() => useGoalRun());
+    await act(() => result.current.start("Delete", [{ id: "a", title: "A", run: async () => ({ success: false, message: "still terminating", logs: [], errorCode: "in_progress" }) }], { kind: "delete" }));
+    expect(result.current.run?.states.a.status).toBe("running");
+    expect(result.current.run?.result?.errorCode).toBe("in_progress");
+  });
+
+  // Item 4: Clean up is one streamed operation; each event updates its step.
+  it("follows a streamed operation step by step to its outcome", () => {
+    const { result } = renderHook(() => useGoalRun());
+    let emit: (s: { step: string; status: "running" | "success" | "failed" | "skipped"; message: string; elapsedMs: number }) => void = () => {};
+    let done: (success: boolean, error?: string) => void = () => {};
+    act(() => result.current.follow("Clean up", [{ id: "pipeline-server:a", title: "Pipeline server in a" }, { id: "storage", title: "S3 storage" }], (onStep, onDone) => {
+      emit = onStep;
+      done = onDone;
+      return new AbortController();
+    }));
+    act(() => emit({ step: "pipeline-server:a", status: "success", message: "Pipeline server removed from 'a'.", elapsedMs: 1 }));
+    act(() => emit({ step: "storage", status: "failed", message: "Cannot delete the S3 storage yet.", elapsedMs: 2 }));
+    act(() => emit({ step: "operation_complete", status: "failed", message: "Cannot delete the S3 storage yet. Deleted before it stopped: a.", elapsedMs: 3 }));
+    act(() => done(false, "Cannot delete the S3 storage yet. Deleted before it stopped: a."));
+    expect(result.current.run?.states["pipeline-server:a"].status).toBe("success");
+    expect(result.current.run?.states.storage.status).toBe("failed");
+    expect(result.current.run).toMatchObject({ kind: "delete", running: false, result: { success: false, message: "Cannot delete the S3 storage yet. Deleted before it stopped: a." } });
   });
 
   it("does nothing without steps or while a run is going; reset keeps a running run", async () => {

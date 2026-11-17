@@ -65,6 +65,10 @@ type dspaInfo struct {
 	// DSPA's own settings), for the generation in ObservedGeneration
 	// (controllers/dspastatus/dspa_status.go, rhoai-3.6).
 	ObjectStore *dspaCondition
+	// APIURL is the pipeline API's external address, which DSPO reports in
+	// status.components.apiServer.externalUrl (api/v1 ComponentStatus): the
+	// host for the KFP SDK.
+	APIURL string
 }
 
 type dspaCondition struct {
@@ -164,6 +168,11 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 				} `json:"database"`
 			} `json:"spec"`
 			Status struct {
+				Components struct {
+					APIServer struct {
+						ExternalURL string `json:"externalUrl"`
+					} `json:"apiServer"`
+				} `json:"components"`
 				Conditions []struct {
 					Type string `json:"type"`
 					dspaCondition
@@ -176,7 +185,7 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	}
 	out := make([]dspaInfo, 0, len(list.Items))
 	for _, item := range list.Items {
-		d := dspaInfo{Meta: item.Metadata, ExternalDB: item.Spec.Database.ExternalDB != nil}
+		d := dspaInfo{Meta: item.Metadata, ExternalDB: item.Spec.Database.ExternalDB != nil, APIURL: item.Status.Components.APIServer.ExternalURL}
 		if es := item.Spec.ObjectStorage.ExternalStorage; es != nil {
 			d.Host, d.Scheme, d.Port = es.Host, es.Scheme, es.Port
 			d.SecretName = es.S3CredentialsSecret.SecretName
@@ -295,6 +304,9 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		state.Message = "Running"
 		if dashboardURL != "" {
 			state.UIRoute = dashboardURL + "/develop-train/pipelines/definitions/" + d.Meta.Namespace
+		}
+		if strings.HasPrefix(d.APIURL, "https://") {
+			state.APIRoute = d.APIURL
 		}
 	default:
 		// The Ready reason is often a success-sounding word such as

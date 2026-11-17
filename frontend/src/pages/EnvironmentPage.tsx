@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import { PageHeader } from "../components/PageHeader";
 import { QuickResourceCreator } from "../components/QuickResourceCreator";
 import { useClusterBusyHandler, useMutationBlocker, usePermissions } from "../state/AppInfo";
+import { useClusterStatus } from "../state/AppState";
 
 /**
  * Environment: one-click setups for developing and reproducing issues (S3
@@ -15,6 +16,7 @@ export const EnvironmentPage: React.FC = () => {
   // cluster-admin check as a change, but no free operation slot.
   const { reason: readBlocker } = usePermissions();
   const onResult = useClusterBusyHandler();
+  const { status } = useClusterStatus();
   useEffect(() => {
     document.title = "Environment — RHOAI Nightly Updater";
   }, []);
@@ -22,6 +24,7 @@ export const EnvironmentPage: React.FC = () => {
     <QuickResourceCreator
       mutateBlocker={blocker}
       readBlocker={readBlocker}
+      consoleURL={status?.consoleURL}
       onResult={onResult}
       renderHeader={(header) => (
         <PageHeader

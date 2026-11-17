@@ -143,3 +143,28 @@ func TestSetups_RefuseWhenTheComponentIsOff(t *testing.T) {
 		}
 	})
 }
+
+// A ready pipeline server reports the address the KFP SDK uses: DSPO's
+// status.components.apiServer.externalUrl, https only.
+func TestGetResourcesStatus_PipelineServerAPIAddress(t *testing.T) {
+	f, c := newResourceFake(t)
+	putReadyManagedS3(f)
+	putDSProject(f, "p1")
+	putDSProject(f, "p2")
+	ready := func(url string) string {
+		return `{"conditions":[{"type":"Ready","status":"True"}],"components":{"apiServer":{"externalUrl":"` + url + `"}}}`
+	}
+	putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("https://ds-pipeline-nightly-dspa-p1.apps.example.com"))
+	putDSPA(f, "p2", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", ready("javascript:alert(1)"))
+	s, err := GetResourcesStatus(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, ps := range s.PipelineServers {
+		got[ps.Namespace] = ps.APIRoute
+	}
+	if got["p1"] != "https://ds-pipeline-nightly-dspa-p1.apps.example.com" || got["p2"] != "" {
+		t.Fatalf("got %v", got)
+	}
+}

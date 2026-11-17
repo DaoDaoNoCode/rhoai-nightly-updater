@@ -29,7 +29,9 @@ export const ProjectSelect: React.FC<{
   onSelect: (project: string) => void;
   /** The clear button clears the selection too, not only the typed filter. */
   onClear?: () => void;
-}> = ({ id, projects, selected, onSelect, onClear }) => {
+  /** The field's name, for the combobox (its FormGroup label says the same). */
+  label?: string;
+}> = ({ id, projects, selected, onSelect, onClear, label = "Project" }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [inputValue, setInputValue] = useState(selected ?? "");
   const [filter, setFilter] = useState("");
@@ -86,7 +88,8 @@ export const ProjectSelect: React.FC<{
       onClick={() => { setIsOpen(!isOpen); inputRef.current?.focus(); }}>
       <TextInputGroup isPlain>
         <TextInputGroupMain
-          id={id}
+          inputId={id}
+          aria-label={label}
           value={inputValue}
           placeholder="Select a project"
           role="combobox"
