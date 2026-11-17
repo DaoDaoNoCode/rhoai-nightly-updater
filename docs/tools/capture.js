@@ -397,7 +397,7 @@ async (page) => {
         notes: [
           { at: page.getByText(/^\d+ of \d+ ready$/), n: 1, pos: "r" },
           { at: table.getByRole("link", { name: "Pipelines", exact: true }), n: 2, pos: "l" },
-          { at: label(table, "Ready · not managed by this tool"), n: 3, pos: "r" },
+          { at: label(table, "Ready · not managed by this tool"), n: 3, pos: "tl" },
           { at: table.getByRole("link", { name: /Open MLflow/ }), n: 4, pos: "r" },
         ],
         pad: 24,
