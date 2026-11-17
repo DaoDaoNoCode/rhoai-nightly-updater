@@ -576,6 +576,49 @@ export const mlflowStates = {
 
 export const projects = ["dev-project", "fraud-detection", "llm-eval"];
 
+// --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---
+// The words are the backend's (pkg/cluster inference_gateway.go, models.go).
+const INFERENCE = `https://inference.${APPS}`;
+const PRESET = "v3-6-0-kserve-config-llm-template-cpu";
+const PRESET_IMAGE = `registry.redhat.io/rhaii/vllm-cpu-rhel9@${digest("vllm-cpu-nightly")}`;
+const RELEASED_IMAGE = `registry.redhat.io/rhaii/vllm-cpu-rhel9@${digest("vllm-cpu-3.5.3")}`;
+const GW = { namespace: "openshift-ingress", name: "openshift-ai-inference" };
+const usedBy = (models) => models.length
+  ? { usedBy: models, teardownBlockedReason: `Models route through it: ${models.join(", ")}. Delete ${models.length > 1 ? "those models" : "that model"} first.` }
+  : {};
+
+export const gatewayStates = {
+  none: { deployed: false, ready: false, message: "Not set up", managedByTool: false },
+  starting: { ...GW, deployed: true, ready: false, managedByTool: true, message: "Programmed, waiting for an address", externalUrl: INFERENCE },
+  ready: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: true, message: "Running", externalUrl: INFERENCE, address: "a1b2c3d4e5f6-1234567890.us-east-1.elb.amazonaws.com", dns: "published", authPolicy: models.length ? "enforced" : "missing", ...usedBy(models) }),
+  // RHOAI's chart (or an admin) made it: used as it is, never changed.
+  foreign: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: false, message: "Running", externalUrl: INFERENCE, address: "a9f8e7d6-0987654321.us-east-1.elb.amazonaws.com", authPolicy: "enforced", ...usedBy(models), teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." }),
+  // Someone else's that reports no Programmed condition: unknown, not failed.
+  unknown: { ...GW, deployed: true, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Programmed condition", externalUrl: INFERENCE, teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." },
+};
+
+const MODEL = { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true };
+export const modelStates = {
+  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/qwen25-05b-instruct`, imageKind: "preset", ...over }),
+  released: (ns = "dev-project") => modelStates.ready(ns, { imageKind: "released", imageVersion: "3.5.3", currentImage: RELEASED_IMAGE }),
+  starting: (ns = "dev-project") => ({ ...MODEL, namespace: ns, ready: false, managedByTool: true, message: "MainWorkloadReady: Deployment qwen25-05b-instruct-kserve is not ready", imageKind: "preset" }),
+  imageMissing: (ns = "dev-project") => ({
+    ...MODEL, namespace: ns, ready: false, managedByTool: true, terminalError: true, presetImageMissing: true, imageKind: "preset", currentImage: undefined,
+    waitingReason: "ErrImagePull", message: `ErrImagePull: reading manifest ${PRESET_IMAGE.split("@")[1]} in registry.redhat.io/rhaii/vllm-cpu-rhel9: manifest unknown`,
+  }),
+  foreign: (ns = "llm-eval") => ({ ...MODEL, displayName: "Qwen (team copy)", namespace: ns, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Ready condition", teardownBlockedReason: "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it." }),
+};
+
+export const modelsStatus = (over = {}) => ({
+  dependencies: "True", preset: PRESET, imagePlan: "released",
+  imagePlanReason: "This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves registry.redhat.io/rhaii/vllm-cpu-rhel9; the newest released Red Hat image is used instead.",
+  catalog: [{ name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct", cpu: "4", memory: "16Gi" }],
+  items: [],
+  ...over,
+});
+
+export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12Gi of memory free (up to 16Gi), and the most CPU free is 2.3 CPUs and 41.2 GiB on ip-10-0-1-23.ec2.internal. It may stay pending until a node is added or other workloads stop; the setup still runs.";
+
 // --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleStatus) ---
 // The names, messages and actions are the backend's (pkg/cluster samples_*.go).
 

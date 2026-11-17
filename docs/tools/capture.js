@@ -425,6 +425,29 @@ async (page) => {
         pad: 24,
       });
 
+      // Models: the gateway and a ready model; a nightly preset image that is missing.
+      await open("/test-resources?tab=models&project=dev-project", "env-models-ready");
+      const gateway = part("Inference gateway");
+      const qwen = part("Qwen2.5 0.5B Instruct (CPU)");
+      await crop("environment-models", [panel().getByRole("heading", { name: "Models", level: 2 }), qwen], {
+        notes: [
+          { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
+          { at: row(gateway, "External address"), n: 2, pos: "l" },
+          { at: row(qwen, "Address"), n: 3, pos: "l" },
+          { at: row(qwen, "Runtime image"), n: 4, pos: "l" },
+        ],
+        pad: 24,
+      });
+      await open("/test-resources?tab=models&project=dev-project", "env-models-image-missing");
+      const broken = part("Qwen2.5 0.5B Instruct (CPU)");
+      await crop("environment-models-image", broken, {
+        notes: [
+          { at: broken.getByText("The cluster preset's image is not published yet"), n: 1, pos: "r" },
+          { at: broken.getByRole("button", { name: "Use the newest released Red Hat image" }), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+
       // Samples: the MLflow tab's Sample data and the Pipelines tab's sample run.
       const section = (name) => page.getByRole("region", { name });
       await open("/test-resources?tab=mlflow&project=dev-project", "env-samples");
@@ -433,7 +456,7 @@ async (page) => {
         notes: [
           { at: samples.getByRole("button", { name: "Add all" }), n: 1, pos: "l" },
           { at: label(samples, "Partly added"), n: 2, pos: "r" },
-          { at: samples.getByRole("button", { name: "Regenerate agent and prompt demo" }), n: 3, pos: "r" },
+          { at: samples.getByRole("button", { name: "Regenerate the agent and prompt demo" }), n: 3, pos: "r" },
           { at: label(samples, "Not managed by this tool"), n: 4, pos: "r" },
         ],
         pad: 24,

@@ -4,7 +4,7 @@
 
 <h1 align="center">RHOAI Nightly Updater</h1>
 
-The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
+The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow, a CPU model) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
 
 <p align="center">
   <picture>
@@ -69,18 +69,18 @@ Every nightly tag on Quay: filter, see the contents of a build, compare it with 
 
 It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI builds (`pr-<N>`, `main`). **Deploy latest main** pins the build under its commit tag (`:<commit>@sha256:...`), so the cluster names the commit it runs even after the `main` or `odh-stable` tag has moved on.
 
-### Environment: S3 storage, pipeline servers, MLflow
+### Environment: S3 storage, pipeline servers, MLflow, models
 
-One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`).
+One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`, `?tab=models&project=<name>`).
 
-<img src="docs/images/environment-overview.png" alt="Overview: 2 of 2 ready; Pipelines Ready in dev-project with Open pipelines in dev-project; MLflow Ready, not managed by this tool, with Open MLflow workspaces" width="760">
+<img src="docs/images/environment-overview.png" alt="Overview: 2 of 3 ready; Pipelines Ready in dev-project with Open pipelines in dev-project; MLflow Ready, not managed by this tool, with Open MLflow workspaces; Models Not set up in any project, with Choose a project" width="760">
 
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready · not managed by this tool** when it works: ownership never counts as not ready. A project-scoped feature summarises its projects ("Ready in juntao-test", "Ready in 2 of 5 projects", "Not set up in any project").
 4. The next step, a link in the row: **Open pipelines in** its one ready project (with several ready projects, **Choose a project**: the tab's picker decides), **Open MLflow workspaces** (its list of projects), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
 
-Under the table, **Clean up everything** deletes what this tool created (the pipeline servers, the S3 storage, MLflow) in one confirmed operation, with a checkbox per part.
+Under the table, **Clean up everything** deletes what this tool created (the pipeline servers, the S3 storage, MLflow, the models, then the inference gateway) in one confirmed operation, with a checkbox per part.
 
 <img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, S3 storage with endpoint and masked admin password, and the pipeline server with Open pipelines" width="760">
 
@@ -100,6 +100,22 @@ Storage an earlier version set up in namespace `minio` reads **Needs attention**
 2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow, a PR build, Revert), but the tool does not delete it.
 
 MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (`<address>/#/experiments?workspace=<project>`), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
+
+#### Models: a small chat model on CPU
+
+<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the inference gateway Ready with its external address, DNS and authentication; Qwen2.5 0.5B Instruct (CPU) Ready with its address and the released runtime image" width="760">
+
+1. The feature's state in the selected project.
+2. The **inference gateway**, shared by the cluster: every model is reached through it at `https://inference.<apps domain>`, and it checks each caller's OpenShift token. It runs on a cloud load balancer, which costs money while it exists. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
+3. The **model** in the project: Qwen2.5 0.5B Instruct, served by vLLM on CPU (4 CPUs, up to 16 GiB). Its address copies with one click; **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
+4. Which runtime image it runs. On a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
+
+**Set up** creates whatever is missing (the gateway, then the model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. Once ready, **Use it** has commands that call the model with your own `oc whoami -t` token (no account or key is made). Each part's menu has **Delete**; the gateway stays while a model uses it. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-a-cpu-model).
+
+<img src="docs/images/environment-models-image.png" alt="Model Error: the cluster preset's image is not published yet, with Use the newest released Red Hat image" width="760">
+
+1. On a nightly cluster whose preset image is missing from the registry, the model says so in plain words.
+2. **Use the newest released Red Hat image** changes only the model's image.
 
 #### Sample data and a sample pipeline
 
@@ -239,6 +255,7 @@ Environment variables of the `app` container. The template sets the first group;
 | `IMAGE_REPOSITORY`, `RELEASES_URL` | the Quay repository, the GitLab releases page | the update check: the highest `vX.Y.Z` tag of the repository; its release notes are linked on the public releases page (`INSTALLER_RELEASES_URL` below); an empty `IMAGE_REPOSITORY` turns it off |
 | `INSTALLER_RELEASES_URL` | unset: `RELEASES_URL`, except that the default GitLab project maps to its public GitHub mirror (`https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases`), whose assets download without a sign-in | the releases page the update notice links the release notes on and downloads `install.sh` from: a GitHub (`https://github.com/<owner>/<repo>/releases`) or GitLab (`https://<host>/<project>/-/releases`) releases page. Not a template parameter; set it on the `app` container. A value of another shape, or with characters outside `A-Z a-z 0-9 . _ ~ / -` (and a `:port`), shows no command, only the release notes |
 | `GITHUB_TOKEN` | unset | GitHub API token for commit dates, PR search and Dashboard Dev's distance from `main`. A read-only fine-grained token with public-repository read access is enough |
+| `VLLM_CPU_IMAGE` | unset | the Models tab's runtime image, for example a mirror on a disconnected cluster. Unset: the CPU preset's own image, or on a nightly cluster without a mirror for it the newest released `registry.redhat.io/rhaii/vllm-cpu-rhel9` found in Red Hat's public container catalog |
 | `SEAWEEDFS_IMAGE` | pinned `ghcr.io/chrislusf/seaweedfs@sha256:...` (4.54) | the S3 storage image, for example a mirror; must be a SeaweedFS 4.x whose `weed mini` reads `WEED_ADMIN_*`. `MINIO_IMAGE` is no longer read |
 | `RCLONE_IMAGE` | pinned `docker.io/rclone/rclone@sha256:...` (1.76.0) | the image of Migrate storage's copy Job, for example a mirror; must be an rclone 1.x image with `/bin/sh` |
 | `SEAWEEDFS_ACCESS_KEY_ID`, `SEAWEEDFS_SECRET_ACCESS_KEY` | random per install, kept in `seaweedfs/seaweedfs-s3-credentials` | S3 access key and secret key on a first setup (the secret key is also the admin UI password); keys already stored are kept. `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are no longer read |

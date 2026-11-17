@@ -251,6 +251,32 @@ const scenarios = {
     w.samples.pipeline["dev-project"] = F.pipelineSample("dev-project", { state: "foreign", message: "Experiment 'rhoai-nightly-sample' exists but was not created by this tool (no pipeline of that name is), so it is left unchanged." });
   },
   "env-samples-reader": (w) => { scenarios["env-samples"](w); w.canMutate = false; },
+  // Models: every state of the gateway and the model, one scenario each.
+  "env-models-ready": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
+  },
+  "env-models-starting": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.starting("dev-project")] });
+  },
+  "env-models-image-missing": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.imageMissing("dev-project")] });
+  },
+  "env-models-foreign": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.foreign(["llm-eval/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.foreign("llm-eval")] });
+  },
+  "env-models-unknown": (w) => { w.resources.inferenceGateway = F.gatewayStates.unknown; },
+  "env-models-gateway-starting": (w) => { w.resources.inferenceGateway = F.gatewayStates.starting; },
+  "env-models-capacity": (w) => { w.resources.models = F.modelsStatus({ capacityWarning: F.CAPACITY_WARNING }); },
+  "env-models-blocked": (w) => {
+    w.resources.models = F.modelsStatus({ imagePlan: undefined, imagePlanReason: undefined, preset: undefined, dependencies: "False",
+      blocked: { component: "kserve", reason: "KServe cannot serve LLMInferenceServices yet: DataScienceCluster default-dsc reports KserveLLMInferenceServiceDependencies=False (LeaderWorkerSet operator is not installed). A cluster-admin installs what it names; the Components page shows the details." } });
+  },
+  "env-models-reader": (w) => { scenarios["env-models-ready"](w); w.canMutate = false; },
+  "env-models-gated": (w) => { w.resources.models = F.modelsStatus(); w.gated = true; },
   // Sample changes wait for /__docs/advance: a row shows its operation.
   "env-samples-gated": (w) => { scenarios["env-samples-new"](w); w.gated = true; },
 };
@@ -393,13 +419,15 @@ async function migrateStream(req, res) {
 
 /** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
 async function cleanupStream(req, res) {
-  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false } = await body(req);
+  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false } = await body(req);
   beginOperation("cleanup", "Clean up the environment", [pipelineServers.length ? `${pipelineServers.length} pipeline servers` : "", storage ? "S3 storage" : "", mlflow ? "MLflow" : ""].filter(Boolean).join(", "));
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const parts = [
     ...pipelineServers.map((p) => ({ id: `pipeline-server:${p}`, title: `the pipeline server in '${p}'`, done: `Pipeline server removed from '${p}'.`, apply: () => { world.resources.pipelineServers = world.resources.pipelineServers.filter((ps) => ps.namespace !== p); } })),
     ...(storage ? [{ id: "storage", title: "the S3 storage", done: deleteNamespace ? "S3 storage removed. Namespace 'seaweedfs' is being deleted." : "S3 storage removed.", apply: () => { world.resources.minio = F.s3States.none; delete world.resources.legacyStorage; } }] : []),
     ...(mlflow ? [{ id: "mlflow", title: "MLflow", done: "MLflow removed.", apply: () => { world.resources.mlflow = F.mlflowStates.none; } }] : []),
+    ...models.map((p) => ({ id: `model:${p}`, title: `the model in '${p}'`, done: `Model qwen25-05b-instruct deleted from '${p}'; KServe removed its Deployment, Service and route. The project stays.`, apply: () => removeModel(p) })),
+    ...(inferenceGateway ? [{ id: "inference-gateway", title: "the inference gateway", done: "Inference gateway deleted: Gateway openshift-ingress/openshift-ai-inference, ConfigMap openshift-ingress/openshift-ai-inference-options and GatewayClass openshift-ai-inference. OpenShift removes its load balancer and the ingress operator its DNS record.", apply: () => { world.resources.inferenceGateway = F.gatewayStates.none; } }] : []),
   ];
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
@@ -412,6 +440,81 @@ async function cleanupStream(req, res) {
   }
   const titles = parts.map((p) => p.title);
   const message = `Deleted ${titles.length > 1 ? `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}` : titles[0]}.`;
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
+/** The Models part of the world, created on first change. */
+function modelsWorld() {
+  world.resources.models ??= F.modelsStatus();
+  world.resources.inferenceGateway ??= F.gatewayStates.none;
+  return world.resources.models;
+}
+
+function removeModel(project) {
+  const m = modelsWorld();
+  m.items = (m.items ?? []).filter((i) => i.namespace !== project || i.managedByTool === false);
+  const left = (m.items ?? []).filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
+  if (world.resources.inferenceGateway?.managedByTool) world.resources.inferenceGateway = F.gatewayStates.ready(left);
+}
+
+/** POST /api/resources/models/stream (pkg/cluster RunModels). */
+async function modelsStream(req, res) {
+  const { action, gateway = false, project, releasedImage = false } = await body(req);
+  beginOperation("models", "Models", `${action} ${[gateway ? "inference gateway" : "", project ? `model in ${project}` : ""].filter(Boolean).join(", ")}`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  const m = modelsWorld();
+  const done = [];
+  if (action === "teardown") {
+    if (project) {
+      send({ step: "model", status: "running", message: `Deleting the model in '${project}'...` });
+      await nextStep();
+      removeModel(project);
+      const msg = `Model qwen25-05b-instruct deleted from '${project}'; KServe removed its Deployment, Service and route. The project stays.`;
+      send({ step: "model", status: "success", message: msg });
+      done.push(msg);
+    }
+    if (gateway) {
+      send({ step: "gateway", status: "running", message: "Deleting the inference gateway..." });
+      await nextStep();
+      world.resources.inferenceGateway = F.gatewayStates.none;
+      const msg = "Inference gateway deleted. OpenShift removes its load balancer and the ingress operator its DNS record.";
+      send({ step: "gateway", status: "success", message: msg });
+      done.push(msg);
+    }
+  } else {
+    send({ step: "check", status: "running", message: "Checking what every part needs..." });
+    await nextStep();
+    send({ step: "check", status: "success", message: "Everything the parts need is there." });
+    if (gateway) {
+      send({ step: "gateway", status: "running", message: "Creating the inference gateway..." });
+      world.resources.inferenceGateway = F.gatewayStates.starting;
+      send({ step: "gateway", status: "success", message: "GatewayClass, ConfigMap and Gateway openshift-ingress/openshift-ai-inference applied; external hostname inference.apps.example-cluster.example.com." });
+      send({ step: "gateway-ready", status: "running", message: "Programmed; waiting for the load balancer's address..." });
+      await nextStep();
+      world.resources.inferenceGateway = F.gatewayStates.ready([]);
+      send({ step: "gateway-ready", status: "success", message: "Ready: https://inference.apps.example-cluster.example.com is published in DNS." });
+      done.push("The inference gateway is set up.");
+    }
+    if (project) {
+      send({ step: "model", status: "running", message: `Creating Qwen2.5 0.5B Instruct (CPU) in '${project}'...` });
+      m.items = [...(m.items ?? []).filter((i) => i.namespace !== project), F.modelStates.starting(project)];
+      send({ step: "model", status: "success", message: `LLMInferenceService ${project}/qwen25-05b-instruct applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3.` });
+      send({ step: "model-ready", status: "running", message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." });
+      await nextStep();
+      send({ step: "model-ready", status: "running", message: "Starting vLLM and loading the model..." });
+      await nextStep();
+      m.items = [...m.items.filter((i) => i.namespace !== project), releasedImage || m.imagePlan === "released" ? F.modelStates.released(project) : F.modelStates.ready(project)];
+      const users = m.items.filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
+      if (world.resources.inferenceGateway?.managedByTool) world.resources.inferenceGateway = F.gatewayStates.ready(users);
+      send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/qwen25-05b-instruct.` });
+      done.push(`Qwen2.5 0.5B Instruct (CPU) is ready in ${project}.`);
+    }
+  }
+  const message = done.join(" ");
   endOperation(true, message);
   send({ step: "operation_complete", status: "success", message });
   res.end();
@@ -522,7 +625,7 @@ const routes = {
   "GET /api/diagnostics": () => world.diagnostics,
   "GET /api/dashboard/state": () => world.dashboard,
   "GET /api/dashboard/builds": () => world.dashboardBuilds,
-  "GET /api/resources/status": () => ({ dashboardUrl: F.DASHBOARD_URL, ...world.resources }),
+  "GET /api/resources/status": () => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...world.resources }),
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline": (u) => pipelineSampleOf(u.searchParams.get("project") || ""),
@@ -564,6 +667,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/minio/setup") return mutation(res, "setup-minio", "Set up S3 storage", minioSetup);
   if (key === "POST /api/resources/minio/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
+  if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });
   }

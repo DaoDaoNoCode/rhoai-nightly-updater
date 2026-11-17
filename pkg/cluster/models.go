@@ -321,7 +321,7 @@ func modelsBlock(dsc dscRead) (*types.ComponentBlock, string) {
 	if deps == "False" {
 		meta, _ := dsc.Object["metadata"].(map[string]interface{})
 		name, _ := meta["name"].(string)
-		return &types.ComponentBlock{Component: "kserve", DSC: name, State: "Managed",
+		return &types.ComponentBlock{Component: "kserve",
 			Reason: fmt.Sprintf("KServe cannot serve LLMInferenceServices yet: DataScienceCluster %s reports %s=False (%s). A cluster-admin installs what it names; the Components page shows the details.", name, llmDependenciesCondition, firstNonEmpty(msg, "no message"))}, deps
 	}
 	return nil, deps

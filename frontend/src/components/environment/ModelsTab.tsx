@@ -3,7 +3,6 @@ import {
   ActionListItem,
   Alert,
   AlertActionLink,
-  ClipboardCopy,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -99,7 +98,7 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
         The front door to every model on the cluster: it answers at <code>https://inference.&lt;apps domain&gt;</code>, sends each call to its model, and checks the caller&apos;s OpenShift token.
         {unmanaged
           ? " It was created outside this tool (for example by RHOAI's installation): models use it as it is, and this tool does not change or delete it."
-          : " It creates a cloud load balancer, which costs money while it exists."}
+          : deployed ? " It runs on a cloud load balancer, which costs money while it exists." : " Setting it up creates a cloud load balancer, which costs money while it exists."}
       </Content>
       {gw && <ProblemAlerts kind="gateway" state={gw} />}
       {deployed && s === "setting-up" && !terminalReason(gw) && !isTerminating(gw) && <StartingNote state={gw!} typical="under a minute" />}
@@ -113,7 +112,7 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
             <DescriptionListGroup>
               <DescriptionListTerm>External address</DescriptionListTerm>
               <DescriptionListDescription>
-                <ClipboardCopy isReadOnly hoverTip="Copy" clickTip="Copied" variant="inline-compact" aria-label="External address of the inference gateway">{gw.externalUrl}</ClipboardCopy>
+                <ImageRef image={gw.externalUrl} what="external address" truncate={false} isCode={false} />
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}
@@ -190,7 +189,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason
             <DescriptionListGroup>
               <DescriptionListTerm>Address</DescriptionListTerm>
               <DescriptionListDescription>
-                <ClipboardCopy isReadOnly hoverTip="Copy" clickTip="Copied" variant="inline-compact" aria-label={`Address of the model in ${project}`}>{model.url}</ClipboardCopy>
+                <ImageRef image={model.url} what="model address" isCode={false} />
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}
@@ -198,8 +197,10 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason
             <DescriptionListGroup>
               <DescriptionListTerm>Runtime image</DescriptionListTerm>
               <DescriptionListDescription>
-                {imageWords(model)}
-                {model.currentImage && <> (<ImageRef image={model.currentImage} what="runtime image" />)</>}
+                <Stack>
+                  <StackItem>{imageWords(model)}</StackItem>
+                  {model.currentImage && <StackItem><ImageRef image={model.currentImage} what="runtime image" /></StackItem>}
+                </Stack>
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}

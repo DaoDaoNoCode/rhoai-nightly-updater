@@ -18,6 +18,24 @@ only accepts a tag whose version is the top dated section. See
 
 ## [3.0.0] - unreleased
 
+### Added
+
+- **Environment page, Models tab.** One Set up deploys a small chat model
+  (Qwen2.5 0.5B Instruct, vLLM on CPU, LLMInferenceService
+  `qwen25-05b-instruct`) in a data science project, and the cluster's
+  inference gateway (Gateway `openshift-ingress/openshift-ai-inference`)
+  it is reached through, unless one exists; each has its own removal, and
+  Clean up everything deletes the models, then the gateway. The CPU preset
+  is found at run time; on a nightly cluster that cannot pull the preset's
+  image, the newest released Red Hat image is used (`VLLM_CPU_IMAGE`
+  overrides it). "Use it" calls the model with the user's own token; no
+  account or token is created. The Overview gets a Models row.
+- RBAC (template revision 5): Roles in `openshift-ingress` and
+  `openshift-ingress-operator` (new template parameters `INGRESS_NAMESPACE`,
+  `INGRESS_OPERATOR_NAMESPACE`) and named ClusterRole rules for the
+  GatewayClass, LLMInferenceServices and their presets; each is audited in
+  SECURITY.md.
+
 ### Changed
 
 - MLflow set up by this tool uses the MLflow operator's own resource

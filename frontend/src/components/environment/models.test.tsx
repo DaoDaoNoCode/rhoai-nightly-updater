@@ -101,7 +101,7 @@ describe("Models tab", () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: { ...gateway, usedBy: ["dev/qwen25-05b-instruct"], teardownBlockedReason: "Models route through it: dev/qwen25-05b-instruct. Delete that model first." }, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=models&project=dev");
     const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
-    expect(within(gw).getByText(/costs money while it exists/)).toBeInTheDocument();
+    expect(within(gw).getByText(/runs on a cloud load balancer, which costs money while it exists/)).toBeInTheDocument();
     expect(within(gw).getByText(/On: every call needs an OpenShift token/)).toBeInTheDocument();
     const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
     expect(within(part).getByRole("link", { name: /Open dev in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects/dev?section=model-server");

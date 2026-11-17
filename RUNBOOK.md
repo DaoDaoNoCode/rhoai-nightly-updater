@@ -275,7 +275,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PVC `seaweedfs-data`, Service `seaweedfs-s3`, Route `seaweedfs-admin`). Storage an earlier version set up in namespace `minio` is moved with **Migrate storage** (§10.1). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
-The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server) and **MLflow**. The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): the pipeline servers, then the storage, then MLflow, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, a notification brings it back.
+The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server), **MLflow** and **Models** (the inference gateway and a project's CPU model, §10.2). The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): the pipeline servers, then the storage, then MLflow, then the models, then the inference gateway, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, a notification brings it back.
 
 <img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
 
@@ -333,6 +333,37 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | Sample run Failed: an image cannot be pulled | Disconnected or mirrored cluster: mirror the image the section shows, or set `SAMPLE_PIPELINE_IMAGE` on the updater to a pullable copy, then **Run sample pipeline** again |
 | Sample pipeline not offered | It runs only on a ready pipeline server this tool set up (`nightly-dspa`); the section says which condition is missing. A KFP experiment or pipeline `rhoai-nightly-sample` someone else created blocks it |
 | Sample run stays Pending | The section stops checking after 10 minutes (**Check again**). Open the run in the dashboard for its step's state |
+
+### 10.2 Models: the inference gateway and a CPU model
+
+The **Models** tab sets up two parts with one **Set up**: the cluster's **inference gateway** (Gateway `openshift-ingress/openshift-ai-inference`, which every model is reached through) and **Qwen2.5 0.5B Instruct** on CPU in the chosen project (LLMInferenceService `qwen25-05b-instruct`). Objects: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#models-inference-gateway-cluster-and-a-cpu-model-a-project-you-choose).
+
+Before Set up the tab says what is missing: model serving turned off (DataScienceCluster `kserve` not Managed, or `KserveLLMInferenceServiceDependencies=False`), no CPU preset on this release, no data science project, or too little room on the workers (a warning only: the model needs 4 CPUs and 12 GiB requested, 16 GiB limit, on one amd64 worker). A gateway someone else made (RHOAI's install, an admin) reads **Not managed by this tool** and is used as it is.
+
+Call a ready model with your own token (no account or key is made):
+
+```bash
+TOKEN=$(oc whoami -t)
+URL=$(oc get llminferenceservice qwen25-05b-instruct -n <project> -o jsonpath='{.status.url}')
+curl -s -H "Authorization: Bearer $TOKEN" $URL/v1/models
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
+  -d '{"model":"qwen25-05b-instruct","messages":[{"role":"user","content":"Say hello"}],"max_tokens":64}'
+```
+
+`401`: no or expired token. `403`: your user cannot `get` the model (no access to the project). The `model` field is the resource name, as the dashboard's playground expects.
+
+| Symptom | Cause and fix |
+|---|---|
+| Model **Error**: "The cluster preset's image is not published yet" (`ErrImagePull ... manifest unknown`) | A nightly build's CPU preset names a runtime image Red Hat has not published. Use **Use the newest released Red Hat image** on the model: it sets the newest released `registry.redhat.io/rhaii/vllm-cpu-rhel9` image, pinned by digest. Or mirror `registry.redhat.io/rhaii` to `registry.stage.redhat.io/rhaii` (ImageDigestMirrorSet) with a pull credential for that registry, then set the model up again. On disconnected clusters set `VLLM_CPU_IMAGE` on the updater |
+| Model stays **Setting up**, "Waiting for a worker with room" | `FailedScheduling: Insufficient cpu/memory`. Free 4 CPUs / 12 GiB on one amd64 worker, or add a node; it starts by itself |
+| Model **Error**: "keeps crashing ... OOMKilled" | The 16 GiB limit was too small for the model's KV cache; check `oc logs deploy/qwen25-05b-instruct-kserve -n <project> -c main` |
+| Model **Error**: "KServe cannot resolve its preset" | The preset named in `spec.baseRefs` is gone (RHOAI was updated and its prefix changed). Set the model up again: it re-reads the prefix |
+| Gateway **Needs attention**: "The gateway's authentication is missing" | odh-model-controller adds AuthPolicy `openshift-ai-inference-authn` once a model uses the gateway; check that odh-model-controller and Connectivity Link (Kuadrant) run: `oc get authpolicy -n openshift-ingress` |
+| Gateway **Setting up** for minutes | `oc get gateway openshift-ai-inference -n openshift-ingress -o yaml`: `Programmed=False` names the reason (no load balancer quota, for example). DNS for a new load balancer can take a few minutes |
+| Gateway **Unknown · not managed by this tool** | Someone else's gateway that reports no `Programmed` condition: the tool cannot tell; ask its owner |
+| **Delete inference gateway** unavailable | Models route through it (named), or routes are attached to it (`oc get httproute -A`). Delete those first; models of other tools are never deleted here |
+
+Rollback: **Delete model**, then **Delete inference gateway** (or **Clean up Models**, which runs both in that order). By hand, only for what the tool made (`app.kubernetes.io/managed-by=rhoai-nightly-updater`): `oc delete llminferenceservice qwen25-05b-instruct -n <project>`, then `oc delete gateway openshift-ai-inference -n openshift-ingress`, `oc delete configmap openshift-ai-inference-options -n openshift-ingress`, `oc delete gatewayclass openshift-ai-inference`.
 
 ### 10.1 Migrate storage from an earlier version
 
