@@ -403,8 +403,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : null;
   const whatNext = run.run?.kind === "setup"
     ? <Content component="p">{runFeature === "mlflow"
-      ? "Open MLflow to see the experiments of a project. The MLflow tab shows how to log runs from a notebook or script."
-      : "Open pipelines to import a pipeline and create a run. The Pipelines tab shows how to use the pipeline server."}</Content>
+      ? "Open MLflow workspaces to choose a project and see its experiments. The MLflow tab shows how to log runs from a notebook or script."
+      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run. The Pipelines tab shows how to use the pipeline server.`}</Content>
     : undefined;
   const outcome = run.run ? runOutcome(run.run) : null;
 
@@ -462,7 +462,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   <Overview rows={overviewRows} baseReason={baseReason} setUpReason={readOnly ? READ_ONLY_SETUP : null}
                     onSetUp={(row, setup) => setUp(row.name, setup)}
                     onShowIssue={(row, part) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(partTitleId(part)); }}
-                    onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab }); setFocusTarget("pipelines-project"); }}
+                    onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget("pipelines-project"); }}
                     onMigrate={() => setMigrateKind("migrate")}
                     onCleanup={!readOnly && anythingToClean ? () => setCleanupScope("all") : null} />
                 )}

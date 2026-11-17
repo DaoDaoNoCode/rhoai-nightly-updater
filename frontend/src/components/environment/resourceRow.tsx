@@ -191,8 +191,8 @@ export const createdBy = (state: ResourceState | undefined) => state?.managedByT
 /** An external link as a full-size link button, for action rows (isInline is
  *  for links inside running text: it drops the button height, so the link
  *  would sit higher than the buttons beside it). */
-export const ExternalLink: React.FC<{ href: string; children: React.ReactNode; variant?: "link" | "primary" | "secondary"; size?: "sm" }> = ({ href, children, variant = "link", size }) => (
-  <Button variant={variant} size={size} component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
+export const ExternalLink: React.FC<{ href: string; children: React.ReactNode; variant?: "link" | "primary" | "secondary" }> = ({ href, children, variant = "link" }) => (
+  <Button variant={variant} component="a" href={href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{children}</Button>
 );
 
 /** An OpenShift console page of a Deployment's pods (with their logs), or undefined without a console address. */

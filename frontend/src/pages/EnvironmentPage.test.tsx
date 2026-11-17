@@ -43,8 +43,8 @@ describe("Environment page", () => {
     const table = screen.getByRole("grid", { name: "Features" });
     expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["Pipelines", "MLflow"]);
     expect(await row("Pipelines")).toHaveTextContent("Not set up in any project");
-    expect(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" })).toBeInTheDocument();
-    expect(within(await row("MLflow")).getByRole("button", { name: "Set up MLflow" })).toBeInTheDocument();
+    expect(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" })).toHaveClass("pf-m-inline");
+    expect(within(await row("MLflow")).getByRole("button", { name: "Set up MLflow…" })).toBeInTheDocument();
     // No endpoints, logins or teardown on the Overview.
     expect(screen.getByRole("tabpanel")).not.toHaveTextContent(/seaweedfs|Password|Tear down/);
   });
@@ -58,7 +58,9 @@ describe("Environment page", () => {
     expect(await screen.findByText("2 of 2 ready")).toBeInTheDocument();
     const mlflow = await row("MLflow");
     expect(mlflow).toHaveTextContent("Ready · not managed by this tool");
-    expect(within(mlflow).getByRole("link", { name: /Open MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    expect(within(mlflow).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    // One ready project: the link says which, as an inline link in the cell.
+    expect(within(await row("Pipelines")).getByRole("link", { name: /Open pipelines in juntao-test/ })).toHaveClass("pf-m-inline");
     const pipelines = await row("Pipelines");
     expect(pipelines).toHaveTextContent("Ready in juntao-test");
     expect(within(pipelines).getByRole("link", { name: "Pipelines" })).toHaveAttribute("href", "/test-resources?tab=pipelines&project=juntao-test");
@@ -79,6 +81,11 @@ describe("Environment page", () => {
     });
     renderPage("/test-resources");
     expect(await row("Pipelines")).toHaveTextContent("Ready in 2 of 5 projects");
+    // Several ready projects: no jump into one of them; the tab's picker decides.
+    expect(within(await row("Pipelines")).queryByRole("link", { name: /Open pipelines/ })).not.toBeInTheDocument();
+    fireEvent.click(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" }));
+    expect(await screen.findByText("No project chosen")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue("");
   });
 
   it("keeps the tab and the project in the URL; back and forward work; old tabs open Pipelines", async () => {

@@ -135,7 +135,7 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   // artifacts in storage of its own, so this tool's storage is not its dependency.
   if (server.status === "ready" && (storage.status === "ready" || server.unmanaged)) {
     const href = pipelineServerIn(status, project)?.uiRoute;
-    return { status: "ready", label: `Ready in ${project}${unmanaged ? NOT_MANAGED : ""}`, next: href ? { kind: "open", label: "Open pipelines", href } : null, project };
+    return { status: "ready", label: `Ready in ${project}${unmanaged ? NOT_MANAGED : ""}`, next: href ? { kind: "open", label: `Open pipelines in ${project}`, href } : null, project };
   }
   if (server.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${NOT_MANAGED}`, next: null, project };
   const setup: Pending[] = [];
@@ -189,9 +189,9 @@ export function pipelinesState(status: ResourcesStatus | null, project: string |
   const states = withServers.map((p) => pipelinesIn(status, p, busy));
   const ready = states.filter((s) => s.status === "ready");
   if (ready.length === 1) return ready[0];
+  // Several ready projects: no jump to one of them; the tab's picker decides.
   if (ready.length > 1) {
-    const first = ready[0];
-    return { status: "ready", label: `Ready in ${ready.length} of ${projects.length} projects`, next: first.next, project: first.project };
+    return { status: "ready", label: `Ready in ${ready.length} of ${projects.length} projects`, next: { kind: "choose-project" }, project: null };
   }
   const problem = states.find((s) => PROBLEM.includes(s.status)) ?? states.find((s) => MOVING.includes(s.status) || s.status === "setting-up") ?? states.find((s) => s.status === "unknown");
   if (problem) return problem;
@@ -207,6 +207,13 @@ export function mlflowStatus(status: ResourcesStatus | null, busy: Busy): EnvSta
   return envStatus(status?.mlflow, { busy: b });
 }
 
+/**
+ * The label of a link to MLflow's root: with workspaces on, its root is the
+ * list of workspaces, one per project (opendatahub-io/mlflow server/js
+ * MlflowRouter: "/" is a global route, WorkspacesHomeView).
+ */
+export const MLFLOW_WORKSPACES = "Open MLflow workspaces";
+
 export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): FeatureState {
   const mlflow = status?.mlflow;
   const s = mlflowStatus(status, busy);
@@ -214,7 +221,7 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
   const suffix = unmanaged ? NOT_MANAGED : "";
   switch (s) {
     case "ready":
-      return { status: s, label: `Ready${suffix}`, next: mlflow?.uiRoute ? { kind: "open", label: "Open MLflow", href: mlflow.uiRoute } : null, project: null };
+      return { status: s, label: `Ready${suffix}`, next: mlflow?.uiRoute ? { kind: "open", label: MLFLOW_WORKSPACES, href: mlflow.uiRoute } : null, project: null };
     case "error":
     case "needs-attention":
       return { status: s, label: `${s === "error" ? "Error" : "Needs attention"}${suffix}`, next: { kind: "show-issue", part: "mlflow" }, project: null };

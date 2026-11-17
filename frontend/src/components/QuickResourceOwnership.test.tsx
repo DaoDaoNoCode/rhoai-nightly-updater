@@ -157,14 +157,14 @@ describe("health and ownership are separate", () => {
     ["someone else's, running", browserMlflow, "Ready", true, true],
     ["someone else's, broken", brokenForeignMlflow, "Error", true, false],
     ["this tool's, running", ownMlflow, "Ready", false, true],
-  ])("MLflow tab, %s: health, ownership apart, Open when ready (in the project's workspace), Delete only for this tool's", async (_name, mlflow, status, foreign, open) => {
+  ])("MLflow tab, %s: health, ownership apart, Open its workspaces when ready, Delete only for this tool's", async (_name, mlflow, status, foreign, open) => {
     setup(live({ mlflow: mlflow as ResourceState }));
     renderAt("/test-resources?tab=mlflow&project=juntao-test");
     const server = await part("MLflow server");
     expect(within(server).getByText(status as string)).toBeInTheDocument();
     if (foreign) expect(within(server).getByText("Not managed by this tool")).toBeInTheDocument();
     else expect(within(server).queryByText("Not managed by this tool")).not.toBeInTheDocument();
-    if (open) expect(within(server).getByRole("link", { name: /Open MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com/#/experiments?workspace=juntao-test");
+    if (open) expect(within(server).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
     else expect(within(server).queryByRole("link", { name: /Open MLflow/ })).not.toBeInTheDocument();
     if (foreign) {
       expect(await menuItem("MLflow server", /Delete MLflow/)).toBeNull();

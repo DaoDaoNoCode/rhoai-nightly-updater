@@ -73,12 +73,12 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`).
 
-<img src="docs/images/environment-overview.png" alt="Overview: 2 of 2 ready; Pipelines Ready in dev-project with Open pipelines; MLflow Ready, not managed by this tool, with Open MLflow" width="760">
+<img src="docs/images/environment-overview.png" alt="Overview: 2 of 2 ready; Pipelines Ready in dev-project with Open pipelines in dev-project; MLflow Ready, not managed by this tool, with Open MLflow workspaces" width="760">
 
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready · not managed by this tool** when it works: ownership never counts as not ready. A project-scoped feature summarises its projects ("Ready in juntao-test", "Ready in 2 of 5 projects", "Not set up in any project").
-4. The next step: **Open**, **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
+4. The next step, a link in the row: **Open pipelines in** its one ready project (with several ready projects, **Choose a project**: the tab's picker decides), **Open MLflow workspaces** (its list of projects), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
 
 Under the table, **Clean up everything** deletes what this tool created (the pipeline servers, the S3 storage, MLflow) in one confirmed operation, with a checkbox per part.
 

@@ -24,7 +24,7 @@ import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type Pending, ExternalLink, ProblemAlerts, StartingNote, consolePodsHref, isTerminating, pvcsLost, terminalReason } from "./resourceRow";
 import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { notManaged } from "./resourceStatus";
-import { type Busy, type FeatureState, mlflowStatus } from "./featureState";
+import { MLFLOW_WORKSPACES, type Busy, type FeatureState, mlflowStatus } from "./featureState";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, mlflowClientEnv, mlflowWorkspaceHref } from "./UseIt";
@@ -154,7 +154,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
   if (mlflow?.prOverride && !readOnly) {
     actions.push(<ActionListItem key="revert"><TooltipButton variant="secondary" onClick={revert} isLoading={busy.resAction === "revert-mlflow"} disabledReason={baseReason}>Revert the PR image</TooltipButton></ActionListItem>);
   }
-  if (mlflow?.ready && mlflow.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={mlflowWorkspaceHref(mlflow.uiRoute, props.project)}>Open MLflow</ExternalLink></ActionListItem>);
+  if (mlflow?.ready && mlflow.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={mlflow.uiRoute}>{MLFLOW_WORKSPACES}</ExternalLink></ActionListItem>);
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(mlflow)
     ? [{ key: "delete", label: "Delete MLflow…", onClick: () => setPending({ kind: "teardown-mlflow" }), disabledReason: baseReason ?? mlflow?.teardownBlockedReason ?? null, isDanger: true }]
     : [];

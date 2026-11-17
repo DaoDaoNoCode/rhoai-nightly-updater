@@ -37,7 +37,8 @@ describe("defaultProject", () => {
 
 describe("pipelinesState and mlflowState", () => {
   it("readiness is health: someone else's running MLflow is Ready, with ownership in the label", () => {
-    expect(mlflowState(FIXTURES.live)).toEqual({ status: "ready", label: "Ready · not managed by this tool", next: { kind: "open", label: "Open MLflow", href: "https://mlflow" }, project: null });
+    // MLflow's root is its list of workspaces: the label says so.
+    expect(mlflowState(FIXTURES.live)).toEqual({ status: "ready", label: "Ready · not managed by this tool", next: { kind: "open", label: "Open MLflow workspaces", href: "https://mlflow" }, project: null });
     const broken = { ...FIXTURES.live, mlflow: { ...FIXTURES.live.mlflow, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff" } };
     expect(mlflowState(broken)).toMatchObject({ status: "error", label: "Error · not managed by this tool", next: { kind: "show-issue", part: "mlflow" } });
     expect(mlflowState(FIXTURES.none)).toMatchObject({ status: "not-set-up", next: { kind: "set-up", setup: [{ kind: "setup-mlflow" }], reason: null } });
@@ -70,6 +71,11 @@ describe("pipelinesState and mlflowState", () => {
       const tab = pipelinesState(s, tabProject, projects);
       expect(tab.status).toBe(overview.status);
       if (!overview.label.includes(" of ")) expect(tab.label).toBe(overview.label.startsWith("Needs attention") || overview.label.startsWith("Error") && !overview.label.includes(" in ") ? `${overview.label} in ${tabProject}` : overview.label);
+      // A link to a project says which, and the Overview's is the tab's.
+      if (overview.next?.kind === "open") {
+        expect(overview.next.label).toBe(`Open pipelines in ${tabProject}`);
+        expect(tab.next).toEqual(overview.next);
+      }
     } else {
       // No project to open: the tab shows the same cross-project state.
       expect(overview.project).toBeNull();
@@ -98,6 +104,14 @@ describe("pipelinesState and mlflowState", () => {
     expect(setUpBlocked(pipelinesState(FIXTURES.none, "a-test-project", projects))).toBeNull();
     const m = mlflowState({ ...FIXTURES.none, mlflowBlocked: { component: "mlflowoperator", reason: "MLflow is turned off." } });
     expect(m.next).toMatchObject({ kind: "set-up", label: "Set up MLflow", reason: "MLflow is turned off." });
+  });
+
+  it("several ready projects: the Overview offers the tab's picker, not a jump into one of them", () => {
+    const two: ResourcesStatus = { ...FIXTURES.live, pipelineServers: [dspa("juntao-test"), dspa("zeta")] };
+    const overview = pipelinesState(two, null, projects);
+    expect(overview).toMatchObject({ status: "ready", label: `Ready in 2 of ${projects.length} projects`, next: { kind: "choose-project" } });
+    // The tab, in one of them, links there by name.
+    expect(pipelinesState(two, "zeta", projects).next).toMatchObject({ kind: "open", label: "Open pipelines in zeta" });
   });
 
   it("nothing is offered while every part exists and one is starting; storage of an earlier version points at Migrate storage", () => {

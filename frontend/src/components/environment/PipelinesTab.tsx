@@ -264,7 +264,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
     : [];
   return (
     <PartItem id="pipeline-server" title="Pipeline server" scope={`In project ${project}`} status={pipelineServerStatus(status, project, busy)} unmanaged={unmanaged}
-      actions={server?.ready && server.uiRoute && !isTerminating(server) ? <ActionListItem><ExternalLink href={server.uiRoute}>Open pipelines</ExternalLink></ActionListItem> : undefined}
+      actions={server?.ready && server.uiRoute && !isTerminating(server) ? <ActionListItem><ExternalLink href={server.uiRoute}>Open pipelines in {project}</ExternalLink></ActionListItem> : undefined}
       menu={menu}>
       {unmanaged
         ? <Content component="p">Created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
@@ -285,7 +285,7 @@ const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ se
         <DescriptionListGroup>
           <DescriptionListTerm>In the dashboard</DescriptionListTerm>
           <DescriptionListDescription>
-            <Content component="p">Open pipelines shows this project&apos;s pipelines and runs. Choose Import pipeline to upload a pipeline (a compiled YAML file), then Create run.</Content>
+            <Content component="p">Open pipelines in {project} shows its pipelines and runs. Choose Import pipeline to upload a pipeline (a compiled YAML file), then Create run.</Content>
           </DescriptionListDescription>
         </DescriptionListGroup>
       )}
@@ -365,7 +365,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
           <StackItem><UsePipelines server={server} project={project} /></StackItem>
           <StackItem>
             <WhatNext id="pipelines-next" items={[
-              <>Open pipelines, then choose Import pipeline to upload a compiled pipeline.</>,
+              <>Open pipelines in {project}, then choose Import pipeline to upload a compiled pipeline.</>,
               <>Create a run; its steps write their artifacts to the S3 storage.</>,
               <>Follow the run and open its artifacts from the run&apos;s page.</>,
             ]} />
