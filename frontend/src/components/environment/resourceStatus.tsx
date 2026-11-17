@@ -34,6 +34,8 @@ export function envStatus(state: ResourceState | undefined, { busy, attention }:
   if (busy) return busy;
   if (!state) return "not-set-up";
   if (isTerminating(state)) return "deleting";
+  // Exists, but reports nothing this tool can read: unknown, never a failure.
+  if (state.healthUnknown && !state.ready && !state.terminalError) return "unknown";
   if (attention) return "needs-attention";
   if (state.ready) return state.repairNeeded || state.warning ? "needs-attention" : "ready";
   if (!state.deployed) return "not-set-up";

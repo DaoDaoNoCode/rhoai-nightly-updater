@@ -350,6 +350,10 @@ export interface ResourcesStatus {
   mlflowBlocked?: ComponentBlock | null;
   /** The RHOAI dashboard's address, when known. */
   dashboardUrl?: string;
+  /** The inference gateway (absent from an older backend). */
+  inferenceGateway?: InferenceGatewayState;
+  /** What the Models feature needs, and its models (absent from an older backend). */
+  models?: ModelsStatus;
 }
 
 // --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleStatus) ---
@@ -781,6 +785,73 @@ export interface ResourceState {
    * cleanup undone. Not ready: incomplete; ready: degraded.
    */
   repairNeeded?: string;
+  /** It exists but reports no readiness this tool can read: its health is unknown, not failed. */
+  healthUnknown?: boolean;
+}
+
+// --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---
+
+/** The cluster's inference gateway (Gateway openshift-ingress/openshift-ai-inference). usedBy: the models ("namespace/name") that route through it. */
+export interface InferenceGatewayState extends ResourceState {
+  /** https://<hostname> of the listener for callers outside the cluster. */
+  externalUrl?: string;
+  /** The load balancer address the gateway reports. */
+  address?: string;
+  /** "published" once the external hostname is in DNS, "pending" before; absent: unknown. */
+  dns?: "published" | "pending";
+  /** The gateway's authentication (odh-model-controller adds it once a model uses the gateway); absent: unknown. */
+  authPolicy?: "enforced" | "not-enforced" | "missing";
+}
+
+/** A model the Models feature sets up (pkg/cluster modelCatalog). */
+export interface CatalogModel {
+  name: string;
+  displayName: string;
+  uri: string;
+  cpu: string;
+  memory: string;
+}
+
+/** One model of the catalog in a project (namespace, name). */
+export interface ModelState extends ResourceState {
+  displayName?: string;
+  /** The model's address: the base of its OpenAI API. */
+  url?: string;
+  /** Which image it runs: the preset's, the newest released one, or VLLM_CPU_IMAGE's. */
+  imageKind?: "preset" | "released" | "override";
+  imageVersion?: string;
+  /** The preset's image is not in the registry (a nightly build's): setting it up with the newest released image fixes it. */
+  presetImageMissing?: boolean;
+}
+
+/** What a model setup needs, and the catalog's models in the projects. */
+export interface ModelsStatus {
+  /** Why no model can be set up (KServe off, LLM dependencies missing). */
+  blocked?: ComponentBlock | null;
+  /** DataScienceCluster KserveLLMInferenceServiceDependencies; absent: not reported (unknown). */
+  dependencies?: "True" | "False";
+  /** The CPU preset found at run time, or why none was found. */
+  preset?: string;
+  presetProblem?: string;
+  /** The image a new model would run; absent: unknown. */
+  imagePlan?: "preset" | "released" | "override";
+  imagePlanReason?: string;
+  /** No worker seems to have room for a model (a warning, never a block). */
+  capacityWarning?: string;
+  catalog: CatalogModel[] | null;
+  items?: ModelState[] | null;
+}
+
+/** The body of POST /api/resources/models/stream (pkg/types ModelsRequest). */
+export interface ModelsRequest {
+  action: "setup" | "teardown";
+  /** The inference gateway: set up before the model, deleted after it. */
+  gateway?: boolean;
+  /** The model's project; absent: no model part. */
+  project?: string;
+  model?: string;
+  /** Setup: run the newest released Red Hat image instead of the preset's. */
+  releasedImage?: boolean;
 }
 
 export interface KeptPVC {

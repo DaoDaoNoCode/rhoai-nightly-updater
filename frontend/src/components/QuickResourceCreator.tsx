@@ -29,6 +29,7 @@ import {
   streamCleanup,
   streamMLflowSamples,
   streamPipelineSample,
+  streamModels,
   toApiError,
   type StreamDoneHandler,
   type StreamDetachHandler,
@@ -40,7 +41,8 @@ import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
 import { PageLoading } from "./PageStates";
 import { errorResult } from "../outcomes";
-import { type ConfirmSpec, type Pending, type ResourcePending, type SamplePending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type ResourcePending, type SamplePending, isModelsPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
+import { ModelsTab, modelsConfirm, modelsSteps } from "./environment/ModelsTab";
 import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
@@ -60,8 +62,11 @@ import {
   type Busy,
   type FeatureState,
   type NextStep,
+  defaultModelsProject,
   defaultProject,
   mlflowState,
+  modelsState,
+  type ModelsOp,
   pipelineServerIn,
   pipelineServerStatus,
   pipelineServerUnmanaged,
@@ -90,9 +95,9 @@ export function readyCheck(kind: ResourceKind, state: ResourceState | undefined)
 const BUSY_REASON = "Another operation is in progress";
 
 /** The tabs, in the URL as ?tab= (overview is the default and is left out). */
-export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow"] as const;
+export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models"] as const;
 export type EnvironmentTab = (typeof ENVIRONMENT_TABS)[number];
-const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow" };
+const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models" };
 /** Tabs of the earlier layout: links to them open Pipelines. */
 const OLD_TABS = ["cluster", "projects"];
 
@@ -218,7 +223,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const mlflow = resStatus?.mlflow;
   const legacy = resStatus?.legacyStorage;
   const pipelineServers = resStatus?.pipelineServers ?? [];
-  const allResources = resStatus ? [resStatus.minio, resStatus.mlflow, ...pipelineServers] : [];
+  const allResources = resStatus ? [resStatus.minio, resStatus.mlflow, ...pipelineServers, ...(resStatus.inferenceGateway ? [resStatus.inferenceGateway] : []), ...(resStatus.models?.items ?? [])] : [];
   // Settling: something is starting or terminating and may still change on its
   // own. Terminal states are not settling: they need a change (A08-3).
   const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
@@ -281,6 +286,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [sampleOp, setSampleOp] = useState<SampleOp | null>(null);
   const [sampleRun, setSampleRun] = useState<SampleOp | null>(null);
   const [samplesRefresh, setSamplesRefresh] = useState(0);
+  // The Models operation running now (its parts show it), and the last one (for the run dialog's next step).
+  const [modelsOp, setModelsOp] = useState<ModelsOp | null>(null);
+  const [modelsRun, setModelsRun] = useState<ModelsOp | null>(null);
 
   const request = (p: ResourcePending): [string, () => Promise<OperationResponse>, string | null] => {
     switch (p.kind) {
@@ -295,7 +303,34 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? samplesConfirm(p);
+
+  /** A confirmed Models change: one streamed request whose steps the run dialog shows. */
+  const startModels = (p: ModelsPending) => {
+    if (run.run?.running) return;
+    const spec = modelsConfirm(p, resStatus);
+    const op: ModelsOp = p.kind === "setup-models"
+      ? { action: "setup", gateway: p.gateway, project: p.project }
+      : p.kind === "teardown-model" ? { action: "teardown", gateway: false, project: p.project } : { action: "teardown", gateway: true, project: null };
+    setPending(null);
+    setSampleRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setModelsOp(op);
+    setModelsRun(op);
+    setPollGaveUp(false);
+    setPollRound((n) => n + 1);
+    const end = () => {
+      setModelsOp(null);
+      void fetchResources();
+    };
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels({
+      action: op.action,
+      ...(op.gateway ? { gateway: true } : {}),
+      ...(op.project ? { project: op.project } : {}),
+      ...(p.kind === "setup-models" && p.releasedImage ? { releasedImage: true } : {}),
+    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
+  };
 
   /**
    * A confirmed sample change: one streamed request (one rate-limit slot on
@@ -333,7 +368,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       startSample(p);
       return;
     }
+    if (isModelsPending(p)) {
+      startModels(p);
+      return;
+    }
     setSampleRun(null);
+    setModelsRun(null);
     const spec = confirmOf(p);
     const [action, fn, target] = request(p);
     const title = spec?.runTitle ?? spec?.title ?? action;
@@ -345,10 +385,16 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   /** Set up: confirm every change, then check every part's prerequisites, then run the missing parts in order. */
   const setUp = (feature: string, setup: Pending[]) => {
+    // Models is one streamed operation: its own confirmation, then its run.
+    const models = setup.find(isModelsPending);
+    if (models) {
+      setPending(models);
+      return;
+    }
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = request(p);
@@ -373,6 +419,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const startCleanup = (req: CleanupRequest) => {
     setCleanupScope(null);
     setSampleRun(null);
+    setModelsRun(null);
     setRunOpen(true);
     trackFeature("cleanup");
     setPollGaveUp(false);
@@ -398,7 +445,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   }, [run.run?.running, runOpen]);
 
   const runningSomething = !!resAction || migrating || !!run.run?.running;
-  const busy: Busy = { resAction, actionProject, migrating };
+  const busy: Busy = { resAction, actionProject, migrating, models: modelsOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // After a deletion the namespace stays (deployed:false, managedByTool:true).
   // Offer Delete again while tool objects are still reported (the data
@@ -429,6 +476,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     return { name, description: has ? `Pipeline server: ${envStatusText(status)}${foreign ? " · not managed by this tool" : ""}` : undefined };
   });
   const workspaceOptions: ProjectOption[] = projectNames.map((name) => ({ name }));
+  const modelOptions: ProjectOption[] = projectNames.map((name) => {
+    const m = (resStatus?.models?.items ?? []).find((i) => i.namespace === name);
+    return { name, description: m ? `Model: ${m.ready ? "Ready" : m.terminating ? "Deleting" : "Not ready"}${m.managedByTool === false ? " · not managed by this tool" : ""}` : undefined };
+  });
+  // The Models tab's own default: the first project with a model, preferring a ready one.
+  const modelsProject = missingProject ? null : searchParams.has("project") ? urlProject : defaultModelsProject(resStatus, projectNames, null);
 
   // After an explicit clear the tab says so instead of the cross-project
   // summary, which names a project the picker no longer shows.
@@ -438,6 +491,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     : pipelinesState(resStatus, project, projectNames, busy);
   const pipelinesSummary = pipelinesState(resStatus, null, projectNames, busy);
   const mlflowNow = mlflowState(resStatus, busy);
+  const models: FeatureState = cleared
+    ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
+    : modelsState(resStatus, modelsProject, projectNames, busy);
+  const modelsSummary = modelsState(resStatus, null, projectNames, busy);
   // Once a feature works, its samples are the natural next step: the
   // sample pipeline only on a pipeline server this tool set up.
   const summaryServer = pipelinesSummary.project ? pipelineServerIn(resStatus, pipelinesSummary.project) : undefined;
@@ -452,20 +509,29 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       id: "mlflow", name: "MLflow", gives: "Track experiments, runs and models", state: mlflowNow, href: "?tab=mlflow",
       ...(mlflowNow.status === "ready" ? { samples: { label: "Add sample data", focus: MLFLOW_SAMPLES_ID } } : {}),
     },
+    {
+      id: "models", name: "Models", gives: "Serve a small chat model on CPU; call it or use the playground", state: modelsSummary,
+      href: `?tab=models${modelsSummary.project ? `&project=${encodeURIComponent(modelsSummary.project)}` : ""}`,
+    },
   ];
   const anythingToClean = !!resStatus && (() => {
     const c = cleanupCandidates(resStatus, "all", minioLeftovers);
-    return c.servers.length > 0 || c.storage || c.mlflow;
+    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway;
   })();
 
   // The run's "what next" and main action, from the feature it set up.
   // A sample run: after adding MLflow samples, open the project's workspace.
-  const runFeature = run.run?.title.includes("MLflow") ? "mlflow" : "pipelines";
+  const runFeature = modelsRun ? "models" : run.run?.title.includes("MLflow") ? "mlflow" : "pipelines";
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
     ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowWorkspaceHref(mlflow.uiRoute, sampleRun.project) }
     : null;
-  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : sampleNext;
-  const whatNext = run.run?.kind === "setup"
+  const modelsNext = modelsRun?.project ? modelsState(resStatus, modelsRun.project, projectNames, busy).next : null;
+  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : sampleNext;
+  const whatNext = run.run?.kind === "setup" && runFeature === "models"
+    ? <Content component="p">{modelsRun?.project
+      ? `On the Models tab, Use it has the model's address and commands that call it with your OpenShift token. In the dashboard, ${modelsRun.project} lists the model, and Gen AI studio offers it in the playground.`
+      : "Choose a project on the Models tab and set up a model there: it routes through this gateway."}</Content>
+    : run.run?.kind === "setup"
     ? <Content component="p">{runFeature === "mlflow"
       ? "Open MLflow workspaces to choose a project and see its experiments. On the MLflow tab, Sample data adds example experiments, traces and a model to a project in one click."
       : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run, or run the sample pipeline on the Pipelines tab to check that runs work.`}</Content>
@@ -531,7 +597,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   <Overview rows={overviewRows} baseReason={baseReason} setUpReason={readOnly ? READ_ONLY_SETUP : null}
                     onSetUp={(row, setup) => setUp(row.name, setup)}
                     onShowIssue={(row, part) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(partTitleId(part)); }}
-                    onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget("pipelines-project"); }}
+                    onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget(`${row.id}-project`); }}
                     onMigrate={() => setMigrateKind("migrate")}
                     onSamples={(row, focus) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(focus); }}
                     onCleanup={!readOnly && anythingToClean ? () => setCleanupScope("all") : null} />
@@ -550,6 +616,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
                     setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")}
                     sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
+                )}
+                {tab === "models" && (
+                  <ModelsTab status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
+                    onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                    state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                    setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")} />
                 )}
               </StackItem>
             )}

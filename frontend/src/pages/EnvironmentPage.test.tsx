@@ -37,11 +37,11 @@ describe("Environment page", () => {
     renderPage("/test-resources");
     expect(screen.getByRole("heading", { level: 1, name: "Environment" })).toBeInTheDocument();
     expect(document.title).toBe("Environment — RHOAI Nightly Updater");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "Pipelines", "MLflow"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "Pipelines", "MLflow", "Models"]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByText("0 of 2 ready")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 3 ready")).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Features" });
-    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["Pipelines", "MLflow"]);
+    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["Pipelines", "MLflow", "Models"]);
     expect(await row("Pipelines")).toHaveTextContent("Not set up in any project");
     expect(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" })).toHaveClass("pf-m-inline");
     expect(within(await row("MLflow")).getByRole("button", { name: "Set up MLflow…" })).toBeInTheDocument();
@@ -55,7 +55,7 @@ describe("Environment page", () => {
       "/api/resources/projects": { projects: ["a-test-project", "juntao-test", "zeta"] },
     });
     const router = renderPage("/test-resources");
-    expect(await screen.findByText("2 of 2 ready")).toBeInTheDocument();
+    expect(await screen.findByText("2 of 3 ready")).toBeInTheDocument();
     const mlflow = await row("MLflow");
     expect(mlflow).toHaveTextContent("Ready · not managed by this tool");
     expect(within(mlflow).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");

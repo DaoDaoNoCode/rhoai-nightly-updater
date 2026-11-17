@@ -1,4 +1,4 @@
-import type { ResourceState, ResourcesStatus } from "../../types";
+import type { ModelState, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 
@@ -17,9 +17,18 @@ export interface Busy {
   actionProject: string | null;
   /** Migrate storage runs from this page. */
   migrating: boolean;
+  /** A Models operation runs from this page: what it changes. */
+  models?: ModelsOp | null;
 }
 
-export const IDLE: Busy = { resAction: null, actionProject: null, migrating: false };
+/** What a running Models operation changes. */
+export interface ModelsOp {
+  action: "setup" | "teardown";
+  gateway: boolean;
+  project: string | null;
+}
+
+export const IDLE: Busy = { resAction: null, actionProject: null, migrating: false, models: null };
 
 /** The next thing to do about a feature. */
 export type NextStep =
@@ -233,4 +242,101 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
     default:
       return { status: s, label: `Unknown${suffix}`, next: null, project: null };
   }
+}
+
+// --- Models: the inference gateway (cluster) and a model (project) --------------------
+
+const modelsBusy = (busy: Busy, part: "gateway" | "model", project?: string): "setting-up" | "deleting" | null => {
+  const op = busy.models;
+  if (!op || (part === "gateway" ? !op.gateway : op.project !== project)) return null;
+  return op.action === "setup" ? "setting-up" : "deleting";
+};
+
+export function gatewayStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
+  return envStatus(status?.inferenceGateway, { busy: modelsBusy(busy, "gateway") });
+}
+
+/** The project's model: this tool's, else one of the same name someone else made. */
+export function modelIn(status: ResourcesStatus | null, project: string): ModelState | undefined {
+  const items = (status?.models?.items ?? []).filter((m) => m.namespace === project);
+  return items.find((m) => m.managedByTool !== false) ?? items[0];
+}
+
+export function modelStatus(status: ResourcesStatus | null, project: string, busy: Busy): EnvStatus {
+  return envStatus(modelIn(status, project), { busy: modelsBusy(busy, "model", project) });
+}
+
+/** The parts of Models in a project, in dependency order. */
+export function modelsParts(status: ResourcesStatus | null, project: string, busy: Busy): PartState[] {
+  return [
+    { id: "gateway", status: gatewayStatus(status, busy), unmanaged: notManaged(status?.inferenceGateway) },
+    { id: "model", status: modelStatus(status, project, busy), unmanaged: notManaged(modelIn(status, project)) },
+  ];
+}
+
+/** Why no model can be set up on this cluster, or null (unknown is not a reason). */
+export function modelsBlockedReason(status: ResourcesStatus | null): string | null {
+  return status?.models?.blocked?.reason ?? status?.models?.presetProblem ?? null;
+}
+
+/** The dashboard's page of a project's deployed models (odh-dashboard /projects/<ns>). */
+export function dashboardProjectHref(dashboardUrl: string | undefined, project: string): string | undefined {
+  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/projects/${encodeURIComponent(project)}?section=model-server` : undefined;
+}
+
+const projectsWithModels = (status: ResourcesStatus | null, projects: string[]) => projects.filter((p) => !!modelIn(status, p));
+
+/** The project the Models tab opens with: the URL's; else the first with a model, preferring a ready one. */
+export function defaultModelsProject(status: ResourcesStatus | null, projects: string[], fromUrl: string | null): string | null {
+  if (fromUrl) return fromUrl;
+  const withModels = projectsWithModels(status, projects);
+  return withModels.find((p) => modelIn(status, p)?.ready) ?? withModels[0] ?? null;
+}
+
+function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy): FeatureState {
+  const parts = modelsParts(status, project, busy);
+  const [gateway, model] = parts;
+  const problem = parts.find((p) => PROBLEM.includes(p.status));
+  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}${problem.unmanaged ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: problem.id }, project };
+  const unmanaged = parts.some((p) => p.unmanaged);
+  if (model.status === "ready") {
+    const href = dashboardProjectHref(status?.dashboardUrl, project);
+    return { status: "ready", label: `Ready in ${project}${unmanaged ? NOT_MANAGED : ""}`, next: href ? { kind: "open", label: `Open ${project} in the dashboard`, href } : null, project };
+  }
+  if (model.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${model.unmanaged ? NOT_MANAGED : ""}`, next: null, project };
+  const moving = parts.find((p) => MOVING.includes(p.status));
+  if (moving && parts.every((p) => p.status !== "not-set-up")) {
+    return { status: "setting-up", label: moving.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
+  }
+  const needGateway = gateway.status === "not-set-up";
+  const setup: Pending[] = [{ kind: "setup-models", gateway: needGateway, project }];
+  let reason: string | null = modelsBlockedReason(status);
+  if (!reason && moving) reason = `The ${moving.id === "gateway" ? "inference gateway" : "model"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is done.`;
+  if (!reason && needGateway && status?.inferenceGateway?.setupBlockedReason) reason = status.inferenceGateway.setupBlockedReason;
+  return {
+    status: moving ? "setting-up" : "not-set-up",
+    label: moving ? `Setting up in ${project}` : `Not set up in ${project}`,
+    next: { kind: "set-up", label: needGateway ? `Set up Models in ${project}` : `Set up the model in ${project}`, setup, reason },
+    project,
+  };
+}
+
+/**
+ * Models: in a project (the tab), or summarised across the projects (the
+ * Overview), as pipelinesState does.
+ */
+export function modelsState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE): FeatureState {
+  if (project) return modelsIn(status, project, busy);
+  const gateway = gatewayStatus(status, busy);
+  if (PROBLEM.includes(gateway)) {
+    return { status: gateway, label: `${envStatusText(gateway)}${notManaged(status?.inferenceGateway) ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: "gateway" }, project: defaultModelsProject(status, projects, null) };
+  }
+  const states = projectsWithModels(status, projects).map((p) => modelsIn(status, p, busy));
+  const ready = states.filter((s) => s.status === "ready");
+  if (ready.length === 1) return ready[0];
+  if (ready.length > 1) return { status: "ready", label: `Ready in ${ready.length} of ${projects.length} projects`, next: { kind: "choose-project" }, project: null };
+  const other = states.find((s) => PROBLEM.includes(s.status)) ?? states.find((s) => s.status === "setting-up") ?? states.find((s) => s.status === "unknown");
+  if (other) return other;
+  if (MOVING.includes(gateway)) return { status: gateway, label: gateway === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
+  return { status: "not-set-up", label: "Not set up in any project", next: { kind: "choose-project" }, project: null };
 }

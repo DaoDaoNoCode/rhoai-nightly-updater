@@ -25,19 +25,25 @@ import { isTerminating } from "./resourceRow";
 import { S3_NAMESPACE, storageTeardownOffered } from "./PipelinesTab";
 
 /** What a Clean up offers: one feature's parts, or everything. */
-export type CleanupScope = "pipelines" | "mlflow" | "all";
+export type CleanupScope = "pipelines" | "mlflow" | "models" | "all";
 
 /** What this tool created that a clean-up of the scope can delete, from the status. */
 export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean) {
-  const pipelines = scope !== "mlflow";
+  const pipelines = scope === "pipelines" || scope === "all";
+  const modelsScope = scope === "models" || scope === "all";
+  const models = modelsScope
+    ? [...new Set((status.models?.items ?? []).filter((m) => m.managedByTool !== false && !isTerminating(m) && m.namespace).map((m) => m.namespace!))]
+    : [];
+  const gw = status.inferenceGateway;
+  const gateway = modelsScope && gw?.managedByTool === true && !isTerminating(gw);
   const servers = pipelines
     ? (status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false && !isTerminating(ps) && ps.namespace).map((ps) => ps.namespace!)
     : [];
   const storage = pipelines && storageTeardownOffered(status.minio, status.legacyStorage, minioLeftovers);
   const minio = status.minio;
   const namespace = storage && minio?.managedByTool !== false && !!minio?.deployed && !!minio?.namespaceDeletable;
-  const mlflow = scope !== "pipelines" && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
-  return { servers, storage, namespace, mlflow };
+  const mlflow = (scope === "mlflow" || scope === "all") && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
+  return { servers, storage, namespace, mlflow, models, gateway };
 }
 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
@@ -46,6 +52,8 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
     ...(req.pipelineServers ?? []).map((p) => ({ id: `pipeline-server:${p}`, title: `Delete the pipeline server in ${p}` })),
     ...(req.storage ? [{ id: "storage", title: req.deleteNamespace ? `Delete the S3 storage and namespace ${S3_NAMESPACE}` : "Delete the S3 storage" }] : []),
     ...(req.mlflow ? [{ id: "mlflow", title: "Delete MLflow" }] : []),
+    ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the model in ${p}` })),
+    ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
   ];
 }
 
@@ -55,6 +63,13 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
  * that step after deleting the rest).
  */
 export function cleanupBlocked(status: ResourcesStatus, req: CleanupRequest): string | null {
+  if (req.inferenceGateway) {
+    const selected = new Set(req.models ?? []);
+    const users = (status.inferenceGateway?.usedBy ?? []).filter((u) => !selected.has(u.split("/")[0]) || !(status.models?.items ?? []).some((m) => `${m.namespace}/${m.name}` === u && m.managedByTool !== false));
+    if (users.length > 0) {
+      return `Models route through the inference gateway: ${users.join(", ")}. Select ${users.length > 1 ? "those models" : "that model"} too if this tool created ${users.length > 1 ? "them" : "it"}, or keep the gateway.`;
+    }
+  }
   if (!req.storage) return null;
   const selected = new Set(req.pipelineServers ?? []);
   const users = (status.minio?.usedBy ?? []).filter((u) => !selected.has(u.split("/")[0]));
@@ -92,13 +107,18 @@ export const CleanupModal: React.FC<{
   const [storage, setStorage] = useState(offered.storage);
   const [namespace, setNamespace] = useState(false);
   const [mlflow, setMlflow] = useState(offered.mlflow);
+  const [models, setModels] = useState<string[]>(offered.models);
+  const [gateway, setGateway] = useState(offered.gateway);
+  const chosenModels = models.filter((m) => offered.models.includes(m));
   const chosenServers = servers.filter((s) => offered.servers.includes(s));
   const req: CleanupRequest = {
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
+    ...(chosenModels.length ? { models: chosenModels } : {}),
+    ...(gateway && offered.gateway ? { inferenceGateway: true } : {}),
   };
-  const nothing = !req.pipelineServers && !req.storage && !req.mlflow;
+  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway;
   const reason = baseReason ?? (nothing ? "Select something to delete." : cleanupBlocked(status, req));
   const lost = [
     ...(req.pipelineServers ?? []).map((p) => <>The runs and experiments of the pipeline server in {p}.</>),
@@ -107,8 +127,9 @@ export const CleanupModal: React.FC<{
     ...(req.mlflow ? [<>Every MLflow experiment, run and model, in every workspace.</>] : []),
   ];
   const toggleServer = (p: string, v: boolean) => setServers((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow;
-  const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : "Clean up MLflow?";
+  const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway;
+  const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : "Clean up MLflow?";
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={onCancel}>
       <ModalHeader title={title} labelId={titleId} titleIconVariant="warning" />
@@ -145,6 +166,16 @@ export const CleanupModal: React.FC<{
                 {offered.mlflow && (
                   <FormGroup role="group" isStack label="MLflow" fieldId="cleanup-mlflow">
                     <Checkbox id="cleanup-mlflow" label="MLflow server" isChecked={mlflow} onChange={(_e, v) => setMlflow(v)} />
+                  </FormGroup>
+                )}
+                {(offered.models.length > 0 || offered.gateway) && (
+                  <FormGroup role="group" isStack label="Models" fieldId="cleanup-models">
+                    {offered.models.map((p) => (
+                      <Checkbox key={p} id={`cleanup-model-${p}`} label={<>Model in {p}</>} isChecked={models.includes(p)} onChange={(_e, v) => toggleModel(p, v)} />
+                    ))}
+                    {offered.gateway && (
+                      <Checkbox id="cleanup-gateway" label="Inference gateway" description="With its cloud load balancer and DNS record. Deleted after the models." isChecked={gateway} onChange={(_e, v) => setGateway(v)} />
+                    )}
                   </FormGroup>
                 )}
               </Form>

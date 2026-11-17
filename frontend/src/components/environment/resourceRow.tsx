@@ -36,9 +36,9 @@ export function isTerminating(state: ResourceState | undefined): boolean {
   return !!state && (!!state.terminating || state.message === "Terminating");
 }
 
-export type ResourceKind = "minio" | "mlflow" | "pipeline";
+export type ResourceKind = "minio" | "mlflow" | "pipeline" | "gateway" | "model";
 
-const SUBJECT: Record<ResourceKind, string> = { minio: "The S3 storage", mlflow: "MLflow", pipeline: "The pipeline server" };
+const SUBJECT: Record<ResourceKind, string> = { minio: "The S3 storage", mlflow: "MLflow", pipeline: "The pipeline server", gateway: "The inference gateway", model: "The model" };
 
 const rawText = (state: ResourceState) => `${state.waitingReason ?? ""} ${state.message ?? ""}`;
 const imagePull = (state: ResourceState) => /ImagePullBackOff|ErrImagePull|InvalidImageName/.test(rawText(state));
@@ -211,12 +211,19 @@ export type Pending =
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[] }
   /** The sample pipeline: a new run, or its removal; runs and image for the confirmation. */
-  | { kind: "pipeline-sample"; project: string; action: "run" | "remove"; runs?: number; image?: string };
+  | { kind: "pipeline-sample"; project: string; action: "run" | "remove"; runs?: number; image?: string }
+  /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
+  | { kind: "setup-models"; gateway: boolean; project: string | null; releasedImage?: boolean }
+  | { kind: "teardown-model"; project: string }
+  | { kind: "teardown-gateway" };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" | "pipeline-sample" }>;
-export type ResourcePending = Exclude<Pending, SamplePending>;
+/** A Models change: one streamed request (pkg/api HandleModelsStream). */
+export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-model" | "teardown-gateway" }>;
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending>;
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples" || p.kind === "pipeline-sample";
+export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway";
 
 /** What the ConfirmActionModal shows for a pending change. */
 export interface ConfirmSpec {

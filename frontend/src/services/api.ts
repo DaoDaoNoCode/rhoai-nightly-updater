@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -648,6 +648,10 @@ export interface CleanupRequest {
   /** Also delete namespace seaweedfs (needs storage). */
   deleteNamespace?: boolean;
   mlflow?: boolean;
+  /** The projects whose model goes (after MLflow). */
+  models?: string[];
+  /** The inference gateway, after the models. */
+  inferenceGateway?: boolean;
 }
 
 /**
@@ -663,6 +667,21 @@ export function streamCleanup(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/cleanup/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/**
+ * Models: sets up the inference gateway and/or a model in a project, or
+ * deletes them, as one operation streaming "check", "gateway",
+ * "gateway-ready", "model", "model-ready" (teardown: "model", then
+ * "gateway").
+ */
+export function streamModels(
+  req: ModelsRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/models/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /** The MLflow samples of one project (named reads only; cached on the server for 15 s). */
