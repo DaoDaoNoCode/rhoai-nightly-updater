@@ -104,10 +104,10 @@ export const Overview: React.FC<{
                 <Td dataLabel="State"><EnvStatusLabel status={row.state.status} text={row.state.label} /></Td>
                 <Td dataLabel="Next step">
                   {row.samples ? (
-                    <Flex gap={{ default: "gapMd" }} rowGap={{ default: "rowGapXs" }}>
-                      <FlexItem>{next(row, row.state.next)}</FlexItem>
-                      <FlexItem><Button variant="link" isInline onClick={() => onSamples(row, row.samples!.focus)}>{row.samples.label}</Button></FlexItem>
-                    </Flex>
+                    <Stack>
+                      <StackItem>{next(row, row.state.next)}</StackItem>
+                      <StackItem><Button variant="link" isInline onClick={() => onSamples(row, row.samples!.focus)}>{row.samples.label}</Button></StackItem>
+                    </Stack>
                   ) : next(row, row.state.next)}
                 </Td>
               </Tr>

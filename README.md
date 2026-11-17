@@ -101,6 +101,25 @@ Storage an earlier version set up in namespace `minio` reads **Needs attention**
 
 MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (`<address>/#/experiments?workspace=<project>`), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
 
+#### Sample data and a sample pipeline
+
+Once MLflow or a pipeline server works, one click shows it working, with no code.
+
+<img src="docs/images/environment-mlflow-samples.png" alt="MLflow tab, Sample data for dev-project: Add all and Remove all; the agent and prompt demo Added with Regenerate; the training sample Partly added with Add and Remove; the MCP server Not managed by this tool; the agent skill Not available" width="760">
+
+1. **Add all** / **Remove all**: one confirmed operation for every sample that can be added or removed (the updater allows one samples operation per user every 30 seconds).
+2. Each sample in the chosen project (MLflow workspace) says what you then see, and where in the dashboard. **Partly added** names what is missing; **Removed** means deleted in MLflow (Add restores it); **Not available** means this MLflow has no such API (skills on older releases).
+3. The **agent and prompt demo** is MLflow's own demo. It has **Regenerate**, but no Remove: the updater holds no right to delete MLflow data it did not name, so remove it in the MLflow UI. Clean up leaves it in place.
+4. Something of a sample's name that this tool did not create is **Not managed by this tool** and left alone.
+
+The other samples are a training experiment with three runs and a registered model (`champion` alias), an MCP server entry (DeepWiki's public server; the Gen AI playground needs internet access to call it) and an agent skill. Everything the tool adds is tagged `rhoai-nightly-updater.sample`, and Remove deletes only that. Readers see every action disabled with the reason; without a working MLflow the section links to Set up.
+
+<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Sample pipeline in dev-project: the latest run Running for 1m 20s with View run in dashboard, 1 run of the sample, the image, Run sample pipeline and Remove sample" width="760">
+
+1. The latest run's state, read again every 5 seconds while it runs.
+2. **View run in dashboard** (and **View runs in dashboard** for all of them).
+3. **Run sample pipeline** starts a new two-step run (write a small file to the S3 storage, read it back) on the pipeline server this tool set up; **Remove sample** deletes its runs, pipeline and experiment, and the files stay in the S3 storage. The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. A pipeline server someone else created is not offered the sample.
+
 Every setup has its removal on the same tab: **Delete** in the part's menu for the storage, the pipeline server and MLflow, each confirmed with the outcome first and the objects under Details; **Revert** for a deployed PR image; **Delete old storage** after Migrate storage; and **Clean up** at the bottom of each tab. What this tool did not create has no Delete.
 
 ### Diagnostics: what is wrong, and how to fix it

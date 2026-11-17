@@ -425,6 +425,30 @@ async (page) => {
         pad: 24,
       });
 
+      // Samples: the MLflow tab's Sample data and the Pipelines tab's sample run.
+      const section = (name) => page.getByRole("region", { name });
+      await open("/test-resources?tab=mlflow&project=dev-project", "env-samples");
+      const samples = section("Sample data");
+      await crop("environment-mlflow-samples", samples, {
+        notes: [
+          { at: samples.getByRole("button", { name: "Add all" }), n: 1, pos: "l" },
+          { at: label(samples, "Partly added"), n: 2, pos: "r" },
+          { at: samples.getByRole("button", { name: "Regenerate agent and prompt demo" }), n: 3, pos: "r" },
+          { at: label(samples, "Not managed by this tool"), n: 4, pos: "r" },
+        ],
+        pad: 24,
+      });
+      await open("/test-resources?tab=pipelines&project=dev-project", "env-samples-busy");
+      const sample = section("Sample pipeline");
+      await crop("environment-pipeline-sample", sample, {
+        notes: [
+          { at: label(sample, "Running"), n: 1, pos: "l" },
+          { at: sample.getByRole("link", { name: /View run in dashboard/ }), n: 2, pos: "r" },
+          { at: sample.getByRole("button", { name: "Run sample pipeline" }), n: 3, pos: "l" },
+        ],
+        pad: 24,
+      });
+
       await open("/test-resources?tab=pipelines", "s3-migrate");
       const old = part("S3 storage");
       await old.getByRole("button", { name: "Storage of an earlier version" }).click();

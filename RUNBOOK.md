@@ -324,6 +324,15 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | Old pipeline run artifacts return 404 after Migrate storage | They were written to MinIO before an earlier version replaced it with SeaweedFS, so they are on `minio-pvc`, which cannot be copied automatically. Copy them by hand before you remove the old storage (§10.1). If a cached step fails because its outputs are gone, re-run with caching disabled |
 | DSPA or project stuck Terminating | §11.4 |
 | MLflow teardown hangs / DSC change waits on MLflow | §11.4 |
+| Sample data: "Too many requests. Please wait 30 seconds" | One samples operation per user and route every 30 seconds. Use **Add all** / **Remove all** (one request) instead of one row after another |
+| Sample data or the sample pipeline: "lacks the rights for this call" | The updater's ServiceAccount misses the samples rules: re-apply the template (`make upgrade`). MLflow caches access decisions for up to 5 minutes, so retry after that |
+| Sample **Partly added** | An earlier Add stopped part-way; the row names what is missing. **Add** (or **Regenerate** for the agent and prompt demo) completes it |
+| Sample **Not managed by this tool** | Something of the sample's name exists without the `rhoai-nightly-updater.sample` tag; the tool never changes or deletes it. Rename or delete it in MLflow if it is yours to remove |
+| Agent and prompt demo has no Remove | By design: the updater holds no right to delete MLflow data it did not name. Remove it in the MLflow UI; Clean up leaves it |
+| Agent skill **Not available** | This MLflow has no Skill Registry (older RHOAI releases). The dashboard's AI hub > Skills also needs the `skillRegistry` flag |
+| Sample run Failed: an image cannot be pulled | Disconnected or mirrored cluster: mirror the image the section shows, or set `SAMPLE_PIPELINE_IMAGE` on the updater to a pullable copy, then **Run sample pipeline** again |
+| Sample pipeline not offered | It runs only on a ready pipeline server this tool set up (`nightly-dspa`); the section says which condition is missing. A KFP experiment or pipeline `rhoai-nightly-sample` someone else created blocks it |
+| Sample run stays Pending | The section stops checking after 10 minutes (**Check again**). Open the run in the dashboard for its step's state |
 
 ### 10.1 Migrate storage from an earlier version
 

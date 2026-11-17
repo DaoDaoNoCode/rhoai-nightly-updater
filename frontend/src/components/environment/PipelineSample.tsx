@@ -24,7 +24,7 @@ import type { PipelineSampleStatus } from "../../types";
 import { getPipelineSample } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { ImageRef } from "../ImageRef";
-import { ExternalLink, type Pending } from "./resourceRow";
+import type { Pending } from "./resourceRow";
 import { EnvStatusLabel } from "./resourceStatus";
 import { TabSection } from "./FeatureLayout";
 import { READ_ONLY_SAMPLES, type SampleOp, runActive, runLabel, runTime } from "./samples";
@@ -92,7 +92,7 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, unmanag
       <Alert variant="warning" isInline component="div"
         title={data.state === "foreign" ? "Something of the sample's name exists that this tool did not create" : `Cannot read the sample pipeline of ${project}`}
         actionLinks={data.state === "unknown" ? <AlertActionLink onClick={status.reload}>Try again</AlertActionLink> : undefined}>
-        <Content component="p">{data.message}{data.state === "foreign" ? " It is left alone, so the sample cannot run here." : ""}</Content>
+        <Content component="p">{data.message}{data.state === "foreign" ? " The sample cannot run here." : ""}</Content>
       </Alert>,
     );
   }
@@ -124,7 +124,10 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, unmanag
           {present && (
             <DescriptionListGroup>
               <DescriptionListTerm>Runs</DescriptionListTerm>
-              <DescriptionListDescription>{data.runs === 1 ? "1 run" : `${data.runs} runs`} of the sample in {project}</DescriptionListDescription>
+              <DescriptionListDescription>
+                {data.runs === 1 ? "1 run" : `${data.runs} runs`} of the sample in {project}
+                {data.runsLink && <>{" "}<Button variant="link" isInline component="a" href={data.runsLink} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">View runs in dashboard</Button></>}
+              </DescriptionListDescription>
             </DescriptionListGroup>
           )}
           <DescriptionListGroup>
@@ -135,8 +138,7 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, unmanag
       </StackItem>
       {run?.state === "FAILED" && !busy && (
         <StackItem>
-          <Alert variant="danger" isInline component="div" title="The sample run failed"
-            actionLinks={run.link ? <AlertActionLink component="a" href={run.link} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">View run in dashboard</AlertActionLink> : undefined}>
+          <Alert variant="danger" isInline component="div" title="The sample run failed">
             <Content component="p">{run.error || "The run's page in the dashboard shows which step failed and why."} If a step cannot start because its image cannot be pulled (a disconnected cluster), mirror the image above, or set SAMPLE_PIPELINE_IMAGE on the updater to a copy the cluster can pull.</Content>
           </Alert>
         </StackItem>
@@ -166,7 +168,6 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, unmanag
                 </TooltipButton>
               </ActionListItem>
             )}
-            {data.runsLink && <ActionListItem><ExternalLink href={data.runsLink}>View runs in dashboard</ExternalLink></ActionListItem>}
           </ActionListGroup>
         </ActionList>
       </StackItem>

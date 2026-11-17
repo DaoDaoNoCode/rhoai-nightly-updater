@@ -408,7 +408,7 @@ describe("Pipelines tab: Sample pipeline", () => {
     expect(within(section()).getByText("Failed")).toBeInTheDocument();
     const alert = within(section()).getByText("The sample run failed").closest(".pf-v6-c-alert") as HTMLElement;
     expect(alert).toHaveTextContent("task read-artifact failed");
-    expect(within(alert).getByRole("link", { name: /View run in dashboard/ })).toHaveAttribute("href", runLink);
+    expect(within(section()).getByRole("link", { name: /View run in dashboard/ })).toHaveAttribute("href", runLink);
   });
 
   it("Remove says how many runs go and that the files stay, then sends one request", async () => {
@@ -456,7 +456,7 @@ describe("Pipelines tab: Sample pipeline", () => {
     });
     renderAt("/test-resources?tab=pipelines&project=dev");
     await tick();
-    expect(section()).toHaveTextContent("Experiment 'rhoai-nightly-sample' was not created by this tool. It is left alone, so the sample cannot run here.");
+    expect(section()).toHaveTextContent("Experiment 'rhoai-nightly-sample' was not created by this tool. The sample cannot run here.");
     expect(within(section()).queryByRole("button", { name: "Run sample pipeline" })).not.toBeInTheDocument();
   });
 
