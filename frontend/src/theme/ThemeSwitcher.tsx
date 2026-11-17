@@ -18,23 +18,19 @@ import RhUiAutoLightDarkModeIcon from "@patternfly/react-icons/dist/esm/icons/rh
 import RhUiDarkModeIcon from "@patternfly/react-icons/dist/esm/icons/rh-ui-dark-mode-icon";
 import RhUiLightModeIcon from "@patternfly/react-icons/dist/esm/icons/rh-ui-light-mode-icon";
 import { useTheme } from "./ThemeContext";
-import type { ColorScheme, ContrastMode, EffectiveContrast } from "./themeCore";
-
-const SCHEME_LABELS: Record<ColorScheme, string> = { system: "System", light: "Light", dark: "Dark" };
-const CONTRAST_LABELS: Record<ContrastMode, string> = { system: "System", default: "Default", "high-contrast": "High contrast", glass: "Glass" };
-const EFFECTIVE_LABELS: Record<EffectiveContrast, string> = { default: "default contrast", "high-contrast": "high contrast", glass: "glass" };
+import type { ColorScheme, ContrastMode } from "./themeCore";
+import { CONTRAST_LABELS, SCHEME_LABELS, systemNotes } from "./themeLabels";
 
 /**
  * The masthead's appearance control: Color scheme (System, Light, Dark) and
  * Contrast mode (System, Default, High contrast, Glass) as two toggle groups
  * in a popover. System follows the operating system; the line below says
- * what it resolves to now.
+ * which choices follow it and what they resolve to now.
  */
 export const ThemeSwitcher: React.FC = () => {
   const { colorScheme, contrastMode, resolved, setColorScheme, setContrastMode } = useTheme();
   const icon = colorScheme === "system" ? <RhUiAutoLightDarkModeIcon /> : colorScheme === "dark" ? <RhUiDarkModeIcon /> : <RhUiLightModeIcon />;
-  const followsSystem = colorScheme === "system" || contrastMode === "system";
-  const now = `${resolved.dark ? "Dark" : "Light"}, ${EFFECTIVE_LABELS[resolved.contrast]}`;
+  const notes = systemNotes(colorScheme, contrastMode, resolved);
 
   const body = (
     <Stack hasGutter>
@@ -54,10 +50,12 @@ export const ThemeSwitcher: React.FC = () => {
           ))}
         </ToggleGroup>
       </StackItem>
-      {followsSystem && (
+      {notes.length > 0 && (
         <StackItem>
           <HelperText>
-            <HelperTextItem>Following the system: {now}.</HelperTextItem>
+            {notes.map((n) => (
+              <HelperTextItem key={n}>{n}</HelperTextItem>
+            ))}
           </HelperText>
         </StackItem>
       )}

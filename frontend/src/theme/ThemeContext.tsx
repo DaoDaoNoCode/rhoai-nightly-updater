@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   COLOR_SCHEME_KEY,
   CONTRAST_MODE_KEY,
@@ -76,7 +76,15 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const resolved = useMemo(() => resolveTheme(colorScheme, contrastMode, system), [colorScheme, contrastMode, system]);
 
-  useEffect(() => {
+  // A layout effect, not a passive one: the classes change the layout (the
+  // glass theme sets PatternFly's page-chrome inset to 16 px instead of
+  // 24 px, so everything in the masthead moves 8 px). React runs every
+  // layout effect of a commit before any passive effect, so PatternFly's
+  // Popper, which re-measures its trigger in a passive effect when the
+  // popover's content changes (helpers/Popper/Popper.js), measures the new
+  // layout. Applied in a passive effect, the classes changed after that
+  // measurement, children's effects running before their parents'.
+  useLayoutEffect(() => {
     applyThemeClasses(document.documentElement, resolved);
   }, [resolved]);
 

@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThemeProvider } from "./ThemeContext";
+import { ThemeProvider, useTheme } from "./ThemeContext";
 import { Dropdown, MenuToggle } from "@patternfly/react-core";
 import { ThemeMenuGroups, ThemeSwitcher } from "./ThemeSwitcher";
 import { COLOR_SCHEME_KEY, CONTRAST_MODE_KEY, LEGACY_THEME_KEY, MEDIA_QUERIES } from "./themeCore";
@@ -38,8 +39,10 @@ describe("ThemeSwitcher", () => {
     expect(html().contains("pf-v6-theme-glass")).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /^Appearance: System color scheme, System contrast mode/ }));
-    expect(screen.getByText("Following the system: Light, glass.")).toBeInTheDocument();
+    expect(screen.getByText("Color scheme follows the system: Light.")).toBeInTheDocument();
+    expect(screen.getByText("Contrast mode follows the system: Glass.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(screen.getByText("Contrast mode follows the system: Glass.")).toBeInTheDocument();
     expect(html().contains("pf-v6-theme-dark")).toBe(true);
     expect(localStorage.getItem(COLOR_SCHEME_KEY)).toBe("dark");
 
@@ -47,7 +50,7 @@ describe("ThemeSwitcher", () => {
     expect(html().contains("pf-v6-theme-high-contrast")).toBe(true);
     expect(html().contains("pf-v6-theme-glass")).toBe(false);
     expect(localStorage.getItem(CONTRAST_MODE_KEY)).toBe("high-contrast");
-    expect(screen.queryByText(/Following the system/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/follows the system/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Glass" }));
     expect(html().contains("pf-v6-theme-glass")).toBe(true);
@@ -56,6 +59,36 @@ describe("ThemeSwitcher", () => {
     fireEvent.click(screen.getByRole("button", { name: "Default" }));
     expect(html().contains("pf-v6-theme-glass") || html().contains("pf-v6-theme-high-contrast")).toBe(false);
     expect(screen.getByRole("button", { name: "Default" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("says which choice follows the system when only the color scheme does", () => {
+    localStorage.setItem(CONTRAST_MODE_KEY, "default");
+    liveSystem({ [MEDIA_QUERIES.dark]: true });
+    render(<ThemeProvider><ThemeSwitcher /></ThemeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: /^Appearance: System color scheme, Default contrast mode/ }));
+    expect(screen.getByText("Color scheme follows the system: Dark.")).toBeInTheDocument();
+    expect(screen.queryByText(/^Contrast mode follows/)).not.toBeInTheDocument();
+  });
+
+  it("puts the classes on <html> before descendants' effects run", () => {
+    // PatternFly's Popper re-measures its trigger in a passive effect when
+    // the popover's content changes; the theme classes change the layout
+    // (glass narrows the masthead's inline padding), so they must already
+    // be on <html> when a descendant's effect runs.
+    liveSystem({});
+    const seen: string[] = [];
+    const Probe = () => {
+      const { contrastMode } = useTheme();
+      useEffect(() => {
+        seen.push(`${contrastMode}:${document.documentElement.classList.contains("pf-v6-theme-glass") ? "glass" : "solid"}`);
+      }, [contrastMode]);
+      return null;
+    };
+    render(<ThemeProvider><ThemeSwitcher /><Probe /></ThemeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: /^Appearance:/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Default" }));
+    fireEvent.click(screen.getByRole("button", { name: "Glass" }));
+    expect(seen).toEqual(["system:glass", "default:solid", "glass:glass"]);
   });
 
   it("follows OS changes live while a choice is System", () => {
