@@ -56,6 +56,30 @@ describe("PullSecretSetup gating (R7 L6)", () => {
   });
 });
 
+describe("PullSecretSetup actions of an existing secret", () => {
+  const ready = { exists: true, valid: true, hasQuayAuth: true } as unknown as React.ComponentProps<typeof PullSecretSetup>["pullSecret"];
+
+  it("offers Test with Quay and Replace token as buttons of the same weight; Replace token is the danger one", async () => {
+    renderWithApp(<PullSecretSetup pullSecret={ready} />);
+    const test = await screen.findByRole("button", { name: "Test with Quay" });
+    const replace = screen.getByRole("button", { name: "Replace token" });
+    for (const b of [test, replace]) {
+      expect(b).toHaveClass("pf-m-secondary");
+      expect(b).not.toHaveClass("pf-m-link");
+    }
+    expect(replace).toHaveClass("pf-m-danger");
+    expect(test).not.toHaveClass("pf-m-danger");
+    expect(replace).toHaveAttribute("aria-expanded", "false");
+
+    // The form is the confirmation; the same button then cancels.
+    fireEvent.click(replace);
+    const cancel = screen.getByRole("button", { name: "Cancel replacing" });
+    expect(cancel).toHaveAttribute("aria-expanded", "true");
+    expect(cancel).not.toHaveClass("pf-m-danger");
+    expect(screen.getByRole("button", { name: "Replace secret" })).toBeInTheDocument();
+  });
+});
+
 // The gitops profile pulls with the cluster's own pull secrets: a missing
 // additional-pull-secret is not used there, so it is no error and no
 // unfinished setup. The full profile is unchanged.

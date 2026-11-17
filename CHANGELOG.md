@@ -45,6 +45,10 @@ only accepts a tag whose version is the top dated section. See
   **Migrate to SeaweedFS**), and its kept data volume `minio-pvc`. The
   object names `minio`, `minio-service`, `minio-secret` and `minio-pvc`
   stay, so pipeline servers need no edits.
+- Status page, Cluster setup: **Replace token** of the pull secret is a
+  button like **Test with Quay** next to it, outlined in red because it
+  overwrites a credential that may work; the form it opens is still the
+  confirmation, and the same button then reads **Cancel replacing**.
 
 ### Fixed
 

@@ -205,7 +205,10 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
                 </Button>
               </ActionListItem>
               <ActionListItem>
-                <Button variant="link" isInline onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
+                {/* Danger: replacing overwrites a credential that may work. The
+                    form below is the confirmation; while it is open the same
+                    button cancels, so focus stays on it. */}
+                <Button variant="secondary" isDanger={!replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)} aria-expanded={replaceOpen}>
                   {replaceOpen ? "Cancel replacing" : "Replace token"}
                 </Button>
               </ActionListItem>
