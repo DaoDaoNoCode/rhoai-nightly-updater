@@ -115,15 +115,24 @@ The routes are mutations behind the cluster-admin gate, the lock and the activit
 
 No cluster-wide `delete` (or `get`, `update`, `list`) on MLflow experiments, datasets or registered models is granted, and no Kubernetes object becomes readable or writable: `mlflow.kubeflow.org` resources exist only as names in MLflow's access reviews. The gitops profile refuses the samples routes and `deploy/rbac-gitops.yaml` gets none of these rules. Leftovers: MLflow keeps soft-deleted experiments and runs (and the demo's REJECTED issues) until its garbage collection runs; KFP keeps a run's artifacts in S3 and its MLMD records.
 
-Check on a cluster (replace `<ns>` with the app's namespace and `<sa>` with its ServiceAccount, by default `rhoai-nightly-updater`):
+Check on a cluster (replace `<ns>` with the app's namespace and `<sa>` with its ServiceAccount, by default `rhoai-nightly-updater`). `mlflow.kubeflow.org` is not an API the server serves, so `oc auth can-i` cannot resolve it (it answers `no` even for allowed rules); ask the API server with a SubjectAccessReview, as MLflow does. Verified on a 3.6 cluster on 2026-11-17: the six "yes" and six "no" cases below gave exactly these answers.
 
 ```bash
 SA=system:serviceaccount:<ns>:<sa>; P=<a project>
-oc auth can-i create experiments.mlflow.kubeflow.org -n $P --as=$SA                              # yes
-oc auth can-i update 'experiments.mlflow.kubeflow.org/MLflow Demo' -n $P --as=$SA                # yes
-oc auth can-i delete 'experiments.mlflow.kubeflow.org/MLflow Demo' -n $P --as=$SA                # no
-oc auth can-i delete experiments.mlflow.kubeflow.org -n $P --as=$SA                              # no
-oc auth can-i delete experiments.mlflow.kubeflow.org/nightly-sample-training -n $P --as=$SA      # yes
+sar() {  # sar <verb> <resource> [<name>] -> true/false, as MLflow's access review sees it
+  oc create -o jsonpath='{.status.allowed}{"\n"}' -f - <<EOF
+{"apiVersion":"authorization.k8s.io/v1","kind":"SubjectAccessReview","spec":{"user":"$SA",
+ "groups":["system:serviceaccounts","system:serviceaccounts:<ns>","system:authenticated"],
+ "resourceAttributes":{"namespace":"$P","group":"mlflow.kubeflow.org","resource":"$2","verb":"$1","name":"${3:-}"}}}
+EOF
+}
+sar create experiments                                    # true
+sar update experiments 'MLflow Demo'                      # true
+sar delete experiments nightly-sample-training            # true
+sar delete experiments 'MLflow Demo'                      # false
+sar delete experiments                                    # false
+sar delete registeredmodels some-other-model              # false
+# The pipeline server's proxy checks a real subresource, so oc auth can-i works there:
 oc auth can-i create datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io/nightly-dspa --subresource=api -n $P --as=$SA  # yes
 oc auth can-i get datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io/dspa --subresource=api -n $P --as=$SA           # no
 ```
