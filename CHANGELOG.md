@@ -27,8 +27,11 @@ only accepts a tag whose version is the top dated section. See
   listener on 23646; the NetworkPolicy and `minio-service` follow. Pipeline
   servers are unaffected: the S3 endpoint stays
   `minio-service.minio.svc:9000`. A storage set up by an earlier version
-  keeps running 4.48 on 23646 and asks to re-run setup, which updates it in
-  place and keeps the data volume.
+  keeps running 4.48 on 23646 (still shown as Running) and shows **Needs
+  repair** with **Repair**, which updates it in place: the data volume and
+  the credentials are kept. S3 is unavailable while the pod
+  restarts. Before, a storage on another image only showed a warning
+  without a button to update it.
 - The Storage card describes the storage as what it is, SeaweedFS:
   "S3 storage (SeaweedFS) for pipeline artifacts and test files, in
   namespace minio, behind Service minio-service." MinIO is named only where

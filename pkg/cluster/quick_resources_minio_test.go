@@ -579,7 +579,9 @@ func TestSetupMinIO_RecoversFromInterruptedSetup(t *testing.T) {
 	})
 }
 
-// A SeaweedFS that runs another image than this version deploys says so.
+// A SeaweedFS that runs another image than this version deploys says so: as
+// a warning while something more serious needs repair (here the Service is
+// missing), else as the repair reason (TestGetMinIOStatus_AdminPortOfTheDeployment).
 func TestGetMinIOStatus_ImageDrift(t *testing.T) {
 	t.Setenv("SEAWEEDFS_IMAGE", "")
 	f, c := newResourceFake(t)
@@ -610,7 +612,7 @@ func TestGetMinIOStatus_AdminPortOfTheDeployment(t *testing.T) {
 		wantWarning string
 	}{
 		{name: "set up by 2.x (4.48 on 23646)", image: oldImage, ports: `[{"name":"s3","containerPort":8333},{"name":"admin","containerPort":23646}]`, svcUIPort: "23646",
-			wantReady: true, wantWarning: "Re-run setup to update it"},
+			wantReady: true, wantRepair: "not the image this version deploys"},
 		{name: "set up by this version", image: seaweedfsDefaultImage, ports: `[{"name":"s3","containerPort":8333},{"name":"admin","containerPort":12535}]`, svcUIPort: "12535",
 			wantReady: true},
 		{name: "Deployment updated, Service not yet", image: seaweedfsDefaultImage, ports: `[{"name":"s3","containerPort":8333},{"name":"admin","containerPort":12535}]`, svcUIPort: "23646",
@@ -639,6 +641,73 @@ func TestGetMinIOStatus_AdminPortOfTheDeployment(t *testing.T) {
 				t.Errorf("Warning = %q, want %q", st.Warning, tc.wantWarning)
 			}
 		})
+	}
+}
+
+// A storage set up by 2.3.x (SeaweedFS 4.48, admin UI on 23646 in the
+// Deployment, minio-service and the NetworkPolicy) is moved to this
+// version's image and admin port by re-running setup (Set up / Repair), in
+// place: the data PVC and the credentials are the same objects afterwards,
+// and nothing is deleted.
+func TestSetupMinIO_UpgradesAnInstallOnTheOldAdminPort(t *testing.T) {
+	t.Setenv("SEAWEEDFS_IMAGE", "")
+	fastMinIOTimings(t)
+	f, c := newResourceFake(t)
+	readyAfterApply(f)
+	if resp, _ := SetupMinIO(c); !resp.Success {
+		t.Fatalf("setup = %+v", resp)
+	}
+	const oldImage = "ghcr.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
+	// Turn the objects into what 2.3.x applied.
+	for _, path := range []string{s3DeployPath, minioSvcPath, s3NPPath} {
+		raw, _ := json.Marshal(f.get(path))
+		old := strings.ReplaceAll(string(raw), "12535", "23646")
+		old = strings.ReplaceAll(old, `,"-admin.port=23646","-admin.port.legacy=0"`, "")
+		old = strings.ReplaceAll(old, seaweedfsDefaultImage, oldImage)
+		f.putJSON(path, old)
+	}
+	if raw, _ := json.Marshal(f.get(s3DeployPath)); strings.Contains(string(raw), "admin.port") || !strings.Contains(string(raw), oldImage) {
+		t.Fatalf("fixture is not the 2.3.x Deployment: %s", raw)
+	}
+	pvcUID := ensureMap(f.get(s3PVCPath), "metadata")["uid"]
+	secretPath := "/api/v1/namespaces/minio/secrets/minio-secret"
+	secretBefore, _ := json.Marshal(f.get(secretPath)["data"])
+	if st := getMinIOStatus(c); !st.Ready || st.Warning != "" || !strings.Contains(st.RepairNeeded, "not the image this version deploys") {
+		t.Fatalf("2.3.x storage before the re-run = %+v", st)
+	}
+	f.mu.Lock()
+	f.requests = nil
+	f.mu.Unlock()
+
+	if resp, _ := SetupMinIO(c); !resp.Success {
+		t.Fatalf("re-run = %+v", resp)
+	}
+	for _, m := range f.mutations() {
+		if strings.HasPrefix(m, "DELETE ") {
+			t.Errorf("the upgrade must delete nothing: %s", m)
+		}
+	}
+	if uid := ensureMap(f.get(s3PVCPath), "metadata")["uid"]; uid == nil || uid != pvcUID {
+		t.Errorf("data PVC replaced: uid %v, was %v", uid, pvcUID)
+	}
+	if after, _ := json.Marshal(f.get(secretPath)["data"]); string(after) != string(secretBefore) {
+		t.Errorf("credentials changed: %s, were %s", after, secretBefore)
+	}
+	for path, want := range map[string]string{
+		s3DeployPath: `{"containerPort":12535,"name":"admin","protocol":"TCP"}`,
+		minioSvcPath: `{"name":"ui","port":9090,"targetPort":12535}`,
+		s3NPPath:     `"ports":[{"port":12535,"protocol":"TCP"}]`,
+	} {
+		raw, _ := json.Marshal(f.get(path))
+		if !strings.Contains(string(raw), want) || strings.Contains(string(raw), "23646") {
+			t.Errorf("%s after the re-run lacks %s or keeps 23646: %s", path, want, raw)
+		}
+	}
+	if raw, _ := json.Marshal(f.get(s3DeployPath)); !strings.Contains(string(raw), seaweedfsDefaultImage) {
+		t.Errorf("image not updated: %s", raw)
+	}
+	if st := getMinIOStatus(c); !st.Ready || st.RepairNeeded != "" || st.Warning != "" {
+		t.Errorf("status after the re-run = %+v", st)
 	}
 }
 

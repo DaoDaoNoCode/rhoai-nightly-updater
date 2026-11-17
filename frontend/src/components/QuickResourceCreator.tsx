@@ -98,7 +98,7 @@ export function nextStep(kind: ResourceKind, state: ResourceState, minioReady = 
     return "Migrate to SeaweedFS replaces this MinIO from an earlier version. It starts with an empty bucket; the MinIO data volume is kept.";
   }
   if (kind === "minio" && managed && state.repairNeeded) {
-    return "Repair re-runs setup: it scales SeaweedFS back up if needed, waits for it, points Service minio-service and Route minio-ui at it and removes what is left of the earlier MinIO storage, if anything. Stored data is kept.";
+    return "Repair re-runs setup: it applies the SeaweedFS Deployment with the image and settings of this version (scaling it back up if needed), waits for it, points Service minio-service and Route minio-ui at it and removes what is left of the earlier MinIO storage, if anything. Stored data is kept.";
   }
   if (!terminalReason(state)) return null;
   const text = `${state.waitingReason ?? ""} ${state.message ?? ""}`;

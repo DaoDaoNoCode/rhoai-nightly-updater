@@ -489,8 +489,11 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 	serving := ""
 	if container == s3Container {
 		state.UIUser = s3AdminUser
+		// Another image, for example the one an earlier version of this tool
+		// deployed: re-running setup (Repair) updates it in place.
+		imageDrift := ""
 		if ns.Managed && state.CurrentImage != "" && state.CurrentImage != s3Image() {
-			state.Warning = strings.TrimSpace(fmt.Sprintf("SeaweedFS runs %s, not the image this version deploys (%s). Re-run setup to update it; the data PVC is kept. %s", state.CurrentImage, s3Image(), state.Warning))
+			imageDrift = fmt.Sprintf("SeaweedFS runs %s, not the image this version deploys (%s). Re-run setup to update it; the data PVC is kept.", state.CurrentImage, s3Image())
 		}
 		// SeaweedFS serves only through minio-service and Route minio-ui,
 		// which setup switches once it is ready: a setup that stopped
@@ -507,6 +510,14 @@ func minioStatusAndEndpoints(c *Client) (types.ResourceState, minioEndpoints, er
 			if state.RepairNeeded == "" && legacyNPErr == nil && legacyNPOK && minioObjectOwned(legacyNP) && IsK8sError(legacyErr, 404) {
 				state.RepairNeeded = "NetworkPolicy minio-ingress of the replaced MinIO was not removed yet (its pods were still shutting down)."
 			}
+		}
+		// A more serious repair reason wins; the image is then a warning.
+		switch {
+		case imageDrift == "":
+		case state.RepairNeeded == "":
+			state.RepairNeeded = imageDrift
+		default:
+			state.Warning = strings.TrimSpace(imageDrift + " " + state.Warning)
 		}
 	}
 	switch {

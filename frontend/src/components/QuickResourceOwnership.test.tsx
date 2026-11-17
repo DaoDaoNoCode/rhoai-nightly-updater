@@ -311,6 +311,8 @@ describe("status from the serving configuration (Repair)", () => {
     ["SeaweedFS is scaled to zero", { ...base, terminalError: true, message: scaledDown, repairNeeded: scaledDown }, "Incomplete", scaledDown],
     ["it is still starting before the switch", { ...base, message: "0/1 ready", repairNeeded: onMinIO }, "Starting", `Needs repair: ${onMinIO}`],
     ["the MinIO cleanup is unfinished", { ...base, ready: true, message: "Running", repairNeeded: "NetworkPolicy minio-ingress of the replaced MinIO was not removed yet (its pods were still shutting down)." }, "Running", "Needs repair: NetworkPolicy minio-ingress"],
+    // A storage an earlier version set up (SeaweedFS 4.48, admin UI on 23646) after the app upgrade.
+    ["it runs the image of an earlier version", { ...base, ready: true, message: "Running", repairNeeded: "SeaweedFS runs ghcr.io/chrislusf/seaweedfs@sha256:4e61d15f, not the image this version deploys (ghcr.io/chrislusf/seaweedfs@sha256:4b42c212). Re-run setup to update it; the data PVC is kept." }, "Running", "Needs repair: SeaweedFS runs ghcr.io/chrislusf/seaweedfs"],
   ])("when %s, it says so and offers Repair, which re-runs setup", async (_name, minio, label, text) => {
     const api = setup(live({ minio: minio as ResourceState, pipelineServers: [] }), {
       "POST /api/resources/minio/setup": () => jsonResponse({ success: true, message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.", logs: [] }),
