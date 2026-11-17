@@ -631,6 +631,9 @@ type InferenceGatewayState struct {
 	// ExternalURL is https://<hostname> of the listener for callers outside
 	// the cluster ("" when it has none).
 	ExternalURL string `json:"externalUrl,omitempty"`
+	// PlannedURL is the address set up would give the gateway, while it
+	// is not set up ("" when the cluster's apps domain cannot be read).
+	PlannedURL string `json:"plannedUrl,omitempty"`
 	// Address is the load balancer address the gateway reports.
 	Address string `json:"address,omitempty"`
 	// DNS is "published" once the external hostname's DNSRecord is

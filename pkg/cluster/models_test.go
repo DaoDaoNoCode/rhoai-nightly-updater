@@ -715,3 +715,75 @@ func TestModelsSetup_ReadErrorsKeepTheirCode(t *testing.T) {
 		t.Fatalf("got %+v", res)
 	}
 }
+
+// notProgrammedGateway makes the gateway report what OpenShift's controller
+// says while it makes the load balancer (seen live), for the first reads
+// (all of them when reads is 0), then Programmed.
+func notProgrammedGateway(mc *modelsCluster, reads int) {
+	next := mc.f.onGet
+	n := 0
+	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		next(k, obj)
+		if k.plural != "gateways" {
+			return
+		}
+		mc.mu.Lock()
+		n++
+		pending := reads == 0 || n <= reads
+		mc.mu.Unlock()
+		if pending {
+			obj["status"] = map[string]interface{}{"conditions": []interface{}{
+				map[string]interface{}{"type": "Accepted", "status": "True"},
+				map[string]interface{}{"type": "Programmed", "status": "False", "reason": "AddressNotAssigned",
+					"message": `Failed to assign to any requested addresses: hostname "openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local" not found`},
+			}}
+		}
+	}
+}
+
+// While the load balancer is made, progress is plain: the controller's
+// condition reads as an error although it is the normal wait.
+func TestModelsSetup_GatewayWaitSpeaksPlainly(t *testing.T) {
+	mc := newModelsCluster(t)
+	notProgrammedGateway(mc, 3)
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	waited := false
+	for _, e := range events {
+		if strings.Contains(e.Message, "Failed to assign") {
+			t.Errorf("progress shows the controller's condition: %q", e.Message)
+		}
+		waited = waited || strings.Contains(e.Message, "Waiting for OpenShift to create the gateway's load balancer")
+	}
+	if !waited {
+		t.Error("no plain progress while the gateway was not programmed")
+	}
+}
+
+// When the gateway is still not programmed at the end of the wait, the step
+// names the controller's reason: then it is the clue.
+func TestModelsSetup_GatewayNotProgrammedNamesTheReason(t *testing.T) {
+	mc := newModelsCluster(t)
+	notProgrammedGateway(mc, 0)
+	_, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	for _, e := range events {
+		if e.Step == "gateway-ready" && e.Status != "running" {
+			if !strings.Contains(e.Message, "not programmed after") || !strings.Contains(e.Message, "The gateway controller says: Failed to assign to any requested addresses") {
+				t.Errorf("gateway-ready: %q", e.Message)
+			}
+			return
+		}
+	}
+	t.Fatal("no final gateway-ready step")
+}
+
+// Before set up, the status names the address set up would give the
+// gateway, so the tab shows the real one instead of a placeholder.
+func TestInferenceGatewayStatus_PlannedURLBeforeSetup(t *testing.T) {
+	mc := newModelsCluster(t)
+	if got := getInferenceGatewayStatus(mc.c, nil, nil); got.Deployed || got.PlannedURL != "https://inference.apps.example.com" || got.ExternalURL != "" {
+		t.Errorf("not set up: deployed=%v planned=%q external=%q", got.Deployed, got.PlannedURL, got.ExternalURL)
+	}
+}

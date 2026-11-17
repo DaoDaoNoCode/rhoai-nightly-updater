@@ -490,6 +490,9 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	}
 	if !found {
 		state.Message = "Not set up"
+		if domain, err := clusterAppsDomain(c); err == nil && domain != "" {
+			state.PlannedURL = "https://" + inferenceHostPrefix + domain
+		}
 		// Objects of an earlier setup that stopped half-way: teardown
 		// removes them, setup completes them.
 		for _, kind := range []string{"GatewayClass", "ConfigMap"} {
@@ -703,7 +706,12 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 // with an address, then until its hostname is published in DNS. A wait
 // that runs out is not a failure: the gateway may still come up, and the
 // status shows it. It returns a terminal problem, or "".
-func waitInferenceGateway(c *Client, host string, progress func(string)) (ready bool, dns string, problem string, err error) {
+// While the Gateway is not programmed, progress says so in plain words:
+// the controller's own condition ("Failed to assign to any requested
+// addresses: hostname ... not found") is normal while the load balancer is
+// made and reads as an error (seen live). That condition is returned as
+// pending, for the message when the wait ends without the gateway ready.
+func waitInferenceGateway(c *Client, host string, progress func(string)) (ready bool, dns string, problem string, pending string, err error) {
 	last := ""
 	ready, err = waitForGone(c, InferenceGatewayReadyTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
 		gw, found, err := readInferenceGateway(cc)
@@ -727,7 +735,8 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 		case ok && programmed.Status == "True":
 			msg = "Programmed; waiting for the load balancer's address..."
 		case ok:
-			msg = fmt.Sprintf("Not programmed yet: %s", firstNonEmpty(programmed.Message, programmed.Reason))
+			msg = "Waiting for OpenShift to create the gateway's load balancer (usually under a minute)..."
+			pending = firstNonEmpty(programmed.Message, programmed.Reason)
 		}
 		if msg != last {
 			last = msg
@@ -736,19 +745,19 @@ func waitInferenceGateway(c *Client, host string, progress func(string)) (ready 
 		return false, nil
 	})
 	if err != nil || problem != "" || !ready || host == "" {
-		return ready && problem == "", "", problem, err
+		return ready && problem == "", "", problem, pending, err
 	}
 	progress("Programmed; waiting for " + host + " to be published in DNS...")
 	published, werr := waitForGone(c, InferenceGatewayDNSTimeout, InferenceGatewayPoll, func(cc *Client) (bool, error) {
 		return dnsPublished(cc, host) == "published", nil
 	})
 	if werr != nil {
-		return true, "", "", werr
+		return true, "", "", "", werr
 	}
 	if published {
-		return true, "published", "", nil
+		return true, "published", "", "", nil
 	}
-	return true, "pending", "", nil
+	return true, "pending", "", "", nil
 }
 
 // TeardownInferenceGateway deletes the inference gateway's objects this

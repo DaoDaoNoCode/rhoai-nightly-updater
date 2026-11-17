@@ -682,14 +682,18 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			}
 			m.step("gateway", "success", fmt.Sprintf("GatewayClass, ConfigMap and Gateway %s/%s applied; external hostname %s.", inferenceGatewayNamespace, inferenceGatewayName, gw.host))
 			m.step("gateway-ready", "running", "Waiting for the gateway and its load balancer...")
-			ready, dns, problem, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
+			ready, dns, problem, pending, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
 			switch {
 			case err != nil:
 				return m.fail("gateway-ready", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created; the Models tab shows its state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
 			case problem != "":
 				return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
 			case !ready:
-				m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.", clockText(InferenceGatewayReadyTimeout)))
+				why := ""
+				if pending != "" {
+					why = " The gateway controller says: " + truncateMessage(pending) + "."
+				}
+				m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", clockText(InferenceGatewayReadyTimeout), why))
 			case dns == "published":
 				m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
 			default:

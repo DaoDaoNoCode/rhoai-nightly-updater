@@ -95,7 +95,7 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
   return (
     <PartItem id="gateway" title="Inference gateway" scope="Shared by the cluster" status={s} unmanaged={unmanaged} menu={menu}>
       <Content component="p">
-        The front door to every model on the cluster: it answers at <code>https://inference.&lt;apps domain&gt;</code>, sends each call to its model, and checks the caller&apos;s OpenShift token.
+        The front door to every model on the cluster: it answers at <code>{gw?.externalUrl ?? gw?.plannedUrl ?? "https://inference.<apps domain>"}</code>, sends each call to its model, and checks the caller&apos;s OpenShift token.
         {unmanaged
           ? " It was created outside this tool (for example by RHOAI's installation): models use it as it is, and this tool does not change or delete it."
           : deployed ? " It runs on a cloud load balancer, which costs money while it exists." : " Setting it up creates a cloud load balancer, which costs money while it exists."}

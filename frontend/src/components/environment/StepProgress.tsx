@@ -27,7 +27,7 @@ export const StepProgress: React.FC<{
       const s = states[id];
       const current = running && s?.status === "running";
       const variant = !s ? "pending" : s.status === "success" ? "success" : s.status === "failed" ? "danger" : s.status === "skipped" ? "default" : "info";
-      const description = s && !(s.status === "failed" && s.message === shownElsewhere) ? s.message : undefined;
+      const description = s && !((s.status === "failed" || s.status === "success") && s.message === shownElsewhere) ? s.message : undefined;
       return (
         <ProgressStep key={id} id={`${idPrefix}-${id}`} titleId={`${idPrefix}-${id}-title`} variant={variant} isCurrent={current}
           icon={current ? <Spinner size="sm" aria-label="In progress" /> : undefined} description={description}>

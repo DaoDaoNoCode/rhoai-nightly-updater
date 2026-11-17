@@ -117,12 +117,23 @@ describe("Models runs and clean-up", () => {
 });
 
 describe("Models tab", () => {
+  it("names the address the gateway will get before it is set up", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: { deployed: false, ready: false, managedByTool: false, message: "Not set up", plannedUrl: "https://inference.apps.example.com" } }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    expect(within(gw).getByText("https://inference.apps.example.com")).toBeInTheDocument();
+    expect(within(gw).queryByText(/apps domain/)).toBeNull();
+  });
+
   it("shows both parts with their details and how to call a ready model", async () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: { ...gateway, usedBy: ["dev/qwen25-05b-instruct"], teardownBlockedReason: "Models route through it: dev/qwen25-05b-instruct. Delete that model first." }, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=models&project=dev");
     const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
     expect(within(gw).getByText(/runs on a cloud load balancer, which costs money while it exists/)).toBeInTheDocument();
     expect(within(gw).getByText(/On: every call needs an OpenShift token/)).toBeInTheDocument();
+    // The real address, not a placeholder.
+    expect(within(gw).getAllByText(gateway.externalUrl!)[0]).toBeInTheDocument();
+    expect(within(gw).queryByText(/apps domain/)).toBeNull();
     const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
     expect(within(part).getByRole("link", { name: /Open dev in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects/dev?section=model-server");
     expect(screen.getByRole("heading", { name: "Use it" })).toBeInTheDocument();

@@ -795,6 +795,8 @@ export interface ResourceState {
 export interface InferenceGatewayState extends ResourceState {
   /** https://<hostname> of the listener for callers outside the cluster. */
   externalUrl?: string;
+  /** While not set up: the address set up would give it. */
+  plannedUrl?: string;
   /** The load balancer address the gateway reports. */
   address?: string;
   /** "published" once the external hostname is in DNS, "pending" before; absent: unknown. */

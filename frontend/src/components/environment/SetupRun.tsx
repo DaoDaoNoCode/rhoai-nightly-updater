@@ -60,7 +60,7 @@ export const RunModal: React.FC<{
         <Stack hasGutter>
           <StackItem>
             <StepProgress idPrefix="goal-run" aria-label={`${run.title}: progress`} steps={shownSteps(run)} states={run.states} running={run.running}
-              shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} />
+              shownElsewhere={run.result?.message} />
           </StackItem>
           {run.running && (
             <StackItem>
