@@ -881,6 +881,13 @@ func TeardownModels(c *Client, project string) (*types.OperationResponse, error)
 		recordModelsActivity(c, "teardown-model", fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
+	// A published model is unpublished first (MaaS tab): its MaaSModelRef
+	// and access entries would point at nothing.
+	if published, err := MaaSPublishedIn(c, project); err != nil {
+		return fail(fmt.Sprintf("Cannot check whether the model in '%s' is published to MaaS; nothing was deleted: %v.", project, err), errorCodeFromK8sErr(err), "maas check failed")
+	} else if published {
+		return fail(fmt.Sprintf("The model in '%s' is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", project), "in_use", "published to maas")
+	}
 	var deleted, kept []string
 	for _, entry := range modelCatalog {
 		model, found, err := readToolModel(c, project, entry.Name)

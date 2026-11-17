@@ -17,11 +17,14 @@ var (
 	cleanupModels         = TeardownModels
 	cleanupGateway        = TeardownInferenceGateway
 	cleanupPlayground     = TeardownPlayground
+	cleanupUnpublish      = UnpublishMaaSModel
+	cleanupMaaSPlatform   = TeardownMaaSPlatform
 )
 
 // CleanupStepID is the step id of each part of a clean-up, as streamed:
 // "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
-// "model:<project>" and "inference-gateway".
+// "model:<project>", "inference-gateway", and "maas-unpublish:<project>"
+// (first) and "maas-platform" (last).
 func CleanupStepID(part, project string) string {
 	if project != "" {
 		return part + ":" + project
@@ -38,9 +41,18 @@ type cleanupPart struct {
 // pipeline servers first (the storage teardown refuses while one uses the
 // storage), then the storage, then MLflow, which depends on neither, then
 // the playgrounds (which use the models), then the models and, after them, the inference gateway they route through
-// (its teardown refuses while a model uses it).
+// (its teardown refuses while a model uses it). A model published to MaaS
+// is unpublished before anything else (the Models teardown refuses while it
+// is published), and the MaaS platform goes last.
 func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []cleanupPart {
 	var parts []cleanupPart
+	for _, project := range req.MaaSPublished {
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("maas-unpublish", project),
+			title: fmt.Sprintf("the MaaS publication of the model in '%s'", project),
+			run:   func() (*types.OperationResponse, error) { return cleanupUnpublish(c, project) },
+		})
+	}
 	for _, project := range req.PipelineServers {
 		parts = append(parts, cleanupPart{
 			id:    CleanupStepID("pipeline-server", project),
@@ -76,6 +88,9 @@ func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []clea
 	}
 	if req.InferenceGateway {
 		parts = append(parts, cleanupPart{id: CleanupStepID("inference-gateway", ""), title: "the inference gateway", run: func() (*types.OperationResponse, error) { return cleanupGateway(c) }})
+	}
+	if req.MaaSPlatform {
+		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
 	}
 	return parts
 }

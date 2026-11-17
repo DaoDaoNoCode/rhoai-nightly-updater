@@ -36,7 +36,7 @@ Token rules (pkg/api/identity.go, handlers.go):
 | the app's namespace | ConfigMaps: `create`; `get` on `rhoai-nightly-updater-{activity,snapshot,operation}`, `update` activity, `patch` snapshot and operation |
 | `kube-system` | Secret `additional-pull-secret`: `get`, `patch` |
 | `openshift-marketplace` | CatalogSources: `get list create patch delete`; PackageManifests: `list` |
-| `openshift-ingress` (`INGRESS_NAMESPACE`) | Gateways: `create`; `get patch delete` on `openshift-ai-inference`. ConfigMaps: `create`; `get patch delete` on `openshift-ai-inference-options`. DNSRecords: `list`. AuthPolicy `openshift-ai-inference-authn`: `get` (template revision 5, Models audit below) |
+| `openshift-ingress` (`INGRESS_NAMESPACE`) | Gateways: `create`; `get patch delete` on `openshift-ai-inference`. ConfigMaps: `create`; `get patch delete` on `openshift-ai-inference-options`. DNSRecords: `list`. AuthPolicy `openshift-ai-inference-authn`: `get` (template revision 5, Models audit below). Gateway `maas-default-gateway`: `get patch delete`; AuthPolicies: `list` (template revision 5, MaaS audit below) |
 | `openshift-ingress-operator` (`INGRESS_OPERATOR_NAMESPACE`) | IngressController `default`: `get` (template revision 5, Models audit below) |
 
 **Cluster-wide (ClusterRole).** The operator namespaces (`redhat-ods-*`, `seaweedfs`) and the user's pipeline projects do not exist when the template is applied, so these rules are cluster-wide. Wherever the API allows it, they are limited to fixed object names. `create` cannot be limited by name.
@@ -172,7 +172,7 @@ Reads that need no new rule: the controller's prefix (Deployment `llmisvc-contro
 SA=system:serviceaccount:<ns>:<sa>
 oc auth can-i create gateways.gateway.networking.k8s.io -n openshift-ingress --as=$SA                       # yes
 oc auth can-i delete gateways.gateway.networking.k8s.io/openshift-ai-inference -n openshift-ingress --as=$SA # yes
-oc auth can-i delete gateways.gateway.networking.k8s.io/maas-default-gateway -n openshift-ingress --as=$SA   # no
+oc auth can-i delete gateways.gateway.networking.k8s.io/other -n openshift-ingress --as=$SA                  # no
 oc auth can-i create gateways.gateway.networking.k8s.io -n default --as=$SA                                 # no
 oc auth can-i delete llminferenceservices.serving.kserve.io/qwen25-05b-instruct -n <project> --as=$SA        # yes
 oc auth can-i delete llminferenceservices.serving.kserve.io/other-model -n <project> --as=$SA                # no
@@ -214,6 +214,45 @@ oc auth can-i update configmaps/other -n <project> --as=$SA                     
 oc auth can-i list inferenceservices.serving.kserve.io -n <project> --as=$SA                 # yes
 oc auth can-i delete inferenceservices.serving.kserve.io/any -n <project> --as=$SA           # no
 oc get deploy -n <ns> <app> -o yaml | grep -- '--scope'                                       # nothing
+```
+
+**Audit: template revision 5 (3.0.0), Models as a Service.** The MaaS tab sets up the cluster's MaaS platform the way the MaaS install docs do (`opendatahub-io/models-as-a-service` `docs/content/install`, and the scripts they run: `setup-gateway.sh` in its default loadbalancer mode, `setup-database.sh`, `deploy.sh`), removes what it set up, and publishes this tool's own model. Everything it writes carries the tool label, is written with the tool's field manager, and is deleted with a UID precondition; objects of the same names that someone else made are used as they are and never changed or deleted. Kuadrant (Connectivity Link), Authorino, the CloudNativePG operator and every object RHOAI's operator makes (`Config/default`, the AITenant, MaasTenantConfig, maas-api, the gateway's AuthPolicy, the generated namespaces) are only read.
+
+*The database password.* The connection URL is built in memory from the CloudNativePG application Secret `maas-db-app` (read by name, only its `username` and `password` keys are used) and written only into Secret `maas-db-config`. It is never logged, put in an error, returned by the API, or kept in status (a unit test checks the operation's output for it). No Secret is listed or watched.
+
+*What the tool does not do.* The docs' Authorino TLS step (`setup-authorino-tls.sh`) patches Connectivity Link's own Authorino Service, Authorino CR and Deployment. Those are objects Connectivity Link's operators own and reconcile (the Kuadrant operator makes the Authorino CR, the Authorino operator its Deployment, which may undo a direct edit), and this tool never edits operator-owned objects; doing it would also need new write rules on Connectivity Link's objects (`patch` on the Authorino CR, which names Authorino's image, and on its Service). So the tool only checks the three settings (read-only rules below and the existing `get` on Services and Deployments) and shows the script's exact commands for a cluster-admin. The docs' namespace label for model projects (`maas.opendatahub.io/gateway-access=true`) would need `patch` on every namespace (which could also relax a namespace's pod security labels); the tool instead lists the published projects in its own gateway's `allowedRoutes`, the script's documented `ALLOWED_ROUTE_NAMESPACES` form.
+
+| Rule | What it allows | Worst case if the SA token leaks | Why nothing narrower works |
+|---|---|---|---|
+| GatewayClasses `get patch delete` on `openshift-default` (added to the rule for `openshift-ai-inference`) | read the class (its controller), create it when missing as `setup-gateway.sh` does, and delete the tool's own when no other Gateway uses it | change or delete the cluster's shared `openshift-default` class, also one an admin made (the code never does): every Gateway of that class (for example an MCP gateway) stops being served | named; `create` is the existing rule |
+| `openshift-ingress` Gateways `get patch delete` on `maas-default-gateway` | read, apply (setup, and the published projects in `allowedRoutes`) and delete the tool's MaaS gateway | change or delete the MaaS gateway, also one an admin made: the hostname takeover described for the inference gateway, for this one Gateway, or MaaS unreachable | named, in one namespace |
+| `openshift-ingress` AuthPolicies `list` | find the AuthPolicy maas-controller puts on the MaaS gateway (its name differs between releases) and show whether it is enforced | read the AuthPolicies in `openshift-ingress`: rules and endpoints, no secrets | the policy's name is not fixed across releases; read-only, one namespace |
+| Gateways `list` (cluster-wide) | keep GatewayClass `openshift-default` while another Gateway uses it | read every Gateway: listeners, hostnames, certificate Secret names (not their content) | the users of a class can be in any namespace |
+| CloudNativePG Clusters `create` (cluster-wide) | create the database `maas-db` in the AI gateway's infrastructure namespace, which is found at run time and created by RHOAI's operator | create a PostgreSQL cluster in any namespace (pods running CloudNativePG's operand image, a volume; no image choice beyond what the operator allows) | `create` cannot be limited by name; the namespace does not exist when the template is applied |
+| CloudNativePG Clusters `get patch delete` on `maas-db` | read its readiness, apply and delete the tool's database | change or delete any CloudNativePG cluster named `maas-db`, also one an admin made for MaaS (the code refuses: label, field manager, UID precondition): its data is lost | named |
+| Secrets `get` on `maas-db-config`, `maas-db-app` (cluster-wide) | `maas-db-app`: build the connection URL; `maas-db-config`: whether a connection Secret exists and whose it is, before writing | read MaaS's database credentials, in any namespace: with network access to the database, the API-key metadata (hashed keys, subscriptions) could be read or changed | named; the infrastructure namespace is found at run time. Existence and ownership need a read; there is no list |
+| Secrets `patch delete` on `maas-db-config` (cluster-wide) | update and delete the tool's connection Secret | point maas-api at another database, or delete the Secret (maas-api then crash-loops until it is back) | named |
+| Kuadrants `list` (cluster-wide) | find the Kuadrant CR (a prerequisite) and its namespace, where Authorino runs | read Kuadrant CRs: no secrets | the CR's namespace is not fixed |
+| Authorinos (`operator.authorino.kuadrant.io`) `get` on `authorino` | check that Authorino's listener serves TLS | read Authorino's configuration: no secrets | named; read-only |
+| AITenants `get` on `models-as-a-service`; MaasTenantConfigs `get` on `default-tenant` | the default tenant's readiness, and its `status.infraNamespace` | read the default tenant's configuration: no secrets | named; read-only |
+| MaaSModelRefs, MaaSSubscriptions, MaaSAuthPolicies `create` (cluster-wide) | publish: a MaaSModelRef in the model's project, the tool's subscription and access policy in `models-as-a-service` (made by the MaaS controller, so not a template namespace) | publish any LLMInferenceService of any namespace to MaaS and give any group access to it through a new subscription: the model becomes reachable with a MaaS API key for that group (requests are still authenticated and rate-limited) | `create` cannot be limited by name |
+| MaaSModelRefs `get patch delete` on `qwen25-05b-instruct`; MaaSSubscriptions on `rhoai-nightly-updater-subscription`; MaaSAuthPolicies on `rhoai-nightly-updater-access` | read, apply and delete the tool's publication | widen or delete the tool's subscription and access policy (who may call the published models, their token limits), or unpublish any model named `qwen25-05b-instruct` | named |
+
+Reads and writes that need no new rule: the DataScienceCluster (`patch` existed; only `aigateway.modelsAsAService.managementState` is written, and its previous value is recorded in the tool's snapshot ConfigMap, data key `maas`, so removal restores it), the gateway ref on the tool's model (existing `patch` on `qwen25-05b-instruct`, as field manager `rhoai-nightly-updater-maas`, so removing it reverts exactly that change), Secret `create` (existing), Deployments `maas-api` and `authorino` (existing `get`), the Authorino Service (existing `get`), CSVs (existing `list`, for the Connectivity Link version), the apps domain and the default IngressController (Models rules).
+
+```bash
+SA=system:serviceaccount:<ns>:<sa>
+oc auth can-i get secrets/maas-db-app -n redhat-ai-gateway-infra --as=$SA                                   # yes
+oc auth can-i get secrets/other -n redhat-ai-gateway-infra --as=$SA                                         # no
+oc auth can-i list secrets -n redhat-ai-gateway-infra --as=$SA                                              # no
+oc auth can-i delete clusters.postgresql.cnpg.io/maas-db -n redhat-ai-gateway-infra --as=$SA                 # yes
+oc auth can-i delete clusters.postgresql.cnpg.io/other -n redhat-ai-gateway-infra --as=$SA                   # no
+oc auth can-i patch authorinos.operator.authorino.kuadrant.io/authorino -n kuadrant-system --as=$SA         # no
+oc auth can-i patch services/authorino-authorino-authorization -n kuadrant-system --as=$SA                  # no
+oc auth can-i delete gateways.gateway.networking.k8s.io/maas-default-gateway -n openshift-ingress --as=$SA   # yes
+oc auth can-i delete maassubscriptions.maas.opendatahub.io/other -n models-as-a-service --as=$SA            # no
+oc auth can-i patch namespaces/<project> --as=$SA                                                           # no
+oc auth can-i delete kuadrants.kuadrant.io/kuadrant -n kuadrant-system --as=$SA                              # no
 ```
 
 **Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.

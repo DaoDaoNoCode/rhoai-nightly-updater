@@ -400,7 +400,7 @@ objects:
         verbs: ["create"]
       - apiGroups: ["gateway.networking.k8s.io"]
         resources: ["gatewayclasses"]
-        resourceNames: ["openshift-ai-inference"]
+        resourceNames: ["openshift-ai-inference", "openshift-default"]
         verbs: ["get", "patch", "delete"]
       # The apps domain, for the gateway's hostname inference.<domain>
       - apiGroups: ["config.openshift.io"]
@@ -467,6 +467,70 @@ objects:
       - apiGroups: ["serving.kserve.io"]
         resources: ["inferenceservices", "llminferenceservices"]
         verbs: ["get", "list"]
+      # Models as a Service (MaaS tab), as the MaaS install docs set it up.
+      # The database: a CloudNativePG Cluster maas-db and the connection
+      # Secret maas-db-config in the AI gateway's infrastructure namespace
+      # (found at run time, created by RHOAI's operator, so cluster-wide but
+      # only these names; Secret create is the existing rule above). The
+      # CloudNativePG application Secret maas-db-app is read only by name,
+      # to build the connection URL; no Secret is listed or watched.
+      - apiGroups: ["postgresql.cnpg.io"]
+        resources: ["clusters"]
+        verbs: ["create"]
+      - apiGroups: ["postgresql.cnpg.io"]
+        resources: ["clusters"]
+        resourceNames: ["maas-db"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["maas-db-config", "maas-db-app"]
+        verbs: ["get"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["maas-db-config"]
+        verbs: ["patch", "delete"]
+      # The gateways that use GatewayClass openshift-default (it is kept
+      # while another one does), read-only
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        verbs: ["list"]
+      # Connectivity Link: the Kuadrant CR (a prerequisite, never written)
+      # and whether its Authorino is set up for TLS (read-only)
+      - apiGroups: ["kuadrant.io"]
+        resources: ["kuadrants"]
+        verbs: ["list"]
+      - apiGroups: ["operator.authorino.kuadrant.io"]
+        resources: ["authorinos"]
+        resourceNames: ["authorino"]
+        verbs: ["get"]
+      # The default tenant the operator creates (read-only)
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["aitenants"]
+        resourceNames: ["models-as-a-service"]
+        verbs: ["get"]
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["maastenantconfigs"]
+        resourceNames: ["default-tenant"]
+        verbs: ["get"]
+      # Publishing the tool's model: its MaaSModelRef (in the model's
+      # project), and the tool's own MaaSSubscription and MaaSAuthPolicy (in
+      # the tenant namespace models-as-a-service, which the MaaS controller
+      # creates); create cannot be limited by name, the rest only these names
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["maasmodelrefs", "maassubscriptions", "maasauthpolicies"]
+        verbs: ["create"]
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["maasmodelrefs"]
+        resourceNames: ["qwen25-05b-instruct"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["maassubscriptions"]
+        resourceNames: ["rhoai-nightly-updater-subscription"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["maasauthpolicies"]
+        resourceNames: ["rhoai-nightly-updater-access"]
+        verbs: ["get", "patch", "delete"]
 
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -580,7 +644,8 @@ objects:
         namespace: ${NAMESPACE}
 
   # Models: the inference gateway in OpenShift's ingress namespace (the
-  # Gateway and its options ConfigMap, only by their names but create),
+  # Gateway and its options ConfigMap, only by their names but create; MaaS:
+  # Gateway maas-default-gateway),
   # its DNS records (read-only, whether the hostname is published) and the
   # AuthPolicy odh-model-controller adds to it (read-only)
   - apiVersion: rbac.authorization.k8s.io/v1
@@ -596,7 +661,7 @@ objects:
         verbs: ["create"]
       - apiGroups: ["gateway.networking.k8s.io"]
         resources: ["gateways"]
-        resourceNames: ["openshift-ai-inference"]
+        resourceNames: ["openshift-ai-inference", "maas-default-gateway"]
         verbs: ["get", "patch", "delete"]
       - apiGroups: [""]
         resources: ["configmaps"]
@@ -612,6 +677,11 @@ objects:
         resources: ["authpolicies"]
         resourceNames: ["openshift-ai-inference-authn"]
         verbs: ["get"]
+      # MaaS: the AuthPolicy maas-controller puts on the MaaS gateway, found
+      # by its target because its name differs between releases (read-only)
+      - apiGroups: ["kuadrant.io"]
+        resources: ["authpolicies"]
+        verbs: ["list"]
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: RoleBinding
     metadata:

@@ -806,6 +806,83 @@ type PlaygroundRequest struct {
 	Models []PlaygroundModelRef `json:"models,omitempty"`
 }
 
+// MaaSStatus is the Models as a Service feature (GET /api/resources/maas):
+// the cluster's MaaS platform, part by part, and this tool's models with
+// whether they are published to MaaS.
+type MaaSStatus struct {
+	// Blocked says why the platform cannot be set up here (no
+	// DataScienceCluster, or its aigateway component is off), or is nil.
+	Blocked *ComponentBlock `json:"blocked,omitempty"`
+	// Platform is the platform as a whole: Ready when every part is ready,
+	// Deployed when MaaS runs (modelsAsAService Managed), ManagedByTool when
+	// this tool set up any part.
+	Platform ResourceState `json:"platform"`
+	// Parts are the documented prerequisites and pieces, in setup order.
+	Parts []MaaSPart `json:"parts"`
+	// URL is https://maas.<apps domain>, the MaaS gateway's address ("" when
+	// the apps domain cannot be read).
+	URL string `json:"url,omitempty"`
+	// Subscription is the MaaSSubscription a published model of this tool
+	// is offered under (the API key is minted for it).
+	Subscription string `json:"subscription"`
+	// DashboardURL is the RHOAI dashboard's address, for its MaaS pages.
+	DashboardURL string `json:"dashboardUrl,omitempty"`
+	// Items are this tool's models in data science projects, published or
+	// not.
+	Items []MaaSModel `json:"items,omitempty"`
+}
+
+// MaaSPart is one part of the MaaS platform.
+type MaaSPart struct {
+	// ID is "dsc", "kuadrant", "database", "gateway", "authorino-tls",
+	// "maas-api" or "tenant".
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// State is "ready", "missing" (setup creates it), "waiting", "problem",
+	// "manual" (a cluster-admin does it; Commands says how) or "unknown".
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+	// ManagedByTool: this tool created (or set) it; Setup and Remove
+	// change it. NotManaged: it exists but someone else made it; it is used
+	// as it is and never changed or deleted.
+	ManagedByTool bool `json:"managedByTool,omitempty"`
+	NotManaged    bool `json:"notManaged,omitempty"`
+	// Warning is a problem that does not block setup.
+	Warning string `json:"warning,omitempty"`
+	// Commands are the documented commands a cluster-admin runs for a
+	// "manual" part.
+	Commands string `json:"commands,omitempty"`
+	// DocURL is the MaaS documentation page for the part.
+	DocURL string `json:"docUrl,omitempty"`
+}
+
+// MaaSModel is one of this tool's models (Namespace, Name) and its MaaS
+// publication.
+type MaaSModel struct {
+	ResourceState
+	DisplayName string `json:"displayName,omitempty"`
+	// ModelReady: the model itself (LLMInferenceService) is ready.
+	ModelReady bool `json:"modelReady"`
+	// Published: this tool published it (its MaaSModelRef exists).
+	Published bool `json:"published"`
+	// Phase is the MaaSModelRef's phase ("Ready", ...).
+	Phase string `json:"phase,omitempty"`
+	// Endpoint is the MaaSModelRef's status.endpoint.
+	Endpoint string `json:"endpoint,omitempty"`
+	// Access and Subscription are the phases of the tool's MaaSAuthPolicy
+	// and MaaSSubscription ("Active", ...).
+	Access       string `json:"access,omitempty"`
+	Subscription string `json:"subscription,omitempty"`
+}
+
+// MaaSRequest is the body of POST /api/resources/maas/stream.
+type MaaSRequest struct {
+	// Action is "setup" or "teardown" (the platform), or "publish" or
+	// "unpublish" (the tool's model in Project).
+	Action  string `json:"action"`
+	Project string `json:"project,omitempty"`
+}
+
 // ComponentBlock is a DataScienceCluster component a feature needs that is
 // not turned on.
 type ComponentBlock struct {
@@ -839,6 +916,11 @@ type CleanupRequest struct {
 	// Playgrounds are the projects whose playground (requested by this
 	// tool) goes, before the models it uses.
 	Playgrounds []string `json:"playgrounds,omitempty"`
+	// MaaSPublished are the projects whose model this tool unpublishes from
+	// Models as a Service first, before anything else goes; MaaSPlatform
+	// removes the MaaS platform this tool set up, last.
+	MaaSPublished []string `json:"maasPublished,omitempty"`
+	MaaSPlatform  bool     `json:"maasPlatform,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/minio/teardown.

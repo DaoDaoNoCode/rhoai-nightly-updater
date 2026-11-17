@@ -1823,6 +1823,70 @@ var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.Res
 	}
 })
 
+// runMaaS runs a MaaS operation; tests replace it.
+var runMaaS = cluster.RunMaaS
+
+// getMaaSStatus reads the MaaS feature; tests replace it.
+var getMaaSStatus = cluster.GetMaaSStatus
+
+// HandleMaaSStatus reports the Models as a Service feature: the platform
+// part by part, and this tool's models with their publication.
+var HandleMaaSStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	st, err := getMaaSStatus(c)
+	if err != nil {
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "Cannot read the MaaS state: "+err.Error(), code, errorCode)
+		return
+	}
+	writeJSON(w, st, "maas")
+})
+
+// HandleMaaSStream sets up or removes the MaaS platform, or publishes or
+// unpublishes this tool's model in a project, as one operation streaming
+// its steps.
+var HandleMaaSStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.MaaSRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if problem := cluster.ValidateMaaSRequest(req); problem != "" {
+		writeError(w, problem, http.StatusBadRequest, "validation")
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in maas handler", "error", rec)
+		}
+	}()
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	defer sseWriter.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	target := req.Action + " MaaS platform"
+	if req.Project != "" {
+		target = req.Action + " model in " + req.Project
+	}
+	beginOperation(w, target)
+	slog.Info("mutation", "op", "maas", "action", req.Action, "project", req.Project)
+	result, runErr := runMaaS(c, req, forwardSteps(sseWriter))
+	sendOperationResult(sseWriter, result, runErr)
+	if runErr != nil {
+		slog.Error("maas failed", "error", runErr)
+	}
+})
+
 // runCleanUp runs a clean-up; tests replace it.
 var runCleanUp = cluster.CleanUp
 
@@ -1846,11 +1910,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
 		return
 	}
-	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects {
+	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects {
 		writeError(w, fmt.Sprintf("at most %d pipeline servers, models and playgrounds each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
 		return
 	}
-	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds} {
+	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished} {
 		seen := map[string]bool{}
 		for _, p := range list {
 			if !namespaceRegex.MatchString(p) {
@@ -1868,7 +1932,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		writeError(w, "deleteNamespace needs storage", http.StatusBadRequest, "validation")
 		return
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 {
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -1890,6 +1954,9 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	go sseHeartbeat(sseWriter, done)
 
 	var target []string
+	if n := len(req.MaaSPublished); n > 0 {
+		target = append(target, fmt.Sprintf("%d MaaS %s", n, map[bool]string{true: "publication", false: "publications"}[n == 1]))
+	}
 	if n := len(req.PipelineServers); n > 0 {
 		target = append(target, fmt.Sprintf("%d pipeline %s", n, map[bool]string{true: "server", false: "servers"}[n == 1]))
 	}
@@ -1911,8 +1978,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if req.InferenceGateway {
 		target = append(target, "inference gateway")
 	}
+	if req.MaaSPlatform {
+		target = append(target, "MaaS platform")
+	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform)
 
 	token := ""
 	if len(req.Playgrounds) > 0 {
