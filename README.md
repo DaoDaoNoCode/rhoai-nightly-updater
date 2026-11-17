@@ -135,6 +135,18 @@ The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page 
 1. On a nightly cluster whose preset image is missing from the registry, the model says so in plain words.
 2. **Use the newest released Red Hat image** changes only the model's image.
 
+#### MaaS: Models as a Service
+
+The MaaS tab sets up the cluster's Models as a Service platform the way the [MaaS install docs](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/content/install) do, and publishes this tool's model to it: everyone signed in to the cluster can then call the model with a MaaS API key, up to 100 tokens a minute.
+
+<img src="docs/images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts with their health, Connectivity Link not managed by this tool with a version warning, and the published model with Unpublish" width="760">
+
+1. **Database**: a one-instance CloudNativePG PostgreSQL for MaaS's API keys, for development and test, and Secret `maas-db-config` with its address. A connection Secret someone else made is used as it is.
+2. **Authorino TLS**: Connectivity Link's Authorino must serve TLS and trust the cluster's service CA. Its operators own it, so this tool only checks it; when it is missing, the part shows the docs' commands for a cluster-admin.
+3. **Publish** / **Unpublish** per model of this tool. A published model's address moves to the MaaS gateway until it is unpublished.
+
+**Set up** runs the docs' steps in their order: the database, Gateway `maas-default-gateway` with an external load balancer at `maas.<apps domain>`, the Authorino check, then MaaS turned on in the DataScienceCluster (the previous value is recorded), then it waits for maas-api and the default tenant, about 5 minutes. Connectivity Link (a Kuadrant CR) and the CloudNativePG operator are prerequisites a cluster-admin installs. **Use it** has the docs' commands to get a key (shown once), list the models and chat, with your own `oc whoami -t` token, and a link to the dashboard's MaaS pages. **Remove MaaS** unpublishes, turns MaaS back to what it was, then deletes the gateway and the database; GatewayClass `openshift-default`, Connectivity Link and what RHOAI's operator made stay. Troubleshooting: [RUNBOOK §10.4](RUNBOOK.md#104-maas-models-as-a-service).
+
 #### Sample data and a sample pipeline
 
 Once MLflow or a pipeline server works, one click shows it working, with no code.

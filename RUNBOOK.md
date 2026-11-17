@@ -391,6 +391,33 @@ curl -s -X POST "https://rh-ai.<apps domain>/gen-ai/api/v1/lsd/responses?namespa
 
 Rollback: **Delete** in the playground's menu (or **Clean up Playground**). By hand, the dashboard's way: `oc delete ogxserver lsd-genai-playground -n <project>`, then the `genai-pgvector*` objects (`oc delete deploy,svc,networkpolicy,pvc,secret,configmap -n <project> -l gen-ai.opendatahub.io/pgvector=true`), then remove `<project>` from the `playgrounds` key of ConfigMap `rhoai-nightly-updater-snapshot` in the updater's namespace.
 
+### 10.4 MaaS: Models as a Service
+
+The **MaaS** tab sets up the MaaS platform as the MaaS install docs do and publishes this tool's model. Objects and order: [CLUSTER_CHANGES](docs/CLUSTER_CHANGES.md#maas-models-as-a-service-cluster-and-this-tools-published-model).
+
+```bash
+INFRA=redhat-ai-gateway-infra   # odh-ai-gateway-infra on ODH
+oc get dsc -o jsonpath='{.items[0].spec.components.aigateway}'; echo
+oc get clusters.postgresql.cnpg.io maas-db -n $INFRA
+oc get gateway maas-default-gateway -n openshift-ingress
+oc get deploy maas-api -n $INFRA
+oc get aitenant -n ai-tenants; oc get maastenantconfig -n models-as-a-service
+oc get authpolicy -n openshift-ingress
+oc get maasmodelref -A; oc get maassubscription,maasauthpolicy -n models-as-a-service
+```
+
+| Symptom | Cause and fix |
+|---|---|
+| Set up refused: no Kuadrant CR | A cluster-admin installs Red Hat Connectivity Link and creates the Kuadrant CR (MaaS `platform-setup.md`) |
+| Set up refused: CloudNativePG not installed | Install the CloudNativePG operator from OperatorHub, or create Secret `maas-db-config` for your own PostgreSQL |
+| **Authorino TLS** needs attention | Run the commands the part shows (the docs' `setup-authorino-tls.sh`) as a cluster-admin; until then API keys are refused |
+| maas-api restarts | It restarts until the database answers: `oc get cluster maas-db -n $INFRA`, `oc logs deploy/maas-api -n $INFRA --previous` |
+| Gateway not programmed, or `maas.<apps domain>` does not resolve | OpenShift is making the load balancer; `oc get dnsrecords -n openshift-ingress` shows the record |
+| Connectivity Link version warning | The docs ask for RHCL 1.5 (channel `stable-1.5`); 1.4.x can hang callers with two or more subscriptions |
+| Model delete refused: published | Unpublish it on the MaaS tab first |
+
+Rollback: **Remove MaaS** (or Clean up everything). By hand, in order: `oc delete maasauthpolicy rhoai-nightly-updater-access maassubscription rhoai-nightly-updater-subscription -n models-as-a-service`, `oc delete maasmodelref qwen25-05b-instruct -n <project>`, set `aigateway.modelsAsAService` back to the value in data key `maas` of ConfigMap `rhoai-nightly-updater-snapshot`, then `oc delete gateway maas-default-gateway -n openshift-ingress`, `oc delete secret maas-db-config -n $INFRA`, `oc delete cluster.postgresql.cnpg.io maas-db -n $INFRA`, and remove the `maas` key.
+
 ### 10.1 Migrate storage from an earlier version
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:

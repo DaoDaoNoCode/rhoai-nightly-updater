@@ -246,6 +246,21 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the MaaS tab in every state, light and dark, to
+    // check it by eye (screenshots.sh maas-review, THEMES_DIR).
+    async "maas-review"() {
+      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "ready", "publishing", "published", "foreign", "no-model"]) {
+        for (const dark of [false, true]) {
+          await open("/test-resources?tab=maas", `env-maas-${st}`, { dark, width: 1440 });
+          await fit();
+          await page.screenshot({ path: `${out}/themes/maas-${st}-${dark ? "dark" : "light"}.png` });
+        }
+      }
+      await open("/test-resources", "env-maas-published");
+      await fit();
+      await page.screenshot({ path: `${out}/themes/maas-overview-light.png` });
+    },
+
     // Not a docs image: the Playground tab in every state, light and dark,
     // to check it by eye (screenshots.sh playground-review, THEMES_DIR).
     async "playground-review"() {
@@ -466,6 +481,17 @@ async (page) => {
         notes: [
           { at: broken.getByText("The cluster preset's image is not published yet"), n: 1, pos: "r" },
           { at: broken.getByRole("button", { name: "Use the newest released Red Hat image" }), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+
+      // MaaS: the platform's parts, and this tool's model published.
+      await open("/test-resources?tab=maas", "env-maas-published");
+      await crop("environment-maas", [panel().getByRole("heading", { name: "MaaS", level: 2 }), panel().getByRole("grid", { name: "This tool's models in MaaS" })], {
+        notes: [
+          { at: part("Database (PostgreSQL) and maas-db-config"), n: 1, pos: "r" },
+          { at: part("Authorino TLS"), n: 2, pos: "r" },
+          { at: panel().getByRole("button", { name: "Unpublish" }), n: 3, pos: "l" },
         ],
         pad: 24,
       });

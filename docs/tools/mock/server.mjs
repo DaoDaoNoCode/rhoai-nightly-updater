@@ -42,6 +42,8 @@ function baseWorld() {
     resources: { minio: F.s3States.running, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServer] },
     // The Gen AI playground (GET /api/resources/playground).
     playground: F.playgroundWorld(),
+    // Models as a Service (GET /api/resources/maas).
+    maas: F.maasWorld("none"),
     // Sample states by project; a project not named has none of the samples.
     samples: { mlflow: {}, pipeline: {} },
     // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
@@ -281,6 +283,17 @@ const scenarios = {
   "env-models-gated": (w) => { w.resources.models = F.modelsStatus(); w.gated = true; },
   // Playground: every state in dev-project, on a ready model.
   "env-playground-none": (w) => { scenarios["env-models-ready"](w); },
+  // MaaS: the platform and this tool's model in dev-project.
+  "env-maas-none": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { items: [F.maasModel(false)] }); },
+  "env-maas-blocked": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { blocked: F.MAAS_BLOCKED, items: [F.maasModel(false)] }); },
+  "env-maas-no-cnpg": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { noCNPG: true, items: [F.maasModel(false)] }); },
+  "env-maas-starting": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("starting", { items: [F.maasModel(false)] }); },
+  "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
+  "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
+  "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
+  "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); },
+  "env-maas-foreign": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] }); },
+  "env-maas-no-model": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready"); },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
   "env-playground-model-not-ready": (w) => {
     scenarios["env-models-ready"](w);
@@ -584,6 +597,40 @@ async function playgroundStream(req, res) {
   res.end();
 }
 
+/** POST /api/resources/maas/stream (pkg/cluster RunMaaS), in the backend's steps. */
+async function maasStream(req, res) {
+  const { action, project } = await body(req);
+  beginOperation("maas", "Models as a Service", project ? `${action} model in ${project}` : `${action} MaaS platform`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  const steps = {
+    setup: [["check", "Everything the platform needs is there."], ["database", `The database runs, and Secret ${F.MAAS_INFRA}/maas-db-config holds its connection URL (sslmode=require).`],
+      ["gateway", "Programmed; https://maas.apps.example.com is published in DNS."], ["authorino-tls", "Authorino serves TLS and trusts the service CA."],
+      ["dsc", "modelsAsAService is Managed."], ["ready", "maas-api is available, the tenant is ready, and the gateway checks every request."]],
+    teardown: [["check", "Removing, in reverse order of setup."], ["unpublish", "1 model unpublished."], ["dsc", "modelsAsAService is Removed again, as before setup."],
+      ["gateway", "The gateway this tool created is deleted. GatewayClass openshift-default stays."], ["database", "The database and its connection Secret are deleted."]],
+    publish: [["check", "The platform is ready and the model can be published."], ["gateway", `The MaaS gateway admits routes from '${project}'.`],
+      ["model", "The model routes through maas-default-gateway."], ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
+    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", "The model routes as before publishing."],
+      ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
+  }[action] ?? [];
+  for (const [step, done] of steps) {
+    send({ step, status: "running", message: "..." });
+    await nextStep();
+    send({ step, status: "success", message: done });
+  }
+  const item = (published) => (world.maas.items ?? []).map((i) => (i.namespace === project ? F.maasModel(published) : i));
+  if (action === "setup") world.maas = F.maasWorld("ready", { items: world.maas.items });
+  if (action === "teardown") world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map(() => F.maasModel(false)) });
+  if (action === "publish") world.maas = { ...world.maas, items: item(true) };
+  if (action === "unpublish") world.maas = { ...world.maas, items: item(false) };
+  const message = { setup: "The MaaS platform is ready.", teardown: "The MaaS platform this tool set up is removed.", publish: `The model in '${project}' is published to MaaS.`, unpublish: `The model in '${project}' is unpublished from MaaS.` }[action];
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
 /** The MLflow samples of a project (pkg/cluster GetMLflowSamplesStatus). */
 function mlflowSamplesOf(project) {
   const m = world.resources.mlflow;
@@ -692,6 +739,7 @@ const routes = {
   "GET /api/resources/status": () => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...world.resources }),
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
+  "GET /api/resources/maas": () => world.maas,
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline": (u) => pipelineSampleOf(u.searchParams.get("project") || ""),
   // Made up, like every value here.
@@ -734,6 +782,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
   if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);
+  if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });
   }

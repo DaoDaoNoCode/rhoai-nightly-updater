@@ -796,3 +796,75 @@ export const playgroundWorld = (over = {}) => ({
 
 export const PLAYGROUND_API_DIFFERS = "This RHOAI release's dashboard gen-ai API differs from the one this tool knows: GET /gen-ai/api/v1/aaa/models answered 404 (the requested resource could not be found). Use the playground from the dashboard's Gen AI studio instead.";
 export const PLAYGROUND_BLOCKED = { component: "ogx", dsc: "default-dsc", state: "Removed", reason: "The Gen AI playground is turned off on this cluster: component ogx is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." };
+
+// --- Models as a Service (GET /api/resources/maas, pkg/cluster GetMaaSStatus) ---
+
+const MAAS_DOCS = "https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/content/";
+export const MAAS_INFRA = "redhat-ai-gateway-infra";
+export const MAAS_AUTHORINO_COMMANDS = `oc annotate service authorino-authorino-authorization -n kuadrant-system \\
+  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite
+oc patch authorino authorino -n kuadrant-system --type=merge \\
+  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}'
+oc -n kuadrant-system set env deployment/authorino \\
+  SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \\
+  REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+oc rollout restart deployment/authorino -n kuadrant-system`;
+const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later (OLM channel stable-1.5): on 1.4.x a caller with two or more subscriptions can hang. A cluster-admin upgrades it; MaaS works for a single subscription meanwhile.";
+
+/** The platform's parts by state: "none" (not set up), "starting", "ready", "foreign" (someone else's). */
+export function maasParts(state, { tls = true } = {}) {
+  const tool = state !== "foreign";
+  const ready = state === "ready" || state === "foreign";
+  const on = state !== "none";
+  return [
+    { id: "dsc", title: "MaaS in the DataScienceCluster", docUrl: `${MAAS_DOCS}install/maas-setup.md#configure-datasciencecluster`,
+      ...(on ? { state: ready ? "ready" : "waiting", message: ready ? "aigateway and modelsAsAService are Managed" : "modelsAsAService is Managed; not ready: deployments are starting", managedByTool: tool, notManaged: !tool }
+        : { state: "missing", message: "modelsAsAService is Removed; setup sets it to Managed, last" }) },
+    { id: "kuadrant", title: "Connectivity Link (Kuadrant)", docUrl: `${MAAS_DOCS}install/platform-setup.md`, state: "ready", message: "Kuadrant kuadrant-system/kuadrant is Ready", notManaged: true, warning: RHCL_WARNING },
+    { id: "database", title: "Database (PostgreSQL) and maas-db-config", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
+      ...(!on ? { state: "missing", message: `Setup runs a one-instance CloudNativePG database (development and test use) in ${MAAS_INFRA}` }
+        : tool ? { state: "ready", managedByTool: true, message: `CloudNativePG ${MAAS_INFRA}/maas-db runs (1 instance, development and test use); Secret maas-db-config set` }
+          : { state: "ready", notManaged: true, message: `Secret ${MAAS_INFRA}/maas-db-config exists: maas-api uses the database it names` }) },
+    { id: "gateway", title: "Gateway maas-default-gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
+      ...(on ? { state: "ready", message: "Programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
+        : { state: "missing", message: `Setup creates it with an external load balancer at https://maas.${APPS}` }) },
+    tls ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "ready", message: "Authorino in kuadrant-system serves TLS and trusts the service CA", notManaged: true }
+      : { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "manual", notManaged: true, commands: MAAS_AUTHORINO_COMMANDS,
+        message: "Not configured: trust of the service CA (SSL_CERT_FILE). A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused." },
+    { id: "maas-api", title: "MaaS API (maas-api)", docUrl: `${MAAS_DOCS}install/validation.md`,
+      ...(!on ? { state: "missing", message: "The operator creates it once MaaS is turned on" } : ready ? { state: "ready", message: `Available in ${MAAS_INFRA}` } : { state: "waiting", message: "Not available yet (it restarts until the database answers)" }) },
+    { id: "tenant", title: "Default tenant and gateway authentication", docUrl: `${MAAS_DOCS}install/maas-setup.md#maastenantconfig-cr`,
+      ...(!on ? { state: "missing", message: "The operator creates it once MaaS is turned on" } : ready ? { state: "ready", message: "Tenant models-as-a-service is Ready; the gateway's authentication is enforced" } : { state: "waiting", message: "Waiting for the operator (tenant missing, configuration missing, authentication missing)" }) },
+  ];
+}
+
+/** This tool's model in dev-project: published or not. */
+export function maasModel(published, { ready = true } = {}) {
+  return {
+    namespace: "dev-project", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", managedByTool: true, modelReady: true,
+    deployed: published, ready: published && ready, published, message: published ? (ready ? "Published" : "Published; waiting") : "Not published",
+    ...(published ? { phase: ready ? "Ready" : "Pending", endpoint: `https://maas.${APPS}/dev-project/qwen25-05b-instruct`, access: ready ? "Active" : "Pending", subscription: ready ? "Active" : "Pending" } : {}),
+  };
+}
+
+/** The MaaS status by state. */
+export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false } = {}) {
+  const parts = maasParts(state, { tls });
+  if (noCNPG) Object.assign(parts[2], { state: "manual", message: "The CloudNativePG operator is not installed. A cluster-admin installs it from OperatorHub (certified operators), or creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)." });
+  const allReady = parts.every((p) => p.state === "ready");
+  const tool = parts.some((p) => p.managedByTool);
+  return {
+    ...(blocked ? { blocked } : {}),
+    platform: {
+      namespace: MAAS_INFRA, deployed: state !== "none", ready: allReady, managedByTool: tool,
+      message: allReady ? "Ready" : state === "none" ? "Not set up" : "Needs attention",
+      ...(blocked ? { setupBlockedReason: blocked.reason } : noCNPG ? { setupBlockedReason: parts[2].message } : {}),
+      ...(!tool ? { teardownBlockedReason: "No part of the MaaS platform was set up by this tool, so there is nothing for it to remove." } : {}),
+    },
+    parts, url: `https://maas.${APPS}`, subscription: "rhoai-nightly-updater-subscription", dashboardUrl: DASHBOARD_URL,
+    items: items.map((i) => (i.published || allReady ? i : { ...i, setupBlockedReason: "Set up the MaaS platform first." })),
+  };
+}
+
+export const MAAS_BLOCKED = { component: "aigateway", dsc: "default-dsc", state: "Removed",
+  reason: "MaaS runs in RHOAI's AI gateway, which is Removed in DataScienceCluster default-dsc. A cluster-admin sets aigateway to Managed on the Components page (MaaS platform setup, platform-setup.md); then MaaS can be set up here." };
