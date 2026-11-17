@@ -45,23 +45,23 @@ export const Overview: React.FC<{
   const next = (row: OverviewRow, step: NextStep | null) => {
     switch (step?.kind) {
       case "open":
-        return <ExternalLink href={step.href} variant="secondary">{step.label}</ExternalLink>;
+        return <ExternalLink href={step.href} variant="secondary" size="sm">{step.label}</ExternalLink>;
       case "set-up": {
         const reason = setUpReason ?? baseReason ?? step.reason;
         const reasonId = `overview-${row.id}-reason`;
         return (
           <Stack>
-            <StackItem><TooltipButton variant="secondary" onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}</TooltipButton></StackItem>
+            <StackItem><TooltipButton variant="secondary" size="sm" onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}</TooltipButton></StackItem>
             {reason && <StackItem><HelperText id={reasonId}><HelperTextItem>{reason}</HelperTextItem></HelperText></StackItem>}
           </Stack>
         );
       }
       case "show-issue":
-        return <Button variant="secondary" onClick={() => onShowIssue(row, step.part)}>Show issue</Button>;
+        return <Button variant="secondary" size="sm" onClick={() => onShowIssue(row, step.part)}>Show issue</Button>;
       case "migrate":
-        return setUpReason ? <Button variant="secondary" onClick={() => onShowIssue(row, "storage")}>Show issue</Button> : <Button variant="secondary" onClick={onMigrate}>Migrate storage</Button>;
+        return setUpReason ? <Button variant="secondary" size="sm" onClick={() => onShowIssue(row, "storage")}>Show issue</Button> : <Button variant="secondary" size="sm" onClick={onMigrate}>Migrate storage</Button>;
       case "choose-project":
-        return <Button variant="secondary" onClick={() => onOpenTab(row)}>Choose a project</Button>;
+        return <Button variant="secondary" size="sm" onClick={() => onOpenTab(row)}>Choose a project</Button>;
       default:
         return null;
     }
@@ -93,7 +93,7 @@ export const Overview: React.FC<{
                 <Td dataLabel="Feature"><Link to={row.href}>{row.name}</Link></Td>
                 <Td dataLabel="What it gives you">{row.gives}</Td>
                 <Td dataLabel="State"><EnvStatusLabel status={row.state.status} text={row.state.label} /></Td>
-                <Td dataLabel="Next step">{next(row, row.state.next)}</Td>
+                <Td dataLabel="Next step" hasAction>{next(row, row.state.next)}</Td>
               </Tr>
             ))}
           </Tbody>
