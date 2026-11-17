@@ -57,9 +57,45 @@ describe("useGoalRun", () => {
     ]));
     expect(order).toEqual(["a", "b"]);
     expect(result.current.run?.running).toBe(false);
-    expect(result.current.run?.result).toEqual({ success: true, message: "All 2 parts are set up." });
+    expect(result.current.run?.result).toEqual({ success: true, message: "All 2 parts are set up and working." });
     expect(result.current.run?.states.a.status).toBe("success");
-    expect(result.current.run?.states.a.message).toMatch(/^A done \(took \d+ s\)$/);
+    expect(result.current.run?.states.a.message).toMatch(/^A done \(\d+:\d\d\)$/);
+  });
+
+  // Item 1: a step succeeds only when its part works.
+  const fakeClock = () => {
+    let t = 0;
+    return { now: () => t, sleep: async (ms: number) => { t += ms; } };
+  };
+  it("waits until the status says the part works, with the elapsed time", async () => {
+    const c = fakeClock();
+    let checks = 0;
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [{
+      id: "a", title: "A", run: ok("created"), readyMessage: "A is ready.",
+      waitReady: { typical: "1 to 3 minutes", check: () => { checks += 1; return checks < 4 ? { state: "starting" } : { state: "ready" }; } },
+    }], "Goal is ready."));
+    expect(result.current.run?.result).toEqual({ success: true, message: "Goal is ready." });
+    expect(result.current.run?.states.a).toEqual({ status: "success", message: "A is ready. (0:06)" });
+  });
+  it("a part that cannot start fails the run with the reason and the fix", async () => {
+    const c = fakeClock();
+    const next = vi.fn(ok("B"));
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [
+      { id: "a", title: "A", run: ok("created"), waitReady: { typical: "x", check: () => ({ state: "failed", reason: "It cannot start: ImagePullBackOff. Repair applies it again." }) } },
+      { id: "b", title: "B", run: next },
+    ]));
+    expect(result.current.run?.result).toEqual({ success: false, message: "It cannot start: ImagePullBackOff. Repair applies it again." });
+    expect(next).not.toHaveBeenCalled();
+  });
+  it("gives up waiting after 10 minutes, as still starting, not as a failure", async () => {
+    const c = fakeClock();
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [{ id: "a", title: "A", run: ok("created"), waitReady: { typical: "x", check: () => ({ state: "starting" }) } }]));
+    expect(result.current.run?.result).toMatchObject({ success: false, errorCode: "in_progress" });
+    expect(result.current.run?.result?.message).toMatch(/created, but not ready after 10:00/);
+    expect(result.current.run?.states.a.status).toBe("running");
   });
 
   it("stops at the first step that fails; later steps do not run", async () => {

@@ -134,13 +134,18 @@ describe("Environment page", () => {
     expect(screen.queryByRole("listitem", { name: /^Pipeline server/ })).not.toBeInTheDocument();
   });
 
-  it("Set up on the Pipelines tab sets up only what is missing, in order, after one confirmation", async () => {
+  it("Set up on the Pipelines tab sets up only what is missing, in order, after one confirmation, and succeeds only once it works", { timeout: 30000 }, async () => {
     let status: ResourcesStatus = { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] };
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(status),
       "/api/resources/projects": { projects: ["dev-project"] },
       "POST /api/resources/minio/setup": () => { status = { ...status, minio: readyMinio }; return jsonResponse({ success: true, message: "S3 storage deployed.", logs: [] }); },
-      "POST /api/resources/pipeline-server/setup": () => jsonResponse({ success: true, message: "Pipeline server created.", logs: [] }),
+      // Created, then starting: the run waits until the status says ready.
+      "POST /api/resources/pipeline-server/setup": () => {
+        status = { ...status, pipelineServers: [{ ...readyDspa("dev-project"), ready: false, message: "Starting (1/3 ready)", uiRoute: undefined }] };
+        setTimeout(() => { status = { ...status, pipelineServers: [readyDspa("dev-project")] }; }, 50);
+        return jsonResponse({ success: true, message: "Pipeline server created.", logs: [] });
+      },
     });
     renderPage("/test-resources?tab=pipelines&project=dev-project");
     expect(await screen.findByText("Not set up in dev-project")).toBeInTheDocument();
@@ -151,7 +156,12 @@ describe("Environment page", () => {
     expect(confirm).toHaveTextContent("DataSciencePipelinesApplication nightly-dspa");
     fireEvent.click(within(confirm).getByRole("button", { name: "Set up" }));
     const progress = await screen.findByRole("dialog", { name: "Set up Pipelines" });
-    expect(await within(progress).findByText("All 2 parts are set up.")).toBeInTheDocument();
+    // Never a success before the part works: first "Starting", then ready, with the main action.
+    expect(await within(progress).findByText(/Created\. Starting \(typically 1 to 3 minutes\)/, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(within(progress).queryByText("Pipelines are ready in dev-project.")).not.toBeInTheDocument();
+    expect(await within(progress).findByText("Pipelines are ready in dev-project.", {}, { timeout: 15000 })).toBeInTheDocument();
+    expect(within(progress).getByText("The pipeline server in dev-project is ready.", { exact: false })).toBeInTheDocument();
+    expect(within(progress).getByRole("link", { name: /Open pipelines/ })).toHaveClass("pf-m-primary");
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources")).map((c) => c.split(" ")[1])).toEqual(["/api/resources/minio/setup", "/api/resources/pipeline-server/setup"]);
     expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev-project" }]);
   });

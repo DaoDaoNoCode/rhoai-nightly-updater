@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   AlertActionCloseButton,
@@ -12,7 +12,7 @@ import {
   TabTitleText,
 } from "@patternfly/react-core";
 import { useSearchParams } from "react-router-dom";
-import type { OperationResponse, ResourcesStatus } from "../types";
+import type { OperationResponse, ResourceState, ResourcesStatus } from "../types";
 import {
   getResourcesStatus,
   getDSProjects,
@@ -33,7 +33,7 @@ import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
 import { PageLoading } from "./PageStates";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
-import { type ConfirmSpec, type Pending, isTerminating, terminalReason } from "./environment/resourceRow";
+import { type ConfirmSpec, type Pending, isTerminating, nextStep, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
@@ -43,7 +43,7 @@ import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { useMigrateStorage } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
 import { SetupRunModal } from "./environment/SetupRun";
-import { useGoalRun, type GoalRunStep } from "./environment/useGoalRun";
+import { useGoalRun, type GoalRunStep, type ReadyCheck } from "./environment/useGoalRun";
 import {
   type Busy,
   type FeatureState,
@@ -56,6 +56,21 @@ import {
 } from "./environment/featureState";
 
 export { nextStep, terminalReason } from "./environment/resourceRow";
+
+/**
+ * Whether a part that was just created works, from the status: ready, a
+ * reason it cannot start (with the next step), or still starting.
+ */
+export function readyCheck(kind: ResourceKind, state: ResourceState | undefined): ReadyCheck {
+  if (!state || !state.deployed) return { state: "starting" };
+  if (state.ready) return { state: "ready" };
+  const reason = terminalReason(state);
+  if (reason) {
+    const step = nextStep(kind, state);
+    return { state: "failed", reason: `It was created but cannot start: ${state.message || reason}.${step ? ` ${step}` : ""}` };
+  }
+  return { state: "starting" };
+}
 
 const BUSY_REASON = "Another operation is in progress";
 
@@ -90,6 +105,9 @@ interface QuickResourceCreatorProps {
  */
 export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, readBlocker = null, onResult, renderHeader }) => {
   const [resStatus, setResStatus] = useState<ResourcesStatus | null>(null);
+  // The latest status, for a Set up run that waits until its parts work.
+  const statusRef = useRef<ResourcesStatus | null>(null);
+  statusRef.current = resStatus;
   const [resAction, setResAction] = useState<string | null>(null);
   const [actionProject, setActionProject] = useState<string | null>(null);
   const [resResult, setResResult] = useState<OperationResponse | null>(null);
@@ -226,7 +244,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const setupRun = useGoalRun();
   const [setupRunOpen, setSetupRunOpen] = useState(false);
-  const [setupConfirm, setSetupConfirm] = useState<{ feature: string; specs: ConfirmSpec[]; steps: GoalRunStep[] } | null>(null);
+  const [setupConfirm, setSetupConfirm] = useState<{ feature: string; specs: ConfirmSpec[]; steps: GoalRunStep[]; done: string } | null>(null);
 
   const request = (p: Pending): [string, () => Promise<OperationResponse>, string | null] => {
     switch (p.kind) {
@@ -256,9 +274,19 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       if (spec) specs.push(spec);
       const [action, fn, target] = request(p);
       const title = p.kind === "setup-minio" ? "Set up the S3 storage" : p.kind === "setup-mlflow" ? "Set up MLflow" : `Set up the pipeline server in ${target}`;
-      steps.push({ id: p.kind, title, run: () => runAction(action, fn, target, false) });
+      // The request returns once the part is created; the step waits until
+      // the status the page keeps loading reports it working.
+      const waitReady: GoalRunStep["waitReady"] = p.kind === "setup-pipeline-server"
+        ? { check: () => readyCheck("pipeline", pipelineServerIn(statusRef.current, target!)), typical: "1 to 3 minutes" }
+        : p.kind === "setup-mlflow"
+          ? { check: () => readyCheck("mlflow", statusRef.current?.mlflow), typical: "1 to 3 minutes" }
+          : { check: () => readyCheck("minio", statusRef.current?.minio), typical: "under a minute" };
+      const readyMessage = p.kind === "setup-minio" ? "The S3 storage is ready." : p.kind === "setup-mlflow" ? "MLflow is ready." : `The pipeline server in ${target} is ready.`;
+      steps.push({ id: p.kind, title, run: () => runAction(action, fn, target, false), waitReady, readyMessage });
     }
-    if (steps.length > 0) setSetupConfirm({ feature, specs, steps });
+    const project = setup.flatMap((p) => (p.kind === "setup-pipeline-server" ? [p.project] : []))[0];
+    const done = project ? `Pipelines are ready in ${project}.` : `${feature} is ready.`;
+    if (steps.length > 0) setSetupConfirm({ feature, specs, steps, done });
   };
 
   const busy: Busy = { resAction, actionProject, migrating };
@@ -414,10 +442,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           changes={setupConfirm.specs.flatMap((s) => s.changes)}
           confirmLabel="Set up"
           onConfirm={() => {
-            const { feature, steps } = setupConfirm;
+            const { feature, steps, done } = setupConfirm;
             setSetupConfirm(null);
             setSetupRunOpen(true);
-            void setupRun.start(`Set up ${feature}`, steps);
+            void setupRun.start(`Set up ${feature}`, steps, done);
           }}
           onCancel={() => setSetupConfirm(null)}
         >
@@ -428,7 +456,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
         </ConfirmActionModal>
       )}
 
-      <SetupRunModal run={setupRun.run} isOpen={setupRunOpen} onClose={() => { setSetupRunOpen(false); setupRun.reset(); }} />
+      <SetupRunModal run={setupRun.run} isOpen={setupRunOpen} onClose={() => { setSetupRunOpen(false); setupRun.reset(); }}
+        open={setupRun.run?.result?.success ? (setupRun.run.title === "Set up MLflow" ? mlflowNow.next : pipelines.next) : null} />
     </>
   );
 };
