@@ -184,14 +184,17 @@ const AppLayout: React.FC = () => {
                   </span>
                 </ToolbarItem>
               )}
-              {/* Below md the popover does not fit next to the masthead's
-                  edge: the same choices move into the overflow menu (the
-                  user menu, or the kebab below when there is none). */}
-              <ToolbarItem visibility={{ default: "hidden", md: "visible" }}>
+              {/* Whether the popover fits depends on the button's distance
+                  from the viewport's right edge; on a live cluster it was
+                  measured 12.7 px off its trigger at 768 px (md) and
+                  centred at 1024 px, so it shows from lg. Below lg the same choices
+                  move into the overflow menu (the user menu, or the kebab
+                  below when there is none). */}
+              <ToolbarItem visibility={{ default: "hidden", lg: "visible" }}>
                 <ThemeSwitcher />
               </ToolbarItem>
               {!status && (
-                <ToolbarItem visibility={{ default: "visible", md: "hidden" }}>
+                <ToolbarItem visibility={{ default: "visible", lg: "hidden" }}>
                   <Dropdown
                     isOpen={overflowMenuOpen}
                     onSelect={() => setOverflowMenuOpen(false)}
@@ -270,8 +273,8 @@ const AppLayout: React.FC = () => {
                       </DropdownGroup>
                     )}
                     {/* The theme button is hidden on small screens; its choices move here. */}
-                    <ThemeMenuGroups className="pf-v6-u-display-none-on-md" />
-                    <Divider className="pf-v6-u-display-none-on-md" />
+                    <ThemeMenuGroups className="pf-v6-u-display-none-on-lg" />
+                    <Divider className="pf-v6-u-display-none-on-lg" />
                     <DropdownGroup label={`Signed in as ${status.cluster.user}`} labelHeadingLevel="h2">
                       <DropdownList>
                         <DropdownItem key="logout" onClick={() => { window.location.href = "/oauth/sign_in"; }}>

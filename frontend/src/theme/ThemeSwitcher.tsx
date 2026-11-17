@@ -82,8 +82,12 @@ export const ThemeSwitcher: React.FC = () => {
  */
 export const ThemeMenuGroups: React.FC<{ className?: string }> = ({ className }) => {
   const { colorScheme, contrastMode, setColorScheme, setContrastMode } = useTheme();
-  // PatternFly gives a checked menu item a check mark but keeps role
-  // "menuitem", so the accessible name says which one is chosen.
+  // PatternFly 6.7 marks the chosen item with a check mark only: MenuItem
+  // sets role "menuitem" itself (aria-selected only when the whole menu is
+  // a listbox, Menu/MenuItem.js:219), puts extra props on the <li
+  // role="none"> (:235), and has no menuitemradio or aria-checked. This
+  // menu also holds links and Log out, so it cannot be a listbox; the
+  // accessible name says which item is chosen and keeps the visible text.
   const name = (label: string, selected: boolean) => (selected ? `${label}, selected` : label);
   return (
     <>

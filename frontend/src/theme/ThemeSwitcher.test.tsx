@@ -106,10 +106,21 @@ describe("ThemeMenuGroups", () => {
     // Both start on System: one checked item per group.
     expect(screen.getAllByRole("menuitem", { name: /, selected$/ }).map((el) => el.getAttribute("aria-label"))).toEqual(["System, selected", "System, selected"]);
 
+    // PatternFly's own selected state (check mark, pf-m-selected) on the
+    // chosen item only; the accessible name keeps the visible text.
+    const isChecked = (item: HTMLElement) => item.classList.contains("pf-m-selected") && !!item.querySelector(".pf-v6-c-menu__item-select-icon");
+    const checked = (name: string) => isChecked(screen.getByRole("menuitem", { name }));
+    expect(screen.getAllByRole("menuitem", { name: /, selected$/ }).every(isChecked)).toBe(true);
+    expect(screen.getAllByRole("menuitem").filter(isChecked)).toHaveLength(2);
+    expect(screen.getByRole("menuitem", { name: "Dark" })).toHaveTextContent("Dark");
+    expect(checked("Dark")).toBe(false);
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Dark" }));
     expect(html().contains("pf-v6-theme-dark")).toBe(true);
     expect(localStorage.getItem(COLOR_SCHEME_KEY)).toBe("dark");
-    expect(screen.getByRole("menuitem", { name: "Dark, selected" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Dark, selected" })).toHaveTextContent("Dark");
+    expect(checked("Dark, selected")).toBe(true);
+    expect(checked("Light")).toBe(false);
 
     fireEvent.click(screen.getByRole("menuitem", { name: "High contrast" }));
     expect(html().contains("pf-v6-theme-high-contrast")).toBe(true);
