@@ -111,7 +111,9 @@ expected_objects() {
 		sed -e "s/\${NAMESPACE}/$ns/g" -e "s/\${APP_NAME}/$app/g" \
 			-e "s/\${PULL_SECRET_NAMESPACE}/$(default_of PULL_SECRET_NAMESPACE)/g" \
 			-e "s/\${OPERATOR_NAMESPACE}/redhat-ods-operator/g" \
-			-e "s/\${MARKETPLACE_NAMESPACE}/$(default_of MARKETPLACE_NAMESPACE)/g" <<<"$objects"
+			-e "s/\${MARKETPLACE_NAMESPACE}/$(default_of MARKETPLACE_NAMESPACE)/g" \
+			-e "s/\${INGRESS_NAMESPACE}/$(default_of INGRESS_NAMESPACE)/g" \
+			-e "s/\${INGRESS_OPERATOR_NAMESPACE}/$(default_of INGRESS_OPERATOR_NAMESPACE)/g" <<<"$objects"
 		if [ "$session" = 1 ]; then
 			printf '%s\n' "ServiceAccount/$app-session-secret/$ns" "Role/$app-session-secret/$ns" \
 				"RoleBinding/$app-session-secret/$ns" "Job/$app-session-secret/$ns"

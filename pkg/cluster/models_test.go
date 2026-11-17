@@ -1,0 +1,680 @@
+package cluster
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+const (
+	testGatewayPath   = "/apis/gateway.networking.k8s.io/v1/namespaces/openshift-ingress/gateways/openshift-ai-inference"
+	testGatewayClass  = "/apis/gateway.networking.k8s.io/v1/gatewayclasses/openshift-ai-inference"
+	testGatewayCM     = "/api/v1/namespaces/openshift-ingress/configmaps/openshift-ai-inference-options"
+	testModelPath     = "/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/qwen25-05b-instruct"
+	testPresetImage   = "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:978a7c7b"
+	testPresetName    = "v3-6-0-kserve-config-llm-template-cpu"
+	testSubscription  = "/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-operator/subscriptions/rhods-operator"
+	testModelPodsPath = "/api/v1/namespaces/proj/pods/qwen25-05b-instruct-kserve-abc"
+)
+
+// modelsCluster is a fake cluster with what a model setup needs: KServe
+// with its LLM dependencies, the controller's preset prefix and the CPU
+// preset, the apps domain, the default ingress certificate and a data
+// science project "proj". Gateways report Programmed with an address and
+// their hostname is published; a model reports Ready on its third read.
+type modelsCluster struct {
+	f *resourceFake
+	c *Client
+
+	mu         sync.Mutex
+	modelReads int
+	// readyAfter is the model read that first reports Ready (0: never).
+	readyAfter int
+}
+
+func newModelsCluster(t *testing.T) *modelsCluster {
+	t.Helper()
+	capacityCache.Purge()
+	planCache.Purge()
+	t.Setenv(vllmImageEnv, "")
+	f, c := newResourceFake(t)
+	mc := &modelsCluster{f: f, c: c, readyAfter: 3}
+	f.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{
+		"spec":{"components":{"kserve":{"managementState":"Managed"}}},
+		"status":{"conditions":[{"type":"KserveLLMInferenceServiceDependencies","status":"True"}]}}`)
+	f.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/llmisvc-controller-manager", `{
+		"spec":{"template":{"spec":{"containers":[{"name":"manager","env":[{"name":"LLM_INFERENCE_SERVICE_CONFIG_PREFIX","value":"v3-6-0-kserve-"}]}]}}}}`)
+	f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/redhat-ods-applications/llminferenceserviceconfigs/"+testPresetName, `{
+		"spec":{"template":{"containers":[{"name":"main","image":"`+testPresetImage+`"}]}}}`)
+	f.putJSON("/apis/config.openshift.io/v1/ingresses/cluster", `{"spec":{"domain":"apps.example.com"}}`)
+	f.putJSON("/apis/operator.openshift.io/v1/namespaces/openshift-ingress-operator/ingresscontrollers/default", `{"spec":{"defaultCertificate":{"name":"custom-cert"}}}`)
+	f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
+	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external", `{
+		"spec":{"dnsName":"inference.apps.example.com."},
+		"status":{"zones":[{"conditions":[{"type":"Published","status":"True"}]},{"conditions":[{"type":"Published","status":"True"}]}]}}`)
+	f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		switch k.plural {
+		case "gateways":
+			obj["status"] = map[string]interface{}{
+				"addresses":  []interface{}{map[string]interface{}{"value": "a1.elb.example.com"}},
+				"conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "Programmed", "status": "True"}},
+			}
+		case "llminferenceservices":
+			mc.mu.Lock()
+			mc.modelReads++
+			n := mc.modelReads
+			mc.mu.Unlock()
+			if mc.readyAfter > 0 && n >= mc.readyAfter {
+				obj["status"] = map[string]interface{}{
+					"url":        "https://inference.apps.example.com/" + k.ns + "/" + k.name,
+					"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}},
+				}
+			}
+		}
+	}
+	return mc
+}
+
+func runModels(t *testing.T, c *Client, req types.ModelsRequest) (*types.OperationResponse, []UpdateStepEvent) {
+	t.Helper()
+	var events []UpdateStepEvent
+	res, err := RunModels(c, req, func(e UpdateStepEvent) { events = append(events, e) })
+	if err != nil {
+		t.Fatalf("RunModels: %v", err)
+	}
+	return res, events
+}
+
+// finalSteps is each step's last status, in the order the steps first ran.
+func finalSteps(events []UpdateStepEvent) string {
+	var order []string
+	last := map[string]string{}
+	for _, e := range events {
+		if _, ok := last[e.Step]; !ok {
+			order = append(order, e.Step)
+		}
+		last[e.Step] = e.Status
+	}
+	out := make([]string, len(order))
+	for i, s := range order {
+		out[i] = s + "=" + last[s]
+	}
+	return strings.Join(out, " ")
+}
+
+func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
+	mc := newModelsCluster(t)
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	if got := finalSteps(events); got != "check=success gateway=success gateway-ready=success model=success model-ready=success" {
+		t.Fatalf("steps: %s", got)
+	}
+	if !strings.Contains(res.Message, "Qwen2.5 0.5B Instruct (CPU) is ready in proj.") {
+		t.Errorf("message: %q", res.Message)
+	}
+
+	// The class is OpenShift's controller; the options ConfigMap asks
+	// service-ca for the internal listener's certificate.
+	class := mc.f.get(testGatewayClass)
+	if class["spec"].(map[string]interface{})["controllerName"] != "openshift.io/gateway-controller/v1" {
+		t.Errorf("class: %v", class)
+	}
+	cm := mc.f.get(testGatewayCM)
+	if svc := cm["data"].(map[string]interface{})["service"].(string); !strings.Contains(svc, "service.beta.openshift.io/serving-cert-secret-name: openshift-ai-inference-service-tls") {
+		t.Errorf("options: %q", svc)
+	}
+	// Two listeners: the apps domain with the ingress's default
+	// certificate (only named), and the Service's own name.
+	gw := mc.f.get(testGatewayPath)
+	spec := gw["spec"].(map[string]interface{})
+	listeners := spec["listeners"].([]interface{})
+	l0, l1 := listeners[0].(map[string]interface{}), listeners[1].(map[string]interface{})
+	cert := func(l map[string]interface{}) interface{} {
+		return l["tls"].(map[string]interface{})["certificateRefs"].([]interface{})[0].(map[string]interface{})["name"]
+	}
+	if l0["hostname"] != "inference.apps.example.com" || cert(l0) != "custom-cert" {
+		t.Errorf("external listener: %v", l0)
+	}
+	if l1["hostname"] != "openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local" || cert(l1) != "openshift-ai-inference-service-tls" {
+		t.Errorf("internal listener: %v", l1)
+	}
+	if spec["infrastructure"].(map[string]interface{})["parametersRef"].(map[string]interface{})["name"] != "openshift-ai-inference-options" {
+		t.Errorf("parametersRef: %v", spec["infrastructure"])
+	}
+
+	// The model: the preset found through the controller's prefix, the
+	// model's name equal to the resource's (the playground resolves by it),
+	// the default gateway, and no image of its own on a released cluster.
+	model := mc.f.get(testModelPath)
+	ms := model["spec"].(map[string]interface{})
+	if ms["baseRefs"].([]interface{})[0].(map[string]interface{})["name"] != testPresetName {
+		t.Errorf("baseRefs: %v", ms["baseRefs"])
+	}
+	if m := ms["model"].(map[string]interface{}); m["name"] != "qwen25-05b-instruct" || m["uri"] != "hf://Qwen/Qwen2.5-0.5B-Instruct" {
+		t.Errorf("model: %v", m)
+	}
+	main := ms["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+	if _, set := main["image"]; set {
+		t.Errorf("a released cluster's model must use the preset's image, got %v", main["image"])
+	}
+	labels := model["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+		t.Errorf("labels: %v", labels)
+	}
+	// Nothing grants access: no ServiceAccount, Role, RoleBinding or token.
+	for _, m := range mc.f.mutations() {
+		for _, kind := range []string{"serviceaccounts", "roles", "rolebindings", "token"} {
+			if strings.Contains(m, "/"+kind) {
+				t.Errorf("setup wrote %s", m)
+			}
+		}
+	}
+}
+
+// A gateway someone else made is used as it is; nothing of the gateway is
+// written.
+func TestModelsSetup_UsesAForeignGatewayWithoutTouchingIt(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testGatewayPath, `{"spec":{"gatewayClassName":"openshift-ai-inference","listeners":[{"name":"https","hostname":"x.example.com","allowedRoutes":{"namespaces":{"from":"All"}}}]}}`)
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	for _, m := range mc.f.mutations() {
+		if strings.Contains(m, "gateway") || strings.Contains(m, "openshift-ingress") {
+			t.Errorf("wrote to the gateway: %s", m)
+		}
+	}
+	if !strings.Contains(finalSteps(events), "gateway=success") || !mc.f.has(testModelPath) {
+		t.Fatalf("steps %s, model created %v", finalSteps(events), mc.f.has(testModelPath))
+	}
+}
+
+// A foreign gateway whose listeners do not admit the project: refused
+// before anything is written.
+func TestModelsSetup_RefusesAGatewayThatDoesNotAdmitTheProject(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testGatewayPath, `{"spec":{"listeners":[{"name":"https","allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchLabels":{"maas":"true"}}}}}]}}`)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
+	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "does not let routes from project 'proj' attach") {
+		t.Fatalf("got %+v", res)
+	}
+	if m := mc.f.mutations(); len(m) != 0 {
+		t.Errorf("wrote %v", m)
+	}
+}
+
+func TestModelsSetup_ModelNeedsTheGateway(t *testing.T) {
+	mc := newModelsCluster(t)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
+	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "needs the inference gateway") {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+// Every refusal changes nothing: a foreign model, a project that is not a
+// data science project, KServe off, LLM dependencies missing, no preset.
+func TestModelsSetup_RefusesBeforeWritingAnything(t *testing.T) {
+	cases := map[string]struct {
+		setup func(mc *modelsCluster)
+		code  string
+		want  string
+	}{
+		"foreign model": {func(mc *modelsCluster) {
+			mc.f.putJSON(testModelPath, `{"metadata":{"labels":{}}}`)
+		}, "not_managed", "that this tool did not create"},
+		"not a data science project": {func(mc *modelsCluster) {
+			mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{}}}`)
+		}, "validation", "is not a data science project"},
+		"kserve removed": {func(mc *modelsCluster) {
+			mc.f.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{"spec":{"components":{"kserve":{"managementState":"Removed"}}}}`)
+		}, "prerequisites", "is turned off"},
+		"llm dependencies false": {func(mc *modelsCluster) {
+			mc.f.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{
+				"spec":{"components":{"kserve":{"managementState":"Managed"}}},
+				"status":{"conditions":[{"type":"KserveLLMInferenceServiceDependencies","status":"False","message":"LeaderWorkerSet missing"}]}}`)
+		}, "prerequisites", "KserveLLMInferenceServiceDependencies=False (LeaderWorkerSet missing)"},
+		"no preset prefix": {func(mc *modelsCluster) {
+			mc.f.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/llmisvc-controller-manager", `{"spec":{"template":{"spec":{"containers":[{"name":"manager"}]}}}}`)
+		}, "prerequisites", "sets no LLM_INFERENCE_SERVICE_CONFIG_PREFIX"},
+		"no cpu preset": {func(mc *modelsCluster) {
+			mc.f.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/llmisvc-controller-manager", `{
+				"spec":{"template":{"spec":{"containers":[{"name":"manager","env":[{"name":"LLM_INFERENCE_SERVICE_CONFIG_PREFIX","value":"v9-kserve-"}]}]}}}}`)
+		}, "prerequisites", "LLMInferenceServiceConfig v9-kserve-config-llm-template-cpu does not exist"},
+		"foreign options configmap": {func(mc *modelsCluster) {
+			mc.f.putJSON(testGatewayCM, `{"data":{}}`)
+		}, "not_managed", "ConfigMap openshift-ingress/openshift-ai-inference-options already exists"},
+		"foreign class of another controller": {func(mc *modelsCluster) {
+			mc.f.putJSON(testGatewayClass, `{"spec":{"controllerName":"example.com/other"}}`)
+		}, "not_managed", "belongs to controller"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mc := newModelsCluster(t)
+			tc.setup(mc)
+			res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+			if res.Success || res.ErrorCode != tc.code || !strings.Contains(res.Message, tc.want) {
+				t.Fatalf("got %+v", res)
+			}
+			if m := mc.f.mutations(); len(m) != 0 {
+				t.Errorf("wrote %v", m)
+			}
+			if got := finalSteps(events); got != "check=failed" {
+				t.Errorf("steps: %s", got)
+			}
+		})
+	}
+}
+
+// The API server's refusal of a dry run stops the setup before any write.
+func TestModelsSetup_DryRunRefusalWritesNothing(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.failDryRun["POST /apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices"] = 422
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || !strings.Contains(res.Message, "The API server rejects LLMInferenceService proj/qwen25-05b-instruct") {
+		t.Fatalf("got %+v", res)
+	}
+	if m := mc.f.mutations(); len(m) != 0 {
+		t.Errorf("wrote %v", m)
+	}
+}
+
+// On a nightly cluster without a mirror for the preset's repository, the
+// newest released image is used, pinned by digest, its version recorded.
+func TestModelsSetup_NightlyClusterUsesTheNewestReleasedImage(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	prev := lookupReleasedImage
+	t.Cleanup(func() { lookupReleasedImage = prev })
+	var asked string
+	lookupReleasedImage = func(_ context.Context, repo string) (releasedImage, error) {
+		asked = repo
+		return releasedImage{Ref: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353", Version: "3.5.3"}, nil
+	}
+	mc.f.putJSON(testGatewayPath, `{"metadata":{"labels":{}},"spec":{"listeners":[{"allowedRoutes":{"namespaces":{"from":"All"}}}]}}`)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
+	if !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	if asked != "rhaii/vllm-cpu-rhel9" {
+		t.Errorf("looked up %q", asked)
+	}
+	model := mc.f.get(testModelPath)
+	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if main["image"] != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || ann[modelImageSourceAnnotation] != "released" || ann[modelImageVersionAnnotation] != "3.5.3" {
+		t.Fatalf("image %v, annotations %v", main["image"], ann)
+	}
+
+	// With a mirror for registry.redhat.io/rhaii the preset's image is pulled.
+	mc2 := newModelsCluster(t)
+	mc2.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	mc2.f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/stage", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhaii","mirrors":["registry.stage.redhat.io/rhaii"]}]}}`)
+	plan, err := planModelImage(mc2.c, testPresetImage, false, nil, true)
+	if err != nil || plan.Kind != "preset" || plan.Image != "" {
+		t.Fatalf("mirrored: %+v, %v", plan, err)
+	}
+
+	// VLLM_CPU_IMAGE wins.
+	t.Setenv(vllmImageEnv, "mirror.example.com/vllm-cpu:1")
+	plan, err = planModelImage(mc2.c, testPresetImage, true, nil, true)
+	if err != nil || plan.Kind != "override" || plan.Image != "mirror.example.com/vllm-cpu:1" {
+		t.Fatalf("override: %+v, %v", plan, err)
+	}
+}
+
+// A repair keeps the released image a model runs instead of moving it
+// back to the preset's.
+func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
+	mc := newModelsCluster(t)
+	var existing llmisvcObject
+	existing.Metadata.Annotations = map[string]string{modelImageSourceAnnotation: "released", modelImageVersionAnnotation: "3.5.3"}
+	existing.Spec.Template = &struct {
+		Containers []struct {
+			Name  string `json:"name"`
+			Image string `json:"image"`
+		} `json:"containers"`
+	}{Containers: []struct {
+		Name  string `json:"name"`
+		Image string `json:"image"`
+	}{{Name: "main", Image: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353"}}}
+	plan, err := planModelImage(mc.c, testPresetImage, false, &existing, true)
+	if err != nil || plan.Kind != "released" || plan.Image != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || plan.Version != "3.5.3" {
+		t.Fatalf("got %+v, %v", plan, err)
+	}
+}
+
+// The preset's image is missing from the registry: the wait stops at once
+// with image_unavailable, and the status offers the released image.
+func TestModelsSetup_PresetImageMissingStopsWithItsFix(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 0
+	mc.f.putJSON(testGatewayPath, `{"metadata":{"labels":{}},"spec":{"listeners":[{"allowedRoutes":{"namespaces":{"from":"All"}}}]}}`)
+	mc.f.putJSON(testModelPodsPath, `{"metadata":{"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ErrImagePull","message":"reading manifest sha256:978a in registry.redhat.io/rhaii/vllm-cpu-rhel9: manifest unknown"}}}]}}`)
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
+	if res.Success || res.ErrorCode != "image_unavailable" || !strings.Contains(res.Message, "newest released Red Hat image") {
+		t.Fatalf("got %+v", res)
+	}
+	if got := finalSteps(events); got != "check=success model=success model-ready=failed" {
+		t.Errorf("steps: %s", got)
+	}
+
+	st, err := GetResourcesStatus(mc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Models.Items) != 1 || !st.Models.Items[0].PresetImageMissing || !st.Models.Items[0].TerminalError || !st.Models.Items[0].ManagedByTool {
+		t.Fatalf("status: %+v", st.Models.Items)
+	}
+}
+
+// Progress comes from the pod and its newest event, in words.
+func TestDescribeModelPods(t *testing.T) {
+	pod := func(status string) modelPod {
+		var p modelPod
+		if err := json.Unmarshal([]byte(`{"metadata":{"name":"p"},"status":`+status+`}`), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	ev := &modelEvent{Reason: "Pulling", Message: `Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9"`}
+	cases := []struct {
+		name    string
+		pods    []modelPod
+		event   *modelEvent
+		message string
+		problem string
+	}{
+		{"no pod", nil, nil, "Waiting for KServe to create the model's pod...", ""},
+		{"unschedulable", []modelPod{pod(`{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/3 nodes are available: 3 Insufficient cpu."}]}`)}, nil, "Waiting for a worker with room for the model: 0/3 nodes are available: 3 Insufficient cpu.", ""},
+		{"downloading", []modelPod{pod(`{"initContainerStatuses":[{"name":"storage-initializer","state":{"running":{}}}]}`)}, nil, "Downloading the model from Hugging Face (storage-initializer)...", ""},
+		{"pulling", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)}, ev, `Pulling the runtime image (several GB; a few minutes the first time on a node)... (Pulling: Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9")`, ""},
+		{"starting", []modelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}}}]}`)}, nil, "Starting vLLM and loading the model...", ""},
+		{"oom restart", []modelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "Restarted after running out of memory (OOMKilled); starting vLLM again...", ""},
+		{"crash loop", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "", "container main keeps crashing. Last exit: OOMKilled, code 137. It ran out of memory. Its logs say why."},
+		{"pull back-off", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}`)}, nil, "", "the image of container main cannot be pulled (ImagePullBackOff: unauthorized). Check that the cluster's pull secret can read it."},
+	}
+	for _, tc := range cases {
+		got := describeModelPods(tc.pods, tc.event)
+		if got.message != tc.message || got.problem != tc.problem {
+			t.Errorf("%s: got %+v", tc.name, got)
+		}
+	}
+}
+
+func TestModelsTeardown_DeletesTheModelThenTheGateway(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	// A foreign model of the same name elsewhere is never touched; it
+	// uses another gateway, so it does not block.
+	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/other/llminferenceservices/qwen25-05b-instruct", `{"spec":{"router":{"gateway":{"refs":[{"name":"maas-default-gateway","namespace":"openshift-ingress"}]}}}}`)
+	before := len(mc.f.mutations())
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if got := finalSteps(events); got != "model=success gateway=success" {
+		t.Errorf("steps: %s", got)
+	}
+	var deletes []string
+	for _, m := range mc.f.mutations()[before:] {
+		if strings.HasPrefix(m, "DELETE ") {
+			deletes = append(deletes, strings.TrimPrefix(m, "DELETE "))
+		}
+	}
+	// (mutations leaves ConfigMaps out: the activity log writes them.)
+	if want := []string{testModelPath, testGatewayPath, testGatewayClass}; strings.Join(deletes, " ") != strings.Join(want, " ") {
+		t.Fatalf("deleted %v, want %v", deletes, want)
+	}
+	if mc.f.has(testGatewayCM) {
+		t.Error("the options ConfigMap is left")
+	}
+	if !mc.f.has("/apis/serving.kserve.io/v1alpha2/namespaces/other/llminferenceservices/qwen25-05b-instruct") {
+		t.Error("deleted someone else's model")
+	}
+}
+
+// The gateway stays while any model, whoever made it, routes through it
+// (spec.router.gateway {} is the default gateway).
+func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"spec":{"router":{"route":{},"gateway":{}}}}`)
+	before := len(mc.f.mutations())
+	res, _ := TeardownInferenceGateway(mc.c)
+	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "team/granite") {
+		t.Fatalf("got %+v", res)
+	}
+	if m := mc.f.mutations()[before:]; len(m) != 0 {
+		t.Errorf("wrote %v", m)
+	}
+	st, _ := GetResourcesStatus(mc.c)
+	if !strings.Contains(st.InferenceGateway.TeardownBlockedReason, "team/granite") || len(st.InferenceGateway.UsedBy) != 1 {
+		t.Errorf("status: %+v", st.InferenceGateway)
+	}
+
+	// Models that cannot be listed: fail closed.
+	mc.f.fail["GET /apis/serving.kserve.io/v1alpha2/llminferenceservices"] = 500
+	res, _ = TeardownInferenceGateway(mc.c)
+	if res.Success || !strings.Contains(res.Message, "Cannot check which models use the gateway") {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+func TestGatewayTeardown_NeverDeletesAForeignGateway(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testGatewayPath, `{"spec":{}}`)
+	res, _ := TeardownInferenceGateway(mc.c)
+	if res.Success || res.ErrorCode != "not_managed" || !mc.f.has(testGatewayPath) {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+func TestTeardownModels_WaitsForTheFinalizerAndNamesIt(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testModelPath, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"finalizers":["serving.kserve.io/llmisvc-finalizer"],
+		"managedFields":[{"manager":"rhoai-nightly-updater","operation":"Apply"}]}}`)
+	res, _ := TeardownModels(mc.c, "proj")
+	if res.Success || res.ErrorCode != "in_progress" || !strings.Contains(res.Message, "serving.kserve.io/llmisvc-finalizer") {
+		t.Fatalf("got %+v", res)
+	}
+	// The controller finishes: the next teardown sees it gone.
+	mc.f.finalizeOnGet = true
+	res, _ = TeardownModels(mc.c, "proj")
+	if !res.Success || mc.f.has(testModelPath) {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+// The status: an unmanaged gateway that reports nothing has unknown
+// health, never a failure; a model of the catalog's name that someone
+// else made is shown, not offered for deletion.
+func TestModelsStatus_UnknownAndForeign(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.onGet = nil
+	mc.f.putJSON(testGatewayPath, `{"spec":{"listeners":[{"hostname":"ai.example.com"}]}}`)
+	mc.f.putJSON(testModelPath, `{"metadata":{"annotations":{"openshift.io/display-name":"Theirs"}},"spec":{"router":{"gateway":{}}}}`)
+	st, err := GetResourcesStatus(mc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := st.InferenceGateway
+	if !gw.Deployed || gw.ManagedByTool || gw.Ready || !gw.HealthUnknown || gw.TerminalError || gw.ExternalURL != "https://ai.example.com" {
+		t.Errorf("gateway: %+v", gw)
+	}
+	if len(st.Models.Items) != 1 {
+		t.Fatalf("items: %+v", st.Models.Items)
+	}
+	m := st.Models.Items[0]
+	if m.ManagedByTool || !m.HealthUnknown || m.TeardownBlockedReason == "" || m.DisplayName != "Theirs" {
+		t.Errorf("model: %+v", m)
+	}
+	if st.Models.Preset != testPresetName || st.Models.ImagePlan != "preset" || st.Models.Dependencies != "True" || st.Models.Blocked != nil {
+		t.Errorf("models: %+v", st.Models)
+	}
+	if len(st.Models.Catalog) != 1 || st.Models.Catalog[0].Name != "qwen25-05b-instruct" {
+		t.Errorf("catalog: %+v", st.Models.Catalog)
+	}
+}
+
+// The gateway's authentication is checked once a model uses it.
+func TestInferenceGatewayStatus_WarnsWithoutItsAuthPolicy(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	st, _ := GetResourcesStatus(mc.c)
+	gw := st.InferenceGateway
+	if !gw.Ready || !gw.ManagedByTool || gw.AuthPolicy != "missing" || !strings.Contains(gw.Warning, "authentication is missing") || gw.DNS != "published" {
+		t.Fatalf("gateway: %+v", gw)
+	}
+	mc.f.putJSON("/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/openshift-ai-inference-authn", `{"status":{"conditions":[{"type":"Enforced","status":"True"}]}}`)
+	mc.f.putJSON("/api/v1/namespaces/openshift-ingress/services/openshift-ai-inference-openshift-ai-inference", `{"metadata":{"labels":{"gateway.networking.k8s.io/gateway-name":"openshift-ai-inference"}}}`)
+	// The status lists the models (a list is not changed by onGet).
+	model := mc.f.get(testModelPath)
+	model["status"] = map[string]interface{}{"url": "https://inference.apps.example.com/proj/qwen25-05b-instruct", "conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}}
+	mc.f.put(testModelPath, model)
+	st, _ = GetResourcesStatus(mc.c)
+	if st.InferenceGateway.AuthPolicy != "enforced" || st.InferenceGateway.Warning != "" {
+		t.Fatalf("gateway: %+v", st.InferenceGateway)
+	}
+	if len(st.Models.Items) != 1 || !st.Models.Items[0].Ready || st.Models.Items[0].URL != "https://inference.apps.example.com/proj/qwen25-05b-instruct" {
+		t.Fatalf("models: %+v", st.Models.Items)
+	}
+}
+
+func TestValidateModelsRequest(t *testing.T) {
+	cases := map[string]types.ModelsRequest{
+		"action must be setup or teardown":                    {Action: "delete", Gateway: true},
+		"nothing to do: name the gateway, a project, or both": {Action: "setup"},
+		"unknown model":                     {Action: "setup", Project: "p", Model: "llama"},
+		"releasedImage needs a model setup": {Action: "teardown", Project: "p", ReleasedImage: true},
+		"":                                  {Action: "setup", Gateway: true, Project: "p", ReleasedImage: true},
+	}
+	for want, req := range cases {
+		if got := ValidateModelsRequest(req); got != want {
+			t.Errorf("%+v: got %q, want %q", req, got, want)
+		}
+	}
+}
+
+func TestPickReleasedImage_HighestPublishedVersion(t *testing.T) {
+	body := []byte(`{"data":[
+		{"architecture":"amd64","creation_date":"2026-11-12","repositories":[{"registry":"registry.access.redhat.com","repository":"rhaii/vllm-cpu-rhel9","published":true,
+			"manifest_list_digest":"sha256:347","tags":[{"name":"1794398071"},{"name":"3.4"},{"name":"3.4.7"},{"name":"3.4.7-1794398071"}]}]},
+		{"architecture":"amd64","creation_date":"2026-11-03","repositories":[{"registry":"registry.access.redhat.com","repository":"rhaii/vllm-cpu-rhel9","published":true,
+			"manifest_list_digest":"sha256:353","tags":[{"name":"3.5"},{"name":"3.5.3"}]}]},
+		{"architecture":"amd64","creation_date":"2026-11-15","repositories":[{"registry":"registry.access.redhat.com","repository":"rhaii/vllm-cpu-rhel9","published":false,
+			"manifest_list_digest":"sha256:360","tags":[{"name":"3.6.0"}]}]},
+		{"architecture":"ppc64le","creation_date":"2026-11-16","repositories":[{"repository":"rhaii/vllm-cpu-rhel9","published":true,"manifest_list_digest":"sha256:999","tags":[{"name":"9.9"}]}]}]}`)
+	img, err := pickReleasedImage(body, "rhaii/vllm-cpu-rhel9")
+	if err != nil || img.Ref != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:353" || img.Version != "3.5.3" {
+		t.Fatalf("got %+v, %v", img, err)
+	}
+	if _, err := pickReleasedImage([]byte(`{"data":[]}`), "rhaii/vllm-cpu-rhel9"); err == nil {
+		t.Error("no image: want an error")
+	}
+}
+
+// The catalog request: the repository's amd64 images, through the
+// external client; an HTTP error is reported.
+func TestFetchReleasedImage(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		if strings.Contains(r.URL.Path, "missing") {
+			http.Error(w, "nope", http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"architecture":"amd64","repositories":[{"repository":"rhaii/vllm-cpu-rhel9","published":true,"manifest_list_digest":"sha256:1","tags":[{"name":"3.4.1"}]}]}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	prev := redHatCatalogURL
+	redHatCatalogURL = srv.URL
+	t.Cleanup(func() { redHatCatalogURL = prev })
+	img, err := fetchReleasedImage(context.Background(), "rhaii/vllm-cpu-rhel9")
+	if err != nil || img.Version != "3.4.1" {
+		t.Fatalf("got %+v, %v", img, err)
+	}
+	if gotPath != "/repositories/registry/registry.access.redhat.com/repository/rhaii/vllm-cpu-rhel9/images" || !strings.Contains(gotQuery, "filter=architecture%3D%3Damd64") {
+		t.Errorf("request %s?%s", gotPath, gotQuery)
+	}
+	if _, err := fetchReleasedImage(context.Background(), "rhaii/missing"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Errorf("err: %v", err)
+	}
+}
+
+func TestMirrorCovers(t *testing.T) {
+	repo := "registry.redhat.io/rhaii/vllm-cpu-rhel9"
+	for source, want := range map[string]bool{
+		"registry.redhat.io/rhaii":                true,
+		"registry.redhat.io":                      true,
+		"registry.redhat.io/rhaii/vllm-cpu-rhel9": true,
+		"*.redhat.io":                             true,
+		"registry.redhat.io/rhai":                 false,
+		"registry.redhat.io/rhaii/vllm-cuda":      false,
+		"quay.io":                                 false,
+		"":                                        false,
+	} {
+		if got := mirrorCovers(source, repo); got != want {
+			t.Errorf("%q: got %v", source, got)
+		}
+	}
+	if imageRepository("registry.redhat.io/rhaii/vllm-cpu-rhel9:3.4@sha256:1") != repo || imageRepository("localhost:5000/a/b:1") != "localhost:5000/a/b" {
+		t.Error("imageRepository")
+	}
+}
+
+func TestParseQuantity(t *testing.T) {
+	for in, want := range map[string]float64{"250m": 0.25, "4": 4, "15500m": 15.5, "12Gi": 12 << 30, "64000Ki": 64000 << 10, "1G": 1e9, "1.5": 1.5} {
+		if got, ok := parseQuantity(in); !ok || got != want {
+			t.Errorf("%s: got %v %v", in, got, ok)
+		}
+	}
+	if _, ok := parseQuantity("x"); ok {
+		t.Error("x parsed")
+	}
+}
+
+// Capacity: a warning when no amd64 worker has the requests free; none
+// when one has.
+func TestModelCapacityWarning(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
+	mc.f.putJSON("/api/v1/nodes/m1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"spec":{"taints":[{"effect":"NoSchedule"}]},"status":{"allocatable":{"cpu":"64","memory":"256Gi"}}}`)
+	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"14","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
+	w := modelCapacityWarning(mc.c, modelCatalog[0])
+	if !strings.Contains(w, "the most CPU free is 1.5 CPUs and 53.0 GiB on w1") {
+		t.Fatalf("warning: %q", w)
+	}
+	capacityCache.Purge()
+	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"2","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
+	if w := modelCapacityWarning(mc.c, modelCatalog[0]); w != "" {
+		t.Fatalf("warning: %q", w)
+	}
+}
+
+// A read the ServiceAccount may not make is refused with its code and the
+// hint to re-apply the template.
+func TestModelsSetup_ReadErrorsKeepTheirCode(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.fail["GET "+testGatewayPath] = 403
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true})
+	if res.Success || res.ErrorCode != "forbidden" || !strings.Contains(res.Message, "make upgrade") {
+		t.Fatalf("got %+v", res)
+	}
+}

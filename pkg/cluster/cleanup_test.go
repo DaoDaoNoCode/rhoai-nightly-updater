@@ -12,8 +12,10 @@ import (
 // to the response that fails it. It returns the steps in the order they ran.
 func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]string {
 	t.Helper()
-	ps, st, ml := cleanupPipelineServer, cleanupStorage, cleanupMLflow
-	t.Cleanup(func() { cleanupPipelineServer, cleanupStorage, cleanupMLflow = ps, st, ml })
+	ps, st, ml, md, gw := cleanupPipelineServer, cleanupStorage, cleanupMLflow, cleanupModels, cleanupGateway
+	t.Cleanup(func() {
+		cleanupPipelineServer, cleanupStorage, cleanupMLflow, cleanupModels, cleanupGateway = ps, st, ml, md, gw
+	})
 	var ran []string
 	result := func(id, msg string) (*types.OperationResponse, error) {
 		ran = append(ran, id)
@@ -32,7 +34,45 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 		return result("storage", "S3 storage removed.")
 	}
 	cleanupMLflow = func(*Client) (*types.OperationResponse, error) { return result("mlflow", "MLflow removed.") }
+	cleanupModels = func(_ *Client, project string) (*types.OperationResponse, error) {
+		return result(CleanupStepID("model", project), "Model deleted from '"+project+"'.")
+	}
+	cleanupGateway = func(*Client) (*types.OperationResponse, error) {
+		return result("inference-gateway", "Inference gateway deleted.")
+	}
 	return &ran
+}
+
+// The models go before the inference gateway they route through, whose
+// teardown refuses while one is left.
+func TestCleanUp_DeletesTheModelsBeforeTheGateway(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	_, c := newResourceFake(t)
+	res, err := CleanUp(c, types.CleanupRequest{MLflow: true, Models: []string{"a", "b"}, InferenceGateway: true}, nil)
+	if err != nil || !res.Success {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	if got := strings.Join(*ran, " "); got != "mlflow model:a model:b inference-gateway" {
+		t.Fatalf("order: %s", got)
+	}
+	if res.Message != "Deleted MLflow, the model in 'a', the model in 'b' and the inference gateway." {
+		t.Errorf("message: %q", res.Message)
+	}
+}
+
+// A model that cannot be deleted stops the run before the gateway.
+func TestCleanUp_KeepsTheGatewayWhenAModelStays(t *testing.T) {
+	ran := fakeTeardowns(t, map[string]*types.OperationResponse{
+		"model:a": {Success: false, Message: "The model a/qwen25-05b-instruct is still being deleted after 2:00.", ErrorCode: "in_progress"},
+	})
+	_, c := newResourceFake(t)
+	res, _ := CleanUp(c, types.CleanupRequest{Models: []string{"a"}, InferenceGateway: true}, nil)
+	if res.Success || res.ErrorCode != "in_progress" || !strings.Contains(res.Message, "Not done: the inference gateway.") {
+		t.Fatalf("got %+v", res)
+	}
+	if got := strings.Join(*ran, " "); got != "model:a" {
+		t.Fatalf("ran: %s", got)
+	}
 }
 
 func TestCleanUp_RunsThePartsInDependencyOrder(t *testing.T) {

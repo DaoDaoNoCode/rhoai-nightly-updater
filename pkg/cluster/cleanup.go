@@ -14,10 +14,13 @@ var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
+	cleanupModels         = TeardownModels
+	cleanupGateway        = TeardownInferenceGateway
 )
 
 // CleanupStepID is the step id of each part of a clean-up, as streamed:
-// "pipeline-server:<project>", "storage" and "mlflow".
+// "pipeline-server:<project>", "storage", "mlflow", "model:<project>" and
+// "inference-gateway".
 func CleanupStepID(part, project string) string {
 	if project != "" {
 		return part + ":" + project
@@ -32,7 +35,9 @@ type cleanupPart struct {
 
 // cleanupParts lists the parts of a clean-up in the order they run: the
 // pipeline servers first (the storage teardown refuses while one uses the
-// storage), then the storage, then MLflow, which depends on neither.
+// storage), then the storage, then MLflow, which depends on neither, then
+// the models and, after them, the inference gateway they route through
+// (its teardown refuses while a model uses it).
 func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	var parts []cleanupPart
 	for _, project := range req.PipelineServers {
@@ -54,12 +59,23 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	if req.MLflow {
 		parts = append(parts, cleanupPart{id: CleanupStepID("mlflow", ""), title: "MLflow", run: func() (*types.OperationResponse, error) { return cleanupMLflow(c) }})
 	}
+	for _, project := range req.Models {
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("model", project),
+			title: fmt.Sprintf("the model in '%s'", project),
+			run:   func() (*types.OperationResponse, error) { return cleanupModels(c, project) },
+		})
+	}
+	if req.InferenceGateway {
+		parts = append(parts, cleanupPart{id: CleanupStepID("inference-gateway", ""), title: "the inference gateway", run: func() (*types.OperationResponse, error) { return cleanupGateway(c) }})
+	}
 	return parts
 }
 
 // CleanUp deletes what this tool created, as one operation: the pipeline
 // servers in the given projects, then the S3 storage (with storage an
-// earlier version left, and namespace seaweedfs when asked), then MLflow.
+// earlier version left, and namespace seaweedfs when asked), then MLflow,
+// then the models in the given projects, then the inference gateway.
 // Each part runs the part's own teardown, with all its guards (only what
 // this tool created, never while something still uses it). Each part is a
 // streamed step; the first part that does not succeed stops the run, and

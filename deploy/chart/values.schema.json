@@ -37,6 +37,16 @@
           "type": "string",
           "minLength": 1
         },
+        "INGRESS_NAMESPACE": {
+          "description": "The namespace of OpenShift's ingress, where the inference gateway runs (full profile only).",
+          "type": "string",
+          "minLength": 1
+        },
+        "INGRESS_OPERATOR_NAMESPACE": {
+          "description": "The namespace of the ingress operator's default IngressController (full profile only).",
+          "type": "string",
+          "minLength": 1
+        },
         "OAUTH_PROXY_IMAGE": {
           "description": "Required. The oauth-proxy image pinned by digest; its tag must match the cluster's OCP minor version (<repository>:v4.<minor>@sha256:<digest>).",
           "type": "string",

@@ -670,9 +670,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		legacyErr   error
 		dsc         dscRead
 		dscErr      error
+		models      []llmisvcObject
+		modelsErr   error
 		status      = &types.ResourcesStatus{}
 	)
-	wg.Add(7)
+	wg.Add(8)
+	go func() { defer wg.Done(); models, modelsErr = listLLMInferenceServices(c) }()
 	go func() { defer wg.Done(); projects, projectsErr = GetDSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
 	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = s3StatusAndEndpoints(c) }()
@@ -706,6 +709,14 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	for _, p := range projects {
 		visible[p] = true
 	}
+	// Models: the inference gateway (which models use it) and the
+	// catalog's models in the visible projects.
+	var mwg sync.WaitGroup
+	mwg.Add(2)
+	go func() { defer mwg.Done(); status.InferenceGateway = getInferenceGatewayStatus(c, models, modelsErr) }()
+	go func() { defer mwg.Done(); status.Models = getModelsStatus(c, dsc, dscErr, models, modelsErr, visible) }()
+	mwg.Wait()
+
 	unmanaged := map[string]bool{}
 	for _, d := range dspas {
 		if !visible[d.Meta.Namespace] {

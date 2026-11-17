@@ -25,6 +25,13 @@ parameters:
     value: kube-system
   - name: MARKETPLACE_NAMESPACE
     value: openshift-marketplace
+  # Namespaces of OpenShift's ingress (where the inference gateway runs)
+  # and of its operator (the default IngressController), for the Models
+  # feature's Roles.
+  - name: INGRESS_NAMESPACE
+    value: openshift-ingress
+  - name: INGRESS_OPERATOR_NAMESPACE
+    value: openshift-ingress-operator
   - name: OAUTH_PROXY_IMAGE
     # Match the tag to your cluster's OCP minor version (e.g., v4.17 for OCP 4.17.x).
     # Find available tags: oc image info registry.redhat.io/openshift4/ose-oauth-proxy-rhel9 --filter-by-os=linux/amd64
@@ -384,6 +391,41 @@ objects:
       - apiGroups: ["cert-manager.io"]
         resources: ["certificates"]
         verbs: ["list"]
+      # Models (Environment page). The inference gateway's GatewayClass is
+      # cluster-scoped: create (not limited by name), and only its own name
+      # for the rest. The Gateway and its options ConfigMap are in the
+      # ingress namespace's Role below.
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gatewayclasses"]
+        verbs: ["create"]
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gatewayclasses"]
+        resourceNames: ["openshift-ai-inference"]
+        verbs: ["get", "patch", "delete"]
+      # The apps domain, for the gateway's hostname inference.<domain>
+      - apiGroups: ["config.openshift.io"]
+        resources: ["ingresses"]
+        resourceNames: ["cluster"]
+        verbs: ["get"]
+      # Whether a mirror serves the CPU preset's image (with the existing
+      # imagedigestmirrorsets list)
+      - apiGroups: ["config.openshift.io"]
+        resources: ["imagetagmirrorsets"]
+        verbs: ["list"]
+      # The model: an LLMInferenceService in the user's data science project
+      # (create cannot be limited by name; the rest only the catalog's name),
+      # all of them listed to find the models that use the gateway, and the
+      # CPU preset, whose name is found at run time (read-only)
+      - apiGroups: ["serving.kserve.io"]
+        resources: ["llminferenceservices"]
+        verbs: ["list", "create"]
+      - apiGroups: ["serving.kserve.io"]
+        resources: ["llminferenceservices"]
+        resourceNames: ["qwen25-05b-instruct"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["serving.kserve.io"]
+        resources: ["llminferenceserviceconfigs"]
+        verbs: ["get"]
 
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -485,6 +527,85 @@ objects:
     metadata:
       name: ${APP_NAME}-${NAMESPACE}
       namespace: ${MARKETPLACE_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # Models: the inference gateway in OpenShift's ingress namespace (the
+  # Gateway and its options ConfigMap, only by their names but create),
+  # its DNS records (read-only, whether the hostname is published) and the
+  # AuthPolicy odh-model-controller adds to it (read-only)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${INGRESS_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        verbs: ["create"]
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        resourceNames: ["openshift-ai-inference"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["openshift-ai-inference-options"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["ingress.operator.openshift.io"]
+        resources: ["dnsrecords"]
+        verbs: ["list"]
+      - apiGroups: ["kuadrant.io"]
+        resources: ["authpolicies"]
+        resourceNames: ["openshift-ai-inference-authn"]
+        verbs: ["get"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${INGRESS_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ${APP_NAME}-${NAMESPACE}
+    subjects:
+      - kind: ServiceAccount
+        name: ${APP_NAME}
+        namespace: ${NAMESPACE}
+
+  # Models: the default IngressController names the certificate the
+  # gateway's external listener uses (read-only; the Secret is never read)
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${INGRESS_OPERATOR_NAMESPACE}
+      labels:
+        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
+    rules:
+      - apiGroups: ["operator.openshift.io"]
+        resources: ["ingresscontrollers"]
+        resourceNames: ["default"]
+        verbs: ["get"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: ${APP_NAME}-${NAMESPACE}
+      namespace: ${INGRESS_OPERATOR_NAMESPACE}
       labels:
         app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}
     roleRef:

@@ -37,6 +37,9 @@ func TestCleanupStream_RefusesBadRequestsBeforeAnything(t *testing.T) {
 		"namespace without storage": `{"mlflow":true,"deleteNamespace":true}`,
 		"not JSON":                  `{`,
 		"too many pipeline servers": `{"pipelineServers":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
+		"invalid model project":     `{"models":["Bad_Name"]}`,
+		"a model project twice":     `{"models":["a","a"],"inferenceGateway":true}`,
+		"too many models":           `{"models":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
 	} {
 		w := httptest.NewRecorder()
 		HandleCleanupStream(w, postJSON("/api/resources/cleanup/stream", "user:"+strings.ReplaceAll(name, " ", "-"), body))

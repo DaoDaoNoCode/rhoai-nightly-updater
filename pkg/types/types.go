@@ -614,6 +614,105 @@ type ResourcesStatus struct {
 	// DashboardURL is the RHOAI dashboard's address ("" when unknown), for
 	// links such as its Projects page.
 	DashboardURL string `json:"dashboardUrl,omitempty"`
+	// InferenceGateway is the cluster's inference gateway, which models
+	// route through by default (Gateway openshift-ingress/openshift-ai-inference).
+	InferenceGateway InferenceGatewayState `json:"inferenceGateway"`
+	// Models is what the Models feature needs, and the models it set up.
+	Models ModelsStatus `json:"models"`
+}
+
+// InferenceGatewayState is the cluster's inference gateway: GatewayClass,
+// options ConfigMap and Gateway openshift-ai-inference. Deployed is true
+// when the Gateway exists, whoever created it; ManagedByTool when this tool
+// did. UsedBy lists the LLMInferenceServices ("namespace/name") that route
+// through it: it is not deleted while one does.
+type InferenceGatewayState struct {
+	ResourceState
+	// ExternalURL is https://<hostname> of the listener for callers outside
+	// the cluster ("" when it has none).
+	ExternalURL string `json:"externalUrl,omitempty"`
+	// Address is the load balancer address the gateway reports.
+	Address string `json:"address,omitempty"`
+	// DNS is "published" once the external hostname's DNSRecord is
+	// published in every zone, "pending" before, "" when unknown.
+	DNS string `json:"dns,omitempty"`
+	// AuthPolicy is the gateway's authentication, which odh-model-controller
+	// adds once a model uses the gateway: "enforced", "not-enforced",
+	// "missing", or "" when unknown.
+	AuthPolicy string `json:"authPolicy,omitempty"`
+}
+
+// ModelsStatus is what setting up a model needs, and the models of the
+// tool's catalog in data science projects.
+type ModelsStatus struct {
+	// Blocked says why no model can be set up (KServe is off, or its
+	// LLMInferenceService dependencies are not met), or is nil.
+	Blocked *ComponentBlock `json:"blocked,omitempty"`
+	// Dependencies is the DataScienceCluster condition
+	// KserveLLMInferenceServiceDependencies: "True", "False", or "" when
+	// it is not reported (unknown).
+	Dependencies string `json:"dependencies,omitempty"`
+	// Preset is the CPU preset (LLMInferenceServiceConfig) a model uses,
+	// found at run time; PresetProblem says why it was not found.
+	Preset        string `json:"preset,omitempty"`
+	PresetProblem string `json:"presetProblem,omitempty"`
+	// ImagePlan is the image a new model would run: "preset" (the preset's
+	// own), "released" (the newest released Red Hat image, on a nightly
+	// cluster that cannot pull the preset's), "override" (VLLM_CPU_IMAGE),
+	// or "" when unknown; ImagePlanReason says why.
+	ImagePlan       string `json:"imagePlan,omitempty"`
+	ImagePlanReason string `json:"imagePlanReason,omitempty"`
+	// CapacityWarning says that no worker seems to have room for a model,
+	// or is "" (room found, or unknown). It never blocks a setup.
+	CapacityWarning string `json:"capacityWarning,omitempty"`
+	// Catalog is what setup offers.
+	Catalog []CatalogModel `json:"catalog"`
+	// Items are the catalog's models in data science projects: this tool's,
+	// and those of the same name it did not create.
+	Items []ModelState `json:"items,omitempty"`
+}
+
+// CatalogModel is a model the Models feature sets up.
+type CatalogModel struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	URI         string `json:"uri"`
+	CPU         string `json:"cpu"`
+	Memory      string `json:"memory"`
+}
+
+// ModelState is one LLMInferenceService of the catalog in a project
+// (Namespace, Name).
+type ModelState struct {
+	ResourceState
+	DisplayName string `json:"displayName,omitempty"`
+	// URL is the model's address (status.url), the base of its OpenAI API.
+	URL string `json:"url,omitempty"`
+	// ImageKind is "preset", "released" or "override"; ImageVersion is the
+	// released image's version.
+	ImageKind    string `json:"imageKind,omitempty"`
+	ImageVersion string `json:"imageVersion,omitempty"`
+	// PresetImageMissing: the preset's image cannot be pulled because the
+	// registry does not have it (a nightly build's image is not published
+	// yet); setting the model up again with the newest released image
+	// fixes it.
+	PresetImageMissing bool `json:"presetImageMissing,omitempty"`
+}
+
+// ModelsRequest is the body of POST /api/resources/models/stream.
+type ModelsRequest struct {
+	// Action is "setup" or "teardown".
+	Action string `json:"action"`
+	// Gateway: set up (or delete) the inference gateway. Setup does it
+	// before the model, teardown after.
+	Gateway bool `json:"gateway,omitempty"`
+	// Project is the model's project; "" when the request has no model.
+	Project string `json:"project,omitempty"`
+	// Model is the catalog name; "" means the catalog's first entry.
+	Model string `json:"model,omitempty"`
+	// ReleasedImage (setup only): run the newest released Red Hat vLLM CPU
+	// image instead of the preset's.
+	ReleasedImage bool `json:"releasedImage,omitempty"`
 }
 
 // ComponentBlock is a DataScienceCluster component a feature needs that is
@@ -642,6 +741,10 @@ type CleanupRequest struct {
 	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
 	// MLflow deletes the MLflow server.
 	MLflow bool `json:"mlflow,omitempty"`
+	// Models are the projects whose model of the tool's catalog goes;
+	// InferenceGateway deletes the inference gateway after them.
+	Models           []string `json:"models,omitempty"`
+	InferenceGateway bool     `json:"inferenceGateway,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/minio/teardown.
@@ -783,6 +886,10 @@ type ResourceState struct {
 	// zero, or a migration left cleanup undone. With Ready false the
 	// resource is incomplete; with Ready true it works but is degraded.
 	RepairNeeded string `json:"repairNeeded,omitempty"`
+	// HealthUnknown is true when the resource exists but reports no
+	// readiness this tool can read (no condition, or one it cannot
+	// interpret): its health is unknown, which is not a failure.
+	HealthUnknown bool `json:"healthUnknown,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.

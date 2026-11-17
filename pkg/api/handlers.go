@@ -1689,6 +1689,64 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 	}
 })
 
+// runModels runs a Models operation; tests replace it.
+var runModels = cluster.RunModels
+
+// HandleModelsStream sets up or deletes the inference gateway and a model
+// in a project (Environment page, Models tab), as one operation streaming
+// a step per part: setup checks every part and dry-runs every write
+// first, then creates the gateway, waits for it, creates the model and
+// waits until it serves; teardown deletes the model, then the gateway.
+var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req types.ModelsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if req.Project != "" && !namespaceRegex.MatchString(req.Project) {
+		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+		return
+	}
+	if problem := cluster.ValidateModelsRequest(req); problem != "" {
+		writeError(w, problem, http.StatusBadRequest, "validation")
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in models handler", "error", rec)
+		}
+	}()
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	defer sseWriter.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	var parts []string
+	if req.Gateway {
+		parts = append(parts, "inference gateway")
+	}
+	if req.Project != "" {
+		parts = append(parts, "model in "+req.Project)
+	}
+	beginOperation(w, req.Action+" "+strings.Join(parts, ", "))
+	slog.Info("mutation", "op", "models", "action", req.Action, "gateway", req.Gateway, "project", req.Project, "releasedImage", req.ReleasedImage)
+	result, runErr := runModels(c, req, forwardSteps(sseWriter))
+	sendOperationResult(sseWriter, result, runErr)
+	if runErr != nil {
+		slog.Error("models failed", "error", runErr)
+	}
+})
+
 // runCleanUp runs a clean-up; tests replace it.
 var runCleanUp = cluster.CleanUp
 
@@ -1697,7 +1755,8 @@ const maxCleanupProjects = 200
 
 // HandleCleanupStream deletes what this tool created, as one operation
 // (one lock, one rate-limit slot): the pipeline servers in the given
-// projects, then the S3 storage, then MLflow, streaming each part via SSE.
+// projects, then the S3 storage, then MLflow, then the models in the given
+// projects, then the inference gateway, streaming each part via SSE.
 // A clean-up from the browser as separate requests would hit the per-user
 // rate limit on the second pipeline server.
 var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
@@ -1711,27 +1770,29 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
 		return
 	}
-	if len(req.PipelineServers) > maxCleanupProjects {
-		writeError(w, fmt.Sprintf("at most %d pipeline servers per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
+	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects {
+		writeError(w, fmt.Sprintf("at most %d pipeline servers and %d models per clean-up", maxCleanupProjects, maxCleanupProjects), http.StatusBadRequest, "validation")
 		return
 	}
-	seen := map[string]bool{}
-	for _, p := range req.PipelineServers {
-		if !namespaceRegex.MatchString(p) {
-			writeError(w, "invalid project name", http.StatusBadRequest, "validation")
-			return
+	for _, list := range [][]string{req.PipelineServers, req.Models} {
+		seen := map[string]bool{}
+		for _, p := range list {
+			if !namespaceRegex.MatchString(p) {
+				writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+				return
+			}
+			if seen[p] {
+				writeError(w, "a project is listed twice", http.StatusBadRequest, "validation")
+				return
+			}
+			seen[p] = true
 		}
-		if seen[p] {
-			writeError(w, "a project is listed twice", http.StatusBadRequest, "validation")
-			return
-		}
-		seen[p] = true
 	}
 	if req.DeleteNamespace && !req.Storage {
 		writeError(w, "deleteNamespace needs storage", http.StatusBadRequest, "validation")
 		return
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow {
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -1765,8 +1826,14 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if req.MLflow {
 		target = append(target, "MLflow")
 	}
+	if n := len(req.Models); n > 0 {
+		target = append(target, fmt.Sprintf("%d %s", n, map[bool]string{true: "model", false: "models"}[n == 1]))
+	}
+	if req.InferenceGateway {
+		target = append(target, "inference gateway")
+	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway)
 
 	result, cleanupErr := runCleanUp(c, req, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, cleanupErr)

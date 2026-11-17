@@ -33,6 +33,11 @@ parameters: {}
   # PULL_SECRET_NAMESPACE: kube-system
   # MARKETPLACE_NAMESPACE: openshift-marketplace
   #
+  # Full profile only: where OpenShift's ingress and its operator are; the
+  # app gets a Role in each for the Models feature's inference gateway.
+  # INGRESS_NAMESPACE: openshift-ingress
+  # INGRESS_OPERATOR_NAMESPACE: openshift-ingress-operator
+  #
   # Required, by digest. The oauth-proxy image. Its tag must match the
   # cluster's OCP minor version (v4.17 for OCP 4.17.x); install.sh detects
   # it from the cluster, the chart cannot, so set it per cluster. The
