@@ -90,9 +90,13 @@ export const PrimaryAction: React.FC<{ children: React.ReactNode }> = ({ childre
   </ActionList>
 );
 
-/** Secondary actions (ActionListItems) as one action row. */
-export const ActionRow: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <ActionList>
+/**
+ * Secondary actions (ActionListItems) as one action row. vertical stacks
+ * them: a PatternFly ActionList does not wrap, so a row of long labels
+ * (one Tear down per part) would overflow a phone-width screen.
+ */
+export const ActionRow: React.FC<{ vertical?: boolean; children: React.ReactNode }> = ({ vertical, children }) => (
+  <ActionList isVertical={vertical}>
     <ActionListGroup>{children}</ActionListGroup>
   </ActionList>
 );

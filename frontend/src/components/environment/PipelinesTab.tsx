@@ -252,7 +252,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
               )}
               {((serverManaged && !isTerminating(server)) || storageTeardown) && (
               <StackItem>
-                <ActionRow>
+                <ActionRow vertical>
                   {serverManaged && !isTerminating(server) && (
                     <ActionListItem>
                       <TooltipButton variant="secondary" isDanger onClick={() => setPending({ kind: "teardown-pipeline-server", project: project!, name: server!.name })}
