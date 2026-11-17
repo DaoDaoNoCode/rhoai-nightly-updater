@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -663,6 +663,58 @@ export function streamCleanup(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/cleanup/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** The MLflow samples of one project (named reads only; cached on the server for 15 s). */
+export function getMLflowSamples(project: string): Promise<MLflowSamplesStatus> {
+  return request(`/api/resources/samples/mlflow?project=${encodeURIComponent(project)}`);
+}
+
+/** The body of POST /api/resources/samples/mlflow/stream (pkg/types MLflowSamplesRequest). */
+export interface MLflowSamplesRequest {
+  project: string;
+  action: MLflowSampleAction;
+  samples: MLflowSampleId[];
+}
+
+/**
+ * Adds, removes or regenerates MLflow samples in one project as one
+ * operation (one rate-limit slot), streaming "check", then one step per
+ * sample id.
+ */
+export function streamMLflowSamples(
+  req: MLflowSamplesRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/samples/mlflow/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** The sample pipeline of one project (cached on the server for 5 s, for polling a run). */
+export function getPipelineSample(project: string): Promise<PipelineSampleStatus> {
+  return request(`/api/resources/samples/pipeline?project=${encodeURIComponent(project)}`);
+}
+
+/** The body of POST /api/resources/samples/pipeline/stream (pkg/types PipelineSampleRequest). */
+export interface PipelineSampleRequest {
+  project: string;
+  action: 'run' | 'remove';
+}
+
+/**
+ * Starts a run of the sample pipeline, or removes the sample, streaming
+ * "check", then "experiment", "pipeline" and "run" (the first two only
+ * when they are created), or for remove "runs", "pipeline", "experiment"
+ * (or "remove" when nothing is there).
+ */
+export function streamPipelineSample(
+  req: PipelineSampleRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/samples/pipeline/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /**

@@ -28,6 +28,8 @@ import { MLFLOW_WORKSPACES, type Busy, type FeatureState, mlflowStatus } from ".
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, mlflowClientEnv, mlflowWorkspaceHref } from "./UseIt";
+import { MLflowSamples } from "./MLflowSamples";
+import type { SampleOp } from "./samples";
 
 export interface MLflowTabProps {
   status: ResourcesStatus;
@@ -46,6 +48,10 @@ export interface MLflowTabProps {
   setPending: (p: Pending) => void;
   onSetUp: (setup: Pending[]) => void;
   onCleanup: () => void;
+  /** The sample operation running now, if any. */
+  sampleOp: SampleOp | null;
+  /** Changes when a sample operation ends, so the sample data is read again. */
+  samplesRefresh: number;
 }
 
 /**
@@ -130,6 +136,7 @@ const UseMLflow: React.FC<{ url: string } & Pick<MLflowTabProps, "project" | "pr
     )}
     {project && (
       <WhatNext id="mlflow-next" items={[
+        <>Add sample data below to see experiments, traces and a registered model in {project} without writing code.</>,
         <>Log a run from a notebook with the settings above: <code>mlflow.start_run()</code>, then <code>mlflow.log_metric()</code>.</>,
         <>Open {project} in MLflow to compare runs and register a model.</>,
       ]} />
@@ -199,6 +206,10 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
         </StackItem>
       )}
       {mlflow?.ready && mlflow.uiRoute && !isTerminating(mlflow) && <StackItem><UseMLflow url={mlflow.uiRoute} {...props} /></StackItem>}
+      <StackItem>
+        <MLflowSamples state={state} ready={!!mlflow?.ready && !!mlflow.uiRoute && !isTerminating(mlflow)} project={props.project} readOnly={readOnly}
+          baseReason={baseReason} op={props.sampleOp} refreshKey={props.samplesRefresh} setPending={setPending} onSetUp={onSetUp} />
+      </StackItem>
       {deployed && !readOnly && !isTerminating(mlflow) && (
         <StackItem><DeployPR busy={busy} baseReason={baseReason} prOverride={!!mlflow?.prOverride} setPending={setPending} /></StackItem>
       )}

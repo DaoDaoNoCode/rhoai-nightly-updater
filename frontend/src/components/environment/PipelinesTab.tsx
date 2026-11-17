@@ -38,6 +38,8 @@ import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, kfpClientSnippet } from "./UseIt";
+import { PipelineSample } from "./PipelineSample";
+import type { SampleOp } from "./samples";
 import {
   type Busy,
   type FeatureState,
@@ -86,6 +88,10 @@ export interface PipelinesTabProps {
   onRemoveOldStorage: () => void;
   onSetUp: (setup: Pending[]) => void;
   onCleanup: () => void;
+  /** The sample operation running now, if any. */
+  sampleOp: SampleOp | null;
+  /** Changes when a sample operation ends, so the sample pipeline is read again. */
+  samplesRefresh: number;
 }
 
 /** Delete is offered: the tool's storage exists, or storage of an earlier version does. */
@@ -364,7 +370,12 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
         <>
           <StackItem><UsePipelines server={server} project={project} /></StackItem>
           <StackItem>
+            <PipelineSample project={project} unmanaged={server.managedByTool === false} readOnly={readOnly} baseReason={baseReason}
+              op={props.sampleOp} refreshKey={props.samplesRefresh} setPending={props.setPending} />
+          </StackItem>
+          <StackItem>
             <WhatNext id="pipelines-next" items={[
+              ...(server.managedByTool === false ? [] : [<>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>]),
               <>Open pipelines in {project}, then choose Import pipeline to upload a compiled pipeline.</>,
               <>Create a run; its steps write their artifacts to the S3 storage.</>,
               <>Follow the run and open its artifacts from the run&apos;s page.</>,

@@ -29,10 +29,20 @@ export interface GoalRunStep {
 /** What a run does, for its words: a setup starts things, a deletion removes them, a change changes one. */
 export type GoalRunKind = "setup" | "delete" | "change";
 
+/** A step of a run; an optional one shows only once the operation reports it (a part created only when missing). */
+export interface GoalRunStepInfo {
+  id: string;
+  title: string;
+  optional?: boolean;
+}
+
+/** The steps a run shows: every required one, and the optional ones that reported. */
+export const shownSteps = (run: GoalRun) => run.steps.filter((s) => !s.optional || !!run.states[s.id]);
+
 export interface GoalRun {
   title: string;
   kind: GoalRunKind;
-  steps: { id: string; title: string }[];
+  steps: GoalRunStepInfo[];
   states: Record<string, StepState>;
   running: boolean;
   /** The outcome, once the run ended. */
@@ -159,8 +169,11 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
     finish(result);
   }, [now, sleep, setStep, finish]);
 
-  /** Follows a streamed operation whose steps are known up front; each event updates its step. */
-  const follow = useCallback((title: string, steps: { id: string; title: string }[], stream: StreamRun, kind: GoalRunKind = "delete") => {
+  /**
+   * Follows a streamed operation whose steps are known up front (in their
+   * order; optional ones show once reported); each event updates its step.
+   */
+  const follow = useCallback((title: string, steps: GoalRunStepInfo[], stream: StreamRun, kind: GoalRunKind = "delete") => {
     if (steps.length === 0 || running.current) return;
     running.current = true;
     setRun({ title, kind, steps, states: {}, running: true, result: null });

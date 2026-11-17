@@ -12,7 +12,7 @@ import {
   StackItem,
 } from "@patternfly/react-core";
 import { StepProgress } from "./StepProgress";
-import type { GoalRun, GoalRunKind } from "./useGoalRun";
+import { type GoalRun, type GoalRunKind, shownSteps } from "./useGoalRun";
 import type { NextStep } from "./featureState";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 
@@ -59,7 +59,7 @@ export const RunModal: React.FC<{
       <ModalBody>
         <Stack hasGutter>
           <StackItem>
-            <StepProgress idPrefix="goal-run" aria-label={`${run.title}: progress`} steps={run.steps} states={run.states} running={run.running}
+            <StepProgress idPrefix="goal-run" aria-label={`${run.title}: progress`} steps={shownSteps(run)} states={run.states} running={run.running}
               shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} />
           </StackItem>
           {run.running && (

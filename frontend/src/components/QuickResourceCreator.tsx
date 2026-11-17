@@ -27,7 +27,11 @@ import {
   deployMLflowPR,
   revertMLflow,
   streamCleanup,
+  streamMLflowSamples,
+  streamPipelineSample,
   toApiError,
+  type StreamDoneHandler,
+  type StreamDetachHandler,
   type CleanupRequest,
 } from "../services/api";
 import { exponentialBackoff, usePolling } from "../hooks/usePolling";
@@ -36,7 +40,7 @@ import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
 import { PageLoading } from "./PageStates";
 import { errorResult } from "../outcomes";
-import { type ConfirmSpec, type Pending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
+import { type ConfirmSpec, type Pending, type ResourcePending, type SamplePending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
@@ -46,6 +50,10 @@ import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
 import { RunModal, runOutcome } from "./environment/SetupRun";
+import { type SampleOp, mlflowSampleSteps, pipelineSampleSteps, samplesConfirm } from "./environment/samples";
+import { MLFLOW_SAMPLES_ID } from "./environment/MLflowSamples";
+import { PIPELINE_SAMPLE_ID } from "./environment/PipelineSample";
+import { mlflowWorkspaceHref } from "./environment/UseIt";
 import { useGoalRun, type GoalRunStep, type ReadyCheck } from "./environment/useGoalRun";
 import { CleanupModal, type CleanupScope, cleanupCandidates, cleanupSteps } from "./environment/CleanupModal";
 import {
@@ -267,7 +275,14 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [setupConfirm, setSetupConfirm] = useState<SetupConfirm | null>(null);
   const [cleanupScope, setCleanupScope] = useState<CleanupScope | null>(null);
 
-  const request = (p: Pending): [string, () => Promise<OperationResponse>, string | null] => {
+  // The sample operation running now (its rows show it), the last sample
+  // run (for the run dialog's next step), and a key that changes when one
+  // ends, so the tabs read the sample state again.
+  const [sampleOp, setSampleOp] = useState<SampleOp | null>(null);
+  const [sampleRun, setSampleRun] = useState<SampleOp | null>(null);
+  const [samplesRefresh, setSamplesRefresh] = useState(0);
+
+  const request = (p: ResourcePending): [string, () => Promise<OperationResponse>, string | null] => {
     switch (p.kind) {
       case "setup-minio": return ["setup-minio", setupMinIO, null];
       case "repair-minio": return ["setup-minio", setupMinIO, null];
@@ -280,10 +295,45 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? samplesConfirm(p);
+
+  /**
+   * A confirmed sample change: one streamed request (one rate-limit slot on
+   * the server) whose steps the run dialog shows; when it ends, the tab
+   * reads the samples again.
+   */
+  const startSample = (p: SamplePending) => {
+    if (run.run?.running) return;
+    const spec = samplesConfirm(p);
+    const op: SampleOp = p.kind === "mlflow-samples"
+      ? { feature: "mlflow", project: p.project, action: p.action, samples: p.samples }
+      : { feature: "pipeline", project: p.project, action: p.action, samples: [] };
+    setPending(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setSampleOp(op);
+    setSampleRun(op);
+    const end = () => {
+      setSampleOp(null);
+      setSamplesRefresh((n) => n + 1);
+    };
+    const steps = p.kind === "mlflow-samples" ? mlflowSampleSteps(p.action, p.samples) : pipelineSampleSteps(p.action);
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, steps, (onStep, onDone, onDetach) => {
+      const done: StreamDoneHandler = (success, error, apiError) => { end(); onDone(success, error, apiError); };
+      const detach: StreamDetachHandler = (reason) => { end(); onDetach(reason); };
+      return p.kind === "mlflow-samples"
+        ? streamMLflowSamples({ project: p.project, action: p.action, samples: p.samples }, onStep, done, detach)
+        : streamPipelineSample({ project: p.project, action: p.action }, onStep, done, detach);
+    }, p.action === "remove" ? "delete" : "change");
+  };
 
   /** A single confirmed change: a run of one step, in the run dialog. */
   const execute = (p: Pending) => {
+    if (isSamplePending(p)) {
+      startSample(p);
+      return;
+    }
+    setSampleRun(null);
     const spec = confirmOf(p);
     const [action, fn, target] = request(p);
     const title = spec?.runTitle ?? spec?.title ?? action;
@@ -298,6 +348,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
+      if (isSamplePending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = request(p);
@@ -321,6 +372,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const startCleanup = (req: CleanupRequest) => {
     setCleanupScope(null);
+    setSampleRun(null);
     setRunOpen(true);
     trackFeature("cleanup");
     setPollGaveUp(false);
@@ -386,12 +438,20 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     : pipelinesState(resStatus, project, projectNames, busy);
   const pipelinesSummary = pipelinesState(resStatus, null, projectNames, busy);
   const mlflowNow = mlflowState(resStatus, busy);
+  // Once a feature works, its samples are the natural next step: the
+  // sample pipeline only on a pipeline server this tool set up.
+  const summaryServer = pipelinesSummary.project ? pipelineServerIn(resStatus, pipelinesSummary.project) : undefined;
+  const pipelinesSamples = pipelinesSummary.status === "ready" && !!summaryServer && summaryServer.managedByTool !== false;
   const overviewRows: OverviewRow[] = [
     {
       id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: pipelinesSummary,
       href: `?tab=pipelines${pipelinesSummary.project ? `&project=${encodeURIComponent(pipelinesSummary.project)}` : ""}`,
+      ...(pipelinesSamples ? { samples: { label: "Run a sample pipeline", focus: PIPELINE_SAMPLE_ID } } : {}),
     },
-    { id: "mlflow", name: "MLflow", gives: "Track experiments, runs and models", state: mlflowNow, href: "?tab=mlflow" },
+    {
+      id: "mlflow", name: "MLflow", gives: "Track experiments, runs and models", state: mlflowNow, href: "?tab=mlflow",
+      ...(mlflowNow.status === "ready" ? { samples: { label: "Add sample data", focus: MLFLOW_SAMPLES_ID } } : {}),
+    },
   ];
   const anythingToClean = !!resStatus && (() => {
     const c = cleanupCandidates(resStatus, "all", minioLeftovers);
@@ -399,19 +459,28 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   })();
 
   // The run's "what next" and main action, from the feature it set up.
+  // A sample run: after adding MLflow samples, open the project's workspace.
   const runFeature = run.run?.title.includes("MLflow") ? "mlflow" : "pipelines";
-  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : null;
+  const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
+    ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowWorkspaceHref(mlflow.uiRoute, sampleRun.project) }
+    : null;
+  const runNext: NextStep | null = run.run?.kind === "setup" ? (runFeature === "mlflow" ? mlflowNow.next : pipelines.next) : sampleNext;
   const whatNext = run.run?.kind === "setup"
     ? <Content component="p">{runFeature === "mlflow"
-      ? "Open MLflow workspaces to choose a project and see its experiments. The MLflow tab shows how to log runs from a notebook or script."
-      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run. The Pipelines tab shows how to use the pipeline server.`}</Content>
-    : undefined;
+      ? "Open MLflow workspaces to choose a project and see its experiments. On the MLflow tab, Sample data adds example experiments, traces and a model to a project in one click."
+      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run, or run the sample pipeline on the Pipelines tab to check that runs work.`}</Content>
+    : sampleRun && sampleRun.action !== "remove"
+      ? <Content component="p">{sampleRun.feature === "mlflow"
+        ? `Open ${sampleRun.project} in MLflow to see the sample data; the dashboard shows it on the pages each sample names.`
+        : "The Pipelines tab shows the run's state until it ends, with a link to the run in the dashboard."}</Content>
+      : undefined;
   const outcome = run.run ? runOutcome(run.run) : null;
 
   const startSetUp = () => {
     if (!setupConfirm) return;
     const { title, steps, done, recheck } = setupConfirm;
     setSetupConfirm(null);
+    setSampleRun(null);
     setRunOpen(true);
     void run.start(title, steps, {
       kind: "setup",
@@ -464,6 +533,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     onShowIssue={(row, part) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(partTitleId(part)); }}
                     onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget("pipelines-project"); }}
                     onMigrate={() => setMigrateKind("migrate")}
+                    onSamples={(row, focus) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(focus); }}
                     onCleanup={!readOnly && anythingToClean ? () => setCleanupScope("all") : null} />
                 )}
                 {tab === "pipelines" && (
@@ -471,13 +541,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                     onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                     state={pipelines} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
                     setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
-                    onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")} />
+                    onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
+                    sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
                 )}
                 {tab === "mlflow" && (
                   <MLflowTab status={resStatus} state={mlflowNow} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                     project={project} projects={workspaceOptions} projectsLoaded={projectList !== null}
                     onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
-                    setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")} />
+                    setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")}
+                    sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
                 )}
               </StackItem>
             )}

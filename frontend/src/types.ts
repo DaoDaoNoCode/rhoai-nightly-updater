@@ -352,6 +352,76 @@ export interface ResourcesStatus {
   dashboardUrl?: string;
 }
 
+// --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleStatus) ---
+
+/** An MLflow sample's id (pkg/cluster mlflowSampleIDs, in their add order). */
+export type MLflowSampleId = "genai-demo" | "training" | "mcp-server" | "skill";
+
+/**
+ * absent: not there; present: added; partial: part of it is missing
+ * (missing names what); removed: deleted in MLflow, Add restores it;
+ * foreign: an object of the sample's name exists that this tool did not
+ * create (left alone); unsupported: this MLflow has no such API; unknown:
+ * its state could not be read (message says why).
+ */
+export type SampleState = "absent" | "present" | "partial" | "removed" | "foreign" | "unsupported" | "unknown";
+
+export type MLflowSampleAction = "add" | "remove" | "regenerate";
+
+/** One MLflow sample in a project. */
+export interface SampleStatus {
+  id: MLflowSampleId;
+  name: string;
+  state: SampleState;
+  message?: string;
+  missing?: string[] | null;
+  /** The sample in the MLflow UI, when there is one. */
+  link?: string;
+  /** What the state allows. */
+  actions: MLflowSampleAction[];
+}
+
+/** GET /api/resources/samples/mlflow?project=. */
+export interface MLflowSamplesStatus {
+  project: string;
+  /** False while MLflow is not deployed, not ready or has no address; reason says which. */
+  available: boolean;
+  reason?: string;
+  mlflowURL?: string;
+  samples: SampleStatus[];
+}
+
+/** KFP's run states (v2beta1 RuntimeState). */
+export type PipelineRunState = "PENDING" | "RUNNING" | "SUCCEEDED" | "SKIPPED" | "FAILED" | "CANCELING" | "CANCELED" | "PAUSED" | "RUNTIME_STATE_UNSPECIFIED";
+
+export interface PipelineSampleRun {
+  id: string;
+  state: PipelineRunState | string;
+  createdAt?: string;
+  finishedAt?: string;
+  error?: string;
+  /** The run in the RHOAI dashboard, when its address is known. */
+  link?: string;
+}
+
+/** GET /api/resources/samples/pipeline?project=. */
+export interface PipelineSampleStatus {
+  project: string;
+  /** True when the project has a ready pipeline server this tool created; reason says why not. */
+  available: boolean;
+  reason?: string;
+  server?: string;
+  /** The image both steps run. */
+  image: string;
+  /** absent, present, foreign (a KFP experiment or pipeline of the sample's name this tool did not create) or unknown. */
+  state?: "absent" | "present" | "foreign" | "unknown";
+  message?: string;
+  runs: number;
+  latestRun?: PipelineSampleRun | null;
+  /** The project's run list in the RHOAI dashboard. */
+  runsLink?: string;
+}
+
 /** A DataScienceCluster component a feature needs that is not turned on (pkg/types ComponentBlock). */
 export interface ComponentBlock {
   /** Its key in spec.components ("aipipelines"). */

@@ -184,7 +184,7 @@ export const CreatesList: React.FC<{ items: React.ReactNode[] }> = ({ items }) =
 export const TabSection: React.FC<{ title: string; id: string; children: React.ReactNode }> = ({ title, id, children }) => (
   <section aria-labelledby={id}>
     <Stack hasGutter>
-      <StackItem><Title headingLevel="h3" size="lg" id={id}>{title}</Title></StackItem>
+      <StackItem><Title headingLevel="h3" size="lg" id={id} tabIndex={-1}>{title}</Title></StackItem>
       {React.Children.toArray(children).map((child, i) => <StackItem key={i}>{child}</StackItem>)}
     </Stack>
   </section>

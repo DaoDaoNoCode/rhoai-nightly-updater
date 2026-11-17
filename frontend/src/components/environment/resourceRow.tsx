@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { ResourceState } from "../../types";
+import type { MLflowSampleAction, MLflowSampleId, ResourceState } from "../../types";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
 
@@ -207,7 +207,16 @@ export type Pending =
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
   | { kind: "deploy-mlflow-pr"; pr: number }
-  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string };
+  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string }
+  /** MLflow samples in a project's workspace (one request for all of them). */
+  | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[] }
+  /** The sample pipeline: a new run, or its removal; runs and image for the confirmation. */
+  | { kind: "pipeline-sample"; project: string; action: "run" | "remove"; runs?: number; image?: string };
+
+/** A sample change: a streamed request of its own, not a resource's setup or deletion. */
+export type SamplePending = Extract<Pending, { kind: "mlflow-samples" | "pipeline-sample" }>;
+export type ResourcePending = Exclude<Pending, SamplePending>;
+export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples" || p.kind === "pipeline-sample";
 
 /** What the ConfirmActionModal shows for a pending change. */
 export interface ConfirmSpec {

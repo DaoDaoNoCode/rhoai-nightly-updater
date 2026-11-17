@@ -19,6 +19,8 @@ export interface OverviewRow {
   state: FeatureState;
   /** The tab's address, with the project the state is about. */
   href: string;
+  /** Once it works, its samples: the link's label and the id of the tab's samples heading. */
+  samples?: { label: string; focus: string };
 }
 
 /**
@@ -38,9 +40,11 @@ export const Overview: React.FC<{
   /** Opens the feature's tab (to choose a project). */
   onOpenTab: (row: OverviewRow) => void;
   onMigrate: () => void;
+  /** Opens the feature's tab at its samples. */
+  onSamples: (row: OverviewRow, focus: string) => void;
   /** Clean up everything, or null when there is nothing of this tool's (or the user may only read). */
   onCleanup: (() => void) | null;
-}> = ({ rows, baseReason, setUpReason, onSetUp, onShowIssue, onOpenTab, onMigrate, onCleanup }) => {
+}> = ({ rows, baseReason, setUpReason, onSetUp, onShowIssue, onOpenTab, onMigrate, onSamples, onCleanup }) => {
   const ready = rows.filter((r) => r.state.status === "ready").length;
   // The next step is text in a cell, so it is an inline link, as PatternFly
   // puts links in table cells (Button variant="link" isInline): it sits on
@@ -98,7 +102,14 @@ export const Overview: React.FC<{
                 <Td dataLabel="Feature"><Link to={row.href}>{row.name}</Link></Td>
                 <Td dataLabel="What it gives you">{row.gives}</Td>
                 <Td dataLabel="State"><EnvStatusLabel status={row.state.status} text={row.state.label} /></Td>
-                <Td dataLabel="Next step">{next(row, row.state.next)}</Td>
+                <Td dataLabel="Next step">
+                  {row.samples ? (
+                    <Flex gap={{ default: "gapMd" }} rowGap={{ default: "rowGapXs" }}>
+                      <FlexItem>{next(row, row.state.next)}</FlexItem>
+                      <FlexItem><Button variant="link" isInline onClick={() => onSamples(row, row.samples!.focus)}>{row.samples.label}</Button></FlexItem>
+                    </Flex>
+                  ) : next(row, row.state.next)}
+                </Td>
               </Tr>
             ))}
           </Tbody>
