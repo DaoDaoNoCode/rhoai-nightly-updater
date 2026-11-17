@@ -53,6 +53,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
+			putManagedDSC(f)
 			putReadyManagedS3(f)
 			var once sync.Once
 			f.beforeServe = func(method, path string) {
@@ -69,6 +70,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 	}
 	t.Run("owned secret replaced before update", func(t *testing.T) {
 		f, c := newResourceFake(t)
+		putManagedDSC(f)
 		putReadyManagedS3(f)
 		f.putJSON(secretPath("p1", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`,"resourceVersion":"3"}}`)
 		var once sync.Once
@@ -88,6 +90,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 	})
 	t.Run("owned DSPA keeps changing", func(t *testing.T) {
 		f, c := newResourceFake(t)
+		putManagedDSC(f)
 		putReadyManagedS3(f)
 		putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 		f.beforeServe = func(method, path string) {

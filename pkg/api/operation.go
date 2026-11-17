@@ -189,14 +189,15 @@ var operationTypes = map[string][2]string{
 	"/api/dashboard/deploy-main":              {"deploy-dashboard-main", "Deploy dashboard main"},
 	"/api/dashboard/revert":                   {"revert-dashboard", "Revert dashboard"},
 	"/api/resources/minio/setup":              {"setup-minio", "Set up S3 storage"},
-	"/api/resources/minio/teardown":           {"teardown-minio", "Tear down S3 storage"},
+	"/api/resources/minio/teardown":           {"teardown-minio", "Delete S3 storage"},
 	"/api/resources/minio/migrate/stream":     {"migrate-storage", "Migrate S3 storage"},
 	"/api/resources/pipeline-server/setup":    {"setup-pipeline-server", "Set up pipeline server"},
-	"/api/resources/pipeline-server/teardown": {"teardown-pipeline-server", "Tear down pipeline server"},
+	"/api/resources/pipeline-server/teardown": {"teardown-pipeline-server", "Delete pipeline server"},
 	"/api/resources/mlflow/setup":             {"setup-mlflow", "Set up MLflow"},
-	"/api/resources/mlflow/teardown":          {"teardown-mlflow", "Tear down MLflow"},
+	"/api/resources/mlflow/teardown":          {"teardown-mlflow", "Delete MLflow"},
 	"/api/resources/mlflow/deploy-pr":         {"deploy-mlflow-pr", "Deploy MLflow PR"},
 	"/api/resources/mlflow/revert":            {"revert-mlflow", "Revert MLflow"},
+	"/api/resources/cleanup/stream":           {"cleanup", "Clean up the environment"},
 	"/api/diagnostics/fix":                    {"diagnostics-fix", "Apply diagnostics fix"},
 }
 

@@ -108,6 +108,10 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this S3 storage: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
 		t.Errorf("S3 storage teardown reason = %q", st.MinIO.TeardownBlockedReason)
 	}
+	// The same users, structured, for the clean-up's selection.
+	if got := strings.Join(st.MinIO.UsedBy, " "); got != "dashboard-same-spec/dspa hidden/"+dspaName+" legacy-apply/dspa legacy-post/dspa mine/"+dspaName {
+		t.Errorf("S3 storage users = %q", got)
+	}
 }
 
 func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
@@ -148,6 +152,7 @@ func TestGetResourcesStatus_DSPAListErrorFails(t *testing.T) {
 
 func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T) {
 	f, c := newResourceFake(t)
+	putManagedDSC(f)
 	putReadyManagedS3(f)
 
 	resp, _ := SetupPipelineServer(c, "new-project")
@@ -216,6 +221,7 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
+			putManagedDSC(f)
 			tc.setup(f)
 			resp, _ := SetupPipelineServer(c, "proj")
 			if resp.Success || resp.ErrorCode != tc.wantCode {
@@ -232,6 +238,7 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 
 func TestSetupPipelineServer_RerunIsIdempotent(t *testing.T) {
 	f, c := newResourceFake(t)
+	putManagedDSC(f)
 	putReadyManagedS3(f)
 	for i := 0; i < 2; i++ {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {

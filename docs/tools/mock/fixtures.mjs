@@ -445,7 +445,7 @@ export function dashboardBuilds(session = dashboardSession()) {
 
 const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.54")}`;
 const S3_UI = `https://seaweedfs-admin-seaweedfs.${APPS}`;
-const BLOCKED = (ps) => `1 pipeline server uses this S3 storage: ${ps}. Tear it down first.`;
+const BLOCKED = (ps) => `1 pipeline server uses this S3 storage: ${ps}. Delete it first.`;
 
 export const s3States = {
   running: {

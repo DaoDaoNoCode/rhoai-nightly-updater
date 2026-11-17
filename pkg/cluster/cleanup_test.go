@@ -1,0 +1,101 @@
+package cluster
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// fakeTeardowns replaces the teardowns a clean-up runs; fail maps a step id
+// to the response that fails it. It returns the steps in the order they ran.
+func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]string {
+	t.Helper()
+	ps, st, ml := cleanupPipelineServer, cleanupStorage, cleanupMLflow
+	t.Cleanup(func() { cleanupPipelineServer, cleanupStorage, cleanupMLflow = ps, st, ml })
+	var ran []string
+	result := func(id, msg string) (*types.OperationResponse, error) {
+		ran = append(ran, id)
+		if r := fail[id]; r != nil {
+			return r, nil
+		}
+		return &types.OperationResponse{Success: true, Message: msg}, nil
+	}
+	cleanupPipelineServer = func(_ *Client, project string) (*types.OperationResponse, error) {
+		return result(CleanupStepID("pipeline-server", project), "Pipeline server removed from '"+project+"'.")
+	}
+	cleanupStorage = func(_ *Client, req types.S3TeardownRequest) (*types.OperationResponse, error) {
+		if req.DeleteNamespace {
+			return result("storage", "S3 storage and namespace removed.")
+		}
+		return result("storage", "S3 storage removed.")
+	}
+	cleanupMLflow = func(*Client) (*types.OperationResponse, error) { return result("mlflow", "MLflow removed.") }
+	return &ran
+}
+
+func TestCleanUp_RunsThePartsInDependencyOrder(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	_, c := newResourceFake(t)
+	var events []UpdateStepEvent
+	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"a", "b"}, Storage: true, DeleteNamespace: true, MLflow: true}, func(e UpdateStepEvent) { events = append(events, e) })
+	if err != nil || !res.Success {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	if got := strings.Join(*ran, " "); got != "pipeline-server:a pipeline-server:b storage mlflow" {
+		t.Fatalf("order: %s", got)
+	}
+	if res.Message != "Deleted the pipeline server in 'a', the pipeline server in 'b', the S3 storage and MLflow." {
+		t.Errorf("message: %q", res.Message)
+	}
+	// Each part is reported as running, then with its own result.
+	if len(events) != 8 || events[0].Status != "running" || events[5].Message != "S3 storage and namespace removed." {
+		t.Errorf("events: %+v", events)
+	}
+}
+
+func TestCleanUp_StopsAtTheFirstPartThatFails(t *testing.T) {
+	ran := fakeTeardowns(t, map[string]*types.OperationResponse{
+		"pipeline-server:b": {Success: false, Message: "Deletion of pipeline server 'nightly-dspa' was requested, but it is still terminating.", ErrorCode: "in_progress"},
+	})
+	_, c := newResourceFake(t)
+	var last UpdateStepEvent
+	res, _ := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"a", "b"}, Storage: true, MLflow: true}, func(e UpdateStepEvent) { last = e })
+	if res.Success || res.ErrorCode != "in_progress" {
+		t.Fatalf("got %+v", res)
+	}
+	if got := strings.Join(*ran, " "); got != "pipeline-server:a pipeline-server:b" {
+		t.Fatalf("the storage must not be deleted after a failed part: ran %s", got)
+	}
+	for _, want := range []string{"still terminating", "Deleted before it stopped: the pipeline server in 'a'.", "Not done: the S3 storage and MLflow."} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message lacks %q: %q", want, res.Message)
+		}
+	}
+	if last.Step != "pipeline-server:b" || last.Status != "failed" {
+		t.Errorf("last event: %+v", last)
+	}
+}
+
+func TestCleanUp_StopsWhenTheOperationIsCancelled(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	_, c := newResourceFake(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.ctx = ctx
+	res, _ := CleanUp(c, types.CleanupRequest{MLflow: true}, nil)
+	if res.Success || len(*ran) != 0 || !strings.Contains(res.Message, "Not done: MLflow.") {
+		t.Fatalf("got %+v, ran %v", res, *ran)
+	}
+}
+
+// The real teardowns, on a cluster where nothing of this tool is left:
+// each part says so and succeeds.
+func TestCleanUp_NothingLeftSucceeds(t *testing.T) {
+	_, c := newResourceFake(t)
+	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"p1"}, Storage: true, MLflow: true}, nil)
+	if err != nil || !res.Success {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+}

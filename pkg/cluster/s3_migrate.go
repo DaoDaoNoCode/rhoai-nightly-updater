@@ -1229,7 +1229,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	}
 	if reason := s3TeardownBlocker(dspas, legacy.address); reason != "" {
 		instead := "Run Migrate storage to move those this tool created; point the others at the new storage or delete them."
-		reason = strings.Replace(strings.Replace(reason, "Tear them down first.", instead, 1), "Tear it down first.", instead, 1)
+		reason = strings.Replace(strings.Replace(reason, "Delete them first.", instead, 1), "Delete it first.", instead, 1)
 		return m.fail("check", "The old storage is still in use, so nothing was deleted. "+reason, "prerequisites", "pipeline servers on the old storage")
 	}
 	endpoints, err := readS3Endpoints(c)

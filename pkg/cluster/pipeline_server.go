@@ -327,6 +327,11 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
+	// A component that is not Managed leaves its CRD behind: the DSPA
+	// would be created and never start.
+	if block := setupComponentBlock(c, pipelinesComponent); block != nil {
+		return fail(block.Reason+" Nothing was changed.", "prerequisites", "component not managed")
+	}
 	storage := getS3Status(c)
 	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {
 		return fail("The S3 storage is not deployed or not ready. Set it up first (or, with storage from an earlier version, migrate it).", "prerequisites", "S3 storage not ready")
@@ -352,7 +357,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			continue
 		}
 		if d.managedByTool() {
-			return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') created by an earlier version of this tool. Tear it down first to recreate it.", project, d.Meta.Name), "validation", "legacy pipeline server exists")
+			return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') created by an earlier version of this tool. Delete it first to recreate it.", project, d.Meta.Name), "validation", "legacy pipeline server exists")
 		}
 		return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
 	}
@@ -528,7 +533,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	dspaAction, err := writeDSPA(false)
 	if err != nil {
 		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
-		return fail(fmt.Sprintf("%s The credentials secret '%s' is in place; re-run setup, or tear down to clean up.", msg, dspaSecretName), code, "DSPA write failed")
+		return fail(fmt.Sprintf("%s The credentials secret '%s' is in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName), code, "DSPA write failed")
 	}
 	logs = append(logs, "OK: Pipeline server "+dspaAction)
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")

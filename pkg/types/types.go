@@ -606,10 +606,45 @@ type ResourcesStatus struct {
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
+	// PipelinesBlocked and MLflowBlocked say why the feature cannot be set
+	// up on this cluster (the DataScienceCluster does not turn on the
+	// component that runs it), or are nil. Setup refuses for the same reason.
+	PipelinesBlocked *ComponentBlock `json:"pipelinesBlocked,omitempty"`
+	MLflowBlocked    *ComponentBlock `json:"mlflowBlocked,omitempty"`
+	// DashboardURL is the RHOAI dashboard's address ("" when unknown), for
+	// links such as its Projects page.
+	DashboardURL string `json:"dashboardUrl,omitempty"`
 }
 
-// MigrateStorageRequest is the body of POST
-// /api/resources/minio/migrate/stream.
+// ComponentBlock is a DataScienceCluster component a feature needs that is
+// not turned on.
+type ComponentBlock struct {
+	// Component is its key in the DataScienceCluster's spec.components
+	// ("aipipelines", "mlflowoperator").
+	Component string `json:"component"`
+	// DSC is the DataScienceCluster's name; "" when there is none.
+	DSC string `json:"dsc,omitempty"`
+	// State is its managementState as read ("Removed"); "" when there is
+	// no DataScienceCluster or no state.
+	State string `json:"state,omitempty"`
+	// Reason says it in plain words, with who can fix it.
+	Reason string `json:"reason"`
+}
+
+// CleanupRequest is the body of POST /api/resources/cleanup/stream: what
+// to delete of what this tool created, in this order.
+type CleanupRequest struct {
+	// PipelineServers are the projects whose pipeline server goes.
+	PipelineServers []string `json:"pipelineServers,omitempty"`
+	// Storage deletes the S3 storage (and storage an earlier version left).
+	Storage bool `json:"storage,omitempty"`
+	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
+	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
+	// MLflow deletes the MLflow server.
+	MLflow bool `json:"mlflow,omitempty"`
+}
+
+// S3TeardownRequest is the body of POST /api/resources/minio/teardown.
 type S3TeardownRequest struct {
 	// DeleteNamespace also deletes namespace seaweedfs, with everything in
 	// it, once the storage's objects are gone (only when this tool created
@@ -702,6 +737,10 @@ type ResourceState struct {
 	SetupBlockedReason string `json:"setupBlockedReason,omitempty"`
 	// TeardownBlockedReason explains why teardown is unavailable.
 	TeardownBlockedReason string `json:"teardownBlockedReason,omitempty"`
+	// UsedBy lists the pipeline servers ("namespace/name") that store their
+	// artifacts in the S3 storage, whoever created them: the storage cannot
+	// be deleted while one is there.
+	UsedBy []string `json:"usedBy,omitempty"`
 	// WaitingReason is the pod-level reason the resource is not ready, such
 	// as ImagePullBackOff, CrashLoopBackOff or Unschedulable.
 	WaitingReason string `json:"waitingReason,omitempty"`

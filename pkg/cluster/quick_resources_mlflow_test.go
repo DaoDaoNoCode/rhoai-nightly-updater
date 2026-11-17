@@ -76,6 +76,7 @@ func TestGetMLflowStatus_LegacyApplyIsManagedAndOwnedPVCListed(t *testing.T) {
 func TestSetupMLflow(t *testing.T) {
 	t.Run("creates a labelled CR without pinning an image", func(t *testing.T) {
 		f, c := newResourceFake(t)
+		putManagedDSC(f)
 		if resp, _ := SetupMLflow(c); !resp.Success {
 			t.Fatalf("got %+v", resp)
 		}
@@ -92,6 +93,7 @@ func TestSetupMLflow(t *testing.T) {
 	})
 	t.Run("CRD missing", func(t *testing.T) {
 		f, c := newResourceFake(t)
+		putManagedDSC(f)
 		f.fail["POST /apis/"+mlflowAPIGroup+"/mlflows"] = 404
 		if resp, _ := SetupMLflow(c); resp.Success || resp.ErrorCode != "prerequisites" {
 			t.Fatalf("got %+v", resp)
@@ -99,6 +101,7 @@ func TestSetupMLflow(t *testing.T) {
 	})
 	t.Run("created concurrently", func(t *testing.T) {
 		f, c := newResourceFake(t)
+		putManagedDSC(f)
 		f.fail["POST /apis/"+mlflowAPIGroup+"/mlflows"] = 409
 		if resp, _ := SetupMLflow(c); resp.Success || resp.ErrorCode != "conflict" {
 			t.Fatalf("got %+v", resp)

@@ -257,6 +257,12 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 			Logs: logs, ErrorCode: "validation",
 		}, nil
 	}
+	// A component that is not Managed leaves its CRD behind: the CR would
+	// be created and never start.
+	if block := setupComponentBlock(c, mlflowComponent); block != nil {
+		recordMLflowActivity(c, "setup-mlflow", "component not managed", false)
+		return &types.OperationResponse{Success: false, Message: block.Reason + " Nothing was changed.", Logs: logs, ErrorCode: "prerequisites"}, nil
+	}
 
 	logs = append(logs, "Creating MLflow CR...")
 	mlflowCR := map[string]interface{}{

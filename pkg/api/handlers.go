@@ -1549,6 +1549,92 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 	}
 })
 
+// runCleanUp runs a clean-up; tests replace it.
+var runCleanUp = cluster.CleanUp
+
+// maxCleanupProjects bounds the pipeline servers one clean-up deletes.
+const maxCleanupProjects = 200
+
+// HandleCleanupStream deletes what this tool created, as one operation
+// (one lock, one rate-limit slot): the pipeline servers in the given
+// projects, then the S3 storage, then MLflow, streaming each part via SSE.
+// A clean-up from the browser as separate requests would hit the per-user
+// rate limit on the second pipeline server.
+var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	var req types.CleanupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if len(req.PipelineServers) > maxCleanupProjects {
+		writeError(w, fmt.Sprintf("at most %d pipeline servers per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
+		return
+	}
+	seen := map[string]bool{}
+	for _, p := range req.PipelineServers {
+		if !namespaceRegex.MatchString(p) {
+			writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+			return
+		}
+		if seen[p] {
+			writeError(w, "a project is listed twice", http.StatusBadRequest, "validation")
+			return
+		}
+		seen[p] = true
+	}
+	if req.DeleteNamespace && !req.Storage {
+		writeError(w, "deleteNamespace needs storage", http.StatusBadRequest, "validation")
+		return
+	}
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow {
+		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in cleanup handler", "error", rec)
+		}
+	}()
+
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	defer sseWriter.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	var target []string
+	if n := len(req.PipelineServers); n > 0 {
+		target = append(target, fmt.Sprintf("%d pipeline %s", n, map[bool]string{true: "server", false: "servers"}[n == 1]))
+	}
+	if req.Storage {
+		target = append(target, "S3 storage")
+		if req.DeleteNamespace {
+			target = append(target, "namespace seaweedfs")
+		}
+	}
+	if req.MLflow {
+		target = append(target, "MLflow")
+	}
+	beginOperation(w, strings.Join(target, ", "))
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow)
+
+	result, cleanupErr := runCleanUp(c, req, forwardSteps(sseWriter))
+	sendOperationResult(sseWriter, result, cleanupErr)
+	if cleanupErr != nil {
+		slog.Error("cleanup failed", "error", cleanupErr)
+	}
+})
+
 // HandleS3StorageTeardown deletes the S3 storage objects this tool created, including those an earlier
 // version left in namespace minio; the namespaces are kept.
 var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {

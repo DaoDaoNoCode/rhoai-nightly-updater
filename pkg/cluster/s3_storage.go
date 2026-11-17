@@ -1158,7 +1158,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 			if dryRun {
 				return fail(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", r.name, err, templateHint(err)), code, "dry run "+r.name+" failed")
 			}
-			return fail(fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. %s to retry, or tear down to remove it.%s", r.name, err, done, retry.Again, templateHint(err)), code, "apply "+r.name+" failed")
+			return fail(fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. %s to retry, or delete the storage to remove it.%s", r.name, err, done, retry.Again, templateHint(err)), code, "apply "+r.name+" failed")
 		}
 		if !dryRun {
 			applied = append(applied, r.name)
@@ -1208,7 +1208,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 				msg += ": " + truncateMessage(issue.Message)
 			}
 			log.add("SeaweedFS cannot start: " + msg)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or tear it down.", msg, retry.again), "not_ready", issue.Reason)
+			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason)
 		}
 		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "wait failed")
 	}
@@ -1470,7 +1470,21 @@ func waitPVCsGone(c *Client, uids map[string]string) ([]string, error) {
 // (DSPO dspipeline_controller.go), so the storage waits until they are
 // really gone (teardown order DSPA, then S3 storage).
 func s3TeardownBlocker(dspas []dspaInfo, addresses ...storageAddress) string {
-	var live, deleting []string
+	live, deleting := storageUsers(dspas, addresses...)
+	var parts []string
+	if len(live) > 0 {
+		parts = append(parts, fmt.Sprintf("%s %s this S3 storage: %s. Delete %s first.", countNoun(len(live), "pipeline server", "pipeline servers"), verb(len(live), "uses", "use"), strings.Join(live, ", "), verb(len(live), "it", "them")))
+	}
+	if len(deleting) > 0 {
+		parts = append(parts, fmt.Sprintf("%s %s still being deleted: %s. Wait until %s gone; the data-science-pipelines operator must be running to finish the cleanup.", countNoun(len(deleting), "pipeline server", "pipeline servers"), verb(len(deleting), "is", "are"), strings.Join(deleting, ", "), verb(len(deleting), "it is", "they are")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// storageUsers lists the pipeline servers ("namespace/name") that store
+// their artifacts in a storage at one of the addresses, sorted: those that
+// are live and those being deleted.
+func storageUsers(dspas []dspaInfo, addresses ...storageAddress) (live, deleting []string) {
 	for _, d := range dspas {
 		uses := false
 		for _, a := range addresses {
@@ -1490,14 +1504,7 @@ func s3TeardownBlocker(dspas []dspaInfo, addresses ...storageAddress) string {
 	}
 	sort.Strings(live)
 	sort.Strings(deleting)
-	var parts []string
-	if len(live) > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s this S3 storage: %s. Tear %s down first.", countNoun(len(live), "pipeline server", "pipeline servers"), verb(len(live), "uses", "use"), strings.Join(live, ", "), verb(len(live), "it", "them")))
-	}
-	if len(deleting) > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s still being deleted: %s. Wait until %s gone; the data-science-pipelines operator must be running to finish the cleanup.", countNoun(len(deleting), "pipeline server", "pipeline servers"), verb(len(deleting), "is", "are"), strings.Join(deleting, ", "), verb(len(deleting), "it is", "they are")))
-	}
-	return strings.Join(parts, " ")
+	return live, deleting
 }
 
 // TeardownS3Storage removes the S3 storage objects this tool created, with
@@ -1567,7 +1574,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		addresses = append(addresses, legacy.address)
 	}
 	if reason := s3TeardownBlocker(dspas, addresses...); reason != "" {
-		return fail("Cannot tear down the S3 storage yet. "+reason, "prerequisites", "pipeline servers depend on it")
+		return fail("Cannot delete the S3 storage yet. "+reason, "prerequisites", "pipeline servers depend on it")
 	}
 
 	var d storageDeletion

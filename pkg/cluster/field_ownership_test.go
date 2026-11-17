@@ -232,6 +232,7 @@ func TestSetupS3Storage_DryRunFailureChangesNothing(t *testing.T) {
 // credentials Secret behind: both writes are dry-run before either is made.
 func TestSetupPipelineServer_DryRunFailureChangesNothing(t *testing.T) {
 	f, c := newResourceFake(t)
+	putManagedDSC(f)
 	putReadyManagedS3(f)
 	f.putJSON("/api/v1/namespaces/team-a", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 	f.failDryRun["POST /apis/"+dspaAPIGroup+"/namespaces/team-a/datasciencepipelinesapplications"] = 422

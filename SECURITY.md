@@ -115,7 +115,9 @@ The copy Job's pod: `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capab
 ## Abuse limits and input validation
 
 - Mutations: one accepted request per user and endpoint per 30 s, taken when the request is accepted. Rejected requests (4xx/5xx, including 409 busy) and dry runs do not use the slot. One cluster operation at a time (409 `cluster_busy`). A 15-minute deadline applies, independent of the browser.
-- Mutation bodies are capped at 4096 bytes (`/api/pageview` at 256), and the read timeout is 15 s.
+- Mutation bodies are capped at 4096 bytes (`/api/pageview` at 256; the clean-up's list of at most 200 projects at 16 KiB), and the read timeout is 15 s.
+- **Clean up** (Environment page, `POST /api/resources/cleanup/stream`) is one operation: one cluster lock and one rate-limit slot for the whole run, the same cluster-admin gate and 15-minute deadline as every mutation. It needs no new RBAC: each part runs the part's own teardown (pipeline servers, then the S3 storage, then MLflow) with its permissions and guards, so it deletes only what this tool created, never a storage a pipeline server still uses, and namespace `seaweedfs` only when asked and only when this tool created it. Project names are validated (DNS-1123, no duplicates) before the lock is used; the first part that does not succeed stops the run.
+- **Feature prerequisites** (Environment page): the status reads the DataScienceCluster's `spec.components` / `status.components` management state with the `get`/`list` on `datascienceclusters` that `deploy/template.yaml` already grants (the Components page uses it), and setup refuses on the same reading. No new RBAC.
 - Images must match `quay.io/rhoai/` or `registry.redhat.io/rhoai/`. A custom build to install accepts only `quay.io/rhoai/rhoai-fbc-fragment` with a tag and/or digest. PR numbers, DSC names, channels and namespaces are validated before use. The static file server is protected against path traversal.
 - `/api/pageview` stores only aggregate counters, with labels limited to known page/feature names. No user identity is stored.
 

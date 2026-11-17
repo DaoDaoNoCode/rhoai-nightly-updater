@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -671,21 +672,38 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		s3EPErr     error
 		legacy      *legacyStorage
 		legacyErr   error
+		dsc         dscRead
+		dscErr      error
 		status      = &types.ResourcesStatus{}
 	)
-	wg.Add(6)
+	wg.Add(7)
 	go func() { defer wg.Done(); projects, projectsErr = GetDSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
 	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = s3StatusAndEndpoints(c) }()
 	go func() { defer wg.Done(); legacy, legacyErr = readLegacyStorage(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
 	go func() { defer wg.Done(); dashURL = dashboardBaseURL(c) }()
+	go func() { defer wg.Done(); dsc, dscErr = readFirstDSC(c) }()
 	wg.Wait()
 	if projectsErr != nil {
 		return nil, projectsErr
 	}
 	if dspasErr != nil && !errors.Is(dspasErr, errDSPACRDMissing) {
 		return nil, dspasErr
+	}
+
+	status.DashboardURL = dashURL
+	// What the features need from the DataScienceCluster. One that cannot
+	// be read blocks nothing; setup still checks the CRD.
+	if dscErr != nil {
+		slog.Debug("cannot read the DataScienceCluster for the Environment page", "error", dscErr)
+	} else {
+		status.PipelinesBlocked = componentBlock(dsc, pipelinesComponent)
+		status.MLflowBlocked = componentBlock(dsc, mlflowComponent)
+	}
+	if status.PipelinesBlocked == nil && errors.Is(dspasErr, errDSPACRDMissing) {
+		status.PipelinesBlocked = &types.ComponentBlock{Component: pipelinesComponent.keys[0],
+			Reason: "Data Science Pipelines is not installed yet: this cluster has no DataSciencePipelinesApplication API. If the component was just turned on, wait for the operator; otherwise check the Components page."}
 	}
 
 	visible := map[string]bool{}
@@ -754,6 +772,10 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 			status.MinIO.TeardownBlockedReason = "Cannot verify which pipeline servers use the S3 storage: " + addrErr.Error()
 		} else if reason := s3TeardownBlocker(dspas, addresses...); reason != "" {
 			status.MinIO.TeardownBlockedReason = reason
+		}
+		if addrErr == nil {
+			live, deleting := storageUsers(dspas, addresses...)
+			status.MinIO.UsedBy = append(live, deleting...)
 		}
 	}
 	return status, nil
