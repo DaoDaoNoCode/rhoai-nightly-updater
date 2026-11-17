@@ -653,9 +653,13 @@ func dashboardTestPod(name, container, image string, ready bool, status map[stri
 		cs[k] = v
 	}
 	return map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name, "labels": map[string]string{"app": "notebooks"}, "creationTimestamp": "2026-10-05T10:00:00Z"},
-		"spec":     map[string]interface{}{"containers": []map[string]string{{"name": container, "image": image}}},
-		"status":   map[string]interface{}{"containerStatuses": []interface{}{cs}},
+		// Like a real Deployment pod: a pod-template-hash label and its
+		// ReplicaSet "<deployment>-<hash>" as controlling owner (container is
+		// the Deployment's name in these tests).
+		"metadata": map[string]interface{}{"name": name, "labels": map[string]string{"app": "notebooks", "pod-template-hash": name}, "creationTimestamp": "2026-10-05T10:00:00Z",
+			"ownerReferences": []map[string]interface{}{{"kind": "ReplicaSet", "name": container + "-" + name, "controller": true}}},
+		"spec":   map[string]interface{}{"containers": []map[string]string{{"name": container, "image": image}}},
+		"status": map[string]interface{}{"containerStatuses": []interface{}{cs}},
 	}
 }
 
@@ -699,7 +703,12 @@ func TestDashboardStuckRolloutReportsReasons(t *testing.T) {
 			}
 			other := dashboardTestPod("other", "notebooks-ui", newImage, false, nil)
 			other["metadata"].(map[string]interface{})["labels"] = map[string]string{"app": "other"}
-			f.pods = []map[string]interface{}{oldPod, newPod, other}
+			// Same labels as the Deployment's pods, newer and not ready, but
+			// owned by another Deployment's ReplicaSet: never this one's pod.
+			foreign := dashboardTestPod("foreign", "notebooks-ui", newImage, false, map[string]interface{}{"state": map[string]interface{}{"waiting": map[string]interface{}{"reason": "ErrImagePull"}}})
+			foreign["metadata"].(map[string]interface{})["creationTimestamp"] = "2026-10-06T10:00:00Z"
+			foreign["metadata"].(map[string]interface{})["ownerReferences"] = []map[string]interface{}{{"kind": "ReplicaSet", "name": "other-deployment-foreign", "controller": true}}
+			f.pods = []map[string]interface{}{oldPod, newPod, other, foreign}
 
 			var state types.DashboardState
 			populateDashboardDevState(c, &state)

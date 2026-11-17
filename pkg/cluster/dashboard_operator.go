@@ -670,6 +670,7 @@ type dashboardPod struct {
 	Metadata struct {
 		Name              string            `json:"name"`
 		Labels            map[string]string `json:"labels"`
+		OwnerReferences   []ownerRef        `json:"ownerReferences"`
 		CreationTimestamp string            `json:"creationTimestamp"`
 		DeletionTimestamp string            `json:"deletionTimestamp"`
 	} `json:"metadata"`
@@ -761,6 +762,9 @@ func addDashboardRolloutDiagnostics(c *Client, images []types.DashboardDevImage,
 		for p := range pods.Items {
 			pod := &pods.Items[p]
 			if pod.Metadata.DeletionTimestamp != "" || !dashboardLabelsMatch(d.Spec.Selector.MatchLabels, pod.Metadata.Labels) {
+				continue
+			}
+			if kind, name := controllerOf(pod.Metadata.OwnerReferences); !ownedByDeployment(images[i].Deployment, pod.Metadata.Labels, kind, name) {
 				continue
 			}
 			score := 0

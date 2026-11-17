@@ -193,7 +193,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 
 	// Get dashboard pods using the deployment's label selector
-	dashPods := getDashboardPods(c, deploy.Spec.Selector.MatchLabels)
+	dashPods := getDashboardPods(c, dashboardDeploymentName, deploy.Spec.Selector.MatchLabels)
 	state.Pods = dashPods
 
 	// Build the expected image for the primary dashboard container from the deployment spec
@@ -834,7 +834,7 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 
 // getDashboardPods returns pods matching the given label selector, with
 // pod.Image set to the rhods-dashboard container (not the first container).
-func getDashboardPods(c *Client, matchLabels map[string]string) []types.PodInfo {
+func getDashboardPods(c *Client, deployment string, matchLabels map[string]string) []types.PodInfo {
 	// Build label selector query string
 	var parts []string
 	for k, v := range matchLabels {
@@ -852,8 +852,10 @@ func getDashboardPods(c *Client, matchLabels map[string]string) []types.PodInfo 
 	var podList struct {
 		Items []struct {
 			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
+				Name            string            `json:"name"`
+				Namespace       string            `json:"namespace"`
+				Labels          map[string]string `json:"labels"`
+				OwnerReferences []ownerRef        `json:"ownerReferences"`
 			} `json:"metadata"`
 			Spec struct {
 				NodeName   string `json:"nodeName"`
@@ -894,6 +896,10 @@ func getDashboardPods(c *Client, matchLabels map[string]string) []types.PodInfo 
 
 	var pods []types.PodInfo
 	for _, item := range podList.Items {
+		// Only the Deployment's own pods: its selector may also match others.
+		if kind, name := controllerOf(item.Metadata.OwnerReferences); !ownedByDeployment(deployment, item.Metadata.Labels, kind, name) {
+			continue
+		}
 		pod := types.PodInfo{
 			Name:      item.Metadata.Name,
 			Namespace: item.Metadata.Namespace,

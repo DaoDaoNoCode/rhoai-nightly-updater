@@ -485,26 +485,49 @@ func matchPodsToDeployments(pods []types.PodInfo, namespace string, deployments 
 	}
 }
 
-// podMatchesDeployment checks if a pod belongs to a deployment using the
-// deployment's label selector. Falls back to name prefix if no selector.
-func podMatchesDeployment(pod types.PodInfo, dep types.DeploymentInfo) bool {
-	if len(dep.MatchLabels) > 0 && len(pod.Labels) > 0 {
-		for k, v := range dep.MatchLabels {
-			if pod.Labels[k] != v {
-				return false
-			}
+// ownerRef is the part of metadata.ownerReferences pod matching reads.
+type ownerRef struct {
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Controller *bool  `json:"controller"`
+}
+
+// controllerOf returns the controlling owner reference (controller: true),
+// or the first reference when none is marked.
+func controllerOf(refs []ownerRef) (kind, name string) {
+	for i, ref := range refs {
+		if ref.Controller != nil && *ref.Controller {
+			return ref.Kind, ref.Name
 		}
-		// Label selector matched — but exclude pods not owned by a ReplicaSet
-		// (e.g., CronJob pods that share the same app label).
-		// ReplicaSet-managed pods always have a pod-template-hash label.
-		if _, hasHash := pod.Labels["pod-template-hash"]; !hasHash {
-			if pod.OwnerKind != "" && pod.OwnerKind != "ReplicaSet" {
-				return false
-			}
+		if i == 0 {
+			kind, name = ref.Kind, ref.Name
 		}
-		return true
 	}
-	return strings.HasPrefix(pod.Name, dep.Name+"-")
+	return kind, name
+}
+
+// ownedByDeployment reports whether a pod's controlling owner is one of the
+// Deployment's ReplicaSets. The Deployment controller names each ReplicaSet
+// "<deployment>-<pod-template-hash>" and gives its pods that
+// pod-template-hash label (Kubernetes docs, Deployments: "the name of the
+// ReplicaSet is always formatted as [DEPLOYMENT-NAME]-[HASH]"); ReplicaSet
+// names are unique per namespace. A label selector alone is not enough:
+// selectors may overlap (trustyai-operator-module-controller-manager selects
+// only control-plane=controller-manager, which many operators' pods carry).
+func ownedByDeployment(deployment string, podLabels map[string]string, ownerKind, ownerName string) bool {
+	hash := podLabels["pod-template-hash"]
+	return ownerKind == "ReplicaSet" && hash != "" && ownerName == deployment+"-"+hash
+}
+
+// podMatchesDeployment reports whether a pod belongs to a Deployment: the
+// selector matches and the pod's controlling ReplicaSet is the Deployment's.
+func podMatchesDeployment(pod types.PodInfo, dep types.DeploymentInfo) bool {
+	for k, v := range dep.MatchLabels {
+		if pod.Labels[k] != v {
+			return false
+		}
+	}
+	return ownedByDeployment(dep.Name, pod.Labels, pod.OwnerKind, pod.OwnerName)
 }
 
 // enrichComponentFix adds fix buttons only for cases where the operator's own

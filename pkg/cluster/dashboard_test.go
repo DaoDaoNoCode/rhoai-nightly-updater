@@ -68,7 +68,7 @@ func TestGetDashboardState_NoPR(t *testing.T) {
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -127,7 +127,7 @@ func TestGetDashboardState_SingleContainerPR(t *testing.T) {
 	deployJSON, _ := json.Marshal(deploy)
 
 	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -189,7 +189,7 @@ func TestGetDashboardState_MultiContainerPR(t *testing.T) {
 	deployJSON, _ := json.Marshal(deploy)
 
 	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -325,7 +325,7 @@ func TestGetDashboardState_RolloutPending(t *testing.T) {
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -455,7 +455,7 @@ func TestGetDashboardState_ContainersReadyDuringRollout(t *testing.T) {
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -562,7 +562,7 @@ func TestGetDashboardState_ContainersTotalFallbackForPendingPod(t *testing.T) {
 			},
 		},
 	}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -615,7 +615,7 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 	// special characters (slashes, spaces, equals signs, etc.).
 	var capturedRawQuery string
 	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/namespaces/redhat-ods-applications/pods" {
@@ -640,7 +640,7 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 		"deployment":                "rhods-dashboard",
 	}
 
-	getDashboardPods(client, labels)
+	getDashboardPods(client, dashboardDeploymentName, labels)
 
 	if capturedRawQuery == "" {
 		t.Fatal("expected pods request to be made, but no query was captured")
@@ -755,7 +755,7 @@ func TestGetDashboardState_StandaloneMode(t *testing.T) {
 	moduleDeployJSON, _ := json.Marshal(moduleDeploy)
 
 	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -821,7 +821,7 @@ func TestGetDashboardState_SidecarModeDetection(t *testing.T) {
 	}
 	deployJSON, _ := json.Marshal(deploy)
 	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -882,7 +882,7 @@ func TestDeployPRImage_Standalone(t *testing.T) {
 	moduleDeployJSON, _ := json.Marshal(moduleDeploy)
 
 	podList := map[string]interface{}{"items": []interface{}{}}
-	podListJSON, _ := json.Marshal(podList)
+	podListJSON, _ := json.Marshal(ownedByReplicaSets(podList, dashboardDeploymentName))
 
 	client, requests, cleanup := newRecordingMockClient(map[string]mockResponse{
 		"/apis/apps/v1/namespaces/redhat-ods-applications/deployments/rhods-dashboard": {
@@ -946,4 +946,22 @@ func TestModuleContainers_MatchesModuleRegistry(t *testing.T) {
 	if len(moduleContainers) != len(expectedModules) {
 		t.Errorf("expected %d entries in moduleContainers, got %d", len(expectedModules), len(moduleContainers))
 	}
+}
+
+// ownedByReplicaSets gives each fixture pod what a real Deployment pod has:
+// a pod-template-hash label and its ReplicaSet "<deployment>-<hash>" as the
+// controlling owner (the hash is the pod's name, unique per fixture).
+func ownedByReplicaSets(podList map[string]interface{}, deployment string) map[string]interface{} {
+	for _, item := range podList["items"].([]interface{}) {
+		meta := item.(map[string]interface{})["metadata"].(map[string]interface{})
+		name := meta["name"].(string)
+		labels, _ := meta["labels"].(map[string]interface{})
+		if labels == nil {
+			labels = map[string]interface{}{}
+		}
+		labels["pod-template-hash"] = name
+		meta["labels"] = labels
+		meta["ownerReferences"] = []interface{}{map[string]interface{}{"kind": "ReplicaSet", "name": deployment + "-" + name, "controller": true}}
+	}
+	return podList
 }

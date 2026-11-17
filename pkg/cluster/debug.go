@@ -64,9 +64,7 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 				Namespace         string            `json:"namespace"`
 				CreationTimestamp string            `json:"creationTimestamp"`
 				Labels            map[string]string `json:"labels"`
-				OwnerReferences   []struct {
-					Kind string `json:"kind"`
-				} `json:"ownerReferences"`
+				OwnerReferences   []ownerRef        `json:"ownerReferences"`
 			} `json:"metadata"`
 			Spec struct {
 				NodeName   string `json:"nodeName"`
@@ -166,9 +164,7 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 		pod.Age = formatAge(item.Metadata.CreationTimestamp)
 		pod.Labels = item.Metadata.Labels
 		pod.PodTemplateHash = item.Metadata.Labels["pod-template-hash"]
-		if len(item.Metadata.OwnerReferences) > 0 {
-			pod.OwnerKind = item.Metadata.OwnerReferences[0].Kind
-		}
+		pod.OwnerKind, pod.OwnerName = controllerOf(item.Metadata.OwnerReferences)
 
 		// Extract scheduling failure reason from pod conditions
 		if item.Status.Phase == "Pending" {

@@ -411,6 +411,7 @@ type PodInfo struct {
 	Containers        []ContainerInfo   `json:"containers,omitempty"`
 	Labels            map[string]string `json:"-"` // for matching, not serialized
 	OwnerKind         string            `json:"-"` // for matching, not serialized
+	OwnerName         string            `json:"-"` // the controlling owner's name, for matching
 	PodTemplateHash   string            `json:"podTemplateHash,omitempty"`
 	SchedulingReason  string            `json:"schedulingReason,omitempty"`
 	SchedulingMessage string            `json:"schedulingMessage,omitempty"`
