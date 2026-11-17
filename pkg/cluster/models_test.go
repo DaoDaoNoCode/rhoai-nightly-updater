@@ -475,6 +475,43 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 	}
 }
 
+// A model that inherits its route from a preset (no spec.router.gateway)
+// is seen through the gateway's attached routes; with none, the teardown
+// proceeds.
+func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"spec":{"baseRefs":[{"name":"v3-6-0-kserve-config-llm-router-route"}]}}`)
+	attached := 1
+	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		if k.plural == "gateways" {
+			obj["status"] = map[string]interface{}{"listeners": []interface{}{
+				map[string]interface{}{"name": "https-external", "attachedRoutes": attached},
+				map[string]interface{}{"name": "https", "attachedRoutes": 0},
+			}}
+		}
+	}
+	before := len(mc.f.mutations())
+	res, _ := TeardownInferenceGateway(mc.c)
+	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "1 route is attached to the inference gateway") {
+		t.Fatalf("got %+v", res)
+	}
+	if m := mc.f.mutations()[before:]; len(m) != 0 {
+		t.Errorf("wrote %v", m)
+	}
+	st, _ := GetResourcesStatus(mc.c)
+	if !strings.Contains(st.InferenceGateway.TeardownBlockedReason, "1 route is attached") {
+		t.Errorf("status: %+v", st.InferenceGateway)
+	}
+
+	attached = 0
+	if res, _ = TeardownInferenceGateway(mc.c); !res.Success || mc.f.has(testGatewayPath) {
+		t.Fatalf("got %+v", res)
+	}
+}
+
 func TestGatewayTeardown_NeverDeletesAForeignGateway(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testGatewayPath, `{"spec":{}}`)

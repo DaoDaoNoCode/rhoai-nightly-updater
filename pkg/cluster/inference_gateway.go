@@ -120,7 +120,24 @@ type gatewayObject struct {
 			Value string `json:"value"`
 		} `json:"addresses"`
 		Conditions []k8sCondition `json:"conditions"`
+		Listeners  []struct {
+			Name           string `json:"name"`
+			AttachedRoutes int    `json:"attachedRoutes"`
+		} `json:"listeners"`
 	} `json:"status"`
+}
+
+// attachedRoutes is the number of routes the gateway controller reports
+// attached to the gateway's listeners: the authoritative count of what
+// uses it, including models that inherit their route from a preset
+// (<prefix>config-llm-router-route sets the global gateway as parentRef)
+// and routes attached by hand.
+func (g gatewayObject) attachedRoutes() int {
+	n := 0
+	for _, l := range g.Status.Listeners {
+		n += l.AttachedRoutes
+	}
+	return n
 }
 
 // externalHost is the hostname of the first listener that is not the
@@ -541,8 +558,15 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 		state.TeardownBlockedReason = "Cannot check which models use the gateway: " + modelsErr.Error()
 	case len(state.UsedBy) > 0:
 		state.TeardownBlockedReason = fmt.Sprintf("Models route through it: %s. Delete %s first.", strings.Join(state.UsedBy, ", "), verb(len(state.UsedBy), "that model", "those models"))
+	case gw.attachedRoutes() > 0:
+		state.TeardownBlockedReason = attachedRoutesReason(gw.attachedRoutes())
 	}
 	return state
+}
+
+// attachedRoutesReason says why a gateway with n attached routes stays.
+func attachedRoutesReason(n int) string {
+	return fmt.Sprintf("%d %s attached to the inference gateway (models, or routes made by hand; `oc get httproute -A` lists them). Delete them first.", n, verb(n, "route is", "routes are"))
 }
 
 // gatewayServiceWarning checks that the gateway's Service has the name the
@@ -767,6 +791,18 @@ func TeardownInferenceGateway(c *Client) (*types.OperationResponse, error) {
 	}
 	if users := gatewayUsers(models); len(users) > 0 {
 		return fail(fmt.Sprintf("Models route through the inference gateway: %s. Delete %s first; nothing was deleted.", strings.Join(users, ", "), verb(len(users), "that model", "those models")), "in_use", "in use")
+	}
+	// The gateway controller's count of attached routes also sees models
+	// that inherit their route from a preset, and routes made by hand.
+	// Fail closed when it cannot be read.
+	if gw := objs["Gateway"]; gw.found {
+		current, found, err := readInferenceGateway(c)
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot read the gateway's attached routes, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "gateway read failed")
+		}
+		if found && current.attachedRoutes() > 0 {
+			return fail(attachedRoutesReason(current.attachedRoutes())+" Nothing was deleted.", "in_use", "routes attached")
+		}
 	}
 	var deleted []string
 	for i := len(gatewayKinds) - 1; i >= 0; i-- {
