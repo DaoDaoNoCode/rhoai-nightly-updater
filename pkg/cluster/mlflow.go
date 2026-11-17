@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -59,6 +60,12 @@ type mlflowCR struct {
 		} `json:"image"`
 	} `json:"spec"`
 	Status struct {
+		// URL is the public address the operator reports (on current
+		// releases the data-science gateway, https://rh-ai.<apps>/mlflow,
+		// served by an HTTPRoute; there is no Route). odh-dashboard reads the
+		// same field for its external MLflow link (gen-ai BFF,
+		// integrations/mlflow/mlflow_cr.go DiscoverMLflowExternalURL).
+		URL        string `json:"url"`
 		Conditions []struct {
 			Type    string `json:"type"`
 			Status  string `json:"status"`
@@ -66,6 +73,18 @@ type mlflowCR struct {
 			Message string `json:"message"`
 		} `json:"conditions"`
 	} `json:"status"`
+}
+
+// mlflowUIURL is MLflow's public address: the CR's status.url when it is an
+// https URL, else the Route named "mlflow" (releases before the gateway).
+func mlflowUIURL(statusURL, routeHost string) string {
+	if u, err := url.Parse(strings.TrimSpace(statusURL)); err == nil && u.Scheme == "https" && u.Host != "" {
+		return strings.TrimRight(u.String(), "/")
+	}
+	if routeHost != "" {
+		return "https://" + routeHost
+	}
+	return ""
 }
 
 func (m mlflowCR) image() string {
@@ -187,7 +206,13 @@ func getMLflowStatus(c *Client) types.ResourceState {
 		pvcs  []string
 	)
 	wg.Add(3)
-	go func() { defer wg.Done(); host = routeHost(c, mlflowNamespace, "mlflow") }()
+	go func() {
+		defer wg.Done()
+		// The Route only matters on releases whose CR reports no URL.
+		if mlflowUIURL(cr.Status.URL, "") == "" {
+			host = routeHost(c, mlflowNamespace, "mlflow")
+		}
+	}()
 	go func() {
 		defer wg.Done()
 		if !state.Ready && !state.Terminating {
@@ -201,9 +226,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 		}
 	}()
 	wg.Wait()
-	if host != "" {
-		state.UIRoute = "https://" + host
-	}
+	state.UIRoute = mlflowUIURL(cr.Status.URL, host)
 	applyPodIssue(&state, issue)
 	state.DataPVCs = pvcs
 	return state

@@ -20,6 +20,11 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- "Open MLflow" uses the address the MLflow operator reports (the MLflow
+  CR's `status.url`, on current releases `https://rh-ai.<apps>/mlflow`
+  through the data-science gateway). It looked for a Route named `mlflow`,
+  which current releases no longer create, so the link was missing; the
+  Route is still used on releases whose CR reports no address.
 - The update notice's "Release notes" link opens the public GitHub release
   (`.../releases/tag/vX.Y.Z`), the same page the install command downloads
   `install.sh` from. The GitLab release page it linked before redirects
