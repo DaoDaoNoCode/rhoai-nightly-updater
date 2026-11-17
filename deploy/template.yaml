@@ -112,8 +112,8 @@ objects:
       # and pipeline projects. S3 storage teardown removes only the tool's
       # own objects and keeps the namespaces. Only minio, the namespace of
       # the storage earlier versions set up, may be deleted: at the end of
-      # Migrate storage, when the user chooses it and its metadata shows the
-      # tool created it (UID precondition).
+      # Migrate storage, when the user ticks it; offered only when it carries
+      # the tool label and the tool's managers wrote it (UID precondition).
       - apiGroups: [""]
         resources: ["namespaces"]
         verbs: ["get", "list", "create"]
@@ -320,7 +320,7 @@ objects:
         resourceNames: ["nightly-dspa", "dspa"]
         verbs: ["get", "delete"]
       # patch dspa: Migrate storage moves a pipeline server an earlier
-      # version created (proven by its managedFields) to the new storage
+      # version created (proven by its field ownership) to the new storage
       - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
         resources: ["datasciencepipelinesapplications"]
         resourceNames: ["nightly-dspa", "dspa"]
