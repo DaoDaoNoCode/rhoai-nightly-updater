@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { MaaSStatus } from "../../types";
 import { IDLE, maasState } from "./featureState";
 import { maasCurl, maasSteps } from "./MaaSTab";
+import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
+import type { ResourcesStatus } from "../../types";
 
 const base = (parts: MaaSStatus["parts"], extra: Partial<MaaSStatus> = {}): MaaSStatus => ({
   platform: { deployed: false, ready: false, managedByTool: false },
@@ -49,5 +51,26 @@ describe("MaaS use and steps", () => {
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
     expect(maasSteps({ kind: "publish-maas", project: "p" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
     expect(maasSteps({ kind: "unpublish-maas", project: "p" }).map((s) => s.id)).toEqual(["check", "maas", "model", "gateway"]);
+  });
+});
+
+describe("Clean up everything with MaaS", () => {
+  const maas = base([{ id: "dsc", title: "DSC", state: "ready" }], {
+    platform: { deployed: true, ready: true, managedByTool: true },
+    items: [{ namespace: "p", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
+  });
+  const status = { minio: { deployed: false, ready: false, managedByTool: false }, mlflow: { deployed: false, ready: false, managedByTool: false }, pipelineServers: [] } as unknown as ResourcesStatus;
+
+  it("offers the publications and the platform, unpublishing first and removing the platform last", () => {
+    const c = cleanupCandidates(status, "all", false, null, maas);
+    expect(c.maasPublished).toEqual(["p"]);
+    expect(c.maasPlatform).toBe(true);
+    expect(cleanupSteps({ maasPublished: ["p"], models: ["p"], maasPlatform: true }).map((s) => s.id)).toEqual(["maas-unpublish:p", "model:p", "maas-platform"]);
+    expect(cleanupCandidates(status, "models", false, null, maas).maasPlatform).toBe(false);
+  });
+
+  it("a published model cannot go without its publication", () => {
+    expect(cleanupBlocked(status, { models: ["p"] }, ["p"])).toContain("published to MaaS");
+    expect(cleanupBlocked(status, { models: ["p"], maasPublished: ["p"] }, ["p"])).toBeNull();
   });
 });

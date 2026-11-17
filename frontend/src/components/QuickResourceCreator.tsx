@@ -628,8 +628,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     },
   ];
   const anythingToClean = !!resStatus && (() => {
-    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg);
-    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway || c.playgrounds.length > 0;
+    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas);
+    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform;
   })();
 
   // The run's "what next" and main action, from the feature it set up.
@@ -803,7 +803,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       )}
 
       {cleanupScope && resStatus && (
-        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} minioLeftovers={minioLeftovers} baseReason={baseReason}
+        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} maas={maas} minioLeftovers={minioLeftovers} baseReason={baseReason}
           onConfirm={startCleanup} onCancel={() => setCleanupScope(null)} />
       )}
 

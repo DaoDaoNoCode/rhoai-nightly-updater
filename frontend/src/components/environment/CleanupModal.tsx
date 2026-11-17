@@ -18,7 +18,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { PlaygroundStatus, ResourcesStatus } from "../../types";
+import type { PlaygroundStatus, ResourcesStatus, MaaSStatus } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
@@ -28,7 +28,10 @@ import { S3_NAMESPACE, storageTeardownOffered } from "./PipelinesTab";
 export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "all";
 
 /** What this tool created that a clean-up of the scope can delete, from the status. */
-export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null) {
+export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null, maas: MaaSStatus | null = null) {
+  // MaaS (Clean up everything only): this tool's publications first, the platform last.
+  const maasPublished = scope === "all" ? (maas?.items ?? []).filter((i) => i.published && i.namespace).map((i) => i.namespace!) : [];
+  const maasPlatform = scope === "all" && !!maas?.platform.managedByTool;
   // The playgrounds this tool asked the dashboard for (playground status).
   const playgrounds = scope === "playground" || scope === "all"
     ? (playground?.items ?? []).filter((i) => i.managedByTool && i.deployed && !isTerminating(i) && i.namespace).map((i) => i.namespace!)
@@ -47,18 +50,20 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const minio = status.minio;
   const namespace = storage && minio?.managedByTool !== false && !!minio?.deployed && !!minio?.namespaceDeletable;
   const mlflow = (scope === "mlflow" || scope === "all") && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
-  return { servers, storage, namespace, mlflow, models, gateway, playgrounds };
+  return { servers, storage, namespace, mlflow, models, gateway, playgrounds, maasPublished, maasPlatform };
 }
 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
 export function cleanupSteps(req: CleanupRequest): { id: string; title: string }[] {
   return [
+    ...(req.maasPublished ?? []).map((p) => ({ id: `maas-unpublish:${p}`, title: `Unpublish the model in ${p} from MaaS` })),
     ...(req.pipelineServers ?? []).map((p) => ({ id: `pipeline-server:${p}`, title: `Delete the pipeline server in ${p}` })),
     ...(req.storage ? [{ id: "storage", title: req.deleteNamespace ? `Delete the S3 storage and namespace ${S3_NAMESPACE}` : "Delete the S3 storage" }] : []),
     ...(req.mlflow ? [{ id: "mlflow", title: "Delete MLflow" }] : []),
     ...(req.playgrounds ?? []).map((p) => ({ id: `playground:${p}`, title: `Delete the playground in ${p}` })),
     ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the model in ${p}` })),
     ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
+    ...(req.maasPlatform ? [{ id: "maas-platform", title: "Remove the MaaS platform" }] : []),
   ];
 }
 
@@ -67,7 +72,11 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
  * pipeline server that is not selected still uses it (the server refuses
  * that step after deleting the rest).
  */
-export function cleanupBlocked(status: ResourcesStatus, req: CleanupRequest): string | null {
+export function cleanupBlocked(status: ResourcesStatus, req: CleanupRequest, published: string[] = []): string | null {
+  const stillPublished = (req.models ?? []).filter((p) => published.includes(p) && !(req.maasPublished ?? []).includes(p));
+  if (stillPublished.length > 0) {
+    return `The model in ${stillPublished.join(", ")} is published to MaaS. Select its MaaS publication too, or keep the model.`;
+  }
   if (req.inferenceGateway) {
     const selected = new Set(req.models ?? []);
     const users = (status.inferenceGateway?.usedBy ?? []).filter((u) => !selected.has(u.split("/")[0]) || !(status.models?.items ?? []).some((m) => `${m.namespace}/${m.name}` === u && m.managedByTool !== false));
@@ -101,15 +110,21 @@ export const CleanupModal: React.FC<{
   status: ResourcesStatus;
   /** The playground status, for the playgrounds this tool set up (null: none known). */
   playground?: PlaygroundStatus | null;
+  /** The MaaS status, for this tool's publications and platform (null: none known). */
+  maas?: MaaSStatus | null;
   minioLeftovers: boolean;
   /** Why changes are disabled now, or null. */
   baseReason: string | null;
   onConfirm: (req: CleanupRequest) => void;
   onCancel: () => void;
-}> = ({ scope, status, playground = null, minioLeftovers, baseReason, onConfirm, onCancel }) => {
+}> = ({ scope, status, playground = null, maas = null, minioLeftovers, baseReason, onConfirm, onCancel }) => {
   const titleId = React.useId();
   const reasonId = React.useId();
-  const offered = cleanupCandidates(status, scope, minioLeftovers, playground);
+  const offered = cleanupCandidates(status, scope, minioLeftovers, playground, maas);
+  const [published, setPublished] = useState<string[]>(offered.maasPublished);
+  const chosenPublished = published.filter((p) => offered.maasPublished.includes(p));
+  const togglePublished = (p: string, v: boolean) => setPublished((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+  const [maasPlatform, setMaaSPlatform] = useState(offered.maasPlatform);
   const [playgrounds, setPlaygrounds] = useState<string[]>(offered.playgrounds);
   const chosenPlaygrounds = playgrounds.filter((p) => offered.playgrounds.includes(p));
   const togglePlayground = (p: string, v: boolean) => setPlaygrounds((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
@@ -122,25 +137,28 @@ export const CleanupModal: React.FC<{
   const chosenModels = models.filter((m) => offered.models.includes(m));
   const chosenServers = servers.filter((s) => offered.servers.includes(s));
   const req: CleanupRequest = {
+    ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
     ...(chosenModels.length ? { models: chosenModels } : {}),
     ...(gateway && offered.gateway ? { inferenceGateway: true } : {}),
+    ...(maasPlatform && offered.maasPlatform ? { maasPlatform: true } : {}),
   };
-  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway && !req.playgrounds;
-  const reason = baseReason ?? (nothing ? "Select something to delete." : cleanupBlocked(status, req));
+  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform;
+  const reason = baseReason ?? (nothing ? "Select something to delete." : cleanupBlocked(status, req, offered.maasPublished));
   const lost = [
     ...(req.pipelineServers ?? []).map((p) => <>The runs and experiments of the pipeline server in {p}.</>),
     ...(req.storage ? [<>Every file in the S3 storage: pipeline artifacts and uploaded files{status.legacyStorage ? ", and the storage of an earlier version" : ""}.</>] : []),
     ...(req.deleteNamespace ? [<>Everything else in namespace <code>{S3_NAMESPACE}</code>.</>] : []),
     ...(req.mlflow ? [<>Every MLflow experiment, run and model, in every workspace.</>] : []),
     ...(req.playgrounds ?? []).map((p) => <>The chats and uploaded documents of the playground in {p}.</>),
+    ...(req.maasPlatform ? [<>MaaS API keys, and the MaaS database with their records.</>] : []),
   ];
   const toggleServer = (p: string, v: boolean) => setServers((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0;
+  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform;
   const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : "Clean up MLflow?";
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={onCancel}>
@@ -157,6 +175,13 @@ export const CleanupModal: React.FC<{
           {!nothingOffered && (
             <StackItem>
               <Form onSubmit={(e) => e.preventDefault()}>
+                {offered.maasPublished.length > 0 && (
+                  <FormGroup role="group" isStack label="MaaS publications" fieldId="cleanup-maas-published">
+                    {offered.maasPublished.map((p) => (
+                      <Checkbox key={p} id={`cleanup-maas-published-${p}`} label={<>Model in {p}, published to MaaS</>} description="Unpublished first, before anything else goes." isChecked={published.includes(p)} onChange={(_e, v) => togglePublished(p, v)} />
+                    ))}
+                  </FormGroup>
+                )}
                 {offered.servers.length > 0 && (
                   <FormGroup role="group" isStack label="Pipeline servers" fieldId="cleanup-servers">
                     {offered.servers.map((p) => (
@@ -195,6 +220,11 @@ export const CleanupModal: React.FC<{
                     {offered.gateway && (
                       <Checkbox id="cleanup-gateway" label="Inference gateway" description="With its cloud load balancer and DNS record. Deleted after the models." isChecked={gateway} onChange={(_e, v) => setGateway(v)} />
                     )}
+                  </FormGroup>
+                )}
+                {offered.maasPlatform && (
+                  <FormGroup role="group" isStack label="MaaS" fieldId="cleanup-maas-platform">
+                    <Checkbox id="cleanup-maas-platform" label="MaaS platform" description="Last: MaaS turned back off as it was, then the gateway and database this tool created." isChecked={maasPlatform} onChange={(_e, v) => setMaaSPlatform(v)} />
                   </FormGroup>
                 )}
               </Form>
