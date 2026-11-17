@@ -186,6 +186,29 @@ export function setUpBlocked(state: FeatureState): string | null {
 }
 
 /**
+ * A project-scoped feature summarised across the projects that have it (the
+ * Overview), in the order someone scanning the table needs: the operation
+ * running from this page; then problems, which ready projects never hide;
+ * then ready; then anything moving or unknown. Counts are of the projects
+ * that have the feature, never of every project on the cluster. Null when no
+ * project has it.
+ */
+function acrossProjects(states: FeatureState[], running: FeatureState | null): FeatureState | null {
+  if (running && MOVING.includes(running.status)) return running;
+  const problems = states.filter((s) => PROBLEM.includes(s.status));
+  const ready = states.filter((s) => s.status === "ready");
+  if (problems.length > 0) {
+    const first = problems.find((s) => s.status === "error") ?? problems[0];
+    if (problems.length === 1 && ready.length === 0) return first;
+    // The next step still opens the first problem's project.
+    return { ...first, label: `${envStatusText(first.status)} in ${problems.length} of ${states.length} projects` };
+  }
+  if (ready.length === 1) return ready[0];
+  if (ready.length > 1) return { status: "ready", label: `Ready in ${ready.length} projects`, next: { kind: "choose-project" }, project: null };
+  return states.find((s) => MOVING.includes(s.status)) ?? states.find((s) => s.status === "unknown") ?? null;
+}
+
+/**
  * Pipelines: in a project (the tab), or, without one, summarised across
  * the projects (the Overview): "Ready in juntao-test", "Ready in 2 of 5
  * projects", "Not set up in any project".
@@ -194,16 +217,10 @@ export function pipelinesState(status: ResourcesStatus | null, project: string |
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
   if (PROBLEM.includes(storage)) return { status: storage, label: `${envStatusText(storage)}${notManaged(status?.minio) ? NOT_MANAGED : ""}`, next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
-  const withServers = projectsWithServers(status, projects);
-  const states = withServers.map((p) => pipelinesIn(status, p, busy));
-  const ready = states.filter((s) => s.status === "ready");
-  if (ready.length === 1) return ready[0];
-  // Several ready projects: no jump to one of them; the tab's picker decides.
-  if (ready.length > 1) {
-    return { status: "ready", label: `Ready in ${ready.length} of ${projects.length} projects`, next: { kind: "choose-project" }, project: null };
-  }
-  const problem = states.find((s) => PROBLEM.includes(s.status)) ?? states.find((s) => MOVING.includes(s.status) || s.status === "setting-up") ?? states.find((s) => s.status === "unknown");
-  if (problem) return problem;
+  const states = projectsWithServers(status, projects).map((p) => pipelinesIn(status, p, busy));
+  const running = busy.actionProject ? pipelinesIn(status, busy.actionProject, busy) : null;
+  const summary = acrossProjects(states, running);
+  if (summary) return summary;
   if (MOVING.includes(storage)) return { status: storage, label: "Setting up", next: null, project: null };
   return { status: "not-set-up", label: "Not set up in any project", next: { kind: "choose-project" }, project: null };
 }
@@ -306,7 +323,7 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy): 
   if (model.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${model.unmanaged ? NOT_MANAGED : ""}`, next: null, project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   if (moving && parts.every((p) => p.status !== "not-set-up")) {
-    return { status: "setting-up", label: moving.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
+    return { status: moving.status === "deleting" ? "deleting" : "setting-up", label: moving.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
   }
   const needGateway = gateway.status === "not-set-up";
   const setup: Pending[] = [{ kind: "setup-models", gateway: needGateway, project }];
@@ -332,11 +349,9 @@ export function modelsState(status: ResourcesStatus | null, project: string | nu
     return { status: gateway, label: `${envStatusText(gateway)}${notManaged(status?.inferenceGateway) ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: "gateway" }, project: defaultModelsProject(status, projects, null) };
   }
   const states = projectsWithModels(status, projects).map((p) => modelsIn(status, p, busy));
-  const ready = states.filter((s) => s.status === "ready");
-  if (ready.length === 1) return ready[0];
-  if (ready.length > 1) return { status: "ready", label: `Ready in ${ready.length} of ${projects.length} projects`, next: { kind: "choose-project" }, project: null };
-  const other = states.find((s) => PROBLEM.includes(s.status)) ?? states.find((s) => s.status === "setting-up") ?? states.find((s) => s.status === "unknown");
-  if (other) return other;
+  const running = busy.models?.project ? modelsIn(status, busy.models.project, busy) : null;
+  const summary = acrossProjects(states, running);
+  if (summary) return summary;
   if (MOVING.includes(gateway)) return { status: gateway, label: gateway === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
   return { status: "not-set-up", label: "Not set up in any project", next: { kind: "choose-project" }, project: null };
 }

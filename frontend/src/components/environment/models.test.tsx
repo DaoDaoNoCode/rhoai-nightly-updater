@@ -64,10 +64,30 @@ describe("modelsState", () => {
 
   it("across projects for the Overview, and busy while a run sets it up", () => {
     const two = status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("a"), model("b")] }) });
-    expect(modelsState(two, null, ["a", "b", "c"])).toMatchObject({ status: "ready", label: "Ready in 2 of 3 projects" });
+    // Counted among the projects that have a model, not every project.
+    expect(modelsState(two, null, ["a", "b", "c"])).toMatchObject({ status: "ready", label: "Ready in 2 projects", next: { kind: "choose-project" } });
+    const ten = status({ inferenceGateway: gateway, models: modelsStatus({ items: Array.from({ length: 10 }, (_, i) => model(`p${i}`)) }) });
+    expect(modelsState(ten, null, Array.from({ length: 25 }, (_, i) => `p${i}`))).toMatchObject({ status: "ready", label: "Ready in 10 projects" });
     expect(modelsState(status({ inferenceGateway: gateway }), null, ["a"])).toMatchObject({ label: "Not set up in any project", next: { kind: "choose-project" } });
     const busy = { ...IDLE, models: { action: "setup" as const, gateway: true, project: "a" } };
     expect(modelsState(status(), "a", ["a"], busy)).toMatchObject({ status: "setting-up", label: "Setting up in a", next: null });
+  });
+});
+
+describe("modelsState on the Overview", () => {
+  it("never hides a problem behind ready projects", () => {
+    // A problem is never hidden by ready projects; its next step opens that project.
+    const oneBad = status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("a"), model("b", { warning: "The model restarted 3 times." }), model("c")] }) });
+    expect(modelsState(oneBad, null, ["a", "b", "c"])).toMatchObject({ status: "needs-attention", label: "Needs attention in 1 of 3 projects", project: "b", next: { kind: "show-issue" } });
+  });
+
+  it("shows the operation running from this page", () => {
+    // An operation running from this page shows on the Overview (live: it said "Not set up in any project").
+    const settingUp = { ...IDLE, models: { action: "setup" as const, gateway: true, project: "juntao-test" } };
+    expect(modelsState(status({ inferenceGateway: gateway }), null, ["juntao-test"], settingUp)).toMatchObject({ status: "setting-up", label: "Setting up in juntao-test" });
+    const removing = { ...IDLE, models: { action: "teardown" as const, gateway: false, project: "a" } };
+    const two = status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("a"), model("b")] }) });
+    expect(modelsState(two, null, ["a", "b"], removing)).toMatchObject({ status: "deleting", label: "Deleting in a" });
   });
 });
 

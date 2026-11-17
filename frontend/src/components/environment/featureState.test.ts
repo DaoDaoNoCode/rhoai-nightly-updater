@@ -109,7 +109,7 @@ describe("pipelinesState and mlflowState", () => {
   it("several ready projects: the Overview offers the tab's picker, not a jump into one of them", () => {
     const two: ResourcesStatus = { ...FIXTURES.live, pipelineServers: [dspa("juntao-test"), dspa("zeta")] };
     const overview = pipelinesState(two, null, projects);
-    expect(overview).toMatchObject({ status: "ready", label: `Ready in 2 of ${projects.length} projects`, next: { kind: "choose-project" } });
+    expect(overview).toMatchObject({ status: "ready", label: "Ready in 2 projects", next: { kind: "choose-project" } });
     // The tab, in one of them, links there by name.
     expect(pipelinesState(two, "zeta", projects).next).toMatchObject({ kind: "open", label: "Open pipelines in zeta" });
   });

@@ -80,7 +80,7 @@ describe("Environment page", () => {
       "/api/resources/projects": { projects: ["a", "b", "c", "d", "e"] },
     });
     renderPage("/test-resources");
-    expect(await row("Pipelines")).toHaveTextContent("Ready in 2 of 5 projects");
+    expect(await row("Pipelines")).toHaveTextContent("Ready in 2 projects");
     // Several ready projects: no jump into one of them; the tab's picker decides.
     expect(within(await row("Pipelines")).queryByRole("link", { name: /Open pipelines/ })).not.toBeInTheDocument();
     fireEvent.click(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" }));
