@@ -36,6 +36,25 @@ type migrateSim struct {
 	mode        string // the COPY_MODE of the last copy Job seen
 }
 
+// finishJobAfterReads lets the copy Job report running for its first n reads
+// (GETs of the Job by the code under test), then complete. Tests use it
+// instead of flipping the state after a sleep, which raced the scheduler.
+func finishJobAfterReads(f *resourceFake, sim *migrateSim, n int) {
+	next := f.beforeServe
+	reads := 0
+	f.beforeServe = func(method, path string) {
+		if method == "GET" && strings.Contains(path, "/jobs/"+migrateJobName) {
+			f.mu.Lock()
+			reads++
+			if reads > n {
+				sim.jobRunning = false
+			}
+			f.mu.Unlock()
+		}
+		next(method, path)
+	}
+}
+
 // jobCopyMode returns a stored copy Job's COPY_MODE.
 func jobCopyMode(job map[string]interface{}) string {
 	tmpl, _ := ensureMap(job, "spec")["template"].(map[string]interface{})
@@ -627,7 +646,10 @@ func TestMigrate_ResumesAfterEachStep(t *testing.T) {
 		f.putJSON(migrateJobPathT, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"template":{"spec":{"containers":[{"name":"rclone","env":[{"name":"COPY_MODE","value":"overwrite"}]}]}}}}`)
 		sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
 		simulateMigrate(f, sim)
-		go func() { time.Sleep(30 * time.Millisecond); f.mu.Lock(); sim.jobRunning = false; f.mu.Unlock() }()
+		// The earlier copy is seen running, then finishes: by reads, not a
+		// timer, so a slow scheduler cannot make the run find it finished
+		// first (that is the "finished copy nobody read" case below).
+		finishJobAfterReads(f, sim, 2)
 		ok, msg, _, steps := runMigrate(t, c, MigrateOptions{})
 		if !ok {
 			t.Fatal(msg)

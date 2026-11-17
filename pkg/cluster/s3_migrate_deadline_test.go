@@ -70,8 +70,12 @@ func TestRemoveOldStorage_FinalCopyUsesTheRemainingTime(t *testing.T) {
 	sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
 	simulateMigrate(f, sim)
 	releasePVCWhenServerGone(f, &stuck)
-	// The copy takes longer than MigrateCopyTimeout (200ms here).
-	go func() { time.Sleep(400 * time.Millisecond); f.mu.Lock(); sim.jobRunning = false; f.mu.Unlock() }()
+	// The copy takes longer than MigrateCopyTimeout (200ms here) but ends
+	// within the remaining time. It finishes after 120 reads of the Job, not
+	// after a timer: the code polls every MigratePoll (5ms) and reads the Job
+	// at most twice per poll, so at least 300ms have passed by then, whatever
+	// the scheduler does.
+	finishJobAfterReads(f, sim, 120)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ok, msg, _, _ := runMigrate(t, c.WithContext(ctx), MigrateOptions{RemoveOldStorage: true})
