@@ -646,7 +646,8 @@ func maasGatewayAuth(c *Client) string {
 
 // authorinoTLS checks what scripts/setup-authorino-tls.sh sets on
 // Kuadrant's Authorino in ns: the Service's serving-cert annotation, the
-// Authorino CR's TLS listener, and the Deployment's SSL_CERT_FILE. It
+// Authorino CR's TLS listener, and the Deployment's trust of the service
+// CA (authorinoTrustsServiceCA). It
 // returns "" when all are set (or cannot be read: unknown is not a
 // failure), else what is missing.
 func authorinoTLS(c *Client, ns string) (string, bool) {
@@ -675,10 +676,84 @@ func authorinoTLS(c *Client, ns string) (string, bool) {
 	}
 	if body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "authorino")); err != nil {
 		known = false
-	} else if !strings.Contains(string(body), `"SSL_CERT_FILE"`) {
+	} else if !authorinoTrustsServiceCA(body) {
 		missing = append(missing, "trust of the service CA (SSL_CERT_FILE)")
 	}
 	return strings.Join(missing, ", "), known
+}
+
+// authorinoTrustsServiceCA says whether Authorino's Deployment trusts an
+// added CA bundle, either way it is done: the script's SSL_CERT_FILE or
+// REQUESTS_CA_BUNDLE (it points them at service-ca.crt), or an SSL_CERT_DIR entry
+// that is the mount of a ConfigMap volume, as RHOAI's AI gateway sets it
+// up through the Authorino CR's volumes (live on 3.6: ConfigMap
+// aigrid-service-ca, inject-cabundle, at /etc/ssl/certs/openshift-service-ca).
+func authorinoTrustsServiceCA(deployment []byte) bool {
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Volumes []struct {
+						Name      string           `json:"name"`
+						ConfigMap *json.RawMessage `json:"configMap"`
+						Projected *struct {
+							Sources []struct {
+								ConfigMap *json.RawMessage `json:"configMap"`
+							} `json:"sources"`
+						} `json:"projected"`
+					} `json:"volumes"`
+					Containers []struct {
+						Env []struct {
+							Name, Value string
+						} `json:"env"`
+						VolumeMounts []struct {
+							Name      string `json:"name"`
+							MountPath string `json:"mountPath"`
+						} `json:"volumeMounts"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if json.Unmarshal(deployment, &d) != nil {
+		return false
+	}
+	configMapVolume := map[string]bool{}
+	for _, v := range d.Spec.Template.Spec.Volumes {
+		if v.ConfigMap != nil {
+			configMapVolume[v.Name] = true
+		}
+		if v.Projected != nil {
+			for _, src := range v.Projected.Sources {
+				if src.ConfigMap != nil {
+					configMapVolume[v.Name] = true
+				}
+			}
+		}
+	}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		mounts := map[string]bool{}
+		for _, m := range c.VolumeMounts {
+			if configMapVolume[m.Name] {
+				mounts[strings.TrimRight(m.MountPath, "/")] = true
+			}
+		}
+		for _, e := range c.Env {
+			switch e.Name {
+			case "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE":
+				if strings.TrimSpace(e.Value) != "" {
+					return true
+				}
+			case "SSL_CERT_DIR":
+				for _, dir := range strings.Split(e.Value, ":") {
+					if mounts[strings.TrimRight(dir, "/")] {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // authorinoTLSCommands are scripts/setup-authorino-tls.sh's commands for ns,

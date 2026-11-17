@@ -43,7 +43,7 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	f.groups = map[string]string{"/apis/kuadrant.io": `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"},{"groupVersion":"kuadrant.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`}
 	f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{"annotations":{"service.beta.openshift.io/serving-cert-secret-name":"authorino-server-cert"}}}`)
 	f.putJSON("/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true}}}}`)
-	f.putJSON("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino", `{"spec":{"template":{"spec":{"containers":[{"name":"authorino","env":[{"name":"SSL_CERT_FILE","value":"/x"}]}]}}}}`)
+	f.putJSON("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino", `{"spec":{"template":{"spec":{"containers":[{"name":"authorino","env":[{"name":"SSL_CERT_FILE","value":"/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"}]}]}}}}`)
 	f.putJSON("/api/v1/namespaces/redhat-ai-gateway-infra", `{}`)
 	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/maas", `{"spec":{"dnsName":"maas.apps.example.com."},"status":{"zones":[{"conditions":[{"type":"Published","status":"True"}]}]}}`)
 	prev := f.onGet
@@ -351,6 +351,30 @@ func TestValidateMaaSRequest(t *testing.T) {
 	} {
 		if got := ValidateMaaSRequest(req); got != want {
 			t.Errorf("%+v: %q, want %q", req, got, want)
+		}
+	}
+}
+
+// Authorino trusts the service CA either the way setup-authorino-tls.sh
+// sets it or the way RHOAI's AI gateway does (live on 3.6).
+func TestAuthorinoTrustsServiceCA(t *testing.T) {
+	for _, tc := range []struct {
+		name, deployment string
+		want             bool
+	}{
+		{"the script's SSL_CERT_FILE", `{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"SSL_CERT_FILE","value":"/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"}]}]}}}}`, true},
+		{"the AI gateway's mounted bundle in SSL_CERT_DIR", `{"spec":{"template":{"spec":{
+			"volumes":[{"name":"service-ca","projected":{"sources":[{"configMap":{"name":"aigrid-service-ca"}}]}}],
+			"containers":[{"env":[{"name":"SSL_CERT_DIR","value":"/etc/ssl/certs/openshift-service-ca:/etc/pki/tls/certs:/etc/ssl/certs"}],
+				"volumeMounts":[{"name":"service-ca","mountPath":"/etc/ssl/certs/openshift-service-ca"}]}]}}}}`, true},
+		{"SSL_CERT_DIR with only system directories", `{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"SSL_CERT_DIR","value":"/etc/pki/tls/certs:/etc/ssl/certs"}]}]}}}}`, false},
+		{"a mounted directory that is not in SSL_CERT_DIR", `{"spec":{"template":{"spec":{
+			"volumes":[{"name":"ca","configMap":{"name":"x"}}],
+			"containers":[{"volumeMounts":[{"name":"ca","mountPath":"/etc/x"}]}]}}}}`, false},
+		{"nothing", `{"spec":{"template":{"spec":{"containers":[{}]}}}}`, false},
+	} {
+		if got := authorinoTrustsServiceCA([]byte(tc.deployment)); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
