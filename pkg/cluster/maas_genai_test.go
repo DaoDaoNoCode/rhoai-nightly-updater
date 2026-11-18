@@ -52,3 +52,45 @@ func TestMaaSPublish_TakesTheModelOutOfGenAIAssetsAndUnpublishRestores(t *testin
 		t.Errorf("record kept %+v", rec.GenAI)
 	}
 }
+
+// The MaaSModelRef is owned by the model, as the dashboard makes it
+// (odh-dashboard rhoai-3.6 maas BFF maasmodelrefs.go
+// buildModelRefUnstructured: blockOwnerDeletion false; maas-model-ref.ts
+// L161-231 passes the model's UID and description), so garbage collection
+// removes it with the model.
+func TestMaaSPublish_TheModelRefIsOwnedByTheModelAndCarriesItsDescription(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	uid := mc.f.get(testModelPath)["metadata"].(map[string]interface{})["uid"].(string)
+	meta := mc.f.get(tMaaSRef)["metadata"].(map[string]interface{})
+	want := `[{"apiVersion":"serving.kserve.io/v1alpha2","blockOwnerDeletion":false,"kind":"LLMInferenceService","name":"qwen25-05b-instruct","uid":"` + uid + `"}]`
+	if got := jsonOf(meta["ownerReferences"]); got != want {
+		t.Errorf("ownerReferences %s, want %s", got, want)
+	}
+	entry, _ := catalogEntry("")
+	if got := meta["annotations"].(map[string]interface{})["openshift.io/description"]; got != entry.Description {
+		t.Errorf("description %v", got)
+	}
+}
+
+// The model deleted elsewhere takes its MaaSModelRef with it (garbage
+// collection): the recorded publication shows as partly published, and
+// Unpublish finishes it.
+func TestMaaSUnpublish_AfterGarbageCollectionTookTheModelRef(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	deleteFakeObject(mc, testModelPath)
+	deleteFakeObject(mc, tMaaSRef)
+	st, _ := GetMaaSStatus(mc.c)
+	found := false
+	for _, it := range st.Items {
+		found = found || (it.Name == "qwen25-05b-instruct" && it.Partly)
+	}
+	if !found {
+		t.Fatalf("no partly published row: %+v", st.Items)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
+		t.Fatalf("unpublish: %+v", res)
+	}
+	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 0 || len(rec.GenAI) != 0 || len(rec.ModelRefs) != 0 {
+		t.Errorf("record kept %+v", rec)
+	}
+}

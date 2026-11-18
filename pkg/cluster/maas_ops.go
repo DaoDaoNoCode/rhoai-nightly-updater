@@ -717,13 +717,29 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 
 // --- publish ----------------------------------------------------------------------
 
-func maasModelRefObjectFor(c *Client, project, name, displayName string) map[string]interface{} {
+// maasModelRefObjectFor is the MaaSModelRef of the tool's model as the
+// dashboard's MaaS option makes it (odh-dashboard rhoai-3.6 maas
+// maas-model-ref.ts postDeployMaaSModelRef L161-231, which passes the
+// model's UID and description to the BFF's buildModelRefUnstructured in
+// packages/maas/bff/internal/repositories/maasmodelrefs.go): owned by the
+// model with blockOwnerDeletion false, so garbage collection removes it
+// with the model (the MaaS record then shows the publication as partly
+// done, and Unpublish finishes it), and the model's description. The
+// display name is the catalog's (the caller's), not the object's.
+func maasModelRefObjectFor(c *Client, project, name, displayName, description, modelUID string) map[string]interface{} {
+	annotations := map[string]interface{}{"openshift.io/display-name": displayName}
+	if description != "" {
+		annotations["openshift.io/description"] = description
+	}
 	return map[string]interface{}{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSModelRef",
 		"metadata": map[string]interface{}{
 			"name": name, "namespace": project, "labels": toolLabels(),
-			"annotations": map[string]interface{}{"openshift.io/display-name": displayName, "openshift.io/description": "Published by rhoai-nightly-updater"},
+			"annotations": annotations,
+			"ownerReferences": []interface{}{map[string]interface{}{
+				"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": name, "uid": modelUID, "blockOwnerDeletion": false,
+			}},
 		},
 		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": name}},
 	}
@@ -928,7 +944,7 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	// The catalog's display name, never the object's: MaaS shows it to
 	// every signed-in user, and a project editor can change the annotation.
 	entry, _ := catalogEntry(name)
-	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(entry.DisplayName, name))
+	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(entry.DisplayName, name), model.Metadata.Annotations["openshift.io/description"], model.Metadata.UID)
 	if gwPlan != nil {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
 			return m.fail("check", msg, code, "gateway dry run failed")
