@@ -198,6 +198,7 @@ func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStat
 	if cached, ok := mlflowSamplesCache.Get(project); ok {
 		return &cached, nil
 	}
+	gen := mlflowSamplesGen.current(project)
 	t, reason, err := mlflowSampleTarget(c, project)
 	if err != nil {
 		return nil, err
@@ -224,12 +225,40 @@ func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStat
 		}
 		wg.Wait()
 	}
-	mlflowSamplesCache.Add(project, st, mlflowStatusCacheTTL)
+	// A samples operation that ended during this read invalidated the
+	// project: what was read may predate it, so it is returned but not kept.
+	if mlflowSamplesGen.current(project) == gen {
+		mlflowSamplesCache.Add(project, st, mlflowStatusCacheTTL)
+	}
 	return &st, nil
 }
 
-// InvalidateSamplesStatus drops the cached samples status of project.
+// samplesGenerations counts the invalidations of each project's samples
+// status. A status read caches its result only when the count did not
+// change while it read.
+type samplesGenerations struct {
+	mu  sync.Mutex
+	gen map[string]uint64
+}
+
+var mlflowSamplesGen = &samplesGenerations{gen: map[string]uint64{}}
+
+func (g *samplesGenerations) current(project string) uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gen[project]
+}
+
+func (g *samplesGenerations) bump(project string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.gen[project]++
+}
+
+// InvalidateSamplesStatus drops the cached samples status of project, and
+// keeps a read that is under way from caching what it read before.
 func InvalidateSamplesStatus(project string) {
+	mlflowSamplesGen.bump(project)
 	mlflowSamplesCache.Remove(project)
 	pipelineSampleCache.Remove(project)
 }

@@ -36,7 +36,9 @@ type mlflowFake struct {
 	bareNext map[string]int
 	// noSkills: this MLflow has no Skill Registry (RHOAI 3.5).
 	noSkills bool
-	requests []string
+	// onRequest, when set, runs before each request is served.
+	onRequest func(method, path string)
+	requests  []string
 
 	nextID      int
 	experiments map[string]*fakeExperiment // by id
@@ -289,6 +291,9 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	path := strings.TrimPrefix(r.URL.Path, "/mlflow")
 	f.requests = append(f.requests, r.Method+" "+path)
+	if f.onRequest != nil {
+		f.onRequest(r.Method, path)
+	}
 	if r.Header.Get("Authorization") != "Bearer test-token" {
 		f.mlflowError(w, 401, "UNAUTHENTICATED", "no token")
 		return

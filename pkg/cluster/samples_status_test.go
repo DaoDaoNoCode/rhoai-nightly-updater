@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -89,6 +90,33 @@ func TestMLflowSamplesStatus_IsCached(t *testing.T) {
 	}
 	if len(env.mlflow.requests) == n {
 		t.Error("InvalidateSamplesStatus did not drop the cache")
+	}
+}
+
+// A samples operation that ends while a status read is under way drops the
+// cache; the read must not put its older answer back for the TTL.
+func TestMLflowSamplesStatus_ReadDuringInvalidationIsNotCached(t *testing.T) {
+	env := newSamplesEnv(t)
+	var once sync.Once
+	env.mlflow.onRequest = func(string, string) { once.Do(func() { InvalidateSamplesStatus(fakeProject) }) }
+	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+		t.Fatal(err)
+	}
+	env.mlflow.mu.Lock()
+	n := len(env.mlflow.requests)
+	env.mlflow.mu.Unlock()
+	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.mlflow.requests) == n {
+		t.Error("the read that overlapped an invalidation was cached")
+	}
+	n = len(env.mlflow.requests)
+	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.mlflow.requests) != n {
+		t.Error("a read without an invalidation was not cached")
 	}
 }
 
