@@ -630,17 +630,17 @@ export const gatewayStates = {
 
 /** The Models catalog, as pkg/cluster modelCatalog reports it. */
 export const MODEL_CATALOG = [
-  { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", cpu: "2", memoryRequest: "5Gi", memory: "6Gi",
+  { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", cpu: "2", memoryRequest: "4Gi", memory: "5Gi",
     type: "chat", useCase: "Chat (smoke test)", downloadSize: "270 MB", args: "--max-model-len 4096",
     description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
   { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775", cpu: "4", memoryRequest: "6Gi", memory: "8Gi",
     type: "chat", useCase: "Chat", downloadSize: "1.0 GB", args: "--max-model-len 4096", default: true,
     description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
-  { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "10Gi", memory: "12Gi",
+  { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "12Gi", memory: "14Gi",
     type: "chat", toolCalling: true, useCase: "Chat, Tool calling, Reasoning", downloadSize: "4.1 GB",
     args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
     description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
-  { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "4Gi", memory: "6Gi",
+  { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "3Gi", memory: "4Gi",
     type: "embedding", embeddingDimension: 768, useCase: "Embeddings, Semantic search", downloadSize: "250 MB", args: "--runner pooling --max-model-len 512",
     description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
 ];
@@ -674,7 +674,7 @@ export const modelsStatus = (over = {}) => ({
 });
 
 /** The status's room check of one catalog model (pkg/cluster roomWarning). */
-export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 10Gi of memory free (up to 12Gi), and the most CPU free is 5.5 CPUs and 8.2 GiB on ip-10-0-1-23.ec2.internal.";
+export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12Gi of memory free (up to 14Gi), and the most CPU free is 5.5 CPUs and 8.2 GiB on ip-10-0-1-23.ec2.internal.";
 /** The catalog with that warning on Qwen3. */
 export const catalogWithoutRoom = (name = "qwen3-1-7b") => MODEL_CATALOG.map((c) => (c.name === name ? { ...c, capacityWarning: CAPACITY_WARNING } : c));
 

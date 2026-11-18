@@ -11,7 +11,7 @@ import (
 // profile a deployment uses (odh-dashboard
 // packages/hardware-profiles/shared/utils.ts applyHardwareProfileConfig).
 // Its Deployments page reads the name and namespace. A model with none of
-// them (no profile fits it: Qwen3's 10-12 GiB against the default
+// them (no profile fits it: Qwen3's 12-14 GiB against the default
 // profile's 8 GiB on 3.6) is shown so (odh-dashboard rhoai-3.6 a9ea0d86):
 //   - the table's Hardware profile column says "No hardware profile":
 //     useHardwareProfileBindingState returns no binding state without a

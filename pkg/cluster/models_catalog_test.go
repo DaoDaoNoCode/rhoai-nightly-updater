@@ -41,14 +41,14 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 		tools                                                       bool
 		dim                                                         int
 	}{
-		{"smollm2-135m-instruct", "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", "chat", "2", "5Gi", "6Gi", "2", "1",
+		{"smollm2-135m-instruct", "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", "chat", "2", "4Gi", "5Gi", "2", "1",
 			"--max-model-len 4096", "Chat (smoke test)", false, 0},
 		{"qwen25-05b-instruct", "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775", "chat", "4", "6Gi", "8Gi", "4", "2",
 			"--max-model-len 4096", "Chat", false, 0},
-		{"qwen3-1-7b", "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", "chat", "4", "10Gi", "12Gi", "4", "2",
+		{"qwen3-1-7b", "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", "chat", "4", "12Gi", "14Gi", "4", "2",
 			`--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
 			"Chat, Tool calling, Reasoning", true, 0},
-		{"granite-embedding-125m-english", "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", "embedding", "2", "4Gi", "6Gi", "2", "1",
+		{"granite-embedding-125m-english", "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", "embedding", "2", "3Gi", "4Gi", "2", "1",
 			"--runner pooling --max-model-len 512", "Embeddings, Semantic search", false, 768},
 	}
 	if len(modelCatalog) != len(want) {
@@ -77,6 +77,23 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 	}
 	if ValidModelName("llama") || !ValidModelName("qwen3-1-7b") || !ValidModelName("") {
 		t.Error("ValidModelName")
+	}
+}
+
+// The memory is sized from each model's live peak (RHOAI 3.6, vLLM CPU
+// 0.24): the three small models stay within RHOAI 3.6's default-profile
+// (1-4 CPUs, 2-8 GiB), so the dashboard names it for them; Qwen3 (12-14
+// GiB) fits none, and the dashboard shows "No hardware profile".
+func TestModelCatalog_DefaultProfileHoldsAllButQwen3(t *testing.T) {
+	var def hardwareProfileObject
+	if err := json.Unmarshal([]byte(hwProfile("default-profile", "4", "8Gi", "")), &def); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range modelCatalog {
+		why := def.fits(m)
+		if fits := why == ""; fits != (m.Name != "qwen3-1-7b") {
+			t.Errorf("%s (%s CPUs, %s-%s): fits the default profile = %v (%s)", m.Name, m.CPU, m.MemoryRequest, m.Memory, fits, why)
+		}
 	}
 }
 
@@ -190,7 +207,7 @@ func TestModelCatalog_Qwen3ArgumentsSurviveThePresetsEval(t *testing.T) {
 func TestModelsSetup_TheChosenModel(t *testing.T) {
 	mc := newModelsCluster(t)
 	putModelDeploymentFor(mc, "qwen3-1-7b")
-	// The default profile holds qwen25 (6-8 GiB) but not Qwen3 (10-12 GiB).
+	// The default profile holds qwen25 (6-8 GiB) but not Qwen3 (12-14 GiB).
 	putProfiles(mc, hwProfile("default-profile", "4", "8Gi", ""), hwProfile("large", "8", "16Gi", ""))
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"8","memory":"9Gi"}}}`)
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj", Model: "qwen3-1-7b"})
@@ -209,13 +226,13 @@ func TestModelsSetup_TheChosenModel(t *testing.T) {
 		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
 	}
 	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
-	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"12Gi"},"requests":{"cpu":"4","ephemeral-storage":"6.2G","memory":"10Gi"}}` {
+	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"14Gi"},"requests":{"cpu":"4","ephemeral-storage":"6.2G","memory":"12Gi"}}` {
 		t.Errorf("resources %s", r)
 	}
-	// 9 GiB free holds qwen25's 6 GiB, not Qwen3's 10 GiB.
+	// 9 GiB free holds qwen25's 6 GiB, not Qwen3's 12 GiB.
 	warned := false
 	for _, e := range events {
-		warned = warned || (e.Step == "check" && e.Status == "success" && strings.Contains(e.Message, "it needs 4 CPUs and 10Gi of memory free"))
+		warned = warned || (e.Step == "check" && e.Status == "success" && strings.Contains(e.Message, "it needs 4 CPUs and 12Gi of memory free"))
 	}
 	if !warned {
 		t.Errorf("no capacity warning for the chosen model: %v", events)
@@ -285,7 +302,7 @@ func TestModelsStatus_CatalogWithEachModelsRoom(t *testing.T) {
 			t.Errorf("%s: warning %q", name, got[name])
 		}
 	}
-	if !strings.Contains(got["qwen3-1-7b"], "10Gi") {
+	if !strings.Contains(got["qwen3-1-7b"], "4 CPUs and 12Gi of memory free (up to 14Gi)") {
 		t.Errorf("qwen3 warning %q", got["qwen3-1-7b"])
 	}
 	pods := 0

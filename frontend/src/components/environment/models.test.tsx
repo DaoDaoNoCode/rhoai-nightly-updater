@@ -20,14 +20,14 @@ const model = (ns: string, over: Partial<ModelState> = {}): ModelState => ({
   displayName: "Qwen2.5 0.5B Instruct (CPU)", url: `https://inference.apps.example.com/${ns}/qwen25-05b-instruct`, imageKind: "preset", ...over,
 });
 const catalog: CatalogModel[] = [
-  { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", cpu: "2", memoryRequest: "5Gi", memory: "6Gi",
+  { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", cpu: "2", memoryRequest: "4Gi", memory: "5Gi",
     type: "chat", useCase: "Chat (smoke test)", description: "A very small chat model.", args: "--max-model-len 4096", downloadSize: "270 MB" },
   { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775", cpu: "4", memoryRequest: "6Gi", memory: "8Gi",
     type: "chat", useCase: "Chat", description: "A small chat model.", args: "--max-model-len 4096", downloadSize: "1.0 GB", default: true },
-  { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "10Gi", memory: "12Gi",
+  { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "12Gi", memory: "14Gi",
     type: "chat", toolCalling: true, useCase: "Chat, Tool calling, Reasoning", description: "A chat model that can call tools.", downloadSize: "4.1 GB",
     args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` },
-  { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "4Gi", memory: "6Gi",
+  { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "3Gi", memory: "4Gi",
     type: "embedding", embeddingDimension: 768, useCase: "Embeddings, Semantic search", description: "An English embedding model.", args: "--runner pooling --max-model-len 512", downloadSize: "250 MB" },
 ];
 const withRoom = (name: string, capacityWarning: string) => catalog.map((c) => (c.name === name ? { ...c, capacityWarning } : c));
@@ -287,7 +287,7 @@ describe("Models tab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Model" }));
     const smol = await screen.findByRole("option", { name: /SmolLM2 135M Instruct \(CPU\)/ });
     // What it is for, once: the use case the dashboard shows (no "Chat. For: Chat").
-    expect(smol).toHaveTextContent("Chat (smoke test). Reserves 2 CPUs and 5 GiB of memory (up to 6 GiB). Downloads about 270 MB.");
+    expect(smol).toHaveTextContent("Chat (smoke test). Reserves 2 CPUs and 4 GiB of memory (up to 5 GiB). Downloads about 270 MB.");
     expect(screen.getByRole("option", { name: /Qwen2.5 0.5B/ })).toHaveTextContent(/^Qwen2.5 0.5B Instruct \(CPU\)Chat\. Reserves 4 CPUs/);
     expect(screen.getByRole("option", { name: /Granite Embedding/ })).toHaveTextContent("Embeddings, Semantic search; vectors of 768 numbers. Reserves");
     const qwen3 = screen.getByRole("option", { name: /Qwen3 1.7B/ });
@@ -364,7 +364,7 @@ describe("Models tab", () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen25, qwen3] }) }), "/api/resources/projects": { projects: ["dev"] } });
     const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
     const part = await screen.findByRole("listitem", { name: "Qwen3 1.7B (CPU, tool calling)" });
-    expect(within(part).getByText(/None fits: no hardware profile on this cluster allows 4 CPUs and 10 GiB of memory \(up to 12 GiB\), so the dashboard.s Deployments table shows/)).toBeInTheDocument();
+    expect(within(part).getByText(/None fits: no hardware profile on this cluster allows 4 CPUs and 12 GiB of memory \(up to 14 GiB\), so the dashboard.s Deployments table shows/)).toBeInTheDocument();
     expect(within(part).getByText(/shows "No hardware profile" and the model.s details "Hardware profile: Unknown"/)).toBeInTheDocument();
     expect(within(part).getByText(/The model runs as set up/)).toBeInTheDocument();
     view.unmount();

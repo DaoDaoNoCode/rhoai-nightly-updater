@@ -96,23 +96,25 @@ const (
 // (odh-dashboard rhoai-3.6 packages/llmd-serving/src/deployments/model.ts
 // extractRuntimeArgs L147-159), and would list a spaced JSON as two.
 //
-// Memory (requests and limits below, in one place). Measured live only
-// for qwen25 (RHOAI 3.6, vLLM CPU): 7.6 GiB with the preset's 4 GiB KV
-// cache (cgroup memory.peak 7.73 GiB over four parallel 600-token chats),
-// 5.8 GiB with a 2 GiB cache, which still holds over 100k tokens for it
-// (24 layers x 2 KV heads x 64 x 2 x 2 bytes = 12 KiB per token). That is
-// about 1 GB of weights, the cache, and some 3 GiB of runtime. The others
-// are estimates from the same parts (weights + KV cache + about 3 GiB),
-// to be measured live: SmolLM2 0.27 GB + 1 GiB, Qwen3 4.1 GB + 2 GiB,
-// Granite embedding 0.25 GB + 1 GiB. qwen25 also fits the dashboard's
-// default hardware profile (up to 4 CPUs and 8 GiB on 3.6).
+// Memory (requests and limits below, in one place), measured live on
+// RHOAI 3.6 with vLLM CPU 0.24 on 2026-11-18: the main container's memory
+// (oc adm top pod --containers), idle after start with the KV cache
+// already reserved. SmolLM2 3364Mi, Qwen2.5 5625Mi, Qwen3 11590Mi,
+// Granite embedding 2375Mi. Each request is 0.5-0.7 GiB above that, each
+// limit 1.7-2.7 GiB above it, for load. Qwen2.5 under load: 7.6 GiB with
+// the preset's 4 GiB KV cache (cgroup memory.peak 7.73 GiB over four
+// parallel 600-token chats), 5.8 GiB with the 2 GiB cache it has, which
+// still holds over 100k tokens for it (24 layers x 2 KV heads x 64 x 2 x 2
+// bytes = 12 KiB per token). SmolLM2, Qwen2.5 and Granite fit the
+// dashboard's default hardware profile (up to 4 CPUs and 8 GiB on 3.6);
+// Qwen3 fits none.
 //
 // DownloadSize is what the storage-initializer fetches at the pinned
 // commit with storageIgnorePatterns applied (Hugging Face API file sizes).
 var modelCatalog = []catalogModel{
 	{
 		CatalogModel: types.CatalogModel{Name: "smollm2-135m-instruct", DisplayName: "SmolLM2 135M Instruct (CPU)", URI: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac",
-			CPU: "2", MemoryRequest: "5Gi", Memory: "6Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
+			CPU: "2", MemoryRequest: "4Gi", Memory: "5Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
 			Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--max-model-len 4096"},
 		threads: "2", kvCacheGiB: "1", ephemeralStorage: "400M",
@@ -128,7 +130,7 @@ var modelCatalog = []catalogModel{
 		// Thinking is off by default (the user's choice); a request turns
 		// it on with chat_template_kwargs {"enable_thinking": true}.
 		CatalogModel: types.CatalogModel{Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
-			CPU: "4", MemoryRequest: "10Gi", Memory: "12Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
+			CPU: "4", MemoryRequest: "12Gi", Memory: "14Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
 			Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`},
 		threads: "4", kvCacheGiB: "2", ephemeralStorage: "6.2G",
@@ -137,7 +139,7 @@ var modelCatalog = []catalogModel{
 		// A RobertaModel, which vLLM serves as an embedding model with the
 		// pooling runner (vLLM 0.24 removed --task); 512 positions.
 		CatalogModel: types.CatalogModel{Name: "granite-embedding-125m-english", DisplayName: "Granite Embedding 125M English (CPU)", URI: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f",
-			CPU: "2", MemoryRequest: "4Gi", Memory: "6Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
+			CPU: "2", MemoryRequest: "3Gi", Memory: "4Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
 			Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--runner pooling --max-model-len 512"},
 		threads: "2", kvCacheGiB: "1", ephemeralStorage: "375M",

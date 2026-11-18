@@ -58,8 +58,10 @@ only accepts a tag whose version is the top dated section. See
   what it is for, what it reserves and its download; a model no worker has
   room for is disabled with the reason. A project can hold several; Set up,
   Delete and Use it act on the chosen one (embeddings get a
-  `/v1/embeddings` command, Qwen3 tool-calling and thinking commands). The
-  storage-initializer skips ONNX and PyTorch files. The Playground adds
+  `/v1/embeddings` command, Qwen3 tool-calling and thinking commands).
+  Memory requests and limits come from each model's use measured live on
+  RHOAI 3.6: SmolLM2 4 / 5 GiB, Qwen2.5 6 / 8 GiB, Qwen3 12 / 14 GiB,
+  Granite 3 / 4 GiB. The storage-initializer skips ONNX and PyTorch files. The Playground adds
   this tool's embedding model as an embedding model (768 dimensions); MaaS
   publishes the chosen chat model (`MaaSRequest.model`). RBAC: the
   LLMInferenceService rule names the four models and the MaaSModelRef rule
