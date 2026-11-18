@@ -691,6 +691,16 @@ type InferenceGatewayState struct {
 	// NotAllowedModels are those models, "namespace/name": their routes are
 	// rejected (NotAllowedByListeners), so they never become Ready.
 	NotAllowedModels []string `json:"notAllowedModels,omitempty"`
+
+	// --- Models routing: names on this tool's gateway's list ---
+
+	// UnusedProjects are the projects on this tool's gateway's list (not
+	// its own namespace) that no model routes through it from: their
+	// editors can still attach routes to the gateway. Action "disallow"
+	// takes one off. GoneProjects are those of them that no longer exist:
+	// a new project of that name would be admitted at once.
+	UnusedProjects []string `json:"unusedProjects,omitempty"`
+	GoneProjects   []string `json:"goneProjects,omitempty"`
 }
 
 // ModelsStatus is what setting up a model needs, and the models of the
@@ -789,12 +799,36 @@ type ModelState struct {
 	// TokenAuthOff: the model carries security.opendatahub.io/enable-auth
 	// "false" (someone turned token authentication off in the dashboard).
 	TokenAuthOff bool `json:"tokenAuthOff,omitempty"`
+
+	// --- Models routing (how the model is reached) ---
+
+	// Exposure is how the model is reached, read from its spec.router:
+	// "default-gateway" (route and gateway {}), "maas" (refs name the MaaS
+	// gateway), "gateway" (refs name another gateway), "internal" (no
+	// route), or "" when it cannot be told.
+	Exposure string `json:"exposure,omitempty"`
+	// Gateway is the gateway the model routes through ("namespace/name"):
+	// KServe's default for "default-gateway", the first ref otherwise.
+	Gateway string `json:"gateway,omitempty"`
+	// GatewayAuth is the AuthPolicy odh-model-controller puts on that
+	// gateway (<gateway>-authn): "enforced", "not-enforced", "missing",
+	// "maas" (the MaaS gateway, whose auth MaaS does), or "" (unknown).
+	GatewayAuth string `json:"gatewayAuth,omitempty"`
+	// InternalURL is the model's cluster-internal address (status.addresses).
+	InternalURL string `json:"internalUrl,omitempty"`
+	// ServedName is the name the model answers to (spec.model.name): the
+	// "model" a request sends.
+	ServedName string `json:"servedName,omitempty"`
+	// CallCheck is the last "Can it be called?" check of this model by this
+	// app (nil: not checked since the app started).
+	CallCheck *ModelCallCheck `json:"callCheck,omitempty"`
 }
 
 // ModelsRequest is the body of POST /api/resources/models/stream.
 type ModelsRequest struct {
-	// Action is "setup", "teardown", or "allow": add Project to the
-	// projects this tool's inference gateway allows (no model).
+	// Action is "setup", "teardown", "allow": add Project to the
+	// projects this tool's inference gateway allows (no model), or "check":
+	// call the model Model in Project once (Exposure below).
 	Action string `json:"action"`
 	// Gateway: set up (or delete) the inference gateway. Setup does it
 	// before the model, teardown after.
@@ -808,6 +842,16 @@ type ModelsRequest struct {
 	// ReleasedImage (setup only): run the newest released Red Hat vLLM CPU
 	// image instead of the preset's.
 	ReleasedImage bool `json:"releasedImage,omitempty"`
+
+	// --- Models routing ---
+
+	// Exposure (setup with a project) is how the model is reached:
+	// "default-gateway", "maas", "gateway" (GatewayRef) or "internal"; ""
+	// is the choice GET /api/resources/models/exposures recommends.
+	// Action "check" calls the model once ("Can it be called?").
+	Exposure string `json:"exposure,omitempty"`
+	// GatewayRef is the gateway of Exposure "gateway": "namespace/name".
+	GatewayRef string `json:"gatewayRef,omitempty"`
 }
 
 // PlaygroundStatus is what the Gen AI playground feature needs and the
@@ -1045,6 +1089,10 @@ type RestorableComponent struct {
 // /api/resources/prerequisites/stream: set up what Feature needs.
 type PrerequisitesRequest struct {
 	Feature string `json:"feature"`
+	// Exposure (models only) is how the model about to be set up is
+	// reached: "default-gateway" and "gateway" add Red Hat Connectivity
+	// Link and its Kuadrant CR, which authenticate calls on a gateway.
+	Exposure string `json:"exposure,omitempty"`
 }
 
 // ComponentBlock is a DataScienceCluster component a feature needs that is
@@ -1452,4 +1500,80 @@ type MLflowSamplesRequest struct {
 	// Samples are SampleStatus IDs, in any order; they run in the order
 	// genai-demo, training, mcp-server, skill (remove: the reverse).
 	Samples []string `json:"samples"`
+}
+
+// --- Models routing (GET /api/resources/models/exposures) -------------------
+
+// ModelExposures are the ways a model of the catalog can be reached from
+// a project, each with whether it can be used now, and the one this tool
+// recommends.
+type ModelExposures struct {
+	Project string `json:"project"`
+	Model   string `json:"model"`
+	// Default is the Key of the recommended option ("" when none fits:
+	// RecommendGateway then says to set up the inference gateway).
+	Default string `json:"default"`
+	// DefaultReason says, in plain words, why that option is recommended.
+	DefaultReason string                `json:"defaultReason,omitempty"`
+	Options       []ModelExposureOption `json:"options"`
+	// KServeDefaultGateway is the gateway KServe routes a model through by
+	// default ("namespace/name", from inferenceservice-config), or "".
+	KServeDefaultGateway string `json:"kserveDefaultGateway,omitempty"`
+	// AuthReady: Red Hat Connectivity Link's AuthPolicy API is served and
+	// its Kuadrant CR exists, so calls through a gateway are authenticated.
+	AuthReady bool `json:"authReady"`
+	// RecommendGateway: setting up this tool's inference gateway (the
+	// Models tab's own part) is the way to reach the model from outside
+	// the cluster; RecommendGatewayReason says why.
+	RecommendGateway       bool   `json:"recommendGateway,omitempty"`
+	RecommendGatewayReason string `json:"recommendGatewayReason,omitempty"`
+}
+
+// ModelExposureOption is one way to reach the model.
+type ModelExposureOption struct {
+	// Key identifies the option: "default-gateway", "maas", "internal",
+	// or "gateway:<namespace>/<name>".
+	Key string `json:"key"`
+	// Exposure and GatewayRef are what a setup request sends for it.
+	Exposure   string `json:"exposure"`
+	GatewayRef string `json:"gatewayRef,omitempty"`
+	Title      string `json:"title"`
+	// Description says what it means for the user, in plain words.
+	Description string `json:"description"`
+	// Available: it can be chosen (once NeedsAuth is set up, when set);
+	// Reason says why not.
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	// NeedsAuth: calls are authenticated by Connectivity Link, which is not
+	// set up yet: Set up on the tab installs it first.
+	NeedsAuth bool `json:"needsAuth,omitempty"`
+	// Warning is something the user should know before choosing it.
+	Warning string `json:"warning,omitempty"`
+	// Changes are what choosing it changes besides the model (a project
+	// added to a gateway's list, the model published to MaaS).
+	Changes []string `json:"changes,omitempty"`
+	// Address is where the model will answer ("" when unknown).
+	Address string `json:"address,omitempty"`
+}
+
+// ModelCallCheck is the result of one "Can it be called?" check: a
+// minimal request through the model's route, with the model's own token.
+type ModelCallCheck struct {
+	// Result is "ok" (it answered), "model-name" (404 from the model's
+	// server: the request's model name is not the served one), "route"
+	// (404 without a body: nothing answers on that path), "auth" (401),
+	// "forbidden" (403), "server-error" (5xx), "unreachable" (no answer),
+	// "maas" (reached through MaaS with an API key, which this tool does
+	// not create: MaaS's own readiness is reported), "not-checked" (this
+	// app cannot call it; Message says why), or "unexpected".
+	Result string `json:"result"`
+	OK     bool   `json:"ok"`
+	// Status is the HTTP status (0 without an answer).
+	Status int `json:"status,omitempty"`
+	// Message says what happened and what to do, in plain words.
+	Message string `json:"message"`
+	// URL is the address that was called (no token in it).
+	URL string `json:"url,omitempty"`
+	// At is when it ran (RFC 3339).
+	At string `json:"at"`
 }

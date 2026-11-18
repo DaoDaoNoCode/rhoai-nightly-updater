@@ -81,6 +81,29 @@ type featureSetup struct {
 	// operators (KserveLLMInferenceServiceDependencies), waited on while it
 	// names one of operators ("" none).
 	dependency string
+	// kuadrant: a Kuadrant CR is made after the operators (Models routed
+	// through a gateway: featureSetupFor).
+	kuadrant bool
+}
+
+// featureSetupFor is the feature's setup for how its model is reached
+// (models only): through a gateway ("default-gateway", "gateway"), calls are
+// authenticated by Red Hat Connectivity Link, which KServe also requires
+// before it starts a model with token authentication
+// (router_preconditions_odh.go), so its operator and its Kuadrant CR are
+// added, as the MaaS docs install them (the MaaS tab's own steps). "maas"
+// needs the MaaS platform (its tab sets it up, Connectivity Link included);
+// "internal" and "" need neither.
+func featureSetupFor(id, exposure string) (featureSetup, bool) {
+	fs, ok := featureSetupOf(id)
+	if !ok || id != "models" {
+		return fs, ok
+	}
+	if exposure == exposureDefault || exposure == exposureGateway {
+		fs.operators = append(append([]operatorSpec(nil), fs.operators...), rhclOperator)
+		fs.kuadrant = true
+	}
+	return fs, true
 }
 
 var featureSetups = []featureSetup{
@@ -372,12 +395,40 @@ func planFeature(c *Client, fs featureSetup, r clusterReads) *featurePlan {
 		p.operators = append(p.operators, planFeatureOperator(c, p, op, r))
 	}
 
+	// The Kuadrant CR, once Connectivity Link runs.
+	if fs.kuadrant {
+		part(planKuadrantPart(c, p))
+	}
+
 	// What KServe still reports missing that this plan does not install
 	// (Connectivity Link, which depends on how models are routed).
 	if fs.dependency != "" {
 		part(dependencyPart(p))
 	}
 	return p
+}
+
+// planKuadrantPart reads the Kuadrant CR; a missing one is created by Set
+// up in Connectivity Link's namespace.
+func planKuadrantPart(c *Client, p *featurePlan) types.MaaSPart {
+	pt := types.MaaSPart{ID: "kuadrant", Title: "Kuadrant CR (Connectivity Link's policies)"}
+	k, err := readKuadrant(c)
+	switch {
+	case err != nil:
+		msg := fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.%s", err, templateHint(err))
+		p.refuse(msg, errorCodeFromK8sErr(err))
+		pt.State, pt.Message = "unknown", msg
+	case k.found && k.ready:
+		pt.State, pt.Message, pt.NotManaged = "ready", "Kuadrant "+k.namespace+"/kuadrant is Ready", !toolOwned(k.meta)
+		pt.ManagedByTool = toolOwned(k.meta)
+	case k.found:
+		pt.State, pt.Message = "waiting", "Kuadrant "+k.namespace+"/kuadrant is not Ready yet: "+truncateMessage(firstNonEmpty(k.message, "no message"))
+	default:
+		pt.State, pt.Message = "missing", "Not there. Set up creates it once Connectivity Link serves its API; it starts Authorino, which checks each call's token."
+		pt.Commands = kuadrantCommands(rhclOperator.namespace)
+		p.plan = append(p.plan, fmt.Sprintf("Create the Kuadrant CR %s/kuadrant (as the MaaS docs do); it stays after Clean up, as other features share it", rhclOperator.namespace))
+	}
+	return pt
 }
 
 // planFeatureOperator reads op and decides what setup does about it.
@@ -597,9 +648,16 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 
 // GetPrerequisitesStatus reads what every feature needs on the cluster.
 func GetPrerequisitesStatus(c *Client) (*types.PrerequisitesStatus, error) {
+	return GetPrerequisitesStatusFor(c, "")
+}
+
+// GetPrerequisitesStatusFor is GetPrerequisitesStatus with Models planned
+// for how its model is reached (featureSetupFor).
+func GetPrerequisitesStatusFor(c *Client, modelsExposure string) (*types.PrerequisitesStatus, error) {
 	r := readClusterForPrerequisites(c)
 	out := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}}
-	for _, fs := range featureSetups {
+	for _, base := range featureSetups {
+		fs, _ := featureSetupFor(base.id, modelsExposure)
 		out.Features[fs.id] = planFeature(c, fs, r).status()
 	}
 	return out, nil
@@ -611,6 +669,9 @@ func GetPrerequisitesStatus(c *Client) (*types.PrerequisitesStatus, error) {
 func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 	if _, ok := featureSetupOf(req.Feature); !ok {
 		return "feature must be pipelines, mlflow, models or playground"
+	}
+	if req.Exposure != "" && (req.Feature != "models" || !ValidExposure(req.Exposure)) {
+		return "exposure is how a model is reached (models only): default-gateway, maas, gateway or internal"
 	}
 	return ""
 }
@@ -626,7 +687,7 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 	if problem := ValidatePrerequisitesRequest(req); problem != "" {
 		return m.fail("prerequisites", problem, "validation", "invalid request")
 	}
-	fs, _ := featureSetupOf(req.Feature)
+	fs, _ := featureSetupFor(req.Feature, req.Exposure)
 	m.target = fs.title + " prerequisites"
 	m.step("prerequisites", "running", fmt.Sprintf("Checking what %s needs on the cluster...", fs.title))
 	p := planFeature(c, fs, readClusterForPrerequisites(c))
@@ -694,6 +755,11 @@ func RunPrerequisites(c *Client, req types.PrerequisitesRequest, onStep func(Upd
 			return r, err
 		}
 	}
+	if fs.kuadrant {
+		if r, err := m.ensureKuadrant(&p.rec); r != nil || err != nil {
+			return r, err
+		}
+	}
 
 	// 3. Ready.
 	return m.waitPrerequisitesReady(p)
@@ -739,6 +805,53 @@ func (m *maasRun) ensureOperator(rec *prereqRecord, o operatorPlan) (*types.Oper
 		}
 		return m.waitOperator(op.id, sub.Metadata.Namespace, sub.Metadata.Name, op.title)
 	}
+	return nil, nil
+}
+
+// ensureKuadrant makes the Kuadrant CR when there is none, once
+// Connectivity Link serves its API (step "kuadrant"), in the namespace
+// Connectivity Link runs in, as the MaaS setup does. It stays after Clean
+// up: Connectivity Link's policies are shared.
+func (m *maasRun) ensureKuadrant(rec *prereqRecord) (*types.OperationResponse, error) {
+	c := m.c
+	k, err := readKuadrant(c)
+	if err != nil {
+		return m.fail("kuadrant", fmt.Sprintf("Cannot read the Kuadrant CR: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "kuadrant read failed")
+	}
+	if k.found {
+		m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", k.namespace, byWhom(toolOwned(k.meta))))
+		return nil, nil
+	}
+	rhcl, err := readOperator(c, rhclOperator)
+	if err != nil {
+		return m.fail("kuadrant", fmt.Sprintf("Cannot read the installed operators: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
+	}
+	ns := firstNonEmpty(rhcl.csvNS, rhclOperator.namespace)
+	m.step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
+	version := ""
+	if _, err := waitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		v, err := kuadrantServedVersion(cc)
+		version = v
+		return v != "", err
+	}); err != nil || version == "" {
+		return m.fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", clockText(MaaSOperatorTimeout), errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+	}
+	if rec.Shared == nil {
+		rec.Shared = map[string]string{}
+	}
+	rec.Shared["kuadrant"] = "Kuadrant " + ns + "/kuadrant"
+	if err := writePrereqRecord(c, *rec); err != nil {
+		return m.fail("kuadrant", err.Error()+" Nothing was created.", errorCodeFromK8sErr(err), "record write failed")
+	}
+	if err := createKuadrant(c, version, ns, true); err != nil {
+		return m.fail("kuadrant", fmt.Sprintf("The API server rejects the Kuadrant CR %s/kuadrant: %v. Nothing was created.", ns, err), maasWriteCode(err), "kuadrant dry run failed")
+	}
+	m.step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", ns))
+	if err := createKuadrant(c, version, ns, false); err != nil {
+		return m.fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", ns, err), maasWriteCode(err), "kuadrant create failed")
+	}
+	m.logs = append(m.logs, "OK: Kuadrant "+ns+"/kuadrant created")
+	m.step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant created; it starts Authorino, which checks each call's token.", ns))
 	return nil, nil
 }
 

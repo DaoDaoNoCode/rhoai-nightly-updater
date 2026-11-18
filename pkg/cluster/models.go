@@ -198,6 +198,9 @@ type llmisvcObject struct {
 			Name string `json:"name"`
 		} `json:"model"`
 		Router *struct {
+			// Route is spec.router.route: present ({}), KServe makes an
+			// HTTPRoute; absent, the model is cluster-internal only.
+			Route   *json.RawMessage `json:"route"`
 			Gateway *struct {
 				Refs []struct {
 					Name      string `json:"name"`
@@ -213,7 +216,10 @@ type llmisvcObject struct {
 		} `json:"template"`
 	} `json:"spec"`
 	Status struct {
-		URL                string         `json:"url"`
+		URL       string `json:"url"`
+		Addresses []struct {
+			URL string `json:"url"`
+		} `json:"addresses"`
 		ObservedGeneration int64          `json:"observedGeneration"`
 		Conditions         []k8sCondition `json:"conditions"`
 	} `json:"status"`
@@ -369,6 +375,8 @@ func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) type
 // modelItems are the catalog's models in the visible projects.
 func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec modelsRecord) []types.ModelState {
 	var out []types.ModelState
+	def, _ := readKServeGateway(c)
+	auth := map[string]string{}
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
 			continue
@@ -376,7 +384,9 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec 
 		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok {
 			continue
 		}
-		out = append(out, modelState(c, m, true, rec))
+		s := modelState(c, m, true, rec)
+		addModelRouting(c, &s, m, def, auth)
+		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Namespace != out[j].Namespace {
@@ -419,6 +429,12 @@ func modelsBlock(dsc dscRead) (*types.ComponentBlock, string) {
 		return block, ""
 	}
 	deps, msg := llmDependencies(dsc.Object)
+	// Connectivity Link alone is not a block: whether a model needs it
+	// depends on how it is reached (models_exposure.go), and the setup of
+	// a model that needs it says so.
+	if deps == "False" && onlyConnectivityLinkMissing(msg) {
+		return nil, deps
+	}
 	if deps == "False" {
 		meta, _ := dsc.Object["metadata"].(map[string]interface{})
 		name, _ := meta["name"].(string)
@@ -523,7 +539,11 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 // published: the model is published to MaaS, which took it out of Gen AI
 // studio's AI assets (maas_genai.go), so the genai label and annotation
 // are left out until Unpublish puts them back.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool) map[string]interface{} {
+//
+// exp is how the model is reached (models_exposure.go): its spec.router,
+// and token authentication turned off for an internal-only model while
+// Connectivity Link is missing.
+func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool, exp exposurePlan) map[string]interface{} {
 	annotations := map[string]interface{}{
 		// The dashboard's llmd deploy wizard writes these three
 		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
@@ -580,6 +600,30 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 		delete(labels, genAIAssetLabel)
 		delete(annotations, genAIUseCaseAnnotation)
 	}
+	if exp.authOff {
+		annotations[enableAuthAnnot] = "false"
+	}
+	spec := map[string]interface{}{
+		"baseRefs": []interface{}{map[string]interface{}{"name": preset}},
+		// spec.model.name is the model's resource name: the dashboard's
+		// playground proxy finds a model by it (deploy.ts), so an
+		// HF-style name would make the playground answer 404. It is also
+		// the name vLLM serves: a request whose "model" is anything else
+		// (the display name, the Hugging Face id) answers 404 NotFoundError.
+		"model":    map[string]interface{}{"uri": entry.URI, "name": entry.Name},
+		"replicas": 1,
+		"template": map[string]interface{}{
+			"containers": []interface{}{main},
+			// Only env: KServe generates the rest of its storage-initializer.
+			"initContainers": []interface{}{map[string]interface{}{
+				"name": "storage-initializer",
+				"env":  []interface{}{map[string]interface{}{"name": "STORAGE_IGNORE_PATTERNS", "value": storageIgnorePatterns}},
+			}},
+		},
+	}
+	if router := exp.router(); router != nil {
+		spec["router"] = router
+	}
 	return map[string]interface{}{
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
@@ -589,25 +633,7 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			"labels":      labels,
 			"annotations": annotations,
 		},
-		"spec": map[string]interface{}{
-			"baseRefs": []interface{}{map[string]interface{}{"name": preset}},
-			// spec.model.name is the model's resource name: the dashboard's
-			// playground proxy finds a model by it (deploy.ts), so an
-			// HF-style name would make the playground answer 404.
-			"model":    map[string]interface{}{"uri": entry.URI, "name": entry.Name},
-			"replicas": 1,
-			// The default gateway (the inference gateway); no scheduler: one
-			// replica needs no endpoint picker.
-			"router": map[string]interface{}{"route": map[string]interface{}{}, "gateway": map[string]interface{}{}},
-			"template": map[string]interface{}{
-				"containers": []interface{}{main},
-				// Only env: KServe generates the rest of its storage-initializer.
-				"initContainers": []interface{}{map[string]interface{}{
-					"name": "storage-initializer",
-					"env":  []interface{}{map[string]interface{}{"name": "STORAGE_IGNORE_PATTERNS", "value": storageIgnorePatterns}},
-				}},
-			},
-		},
+		"spec": spec,
 	}
 }
 
@@ -680,13 +706,24 @@ func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationRespon
 func ValidateModelsRequest(req types.ModelsRequest) string {
 	switch req.Action {
 	case "setup", "teardown":
-	case "allow":
-		if req.Project == "" || req.Gateway || req.ReleasedImage {
-			return "allow takes a project only"
+	case "allow", "disallow":
+		if req.Project == "" || req.Gateway || req.ReleasedImage || req.Exposure != "" || req.GatewayRef != "" || req.Model != "" {
+			return req.Action + " takes a project only"
+		}
+		if !playgroundProjectRegex.MatchString(req.Project) {
+			return "a valid project is required"
+		}
+		return ""
+	case "check":
+		if req.Project == "" || req.Gateway || req.ReleasedImage || req.Exposure != "" || req.GatewayRef != "" {
+			return "check takes a project and a model only"
+		}
+		if !ValidModelName(req.Model) {
+			return "unknown model"
 		}
 		return ""
 	default:
-		return "action must be setup, teardown or allow"
+		return "action must be setup, teardown, allow, disallow or check"
 	}
 	if !req.Gateway && req.Project == "" {
 		return "nothing to do: name the gateway, a project, or both"
@@ -697,18 +734,37 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 	if req.ReleasedImage && (req.Action != "setup" || req.Project == "") {
 		return "releasedImage needs a model setup"
 	}
+	if !ValidExposure(req.Exposure) {
+		return "exposure must be default-gateway, maas, gateway or internal"
+	}
+	if req.Exposure != "" && (req.Action != "setup" || req.Project == "") {
+		return "exposure needs a model setup"
+	}
+	if (req.Exposure == exposureGateway) != (req.GatewayRef != "") {
+		return "gatewayRef goes with exposure gateway, as namespace/name"
+	}
+	if req.GatewayRef != "" {
+		ns, name, ok := strings.Cut(req.GatewayRef, "/")
+		if !ok || !playgroundProjectRegex.MatchString(ns) || !gatewayNameRegex.MatchString(name) {
+			return "gatewayRef must be namespace/name"
+		}
+	}
+	if req.Gateway && req.Exposure != "" && req.Exposure != exposureDefault {
+		return "the inference gateway set up with a model is its default route: set it up on its own for another exposure"
+	}
 	return ""
 }
 
 // RunModels sets up or deletes the inference gateway and a model, as one
 // operation with a streamed step per part: setup "check", "gateway",
-// "gateway-ready", "model", "model-ready" (the gateway steps only with
-// Gateway, the model steps only with a Project); teardown "model", then
-// "gateway". Setup checks everything it writes, and dry-runs every write,
-// before it writes anything.
+// "gateway-ready", "model", "model-ready", "publish" (a model reached
+// through MaaS), "callable" (the gateway steps only with Gateway, the
+// model steps only with a Project); teardown "model", then "gateway";
+// check "callable". Setup checks everything it writes, and dry-runs every
+// write, before it writes anything.
 func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	var parts []string
-	if req.Action == "allow" {
+	if req.Action == "allow" || req.Action == "disallow" {
 		parts = append(parts, fmt.Sprintf("project %s on the inference gateway", req.Project))
 	} else if req.Project != "" {
 		entry, _ := catalogEntry(req.Model)
@@ -726,8 +782,54 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 		return m.teardown(req)
 	case "allow":
 		return m.allow(req.Project)
+	case "check":
+		return m.check(req)
+	case "disallow":
+		return m.disallow(req.Project)
 	}
 	return m.setup(req)
+}
+
+// check is "Check again": the "Can it be called?" check of the tool's
+// model, on step "callable".
+func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, error) {
+	c := m.c
+	entry, _ := catalogEntry(req.Model)
+	m.step("callable", "running", fmt.Sprintf("Calling %s in '%s' once...", entry.Name, req.Project))
+	model, found, err := readToolModel(c, req.Project, entry.Name)
+	if err != nil {
+		return m.fail("callable", fmt.Sprintf("Cannot read %s in '%s': %v.", entry.Name, req.Project, err), errorCodeFromK8sErr(err), "model read failed")
+	}
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return m.fail("callable", err.Error(), errorCodeFromK8sErr(err), "record read failed")
+	}
+	switch {
+	case !found:
+		return m.fail("callable", fmt.Sprintf("Project '%s' has no %s.", req.Project, entry.Name), "validation", "no model")
+	case !rec.owns(model.Metadata):
+		return m.fail("callable", fmt.Sprintf("%s in '%s' was not created by this tool, so this tool has no token of the model's own to call it with.", entry.Name, req.Project), "not_managed", "model foreign")
+	}
+	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
+		return m.fail("callable", fmt.Sprintf("%s in '%s' is not ready yet; check once it is.", entry.Name, req.Project), "not_ready", "model not ready")
+	}
+	return m.callable(req.Project, entry.Name, rec)
+}
+
+// callable runs the check and reports it on step "callable": a model that
+// does not answer fails the operation (it stays set up).
+func (m *modelsRun) callable(project, name string, rec modelsRecord) (*types.OperationResponse, error) {
+	check := checkModelCall(m.c, project, name, rec, func(line string) { m.step("callable", "running", line) })
+	switch {
+	case check.OK:
+		m.step("callable", "success", check.Message)
+	case check.Result == "not-checked":
+		m.step("callable", "success", check.Message)
+	default:
+		return m.fail("callable", "The model is set up but cannot be called: "+check.Message, "not_callable", "model not callable ("+check.Result+")")
+	}
+	recordModelsActivity(m.c, m.activity, m.target, true)
+	return &types.OperationResponse{Success: true, Message: check.Message, Logs: m.logs}, nil
 }
 
 // allow adds project to the projects this tool's inference gateway allows
@@ -766,6 +868,9 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	}
 	m.step("check", "success", "The gateway is this tool's; the project exists.")
 	m.step("gateway", "running", fmt.Sprintf("Adding '%s' to the projects the inference gateway allows...", project))
+	if err := recordGatewayProject(c, project); err != nil {
+		return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+	}
 	written, msg, code := writeInferenceGateway(c, plan, func(line string) { m.step("gateway", "running", line) })
 	if msg != "" {
 		return m.fail("gateway", msg, code, "gateway list failed")
@@ -829,6 +934,10 @@ type modelPlan struct {
 	token tokenPlan
 	// ephemeral: the model requests ephemeral storage for its download.
 	ephemeral bool
+	// exp is how the model is reached (models_exposure.go); published: it
+	// is published to MaaS already.
+	exp       exposurePlan
+	published bool
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -852,6 +961,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 
 	// The model part. A model behind this tool's existing gateway: its
 	// project is added to the gateway's list first, when it is not on it.
+	// Any other gateway is used as it is.
 	var mp *modelPlan
 	var allow *gatewayPlan
 	if req.Project != "" {
@@ -860,7 +970,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("check", msg, code, "model check failed")
 		}
 		mp = plan
-		if gw == nil {
+		if gw == nil && mp.exp.toolGateway {
 			if allow, msg, code = planGatewayAllow(c, mp.project); msg != "" {
 				return m.fail("check", msg, code, "gateway check failed")
 			}
@@ -903,6 +1013,11 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			summary = append(summary, "The existing inference gateway is used.")
 		} else {
 			m.step("gateway", "running", "Creating the inference gateway...")
+			if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !containsString(listed, req.Project) {
+				if err := recordGatewayProject(c, req.Project); err != nil {
+					return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+				}
+			}
 			written, msg, code := writeInferenceGateway(c, gw, func(line string) { m.step("gateway", "running", line) })
 			if msg != "" {
 				return m.fail("gateway", msg, code, "gateway apply failed")
@@ -933,6 +1048,9 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 	if mp != nil {
 		if allow != nil {
 			m.step("model", "running", fmt.Sprintf("Adding '%s' to the projects the inference gateway allows...", mp.project))
+			if err := recordGatewayProject(c, mp.project); err != nil {
+				return m.fail("model", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+			}
 			if _, msg, code := writeInferenceGateway(c, allow, func(line string) { m.step("model", "running", line) }); msg != "" {
 				return m.fail("model", msg, code, "gateway list failed")
 			}
@@ -948,7 +1066,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if allow != nil {
 			listed = fmt.Sprintf(" '%s' was added to the projects the inference gateway allows.", mp.project)
 		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
+		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 		timeout := ModelReadyTimeout
 		if dl, ok := c.ctx.Deadline(); ok {
@@ -956,7 +1074,18 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 				timeout = left
 			}
 		}
-		res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", timeout, func(line string) { m.step("model-ready", "running", line) })
+		// A model reached through MaaS is Ready only once published (its
+		// route needs the MaaS gateway to admit the project): its workload
+		// is waited on, then it is published.
+		publish := mp.exp.exposure == exposureMaaS && !mp.published
+		res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", publish, timeout, func(line string) { m.step("model-ready", "running", line) })
+		if res.err == nil && res.problem == "" && res.ready && publish {
+			m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
+			if r, err := m.publishToMaaS(mp.project, mp.entry.Name); r != nil || err != nil {
+				return r, err
+			}
+			res.url = ""
+		}
 		switch {
 		case res.err != nil:
 			return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), firstNonEmpty(errorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
@@ -966,10 +1095,26 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("model-ready", "The model cannot start: "+res.problem+" It was created; delete it from the Models tab, or fix the cause and set it up again.", "not_ready", "model not starting")
 		case !res.ready:
 			m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", clockText(timeout)))
+			m.step("callable", "success", "Not checked: the model is not ready yet. Check again on the Models tab once it is.")
 			summary = append(summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
 		default:
-			m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", firstNonEmpty(res.url, "its address")))
-			summary = append(summary, fmt.Sprintf("%s is ready in %s.", mp.entry.DisplayName, mp.project))
+			if !publish {
+				m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", firstNonEmpty(res.url, "its address")))
+			}
+			// Ready is not enough: one request through the way it is
+			// reached tells whether a caller gets an answer.
+			m.step("callable", "running", "Calling the model once, as a user would...")
+			// The record as written by this setup (the token's UID).
+			rec, err := readModelsRecord(c)
+			if err != nil {
+				rec = mp.rec
+			}
+			check := checkModelCall(c, mp.project, mp.entry.Name, rec, func(line string) { m.step("callable", "running", line) })
+			if !check.OK && check.Result != "not-checked" {
+				return m.fail("callable", fmt.Sprintf("%s is ready in %s but cannot be called: %s It stays set up; Check again on the Models tab after fixing the cause.", mp.entry.DisplayName, mp.project, check.Message), "not_callable", "model not callable ("+check.Result+")")
+			}
+			m.step("callable", "success", check.Message)
+			summary = append(summary, fmt.Sprintf("%s is ready in %s. %s", mp.entry.DisplayName, mp.project, check.Message))
 		}
 	}
 	slog.Info("models setup", "target", m.target, "user", getUser(c))
@@ -1005,46 +1150,6 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		return nil, preset.problem + " Nothing was changed.", "prerequisites"
 	}
 
-	// The model's route is KServe's default gateway (spec.router.gateway
-	// {}), read at run time: it must be the gateway this tool manages.
-	def, err := readKServeGateway(c)
-	if err != nil {
-		m.step("check", "running", fmt.Sprintf("Cannot read KServe's default gateway (%v); assuming %s/%s, as on RHOAI 3.x.", err, inferenceGatewayNamespace, inferenceGatewayName))
-	}
-	if msg := defaultGatewayElsewhere(def); msg != "" {
-		return nil, msg + " This tool sets up models only behind its own gateway. Nothing was changed.", "prerequisites"
-	}
-
-	// The gateway the model will route through. This tool's gateway lists
-	// the project before the model is created (setup adds it); someone
-	// else's decides by its own listeners.
-	switch {
-	case gw != nil && gw.foreign:
-		if gw.gateway.admits(req.Project, labels) == "no" {
-			return nil, foreignGatewayRefusal(req.Project), "prerequisites"
-		}
-	case gw == nil:
-		existing, found, err := readInferenceGateway(c)
-		if err != nil {
-			return nil, fmt.Sprintf("Cannot read the inference gateway: %v. Nothing was changed.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
-		}
-		if !found {
-			return nil, "The model needs the inference gateway, which is not set up. Set it up first (the Models tab's Set up does both). Nothing was changed.", "prerequisites"
-		}
-		if existing.Metadata.terminating() {
-			return nil, "The inference gateway is being deleted. Set it up again first. Nothing was changed.", "terminating"
-		}
-		if gatewayOwned(existing.Metadata) {
-			break // setup adds the project to its list
-		}
-		switch existing.admits(req.Project, labels) {
-		case "no":
-			return nil, foreignGatewayRefusal(req.Project), "prerequisites"
-		case "unknown":
-			m.step("check", "running", "The gateway selects namespaces with expressions this tool does not evaluate; check that it admits this project if the model does not become ready.")
-		}
-	}
-
 	existing, found, err := readToolModel(c, req.Project, entry.Name)
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err)
@@ -1058,6 +1163,10 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	}
 	if found && existing.Metadata.terminating() {
 		return nil, fmt.Sprintf("The model %s in '%s' is still being deleted. Wait until it is gone, then set it up again.", entry.Name, req.Project), "terminating"
+	}
+	exp, msg, code := m.planModelExposure(req, labels, entry, gw, existing, found)
+	if msg != "" {
+		return nil, msg, code
 	}
 	var prev *llmisvcObject
 	if found {
@@ -1092,7 +1201,8 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral}, "", ""
+		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral, exp), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral,
+		exp: exp, published: published}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
@@ -1253,7 +1363,10 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		}
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("%s in '%s'; nothing to delete.", what, project), Logs: logs}, nil
 	}
-	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Model %s deleted from '%s'; KServe removed its Deployment, Service and route. The project stays.", strings.Join(deleted, ", "), project), Logs: logs}, nil
+	// The project's last model on this tool's gateway: a project this tool
+	// added goes off the gateway's list (inference_gateway_projects.go).
+	note := releaseGatewayProject(c, project)
+	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Model %s deleted from '%s'; KServe removed its Deployment, Service and route. The project stays.%s", strings.Join(deleted, ", "), project, note), Logs: logs}, nil
 }
 
 // clockText is a duration as m:ss.
@@ -1269,6 +1382,7 @@ func clockText(d time.Duration) string {
 type modelPod struct {
 	Metadata objectMeta `json:"metadata"`
 	Spec     struct {
+		NodeName   string               `json:"nodeName"`
 		Containers []modelContainerSpec `json:"containers"`
 	} `json:"spec"`
 	Status struct {
@@ -1326,6 +1440,10 @@ func (e modelEvent) when() string { return firstNonEmpty(e.LastTimestamp, e.Even
 type modelProgress struct {
 	message, problem string
 	imageMissing     bool
+	// pullFailure is an image pull that keeps failing for a reason other
+	// than a missing image (credentials, network), in words; node is the
+	// pod's node. The wait gives it a grace window (modelPullGrace).
+	pullFailure, node string
 }
 
 // readModelProgress reads the progress of the model's pods of the current
@@ -1407,10 +1525,13 @@ func describeModelPod(p modelPod, event string) modelProgress {
 				if manifestUnknown(w.Message) {
 					return modelProgress{problem: fmt.Sprintf("%s: %s", w.Reason, truncateMessage(w.Message)), imageMissing: true}, true
 				}
-				if w.Reason == "ImagePullBackOff" {
-					return modelProgress{problem: fmt.Sprintf("the image of container %s cannot be pulled (%s: %s). Check that the cluster's pull secret can read it.", s.Name, w.Reason, truncateMessage(w.Message))}, true
-				}
-				return modelProgress{message: fmt.Sprintf("Pulling the image of %s failed once; retrying (%s)...", s.Name, truncateMessage(w.Message))}, true
+				// Credentials can reach a new node a few minutes after it
+				// joins (ROSA HCP, seen live): the wait gives it time.
+				return modelProgress{
+					message:     fmt.Sprintf("Pulling the image of %s failed (%s: %s); the node keeps retrying.", s.Name, w.Reason, truncateMessage(w.Message)),
+					pullFailure: fmt.Sprintf("the image of container %s cannot be pulled (%s: %s)", s.Name, w.Reason, truncateMessage(w.Message)),
+					node:        p.Spec.NodeName,
+				}, true
 			case "CrashLoopBackOff":
 				last := ""
 				if t := s.LastState.Terminated; t != nil {
@@ -1555,9 +1676,21 @@ func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 // progress from its conditions, pods and events. A pull of the preset's
 // image that the registry does not have stops the wait at once
 // (imageMissing): retrying cannot help.
-func waitModelReady(c *Client, project, name string, presetImage bool, timeout time.Duration, progress func(string)) modelWait {
+//
+// workloadOnly: ready once the workload has rolled out, whatever the
+// model's Ready condition says (a model reached through MaaS becomes Ready
+// only once it is published: its route needs the MaaS gateway to admit
+// the project, which publishing does).
+//
+// An image pull that keeps failing is waited on for modelPullGrace before
+// it fails the wait: a node's pull credentials can arrive minutes after it
+// joins the cluster.
+func waitModelReady(c *Client, project, name string, presetImage, workloadOnly bool, timeout time.Duration, progress func(string)) modelWait {
 	var res modelWait
 	last := ""
+	var pullSince time.Time
+	var pullGrace time.Duration
+	pullNote := ""
 	say := func(msg string) {
 		if msg != "" && msg != last {
 			last = msg
@@ -1592,7 +1725,7 @@ func waitModelReady(c *Client, project, name string, presetImage bool, timeout t
 		// the new one starts (seen live).
 		cond, ok := findCondition(model.Status.Conditions, "Ready")
 		ready := ok && cond.Status == "True"
-		if ready && w.rolledOut {
+		if (ready || workloadOnly) && w.rolledOut && w.observed {
 			res.url = model.Status.URL
 			return true, nil
 		}
@@ -1614,6 +1747,19 @@ func waitModelReady(c *Client, project, name string, presetImage bool, timeout t
 			res.imageMissing = pr.imageMissing && presetImage
 			return true, nil
 		}
+		if pr.pullFailure != "" {
+			if pullSince.IsZero() {
+				pullSince = clk.Now()
+				pullGrace, pullNote = modelPullGrace(cc, pr.node)
+			}
+			if clk.Since(pullSince) >= pullGrace {
+				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.pullFailure, clockText(pullGrace), pullNote)
+				return true, nil
+			}
+			say(fmt.Sprintf("%s%s Waiting up to %s for it to succeed...", pr.message, pullNote, clockText(pullGrace)))
+			return false, nil
+		}
+		pullSince = time.Time{}
 		if ready {
 			say(w.message)
 		} else {

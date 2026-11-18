@@ -1900,13 +1900,46 @@ var HandleMaaSStream = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 var runPrerequisites = cluster.RunPrerequisites
 
 // getPrerequisitesStatus reads every feature's prerequisites; tests replace it.
-var getPrerequisitesStatus = cluster.GetPrerequisitesStatus
+var getPrerequisitesStatus = cluster.GetPrerequisitesStatusFor
+
+// getModelExposures reads the ways a model can be reached; tests replace it.
+var getModelExposures = cluster.GetModelExposures
+
+// HandleModelExposures reports the ways a catalog model can be reached from
+// a project (?project=&model=), with the one this tool recommends.
+var HandleModelExposures = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	project, model := r.URL.Query().Get("project"), r.URL.Query().Get("model")
+	if !namespaceRegex.MatchString(project) || !cluster.ValidModelName(model) {
+		writeError(w, "a valid project and a model of the catalog are required", http.StatusBadRequest, "validation")
+		return
+	}
+	ex, msg, code := getModelExposures(c, project, model)
+	if msg != "" {
+		status := http.StatusBadGateway
+		switch code {
+		case "validation":
+			status = http.StatusBadRequest
+		case "forbidden":
+			status = http.StatusForbidden
+		case "terminating":
+			status = http.StatusConflict
+		}
+		writeError(w, msg, status, code)
+		return
+	}
+	writeJSON(w, ex, "model exposures")
+})
 
 // HandlePrerequisitesStatus reports what each Environment feature needs on
 // the cluster (DataScienceCluster components, operators) and what Set up
 // would change.
 var HandlePrerequisitesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	st, err := getPrerequisitesStatus(c)
+	exposure := r.URL.Query().Get("exposure")
+	if !cluster.ValidExposure(exposure) {
+		writeError(w, "exposure must be default-gateway, maas, gateway or internal", http.StatusBadRequest, "validation")
+		return
+	}
+	st, err := getPrerequisitesStatus(c, exposure)
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
 		writeError(w, "Cannot read the prerequisites: "+err.Error(), code, errorCode)

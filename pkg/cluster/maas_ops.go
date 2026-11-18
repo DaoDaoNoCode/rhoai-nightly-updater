@@ -21,6 +21,11 @@ type maasRun struct {
 	logs     []string
 	activity string
 	target   string
+	// newModel (Models routing): publish a model the Models tab just set
+	// up to be reached through MaaS only. Its server runs, but it is not
+	// Ready until published: its route needs the MaaS gateway to admit the
+	// project, which publish does. Publish waits for Ready on its route.
+	newModel bool
 }
 
 func (m *maasRun) step(id, status, msg string) {
@@ -729,7 +734,7 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	case !owned:
 		return m.fail("check", fmt.Sprintf("%s in '%s' was not created by this tool, so it is not published. Nothing was changed.", name, project), "not_managed", "model foreign")
 	}
-	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
+	if cond, ok := findCondition(model.Status.Conditions, "Ready"); (!ok || cond.Status != "True") && !m.newModel {
 		return m.fail("check", fmt.Sprintf("%s in '%s' is not ready yet. Publish it once it is. Nothing was changed.", name, project), "prerequisites", "model not ready")
 	}
 	expect, msg := planModelSpecExpectation(c, name)
