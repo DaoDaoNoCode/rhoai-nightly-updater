@@ -1025,6 +1025,17 @@ func TestTemplateRBACGrantsNothingTheCodeDoesNotUse(t *testing.T) {
 					if !used {
 						t.Errorf("%s grants %s %s/%s (namespace %q) but no code path uses it; remove it to keep least privilege", g.source, verb, group, res, g.namespace)
 					}
+					// Each name of a named rule, too: a name no code path
+					// requests widens the grant for nothing.
+					for _, name := range g.rule.ResourceNames {
+						named := false
+						for _, r := range reqs {
+							named = named || (r.Verb == verb && r.Group == group && r.Resource == res && r.Name == name && g.allows(r))
+						}
+						if used && !named {
+							t.Errorf("%s grants %s %s/%s on %q (namespace %q) but no code path requests that name; remove it to keep least privilege", g.source, verb, group, res, name, g.namespace)
+						}
+					}
 				}
 			}
 		}

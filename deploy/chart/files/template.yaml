@@ -535,12 +535,12 @@ objects:
         resources: ["maasmodelrefs"]
         resourceNames: ["smollm2-135m-instruct", "qwen25-05b-instruct", "qwen3-1-7b"]
         verbs: ["get", "patch", "delete"]
-      # The HTTPRoute KServe makes for the tool's model (in the model's
-      # project), read-only: publishing waits until it names the MaaS gateway
-      # alone, unpublishing until it has left it
+      # The HTTPRoutes KServe makes for the tool's chat models (in the
+      # model's project), read-only: publishing waits until the model's names
+      # the MaaS gateway alone, unpublishing until it has left it
       - apiGroups: ["gateway.networking.k8s.io"]
         resources: ["httproutes"]
-        resourceNames: ["qwen25-05b-instruct-kserve-route"]
+        resourceNames: ["smollm2-135m-instruct-kserve-route", "qwen25-05b-instruct-kserve-route", "qwen3-1-7b-kserve-route"]
         verbs: ["get"]
       # Removing the platform: whether others use MaaS (their model
       # references, subscriptions and access policies; read-only)

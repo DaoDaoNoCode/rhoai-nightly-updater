@@ -262,8 +262,11 @@ only accepts a tag whose version is the top dated section. See
   which the publish dialog says before you confirm, and the Models tab
   shows the MaaS commands instead of the direct curl. A publication by an
   earlier build shows as "Partly published": Unpublish, then Publish
-  again. New RBAC: `get` on the model's HTTPRoute
-  `qwen25-05b-instruct-kserve-route` (SECURITY.md).
+  again. Each chat model of the catalog has its own recorded refs (by
+  project and model) and its own route. New RBAC: `get` on the chat
+  models' HTTPRoutes `smollm2-135m-instruct-kserve-route`,
+  `qwen25-05b-instruct-kserve-route` and `qwen3-1-7b-kserve-route`
+  (SECURITY.md).
 
 - In **Install a different build**, each choice's description touched the
   next choice: the choices were not inside a form, and PatternFly sets

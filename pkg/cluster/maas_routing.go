@@ -153,14 +153,21 @@ func writeModelGatewayRefs(c *Client, project, name, rv string, refs gatewayRefs
 	return err
 }
 
-// modelRoutePath is the HTTPRoute KServe makes for a catalog model:
+// modelRoutePath is the HTTPRoute KServe makes for a chat model of the
+// catalog (the ones publish routes through the MaaS gateway):
 // kmeta.ChildName(<model>, "-kserve-route") (router.go expectedHTTPRoute),
-// which is the plain concatenation while it fits 63 characters. Only the
-// catalog's names, so the RBAC rule stays limited to them.
+// which is the plain concatenation while it fits 63 characters. Only those
+// names, written out so the RBAC rule (resourceNames) stays limited to them
+// and is checked against them (rbac_coverage_test.go); the embedding model
+// is never published, so its route is not read.
 func modelRoutePath(project, name string) (string, bool) {
 	switch name {
+	case "smollm2-135m-instruct":
+		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "smollm2-135m-instruct-kserve-route"), true
 	case "qwen25-05b-instruct":
 		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen25-05b-instruct-kserve-route"), true
+	case "qwen3-1-7b":
+		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen3-1-7b-kserve-route"), true
 	}
 	return "", false
 }
