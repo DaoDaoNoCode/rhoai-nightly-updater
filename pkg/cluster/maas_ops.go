@@ -724,8 +724,9 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 // packages/maas/bff/internal/repositories/maasmodelrefs.go): owned by the
 // model with blockOwnerDeletion false, so garbage collection removes it
 // with the model (the MaaS record then shows the publication as partly
-// done, and Unpublish finishes it), and the model's description. The
-// display name is the catalog's (the caller's), not the object's.
+// done, and Unpublish finishes it), and a description. The display name
+// and description are the catalog's (the caller's), not the object's,
+// which a project editor can change.
 func maasModelRefObjectFor(c *Client, project, name, displayName, description, modelUID string) map[string]interface{} {
 	annotations := map[string]interface{}{"openshift.io/display-name": displayName}
 	if description != "" {
@@ -941,10 +942,11 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	sub, auth := maasAccessObjects(c, live)
-	// The catalog's display name, never the object's: MaaS shows it to
-	// every signed-in user, and a project editor can change the annotation.
+	// The catalog's display name and description (the text setup writes on
+	// the model), never the object's: MaaS shows them to every signed-in
+	// user, and a project editor can change the annotations.
 	entry, _ := catalogEntry(name)
-	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(entry.DisplayName, name), model.Metadata.Annotations["openshift.io/description"], model.Metadata.UID)
+	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(entry.DisplayName, name), entry.Description, model.Metadata.UID)
 	if gwPlan != nil {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
 			return m.fail("check", msg, code, "gateway dry run failed")

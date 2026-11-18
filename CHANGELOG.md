@@ -44,7 +44,7 @@ only accepts a tag whose version is the top dated section. See
   (a model a pre-release 3.0.0 build set up is not: delete it with `oc`
   and set it up again). Publishing takes the model out of Gen AI studio's
   AI assets (restored on Unpublish), and the MaaSModelRef is owned by the
-  model, with its description and the catalog's name. Qwen3's chat template
+  model, with the catalog's name and description. Qwen3's chat template
   JSON has no spaces; models request ephemeral storage for their download;
   setup warns about a full project ResourceQuota; the Models tab says what
   the dashboard shows for a model no hardware profile fits. RBAC:

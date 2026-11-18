@@ -57,7 +57,7 @@ func TestMaaSPublish_TakesTheModelOutOfGenAIAssetsAndUnpublishRestores(t *testin
 // The MaaSModelRef is owned by the model, as the dashboard makes it
 // (odh-dashboard rhoai-3.6 maas BFF maasmodelrefs.go
 // buildModelRefUnstructured: blockOwnerDeletion false; maas-model-ref.ts
-// L161-231 passes the model's UID and description), so garbage collection
+// L161-231 passes the model's UID), so garbage collection
 // removes it with the model.
 func TestMaaSPublish_TheModelRefIsOwnedByTheModelAndCarriesItsDescription(t *testing.T) {
 	mc := publishedMaaSCluster(t)
