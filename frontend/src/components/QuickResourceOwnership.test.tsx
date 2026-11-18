@@ -425,6 +425,22 @@ describe("storage from an earlier version", () => {
   const runningDspa: ResourceState = { deployed: true, ready: true, namespace: "juntao-test", name: "dspa", managedByTool: true, message: "Running", dataPVCs: ["mariadb-dspa"] };
   const sse = (...events: object[]) => () => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 
+  it("a namespace minio this tool did not make is said plainly, offers no migration, and does not block setup", async () => {
+    setup(live({ minio: notDeployed, legacyStorage: null, foreignLegacyNamespace: true, pipelineServers: [] }));
+    renderAt();
+    const storage = await part("S3 storage");
+    expect(within(storage).getByText("Namespace minio is not this tool's")).toBeInTheDocument();
+    expect(within(storage).getByText(/not used as storage from an earlier version/)).toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "Migrate storage" })).not.toBeInTheDocument();
+  });
+
+  it("Migrate storage gives the new storage new keys, not the old ones", async () => {
+    setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
+    renderAt();
+    const storage = await part("S3 storage");
+    expect(within(storage).getByText(/Migrate storage creates it, with new keys/)).toBeInTheDocument();
+  });
+
   it("reads Needs attention with Migrate storage, and names the old objects only in its collapsed section", async () => {
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     renderAt();

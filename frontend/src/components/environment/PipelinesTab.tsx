@@ -192,7 +192,14 @@ const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, re
         </Alert>
       )}
       {legacy?.stage === "migrate" && (
-        <Content component="p">Not set up yet: Migrate storage creates it, with the same keys as the old storage.</Content>
+        <Content component="p">Not set up yet: Migrate storage creates it, with new keys, and gives them to the pipeline servers it moves.</Content>
+      )}
+      {status.foreignLegacyNamespace && !legacy && (
+        <Alert variant="info" isInline component="div" title="Namespace minio is not this tool's">
+          <Content component="p">
+            Namespace <code>minio</code> exists, but this tool did not create it (for example someone ran <code>oc new-project minio</code>), so whatever is in it is not used as storage from an earlier version: nothing is copied from it and nothing in it is changed. Setting up the S3 storage is not affected.
+          </Content>
+        </Alert>
       )}
       {minio && (!legacy || deployed) && (
         <ProblemAlerts kind="minio" state={minio} fix={canRepair && !readOnly ? { label: "Repair", onClick: () => setPending({ kind: "repair-minio" }), reason: repairReason } : null}

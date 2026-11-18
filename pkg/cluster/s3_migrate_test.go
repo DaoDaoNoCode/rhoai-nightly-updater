@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	migrateJobPathT = "/apis/batch/v1/namespaces/seaweedfs/jobs/seaweedfs-migrate"
-	migratePodPath  = "/api/v1/namespaces/seaweedfs/pods/seaweedfs-migrate-x7k2p"
+	migrateJobPathT    = "/apis/batch/v1/namespaces/seaweedfs/jobs/seaweedfs-migrate"
+	migrateSourcePathT = "/api/v1/namespaces/seaweedfs/secrets/seaweedfs-migrate-source"
+	migratePodPath     = "/api/v1/namespaces/seaweedfs/pods/seaweedfs-migrate-x7k2p"
 	// The old storage's keys (putLegacySeaweedFS).
 	legacyKeyID = "minio-abc"
 	legacyKey   = "old-pass"
@@ -216,13 +217,28 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 			t.Errorf("message lacks %q: %s", want, msg)
 		}
 	}
-	// 1. The new storage has the old keys.
-	if secretValue(t, f, s3SecretPath, s3AccessKeyField) != legacyKeyID || secretValue(t, f, s3SecretPath, s3SecretKeyField) != legacyKey {
-		t.Error("the new storage does not have the old keys")
+	// 1. The new storage has fresh keys, not the old ones: whoever knew
+	// the old storage's keys has no access to the new storage.
+	newID, newKey := secretValue(t, f, s3SecretPath, s3AccessKeyField), secretValue(t, f, s3SecretPath, s3SecretKeyField)
+	if newID == "" || newKey == "" || newID == legacyKeyID || newKey == legacyKey {
+		t.Errorf("the new storage's keys are %q/%q, not fresh ones", newID, newKey)
 	}
-	// 2. The Job ran and is gone.
+	// 2. The Job ran and is gone. It read the old keys from its own
+	// Secret, owned by the Job (garbage-collected with it).
 	if !hasMutation(f, "POST /apis/batch/v1/namespaces/seaweedfs/jobs") || f.has(migrateJobPathT) {
 		t.Error("the copy Job was not created, or not deleted after its result was read")
+	}
+	if !hasMutation(f, "POST /api/v1/namespaces/seaweedfs/secrets") {
+		t.Error("the copy Job's source Secret was not created")
+	}
+	if src := f.get(migrateSourcePathT); src != nil {
+		if secretValue(t, f, migrateSourcePathT, s3AccessKeyField) != legacyKeyID || secretValue(t, f, migrateSourcePathT, s3SecretKeyField) != legacyKey {
+			t.Error("the source Secret does not hold the old keys")
+		}
+		refs, _ := ensureMap(src, "metadata")["ownerReferences"].([]interface{})
+		if len(refs) != 1 || refs[0].(map[string]interface{})["kind"] != "Job" || refs[0].(map[string]interface{})["name"] != migrateJobName {
+			t.Errorf("source Secret owner = %v", refs)
+		}
 	}
 	// 3. Both tool pipeline servers point at the new storage with the
 	// standard secret; the earlier version's one is now labelled.
@@ -231,8 +247,8 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		if es["host"] != s3Host() || ensureMap(es, "s3CredentialsSecret")["secretName"] != dspaSecretName || es["bucket"] != "pipelines" || es["scheme"] != "http" {
 			t.Errorf("%s/%s external storage = %v", ps[0], ps[1], es)
 		}
-		if secretValue(t, f, secretPath(ps[0], dspaSecretName), s3AccessKeyField) != legacyKeyID {
-			t.Errorf("%s has no credentials secret with the same keys", ps[0])
+		if secretValue(t, f, secretPath(ps[0], dspaSecretName), s3AccessKeyField) != newID || secretValue(t, f, secretPath(ps[0], dspaSecretName), s3SecretKeyField) != newKey {
+			t.Errorf("%s has no credentials secret with the new storage's keys", ps[0])
 		}
 	}
 	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]interface{})
@@ -272,6 +288,16 @@ func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 	raw, _ := json.Marshal(job)
 	if strings.Contains(string(raw), legacyKey) || strings.Contains(string(raw), "seaweedfs-key") {
 		t.Fatal("a key value is in the Job")
+	}
+	// The old remote reads the old keys from the Job's source Secret, the
+	// new remote the new storage's own.
+	for _, want := range []string{
+		`{"name":"RCLONE_CONFIG_OLD_ACCESS_KEY_ID","valueFrom":{"secretKeyRef":{"key":"AWS_ACCESS_KEY_ID","name":"seaweedfs-migrate-source"}}}`,
+		`{"name":"RCLONE_CONFIG_NEW_ACCESS_KEY_ID","valueFrom":{"secretKeyRef":{"key":"AWS_ACCESS_KEY_ID","name":"seaweedfs-s3-credentials"}}}`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("job lacks %s", want)
+		}
 	}
 	var j struct {
 		Spec struct {
@@ -788,18 +814,24 @@ func hasStep(steps []UpdateStepEvent, id, text string) bool {
 }
 
 func TestMigrate_Refusals(t *testing.T) {
-	t.Run("new storage with other keys", func(t *testing.T) {
+	// A new storage this tool already set up keeps its keys (they are not
+	// the old ones), and the pipeline servers get those.
+	t.Run("new storage with other keys keeps them", func(t *testing.T) {
 		fastMigrateTimings(t)
 		f, c := newResourceFake(t)
 		putMigrationCase(f)
 		putReadyManagedS3(f) // other keys
+		id := secretValue(t, f, s3SecretPath, s3AccessKeyField)
 		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
 		ok, msg, code, _ := runMigrate(t, c, MigrateOptions{})
-		if ok || code != "conflict" || !strings.Contains(msg, "other keys") {
+		if !ok {
 			t.Fatalf("got %v %s: %s", ok, code, msg)
 		}
-		if len(f.mutations()) != 0 {
-			t.Errorf("writes: %v", f.mutations())
+		if got := secretValue(t, f, s3SecretPath, s3AccessKeyField); got != id {
+			t.Errorf("the new storage's keys changed: %q -> %q", id, got)
+		}
+		if got := secretValue(t, f, secretPath("team-a", dspaSecretName), s3AccessKeyField); got != id {
+			t.Errorf("pipeline server key = %q, want %q", got, id)
 		}
 	})
 	t.Run("old server not running", func(t *testing.T) {

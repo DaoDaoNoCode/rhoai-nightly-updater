@@ -154,7 +154,7 @@ func TestGetResourcesStatus_ReportsEarlierStorage(t *testing.T) {
 func TestGetResourcesStatus_EarlierStorageUnreadableIsAWarning(t *testing.T) {
 	f, c := newResourceFake(t)
 	putReadyManagedS3(f)
-	f.putJSON(legacyNSPath, `{"metadata":{},"status":{"phase":"Active"}}`)
+	f.putJSON(legacyNSPath, `{"metadata":{"labels":`+toolLabelJSON+`},"status":{"phase":"Active"}}`)
 	f.fail["GET "+legacySecretPath] = 403
 	st, err := GetResourcesStatus(c)
 	if err != nil {

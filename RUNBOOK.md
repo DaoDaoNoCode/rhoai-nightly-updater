@@ -524,9 +524,12 @@ EOF
 oc -n minio rollout status deploy/minio-old --timeout=3m
 ```
 
-Then copy with a one-off pod. The keys come from `minio-secret` through `secretKeyRef` (the new storage has the same keys); the client image has no shell, so Kubernetes builds the endpoints from `$(AK)`/`$(SK)`. `--overwrite` is left out, so nothing already in the new storage is replaced:
+Then copy with a one-off pod. The keys come through `secretKeyRef`: the old storage's from `minio-secret`, the new storage's from a copy of `seaweedfs-s3-credentials` (since 3.0.0 the new storage has keys of its own), made in `minio` first and deleted with the pod; the client image has no shell, so Kubernetes builds the endpoints from `$(AK)`/`$(SK)`. `--overwrite` is left out, so nothing already in the new storage is replaced:
 
 ```sh
+new_key() { oc -n seaweedfs get secret seaweedfs-s3-credentials -o jsonpath="{.data.$1}" | base64 -d; }
+oc -n minio create secret generic seaweedfs-keys \
+  --from-literal=AWS_ACCESS_KEY_ID="$(new_key AWS_ACCESS_KEY_ID)" --from-literal=AWS_SECRET_ACCESS_KEY="$(new_key AWS_SECRET_ACCESS_KEY)"
 oc -n minio apply -f - <<'EOF'
 apiVersion: v1
 kind: Pod
@@ -542,12 +545,14 @@ spec:
     - {name: AK, valueFrom: {secretKeyRef: {name: minio-secret, key: minio_root_user}}}
     - {name: SK, valueFrom: {secretKeyRef: {name: minio-secret, key: minio_root_password}}}
     - {name: MC_HOST_old, value: "http://$(AK):$(SK)@minio-old.minio.svc:9000"}
-    - {name: MC_HOST_new, value: "http://$(AK):$(SK)@seaweedfs-s3.seaweedfs.svc:8333"}
+    - {name: NAK, valueFrom: {secretKeyRef: {name: seaweedfs-keys, key: AWS_ACCESS_KEY_ID}}}
+    - {name: NSK, valueFrom: {secretKeyRef: {name: seaweedfs-keys, key: AWS_SECRET_ACCESS_KEY}}}
+    - {name: MC_HOST_new, value: "http://$(NAK):$(NSK)@seaweedfs-s3.seaweedfs.svc:8333"}
     securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
 EOF
 oc -n minio wait pod/mc-copy --for=jsonpath='{.status.phase}'=Succeeded --timeout=30m
 oc -n minio logs mc-copy | tail -5
-oc -n minio delete pod mc-copy
+oc -n minio delete pod mc-copy secret/seaweedfs-keys
 oc -n minio delete deploy/minio-old svc/minio-old
 oc -n minio wait --for=delete pod -l app=minio-old --timeout=2m
 oc -n minio delete networkpolicy minio-old-ingress

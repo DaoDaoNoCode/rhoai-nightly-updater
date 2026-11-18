@@ -606,6 +606,11 @@ type ResourcesStatus struct {
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
+	// ForeignLegacyNamespace: namespace minio exists but this tool did not
+	// make it (no tool label; made by a project request, or by someone
+	// else), so whatever is in it is not treated as an earlier version's
+	// storage: Migrate storage never uses it, and setup is not blocked.
+	ForeignLegacyNamespace bool `json:"foreignLegacyNamespace,omitempty"`
 	// PipelinesBlocked and MLflowBlocked say why the feature cannot be set
 	// up on this cluster (the DataScienceCluster does not turn on the
 	// component that runs it), or are nil. Setup refuses for the same reason.

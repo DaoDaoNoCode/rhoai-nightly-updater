@@ -344,6 +344,8 @@ export interface ResourcesStatus {
   pipelineServers: ResourceState[] | null;
   /** Storage an earlier version of this tool left in namespace minio, until it is migrated or torn down. */
   legacyStorage?: LegacyStorageState | null;
+  /** Namespace minio exists but this tool did not make it: it is not treated as an earlier version's storage. */
+  foreignLegacyNamespace?: boolean;
   /** Why Pipelines cannot be set up on this cluster (its DataScienceCluster component is off), or absent. */
   pipelinesBlocked?: ComponentBlock | null;
   /** Why MLflow cannot be set up on this cluster, or absent. */

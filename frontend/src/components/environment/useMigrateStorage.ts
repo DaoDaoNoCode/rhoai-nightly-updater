@@ -8,7 +8,7 @@ export type MigrateKind = "migrate" | "remove";
 export const MIGRATE_STEPS: Record<MigrateKind, { id: string; title: string }[]> = {
   migrate: [
     { id: "check", title: "Check the old storage" },
-    { id: "storage", title: "Set up the new storage with the same keys" },
+    { id: "storage", title: "Set up the new storage with new keys" },
     { id: "copy", title: "Copy every object and check it byte for byte" },
     { id: "repoint", title: "Move the pipeline servers this tool created" },
   ],

@@ -158,20 +158,52 @@ type legacyStorage struct {
 	addressErr error
 }
 
+// projectRequesterAnnotation is set on every namespace a ProjectRequest
+// made (`oc new-project`), to the user who asked for it.
+const projectRequesterAnnotation = "openshift.io/requester"
+
+// legacyNamespaceOurs reports whether namespace minio is the one this tool
+// made. Any user who may request projects can make a namespace minio and
+// fill it with objects that carry the tool's label and field manager, so
+// the objects' own markers prove nothing; the namespace's do:
+//   - the tool label: 2.x created the namespace with it and labelled the
+//     ones earlier versions made (v2.3.3 minio.go); only someone who may
+//     patch namespaces (a cluster-admin, or this tool's ServiceAccount of
+//     those versions) can set it, never a project's own admin
+//     (SECURITY.md, inference gateway);
+//   - else the earliest versions' plain POST (manager Go-http-client), but
+//     never on a namespace a ProjectRequest made (openshift.io/requester).
+func legacyNamespaceOurs(meta objectMeta) bool {
+	if meta.hasToolLabel() {
+		return true
+	}
+	if meta.Annotations[projectRequesterAnnotation] != "" {
+		return false
+	}
+	return meta.hasManager([]string{legacyPostManager})
+}
+
 // readLegacyStorage reports the storage an earlier version left in
-// namespace minio, or nil when there is none: no such namespace, or none of
-// the names in legacyStorageObjects belongs to an object this tool created
-// (the ownership label, or an earlier version's server-side apply). The
-// namespace itself is not judged: an object's own markers say who created
-// it. Any read error is returned (fail closed), except for the addresses,
-// which only the dependency checks need (addressErr).
+// namespace minio, or nil when there is none: no such namespace, a
+// namespace this tool did not make (legacyNamespaceOurs), or none of the
+// names in legacyStorageObjects belongs to an object this tool created
+// (the ownership label, or an earlier version's server-side apply). Any
+// read error is returned (fail closed), except for the addresses, which
+// only the dependency checks need (addressErr).
 func readLegacyStorage(c *Client) (*legacyStorage, error) {
+	l, _, err := readLegacyStorageOwner(c)
+	return l, err
+}
+
+// readLegacyStorageOwner is readLegacyStorage, and also reports a
+// namespace minio this tool did not make (foreign), for the status.
+func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 	body, _, err := c.get("/api/v1/namespaces/" + legacyNamespace)
 	if IsK8sError(err, 404) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read namespace %s: %w", legacyNamespace, err)
+		return nil, false, fmt.Errorf("read namespace %s: %w", legacyNamespace, err)
 	}
 	var nsObj struct {
 		Metadata objectMeta `json:"metadata"`
@@ -180,7 +212,10 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &nsObj); err != nil {
-		return nil, fmt.Errorf("parse namespace %s: %w", legacyNamespace, err)
+		return nil, false, fmt.Errorf("parse namespace %s: %w", legacyNamespace, err)
+	}
+	if !legacyNamespaceOurs(nsObj.Metadata) {
+		return nil, true, nil
 	}
 
 	type result struct {
@@ -225,7 +260,7 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 	wg.Wait()
 
 	if pvcErr != nil {
-		return nil, fmt.Errorf("list PVCs in namespace %s: %w", legacyNamespace, pvcErr)
+		return nil, false, fmt.Errorf("list PVCs in namespace %s: %w", legacyNamespace, pvcErr)
 	}
 	l := &legacyStorage{terminating: nsObj.Metadata.terminating() || nsObj.Status.Phase == "Terminating", nsMeta: nsObj.Metadata, address: address, addressErr: addrErr}
 	deployments := map[string]s3DeploymentSpec{}
@@ -241,7 +276,7 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 			continue
 		}
 		if r.err != nil {
-			return nil, fmt.Errorf("read %s %s/%s: %w", o.kind, legacyNamespace, o.name, r.err)
+			return nil, false, fmt.Errorf("read %s %s/%s: %w", o.kind, legacyNamespace, o.name, r.err)
 		}
 		if o.kind == "Service" && r.found {
 			l.serviceFound = true
@@ -258,7 +293,7 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 		}
 	}
 	if len(l.objects) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	tool := map[string]bool{}
 	for _, o := range l.objects {
@@ -284,7 +319,7 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 	case hasKey(deployments, legacyMinIODeployment):
 		l.server, l.ready = "MinIO", deployments[legacyMinIODeployment].Status.ReadyReplicas >= 1
 	}
-	return l, nil
+	return l, false, nil
 }
 
 // listDeploymentMetas lists the metadata of a namespace's Deployments.

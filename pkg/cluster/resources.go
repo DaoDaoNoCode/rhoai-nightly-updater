@@ -668,6 +668,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		s3EPErr     error
 		legacy      *legacyStorage
 		legacyErr   error
+		foreignNS   bool
 		dsc         dscRead
 		dscErr      error
 		models      []llmisvcObject
@@ -679,7 +680,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer wg.Done(); projects, projectsErr = GetDSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = listDSPAs(c, "") }()
 	go func() { defer wg.Done(); status.MinIO, s3EP, s3EPErr = s3StatusAndEndpoints(c) }()
-	go func() { defer wg.Done(); legacy, legacyErr = readLegacyStorage(c) }()
+	go func() { defer wg.Done(); legacy, foreignNS, legacyErr = readLegacyStorageOwner(c) }()
 	go func() { defer wg.Done(); status.MLflow = getMLflowStatus(c) }()
 	go func() { defer wg.Done(); dashURL = dashboardBaseURL(c) }()
 	go func() { defer wg.Done(); dsc, dscErr = readFirstDSC(c) }()
@@ -692,6 +693,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	}
 
 	status.DashboardURL = dashURL
+	status.ForeignLegacyNamespace = foreignNS
 	// What the features need from the DataScienceCluster. One that cannot
 	// be read blocks nothing; setup still checks the CRD.
 	if dscErr != nil {

@@ -323,6 +323,14 @@ only accepts a tag whose version is the top dated section. See
 - MaaS tab, Authorino TLS commands: the certificate Secret's name read from
   Authorino's CR must be a valid Kubernetes name, or no commands are shown
   and the tab says why; every substitution is shell-quoted.
+- **S3 storage migration: the tool's own namespace only, and new keys.**
+  Namespace `minio` counts as an earlier version's storage only when the
+  namespace shows the tool made it (its label, or the earliest versions'
+  POST without a project requester), so `oc new-project minio` with planted
+  objects is ignored and shown as not this tool's. Migrate storage gives the
+  new storage new keys and gives them to the pipeline servers it moves; the
+  old keys are used only by the copy Job, through a Secret the Job owns
+  (`seaweedfs-migrate-source`, one new RBAC rule).
 - Copy-paste commands: addresses from the cluster (a model's address, a
   pipeline server's API, the MaaS address) are single-quoted, and the server
   shows only plain https addresses, saying why when it hides one.

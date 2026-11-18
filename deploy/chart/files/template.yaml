@@ -149,6 +149,14 @@ objects:
         resources: ["secrets"]
         resourceNames: ["minio-secret"]
         verbs: ["get", "delete"]
+      # The copy Job's Secret with the old storage's keys (Migrate storage,
+      # namespace seaweedfs): an earlier run's is read and deleted before a
+      # new one is created, and the Job is made its owner, which
+      # OwnerReferencesPermissionEnforcement allows only with delete on it
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["seaweedfs-migrate-source"]
+        verbs: ["get", "patch", "delete"]
       # The pipeline-server S3 secret; dashboard-dspa-secret is the name
       # older versions used, kept so their teardown still works.
       - apiGroups: [""]

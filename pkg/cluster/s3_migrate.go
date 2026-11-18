@@ -22,13 +22,17 @@ import (
 // each resumable: re-running one does only what is still missing.
 //
 // Migrate:
-//  1. Set up the new storage with the old storage's keys, so every client
-//     only needs the new address.
+//  1. Set up the new storage with fresh keys (or keep the keys of the new
+//     storage when it is already set up). Never the old storage's keys:
+//     whoever knew those (anyone who could read minio-secret, and whoever
+//     planted the storage, see legacyNamespaceOurs) gets no access to the
+//     new storage. The old keys are read only for the copy Job.
 //  2. Copy every bucket and object with an rclone Job in namespace
 //     seaweedfs, then verify (migrateScript). Any difference stops here.
-//  3. Repoint the pipeline servers this tool created and wait until DSPO
-//     reports ObjectStoreAvailable for the new storage. One that does not
-//     stops the run.
+//  3. Repoint the pipeline servers this tool created, with the new
+//     storage's keys in their Secret, and wait until DSPO reports
+//     ObjectStoreAvailable for the new storage. One that does not stops
+//     the run.
 //
 // Remove the old storage (after the user has read the summary): copy and
 // verify once more (objects written since), delete the old storage's objects
@@ -36,9 +40,13 @@ import (
 // and the user chose to. A removal that stopped part-way is finished by
 // running it again (removeOldStorage).
 const (
-	migrateJobName   = "seaweedfs-migrate"
-	migrateContainer = "rclone"
-	migrateAppLabel  = "seaweedfs-migrate"
+	migrateJobName = "seaweedfs-migrate"
+	// migrateSourceSecret holds the old storage's keys for the copy Job's
+	// "old" remote: a Job reads Secrets of its own namespace only. It is
+	// owned by the Job (ownerReferences), so it goes with the Job.
+	migrateSourceSecret = "seaweedfs-migrate-source"
+	migrateContainer    = "rclone"
+	migrateAppLabel     = "seaweedfs-migrate"
 	// rcloneDefaultImage is rclone 1.76.0 (docker.io/rclone/rclone:1.76.0,
 	// MIT), pinned by its OCI index digest (linux amd64, arm64, arm/v6,
 	// arm/v7, 386; image label org.opencontainers.image.version 1.76.0,
@@ -205,30 +213,30 @@ func migrateJobCreatePath() string {
 	return withToolFieldManager(namespacedPath("batch/v1", "jobs", s3Namespace, ""))
 }
 
-// migrateJob is the copy Job. The old and the new storage have the same
-// keys (step 1 checks it), so both remotes read them from the new storage's
-// Secret, the only one in the Job's namespace. The endpoints carry their
+// migrateJob is the copy Job. The "old" remote reads the old storage's keys
+// from migrateSourceSecret, the "new" one the new storage's from its
+// Secret; both are in the Job's namespace. The endpoints carry their
 // scheme: rclone prepends https:// to one without (backend/s3/s3.go:1597
 // at v1.76.0). Pods can reach both S3 ports: NetworkPolicy
 // seaweedfs-ingress admits port 8333 from every pod in every namespace
 // (namespaceSelector {}), and the old storage's policies do the same for
 // its port.
 func migrateJob(oldServer, mode string, final bool) map[string]interface{} {
-	secretEnv := func(name, key string) map[string]interface{} {
-		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": s3Secret, "key": key}}}
+	secretEnv := func(name, secret, key string) map[string]interface{} {
+		return map[string]interface{}{"name": name, "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": secret, "key": key}}}
 	}
-	remote := func(name, provider, endpoint string) []map[string]interface{} {
+	remote := func(name, provider, endpoint, secret string) []map[string]interface{} {
 		prefix := "RCLONE_CONFIG_" + name + "_"
 		return []map[string]interface{}{
 			{"name": prefix + "TYPE", "value": "s3"},
 			{"name": prefix + "PROVIDER", "value": provider},
 			{"name": prefix + "ENDPOINT", "value": endpoint},
 			{"name": prefix + "REGION", "value": s3Region},
-			secretEnv(prefix+"ACCESS_KEY_ID", s3AccessKeyField),
-			secretEnv(prefix+"SECRET_ACCESS_KEY", s3SecretKeyField),
+			secretEnv(prefix+"ACCESS_KEY_ID", secret, s3AccessKeyField),
+			secretEnv(prefix+"SECRET_ACCESS_KEY", secret, s3SecretKeyField),
 		}
 	}
-	env := append(remote("OLD", rcloneProvider(oldServer), "http://"+legacyS3Host()), remote("NEW", "SeaweedFS", s3Endpoint())...)
+	env := append(remote("OLD", rcloneProvider(oldServer), "http://"+legacyS3Host(), migrateSourceSecret), remote("NEW", "SeaweedFS", s3Endpoint(), s3Secret)...)
 	// The assigned UID has no home directory in the image.
 	env = append(env, map[string]interface{}{"name": "HOME", "value": "/tmp"}, map[string]interface{}{"name": "COPY_MODE", "value": mode})
 	podLabels := map[string]interface{}{"app": migrateAppLabel, managedByLabelKey: managedByLabelValue}
@@ -479,17 +487,14 @@ func (m *migrateRun) sourceReady(legacy *legacyStorage, step string) (s3Keys, *t
 	return keys, nil
 }
 
-// newStorageMatches reports whether the new storage is ready with the given
-// keys (any keys when keys is nil); an error response when it holds other
-// keys. Neither flow points at Tear down here: it deletes both storages.
-func (m *migrateRun) newStorageMatches(keys *s3Keys, step string) (bool, *types.OperationResponse) {
-	stored, found, err := readS3Keys(m.c)
+// newStorageReady reports whether the new storage is set up by this tool
+// and ready. Its keys are its own (step 1 of Migrate): they are never
+// compared with the old storage's. Neither flow points at Tear down here:
+// it deletes both storages.
+func (m *migrateRun) newStorageReady(step string) (bool, *types.OperationResponse) {
+	_, found, err := readS3Keys(m.c)
 	if err != nil {
 		resp, _ := m.fail(step, fmt.Sprintf("Cannot read the new storage's keys: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "new keys unreadable")
-		return false, resp
-	}
-	if found && keys != nil && (stored.AccessKey != keys.AccessKey || stored.SecretKey != keys.SecretKey) {
-		resp, _ := m.fail(step, fmt.Sprintf("The storage in namespace '%s' has other keys than the one in namespace '%s', so clients that keep their keys could not use it. Nothing was changed, and a retry gives the same result: this tool never changes the keys of a storage that may hold data. Two ways forward, both by hand: if namespace '%s' holds nothing you need, delete it (check with `oc get all,pvc,secret -n %s`, then `oc delete project %s`) and run Migrate storage again, which sets the storage up there with the old keys. Or copy the data yourself, for example with rclone, from the old storage (keys in Secret '%s' in '%s') to the new one (keys in Secret '%s' in '%s') and point your clients at the new storage and its keys. (Removing the storage from this page would delete the old storage too.)", s3Namespace, legacyNamespace, s3Namespace, s3Namespace, s3Namespace, legacySecret, legacyNamespace, s3Secret, s3Namespace), "conflict", "keys differ")
 		return false, resp
 	}
 	state := getS3Status(m.c)
@@ -498,21 +503,26 @@ func (m *migrateRun) newStorageMatches(keys *s3Keys, step string) (bool, *types.
 
 // migrate runs steps 1 to 3.
 func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.OperationResponse, error) {
-	keys, resp := m.sourceReady(legacy, "check")
+	oldKeys, resp := m.sourceReady(legacy, "check")
 	if resp != nil {
 		return resp, nil
 	}
 	m.step("check", "success", fmt.Sprintf("OK: %s in namespace '%s' is running", legacy.server, legacyNamespace))
 
-	// Step 1: the new storage, with the old keys.
-	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace '%s' with the same keys...", s3Namespace))
-	ready, resp := m.newStorageMatches(&keys, "storage")
+	// Step 1: the new storage, with keys of its own: the ones it has when
+	// it is set up already, else new random ones (s3Credentials).
+	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace '%s' with new keys...", s3Namespace))
+	ready, resp := m.newStorageReady("storage")
 	if resp != nil {
 		return resp, nil
 	}
 	if ready {
-		m.step("storage", "success", "OK: The new storage is already set up with the same keys")
+		m.step("storage", "success", "OK: The new storage is already set up")
 	} else {
+		keys, err := s3Credentials(m.c)
+		if err != nil {
+			return m.fail("storage", fmt.Sprintf("Cannot make the new storage's keys; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "keys")
+		}
 		log := &opLog{observe: func(line string) {
 			if m.emit != nil {
 				m.emit(UpdateStepEvent{Step: "storage", Status: "running", Message: line})
@@ -532,7 +542,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 
 	// Step 2: copy and verify. From now on the new storage may get data
 	// of its own, so no later copy overwrites there (copyMode).
-	result, resp := m.copyAndVerify(legacy, dspas, "copy", false)
+	result, resp := m.copyAndVerify(legacy, dspas, oldKeys, "copy", false)
 	if resp != nil {
 		return resp, nil
 	}
@@ -540,8 +550,15 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 		return m.fail("copy", fmt.Sprintf("The copy is verified, but it could not be recorded on Secret %s/%s: %v. No pipeline server was moved; run Migrate storage again.%s", s3Namespace, s3Secret, err, templateHint(err)), errorCodeFromK8sErr(err), "record failed")
 	}
 
-	// Step 3: the pipeline servers.
-	repointed, listed, resp := m.repoint(legacy, dspas, keys)
+	// Step 3: the pipeline servers, with the new storage's keys.
+	newKeys, found, err := readS3Keys(m.c)
+	if err != nil || !found {
+		if err == nil {
+			err = fmt.Errorf("secret %s/%s is gone", s3Namespace, s3Secret)
+		}
+		return m.fail("repoint", fmt.Sprintf("Cannot read the new storage's keys; no pipeline server was moved: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "new keys unreadable")
+	}
+	repointed, listed, resp := m.repoint(legacy, dspas, newKeys)
 	if resp != nil {
 		return resp, nil
 	}
@@ -571,7 +588,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 // fresh copy is not resumed by the next run, so it may use the operation's
 // remaining time, less removeAfterCopyReserve, when that is longer than
 // MigrateCopyTimeout.
-func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step string, fresh bool) (copyResult, *types.OperationResponse) {
+func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldKeys s3Keys, step string, fresh bool) (copyResult, *types.OperationResponse) {
 	c := m.c
 	fail := func(msg, code, activity string) (copyResult, *types.OperationResponse) {
 		resp, _ := m.fail(step, msg, code, activity)
@@ -650,12 +667,22 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 		if _, _, err := c.do(http.MethodPost, migrateJobCreatePath(), "application/json", data, url.Values{"dryRun": {"All"}}); err != nil {
 			return fail(fmt.Sprintf("The API server rejects the copy Job: %v. Nothing was changed.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "validation"), "job dry run failed")
 		}
+		// The old keys first, so the Job's pod finds them when it starts.
+		if err := writeMigrateSource(c, oldKeys); err != nil {
+			return fail(fmt.Sprintf("Cannot write the copy Job's Secret %s/%s with the old storage's keys; the copy did not start: %v.%s", s3Namespace, migrateSourceSecret, err, templateHint(err)), errorCodeFromK8sErr(err), "source secret failed")
+		}
 		body, _, err := c.post(migrateJobCreatePath(), data)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot create the copy Job: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "job create failed")
 		}
 		if job, err = parseMigrateJob(body); err != nil {
 			return fail(fmt.Sprintf("Cannot read the copy Job: %v", err), "", "job parse failed")
+		}
+		// The Secret goes with the Job (garbage collection), whichever way
+		// the Job ends: deleted here, by a later run, or by its TTL.
+		if err := ownMigrateSource(c, job.Meta.UID); err != nil {
+			m.deleteMigrateJob(job)
+			return fail(fmt.Sprintf("Cannot give the copy Job's Secret %s/%s to the Job; the copy was stopped: %v.%s", s3Namespace, migrateSourceSecret, err, templateHint(err)), errorCodeFromK8sErr(err), "source secret owner failed")
 		}
 	}
 
@@ -694,6 +721,58 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, step
 	}
 	m.step(step, "success", fmt.Sprintf("OK: %s copied and checked byte for byte", countNoun(int(result.checked()), "object", "objects")))
 	return result, nil
+}
+
+// migrateSourcePath is the copy Job's Secret with the old storage's keys.
+func migrateSourcePath() string {
+	return namespacedPath("v1", "secrets", "seaweedfs", "seaweedfs-migrate-source")
+}
+
+// writeMigrateSource writes the copy Job's Secret with the old storage's
+// keys: one this tool wrote earlier (an earlier run's, still owned by that
+// Job, which is gone or being replaced) is deleted by UID first, and a new
+// one is created. One someone else made is left alone and stops the copy.
+func writeMigrateSource(c *Client, keys s3Keys) error {
+	meta, found, err := readObjectMeta(c, migrateSourcePath())
+	if err != nil {
+		return err
+	}
+	if found {
+		if !meta.hasToolLabel() {
+			return fmt.Errorf("it exists and was not created by this tool")
+		}
+		if _, err := deleteWithUID(c, migrateSourcePath(), meta.UID); err != nil && !IsK8sError(err, 404) {
+			return fmt.Errorf("delete an earlier run's copy: %w", err)
+		}
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+		"metadata":   map[string]interface{}{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": toolLabels()},
+		"stringData": map[string]interface{}{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
+	})
+	_, _, err = c.post(withToolFieldManager(namespacedPath("v1", "secrets", s3Namespace, "")), data)
+	return err
+}
+
+// ownMigrateSource makes the copy Job (jobUID) the owner of its Secret, so
+// garbage collection deletes the Secret with the Job. OpenShift's
+// OwnerReferencesPermissionEnforcement admission asks for delete on the
+// Secret to set it (the rule names it); blockOwnerDeletion is not set, so
+// nothing is asked of the Job.
+func ownMigrateSource(c *Client, jobUID string) error {
+	meta, found, err := readObjectMeta(c, migrateSourcePath())
+	if err != nil {
+		return err
+	}
+	if !found || !meta.hasToolLabel() {
+		return fmt.Errorf("secret %s/%s is gone or not this tool's", s3Namespace, migrateSourceSecret)
+	}
+	patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{
+		"resourceVersion": meta.ResourceVersion,
+		"ownerReferences": []interface{}{map[string]interface{}{"apiVersion": "batch/v1", "kind": "Job", "name": migrateJobName, "uid": jobUID}},
+	}})
+	_, _, err = c.patch(migrateSourcePath(), patch)
+	return err
 }
 
 // deleteMigrateJob deletes the copy Job by UID; its pod goes with it
@@ -1282,11 +1361,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 	if pending := legacy.copiablePVCsNotDeleting(); resume && len(pending) > 0 {
 		return m.fail("check", sourceGoneMessage(legacy, source.why, pending), "prerequisites", "source gone, data not copied")
 	}
-	var keys *s3Keys
-	if source.keysFound {
-		keys = &source.keys
-	}
-	ready, resp := m.newStorageMatches(keys, "check")
+	ready, resp := m.newStorageReady("check")
 	if resp != nil {
 		return resp, nil
 	}
@@ -1316,7 +1391,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		// Objects written to the old storage since the migration (hand-made
 		// clients) are copied before anything is deleted, by a copy that
 		// starts now (fresh).
-		r, resp := m.copyAndVerify(legacy, dspas, "copy", true)
+		r, resp := m.copyAndVerify(legacy, dspas, source.keys, "copy", true)
 		if resp != nil {
 			return resp, nil
 		}
