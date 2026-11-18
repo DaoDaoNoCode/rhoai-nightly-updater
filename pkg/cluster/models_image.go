@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -552,7 +553,11 @@ func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObjec
 		st.Blocked = &types.ComponentBlock{Component: "kserve", Reason: "Model serving is not installed yet: this cluster has no LLMInferenceService API. If KServe was just turned on, wait for the operator; otherwise check the Components page."}
 	}
 	if modelsErr == nil {
-		st.Items = modelItems(c, models, visible)
+		rec, err := readModelsRecord(c)
+		if err != nil {
+			slog.Warn("cannot read the models record", "error", err)
+		}
+		st.Items = modelItems(c, models, visible, rec)
 	}
 	if st.Blocked != nil {
 		return st

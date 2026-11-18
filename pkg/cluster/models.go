@@ -243,11 +243,6 @@ func (m llmisvcObject) mainImage() string {
 	return ""
 }
 
-// modelOwned: this tool created the model (its label, and a write by the tool).
-func modelOwned(meta objectMeta) bool {
-	return meta.hasToolLabel() && meta.hasManager(toolManagers)
-}
-
 func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 	body, _, err := c.get(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
 	if IsK8sError(err, 404) {
@@ -296,10 +291,12 @@ func manifestUnknown(msg string) bool {
 	return strings.Contains(m, "manifest unknown") || strings.Contains(m, "manifest_unknown")
 }
 
-// modelState reports one model. inspect reads its pods when it is not ready.
-func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
+// modelState reports one model. inspect reads its pods when it is not
+// ready. rec is the tool's record of its models (nil: it could not be
+// read, so no model counts as the tool's).
+func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) types.ModelState {
 	s := types.ModelState{ResourceState: types.ResourceState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}}
-	s.ManagedByTool = modelOwned(m.Metadata)
+	s.ManagedByTool = rec.owns(m.Metadata)
 	s.Terminating = m.Metadata.terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	if m.Status.URL != "" {
@@ -316,7 +313,10 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 	if name := m.Metadata.Annotations[hardwareProfileNameAnnotation]; name != "" {
 		s.HardwareProfile = m.Metadata.Annotations[hardwareProfileNamespaceAnnotation] + "/" + name
 	}
-	if !s.ManagedByTool {
+	switch {
+	case rec == nil:
+		s.TeardownBlockedReason = "This tool's record of the models it created cannot be read, so it does not change or delete this one."
+	case !s.ManagedByTool:
 		s.TeardownBlockedReason = "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it."
 	}
 	ready, hasReady := findCondition(m.Status.Conditions, "Ready")
@@ -355,7 +355,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 }
 
 // modelItems are the catalog's models in the visible projects.
-func modelItems(c *Client, models []llmisvcObject, visible map[string]bool) []types.ModelState {
+func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec modelsRecord) []types.ModelState {
 	var out []types.ModelState
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
@@ -364,7 +364,7 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool) []ty
 		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok {
 			continue
 		}
-		out = append(out, modelState(c, m, true))
+		out = append(out, modelState(c, m, true, rec))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Namespace != out[j].Namespace {
@@ -739,6 +739,8 @@ type modelPlan struct {
 	obj      map[string]interface{}
 	current  objectMeta
 	found    bool
+	// rec is the tool's record of its models, as read by the plan.
+	rec modelsRecord
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -932,7 +934,11 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err)
 	}
-	if found && !modelOwned(existing.Metadata) {
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+	}
+	if found && !rec.owns(existing.Metadata) {
 		return nil, fmt.Sprintf("Project '%s' already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
 	}
 	if found && existing.Metadata.terminating() {
@@ -956,7 +962,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found}, "", ""
+		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found, rec: rec}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
@@ -970,8 +976,19 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		return obj.Metadata, found, err
 	}
 	desc := fmt.Sprintf("LLMInferenceService %s/%s", p.project, p.entry.Name)
-	_, meta, found, err := ensureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, modelOwned, dryRun)
+	action, meta, found, err := ensureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, p.rec.owns, dryRun)
 	p.current, p.found = meta, found
+	if err == nil && action == "created" && !dryRun {
+		// Its UID is what makes it the tool's (models_record.go). A model
+		// that cannot be recorded would be nobody's: it is deleted again.
+		if recErr := recordModel(c, meta); recErr != nil {
+			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
+				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), errorCodeFromK8sErr(recErr)
+			}
+			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), firstNonEmpty(errorCodeFromK8sErr(recErr), "internal")
+		}
+		p.rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID}
+	}
 	if err == nil {
 		return "", ""
 	}
@@ -1018,16 +1035,28 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 			return fail(fmt.Sprintf("%s in '%s' is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
 	}
-	var deleted, kept []string
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return fail(err.Error()+" Nothing was deleted.", errorCodeFromK8sErr(err), "record read failed")
+	}
+	var deleted, kept, forget []string
+	// The record is updated once at the end, also when a step fails: a
+	// model that is gone needs no entry.
+	defer func() {
+		if err := forgetModels(c, forget...); err != nil {
+			slog.Warn("cannot update the models record", "error", err)
+		}
+	}()
 	for _, entry := range entries {
 		model, found, err := readToolModel(c, project, entry.Name)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
 		}
 		if !found {
+			forget = append(forget, modelRecordKey(project, entry.Name))
 			continue
 		}
-		if !modelOwned(model.Metadata) {
+		if !rec.owns(model.Metadata) {
 			kept = append(kept, entry.Name)
 			continue
 		}
@@ -1054,6 +1083,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, clockText(ModelDeleteTimeout), note), "in_progress", "still deleting")
 		}
 		deleted = append(deleted, entry.Name)
+		forget = append(forget, modelRecordKey(project, entry.Name))
 		logs = append(logs, fmt.Sprintf("OK: LLMInferenceService %s/%s deleted", project, entry.Name))
 	}
 	if len(deleted) == 0 && len(kept) > 0 {

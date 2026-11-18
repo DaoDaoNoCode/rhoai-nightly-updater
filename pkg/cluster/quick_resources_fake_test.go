@@ -381,8 +381,11 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			// ownership (applySSAPorts).
 			next := deepCopyObject(obj)
 			for key, v := range patch {
-				if key == "metadata" {
-					mergePatch(ensureMap(next, "metadata"), v.(map[string]interface{}))
+				// A ConfigMap's data is a map whose keys are owned one by
+				// one: an apply keeps the keys other managers applied (the
+				// tool's records share the snapshot ConfigMap).
+				if key == "metadata" || (k.plural == "configmaps" && key == "data") {
+					mergePatch(ensureMap(next, key), v.(map[string]interface{}))
 				} else {
 					next[key] = v
 				}

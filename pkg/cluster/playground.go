@@ -256,12 +256,16 @@ func chatModel(capabilities []string, usecase, modelType string) bool {
 // that dimension. Any other embedding model is left as it is; its
 // dimension is not known.
 func markToolEmbeddingModels(c *Client, project string, models []types.PlaygroundModel) {
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return
+	}
 	for i, m := range models {
 		entry, ok := catalogEntry(m.Name)
 		if m.Name == "" || !ok || m.Source != "namespace" || m.Chat || entry.Type != modelTypeEmbedding {
 			continue
 		}
-		if obj, found, err := readToolModel(c, project, m.Name); err == nil && found && modelOwned(obj.Metadata) {
+		if obj, found, err := readToolModel(c, project, m.Name); err == nil && found && rec.owns(obj.Metadata) {
 			models[i].EmbeddingDimension = entry.EmbeddingDimension
 		}
 	}

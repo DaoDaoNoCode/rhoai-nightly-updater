@@ -529,6 +529,7 @@ func TestTeardownModels_WaitsForTheFinalizerAndNamesIt(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testModelPath, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"finalizers":["serving.kserve.io/llmisvc-finalizer"],
 		"managedFields":[{"manager":"rhoai-nightly-updater","operation":"Apply"}]}}`)
+	recordModelFixture(mc.f, testModelPath)
 	res, _ := TeardownModels(mc.c, "proj")
 	if res.Success || res.ErrorCode != "in_progress" || !strings.Contains(res.Message, "serving.kserve.io/llmisvc-finalizer") {
 		t.Fatalf("got %+v", res)
@@ -836,7 +837,7 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 	if !said {
 		t.Error("the run does not name the hardware profile")
 	}
-	st := modelState(mc.c, readModelForTest(t, mc), false)
+	st := modelState(mc.c, readModelForTest(t, mc), false, modelsRecord{})
 	if st.HardwareProfile != "redhat-ods-applications/default-profile" {
 		t.Errorf("status hardware profile = %q", st.HardwareProfile)
 	}

@@ -850,12 +850,16 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	}
 	refPath, _ := maasModelRefPath(c, project, name)
 	model, found, err := readToolModel(c, project, name)
+	owned := false
+	if err == nil && found {
+		owned, err = ownsModel(c, model.Metadata)
+	}
 	switch {
 	case err != nil:
 		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	case !found:
 		return m.fail("check", fmt.Sprintf("Project '%s' has no %s of this tool. Set it up on the Models tab first. Nothing was changed.", project, name), "prerequisites", "no model")
-	case !modelOwned(model.Metadata):
+	case !owned:
 		return m.fail("check", fmt.Sprintf("%s in '%s' was not created by this tool, so it is not published. Nothing was changed.", name, project), "not_managed", "model foreign")
 	}
 	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
@@ -916,7 +920,10 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	sub, auth := maasAccessObjects(c, live)
-	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(model.Metadata.Annotations["openshift.io/display-name"], name))
+	// The catalog's display name, never the object's: MaaS shows it to
+	// every signed-in user, and a project editor can change the annotation.
+	entry, _ := catalogEntry(name)
+	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(entry.DisplayName, name))
 	if gwPlan != nil {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
 			return m.fail("check", msg, code, "gateway dry run failed")
@@ -1026,7 +1033,13 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	}
-	routed := modelFound && modelOwned(model.Metadata) && modelHasMaaSRef(model)
+	modelOwned := false
+	if modelFound {
+		if modelOwned, err = ownsModel(c, model.Metadata); err != nil {
+			return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		}
+	}
+	routed := modelOwned && modelHasMaaSRef(model)
 	if !refFound && !rec.published(project, name) && !routed {
 		say("check", "success", "Not published.")
 		return m.done(fmt.Sprintf("%s in '%s' is not published; nothing to undo.", name, project))
@@ -1114,7 +1127,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	switch {
 	case !modelFound:
 		say("model", "success", "The model is gone; nothing to change on it.")
-	case !modelOwned(model.Metadata):
+	case !modelOwned:
 		say("model", "success", "The model was not created by this tool; it is left alone.")
 	default:
 		if msg, code := m.restoreModelRoute(project, name, recordedRefs, hasRecordedRefs, say); msg != "" {
