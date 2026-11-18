@@ -376,16 +376,79 @@ func TestMaaSUnpublish_RouteThatNeverLeavesMaaSIsPartlyPublished(t *testing.T) {
 	}
 }
 
-// A publication by an earlier build shows as partly published, with what to
-// do: its direct address answers 500 while the route is on both gateways.
+// A publication by an earlier build (no refs recorded) shows as partly
+// published, with what to do: its direct address answers 500 while the
+// route is on both gateways.
 func TestMaaSStatus_AnEarlierBuildsPublicationIsPartlyPublished(t *testing.T) {
 	mc := publishedMaaSCluster(t)
+	rec, _ := readMaaSRecord(mc.c)
+	rec.ModelRefs = nil
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
 	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tInferenceGatewayRef})
 	st, err := GetMaaSStatus(mc.c)
 	if err != nil || len(st.Items) != 1 || !st.Items[0].Partly || !strings.Contains(st.Items[0].Message, "earlier build") ||
 		!strings.Contains(st.Items[0].Message, "Unpublish, then Publish again") {
 		t.Fatalf("status = %+v, %v", st.Items, err)
 	}
+}
+
+// A gateway someone added to a model this build published (its refs are
+// recorded) is not an earlier build's publication: the status says so and
+// gives the remedy Unpublish and Publish give when they refuse
+// (refsChangedRefusal), not "Unpublish, then Publish again", which they
+// refuse (live, 2026-11-18). Right after the change the direct address
+// still answers until Kuadrant applies the policy (about 30 s, live), so
+// the 500 is "once the rate limit applies".
+func TestMaaSStatus_SomeoneAddedAGatewayWhilePublished(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	setModelRefs(mc, []interface{}{tMaaSGatewayRef, tInferenceGatewayRef})
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil || len(st.Items) != 1 {
+		t.Fatalf("status = %+v, %v", st.Items, err)
+	}
+	it := st.Items[0]
+	for _, want := range []string{"Partly published", "someone added openshift-ingress/openshift-ai-inference", "fail with 500 once the rate limit applies",
+		"without maas-default-gateway", "oc patch llminferenceservice qwen25-05b-instruct -n proj", "then Unpublish"} {
+		if !strings.Contains(it.Message, want) {
+			t.Errorf("message lacks %q: %s", want, it.Message)
+		}
+	}
+	if !it.Partly || it.Ready || strings.Contains(it.Message, "earlier build") || strings.Contains(it.Message, "Publish again") {
+		t.Fatalf("status = %+v", it)
+	}
+	// Following it: Unpublish refuses with the same remedy, and after the
+	// user sets the refs, finishes.
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "oc patch llminferenceservice qwen25-05b-instruct -n proj") {
+		t.Fatalf("unpublish = %+v", res)
+	}
+	setModelRefs(mc, []interface{}{tInferenceGatewayRef})
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
+		t.Fatalf("unpublish after setting the refs: %+v", res)
+	}
+}
+
+// The same for the second chat model of a project: the status reads that
+// model's recorded refs, not the project's other model's.
+func TestMaaSStatus_SomeoneAddedAGatewayToTheSecondModel(t *testing.T) {
+	mc := maasWithModels(t, "qwen25-05b-instruct", "smollm2-135m-instruct")
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj", Model: "smollm2-135m-instruct"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+	setModelRefsOf(mc, "smollm2-135m-instruct", []interface{}{tMaaSGatewayRef, tTeamGatewayRef})
+	st, _ := GetMaaSStatus(mc.c)
+	for _, it := range st.Items {
+		if it.Name != "smollm2-135m-instruct" {
+			continue
+		}
+		if !it.Partly || !strings.Contains(it.Message, "someone added team/team-gateway") || !strings.Contains(it.Message, "oc patch llminferenceservice smollm2-135m-instruct -n proj") {
+			t.Fatalf("status = %+v", it)
+		}
+		return
+	}
+	t.Fatalf("no smollm2 row: %+v", st.Items)
 }
 
 // The Models tab knows the model is published, so "Use it" shows the MaaS

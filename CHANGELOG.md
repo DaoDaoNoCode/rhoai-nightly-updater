@@ -262,7 +262,9 @@ only accepts a tag whose version is the top dated section. See
   which the publish dialog says before you confirm, and the Models tab
   shows the MaaS commands instead of the direct curl. A publication by an
   earlier build shows as "Partly published": Unpublish, then Publish
-  again. Each chat model of the catalog has its own recorded refs (by
+  again; a gateway someone added to a published model shows as "Partly
+  published" too, with the remedy Unpublish gives when it refuses (set the
+  model's gateways without the MaaS gateway, then Unpublish). Each chat model of the catalog has its own recorded refs (by
   project and model) and its own route. New RBAC: `get` on the chat
   models' HTTPRoutes `smollm2-135m-instruct-kserve-route`,
   `qwen25-05b-instruct-kserve-route` and `qwen3-1-7b-kserve-route`

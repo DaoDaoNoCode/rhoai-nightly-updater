@@ -1215,7 +1215,14 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
 			item.Access, item.Subscription = authPhase, subPhase
 			item.Ready = item.Phase == "Ready" && authPhase == "Active" && subPhase == "Active"
+			_, recordedRefs := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
 			switch refs := m.gatewayRefNames(); {
+			case modelHasMaaSRef(m) && len(refs) > 1 && recErr == nil && recordedRefs:
+				// This build published it MaaS-only (its refs are recorded):
+				// someone added a gateway since, and Unpublish and Publish
+				// refuse until the refs are set (refsChangedRefusal).
+				item.Ready, item.Partly = false, true
+				item.Message = refsAddedStatus(m.Metadata.Namespace, m.Metadata.Name, refs)
 			case modelHasMaaSRef(m) && len(refs) > 1:
 				// An earlier build kept the other gateways (maas_routing.go):
 				// the rate limit fails every call on them.

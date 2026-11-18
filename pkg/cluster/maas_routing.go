@@ -355,6 +355,35 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 // while it was published, and writing the recorded list would drop it.
 // then says what the operation does once the user has set the refs.
 func refsChangedRefusal(project, name string, refs gatewayRefs, recorded maasModelRefs, then string) string {
-	return fmt.Sprintf("%s in '%s' routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. Set the gateways the model should use yourself, without %s (for KServe's default gateway: oc patch llminferenceservice %s -n %s --type=merge -p '{\"spec\":{\"router\":{\"gateway\":{\"refs\":null}}}}'). %s",
-		name, project, refs, maasGatewayName, recorded.Refs, maasGatewayName, name, project, then)
+	return fmt.Sprintf("%s in '%s' routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. %s. %s",
+		name, project, refs, maasGatewayName, recorded.Refs, setRefsYourself(project, name), then)
+}
+
+// setRefsYourself is the remedy for a gateway someone added to a published
+// model: the user sets the model's refs without the MaaS gateway, after
+// which Unpublish leaves them as set (a sentence without its full stop).
+func setRefsYourself(project, name string) string {
+	return fmt.Sprintf("Set the gateways the model should use yourself, without %s (for KServe's default gateway: oc patch llminferenceservice %s -n %s --type=merge -p '{\"spec\":{\"router\":{\"gateway\":{\"refs\":null}}}}')",
+		maasGatewayName, name, project)
+}
+
+// refsAddedStatus is the MaaS tab's word for a model this build published
+// (its refs are recorded) that routes through the MaaS gateway and others
+// since: someone added them, and Unpublish and Publish refuse
+// (refsChangedRefusal) until the user sets the refs. The rate limit fails
+// calls on the added gateways once Kuadrant applies it there (live: the
+// direct address still answered 200 for about 30 s, then 500).
+func refsAddedStatus(project, name string, refs []string) string {
+	var added []string
+	for _, r := range refs {
+		if r != inferenceGatewayNamespace+"/"+maasGatewayName {
+			added = append(added, r)
+		}
+	}
+	that, it := "that gateway", "it"
+	if len(added) > 1 {
+		that, it = "those gateways", "them"
+	}
+	return fmt.Sprintf("Partly published: someone added %s since the model was published, so direct calls to the model through %s fail with 500 once the rate limit applies to %s. Unpublish and Publish refuse, since writing back the gateways the model had before would drop %s. %s, then Unpublish.",
+		strings.Join(added, " and "), that, it, it, setRefsYourself(project, name))
 }
