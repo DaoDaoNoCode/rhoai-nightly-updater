@@ -450,6 +450,11 @@ objects:
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceserviceconfigs"]
         verbs: ["get"]
+      # The project's ResourceQuotas, for the model setup's room check
+      # (hard minus used). Read-only; quotas hold no secrets.
+      - apiGroups: [""]
+        resources: ["resourcequotas"]
+        verbs: ["list"]
       # The model's token authentication, as the dashboard's "Require token
       # authentication" makes it: ServiceAccount <model>-sa, Role
       # <model>-view-role (get on that one model), RoleBinding <model>-view

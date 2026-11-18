@@ -67,6 +67,11 @@ type catalogModel struct {
 	// kvCacheGiB is VLLM_CPU_KVCACHE_SPACE: vLLM on CPU reserves this
 	// much memory for its KV cache when it starts, whatever the load.
 	kvCacheGiB string
+	// ephemeralStorage is the main container's ephemeral-storage request,
+	// about 1.5 times DownloadSize: with KServe's default model volume the
+	// storage-initializer downloads into an emptyDir on the node's disk
+	// (models_storage.go).
+	ephemeralStorage string
 }
 
 // The catalog's model types.
@@ -110,14 +115,14 @@ var modelCatalog = []catalogModel{
 			CPU: "2", MemoryRequest: "5Gi", Memory: "6Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
 			Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--max-model-len 4096"},
-		threads: "2", kvCacheGiB: "1",
+		threads: "2", kvCacheGiB: "1", ephemeralStorage: "400M",
 	},
 	{
 		CatalogModel: types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
 			CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: modelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
 			Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--max-model-len 4096"},
-		threads: "4", kvCacheGiB: "2",
+		threads: "4", kvCacheGiB: "2", ephemeralStorage: "1.5G",
 	},
 	{
 		// Thinking is off by default (the user's choice); a request turns
@@ -126,7 +131,7 @@ var modelCatalog = []catalogModel{
 			CPU: "4", MemoryRequest: "10Gi", Memory: "12Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
 			Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`},
-		threads: "4", kvCacheGiB: "2",
+		threads: "4", kvCacheGiB: "2", ephemeralStorage: "6.2G",
 	},
 	{
 		// A RobertaModel, which vLLM serves as an embedding model with the
@@ -135,7 +140,7 @@ var modelCatalog = []catalogModel{
 			CPU: "2", MemoryRequest: "4Gi", Memory: "6Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
 			Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--runner pooling --max-model-len 512"},
-		threads: "2", kvCacheGiB: "1",
+		threads: "2", kvCacheGiB: "1", ephemeralStorage: "375M",
 	},
 }
 
@@ -516,7 +521,7 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 // published: the model is published to MaaS, which took it out of Gen AI
 // studio's AI assets (maas_genai.go), so the genai label and annotation
 // are left out until Unpublish puts them back.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published bool) map[string]interface{} {
+func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool) map[string]interface{} {
 	annotations := map[string]interface{}{
 		// The dashboard's llmd deploy wizard writes these three
 		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
@@ -543,6 +548,12 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			"requests": map[string]interface{}{"cpu": entry.CPU, "memory": entry.MemoryRequest},
 			"limits":   map[string]interface{}{"cpu": entry.CPU, "memory": entry.Memory},
 		},
+	}
+	if ephemeral && entry.ephemeralStorage != "" {
+		// The download's emptyDir is on the node's disk (models_storage.go):
+		// a request, no limit, so the scheduler counts it and nothing is
+		// evicted for it.
+		main["resources"].(map[string]interface{})["requests"].(map[string]interface{})["ephemeral-storage"] = entry.ephemeralStorage
 	}
 	if hw.Name != "" {
 		// As the dashboard's deploy wizard records the profile
@@ -757,6 +768,8 @@ type modelPlan struct {
 	rec modelsRecord
 	// token is which token-authentication objects are missing (models_token.go).
 	token tokenPlan
+	// ephemeral: the model requests ephemeral storage for its download.
+	ephemeral bool
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -784,6 +797,9 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		mp = plan
 		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
 			notes = append(notes, warning+" It may stay pending until a node is added or other workloads stop; the setup still runs.")
+		}
+		if warning := quotaWarning(c, mp.project, mp.entry, mp.ephemeral); warning != "" {
+			notes = append(notes, warning)
 		}
 	}
 
@@ -991,6 +1007,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 			return nil, fmt.Sprintf("Cannot check whether %s in '%s' is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
 		}
 	}
+	ephemeral := modelVolumeIsEmptyDir(c)
 	hw, why := pickHardwareProfile(c, entry)
 	if hw.Name != "" {
 		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
@@ -998,7 +1015,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw, published), current: existing.Metadata, found: found, rec: rec, token: tok}, "", ""
+		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).

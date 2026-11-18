@@ -101,7 +101,7 @@ func TestToolModelPath_IsExactlyTheCatalog(t *testing.T) {
 // vLLM does not load.
 func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 	for _, entry := range modelCatalog {
-		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false)
+		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false, false)
 		meta := obj["metadata"].(map[string]interface{})
 		if meta["name"] != entry.Name {
 			t.Errorf("%s: name %v", entry.Name, meta["name"])
@@ -209,7 +209,7 @@ func TestModelsSetup_TheChosenModel(t *testing.T) {
 		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
 	}
 	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
-	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"12Gi"},"requests":{"cpu":"4","memory":"10Gi"}}` {
+	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"12Gi"},"requests":{"cpu":"4","ephemeral-storage":"6.2G","memory":"10Gi"}}` {
 		t.Errorf("resources %s", r)
 	}
 	// 9 GiB free holds qwen25's 6 GiB, not Qwen3's 10 GiB.

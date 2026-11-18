@@ -829,7 +829,7 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 	}
 	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
 	res2, _ := json.Marshal(main["resources"])
-	if string(res2) != `{"limits":{"cpu":"4","memory":"8Gi"},"requests":{"cpu":"4","memory":"6Gi"}}` {
+	if string(res2) != `{"limits":{"cpu":"4","memory":"8Gi"},"requests":{"cpu":"4","ephemeral-storage":"1.5G","memory":"6Gi"}}` {
 		t.Errorf("resources: %s", res2)
 	}
 	if env, _ := json.Marshal(main["env"]); !strings.Contains(string(env), `{"name":"VLLM_CPU_KVCACHE_SPACE","value":"2"}`) {
