@@ -346,6 +346,15 @@ ensure_proxy_secret() {
 	err "Created Secret $PROXY_SECRET. Old ReplicaSets, which still hold the cookie secret in their pod template, are removed after the rollout."
 }
 
+# write_params IMAGE_REF: the template parameters this script sets, in
+# $TMP/params. OAUTH_PROXY_IMAGE is unset only when uninstall renders the
+# template (it needs no image), and then keeps the template's default.
+write_params() {
+	printf '%s\n' "IMAGE=$1" "NAMESPACE=$NAMESPACE" "APP_NAME=$APP_NAME" "IMAGE_REPOSITORY=$IMAGE" >"$TMP/params"
+	[ -z "${OAUTH_PROXY_IMAGE:-}" ] || printf 'OAUTH_PROXY_IMAGE=%s\n' "$OAUTH_PROXY_IMAGE" >>"$TMP/params"
+	[ -z "${RELEASES_URL:-}" ] || printf 'RELEASES_URL=%s\n' "$RELEASES_URL" >>"$TMP/params"
+}
+
 # apply_template TEMPLATE IMAGE_REF: oc process | oc apply. The template is
 # processed locally (--local), so it does not depend on the current project,
 # which may not exist. Parameters go
@@ -353,9 +362,7 @@ ensure_proxy_secret() {
 # parameter (older releases) gets the value of the current Secret.
 apply_template() {
 	local template=$1 image_ref=$2 secret
-	printf '%s\n' "IMAGE=$image_ref" "NAMESPACE=$NAMESPACE" "APP_NAME=$APP_NAME" \
-		"OAUTH_PROXY_IMAGE=$OAUTH_PROXY_IMAGE" "IMAGE_REPOSITORY=$IMAGE" >"$TMP/params"
-	[ -z "${RELEASES_URL:-}" ] || printf 'RELEASES_URL=%s\n' "$RELEASES_URL" >>"$TMP/params"
+	write_params "$image_ref"
 	if oc process -f "$template" --parameters --local | awk 'NR > 1 {print $1}' | grep -qx COOKIE_SECRET; then
 		secret=$(oc get secret "$PROXY_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.session_secret}' 2>/dev/null | base64 -d 2>/dev/null || true)
 		[ -n "$secret" ] || secret=$(oc get deployment "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[?(@.name=="oauth-proxy")].env[?(@.name=="COOKIE_SECRET")].value}' 2>/dev/null || true)
@@ -547,15 +554,28 @@ rollback() {
 	err "Rolled back. Roll forward again with: make upgrade"
 }
 
+# rbac_namespaces: the namespaces other than NAMESPACE where the template
+# creates Roles or RoleBindings, read from the template rendered locally
+# with this install's parameters, so uninstall misses none the template has.
+# Called in a condition, where set -e is off: each failure returns.
+rbac_namespaces() {
+	write_params "$IMAGE"
+	oc process -f "$TEMPLATE" --param-file="$TMP/params" --ignore-unknown-parameters --local \
+		-o jsonpath='{range .items[*]}{.kind} {.metadata.namespace}{"\n"}{end}' >"$TMP/kinds" || return 1
+	rm -f "$TMP/params"
+	awk -v ns="$NAMESPACE" '($1 == "Role" || $1 == "RoleBinding") && $2 != "" && $2 != ns {print $2}' "$TMP/kinds" | sort -u
+}
+
 # Removes the app, its cluster-wide RBAC, its Roles in other namespaces, the
 # ConsoleLink and the namespace. RHOAI and everything the app created on the
 # cluster (catalog, pull secret, IDMS, test resources) stay.
 uninstall() {
 	preflight
-	local ns
+	local ns namespaces
+	namespaces=$(rbac_namespaces) || die "Cannot render $TEMPLATE to find the namespaces of its Roles; nothing was deleted."
 	# shellcheck disable=SC2086 # DRY_FLAG is one word or nothing
 	oc delete consolelink,clusterrolebinding,clusterrole -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
-	for ns in kube-system openshift-marketplace openshift-ingress; do
+	for ns in $namespaces; do
 		# shellcheck disable=SC2086
 		oc delete rolebinding,role -n "$ns" -l "app.kubernetes.io/instance=$INSTANCE" --ignore-not-found $DRY_FLAG
 	done

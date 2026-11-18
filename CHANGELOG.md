@@ -283,6 +283,11 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- `install.sh uninstall` and `make undeploy` read the namespaces of the
+  Roles and RoleBindings from the template they install, instead of a fixed
+  list that missed `openshift-ingress-operator` (template revision 5): its
+  Role and RoleBinding were left behind. If the template cannot be
+  rendered, nothing is deleted.
 - **MaaS: a published model routes through the MaaS gateway only.**
   Earlier builds of 3.0.0 kept it on the inference gateway too, and every
   call to its direct address then failed with 500: maas-controller's

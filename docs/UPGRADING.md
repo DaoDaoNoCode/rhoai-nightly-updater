@@ -428,10 +428,11 @@ a cluster):
   2.x shows it as an earlier version's and can delete it, but its Set up
   refuses the project until it is deleted.
 - The Roles and RoleBindings only template revision 5 has, in
-  `openshift-ingress` and `openshift-ingress-operator`, stay. If you stay
-  on 2.3.x, delete them:
-  `oc delete role,rolebinding -l app.kubernetes.io/instance=$APP-$NS -n openshift-ingress`,
-  then the same with `-n openshift-ingress-operator`.
+  `openshift-ingress` and `openshift-ingress-operator`, stay: the rollback
+  applies 2.3.3's template and deletes nothing. `make undeploy` from a
+  3.0.0 clone, or 3.0.0's `install.sh uninstall`, removes them with the
+  rest; 2.3.3's `install.sh uninstall` leaves the one in
+  `openshift-ingress-operator`.
 
 ## 6. Roll back
 

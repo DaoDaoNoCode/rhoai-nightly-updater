@@ -110,6 +110,14 @@ case "$1 $2" in
 	[ "$3" != - ] || cat >"$FAKE_LOG.stdin" ;;
 "process -f")
 	if [[ " $* " == *" --parameters "* ]]; then echo "NAME DESCRIPTION GENERATOR VALUE"; echo "IMAGE"; exit 0; fi
+	[ -z "${FAKE_PROCESS_FAIL:-}" ] || { echo "error: cannot process the template" >&2; exit 1; }
+	# -o jsonpath: "kind namespace" of each object, rendered from the template.
+	if [[ " $* " == *" jsonpath="* ]]; then
+		pf=
+		for a in "$@"; do case "$a" in --param-file=*) pf=${a#--param-file=} ;; esac; done
+		"$(dirname "$0")/template-objects" "$3" "$pf" | awk -F'\t' '{print $1, $2}'
+		exit 0
+	fi
 	for a in "$@"; do case "$a" in --param-file=*) cat "${a#--param-file=}" >>"$FAKE_LOG.params" ;; esac; done
 	echo '{"kind":"List","items":[]}' ;;
 "apply --dry-run=server")
@@ -132,7 +140,33 @@ else
 	printf 'HTTP/1.1 404 Not Found\r\n\r\n'
 fi
 FAKE
-chmod +x "$BIN/oc" "$BIN/curl"
+# template-objects TEMPLATE [PARAM_FILE]: "kind<TAB>namespace<TAB>instance
+# label" of each object of an OpenShift Template, its ${PARAM}s replaced by the param
+# file's values, else the template's defaults: what `oc process --local`
+# renders, for the fake oc (checked against the real oc below, when there is one).
+cat >"$BIN/template-objects" <<'FAKE'
+#!/usr/bin/env bash
+awk -v pf="${2:-/dev/null}" '
+function rep(s, from, to,   i) { while ((i = index(s, from)) > 0) s = substr(s, 1, i - 1) to substr(s, i + length(from)); return s }
+function subst(s,   k) { for (k in set) s = rep(s, "${" k "}", set[k]); for (k in def) s = rep(s, "${" k "}", def[k]); return s }
+FILENAME == pf { i = index($0, "="); if (i > 1) set[substr($0, 1, i - 1)] = substr($0, i + 1); next }
+/^[a-z]/ { section = $1; next }
+section == "parameters:" && /^  - name: / { name = $3; next }
+section == "parameters:" && /^    value: / { if (name != "") def[name] = $2; next }
+section != "objects:" { next }
+/^  - / { n++; meta = 0; labels = 0; sub(/^  - /, "    ") }
+!n { next }
+/^    kind: / { kind[n] = $2; next }
+/^    metadata:/ { meta = 1; next }
+/^    [^ ]/ { meta = 0 }
+meta && /^      namespace: / { ns[n] = $2 }
+meta && /^      labels:/ { labels = 1; next }
+meta && /^      [^ ]/ { labels = 0 }
+labels && /^        app\.kubernetes\.io\/instance: / { inst[n] = $2 }
+END { OFS = "\t"; for (i = 1; i <= n; i++) print kind[i], subst(ns[i]), subst(inst[i]) }
+' "${2:-/dev/null}" "$1"
+FAKE
+chmod +x "$BIN/oc" "$BIN/curl" "$BIN/template-objects"
 DIGEST="sha256:$(printf 'a%.0s' $(seq 64))"
 
 # run ARGS...: the given command with the fakes, a fresh log, and the
@@ -270,6 +304,54 @@ expect_eq "cleanup-legacy deletes for real" "0" "$(grep '^oc delete' "$LOG" | gr
 FAKE_LEGACY=other-ns/rhoai-nightly-updater expect_ok "cleanup-legacy of another install" run bash "$ASSET" cleanup-legacy --namespace scratch-ns
 expect_eq "another install's binding is kept" "" "$(grep '^oc delete clusterrolebinding' "$LOG" || true)"
 expect_fail "asset: no rollback" "Rollback needs a clone" run bash "$ASSET" rollback --version v9.8.7
+
+# --- Uninstall removes every Role and RoleBinding the template creates ---------
+# Template revision 5 added a Role in openshift-ingress-operator that a fixed
+# list of namespaces missed. The namespaces now come from the template.
+INST=rhoai-nightly-updater-scratch-ns
+printf '%s\n' NAMESPACE=scratch-ns IMAGE=x >"$WORK/render.params"
+objects=$("$BIN/template-objects" "$SRC/deploy/template.yaml" "$WORK/render.params")
+# The fake renders the template as oc does (only where a real oc is installed).
+if REAL_OC=$(command -v oc); then
+	expect_eq "the fake oc renders the template like oc process --local" \
+		"$(KUBECONFIG=/dev/null "$REAL_OC" process -f "$SRC/deploy/template.yaml" --param-file="$WORK/render.params" --local \
+			-o jsonpath='{range .items[*]}{.kind} {.metadata.namespace}{"\n"}{end}' | sort)" \
+		"$(awk -F'\t' '{print $1, $2}' <<<"$objects" | sort)"
+fi
+rbac=$(awk -F'\t' '($1 == "Role" || $1 == "RoleBinding") && $2 != "scratch-ns"' <<<"$objects")
+rbac_ns=$(cut -f2 <<<"$rbac" | sort -u)
+grep -q "^Role	openshift-ingress-operator	" <<<"$rbac" && pass || fail "the template has no Role in openshift-ingress-operator: $rbac"
+# Uninstall deletes them by the instance label, kind by kind it knows: any
+# other kind outside the app's namespace would be left behind.
+expect_eq "every Role and RoleBinding outside the app's namespace carries the instance label" "" \
+	"$(awk -F'\t' -v i="$INST" '$3 != i' <<<"$rbac")"
+expect_eq "outside the app's namespace the template creates only Roles, RoleBindings and cluster-scoped RBAC" "" \
+	"$(awk -F'\t' '$2 != "scratch-ns" && !($1 ~ /^(Role|RoleBinding)$/ && $2 != "") && !($1 ~ /^Cluster(Role|RoleBinding)$/ && $2 == "")' <<<"$objects")"
+expect_ok "uninstall" run bash "$ASSET" uninstall --namespace scratch-ns
+for ns in $rbac_ns; do
+	grep -qx "oc delete rolebinding,role -n $ns -l app.kubernetes.io/instance=$INST --ignore-not-found" "$LOG" && pass ||
+		fail "uninstall: the template's Roles in $ns are not deleted"
+done
+expect_eq "uninstall: no Role deletes in the app's namespace (deleted with it)" "" "$(grep '^oc delete rolebinding,role -n scratch-ns ' "$LOG" || true)"
+expect_eq "uninstall: the deletes in order" "$(
+	echo "oc delete consolelink,clusterrolebinding,clusterrole -l app.kubernetes.io/instance=$INST --ignore-not-found"
+	for ns in $rbac_ns; do
+		echo "oc delete rolebinding,role -n $ns -l app.kubernetes.io/instance=$INST --ignore-not-found"
+	done
+	echo "oc delete project scratch-ns --ignore-not-found"
+)" "$(calls delete)"
+# A namespace the template gains later is covered without touching install.sh.
+# shellcheck disable=SC2016 # the template's own ${PARAM} placeholders
+printf '%s\n' '  - apiVersion: rbac.authorization.k8s.io/v1' '    kind: Role' '    metadata:' \
+	'      name: ${APP_NAME}-${NAMESPACE}-later' '      namespace: ${NAMESPACE}-later' '      labels:' \
+	'        app.kubernetes.io/instance: ${APP_NAME}-${NAMESPACE}' '    rules: []' >>"$REPO/deploy/template.yaml"
+expect_ok "clone: uninstall with a Role in a new namespace" run bash "$CLONE" uninstall --namespace scratch-ns
+grep -qx "oc delete rolebinding,role -n scratch-ns-later -l app.kubernetes.io/instance=$INST --ignore-not-found" "$LOG" && pass ||
+	fail "uninstall: a Role in a namespace the template gained is not deleted"
+git -C "$REPO" checkout -q deploy/template.yaml
+# Without the namespaces it would leave Roles behind: nothing is deleted.
+FAKE_PROCESS_FAIL=1 expect_fail "uninstall: the template cannot be rendered" "nothing was deleted" run bash "$ASSET" uninstall --namespace scratch-ns
+expect_eq "uninstall: no delete when the template cannot be rendered" "" "$(calls delete)"
 
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

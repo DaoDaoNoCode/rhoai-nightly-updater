@@ -390,8 +390,8 @@ test resources) stay, as with `install.sh uninstall`.
     instance label, `app.kubernetes.io/instance` by default (`SetAppInstance`
     in Argo CD's `util/argo/resource_tracking.go`). The Template sets that
     label to `<APP_NAME>-<NAMESPACE>` on its ClusterRole,
-    ClusterRoleBinding and the Roles in `kube-system` and
-    `openshift-marketplace`, and `install.sh uninstall` deletes by it; after
+    ClusterRoleBinding and its Roles in other namespaces, and
+    `install.sh uninstall` deletes by it; after
     the overwrite it no longer finds them. Avoid it with `annotation`
     tracking, or set `application.instanceLabelKey` in `argocd-cm` to another
     key (for example `argocd.argoproj.io/instance`) so Argo CD writes that
