@@ -221,15 +221,6 @@ type tokenPlan struct {
 	missing map[string]bool
 }
 
-func (t tokenPlan) any() bool {
-	for _, m := range t.missing {
-		if m {
-			return true
-		}
-	}
-	return false
-}
-
 // probeWithUID tells, without reading it, whether the object at path is
 // the one with uid: "ours", "gone", or "other" (another object of the
 // name). A server-side dry-run delete checks the UID precondition and
