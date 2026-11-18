@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
-import type { CatalogModel, InferenceGatewayState, ModelState, ModelsStatus, ResourceState, ResourcesStatus } from "../../types";
+import type { CatalogModel, InferenceGatewayState, ModelExposureOption, ModelExposures, ModelState, ModelsStatus, ResourceState, ResourcesStatus } from "../../types";
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
@@ -38,6 +38,20 @@ const status = (over: Partial<ResourcesStatus> = {}): ResourcesStatus => ({
 });
 const sse = (...events: object[]) => () => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 
+// GET /api/resources/models/exposures: the default inference gateway recommended.
+const viaGateway: ModelExposureOption = { key: "default-gateway", exposure: "default-gateway", title: "Through the cluster's default inference gateway",
+  description: "KServe's default route, as the dashboard deploys models.", available: true, address: "https://inference.apps.example.com/dev/qwen25-05b-instruct" };
+const exposures = (over: Partial<ModelExposures> = {}): ModelExposures => ({
+  project: "dev", model: "qwen25-05b-instruct", default: "default-gateway", defaultReason: "Gateway openshift-ingress/openshift-ai-inference is KServe's default.", authReady: true,
+  options: [viaGateway,
+    { key: "maas", exposure: "maas", title: "Through MaaS only", description: "Published to MaaS.", available: false, reason: "The MaaS platform is not ready." },
+    { key: "internal", exposure: "internal", title: "Only inside the cluster", description: "No route.", available: true, warning: "Calls to the in-cluster address are not authenticated." }],
+  ...over,
+});
+// The prerequisites: every feature's ready.
+const prereqReady = { features: { pipelines: { ready: true, parts: [] }, mlflow: { ready: true, parts: [] }, models: { ready: true, parts: [] }, playground: { ready: true, parts: [] } } };
+const routing = { "/api/resources/models/exposures": exposures(), "/api/resources/prerequisites": prereqReady };
+
 function renderAt(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
 }
@@ -45,9 +59,9 @@ function renderAt(path: string) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("modelsState", () => {
-  it("one Set up for what is missing: the gateway and the model, or only the model", () => {
+  it("Set up is the model's alone: the inference gateway is never set up with it", () => {
     const s = modelsState(status(), "dev", ["dev"]);
-    expect(s).toMatchObject({ status: "not-set-up", label: "Not set up in dev", next: { kind: "set-up", label: "Set up Models in dev", setup: [{ kind: "setup-models", gateway: true, project: "dev", model: "qwen25-05b-instruct" }], reason: null } });
+    expect(s).toMatchObject({ status: "not-set-up", label: "Not set up in dev", next: { kind: "set-up", label: "Set up Qwen2.5 0.5B Instruct in dev", setup: [{ kind: "setup-models", gateway: false, project: "dev", model: "qwen25-05b-instruct" }], reason: null } });
     const onlyModel = modelsState(status({ inferenceGateway: gateway }), "dev", ["dev"]);
     expect(onlyModel.next).toMatchObject({ label: "Set up Qwen2.5 0.5B Instruct in dev", setup: [{ kind: "setup-models", gateway: false, project: "dev", model: "qwen25-05b-instruct" }] });
     // The chosen model: its own Set up.
@@ -107,7 +121,11 @@ describe("modelsState on the Overview", () => {
 
 describe("Models runs and clean-up", () => {
   it("names the streamed steps in their order", () => {
-    expect(modelsSteps({ kind: "setup-models", gateway: true, project: "dev", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "gateway-ready", "model", "model-ready"]);
+    expect(modelsSteps({ kind: "setup-models", gateway: true, project: "dev", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "gateway-ready", "model", "model-ready", "callable"]);
+    expect(modelsSteps({ kind: "setup-models", gateway: false, project: "dev", model: "qwen3-1-7b", exposure: "maas" }).map((s) => s.id)).toEqual(["check", "model", "model-ready", "publish", "callable"]);
+    expect(modelsSteps({ kind: "setup-models", gateway: true, project: null, model: "" }).map((s) => s.id)).toEqual(["check", "gateway", "gateway-ready"]);
+    expect(modelsSteps({ kind: "check-model", project: "dev", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["callable"]);
+    expect(modelsSteps({ kind: "disallow-gateway-project", project: "e2e", gone: true }).map((s) => s.id)).toEqual(["check", "gateway"]);
     expect(modelsSteps({ kind: "setup-models", gateway: false, project: "dev", model: "qwen3-1-7b", releasedImage: true }).map((s) => s.title)).toContain("Switch qwen3-1-7b in dev to the released image");
     expect(modelsSteps({ kind: "teardown-model", project: "dev", model: "smollm2-135m-instruct" }).map((s) => s.title)).toEqual(["Delete smollm2-135m-instruct in dev"]);
     expect(cleanupSteps({ mlflow: true, models: ["a"], inferenceGateway: true }).map((s) => s.id)).toEqual(["mlflow", "model:a", "inference-gateway"]);
@@ -248,7 +266,7 @@ describe("Models tab: token authentication", () => {
   });
 
   it("the setup confirmation lists the token objects", async () => {
-    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway }), "/api/resources/projects": { projects: ["dev"] } });
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway }), "/api/resources/projects": { projects: ["dev"] }, ...routing });
     renderAt("/test-resources?tab=models&project=dev");
     fireEvent.click(await screen.findByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
@@ -303,29 +321,98 @@ describe("Models tab", () => {
     expect(await screen.findByRole("heading", { name: "MaaS", level: 2 })).toBeInTheDocument();
   });
 
-  it("Set up confirms what it creates, then runs one streamed operation", async () => {
+  it("Set up confirms what it creates and how the model is reached, then runs one streamed operation", async () => {
     const api = stubApi({
-      "/api/resources/status": status(),
+      "/api/resources/status": status({ inferenceGateway: gateway }),
       "/api/resources/projects": { projects: ["dev"] },
+      ...routing,
       "POST /api/resources/models/stream": sse(
         { step: "check", status: "success", message: "Everything the parts need is there.", elapsedMs: 1 },
-        { step: "gateway", status: "success", message: "Gateway applied.", elapsedMs: 2 },
-        { step: "gateway-ready", status: "success", message: "Ready.", elapsedMs: 3 },
         { step: "model", status: "success", message: "Model applied.", elapsedMs: 4 },
         { step: "model-ready", status: "success", message: "Ready at https://inference.apps.example.com/dev/qwen25-05b-instruct.", elapsedMs: 5 },
-        { step: "operation_complete", status: "success", message: "Qwen2.5 0.5B Instruct (CPU) is ready in dev.", elapsedMs: 6 },
+        { step: "callable", status: "success", message: "Answers requests: a request for model \"qwen25-05b-instruct\" got 200.", elapsedMs: 6 },
+        { step: "operation_complete", status: "success", message: "Qwen2.5 0.5B Instruct (CPU) is ready in dev.", elapsedMs: 7 },
       ),
     });
     renderAt("/test-resources?tab=models&project=dev");
-    fireEvent.click(await screen.findByRole("button", { name: "Set up Models in dev" }));
-    const dialog = await screen.findByRole("dialog", { name: /Set up Models in dev\?/ });
-    expect(within(dialog).getByText(/costs money while it exists/)).toBeInTheDocument();
+    // The recommended way is chosen, and said why.
+    expect(await screen.findByRole("radio", { name: /Through the cluster's default inference gateway/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Through MaaS only/ })).toBeDisabled();
+    expect(screen.getByText(/Recommended: Gateway openshift-ingress\/openshift-ai-inference is KServe's default/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
+    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
+    expect(within(dialog).getByText(/Reached: through the cluster's default inference gateway/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/the setup succeeds only when it answers/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Token authentication, as the dashboard makes it/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
-    const run = await screen.findByRole("dialog", { name: "Set up Models in dev" });
+    const run = await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
     expect(await within(run).findByText("Qwen2.5 0.5B Instruct (CPU) is ready in dev.")).toBeInTheDocument();
-    expect(within(run).getByText("Wait for the gateway and its load balancer")).toBeInTheDocument();
-    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", gateway: true, project: "dev", model: "qwen25-05b-instruct" }]);
+    expect(within(run).getByText("Check that it can be called")).toBeInTheDocument();
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct", exposure: "default-gateway" }]);
+  });
+
+  it("only inside the cluster: chosen explicitly, with its warning, and sent as the exposure", async () => {
+    const api = stubApi({
+      "/api/resources/status": status(),
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/prerequisites": prereqReady,
+      "/api/resources/models/exposures": exposures({ default: "", defaultReason: undefined, recommendGateway: true, recommendGatewayReason: "Set up the inference gateway (this tab's own part) to reach models from outside the cluster.",
+        options: [{ ...viaGateway, available: false, reason: "Gateway openshift-ingress/openshift-ai-inference does not exist." }, exposures().options[2]] }),
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByText("No gateway can carry this model yet")).toBeInTheDocument();
+    // Nothing chosen: Set up says why.
+    const setUp = screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
+    expect(setUp).toHaveAttribute("aria-disabled", "true");
+    // The gateway is its own part, with its own Set up.
+    expect(screen.getByRole("button", { name: "Set up the inference gateway" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /Only inside the cluster/ }));
+    expect(screen.getByText("Calls to the in-cluster address are not authenticated.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
+    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
+    await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct", exposure: "internal" }]);
+  });
+
+  it("a ready model says how it is reached, the name to send, and whether it can be called, with Check again", async () => {
+    const m = model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa", exposure: "default-gateway", gateway: "openshift-ingress/openshift-ai-inference", gatewayAuth: "enforced", servedName: "qwen25-05b-instruct",
+      callCheck: { result: "route", ok: false, status: 404, message: "Nothing answers at https://inference.apps.example.com/dev/qwen25-05b-instruct/v1/chat/completions (404 without the model's own answer).", at: "2026-11-18T18:00:00Z" } });
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [m] }) }),
+      "/api/resources/projects": { projects: ["dev"] }, ...routing,
+      "POST /api/resources/models/stream": sse({ step: "callable", status: "success", message: "Answers requests.", elapsedMs: 1 }, { step: "operation_complete", status: "success", message: "Answers requests.", elapsedMs: 2 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText(/Through the cluster's default inference gateway \(openshift-ingress\/openshift-ai-inference\)/)).toBeInTheDocument();
+    expect(within(part).getByText("Cannot be called")).toBeInTheDocument();
+    expect(within(part).getByText(/send exactly this as/)).toBeInTheDocument();
+    expect(screen.getByText(/A 404 means one of two things/)).toBeInTheDocument();
+    fireEvent.click(within(part).getByRole("button", { name: "Check again" }));
+    const dialog = await screen.findByRole("dialog", { name: /Check that Qwen2.5 0.5B Instruct in dev can be called/ });
+    expect(within(dialog).getByText(/never yours/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check" }));
+    await screen.findByRole("dialog", { name: "Check Qwen2.5 0.5B Instruct in dev" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "check", project: "dev", model: "qwen25-05b-instruct" }]);
+  });
+
+  it("the gateway names projects no model uses or that no longer exist, and removes one after confirmation", async () => {
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: { ...gateway, allowedProjects: ["openshift-ingress", "e2e-v300", "old"], unusedProjects: ["e2e-v300", "old"], goneProjects: ["e2e-v300"] } }),
+      "/api/resources/projects": { projects: ["dev"] }, ...routing,
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const alert = await screen.findByText("The gateway still admits projects that no longer exist");
+    expect(alert).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove from the list" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: /Remove e2e-v300 from the inference gateway's projects\?/ });
+    expect(within(dialog).getByText(/no longer exists; a new project of that name would be admitted at once/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove from the list" }));
+    await screen.findByRole("dialog", { name: "Remove e2e-v300 from the gateway's projects" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "disallow", project: "e2e-v300" }]);
   });
 
   it("no room is no reason once the project has the model: its own pod holds the room, and its state says why it waits", async () => {
@@ -360,7 +447,7 @@ describe("Models tab", () => {
   it("choosing a model shows its part and sets up that one", async () => {
     const api = stubApi({
       "/api/resources/status": status({ inferenceGateway: gateway }),
-      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/projects": { projects: ["dev"] }, ...routing,
       "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
     });
     renderAt("/test-resources?tab=models&project=dev");
@@ -381,7 +468,7 @@ describe("Models tab", () => {
     const dialog = await screen.findByRole("dialog", { name: /Set up Granite Embedding 125M English in dev\?/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
     await screen.findByRole("dialog", { name: "Set up Granite Embedding 125M English in dev" });
-    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "granite-embedding-125m-english" }]);
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "granite-embedding-125m-english", exposure: "default-gateway" }]);
   });
 
   it("a project with a published and an unpublished model: the MaaS pointer is only for the published one", async () => {
@@ -469,10 +556,10 @@ describe("The projects the inference gateway allows (RHOAI's names list)", () =>
   // A model deployed from the dashboard in team, which the gateway does not list.
   const blocked = (gw: InferenceGatewayState): InferenceGatewayState => ({ ...listed(gw, ["dev"]), notAllowedModels: ["team/granite"], notAllowedModelProjects: ["team"] });
 
-  it("this tool's gateway: Set up in an unlisted project proceeds (setup adds it); someone else's says RHOAI's step", () => {
+  it("Set up in an unlisted project proceeds either way: how the model is reached decides (the tab's choice says why a gateway cannot be used)", () => {
     expect(modelsState(status({ inferenceGateway: listed(gateway, []) }), "dev", ["dev"]).next).toMatchObject({ kind: "set-up", reason: null });
     const foreign = modelsState(status({ inferenceGateway: listed({ ...gateway, managedByTool: false }, ["other"]) }), "dev", ["dev"]);
-    expect(foreign.next).toMatchObject({ kind: "set-up", reason: expect.stringMatching(/cluster admin adds dev .*values array/) });
+    expect(foreign.next).toMatchObject({ kind: "set-up", reason: null });
     expect(modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false, allProjectsAllowed: true } }), "dev", ["dev"]).next).toMatchObject({ reason: null });
   });
 

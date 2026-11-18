@@ -18,7 +18,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { PlaygroundStatus, ResourcesStatus, MaaSStatus } from "../../types";
+import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
@@ -66,6 +66,7 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
     ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the models in ${p}` })),
     ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
     ...(req.maasPlatform ? [{ id: "maas-platform", title: "Remove the MaaS platform" }] : []),
+    ...(req.components?.length ? [{ id: "components", title: `Turn ${req.components.join(", ")} back` }] : []),
   ];
 }
 
@@ -117,9 +118,11 @@ export const CleanupModal: React.FC<{
   minioLeftovers: boolean;
   /** Why changes are disabled now, or null. */
   baseReason: string | null;
+  /** One-click prerequisites: the DataScienceCluster components this tool turned on (each feature's restorable). */
+  restorable?: RestorableComponent[];
   onConfirm: (req: CleanupRequest) => void;
   onCancel: () => void;
-}> = ({ scope, status, playground = null, maas = null, minioLeftovers, baseReason, onConfirm, onCancel }) => {
+}> = ({ scope, status, playground = null, maas = null, minioLeftovers, baseReason, restorable = [], onConfirm, onCancel }) => {
   const titleId = React.useId();
   const reasonId = React.useId();
   const offered = cleanupCandidates(status, scope, minioLeftovers, playground, maas);
@@ -127,6 +130,11 @@ export const CleanupModal: React.FC<{
   const chosenPublished = published.filter((p) => offered.maasPublished.includes(p));
   const togglePublished = (p: string, v: boolean) => setPublished((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const [maasPlatform, setMaaSPlatform] = useState(offered.maasPlatform);
+  // Components are offered for the scope's feature (every feature's with "all"), unchecked: turning one back is a cluster change of its own.
+  const offeredComponents = restorable.filter((r) => scope === "all" || r.feature === scope);
+  const [components, setComponents] = useState<string[]>([]);
+  const chosenComponents = components.filter((k) => offeredComponents.some((r) => r.component === k));
+  const toggleComponent = (k: string, v: boolean) => setComponents((s) => (v ? [...s.filter((x) => x !== k), k] : s.filter((x) => x !== k)));
   const [playgrounds, setPlaygrounds] = useState<string[]>(offered.playgrounds);
   const chosenPlaygrounds = playgrounds.filter((p) => offered.playgrounds.includes(p));
   const togglePlayground = (p: string, v: boolean) => setPlaygrounds((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
@@ -147,8 +155,9 @@ export const CleanupModal: React.FC<{
     ...(chosenModels.length ? { models: chosenModels } : {}),
     ...(gateway && offered.gateway ? { inferenceGateway: true } : {}),
     ...(maasPlatform && offered.maasPlatform ? { maasPlatform: true } : {}),
+    ...(chosenComponents.length ? { components: chosenComponents } : {}),
   };
-  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform;
+  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components;
   const reason = baseReason ?? (nothing ? "Select something to delete." : cleanupBlocked(status, req, offered.maasPublished));
   const lost = [
     ...(req.pipelineServers ?? []).map((p) => <>The runs and experiments of the pipeline server in {p}.</>),
@@ -160,7 +169,7 @@ export const CleanupModal: React.FC<{
   ];
   const toggleServer = (p: string, v: boolean) => setServers((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform;
+  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0;
   const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : "Clean up MLflow?";
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={onCancel}>
@@ -227,6 +236,14 @@ export const CleanupModal: React.FC<{
                 {offered.maasPlatform && (
                   <FormGroup role="group" isStack label="MaaS" fieldId="cleanup-maas-platform">
                     <Checkbox id="cleanup-maas-platform" label="MaaS platform" description="Last: MaaS turned back off as it was, then the gateway and database this tool created." isChecked={maasPlatform} onChange={(_e, v) => setMaaSPlatform(v)} />
+                  </FormGroup>
+                )}
+                {offeredComponents.length > 0 && (
+                  <FormGroup role="group" isStack label="Cluster components this tool turned on" fieldId="cleanup-components">
+                    {offeredComponents.map((r) => (
+                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={<>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>}
+                        description="Last, and only while nothing on the cluster uses it and nobody has changed it since; the operators it needed stay." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
+                    ))}
                   </FormGroup>
                 )}
               </Form>

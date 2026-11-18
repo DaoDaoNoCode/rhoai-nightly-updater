@@ -67,6 +67,8 @@ const joinNodes = (nodes: React.ReactNode[]) => nodes.map((n, i) => <React.Fragm
 
 /** What the Pipelines tab needs from the page. */
 export interface PipelinesTabProps {
+  /** What Pipelines needs on the cluster (one-click prerequisites), above the parts. */
+  prerequisites?: React.ReactNode;
   status: ResourcesStatus;
   /** The selected project (the URL's, else the default), or null. */
   project: string | null;
@@ -416,6 +418,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Pipelines" purpose={FEATURE_PURPOSE.pipelines} state={state} /></StackItem>
+      {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {status.pipelinesBlocked && <StackItem><ComponentAlert feature="Data Science Pipelines" block={status.pipelinesBlocked} /></StackItem>}
       {legacy && <StackItem><MigrationAlert legacy={legacy} onMigrate={onMigrate} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}

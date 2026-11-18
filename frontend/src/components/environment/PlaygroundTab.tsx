@@ -40,6 +40,8 @@ import {
 } from "./featureState";
 
 export interface PlaygroundTabProps {
+  /** What the playground needs on the cluster (one-click prerequisites), above the parts. */
+  prerequisites?: React.ReactNode;
   status: ResourcesStatus;
   /**
    * GET /api/resources/playground: null until it has been read; while
@@ -288,6 +290,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Playground" purpose={FEATURE_PURPOSE.playground} state={state} /></StackItem>
+      {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {playground?.blocked && <StackItem><ComponentAlert feature="The Gen AI playground" block={playground.blocked} /></StackItem>}
       {playground && playgroundError && (
         <StackItem>

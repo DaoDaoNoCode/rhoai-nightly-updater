@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSRequest, MaaSStatus } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -669,6 +669,8 @@ export interface CleanupRequest {
   maasPublished?: string[];
   /** The MaaS platform this tool set up, last. */
   maasPlatform?: boolean;
+  /** One-click prerequisites: the DataScienceCluster components this tool turned on that go back to what they were, last (each only while nothing uses it). */
+  components?: string[];
 }
 
 /**
@@ -699,6 +701,30 @@ export function streamModels(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/models/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+// --- Models routing ---
+
+/** The ways a catalog model can be reached from a project, and the recommended one. */
+export function getModelExposures(project: string, model: string): Promise<ModelExposures> {
+  return request(`/api/resources/models/exposures?project=${encodeURIComponent(project)}&model=${encodeURIComponent(model)}`);
+}
+
+// --- One-click prerequisites ---
+
+/** What each feature needs on the cluster; Models planned for how its model is reached. */
+export function getPrerequisites(exposure?: ModelExposureKind | null): Promise<PrerequisitesStatus> {
+  return request(`/api/resources/prerequisites${exposure ? `?exposure=${encodeURIComponent(exposure)}` : ''}`);
+}
+
+/** Sets up what a feature needs, streaming "prerequisites", "dsc", one step per operator, "kuadrant", "ready". */
+export function streamPrerequisites(
+  req: PrerequisitesRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/prerequisites/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /**
