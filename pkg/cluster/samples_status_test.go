@@ -144,6 +144,7 @@ func TestMLflowSamplesStatus_Foreign(t *testing.T) {
 func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	env := newSamplesEnv(t)
 	demo := &fakeExperiment{id: "1", name: demoExperiment, stage: "active", tags: map[string]string{
+		sampleMarkerKey:                  SampleGenAIDemo,
 		demoVersionTagPrefix + "prompts": "1", demoVersionTagPrefix + "evaluation": "0", demoVersionTagPrefix + "issues": "0",
 	}}
 	env.mlflow.experiments["1"] = demo
@@ -158,10 +159,21 @@ func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "present" || !strings.Contains(s.Message, "delete it in the MLflow UI") {
 		t.Errorf("complete: %+v", s)
 	}
-	demo.tags = map[string]string{}
+	demo.tags = map[string]string{sampleMarkerKey: SampleGenAIDemo}
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "partial" {
 		t.Errorf("no tags: %+v", s)
 	}
+	// Without the marker the experiment is someone else's: the generator
+	// would delete traces in it, so no action is offered.
+	demo.tags = map[string]string{}
+	if s := env.status(t)[SampleGenAIDemo]; s.State != "foreign" || len(s.Actions) != 0 || !strings.Contains(s.Message, "not created by this tool") {
+		t.Errorf("unmarked, no versions: %+v", s)
+	}
+	demo.tags = map[string]string{demoVersionTagPrefix + "traces": "1"}
+	if s := env.status(t)[SampleGenAIDemo]; s.State != "foreign" || len(s.Actions) != 0 || !strings.Contains(s.Message, "deletes traces and evaluations in that experiment, whoever logged them") {
+		t.Errorf("MLflow UI demo: %+v", s)
+	}
+	demo.tags[sampleMarkerKey] = SampleGenAIDemo
 	demo.stage = "deleted"
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "removed" || !reflect.DeepEqual(s.Actions, []string{"add"}) {
 		t.Errorf("deleted: %+v", s)

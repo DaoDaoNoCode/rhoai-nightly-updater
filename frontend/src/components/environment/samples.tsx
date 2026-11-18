@@ -35,7 +35,7 @@ export const SAMPLE_INFO: Record<MLflowSampleId, SampleInfo> = {
     inSentence: "agent and prompt demo",
     value: "Agent traces, prompts and evaluations of a sample agent. In the dashboard: Agent traces, Prompt management.",
     adds: "the agent and prompt demo (about 30 seconds)",
-    creates: <>Experiment <code>MLflow Demo</code>, with the prompts, traces, evaluation datasets and runs that MLflow&apos;s own demo generator makes.</>,
+    creates: <>Experiment <code>MLflow Demo</code>, tagged as this tool&apos;s, with the prompts, traces, evaluation datasets and runs that MLflow&apos;s own demo generator makes. An experiment of that name that this tool did not create is left alone.</>,
   },
   training: {
     name: "Training experiment and registered model",
@@ -183,7 +183,7 @@ export function samplesConfirm(pending: Pending): ConfirmSpec | null {
         return {
           title: `Regenerate the agent and prompt demo in ${project}?`, confirm: "Regenerate", runTitle: `Regenerate the agent and prompt demo in ${project}`,
           summary: <Content component="p">MLflow generates its demo in {project} again, replacing the demo&apos;s prompts, traces and evaluations. Use it when the demo is incomplete. About 30 seconds.</Content>,
-          changes: [<>Experiment <code>MLflow Demo</code>: its demo version tags (<code>mlflow.demo.version.*</code>) are reset, then MLflow&apos;s demo generator runs; it deletes and regenerates each part of the demo.</>],
+          changes: [<>Experiment <code>MLflow Demo</code> (this tool&apos;s): its demo version tags (<code>mlflow.demo.version.*</code>) are reset, then MLflow&apos;s demo generator runs; it deletes and regenerates each part of the demo, including traces and evaluations logged into that experiment by anyone.</>],
         };
       }
       return {

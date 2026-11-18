@@ -107,6 +107,8 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 			t.Fatalf("%s %v: %s\n%s", s.action, s.samples, msg, stepMessages(st))
 		}
 	}
+	// A feature this generator lacks: its tag is dropped (delete-experiment-tag).
+	env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"] = "0"
 	env.mlflow.mlflowDeleteDemo()
 	if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok { // restore + reset
 		t.Fatal(msg)

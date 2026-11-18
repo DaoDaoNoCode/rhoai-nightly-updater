@@ -36,6 +36,8 @@ type mlflowFake struct {
 	bareNext map[string]int
 	// noSkills: this MLflow has no Skill Registry (RHOAI 3.5).
 	noSkills bool
+	// noDemo: this MLflow has no demo generator.
+	noDemo bool
 	// onRequest, when set, runs before each request is served.
 	onRequest func(method, path string)
 	requests  []string
@@ -117,6 +119,7 @@ var mlflowFakeRules = []mlflowFakeRule{
 	{"POST", "/api/2.0/mlflow/experiments/restore", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", []string{demoExperiment, trainingExperiment}, "rules_base.py:331-334"},
 	{"POST", "/api/2.0/mlflow/experiments/delete", []fakeCheck{{"experiments", "delete"}}, "body:experiment_id", trainingExpNames, "rules_base.py:327-330"},
 	{"POST", "/api/2.0/mlflow/experiments/set-experiment-tag", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", demoNames, "rules_base.py:342-345"},
+	{"POST", "/api/2.0/mlflow/experiments/delete-experiment-tag", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", demoNames, "rules_base.py:347-350"},
 	// SearchRuns: experiments list, else the experiment_ids the caller may
 	// get by name (rules_base.py:653-656; collection_filters.py:123-139,
 	// 161-174).
@@ -317,7 +320,7 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if !found || (f.noSkills && strings.HasPrefix(path, "/api/3.0/mlflow/skills")) {
+	if !found || (f.noSkills && strings.HasPrefix(path, "/api/3.0/mlflow/skills")) || (f.noDemo && strings.HasSuffix(path, "/demo/generate")) {
 		f.mlflowError(w, 404, "ENDPOINT_NOT_FOUND", "Endpoint not found.")
 		return
 	}
@@ -435,6 +438,18 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 			return
 		}
 		e.tags[str("key")] = str("value")
+		f.writeJSON(w, map[string]string{})
+	case "POST /api/2.0/mlflow/experiments/delete-experiment-tag":
+		e := f.experiments[str("experiment_id")]
+		if e == nil || e.stage != "active" {
+			notFound("experiment")
+			return
+		}
+		if _, ok := e.tags[str("key")]; !ok {
+			notFound("tag")
+			return
+		}
+		delete(e.tags, str("key"))
 		f.writeJSON(w, map[string]string{})
 	case "POST /api/2.0/mlflow/runs/search":
 		ids, _ := body["experiment_ids"].([]interface{})

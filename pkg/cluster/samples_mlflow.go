@@ -383,8 +383,11 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 			failed = append(failed, name)
 			stepCode := sampleErrorCode(err)
 			var refusal *sampleRefusal
-			if errors.As(err, &refusal) {
+			switch {
+			case errors.As(err, &refusal):
 				stepCode = "not_managed"
+			case errors.Is(err, errNoDemoGenerator), errors.Is(err, errNoMCPRegistry), errors.Is(err, errNoSkillRegistry):
+				stepCode = "unsupported"
 			}
 			code = firstNonEmpty(code, stepCode)
 			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err)), ErrorCode: stepCode})
