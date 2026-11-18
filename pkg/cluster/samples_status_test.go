@@ -18,8 +18,9 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 	}{
 		{"not deployed", "", "not deployed", false},
 		{"not ready", `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`, "not ready", true},
-		{"no url", `{"conditions":[{"type":"Available","status":"True"}]}`, "no https address", true},
-		{"http url", `{"url":"http://x/mlflow","conditions":[{"type":"Available","status":"True"}]}`, "no https address", true},
+		// Plain words: a release without status.url never gets one, so no "yet".
+		{"no url", `{"conditions":[{"type":"Available","status":"True"}]}`, "not supported on this MLflow release", true},
+		{"http url", `{"url":"http://x/mlflow","conditions":[{"type":"Available","status":"True"}]}`, "not supported on this MLflow release", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
@@ -32,7 +33,7 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st.Available || !strings.Contains(st.Reason, tc.want) || len(st.Samples) != 0 {
+			if st.Available || !strings.Contains(st.Reason, tc.want) || strings.Contains(st.Reason, "yet") || len(st.Samples) != 0 {
 				t.Errorf("got %+v", st)
 			}
 			mlflowSamplesCache.Remove(fakeProject)

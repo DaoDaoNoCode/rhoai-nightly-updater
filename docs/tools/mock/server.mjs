@@ -635,7 +635,7 @@ async function maasStream(req, res) {
 function mlflowSamplesOf(project) {
   const m = world.resources.mlflow;
   if (!m?.deployed) return { project, available: false, reason: "MLflow is not deployed. Set it up first.", samples: [] };
-  if (!m.ready) return { project, available: false, reason: "MLflow is not ready yet.", samples: [] };
+  if (!m.ready) return { project, available: false, reason: "MLflow is not ready.", samples: [] };
   return world.samples.mlflow[project] ?? F.mlflowSamples(project);
 }
 

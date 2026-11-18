@@ -73,6 +73,9 @@ func mlflowCRReady(cr mlflowCR) bool {
 	return false
 }
 
+// mlflowNoStatusURLReason: the CR reports no https address in status.url.
+const mlflowNoStatusURLReason = "This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work."
+
 // mlflowSampleTarget returns MLflow for project, or why the samples are
 // unavailable. The address is the CR's status.url, the address the operator
 // reports and odh-dashboard links to (see mlflowCR).
@@ -86,11 +89,16 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 	case cr.Metadata.terminating():
 		return nil, "MLflow is being deleted.", nil
 	case !mlflowCRReady(cr):
-		return nil, "MLflow is not ready yet.", nil
+		return nil, "MLflow is not ready.", nil
 	}
+	// The samples call MLflow only at status.url, never at the Route the
+	// tab falls back to for its link (getMLflowStatus): releases before the
+	// data-science gateway report no status.url, and their MLflow was not
+	// checked against these calls. This is the one rule; the page shows its
+	// reason as is.
 	base := mlflowUIURL(cr.Status.URL, "")
 	if base == "" {
-		return nil, "MLflow reports no https address (status.url) yet.", nil
+		return nil, mlflowNoStatusURLReason, nil
 	}
 	return &mlflowTarget{
 		api: &sampleAPI{

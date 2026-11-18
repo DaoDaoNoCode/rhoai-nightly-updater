@@ -161,7 +161,7 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
       </Flex>
     );
   } else if (!data.available) {
-    body = <Alert variant="info" isInline component="p" title="Sample data is not available now">{data.reason}</Alert>;
+    body = <Alert variant="info" isInline component="p" title="Sample data is not available">{data.reason}</Alert>;
   } else {
     body = (
       <Stack hasGutter>

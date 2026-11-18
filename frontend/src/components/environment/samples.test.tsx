@@ -294,7 +294,7 @@ describe("MLflow tab: Sample data", () => {
     stubApi({
       "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev", "other"] },
       "/api/resources/samples/mlflow": (url: string) => url.includes("project=other")
-        ? jsonResponse(mlflowSamples([], { project: "other", available: false, reason: "MLflow reports no https address (status.url) yet." }))
+        ? jsonResponse(mlflowSamples([], { project: "other", available: false, reason: "This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work." }))
         : fail ? jsonResponse({ error: "Cannot read the MLflow samples: timeout", errorCode: "network" }, 503) : jsonResponse(mlflowSamples([sample("training", "absent")])),
     });
     renderAt("/test-resources?tab=mlflow&project=dev");
@@ -307,7 +307,7 @@ describe("MLflow tab: Sample data", () => {
     expect(within(row("Training experiment and registered model")).getByText("Not added")).toBeInTheDocument();
     cleanupAndRender("/test-resources?tab=mlflow&project=other");
     await tick();
-    expect(within(samplesSection()).getByText("MLflow reports no https address (status.url) yet.")).toBeInTheDocument();
+    expect(within(samplesSection()).getByText("This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work.")).toBeInTheDocument();
   });
 
   it("without a project, asks for one", async () => {
