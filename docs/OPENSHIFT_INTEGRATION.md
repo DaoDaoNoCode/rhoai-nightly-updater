@@ -132,6 +132,8 @@ The exact sequences are in [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md#4-operator-li
 
 **Fix:** The dry-run handler sets the **response** header `X-Skip-Rate-Limit: true`, and `withMutationAuth` then gives the slot back. Rejected requests (4xx/5xx, including 409 busy) also give it back.
 
+A refused request gets HTTP 429 with errorCode `user_rate_limited` (not `rate_limited`, which means the OpenShift API is throttling) and `Retry-After` set to the seconds left in the window; the message names the tool's limit and that wait.
+
 ## 12. SSE Streaming Through Route + OAuth Proxy
 
 **What:** SSE (Server-Sent Events) streams progress from mutation endpoints (Update, Install a different build, Refresh) through the OpenShift Route and oauth-proxy to the browser.
