@@ -174,7 +174,6 @@ export const MigrateStorageModal: React.FC<{
               <Alert component="p" isInline isLiveRegion variant={ownRun.result.success ? "success" : ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached" ? "info" : "danger"}
                 title={ownRun.result.success ? (ownRun.kind === "migrate" ? "The data is in the new storage" : "The old storage was deleted") : ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached" ? "Still running" : "Stopped"}>
                 {ownRun.result.message}
-                {ownRun.result.success && ownRun.kind === "migrate" && " The old storage is kept; delete it later from the S3 storage's menu, once nothing else uses it."}
               </Alert>
             </StackItem>
           )}

@@ -570,7 +570,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 	if len(listed) > 0 {
 		msg += fmt.Sprintf(" Not changed by this tool, still on the old storage: %s.", strings.Join(listed, "; "))
 	}
-	msg += fmt.Sprintf(" The old storage in namespace '%s' is kept until you remove it.", legacyNamespace)
+	msg += fmt.Sprintf(" The old storage in namespace '%s' is kept: delete it later from the S3 storage's menu, once nothing else uses it.", legacyNamespace)
 	slog.Info("s3 storage migrated", "user", getUser(m.c), "objects", result.checked())
 	recordS3Activity(m.c, "migrate-storage", fmt.Sprintf("%s -> %s (%s, %d pipeline servers)", legacyNamespace, s3Namespace, result.summary(), len(repointed)), true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.logs}, nil

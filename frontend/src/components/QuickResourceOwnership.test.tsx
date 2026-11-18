@@ -496,7 +496,7 @@ describe("storage from an earlier version", () => {
         { step: "storage", status: "success", message: "OK: The new storage is ready", elapsedMs: 2 },
         { step: "copy", status: "success", message: "OK: 4 objects (4330 bytes) copied and checked byte for byte", elapsedMs: 3 },
         { step: "repoint", status: "success", message: "OK: 1 pipeline server moved", elapsedMs: 4 },
-        { step: "operation_complete", status: "success", message: "Migrated 4 objects (4330 bytes) to namespace 'seaweedfs'. The old storage in namespace 'minio' is kept until you remove it.", elapsedMs: 5 },
+        { step: "operation_complete", status: "success", message: "Migrated 4 objects (4330 bytes) to namespace 'seaweedfs'. The old storage in namespace 'minio' is kept: delete it later from the S3 storage's menu, once nothing else uses it.", elapsedMs: 5 },
       ),
     });
     renderAt();
@@ -511,7 +511,10 @@ describe("storage from an earlier version", () => {
     // Item 7: success ends there; the removal is a later, separate decision.
     expect(screen.getByRole("dialog", { name: "Migrate storage" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: /Delete old storage|Remove old storage/ })).not.toBeInTheDocument();
-    expect(dialog).toHaveTextContent("The old storage is kept; delete it later from the S3 storage's menu");
+    // The backend's message says once that the old storage is kept, and where to delete it.
+    const outcome = within(dialog).getByText("The data is in the new storage").closest(".pf-v6-c-alert") as HTMLElement;
+    expect(outcome).toHaveTextContent("The old storage in namespace 'minio' is kept: delete it later from the S3 storage's menu, once nothing else uses it.");
+    expect(outcome.textContent!.match(/is kept/g)).toHaveLength(1);
     expect(footerClose(dialog)).toHaveClass("pf-m-primary");
   });
 

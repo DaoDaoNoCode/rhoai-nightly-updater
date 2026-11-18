@@ -520,7 +520,7 @@ export function migrateSteps(kind) {
       ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
       ["repoint", "running", "Moving pipeline server dev-project/dspa..."],
       ["repoint", "success", "OK: 1 pipeline server moved"],
-      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace 'seaweedfs'. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace 'minio' is kept until you remove it."],
+      ["operation_complete", "success", "Migrated 37 objects (18204511 bytes) to namespace 'seaweedfs'. 1 pipeline server now uses it: dev-project/dspa. The old storage in namespace 'minio' is kept: delete it later from the S3 storage's menu, once nothing else uses it."],
     ]
     : [
       ["check", "success", "OK: Nothing of this tool uses the old storage"],
