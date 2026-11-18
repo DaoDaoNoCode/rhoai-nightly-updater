@@ -35,8 +35,13 @@ const (
 	dspoSelector = "app.kubernetes.io/name=data-science-pipelines-operator"
 	// dspaStuckAfter matches odh-dashboard's SERVER_TIMEOUT (5 minutes,
 	// frontend/src/utilities/const.ts), after which the dashboard reports a
-	// pipeline server that is still not ready as having issues.
+	// pipeline server whose API server is still not ready as having issues.
 	dspaStuckAfter = 5 * time.Minute
+	// dspaAPIServerCondition is DSPO's APIServerReady condition. The
+	// dashboard's pipelines pages work once it is True (dspaLoaded), and its
+	// timeout is measured against it, not against Ready
+	// (concepts/pipelines/context/usePipelineNamespaceCR.ts L12-37, rhoai-3.6).
+	dspaAPIServerCondition = "APIServerReady"
 )
 
 var (
@@ -60,6 +65,8 @@ type dspaInfo struct {
 	SecretName string
 	ExternalDB bool
 	Ready      *dspaCondition
+	// APIServer is DSPO's APIServerReady condition (dspaAPIServerCondition).
+	APIServer *dspaCondition
 	// ObjectStore is DSPO's ObjectStoreAvailable condition: True once its
 	// connection check to the object storage passed (or was skipped by the
 	// DSPA's own settings), for the generation in ObservedGeneration
@@ -195,6 +202,8 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 			switch cond.Type {
 			case "Ready":
 				d.Ready = &cc
+			case dspaAPIServerCondition:
+				d.APIServer = &cc
 			case dspaObjectStoreCondition:
 				d.ObjectStore = &cc
 			}
@@ -316,7 +325,11 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		// "MinimumReplicasAvailable"; the message carries the cause.
 		state.Message = firstNonEmpty(truncateMessage(d.Ready.Message), d.Ready.Reason, "Not ready")
 	}
-	if !state.Ready && !state.Terminating {
+	// Stuck, like the dashboard's hasServerTimedOut: the API server is not
+	// ready 5 minutes after creation. Ready=False with a ready API server
+	// (another component restarting) is not.
+	apiServerReady := d.APIServer != nil && d.APIServer.Status == "True"
+	if !state.Ready && !state.Terminating && !apiServerReady {
 		if created, err := time.Parse(time.RFC3339, d.Meta.CreationTimestamp); err == nil && time.Since(created) > dspaStuckAfter {
 			state.TerminalError = true
 		}

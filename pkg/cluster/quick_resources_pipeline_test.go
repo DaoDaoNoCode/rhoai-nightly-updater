@@ -114,6 +114,45 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 	}
 }
 
+// The 5-minute "has issues" signal follows odh-dashboard: a pipeline server
+// counts as timed out only while its API server is not ready
+// (usePipelineNamespaceCR.ts hasServerTimedOut uses dspaLoaded, which reads
+// APIServerReady, not Ready). Ready=False alone, for example while another
+// component restarts, is not stuck.
+func TestPipelineServerState_StuckFollowsAPIServerReady(t *testing.T) {
+	old := time.Now().Add(-dspaStuckAfter - time.Minute).UTC().Format(time.RFC3339)
+	fresh := time.Now().UTC().Format(time.RFC3339)
+	cases := []struct {
+		name, created, conditions string
+		wantStuck, wantReady      bool
+	}{
+		{"API server ready, Ready False long after creation", old,
+			`[{"type":"APIServerReady","status":"True"},{"type":"Ready","status":"False","message":"Deployment ds-pipeline-ui-dspa: 0/1"}]`, false, false},
+		{"API server not ready long after creation", old,
+			`[{"type":"APIServerReady","status":"False","message":"Deployment ds-pipeline-dspa: 0/1"},{"type":"Ready","status":"False"}]`, true, false},
+		{"no API server condition long after creation", old, `[]`, true, false},
+		{"API server not ready, just created", fresh, `[{"type":"APIServerReady","status":"False"}]`, false, false},
+		{"all ready", old, `[{"type":"APIServerReady","status":"True"},{"type":"Ready","status":"True"}]`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putDSProject(f, "proj")
+			f.putJSON(dspaPath("proj", dspaName), `{"metadata":{"labels":`+toolLabelJSON+`,"creationTimestamp":"`+tc.created+`"},
+				"spec":{"objectStorage":{"externalStorage":{"host":"`+s3Host()+`","s3CredentialsSecret":{"secretName":"`+dspaSecretName+`"}}}},
+				"status":{"conditions":`+tc.conditions+`}}`)
+			st, err := GetResourcesStatus(c)
+			if err != nil || len(st.PipelineServers) != 1 {
+				t.Fatalf("st=%+v err=%v", st, err)
+			}
+			ps := st.PipelineServers[0]
+			if ps.TerminalError != tc.wantStuck || ps.Ready != tc.wantReady {
+				t.Errorf("TerminalError=%v Ready=%v, want %v %v (%+v)", ps.TerminalError, ps.Ready, tc.wantStuck, tc.wantReady, ps)
+			}
+		})
+	}
+}
+
 func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
 	count := func(projects int) int {
 		f, c := newResourceFake(t)
