@@ -112,20 +112,24 @@ The Models tab serves small models from Hugging Face on CPU in a data science pr
 | `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 10 / 12 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` |
 | `granite-embedding-125m-english`, Granite Embedding 125M English | Embeddings (768 dimensions), semantic search | 2 CPUs, 4 / 6 GiB | about 250 MB | `--runner pooling --max-model-len 512` |
 
-<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS and authentication; Qwen3 Ready with its type, use, resources, source, vLLM options, address and runtime image" width="760">
+<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS and authentication; Qwen3 Ready with its use case, resources, source, vLLM options, address, runtime image, no fitting hardware profile and its token authentication" width="760">
 
 1. The feature's state in the selected project, for the chosen model.
 2. The **model picker**: which catalog model the tab shows, sets up and deletes (the address keeps it as `model=<name>`).
 3. The **inference gateway**, shared by the cluster: every model is reached through it at `https://inference.<apps domain>`, and it checks each caller's OpenShift token. It runs on a cloud load balancer, which costs money while it exists. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
 4. The chosen **model** in the project: what it is, what it is for, what it reserves, where it comes from and its vLLM options. **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
 5. Its address, which copies with one click. The runtime image below it: on a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
+6. The hardware profile the dashboard shows. No profile fits Qwen3 on a default cluster, so the dashboard shows "No hardware profile" (and "Unknown" in its details); the model runs as set up.
+7. Token authentication: the model's own ServiceAccount and token Secret, as the dashboard makes them. The dashboard lists that token for the model.
 
-<img src="docs/images/environment-models-picker.png" alt="The model picker open: each model with its type, use, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
+<img src="docs/images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
 
 1. Each option says what the model is and what it is for, what it reserves, how much is downloaded, and its state in the project.
 2. A model no worker has room for now is disabled, and says why. One the project already has stays selectable.
 
-**Set up** creates whatever is missing (the gateway, then the chosen model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. Once ready, **Use it** has commands that call the model with your own `oc whoami -t` token (no account or key is made): `/v1/chat/completions` for a chat model, `/v1/embeddings` for the embedding model.
+Each model also asks for node disk of about 1.5 times its download (KServe downloads it into an emptyDir by default), and the setup warns when the project's ResourceQuota has no room for it. Qwen3 fits no hardware profile on a default cluster: the dashboard shows "No hardware profile" for it, and the tab says so.
+
+**Set up** creates whatever is missing (the gateway, then the chosen model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. With the model it makes the dashboard's token authentication, as "Require token authentication" does: ServiceAccount `<model>-sa`, which may only `get` the model, its Role and RoleBinding, and token Secret `default-name-<model>-sa`, all owned by the model. The dashboard then lists that token for the model, and its Edit keeps authentication on. Once ready, **Use it** has commands that read that token (`oc get secret default-name-<model>-sa ... | base64 -d`) and call the model: `/v1/chat/completions` for a chat model, `/v1/embeddings` for the embedding model.
 
 <img src="docs/images/environment-models-use-qwen3.png" alt="Use it for Qwen3: a chat request, a tool-calling request with a tools list, and a request that turns thinking on with chat_template_kwargs enable_thinking true" width="760">
 
@@ -165,7 +169,7 @@ The MaaS tab sets up the cluster's Models as a Service platform the way the [Maa
 
 1. **Database**: a one-instance CloudNativePG PostgreSQL for MaaS's API keys, for development and test, and Secret `maas-db-config` with its address. A connection Secret someone else made is used as it is.
 2. **Authorino TLS**: Connectivity Link's Authorino must serve TLS and trust the cluster's service CA. Its operators own it, so this tool only checks it; when it is missing, the part shows the docs' commands for a cluster-admin.
-3. **Publish** / **Unpublish** per model of this tool. A published model's address moves to the MaaS gateway until it is unpublished.
+3. **Publish** / **Unpublish** per model of this tool. A published model's address moves to the MaaS gateway until it is unpublished, and, as the dashboard's MaaS option does, it leaves Gen AI studio's AI assets (its genai label and use-case annotation are removed and put back on Unpublish), so the studio lists it once, through MaaS. Its MaaSModelRef is owned by the model and shows the catalog's name.
 
 **Set up** runs the docs' steps in their order: the database, Gateway `maas-default-gateway` with an external load balancer at `maas.<apps domain>`, the Authorino check, then MaaS turned on in the DataScienceCluster (the previous value is recorded), then it waits for maas-api and the default tenant, about 5 minutes. Connectivity Link (a Kuadrant CR) and the CloudNativePG operator are prerequisites a cluster-admin installs. **Use it** has the docs' commands to get a key (shown once), list the models and chat, with your own `oc whoami -t` token, and a link to the dashboard's MaaS pages. **Remove MaaS** unpublishes, turns MaaS back to what it was, then deletes the gateway and the database; GatewayClass `openshift-default`, Connectivity Link and what RHOAI's operator made stay. Troubleshooting: [RUNBOOK §10.4](RUNBOOK.md#104-maas-models-as-a-service).
 

@@ -364,8 +364,8 @@ describe("Models tab", () => {
     stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen25, qwen3] }) }), "/api/resources/projects": { projects: ["dev"] } });
     const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
     const part = await screen.findByRole("listitem", { name: "Qwen3 1.7B (CPU, tool calling)" });
-    expect(within(part).getByText(/None fits: no hardware profile on this cluster allows 4 CPUs and 10 GiB of memory \(up to 12 GiB\)/)).toBeInTheDocument();
-    expect(within(part).getByText(/its Deployments table shows "No hardware profile" and the model's details "Hardware profile: Unknown"/)).toBeInTheDocument();
+    expect(within(part).getByText(/None fits: no hardware profile on this cluster allows 4 CPUs and 10 GiB of memory \(up to 12 GiB\), so the dashboard.s Deployments table shows/)).toBeInTheDocument();
+    expect(within(part).getByText(/shows "No hardware profile" and the model.s details "Hardware profile: Unknown"/)).toBeInTheDocument();
     expect(within(part).getByText(/The model runs as set up/)).toBeInTheDocument();
     view.unmount();
     renderAt("/test-resources?tab=models&project=dev&model=qwen25-05b-instruct");

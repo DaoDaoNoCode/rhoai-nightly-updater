@@ -440,7 +440,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListDescription>
               {model.hardwareProfile
                 ? <><code>{model.hardwareProfile}</code>, as the dashboard shows it</>
-                : <>None fits: no hardware profile on this cluster allows {modelNeeds(c)}. So its Deployments table shows &quot;No hardware profile&quot; and the model&apos;s details &quot;Hardware profile: Unknown&quot;. The model runs as set up.</>}
+                : <>None fits: no hardware profile on this cluster allows {modelNeeds(c)}, so the dashboard's Deployments table shows &quot;No hardware profile&quot; and the model&apos;s details &quot;Hardware profile: Unknown&quot;. The model runs as set up.</>}
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -545,11 +545,11 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
         <>To call its direct address with your OpenShift token again, unpublish it on the MaaS tab.</>,
       ] : embedding ? [
         <>Copy the commands above and run them: they ask the model for the vector of one sentence.</>,
-        <>Point an OpenAI client&apos;s embeddings call at the address, with your token as the API key and <code>{name}</code> as the model.</>,
+        <>Point an OpenAI client&apos;s embeddings call at the address, with the token as the API key and <code>{name}</code> as the model.</>,
         <>Set up the playground on the Playground tab: it adds this model for searching your documents.</>,
       ] : [
-        <>Copy the commands above and run them: the first lists the model, the second asks it to say hello.</>,
-        <>Point an OpenAI client at the address, with your token as the API key and <code>{name}</code> as the model.</>,
+        <>Copy the commands above and run them: they read the token, list the model, then ask it to say hello.</>,
+        <>Point an OpenAI client at the address, with the token as the API key and <code>{name}</code> as the model.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
       ]} />
     </TabSection>

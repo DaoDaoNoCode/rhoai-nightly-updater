@@ -340,10 +340,10 @@ The **Models** tab sets up two parts with one **Set up**: the cluster's **infere
 
 Before Set up the tab says what is missing: model serving turned off (DataScienceCluster `kserve` not Managed, or `KserveLLMInferenceServiceDependencies=False`), no CPU preset on this release, no data science project, or too little room on the workers: the picker disables a model no amd64 worker has room for now, and says what it needs (SmolLM2 2 CPUs / 5 GiB, Qwen2.5 4 / 6 GiB, Qwen3 4 / 10 GiB, Granite 2 / 4 GiB requested). The check is a snapshot: a cluster that adds nodes on demand may still fit it; the API's setup only warns. A gateway someone else made (RHOAI's install, an admin) reads **Not managed by this tool** and is used as it is.
 
-Call a ready model with your own token (no account or key is made):
+Each model also gets the dashboard's token authentication (ServiceAccount `<model>-sa` that may only `get` the model, Role `<model>-view-role`, RoleBinding `<model>-view`, token Secret `default-name-<model>-sa`, all owned by the model): the dashboard lists that token for the model, and its **Edit** keeps authentication on. Call a ready model with that token (your own `oc whoami -t` works too):
 
 ```bash
-TOKEN=$(oc whoami -t)
+TOKEN=$(oc get secret default-name-qwen25-05b-instruct-sa -n <project> -o jsonpath='{.data.token}' | base64 -d)
 URL=$(oc get llminferenceservice qwen25-05b-instruct -n <project> -o jsonpath='{.status.url}')
 curl -s -H "Authorization: Bearer $TOKEN" $URL/v1/models
 curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
@@ -358,7 +358,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $U
   -d '{"model":"granite-embedding-125m-english","input":["Red Hat OpenShift AI serves models."]}'
 ```
 
-`401`: no or expired token. `403`: your user cannot `get` the model (no access to the project). The `model` field is the resource name, as the dashboard's playground expects.
+`401`: no or expired token. `403`: the token's user cannot `get` the model (the model's token is only for its own model; your user needs access to the project). The `model` field is the resource name, as the dashboard's playground expects. The Qwen3 token above is in `default-name-qwen3-1-7b-sa`, the embedding model's in `default-name-granite-embedding-125m-english-sa`.
 
 | Symptom | Cause and fix |
 |---|---|
@@ -367,6 +367,13 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $U
 | Model **Error**: "keeps crashing ... OOMKilled" | The memory limit was too small (only Qwen2.5's was measured live; the others are estimates): `oc logs deploy/<model>-kserve -n <project> -c main --previous`, and report the model and its peak |
 | Qwen3 answers without `tool_calls`, or a tool request is refused | The model is served with `--enable-auto-tool-choice --tool-call-parser hermes`; check them in `oc get deploy qwen3-1-7b-kserve -n <project> -o yaml` (env `VLLM_ADDITIONAL_ARGS`) and the vLLM log for an unknown option |
 | The embedding model refuses an input | Its context is 512 tokens; split longer text |
+| A model reads "not created by this tool" although this tool set it up | A model is the tool's only when its UID is in the tool's record (snapshot ConfigMap, key `models`). A model a pre-release 3.0.0 build set up has none, nor one made again elsewhere under the name. Delete it yourself (`oc delete llminferenceservice <model> -n <project>`, after unpublishing it on the MaaS tab), then set it up again |
+| Model details: "has no token of its own yet" | Set up before the token objects existed: set it up again (only the missing objects are made). "Off: ... enable-auth is false": someone turned token authentication off in the dashboard; turn it back on there |
+| Set up refuses: "already has a ServiceAccount / Role / RoleBinding / Secret ... that this tool did not make for this model" | An object of the dashboard's token name for this model exists and is not owned by the model (left over, or someone else's). Delete it (`oc delete <kind> <name> -n <project>`) or use another project |
+| Set up warns "no room in its quota" | A ResourceQuota of the project leaves less than the model requests (`oc describe resourcequota -n <project>`). Raise it or stop other workloads; KServe cannot create the pod until then |
+| Model stays **Setting up**, `Insufficient ephemeral-storage` | The model requests node disk for its download (about 1.5 times it; KServe's default model volume is an emptyDir). Free disk on a worker or add one |
+| Hardware profile "None fits" (Qwen3) | No profile allows 4 CPUs and 10-12 GiB (the default allows 8 GiB): the dashboard's Deployments table shows "No hardware profile" and the details "Hardware profile: Unknown". The model runs as set up |
+| After Unpublish, the direct address does not answer | The project lacks the inference gateway's routes label (a model published before the gateway was restricted was not counted): a cluster-admin runs the `oc label namespace` command the result shows |
 | Model **Error**: "KServe cannot resolve its preset" | The preset named in `spec.baseRefs` is gone (RHOAI was updated and its prefix changed). Set the model up again: it re-reads the prefix |
 | Gateway **Needs attention**: "The gateway's authentication is missing" | odh-model-controller adds AuthPolicy `openshift-ai-inference-authn` once a model uses the gateway; check that odh-model-controller and Connectivity Link (Kuadrant) run: `oc get authpolicy -n openshift-ingress` |
 | Gateway **Setting up** for minutes | `oc get gateway openshift-ai-inference -n openshift-ingress -o yaml`: `Programmed=False` names the reason (no load balancer quota, for example). DNS for a new load balancer can take a few minutes |
