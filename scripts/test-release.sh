@@ -167,7 +167,9 @@ printf '%s\n' "$notes" | grep -qF 'the Helm chart `deploy/chart` of this tag' &&
 
 # --- notes -----------------------------------------------------------------------
 notes=$(IMAGE=quay.io/example/app $SH "$RELEASE" notes v1.0.0 v1.0.0)
-expect_eq "notes body" "First release." "$(printf '%s\n' "$notes" | head -1)"
+expect_eq "notes: install lines first" 'From a clone: `git checkout v1.0.0 && make deploy` (first install) or `make upgrade`.' \
+	"$(printf '%s\n' "$notes" | head -1)"
+expect_eq "notes: CHANGELOG section last" "First release." "$(printf '%s\n' "$notes" | tail -1)"
 printf '%s\n' "$notes" | grep -qF 'Image: `quay.io/example/app:v1.0.0`' && pass || fail "notes: image line missing: $notes"
 printf '%s\n' "$notes" | grep -qF '(template revision 2)' && pass || fail "notes: template revision missing: $notes"
 printf 'echo installer\n' >"$WORK/install.sh"
@@ -176,6 +178,31 @@ sum=$( (sha256sum "$WORK/install.sh" 2>/dev/null || shasum -a 256 "$WORK/install
 printf '%s\n' "$notes" | grep -qF "install.sh SHA-256: \`$sum\`" && pass || fail "notes: installer checksum missing: $notes"
 printf '%s\n' "$notes" | grep -qxF 'curl -fsSLO https://example.com/v1.0.0/install.sh' && pass || fail "notes: download command missing"
 printf '%s\n' "$notes" | grep -q 'curl.*| *bash' && fail "notes: piping curl into bash" || pass
+# The copy-paste block opens the notes; the CHANGELOG section (with its
+# ### headings) follows the --- separator, however long it is.
+(
+	git init -q -b main "$WORK/notes"
+	cd "$WORK/notes"
+	mkdir deploy
+	template 3 >deploy/template.yaml
+	changelog '## [1.1.0] - 2026-11-18' '' '### Added' '' '- A feature.' '' '### Fixed' '' '- A fix.' >CHANGELOG.md
+	commit_all v1.1.0
+)
+notes=$(cd "$WORK/notes" && INSTALLER="$WORK/install.sh" INSTALLER_URL=https://example.com/v1.1.0/install.sh \
+	IMAGE=quay.io/example/app $SH "$RELEASE" notes v1.1.0 HEAD)
+expect_eq "notes: the install block opens them" \
+	'**Install or upgrade without a clone** (needs `oc`, logged in as cluster-admin, and `curl`):' \
+	"$(printf '%s\n' "$notes" | head -1)"
+line_of() { printf '%s\n' "$notes" | grep -nxF -- "$1" | head -1 | cut -d: -f1; }
+first_heading=$(printf '%s\n' "$notes" | grep -n '^### ' | head -1 | cut -d: -f1)
+for l in 'curl -fsSLO https://example.com/v1.1.0/install.sh' "install.sh SHA-256: \`$(
+	(sha256sum "$WORK/install.sh" 2>/dev/null || shasum -a 256 "$WORK/install.sh") | cut -d' ' -f1
+)\`" 'Image: `quay.io/example/app:v1.1.0`' '---'; do
+	n=$(line_of "$l")
+	[ -n "$n" ] && [ -n "$first_heading" ] && [ "$n" -lt "$first_heading" ] && pass ||
+		fail "notes: '$l' (line ${n:-none}) is not before the first ### heading (line ${first_heading:-none}): $notes"
+done
+expect_eq "notes: the section ends them" "- A fix." "$(printf '%s\n' "$notes" | tail -1)"
 expect_fail "notes for a missing section" "no section [9.9.9]" $SH "$RELEASE" notes v9.9.9 v1.0.0
 
 # --- should-move -------------------------------------------------------------

@@ -208,7 +208,8 @@ cmd_notes() {
 	body=$(changelog_section "$ref" "${version#v}")
 	[ -n "$body" ] || die "CHANGELOG.md at $ref has no section [${version#v}]."
 	rev=$(template_revision "$ref")
-	printf '%s\n\n---\n\n' "$body"
+	# The copy-paste install and upgrade block comes first, then the
+	# CHANGELOG section: a long section must not bury it.
 	if [ -n "${INSTALLER:-}" ]; then
 		[ -f "$INSTALLER" ] || die "No installer at $INSTALLER."
 		sum=$(sha256 "$INSTALLER")
@@ -226,6 +227,7 @@ cmd_notes() {
 	if [ -n "${IMAGE:-}" ]; then
 		printf 'Image: `%s:%s`\n' "$IMAGE" "$version"
 	fi
+	printf '\n---\n\n%s\n' "$body"
 }
 
 sha256() {
