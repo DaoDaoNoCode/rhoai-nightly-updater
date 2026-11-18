@@ -440,7 +440,10 @@ async (page) => {
       await open("/components", "patch-update");
       await crop("banner-patch-update", alert("is available"));
 
-      await open("/components", "healthy");
+      // The desktop masthead: below PatternFly's lg breakpoint the
+      // appearance button moves into a menu, and the crop window (CW) is
+      // narrower. A crop's text size does not depend on the window width.
+      await open("/components", "healthy", { width: W });
       await crop("masthead-version", head, { notes: [{ at: page.getByText("v2.0.0", { exact: true }), n: 1, pos: "l" }] });
       // Tall enough for the whole Help dialog, so its body does not scroll.
       await page.setViewportSize({ width: vw, height: 2600 });
