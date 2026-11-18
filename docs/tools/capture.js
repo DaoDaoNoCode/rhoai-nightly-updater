@@ -275,7 +275,7 @@ async (page) => {
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
-      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "earlier-build", "orphan", "foreign", "no-model"]) {
+      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "earlier-build", "someone-added", "orphan", "foreign", "no-model"]) {
         for (const dark of [false, true]) {
           await open("/test-resources?tab=maas", `env-maas-${st}`, { dark, width: 1440 });
           await fit();
@@ -289,10 +289,14 @@ async (page) => {
         await page.getByRole("button", { name: "Publish", exact: true }).click();
         await page.getByRole("dialog").waitFor();
         await page.screenshot({ path: `${out}/themes/maas-publish-confirm-${theme}.png` });
-        // The Models tab of a published model: Use it points at the MaaS tab.
-        await open("/test-resources?tab=models&project=dev-project", "env-models-published", { dark, width: 1440 });
+        // The Models tab of a published model: Use it points at the MaaS
+        // tab; the project's unpublished model keeps its own commands.
+        await open("/test-resources?tab=models&project=dev-project&model=qwen25-05b-instruct", "env-models-published", { dark, width: 1440 });
         await fit();
         await page.screenshot({ path: `${out}/themes/models-published-${theme}.png` });
+        await open("/test-resources?tab=models&project=dev-project&model=qwen3-1-7b", "env-models-published", { dark, width: 1440 });
+        await fit();
+        await page.screenshot({ path: `${out}/themes/models-unpublished-beside-published-${theme}.png` });
       }
       await open("/test-resources", "env-maas-published");
       await fit();

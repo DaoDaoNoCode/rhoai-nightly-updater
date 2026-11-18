@@ -312,11 +312,19 @@ const scenarios = {
   "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
   "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
   "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
-  "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
-  // The same, on the Models tab: Use it points at the MaaS tab's commands.
+  // Three models in dev-project: Qwen2.5 published, Qwen3 not, the embedding model never offered.
+  "env-maas-published": (w) => { scenarios["env-models-several"](w); w.maas = F.maasWorld("ready", { items: F.maasSeveral() }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
+  // The same, on the Models tab: Use it of Qwen2.5 points at the MaaS tab's commands; Qwen3's keeps its curl.
   "env-models-published": (w) => { scenarios["env-maas-published"](w); },
   // A publication by an earlier build (the model also on the inference gateway): partly published.
-  "env-maas-earlier-build": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasEarlierBuildPublication()] }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
+  "env-maas-earlier-build": (w) => { scenarios["env-models-several"](w); w.maas = F.maasWorld("ready", { items: F.maasSeveral(F.maasEarlierBuildPublication()) }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
+  // Qwen3 published by this build, then someone added the inference gateway to it: partly published, set the refs, then Unpublish.
+  "env-maas-someone-added": (w) => {
+    scenarios["env-models-several"](w);
+    w.maas = F.maasWorld("ready", { items: F.maasSeveral(F.maasModel(true), F.maasSomeoneAddedPublication({ name: "qwen3-1-7b" })) });
+    F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true);
+    F.setMaaSPublished(w.resources, "dev-project", "qwen3-1-7b", true);
+  },
   "env-maas-foreign": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] }); },
   "env-maas-no-model": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready"); },
   // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
@@ -695,7 +703,10 @@ async function maasStream(req, res) {
   }
   const item = (published) => (world.maas.items ?? []).map((i) => (i.namespace === project && i.name === model ? F.maasModel(published, { name: model }) : i));
   if (action === "setup") world.maas = F.maasWorld("ready", { items: world.maas.items });
-  if (action === "teardown") world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map(() => F.maasModel(false)) });
+  if (action === "teardown") {
+    for (const i of world.maas.items ?? []) if (i.published) F.setMaaSPublished(world.resources, i.namespace, i.name, false);
+    world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map((i) => (i.published ? F.maasModel(false, { name: i.name }) : i)) });
+  }
   if (action === "publish") world.maas = { ...world.maas, items: item(true) };
   if (action === "unpublish") world.maas = { ...world.maas, items: item(false) };
   // The Models tab's model follows: published, it routes through the MaaS gateway alone.

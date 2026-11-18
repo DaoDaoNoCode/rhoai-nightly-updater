@@ -956,6 +956,20 @@ export function maasEarlierBuildPublication({ name = "qwen25-05b-instruct" } = {
 }
 
 /**
+ * A model this build published (its refs recorded) that someone added the
+ * inference gateway to since (GetMaaSStatus refsAddedStatus).
+ */
+export function maasSomeoneAddedPublication({ name = "qwen25-05b-instruct" } = {}) {
+  return { ...maasModel(true, { name }), ready: false, partly: true,
+    message: `Partly published: someone added openshift-ingress/openshift-ai-inference since the model was published, so direct calls to the model through that gateway fail with 500 once the rate limit applies to it. Unpublish and Publish refuse, since writing back the gateways the model had before would drop it. Set the gateways the model should use yourself, without maas-default-gateway (for KServe's default gateway: oc patch llminferenceservice ${name} -n dev-project --type=merge -p '{"spec":{"router":{"gateway":{"refs":null}}}}'), then Unpublish.` };
+}
+
+/** This tool's three models in dev-project (env-models-several) in MaaS's list: Qwen2.5 as given, Qwen3 as given, the embedding model never offered. */
+export function maasSeveral(qwen25 = maasModel(true), qwen3 = maasModel(false, { name: "qwen3-1-7b" })) {
+  return [maasEmbeddingModel(), qwen25, qwen3];
+}
+
+/**
  * Routes the Models tab's model in project through the MaaS gateway alone
  * (ModelState.maasPublished), or back: the inference gateway then no longer
  * lists it under Used by (pkg/cluster gatewayUsers). Other models of the
