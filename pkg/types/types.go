@@ -926,6 +926,10 @@ type MaaSStatus struct {
 	// Items are this tool's models in data science projects, published or
 	// not.
 	Items []MaaSModel `json:"items,omitempty"`
+	// Database is the database choice; Access the audience of this tool's
+	// subscription (nil while it does not exist).
+	Database *MaaSDatabase      `json:"database,omitempty"`
+	Access   *MaaSAudienceState `json:"access,omitempty"`
 }
 
 // MaaSAction is a change a platform part offers on its own (POST
@@ -989,6 +993,8 @@ type MaaSModel struct {
 	// and MaaSSubscription ("Active", ...).
 	Access       string `json:"access,omitempty"`
 	Subscription string `json:"subscription,omitempty"`
+	// Limit is the model's entry in this tool's subscription (published only).
+	Limit *MaaSLimit `json:"limit,omitempty"`
 }
 
 // MaaSRequest is the body of POST /api/resources/maas/stream.
@@ -1002,6 +1008,90 @@ type MaaSRequest struct {
 	// Model is the catalog name of a chat model (publish and unpublish
 	// only); "" means the catalog's default (qwen25-05b-instruct).
 	Model string `json:"model,omitempty"`
+	// Database, Access, Limit and ConfirmKeysLost: MaaSDatabaseRequest and
+	// MaaSAudience below (the database choice and the subscription's
+	// settings).
+	Database        *MaaSDatabaseRequest `json:"database,omitempty"`
+	Access          *MaaSAudience        `json:"access,omitempty"`
+	Limit           *MaaSLimit           `json:"limit,omitempty"`
+	ConfirmKeysLost bool                 `json:"confirmKeysLost,omitempty"`
+}
+
+// --- MaaS: the database choice and the subscription's settings ------------
+
+// MaaSDatabaseRequest is the database Set up creates when maas-db-config
+// does not exist yet, or the one "change-database" switches to.
+type MaaSDatabaseRequest struct {
+	// Kind is "external" (the user's PostgreSQL at ConnectionURL),
+	// "development" (the MaaS docs' scripts/setup-database.sh: one pod, no
+	// volume) or "cnpg" (CloudNativePG, this tool's opinion).
+	Kind string `json:"kind"`
+	// ConnectionURL (external only) holds a password: it is written only to
+	// Secret maas-db-config, never returned, logged or recorded.
+	ConnectionURL string `json:"connectionUrl,omitempty"`
+}
+
+// MaaSDatabase is what GET /api/resources/maas says about the database.
+type MaaSDatabase struct {
+	// Current is "" (none yet: Set up asks), "adopted" (a maas-db-config
+	// this tool did not write, used as it is), or the Kind this tool set up.
+	Current   string `json:"current"`
+	Namespace string `json:"namespace"`
+	// Needed: Set up must be told which database to create.
+	Needed bool `json:"needed,omitempty"`
+	// Default is the choice the Set up dialog preselects.
+	Default string               `json:"default"`
+	Choices []MaaSDatabaseChoice `json:"choices"`
+	// ChangeBlockedReason says why "change-database" cannot run now ("" when
+	// it can, or when the database is not this tool's).
+	ChangeBlockedReason string `json:"changeBlockedReason,omitempty"`
+}
+
+// MaaSDatabaseChoice is one database Set up (or Change database) can make.
+type MaaSDatabaseChoice struct {
+	ID string `json:"id"`
+	// Plan is every change choosing it makes now.
+	Plan          []string `json:"plan"`
+	BlockedReason string   `json:"blockedReason,omitempty"`
+}
+
+// MaaSAudience is who may use this tool's published models: its
+// MaaSSubscription's owner and its MaaSAuthPolicy's subjects.
+type MaaSAudience struct {
+	// Everyone: group system:authenticated (every signed-in user); Groups
+	// and Users are then empty.
+	Everyone bool `json:"everyone"`
+	// Groups are OpenShift group names; Users are user names or service
+	// accounts (system:serviceaccount:<namespace>:<name>).
+	Groups []string `json:"groups,omitempty"`
+	Users  []string `json:"users,omitempty"`
+}
+
+// MaaSAudienceState is the audience of this tool's subscription as read.
+type MaaSAudienceState struct {
+	MaaSAudience
+	// Warnings: groups that have no OpenShift Group, or that could not be
+	// checked.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// MaaSLimit is a published model's token limit in this tool's
+// subscription: exactly one of Unlimited and Rates.
+type MaaSLimit struct {
+	// Preset is "free" (100 tokens a minute, the docs' free sample),
+	// "premium" (100,000 tokens a day, their premium sample), "unlimited"
+	// (usage still metered) or "custom" (Rates). In a request it decides,
+	// except for "custom"; in a response it is derived.
+	Preset    string          `json:"preset"`
+	Unlimited bool            `json:"unlimited,omitempty"`
+	Rates     []MaaSTokenRate `json:"rates,omitempty"`
+}
+
+// MaaSTokenRate is one tokenRateLimits entry: Limit tokens per Window
+// (MaaSSubscription CRD: limit 1 to 1,000,000,000; window ^[1-9]\d{0,3}(s|m|h)$).
+type MaaSTokenRate struct {
+	Limit  int64  `json:"limit"`
+	Window string `json:"window"`
 }
 
 // PrerequisitesStatus is what each Environment feature needs on the cluster

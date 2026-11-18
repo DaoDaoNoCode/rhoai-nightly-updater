@@ -15,7 +15,7 @@ const tMaaSRefs = "/apis/maas.opendatahub.io/v1alpha1/namespaces/proj/maasmodelr
 func maasWithModels(t *testing.T, names ...string) *modelsCluster {
 	t.Helper()
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	for i, name := range names {

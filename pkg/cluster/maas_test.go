@@ -150,7 +150,7 @@ func indexOfPrefix(list []string, prefix string) int {
 
 func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 	mc := newMaaSCluster(t)
-	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("setup failed: %+v", res)
 	}
@@ -230,7 +230,7 @@ func TestMaaSTeardown_ReverseOrderRestoresTheDSCAndKeepsForeignObjects(t *testin
 	mc := newMaaSCluster(t)
 	// A GatewayClass someone else made: used, never deleted.
 	mc.f.putJSON(tMaaSClass, `{"spec":{"controllerName":"openshift.io/gateway-controller/v1"}}`)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	mc.f.requests = nil
@@ -262,14 +262,14 @@ func TestMaaSTeardown_ReverseOrderRestoresTheDSCAndKeepsForeignObjects(t *testin
 
 func TestMaaSTeardown_KeepsAToolCreatedOpenshiftDefaultClass(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if !mc.f.has(tMaaSClass) {
 		t.Fatal("setup did not create the missing GatewayClass")
 	}
 	mc.f.requests = nil
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("second setup: %+v", res)
 	}
 	if indexOfPrefix(mc.f.mutations(), "PATCH "+tMaaSClass) >= 0 {
@@ -287,7 +287,7 @@ func TestMaaSTeardown_KeepsAToolCreatedOpenshiftDefaultClass(t *testing.T) {
 func TestMaaSSetup_UsesAForeignDatabaseSecretAsIs(t *testing.T) {
 	mc := newMaaSCluster(t)
 	mc.f.putJSON(tMaaSDBConfig, `{"data":{"DB_CONNECTION_URL":"eA=="}}`)
-	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -308,7 +308,7 @@ func TestMaaSSetup_CreatesTheKuadrantCRWhenMissing(t *testing.T) {
 	if p := maasPart(t, st, "kuadrant"); p.State != "missing" || !strings.Contains(strings.Join(st.SetupPlan, "\n"), "Create the Kuadrant CR kuadrant-system/kuadrant") {
 		t.Fatalf("part = %+v plan = %v", p, st.SetupPlan)
 	}
-	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("res = %+v", res)
 	}
@@ -352,7 +352,7 @@ func TestMaaSStatus_AuthorinoTLSIsOfferedWithTheDocsCommands(t *testing.T) {
 
 func TestMaaSPublishAndUnpublish(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
@@ -438,7 +438,7 @@ func TestValidateMaaSRequest(t *testing.T) {
 		{Action: "publish"}:                          "a valid project is required",
 		{Action: "publish", Project: "Bad_Name"}:     "a valid project is required",
 		{Action: "unpublish", Project: "p"}:          "",
-		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
+		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
 		{Action: "upgrade-rhcl"}:                     "",
 		{Action: "remove-tier-policies", Model: "m"}: "the platform takes no model",
 	} {
@@ -477,7 +477,7 @@ func TestAuthorinoTrustsServiceCA(t *testing.T) {
 // the DSC copies) reported True and maas-api served: the component wins.
 func TestMaaSStatus_TheComponentWinsOverAStaleDSCCondition(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup failed: %+v", res)
 	}
 	stale := `{"spec":{"components":{"kserve":{"managementState":"Managed"},"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}},
@@ -499,7 +499,7 @@ func TestMaaSStatus_TheComponentWinsOverAStaleDSCCondition(t *testing.T) {
 // and the tab showed "Not published" with no way to retry).
 func TestMaaSUnpublish_FinishesAHalfUndonePublication(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {

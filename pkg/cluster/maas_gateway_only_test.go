@@ -132,7 +132,7 @@ func routeParents(t *testing.T, mc *modelsCluster) string {
 func modelReadyForMaaS(t *testing.T) *modelsCluster {
 	t.Helper()
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {

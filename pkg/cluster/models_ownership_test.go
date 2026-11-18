@@ -28,7 +28,7 @@ func forgeModel(mc *modelsCluster, project, name string) {
 // is someone else's, so it is not changed, deleted or published.
 func TestModelOwnership_ALookAlikeIsNotTheTools(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("maas setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
@@ -152,7 +152,7 @@ func TestModelsSetup_UndoesTheCreateWhenTheRecordCannotBeWritten(t *testing.T) {
 // a project editor can change.
 func TestMaaSPublish_DisplayNameFromTheCatalog(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("maas setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {

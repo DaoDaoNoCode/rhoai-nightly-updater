@@ -14,12 +14,12 @@ import (
 // setup sets the MaaS platform up in the docs' order, doing only what is
 // missing, after checking every step (and dry-running every write it can)
 // first: the docs' platform setup (platform-setup.md: Connectivity Link,
-// its Kuadrant CR), then their MaaS setup (maas-setup.md: database, with
-// CloudNativePG for this tool's; gateway; Authorino TLS; DataScienceCluster;
-// validation). Steps: "check", "rhcl", "kuadrant", "cnpg", "database",
-// "gateway", "authorino-tls", "dsc", "ready". Running it again continues
-// where a failed run stopped.
-func (m *maasRun) setup() (*types.OperationResponse, error) {
+// its Kuadrant CR), then their MaaS setup (maas-setup.md: the database db
+// asks for, when maas-db-config does not exist yet (maas_database.go);
+// gateway; Authorino TLS; DataScienceCluster; validation). Steps: "check",
+// "rhcl", "kuadrant", "cnpg", "database", "gateway", "authorino-tls",
+// "dsc", "ready". Running it again continues where a failed run stopped.
+func (m *maasRun) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", "Checking what the MaaS platform needs...")
 	rec, err := readMaaSRecord(c)
@@ -84,47 +84,11 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
 		return m.fail("check", msg, code, "namespace not rhoai's")
 	}
-	secMeta, secFound, err := readObjectMeta(c, maasObjectPath("Secret", infra))
-	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read Secret %s/%s; nothing was changed: %v.", infra, maasDBConfigSecret, err), errorCodeFromK8sErr(err), "secret read failed")
-	}
-	foreignDB := secFound && !toolOwned(secMeta)
-	var cnpgPlan *operatorInstallPlan
-	var cnpg operatorState
-	cnpgServed := false
-	var clMeta objectMeta
-	var clFound bool
-	if !foreignDB {
-		if cnpgServed, err = groupServed(c, cnpgGroup); err != nil {
-			return m.fail("check", fmt.Sprintf("Cannot tell whether CloudNativePG is installed; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "cnpg read failed")
-		}
-		// Its API served counts only while its controller runs (CRDs stay
-		// after an uninstall).
-		if cnpgServed {
-			if cnpgServed, err = controllerDeployed(c, cnpgController); err != nil {
-				return m.fail("check", fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "controller read failed")
-			}
-		}
-		if !cnpgServed {
-			if cnpg, err = readOperator(c, cnpgOperator); err != nil {
-				return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
-			}
-			if !cnpg.installed() && cnpg.pending() == nil {
-				plan, msg, code := planOperatorInstall(c, cnpgOperator)
-				if msg != "" {
-					return m.fail("check", msg+" Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).", code, "cnpg plan failed")
-				}
-				cnpgPlan = plan
-			}
-		} else if infraFound {
-			clMeta, clFound, _, _, err = readMaaSDBCluster(c, infra)
-			if err != nil {
-				return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was changed: %v.", maasDesc("Cluster", infra), err), errorCodeFromK8sErr(err), "db read failed")
-			}
-			if clFound && !toolOwned(clMeta) {
-				return m.fail("check", fmt.Sprintf("%s exists and was not created by this tool, so it is left alone. Create Secret %s/%s for it yourself, or remove it. Nothing was changed.", maasDesc("Cluster", infra), infra, maasDBConfigSecret), "not_managed", "db foreign")
-			}
-		}
+	// The database: the one already chosen (or someone else's
+	// maas-db-config, used as it is), else the one db asks for.
+	dbPlan, msg, code := planMaaSDatabase(c, rec, infra, infraFound, db, false)
+	if msg != "" {
+		return m.fail("check", msg, code, "database check failed")
 	}
 
 	// The gateway: one someone else made is used as it is, unless it
@@ -143,11 +107,6 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	if rhclPlan != nil {
 		if _, err := createOperatorObjects(c, rhclPlan, true); err != nil {
 			return dry("Connectivity Link's install", err)
-		}
-	}
-	if cnpgPlan != nil {
-		if _, err := createOperatorObjects(c, cnpgPlan, true); err != nil {
-			return dry("CloudNativePG's install", err)
 		}
 	}
 	if !kq.found && kVersion != "" {
@@ -169,13 +128,8 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 			return dry("namespace "+infra, err)
 		}
 	}
-	if !foreignDB && cnpgServed && infraFound {
-		if _, _, _, err := ensureToolObject(c, maasDesc("Cluster", infra), maasObjectPath("Cluster", infra), maasCreatePath("Cluster", infra), maasDBClusterObject(infra), clMeta, clFound, func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Cluster", infra)) }, toolOwned, true); err != nil {
-			return dry(maasDesc("Cluster", infra), err)
-		}
-		if _, _, _, err := ensureToolObject(c, maasDesc("Secret", infra), maasObjectPath("Secret", infra), maasCreatePath("Secret", infra), maasDBConfigObject(infra, "postgresql://dry-run@localhost/maas?sslmode=require"), secMeta, secFound, func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Secret", infra)) }, toolOwned, true); err != nil {
-			return dry(maasDesc("Secret", infra), err)
-		}
+	if what, err := dbPlan.dryRun(c); err != nil {
+		return m.fail("check", redactURL(fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", what, err, templateHint(err)), dbPlan.url), maasWriteCode(err), "dry run failed")
 	}
 	if !foreignGW {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
@@ -264,40 +218,9 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 		m.step("kuadrant", "success", "Kuadrant "+kq.namespace+"/kuadrant is Ready.")
 	}
 
-	// 3. CloudNativePG, for this tool's database.
-	switch {
-	case foreignDB:
-		m.step("cnpg", "success", "Not needed: maas-db-config names a database of its own.")
-	case cnpgServed:
-		m.step("cnpg", "success", "CloudNativePG is installed"+byWhom(rec.Shared["cnpg"] != "")+".")
-	default:
-		ns, name := cnpgOperator.namespace, cnpgOperator.subName
-		if cnpgPlan != nil {
-			m.step("cnpg", "running", fmt.Sprintf("Installing CloudNativePG %s (channel %s) from certified-operators...", cnpgPlan.head, cnpgPlan.channel))
-			rec.setShared("cnpg", fmt.Sprintf("Subscription %s/%s, channel %s", cnpgOperator.namespace, cnpgOperator.subName, cnpgPlan.channel))
-			if err := writeMaaSRecord(c, rec); err != nil {
-				return m.fail("cnpg", err.Error(), errorCodeFromK8sErr(err), "record write failed")
-			}
-			made, err := createOperatorObjects(c, cnpgPlan, false)
-			for _, d := range made {
-				m.logs = append(m.logs, "OK: "+d+" created")
-			}
-			if err != nil {
-				return m.fail("cnpg", fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "cnpg install failed")
-			}
-		} else if p := cnpg.pending(); p != nil {
-			ns, name = p.Metadata.Namespace, p.Metadata.Name
-		}
-		if cnpgPlan != nil || cnpg.pending() != nil {
-			if r, msg := m.waitOperator("cnpg", ns, name, cnpgOperator.title); r != nil {
-				return r, msg
-			}
-		}
-		served, err := waitForGone(c, MaaSOperatorTimeout, MaaSPoll, func(cc *Client) (bool, error) { return groupServed(cc, cnpgGroup) })
-		if err != nil || !served {
-			return m.fail("cnpg", fmt.Sprintf("CloudNativePG's API (postgresql.cnpg.io) is not served after %s%s. Set up again to continue.", clockText(MaaSOperatorTimeout), errSuffix(err)), firstNonEmpty(errorCodeFromK8sErr(err), "not_ready"), "cnpg api missing")
-		}
-		m.step("cnpg", "success", "CloudNativePG runs.")
+	// 3. CloudNativePG, when the database is a CloudNativePG one.
+	if r, err := m.ensureCNPG(&rec, dbPlan); r != nil || err != nil {
+		return r, err
 	}
 
 	// 4. The infrastructure namespace and the database (maas-setup.md
@@ -323,22 +246,8 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 			m.logs = append(m.logs, "OK: Namespace "+infra+" created")
 		}
 	}
-	if foreignDB {
-		m.step("database", "success", fmt.Sprintf("Secret %s/%s already exists and was not created by this tool: maas-api uses the database it names, and this tool does not change it.", infra, maasDBConfigSecret))
-	} else {
-		if !infraFound || !cnpgServed {
-			// Read now that the namespace and CloudNativePG's API exist.
-			clMeta, clFound, _, _, err = readMaaSDBCluster(c, infra)
-			if err != nil {
-				return m.fail("database", fmt.Sprintf("Cannot read %s: %v.", maasDesc("Cluster", infra), err), errorCodeFromK8sErr(err), "db read failed")
-			}
-			if clFound && !toolOwned(clMeta) {
-				return m.fail("database", fmt.Sprintf("%s exists and was not created by this tool, so it is left alone. Create Secret %s/%s for it yourself, or remove it.", maasDesc("Cluster", infra), infra, maasDBConfigSecret), "not_managed", "db foreign")
-			}
-		}
-		if r, err := m.setupDatabase(&rec, infra, clMeta, clFound, dsc.maas == "Managed"); r != nil || err != nil {
-			return r, err
-		}
+	if r, err := m.makeDatabase(&rec, dbPlan, dsc.maas == "Managed", false); r != nil || err != nil {
+		return r, err
 	}
 
 	// 5. Create Gateway.
@@ -414,62 +323,6 @@ func (m *maasRun) waitOperator(step, ns, name, title string) (*types.OperationRe
 		return m.fail(step, fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, clockText(MaaSOperatorTimeout), firstNonEmpty(p.text, "no progress")), "not_ready", "operator not ready")
 	}
 	m.step(step, "success", fmt.Sprintf("%s is installed (%s).", title, p.installedCSV))
-	return nil, nil
-}
-
-// setupDatabase is setup's database step: the CloudNativePG cluster, then
-// maas-db-config with its address.
-func (m *maasRun) setupDatabase(rec *maasRecord, infra string, clMeta objectMeta, clFound, maasOn bool) (*types.OperationResponse, error) {
-	c := m.c
-	m.step("database", "running", fmt.Sprintf("Creating a one-instance CloudNativePG database %s/%s (for development and test)...", infra, maasDBCluster))
-	if rec.DBNamespace != infra {
-		rec.DBNamespace = infra
-		if err := writeMaaSRecord(c, *rec); err != nil {
-			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
-		}
-	}
-	read := func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Cluster", infra)) }
-	if _, _, _, err := ensureToolObject(c, maasDesc("Cluster", infra), maasObjectPath("Cluster", infra), maasCreatePath("Cluster", infra), maasDBClusterObject(infra), clMeta, clFound, read, toolOwned, false); err != nil {
-		return m.fail("database", fmt.Sprintf("Failed to apply %s: %v.", maasDesc("Cluster", infra), err), maasWriteCode(err), "db apply failed")
-	}
-	m.step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)...")
-	ready, err := waitForGone(c, MaaSDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-		_, _, ok, _, err := readMaaSDBCluster(cc, infra)
-		return ok, err
-	})
-	if err != nil {
-		return m.fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; set up again to continue.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "db wait failed")
-	}
-	if !ready {
-		return m.fail("database", fmt.Sprintf("The database is not running after %s, and maas-api needs it before MaaS is turned on. Set up again to continue; the MaaS tab shows its state.", clockText(MaaSDatabaseTimeout)), "not_ready", "db not ready")
-	}
-	connURL, err := maasConnectionURL(c, infra)
-	if err != nil {
-		return m.fail("database", err.Error()+" Set up again to retry.", errorCodeFromK8sErr(err), "db secret read failed")
-	}
-	cur, found, err := readObjectMeta(c, maasObjectPath("Secret", infra))
-	if err != nil {
-		return m.fail("database", fmt.Sprintf("Cannot read Secret %s/%s: %v.", infra, maasDBConfigSecret, err), errorCodeFromK8sErr(err), "secret read failed")
-	}
-	read = func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Secret", infra)) }
-	_, written, _, err := ensureToolObject(c, maasDesc("Secret", infra), maasObjectPath("Secret", infra), maasCreatePath("Secret", infra), maasDBConfigObject(infra, connURL), cur, found, read, toolOwned, false)
-	if err != nil {
-		return m.fail("database", fmt.Sprintf("Failed to write Secret %s/%s: %v.", infra, maasDBConfigSecret, maasWriteCode(err)), maasWriteCode(err), "secret apply failed")
-	}
-	// maas-api reads the Secret when it starts: one already running keeps
-	// the old connection until it restarts (maas-setup.md "Restarting
-	// maas-api"). The API server keeps the resourceVersion when an apply
-	// changes nothing.
-	if changed := !found || written.ResourceVersion != cur.ResourceVersion; changed && maasOn {
-		restarted, err := restartMaaSAPI(c, infra)
-		if err != nil {
-			return m.fail("database", fmt.Sprintf("Secret %s/%s was written, but maas-api could not be restarted to read it: %v. Restart it (oc rollout restart deployment/maas-api -n %s) or set up again.", infra, maasDBConfigSecret, err, infra), errorCodeFromK8sErr(err), "maas-api restart failed")
-		}
-		if restarted {
-			m.step("database", "running", "maas-api restarts to read the new connection Secret.")
-		}
-	}
-	m.step("database", "success", fmt.Sprintf("The database runs, and Secret %s/%s holds its connection URL (sslmode=require).", infra, maasDBConfigSecret))
 	return nil, nil
 }
 

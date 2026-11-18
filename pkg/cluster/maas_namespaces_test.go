@@ -20,7 +20,7 @@ func TestMaaSSetup_RefusesANamespaceAUserRequested(t *testing.T) {
 			mc := newMaaSCluster(t)
 			mc.f.putJSON("/api/v1/namespaces/"+ns, tUserProject)
 			before := len(mc.f.mutations())
-			res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+			res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 			if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, ns) || !strings.Contains(res.Message, "mallory") || !strings.Contains(res.Message, "Nothing was changed") {
 				t.Fatalf("setup = %+v", res)
 			}

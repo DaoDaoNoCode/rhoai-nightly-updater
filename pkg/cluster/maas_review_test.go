@@ -13,7 +13,7 @@ import (
 func publishedMaaSCluster(t *testing.T) *modelsCluster {
 	t.Helper()
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
@@ -120,7 +120,7 @@ func TestMaaSUnpublish_SaysWhenTheGatewayWasNotUpdated(t *testing.T) {
 // put back into the shared subscription and access policy.
 func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	rec, _ := readMaaSRecord(mc.c)
@@ -146,7 +146,7 @@ func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
 // Unpublish can clear it.
 func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	rec, _ := readMaaSRecord(mc.c)
@@ -189,7 +189,7 @@ func TestMaaSTeardown_RefusesWhileOthersUseMaaS(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMaaSCluster(t)
-			if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+			if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 				t.Fatalf("setup: %+v", res)
 			}
 			mc.f.putJSON(path, `{"spec":{}}`)
@@ -208,7 +208,7 @@ func TestMaaSTeardown_RefusesWhileOthersUseMaaS(t *testing.T) {
 // Finding 1: the gateway is not deleted while routes are attached to it.
 func TestMaaSTeardown_KeepsTheGatewayWhileRoutesAreAttached(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	prev := mc.f.onGet
@@ -228,7 +228,7 @@ func TestMaaSTeardown_KeepsTheGatewayWhileRoutesAreAttached(t *testing.T) {
 // owns that field; someone who set it since keeps their value.
 func TestMaaSTeardown_KeepsADSCValueSomeoneElseSetSinceSetup(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	mc.f.mu.Lock()
@@ -292,7 +292,7 @@ func TestMaaSUnpublish_FinishesWhenMaaSControllerIsGone(t *testing.T) {
 // the tenant reports another infrastructure namespace since.
 func TestMaaSTeardown_UsesTheRecordedDatabaseNamespace(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if rec, _ := readMaaSRecord(mc.c); rec.DBNamespace != "redhat-ai-gateway-infra" {
@@ -314,12 +314,12 @@ func TestMaaSTeardown_UsesTheRecordedDatabaseNamespace(t *testing.T) {
 func TestMaaSSetup_RestartsMaaSAPIWhenTheSecretChangesUnderARunningMaaS(t *testing.T) {
 	const api = "PATCH /apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/maas-api"
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success || hasMutation(mc.f, api) {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success || hasMutation(mc.f, api) {
 		t.Fatalf("first setup: %+v", res)
 	}
 	deleteFakeObject(mc, tMaaSDBConfig)
 	mc.f.requests = nil
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("second setup: %+v", res)
 	}
 	if !hasMutation(mc.f, api) {
@@ -363,7 +363,7 @@ func TestGatewayAdmits_EvaluatesMatchExpressions(t *testing.T) {
 // that cannot read Authorino does not block publishing.
 func TestMaaSStatus_AuthorinoTLSFollowsTheCRsSecret(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	mc.f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{"annotations":{"service.beta.openshift.io/serving-cert-secret-name":"aigw-authorino-tls"}}}`)

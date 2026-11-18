@@ -62,8 +62,8 @@ Token rules (pkg/api/identity.go, handlers.go):
 | Secrets | `create` | no (pipeline projects are user-chosen) |
 | Secrets | `get patch delete` | `seaweedfs-s3-credentials`; `seaweedfs-migrate-source` (Migrate storage's copy Job, owned by it); `nightly-dspa-s3` (`get delete patch`; `delete` is also what lets setup and Migrate storage make the pipeline server its owner: OwnerReferencesPermissionEnforcement allows changing `ownerReferences` only to who may delete the object); `rhoai-nightly-updater-s3` (`get patch delete`: the dashboard S3 Connection next to each pipeline server, same reasons); the earlier storage's `minio-secret` and legacy `dashboard-dspa-secret` (`get delete`) |
 | Namespaces | `get list create`; `patch`; `delete` | `patch` only `redhat-ods-operator`; `delete` only `minio` (the earlier storage's namespace, at the end of Migrate storage) and `seaweedfs` (at the end of the storage's Tear down), each only when the user ticks it, offered only when it carries the tool label and the tool's managers wrote it (UID precondition) |
-| Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` (the S3 storage, and the SeaweedFS earlier versions ran in namespace `minio`) and `minio` (MinIO of earlier versions) |
-| Services | `get create`; `patch delete` | `patch delete` only `seaweedfs-s3`; `delete` only `minio-service` (the earlier storage's) |
+| Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` (the S3 storage, and the SeaweedFS earlier versions ran in namespace `minio`), `minio` (MinIO of earlier versions) and `postgres` (the MaaS development database, 4.0.0) |
+| Services | `get create`; `patch delete` | `patch delete` only `seaweedfs-s3` and `postgres` (the MaaS development database, 4.0.0); `delete` only `minio-service` (the earlier storage's) |
 | PVCs | `list create`; `patch delete` | `patch delete` only `seaweedfs-data`; `delete` only `seaweedfs-pvc` and `minio-pvc` (the earlier storage's data) |
 | Routes | `create`; `get` | `get` on `rhods-dashboard`, `mlflow`, `seaweedfs-admin`, `minio-api`, `minio-ui`; `patch delete` on `seaweedfs-admin`; `delete` on `minio-api`, `minio-ui` (the earlier storage's) |
 | NetworkPolicies | `create`; `get patch delete` | the second set only on `seaweedfs-ingress` (the name in both storage namespaces); `get delete` on `minio-ingress` (MinIO's policy of earlier versions) |
@@ -421,6 +421,29 @@ Changes with no new rule: the components are written with the existing DataScien
 oc auth can-i list subscriptions.operators.coreos.com --all-namespaces --as=$SA                             # yes
 oc auth can-i patch subscriptions.operators.coreos.com/openshift-cert-manager-operator -n cert-manager-operator --as=$SA # no
 oc auth can-i delete subscriptions.operators.coreos.com/openshift-cert-manager-operator -n cert-manager-operator --as=$SA # no
+```
+
+**Audit: MaaS database choice and subscription settings (4.0.0, template revision 7).** Set up asks where MaaS keeps its API keys: the user's PostgreSQL (only Secret `maas-db-config` is written, with the URL the user enters), the MaaS docs' development database (`scripts/setup-database.sh` reproduced: Secret `postgres-creds`, Deployment `postgres`, Service `postgres`, all labelled as this tool's), or a CloudNativePG cluster (earlier builds' only option, now an explicit opt-in). A `maas-db-config` this tool did not write is used as it is and never changed or deleted. Remove and Change database delete only objects with this tool's label and field manager, by UID; the user's database has no object here. Publish, Change limit and Change who can use them edit only this tool's MaaSSubscription and MaaSAuthPolicy (existing named rules).
+
+| Rule | What it allows | Worst case if the SA token leaks | Why nothing narrower works |
+|---|---|---|---|
+| Secrets `get patch delete` on `postgres-creds` (cluster-wide) | keep the development database's password across Set up runs (the script reuses it), update and delete the Secret this tool created | read or replace the password of any Secret named `postgres-creds`, in any namespace: a database deployed by the docs' script elsewhere (its data is ephemeral API-key metadata) | named; the infrastructure namespace is found at run time (`maasInfraNamespace`). Secret `create` and the other named `get` rules already existed, so this adds one more name to the accepted risk described for the model token Secrets |
+| Deployments `delete` on `postgres` (cluster-wide) | delete the development database on Remove or Change database, only when this tool created it (UID precondition) | delete any Deployment named `postgres` in any namespace | named; `get list patch create` on Deployments existed (they already allowed changing any Deployment's pod template, the larger risk) |
+| Services `patch delete` on `postgres` (cluster-wide) | apply and delete the development database's Service | redirect or delete any Service named `postgres` | named; `get create` existed |
+| Groups (`user.openshift.io`) `get` (cluster-scoped) | warn when a group named for the published models has no OpenShift Group | read the members of a group whose name is known (no `list`: groups cannot be enumerated) | the names are the user's; `resourceNames` cannot hold them. A 403 or 404 is only a warning: groups from an external identity provider have no Group object |
+
+*The connection URL.* It holds a password. It is checked (scheme `postgresql://` or `postgres://`, host, user, database, port, length, no spaces or `#`) without quoting it, written only into `maas-db-config` (dry-run first), and never logged, recorded (activity, snapshot ConfigMap), returned by the API or shown in the UI; API-server errors on the Secret write pass through `redactURL`. `TestMaaSDatabase_ExternalNeverShowsTheURLAndRemoveKeepsTheDatabase` checks the response, the steps, the status and every object but the Secret for it, also on a refused dry run. The request body limit of `POST /api/resources/maas/stream` is 32 KiB and the body is not logged.
+
+Changes with no new rule: Deployment and Service `create`, Secret `create`, CSV `list` in `redhat-ods-operator` (the development database's image: `relatedImages` `postgresql_16_image` of the RHOAI CSV, as the script resolves it, else `registry.redhat.io/rhel9/postgresql-16:latest`), Pods `list` (whether the development database's pod was replaced after maas-api started), the existing MaaSSubscription and MaaSAuthPolicy rules by name, and the `maas-api` restart (existing Deployments `patch`).
+
+```bash
+oc auth can-i get secrets/postgres-creds -n redhat-ai-gateway-infra --as=$SA         # yes
+oc auth can-i get secrets/other -n redhat-ai-gateway-infra --as=$SA                  # no
+oc auth can-i delete deployments.apps/postgres -n redhat-ai-gateway-infra --as=$SA   # yes
+oc auth can-i delete deployments.apps/maas-api -n redhat-ai-gateway-infra --as=$SA   # no
+oc auth can-i delete services/postgres -n redhat-ai-gateway-infra --as=$SA           # yes
+oc auth can-i get groups.user.openshift.io/ml-team --as=$SA                          # yes
+oc auth can-i list groups.user.openshift.io --as=$SA                                 # no
 ```
 
 **Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
