@@ -418,7 +418,7 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	last := ""
 	ready, err := waitForGone(c, MaaSPlatformTimeout, MaaSPoll, func(cc *Client) (bool, error) {
 		api := deploymentAvailable(cc, infra, "maas-api")
-		ai, _ := readyCondition(cc, namespacedPath(maasAPIGroup, "aitenants", "ai-tenants", "models-as-a-service"))
+		ai, _ := readyCondition(cc, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
 		auth := maasGatewayAuth(cc)
 		msg := fmt.Sprintf("maas-api: %s; tenant: %s; gateway authentication: %s", map[string]string{"True": "available", "False": "starting", "missing": "not created yet"}[api], firstNonEmpty(map[string]string{"True": "ready", "False": "not ready", "missing": "not created yet"}[ai], "unknown"), firstNonEmpty(auth, "unknown"))
 		if msg != last {
@@ -467,9 +467,9 @@ func dscMaaSOwned(d maasDSC) bool {
 func foreignMaaSObjects(c *Client) ([]string, error) {
 	var out []string
 	for _, l := range []struct{ kind, path string }{
-		{"MaaSModelRef", "/apis/" + maasAPIGroup + "/maasmodelrefs"},
-		{"MaaSSubscription", namespacedPath(maasAPIGroup, "maassubscriptions", maasTenantNamespace, "")},
-		{"MaaSAuthPolicy", namespacedPath(maasAPIGroup, "maasauthpolicies", maasTenantNamespace, "")},
+		{"MaaSModelRef", "/apis/" + maasAPI(c) + "/maasmodelrefs"},
+		{"MaaSSubscription", namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, "")},
+		{"MaaSAuthPolicy", namespacedPath(maasAPI(c), "maasauthpolicies", maasTenantNamespace, "")},
 	} {
 		body, _, err := c.get(l.path)
 		if IsK8sError(err, 404) {
@@ -566,7 +566,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		return m.fail("check", "MaaS was turned on in the DataScienceCluster by someone else, and it uses the gateway and database this tool created: removing them would break it. Turn MaaS off first (aigateway.modelsAsAService Removed), then remove. Nothing was deleted.", "in_use", "maas on, not by tool")
 	}
 	if rec.DSCChanged && dsc.maas == "Managed" && !dscMaaSOwned(dsc) {
-		return m.fail("check", "aigateway.modelsAsAService in the DataScienceCluster was set by someone else after this tool's setup, so it is kept, and so are the gateway and database MaaS uses. Turn MaaS off first (aigateway.modelsAsAService Removed), then remove. Nothing was deleted.", "in_use", "dsc changed since setup")
+		return m.fail("check", fmt.Sprintf("aigateway.modelsAsAService in DataScienceCluster %[1]s was set after this tool's setup, by someone else or by an earlier version of this tool that did not mark its change, so this tool does not change it back, and the gateway and database MaaS uses stay. To remove the platform: if nobody else uses MaaS, set it to Removed yourself (oc patch datasciencecluster %[1]s --type=merge -p '{\"spec\":{\"components\":{\"aigateway\":{\"modelsAsAService\":{\"managementState\":\"Removed\"}}}}}'), wait until maas-api is gone, then Remove again: it deletes the gateway and database this tool created. Nothing was deleted.", dsc.name), "in_use", "dsc changed since setup")
 	}
 	// Others' use of MaaS: their model references, subscriptions and access
 	// policies stop working without the platform (and turning MaaS off
@@ -681,9 +681,9 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 
 // --- publish ----------------------------------------------------------------------
 
-func maasModelRefObjectFor(project, displayName string) map[string]interface{} {
+func maasModelRefObjectFor(c *Client, project, displayName string) map[string]interface{} {
 	return map[string]interface{}{
-		"apiVersion": maasAPIGroup,
+		"apiVersion": maasAPI(c),
 		"kind":       "MaaSModelRef",
 		"metadata": map[string]interface{}{
 			"name": "qwen25-05b-instruct", "namespace": project, "labels": toolLabels(),
@@ -696,7 +696,7 @@ func maasModelRefObjectFor(project, displayName string) map[string]interface{} {
 // maasAccessObjects are the tool's MaaSSubscription and MaaSAuthPolicy for
 // the published projects (the docs' free sample: system:authenticated, 100
 // tokens a minute, priority 10).
-func maasAccessObjects(projects []string) (map[string]interface{}, map[string]interface{}) {
+func maasAccessObjects(c *Client, projects []string) (map[string]interface{}, map[string]interface{}) {
 	var subRefs, authRefs []interface{}
 	for _, p := range projects {
 		subRefs = append(subRefs, map[string]interface{}{"name": maasModelRefName, "namespace": p,
@@ -705,14 +705,14 @@ func maasAccessObjects(projects []string) (map[string]interface{}, map[string]in
 	}
 	group := map[string]interface{}{"groups": []interface{}{map[string]interface{}{"name": maasSubjectGroup}}, "users": []interface{}{}}
 	sub := map[string]interface{}{
-		"apiVersion": maasAPIGroup,
+		"apiVersion": maasAPI(c),
 		"kind":       "MaaSSubscription",
 		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": toolLabels(),
 			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "100 tokens a minute for every signed-in user"}},
 		"spec": map[string]interface{}{"owner": group, "modelRefs": subRefs, "priority": 10},
 	}
 	auth := map[string]interface{}{
-		"apiVersion": maasAPIGroup,
+		"apiVersion": maasAPI(c),
 		"kind":       "MaaSAuthPolicy",
 		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": toolLabels(),
 			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "Every signed-in user may use this tool's published models"}},
@@ -721,18 +721,18 @@ func maasAccessObjects(projects []string) (map[string]interface{}, map[string]in
 	return sub, auth
 }
 
-func maasAccessPath(kind string) string {
+func maasAccessPath(c *Client, kind string) string {
 	if kind == "MaaSSubscription" {
-		return namespacedPath(maasAPIGroup, "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription")
+		return namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription")
 	}
-	return namespacedPath(maasAPIGroup, "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access")
+	return namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access")
 }
 
-func maasAccessCreatePath(kind string) string {
+func maasAccessCreatePath(c *Client, kind string) string {
 	if kind == "MaaSSubscription" {
-		return withToolFieldManager(namespacedPath(maasAPIGroup, "maassubscriptions", "models-as-a-service", ""))
+		return withToolFieldManager(namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", ""))
 	}
-	return withToolFieldManager(namespacedPath(maasAPIGroup, "maasauthpolicies", "models-as-a-service", ""))
+	return withToolFieldManager(namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", ""))
 }
 
 // applyMaaSObject creates or updates one of the tool's MaaS objects.
@@ -956,8 +956,8 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
-	sub, auth := maasAccessObjects(live)
-	refObj := maasModelRefObjectFor(project, firstNonEmpty(model.Metadata.Annotations["openshift.io/display-name"], maasModelRefName))
+	sub, auth := maasAccessObjects(c, live)
+	refObj := maasModelRefObjectFor(c, project, firstNonEmpty(model.Metadata.Annotations["openshift.io/display-name"], maasModelRefName))
 	if gwPlan != nil {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
 			return m.fail("check", msg, code, "gateway dry run failed")
@@ -967,9 +967,9 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		desc, path, create string
 		obj                map[string]interface{}
 	}{
-		{"MaaSModelRef " + project + "/" + maasModelRefName, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"), withToolFieldManager(namespacedPath(maasAPIGroup, "maasmodelrefs", project, "")), refObj},
-		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath("MaaSSubscription"), maasAccessCreatePath("MaaSSubscription"), sub},
-		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath("MaaSAuthPolicy"), maasAccessCreatePath("MaaSAuthPolicy"), auth},
+		{"MaaSModelRef " + project + "/" + maasModelRefName, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
+		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
 		if err := applyMaaSObject(c, w.desc, w.path, w.create, w.obj, true); err != nil {
 			return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", w.desc, err), maasWriteCode(err), "dry run failed")
@@ -999,9 +999,9 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		desc, path, create string
 		obj                map[string]interface{}
 	}{
-		{"MaaSModelRef " + project + "/" + maasModelRefName, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"), withToolFieldManager(namespacedPath(maasAPIGroup, "maasmodelrefs", project, "")), refObj},
-		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath("MaaSSubscription"), maasAccessCreatePath("MaaSSubscription"), sub},
-		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath("MaaSAuthPolicy"), maasAccessCreatePath("MaaSAuthPolicy"), auth},
+		{"MaaSModelRef " + project + "/" + maasModelRefName, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
+		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
 		if err := applyMaaSObject(c, w.desc, w.path, w.create, w.obj, false); err != nil {
 			return m.fail("maas", fmt.Sprintf("Failed to apply %s: %v. Unpublish to undo.", w.desc, err), maasWriteCode(err), "apply failed")
@@ -1016,8 +1016,8 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		if err != nil {
 			return false, err
 		}
-		a, _ := maasPhase(cc, maasAccessPath("MaaSAuthPolicy"))
-		s, _ := maasPhase(cc, maasAccessPath("MaaSSubscription"))
+		a, _ := maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
+		s, _ := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		msg := fmt.Sprintf("Model reference: %s; access: %s; subscription: %s", firstNonEmpty(r.Status.Phase, "pending"), firstNonEmpty(a, "pending"), firstNonEmpty(s, "pending"))
 		if msg != last {
 			last = msg
@@ -1082,12 +1082,12 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 
 	// The access policy and the subscription.
 	say("maas", "running", "Removing the model from the access policy and the subscription...")
-	sub, auth := maasAccessObjects(live)
+	sub, auth := maasAccessObjects(c, live)
 	for _, w := range []struct {
 		kind, desc string
 		obj        map[string]interface{}
 	}{{"MaaSAuthPolicy", "MaaSAuthPolicy " + maasAuthPolicyName, auth}, {"MaaSSubscription", "MaaSSubscription " + maasSubscriptionName, sub}} {
-		path := maasAccessPath(w.kind)
+		path := maasAccessPath(c, w.kind)
 		meta, found, err := readObjectMeta(c, path)
 		if err != nil {
 			return m.fail("maas", fmt.Sprintf("Cannot read %s: %v.", w.desc, err), errorCodeFromK8sErr(err), "read failed")
@@ -1103,12 +1103,12 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 			m.logs = append(m.logs, "OK: "+w.desc+" deleted")
 			continue
 		}
-		if err := applyMaaSObject(c, w.desc, path, maasAccessCreatePath(w.kind), w.obj, false); err != nil {
+		if err := applyMaaSObject(c, w.desc, path, maasAccessCreatePath(c, w.kind), w.obj, false); err != nil {
 			return m.fail("maas", fmt.Sprintf("Failed to update %s: %v.", w.desc, err), maasWriteCode(err), "apply failed")
 		}
 	}
 	if refFound {
-		path := namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct")
+		path := namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct")
 		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !IsK8sError(err, 404) {
 			return m.fail("maas", fmt.Sprintf("Failed to delete MaaSModelRef %s/%s: %v.", project, maasModelRefName, err), maasWriteCode(err), "delete failed")
 		}

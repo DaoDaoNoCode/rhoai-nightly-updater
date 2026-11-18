@@ -264,8 +264,36 @@ func TestMaaSTeardown_KeepsADSCValueSomeoneElseSetSinceSetup(t *testing.T) {
 	mc.f.mu.Unlock()
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
 	dsc, _ := json.Marshal(mc.f.get(tMaaSDSC))
-	if !strings.Contains(string(dsc), `"modelsAsAService":{"managementState":"Managed"}`) || !strings.Contains(res.Message+strings.Join(res.Logs, " "), "kept") {
+	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(string(dsc), `"modelsAsAService":{"managementState":"Managed"}`) ||
+		!strings.Contains(res.Message, "oc patch datasciencecluster default-dsc") || !strings.Contains(res.Message, "then Remove again") {
 		t.Fatalf("teardown = %+v; dsc = %s", res, dsc)
+	}
+	// Following the message: the user turns MaaS off, and removal finishes.
+	mc.f.mu.Lock()
+	k, _ = parseFakePath(tMaaSDSC)
+	ensureMap(ensureMap(ensureMap(mc.f.objects[k], "spec"), "components"), "aigateway")["modelsAsAService"] = map[string]interface{}{"managementState": "Removed"}
+	mc.f.mu.Unlock()
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"}); !res.Success || mc.f.has(tMaaSGateway) || mc.f.has(tMaaSDB) {
+		t.Fatalf("teardown after turning MaaS off = %+v", res)
+	}
+	if rec, _ := readMaaSRecord(mc.c); rec.DSCChanged {
+		t.Fatalf("record = %+v", rec)
+	}
+}
+
+// Finding 14: the MaaS and Authorino objects are read at the versions the
+// cluster serves.
+func TestMaaS_UsesTheServedAPIVersions(t *testing.T) {
+	mc := newMaaSCluster(t)
+	mc.f.groups["/apis/maas.opendatahub.io"] = `{"kind":"APIGroup","name":"maas.opendatahub.io","versions":[{"groupVersion":"maas.opendatahub.io/v1","version":"v1"},{"groupVersion":"maas.opendatahub.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"maas.opendatahub.io/v1","version":"v1"}}`
+	mc.f.groups["/apis/operator.authorino.kuadrant.io"] = `{"kind":"APIGroup","name":"operator.authorino.kuadrant.io","versions":[{"groupVersion":"operator.authorino.kuadrant.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"operator.authorino.kuadrant.io/v1","version":"v1"}}`
+	if got := maasAPI(mc.c); got != "maas.opendatahub.io/v1" {
+		t.Fatalf("maasAPI = %s", got)
+	}
+	deleteFakeObject(mc, "/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino")
+	mc.f.putJSON("/apis/operator.authorino.kuadrant.io/v1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}`)
+	if missing, known, _ := authorinoTLS(mc.c, "kuadrant-system"); missing != "" || !known {
+		t.Fatalf("authorinoTLS = %q, %v", missing, known)
 	}
 }
 

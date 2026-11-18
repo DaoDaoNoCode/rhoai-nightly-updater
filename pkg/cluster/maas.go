@@ -57,7 +57,7 @@ import (
 // models-as-a-service (docs/samples/maas-system/free/maas).
 
 const (
-	maasAPIGroup     = "maas.opendatahub.io/v1alpha1"
+	maasGroup        = "maas.opendatahub.io"
 	maasGatewayName  = "maas-default-gateway"
 	maasGatewayClass = "openshift-default"
 	maasHostPrefix   = "maas."
@@ -106,6 +106,16 @@ var (
 	MaaSDeleteTimeout  = 2 * time.Minute
 	MaaSPoll           = 5 * time.Second
 )
+
+// authorinoGroup is the Authorino operator's API group (the Authorino CR).
+const authorinoGroup = "operator.authorino.kuadrant.io"
+
+// maasAPI is maas.opendatahub.io at the version the cluster serves (its
+// preferred one; v1alpha1, RHOAI 3.6's, when discovery cannot tell), for
+// the MaaS objects' paths and apiVersion.
+func maasAPI(c *Client) string {
+	return maasGroup + "/" + servedVersions(c, maasGroup, []string{"v1alpha1"}).Versions[0]
+}
 
 // --- record (this tool's namespace, snapshot ConfigMap key "maas") ---------------
 
@@ -193,7 +203,7 @@ func (r *maasRecord) setPublished(project string, on bool) {
 // scripts/setup-database.sh: redhat-ods-applications ->
 // redhat-ai-gateway-infra, opendatahub -> odh-ai-gateway-infra).
 func maasInfraNamespace(c *Client) string {
-	body, _, err := c.get(namespacedPath(maasAPIGroup, "maastenantconfigs", "models-as-a-service", "default-tenant"))
+	body, _, err := c.get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 	if err == nil {
 		var tc struct {
 			Status struct {
@@ -739,7 +749,10 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 	known := true
 	secret := "authorino-server-cert"
 	tlsOK := false
-	if body, _, err := c.get(namespacedPath("operator.authorino.kuadrant.io/v1beta1", "authorinos", ns, "authorino")); err != nil {
+	// The CR at the version its group serves (v1beta1 when discovery cannot
+	// tell).
+	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
+	if body := read.Body; err != nil || body == nil {
 		known = false
 	} else {
 		var a struct {
@@ -759,10 +772,16 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 			tlsOK = a.Spec.Listener.TLS.Enabled
 		}
 	}
-	if meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization")); err != nil {
-		known = false
-	} else if !found || meta.Annotations[servingCertAnnotation] != secret {
-		missing = append(missing, "the Service's serving certificate")
+	// Which Secret the Service must name is the CR's: without the CR it is
+	// unknown, not missing.
+	if known {
+		meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization"))
+		switch {
+		case err != nil:
+			known = false
+		case !found || meta.Annotations[servingCertAnnotation] != secret:
+			missing = append(missing, "the Service's serving certificate")
+		}
 	}
 	if known && !tlsOK {
 		missing = append(missing, "TLS on Authorino's listener")
@@ -1009,8 +1028,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		default:
 			apiPart.State, apiPart.Message = "unknown", "Cannot read Deployment maas-api"
 		}
-		ai, aiMsg := readyCondition(c, namespacedPath(maasAPIGroup, "aitenants", "ai-tenants", "models-as-a-service"))
-		tc, tcMsg := readyCondition(c, namespacedPath(maasAPIGroup, "maastenantconfigs", "models-as-a-service", "default-tenant"))
+		ai, aiMsg := readyCondition(c, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
+		tc, tcMsg := readyCondition(c, namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 		auth := maasGatewayAuth(c)
 		switch {
 		case ai == "True" && tc == "True" && auth == "enforced":
@@ -1071,8 +1090,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
 	rec, recErr := readMaaSRecord(c)
-	authPhase, _ := maasPhase(c, namespacedPath(maasAPIGroup, "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
-	subPhase, _ := maasPhase(c, namespacedPath(maasAPIGroup, "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
+	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	for _, m := range models {
 		if !modelOwned(m.Metadata) || m.Metadata.Name != maasModelRefName {
 			continue
@@ -1183,7 +1202,7 @@ type maasModelRefObject struct {
 }
 
 func readMaaSModelRef(c *Client, project string) (maasModelRefObject, bool, error) {
-	return readMaaSObject(c, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"))
+	return readMaaSObject(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
 }
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
@@ -1216,7 +1235,7 @@ func maasPhase(c *Client, path string) (string, bool) {
 // Unpublish removes all three (and the project from the shared
 // subscription, access policy and gateway), so the model goes after it.
 func MaaSPublishedIn(c *Client, project string) (bool, error) {
-	_, found, err := readObjectMeta(c, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"))
+	_, found, err := readObjectMeta(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
 	if err != nil && !IsK8sError(err, 404) {
 		return false, err
 	}

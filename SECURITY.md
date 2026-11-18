@@ -253,6 +253,11 @@ oc auth can-i delete gateways.gateway.networking.k8s.io/maas-default-gateway -n 
 oc auth can-i delete gatewayclasses.gateway.networking.k8s.io/openshift-default --as=$SA                    # no
 oc auth can-i list gateways.gateway.networking.k8s.io -A --as=$SA                                           # no
 oc auth can-i delete maassubscriptions.maas.opendatahub.io/other -n models-as-a-service --as=$SA            # no
+oc auth can-i list maasmodelrefs.maas.opendatahub.io -A --as=$SA                                            # yes
+oc auth can-i list maassubscriptions.maas.opendatahub.io -n models-as-a-service --as=$SA                    # yes
+oc auth can-i list maasauthpolicies.maas.opendatahub.io -n models-as-a-service --as=$SA                     # yes
+oc auth can-i patch maasmodelrefs.maas.opendatahub.io/other -n <project> --as=$SA                           # no
+oc auth can-i watch maasmodelrefs.maas.opendatahub.io -A --as=$SA                                           # no
 oc auth can-i patch namespaces/<project> --as=$SA                                                           # no
 oc auth can-i delete kuadrants.kuadrant.io/kuadrant -n kuadrant-system --as=$SA                              # no
 ```
