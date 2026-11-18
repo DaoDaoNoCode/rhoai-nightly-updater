@@ -22,6 +22,7 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
+			f.putJSON("/api/v1/namespaces/"+fakeProject, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 			mlflowSamplesCache.Remove(fakeProject)
 			if tc.deploy {
 				putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, tc.status)
@@ -52,6 +53,21 @@ func TestMLflowSamplesStatus_AllAbsentAndHeaders(t *testing.T) {
 		if !strings.HasPrefix(r, "GET ") {
 			t.Errorf("status made a write: %s", r)
 		}
+	}
+}
+
+// The status reads MLflow with the ServiceAccount's token, so it serves
+// only Data Science projects, like the samples operations.
+func TestMLflowSamplesStatus_OnlyDSProjects(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.k8s.putJSON("/api/v1/namespaces/openshift-config", `{"metadata":{},"status":{"phase":"Active"}}`)
+	mlflowSamplesCache.Remove("openshift-config")
+	st, err := GetMLflowSamplesStatus(env.c, "openshift-config")
+	if !errors.Is(err, ErrNotDSProject) || st != nil {
+		t.Errorf("got %+v, %v; want ErrNotDSProject", st, err)
+	}
+	if len(env.mlflow.requests) != 0 {
+		t.Errorf("MLflow was called: %v", env.mlflow.requests)
 	}
 }
 

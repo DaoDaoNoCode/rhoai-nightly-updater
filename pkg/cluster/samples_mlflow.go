@@ -182,7 +182,19 @@ func mlflowSamples() map[string]mlflowSample {
 // GetMLflowSamplesStatus reports the MLflow samples of project. It makes
 // only named reads (one per sample, a few for the training sample) and is
 // cached for mlflowStatusCacheTTL, so it stays out of the main status poll.
+//
+// project must be a Data Science project, checked before the cache, like
+// the playground's status and every samples operation: the reads go to
+// MLflow with the ServiceAccount's token, so a request must not choose any
+// namespace.
 func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStatus, error) {
+	ok, err := isDSProject(c, project)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: '%s'", ErrNotDSProject, project)
+	}
 	if cached, ok := mlflowSamplesCache.Get(project); ok {
 		return &cached, nil
 	}
@@ -251,6 +263,10 @@ func ValidateMLflowSamplesRequest(req types.MLflowSamplesRequest) string {
 	}
 	return ""
 }
+
+// ErrNotDSProject: the project named in a request is not a Data Science
+// project.
+var ErrNotDSProject = errors.New("not a Data Science project")
 
 // isDSProject reports whether project is a Data Science project (the
 // projects the Environment page lists).

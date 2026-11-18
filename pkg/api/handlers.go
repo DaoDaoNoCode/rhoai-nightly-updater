@@ -1441,6 +1441,10 @@ var HandleMLflowSamplesStatus = withAuth(func(c *cluster.Client, w http.Response
 		return
 	}
 	st, err := cluster.GetMLflowSamplesStatus(c, project)
+	if errors.Is(err, cluster.ErrNotDSProject) {
+		writeError(w, "Cannot read the MLflow samples: "+err.Error(), http.StatusBadRequest, "validation")
+		return
+	}
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
 		writeError(w, "Cannot read the MLflow samples: "+err.Error(), code, errorCode)

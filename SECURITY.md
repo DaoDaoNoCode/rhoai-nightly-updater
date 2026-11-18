@@ -111,7 +111,7 @@ The copy Job's pod: `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capab
 - MLflow (mlflow-kubernetes-plugins 2.1.1, SelfSubjectAccessReview mode) checks group `mlflow.kubeflow.org` in the namespace the `X-MLflow-Workspace` header names, first without a name and, when that is denied, with each resolved name (`auth/core.py:812-851`). So `resourceNames` limit these rules; `create` is never checked with a name (`auth/authorizer.py:131-140`).
 - The DSPA's kube-rbac-proxy checks `datasciencepipelinesapplications/api` on the DSPA's own name, with the verb taken from the HTTP method (DSPO `kube-rbac-proxy-config.yaml.tmpl:11-17`; opendatahub-io/kube-rbac-proxy `pkg/proxy/proxy.go:73-89`).
 
-The routes are mutations behind the cluster-admin gate, the lock and the activity log; the two status reads use only named reads. `pkg/cluster/samples_rbac_test.go` derives these rules from the code's calls (the test MLflow and KFP servers serve only the listed routes and decide every review with this template), so a missing or unused rule fails the tests.
+The routes are mutations behind the cluster-admin gate, the lock and the activity log; the two status reads use only named reads. Every MLflow samples call, the status read included, first checks that the project is a Data Science project (`isDSProject`), so a signed-in user cannot point the SA's token at another namespace's MLflow workspace. `pkg/cluster/samples_rbac_test.go` derives these rules from the code's calls (the test MLflow and KFP servers serve only the listed routes and decide every review with this template), so a missing or unused rule fails the tests.
 
 | Rule | What it allows | Worst case if the SA token leaks | Why nothing narrower works |
 |---|---|---|---|
