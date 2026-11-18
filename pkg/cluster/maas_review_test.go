@@ -375,7 +375,7 @@ func TestMaaSStatus_AuthorinoTLSFollowsTheCRsSecret(t *testing.T) {
 	mc.f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{}}`)
 	st, _ = GetMaaSStatus(mc.c)
 	for _, p := range st.Parts {
-		if p.ID == "authorino-tls" && (p.State != "manual" || !strings.Contains(p.Commands, "serving-cert-secret-name=aigw-authorino-tls")) {
+		if p.ID == "authorino-tls" && (p.State != "missing" || len(p.Actions) != 1 || !strings.Contains(p.Commands, "serving-cert-secret-name=aigw-authorino-tls")) {
 			t.Fatalf("part = %+v", p)
 		}
 	}

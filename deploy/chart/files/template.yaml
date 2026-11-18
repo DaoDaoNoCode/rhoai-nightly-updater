@@ -578,15 +578,42 @@ objects:
         resources: ["secrets"]
         resourceNames: ["maas-db-config"]
         verbs: ["patch", "delete"]
-      # Connectivity Link: the Kuadrant CR (a prerequisite, never written)
-      # and whether its Authorino is set up for TLS (read-only)
+      # Connectivity Link: the Kuadrant CR, created as platform-setup.md
+      # does when there is none (create cannot be limited by name; never
+      # changed or deleted), and Authorino's TLS as setup-authorino-tls.sh
+      # sets it: only the Authorino CR "authorino" and its Service by name
+      # (the namespace is the Kuadrant CR's, found at run time; the
+      # Deployment patch is the existing deployments rule). SECURITY.md,
+      # "MaaS one-click setup".
       - apiGroups: ["kuadrant.io"]
         resources: ["kuadrants"]
-        verbs: ["list"]
+        verbs: ["list", "create"]
       - apiGroups: ["operator.authorino.kuadrant.io"]
         resources: ["authorinos"]
         resourceNames: ["authorino"]
-        verbs: ["get"]
+        verbs: ["get", "patch"]
+      - apiGroups: [""]
+        resources: ["services"]
+        resourceNames: ["authorino-authorino-authorization"]
+        verbs: ["patch"]
+      # The operators MaaS needs, installed as the MaaS docs install them
+      # (Subscription create is the RHOAI rule above): only the
+      # Subscriptions of Connectivity Link (kuadrant-operator, the docs'
+      # name, or rhcl-operator, RHOAI-managed clusters') and CloudNativePG
+      # (cloudnative-pg, in cnpg-system when this tool installs it) are read
+      # and patched (channel for an upgrade, spec.config.resources after an
+      # OOM kill, the docs' deny-on-failure env), never deleted
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions"]
+        resourceNames: ["kuadrant-operator", "rhcl-operator", "cloudnative-pg"]
+        verbs: ["get", "patch"]
+      # The AI gateway's infrastructure namespace, which setup creates
+      # before MaaS is on (scripts/setup-database.sh does); Remove deletes
+      # it only when this tool created it and nothing else is in it
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        resourceNames: ["redhat-ai-gateway-infra", "odh-ai-gateway-infra"]
+        verbs: ["delete"]
       # The default tenant the operator creates (read-only)
       - apiGroups: ["maas.opendatahub.io"]
         resources: ["aitenants"]
@@ -778,6 +805,20 @@ objects:
       - apiGroups: ["kuadrant.io"]
         resources: ["authpolicies"]
         verbs: ["list"]
+      # MaaS: the gateway policies a tier-based MaaS left on the MaaS
+      # gateway (read-only), and only the two the MaaS upgrade guide names
+      # (migration/upgrade-to-3.4.md Phase 4) may be deleted
+      - apiGroups: ["kuadrant.io"]
+        resources: ["tokenratelimitpolicies", "ratelimitpolicies"]
+        verbs: ["list"]
+      - apiGroups: ["kuadrant.io"]
+        resources: ["authpolicies"]
+        resourceNames: ["gateway-auth-policy"]
+        verbs: ["delete"]
+      - apiGroups: ["kuadrant.io"]
+        resources: ["tokenratelimitpolicies"]
+        resourceNames: ["gateway-tier-rate-limits"]
+        verbs: ["delete"]
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: RoleBinding
     metadata:

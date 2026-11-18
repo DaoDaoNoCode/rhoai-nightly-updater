@@ -147,8 +147,28 @@ type maasRecord struct {
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
 	DBNamespace string `json:"dbNamespace,omitempty"`
-	At          string `json:"at,omitempty"`
-	By          string `json:"by,omitempty"`
+	// AIGatewayChanged: setup set aigateway's managementState to Managed,
+	// and PreviousAIGateway is what it was; removal restores it as it does
+	// modelsAsAService.
+	AIGatewayChanged  bool   `json:"aigatewayChanged,omitempty"`
+	PreviousAIGateway string `json:"previousAIGateway,omitempty"`
+	// InfraNamespace is the infrastructure namespace setup created ("" when
+	// it existed); removal deletes it only when nothing else is in it.
+	InfraNamespace string `json:"infraNamespace,omitempty"`
+	// Shared are the shared platform pieces this tool installed, created or
+	// configured ("rhcl", "kuadrant", "cnpg", "authorino-tls",
+	// "rhcl-memory"), with what it did. Removal keeps them: other RHOAI
+	// features use them.
+	Shared map[string]string `json:"shared,omitempty"`
+	At     string            `json:"at,omitempty"`
+	By     string            `json:"by,omitempty"`
+}
+
+func (r *maasRecord) setShared(key, what string) {
+	if r.Shared == nil {
+		r.Shared = map[string]string{}
+	}
+	r.Shared[key] = what
 }
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
@@ -423,6 +443,7 @@ type kuadrantState struct {
 	found, ready bool
 	namespace    string
 	message      string
+	meta         objectMeta
 }
 
 func readKuadrant(c *Client) (kuadrantState, error) {
@@ -452,7 +473,7 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 		return kuadrantState{}, nil
 	}
 	k := list.Items[0]
-	st := kuadrantState{found: true, namespace: k.Metadata.Namespace}
+	st := kuadrantState{found: true, namespace: k.Metadata.Namespace, meta: k.Metadata}
 	if cond, ok := findCondition(k.Status.Conditions, "Ready"); ok {
 		st.ready = cond.Status == "True"
 		st.message = firstNonEmpty(cond.Message, cond.Reason)
@@ -460,42 +481,25 @@ func readKuadrant(c *Client) (kuadrantState, error) {
 	return st, nil
 }
 
-// rhclVersion is the installed Red Hat Connectivity Link operator's version
-// (its CSV), or "" when it is not found.
-func rhclVersion(c *Client) string {
-	csvs, err := listClusterCSVs(c)
-	if err != nil {
-		return ""
-	}
-	for _, csv := range csvs {
-		if containsString(csv.packages(), "rhcl-operator") || strings.HasPrefix(csv.Name, "rhcl-operator.") {
-			if i := strings.Index(csv.Name, ".v"); i >= 0 {
-				return csv.Name[i+2:]
-			}
-		}
-	}
-	return ""
+// rhclBelowMinimum: version is older than the docs' minimum for RHOAI 3.6
+// (false when unknown).
+func rhclBelowMinimum(version string) bool {
+	return version != "" && compareVersions(versionCore(version), rhclDocsMinimum) < 0
 }
 
 // rhclWarning: the docs ask for RHCL 1.5 or later (prerequisites.md
-// "RHOAI 3.6 — use RHCL v1.5"; 1.4.x can hang callers, Kuadrant/wasm-shim#425).
-// The path is the RHCL catalog's (rh-api-management/rhcl-file-based-catalog):
-// stable-1.5's 1.5.0 has skipRange ">=1.4.4 <1.5.0" and 1.4.4 is only in
-// stable-1.4, so from an earlier 1.4 a switch straight to stable-1.5 leaves
-// the Subscription at AtLatestKnown. The 1.4.4 step's authorino-operator
-// recreates Authorino's Service, and service-ca deletes the serving
-// certificate with the old one (seen live 2026-11-18): the Authorino TLS
-// part then shows the commands that make it again.
+// "RHOAI 3.6 — use RHCL v1.5"; 1.4.x can hang callers,
+// Kuadrant/wasm-shim#425), and 1.4.0 bypasses gateway authentication
+// (rhclAuthBypassVersion). Upgrade Connectivity Link (upgradeRHCL) finds
+// OLM's path in the catalog and takes it.
 func rhclWarning(version string) string {
-	v := strings.SplitN(version, "-", 2)[0]
-	if version == "" || compareVersions(v, "1.5") >= 0 {
+	switch {
+	case !rhclBelowMinimum(version):
 		return ""
+	case versionCore(version) == rhclAuthBypassVersion:
+		return fmt.Sprintf("Red Hat Connectivity Link %s silently lets requests past the gateway's authentication (the MaaS docs' prerequisites: \"RHCL v1.4.0 contains a Wasm shim bug that silently bypasses gateway authentication\"). This tool publishes nothing until it is upgraded: Upgrade Connectivity Link does it.", version)
 	}
-	const why = "the MaaS docs ask for 1.5 or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile."
-	if compareVersions(v, "1.4.4") >= 0 {
-		return fmt.Sprintf("Red Hat Connectivity Link %s is installed; %s A cluster-admin upgrades it by switching the rhcl-operator Subscription's channel to stable-1.5.", version, why)
-	}
-	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; %s OLM upgrades to 1.5 only from 1.4.4, so a cluster-admin switches the rhcl-operator Subscription's channel to stable-1.4 first, then to stable-1.5 once 1.4.4 is installed. After the 1.4.4 step, check Authorino TLS below: that step makes Authorino's Service again, which removes its certificate.", version, why)
+	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for %s or later with RHOAI 3.6: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.", version, rhclDocsMinimum)
 }
 
 // maasObjectPath is the path of a platform object this tool reads or
@@ -844,43 +848,42 @@ func readyCondition(c *Client, path string) (string, string) {
 }
 
 // maasGatewayAuth reads the AuthPolicy maas-controller puts on the MaaS
-// gateway (named maas-gateway-auth on RHOAI 3.6; the docs name others, so
-// it is found by its target): "enforced", "not-enforced", "missing" or "".
+// gateway (maas-gateway-auth on RHOAI 3.6; the docs name others, so it is
+// found by its target and maas-controller's label, never by taking the
+// first policy on the gateway: a tier-era gateway-auth-policy may target
+// it too): "enforced", "not-enforced", "missing" or "" (unreadable).
 func maasGatewayAuth(c *Client) string {
-	versions := servedVersions(c, kuadrantGroup, []string{"v1"})
-	if len(versions.Versions) == 0 {
-		return ""
-	}
-	body, _, err := c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", ""))
+	policies, err := maasGatewayPolicies(c)
 	if err != nil {
 		return ""
 	}
-	var list struct {
-		Items []struct {
-			Spec struct {
-				TargetRef struct {
-					Kind string `json:"kind"`
-					Name string `json:"name"`
-				} `json:"targetRef"`
-			} `json:"spec"`
-			Status struct {
-				Conditions []k8sCondition `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &list) != nil {
-		return ""
-	}
-	for _, ap := range list.Items {
-		if ap.Spec.TargetRef.Kind != "Gateway" || ap.Spec.TargetRef.Name != maasGatewayName {
+	for _, p := range policies {
+		if p.Kind != "AuthPolicy" || !p.Managed {
 			continue
 		}
-		if cond, ok := findCondition(ap.Status.Conditions, "Enforced"); ok && cond.Status == "True" {
+		if p.Enforced == "True" {
 			return "enforced"
 		}
 		return "not-enforced"
 	}
 	return "missing"
+}
+
+// groupServed says whether the API server serves group: its discovery
+// document answers 404 when no CRD of the group is installed. Any other
+// failure is returned, so callers can refuse rather than guess.
+func groupServed(c *Client, group string) (bool, error) {
+	if v, ok := apiVersionsCache.Get(c.baseURL + "|" + group); ok && len(v) > 0 {
+		return true, nil
+	}
+	body, _, err := c.get("/apis/" + group)
+	if IsK8sError(err, 404) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the API group %s: %w", group, err)
+	}
+	return len(parseGroupVersions(body)) > 0, nil
 }
 
 // authorinoTLS checks what scripts/setup-authorino-tls.sh sets on
@@ -1046,8 +1049,9 @@ oc rollout restart deployment/authorino -n %[1]s`, q, shellQuote(secret), shellQ
 
 // --- status --------------------------------------------------------------------
 
-// GetMaaSStatus reports the MaaS platform part by part and this tool's
-// models with their publication.
+// GetMaaSStatus reports the MaaS platform part by part, in setup order
+// (the docs' platform setup, then their MaaS setup), what Set up would
+// change now, and this tool's models with their publication.
 func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	st := &types.MaaSStatus{Subscription: maasSubscriptionName, DashboardURL: dashboardURLOrEmpty(c)}
 	rec, err := readMaaSRecord(c)
@@ -1061,57 +1065,152 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		st.URL = u
 	}
 	part := func(p types.MaaSPart) { st.Parts = append(st.Parts, p) }
+	plan := func(s string) { st.SetupPlan = append(st.SetupPlan, s) }
+	var blockers []string
+	denyNote := ""
 
-	// The DataScienceCluster.
-	dscPart := types.MaaSPart{ID: "dsc", Title: "MaaS in the DataScienceCluster", DocURL: maasDocsBase + "install/maas-setup.md#configure-datasciencecluster"}
-	switch {
-	case dscErr != nil:
-		dscPart.State, dscPart.Message = "unknown", "Cannot read the DataScienceCluster: "+dscErr.Error()
-	case dsc.read.Object == nil:
-		st.Blocked = &types.ComponentBlock{Component: "aigateway", Reason: "MaaS needs RHOAI's DataScienceCluster, and this cluster has none. A cluster-admin creates one on the Components page."}
-		dscPart.State, dscPart.Message = "problem", "No DataScienceCluster"
-	case dsc.aigateway != "Managed":
-		st.Blocked = &types.ComponentBlock{Component: "aigateway", DSC: dsc.name, State: dsc.aigateway,
-			Reason: fmt.Sprintf("MaaS runs in RHOAI's AI gateway, which is %s in DataScienceCluster %s. A cluster-admin sets aigateway to Managed on the Components page (MaaS platform setup, platform-setup.md); then MaaS can be set up here.", firstNonEmpty(dsc.aigateway, "not set"), dsc.name)}
-		dscPart.State, dscPart.Message = "problem", "aigateway is "+firstNonEmpty(dsc.aigateway, "not set")
-	case dsc.maas == "Managed":
-		dscPart.ManagedByTool, dscPart.NotManaged = rec.DSCChanged, !rec.DSCChanged
-		switch dsc.ready {
-		case "False":
-			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+truncateMessage(dsc.readyMsg)
-		default:
-			dscPart.State, dscPart.Message = "ready", "aigateway and modelsAsAService are Managed"
-		}
-	default:
-		dscPart.State, dscPart.Message = "missing", "modelsAsAService is "+firstNonEmpty(dsc.maas, "not set")+"; setup sets it to Managed, last"
+	// Red Hat Connectivity Link (platform-setup.md "Install Gateway API
+	// Controller", RHOAI tab).
+	csvs, csvErr := listClusterCSVs(c)
+	var rhcl, cnpg operatorState
+	rhclErr, cnpgReadErr := csvErr, csvErr
+	if csvErr == nil {
+		rhcl, rhclErr = readOperatorIn(c, rhclOperator, csvs)
+		cnpg, cnpgReadErr = readOperatorIn(c, cnpgOperator, csvs)
 	}
-	part(dscPart)
+	kVersion, kvErr := kuadrantServedVersion(c)
+	rhclPart := types.MaaSPart{ID: "rhcl", Title: "Red Hat Connectivity Link", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
+	_, rhclByTool := rec.Shared["rhcl"]
+	switch {
+	case rhclErr != nil:
+		rhclPart.State, rhclPart.Message = "unknown", "Cannot read the installed operators: "+rhclErr.Error()
+	case rhcl.installed():
+		rhclPart.ManagedByTool = rhclByTool && rhcl.sub != nil && toolOwned(rhcl.sub.Metadata)
+		rhclPart.NotManaged = !rhclPart.ManagedByTool
+		where := "its Subscription is not one of the names the docs use (kuadrant-operator, rhcl-operator)"
+		if rhcl.sub != nil {
+			where = fmt.Sprintf("Subscription %s/%s, channel %s", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name, firstNonEmpty(rhcl.sub.Spec.Channel, "not set"))
+		}
+		switch {
+		case versionCore(rhcl.version) == rhclAuthBypassVersion:
+			rhclPart.State, rhclPart.Message = "problem", fmt.Sprintf("Version %s (%s). ", rhcl.version, where)+rhclWarning(rhcl.version)
+		case rhcl.phase != "Succeeded":
+			rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Version %s is being installed (%s; CSV %s)", rhcl.version, where, firstNonEmpty(rhcl.phase, "pending"))
+		default:
+			rhclPart.State, rhclPart.Message = "ready", fmt.Sprintf("Version %s runs (%s)", rhcl.version, where)
+			rhclPart.Warning = rhclWarning(rhcl.version)
+		}
+		if rhclBelowMinimum(rhcl.version) {
+			action, cmds := rhclUpgradeOffer(c, rhcl)
+			if action != nil {
+				rhclPart.Actions = append(rhclPart.Actions, *action)
+			}
+			rhclPart.Commands = cmds
+		}
+		if action, note, cmd := rhclDenyOffer(rhcl); note != "" {
+			if action != nil {
+				rhclPart.Actions = append(rhclPart.Actions, *action)
+			}
+			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
+			rhclPart.Commands = strings.TrimSpace(rhclPart.Commands + "\n" + cmd)
+			denyNote = fmt.Sprintf("Not changed: Subscription %s/%s, which this tool did not create, does not deny traffic when rate limiting fails (the MaaS docs recommend it); the Connectivity Link part offers that change on its own", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name)
+		}
+		if action, note := rhclMemoryOffer(c, rhcl); action != nil {
+			rhclPart.Actions = append(rhclPart.Actions, *action)
+			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
+		} else if note != "" {
+			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
+		}
+	case kvErr == nil && kVersion != "":
+		rhclPart.State, rhclPart.NotManaged = "ready", true
+		rhclPart.Message = "Kuadrant's API is served without an rhcl-operator CSV (an upstream Kuadrant, or another install); MaaS uses it as it is"
+	case rhcl.sub != nil:
+		rhclPart.ManagedByTool, rhclPart.NotManaged = rhclByTool, !rhclByTool
+		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name, firstNonEmpty(rhcl.sub.Status.State, "no state yet"))
+	default:
+		rhclPart.State = "missing"
+		if p, msg, _ := planOperatorInstall(c, rhclOperator); msg != "" {
+			rhclPart.State, rhclPart.Message = "problem", "Not installed, and Set up cannot install it: "+msg
+			blockers = append(blockers, rhclPart.Message)
+		} else {
+			rhclPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from redhat-operators (channel %s), as the MaaS docs' platform setup does.", p.head, p.channel)
+			rhclPart.Commands = rhclInstallCommands(p.channel)
+			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)", p.head, operatorPlanPrefix(p), rhclOperator.namespace, rhclOperator.subName, rhclOperator.pkg, p.channel))
+		}
+	}
+	part(rhclPart)
 
-	// Connectivity Link (Kuadrant): a prerequisite, never created here.
+	// The Kuadrant CR (platform-setup.md: "Once the RHCL operator is
+	// ready, create a Kuadrant instance").
 	kq, kErr := readKuadrant(c)
-	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md", NotManaged: kq.found}
+	kuadrantNS := firstNonEmpty(kq.namespace, rhcl.csvNS, rhclOperator.namespace)
+	kPart := types.MaaSPart{ID: "kuadrant", Title: "Kuadrant CR", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
+	_, kByTool := rec.Shared["kuadrant"]
 	switch {
 	case kErr != nil:
 		kPart.State, kPart.Message = "unknown", "Cannot read the Kuadrant CR: "+kErr.Error()
 	case !kq.found:
-		kPart.State, kPart.Message = "manual", "No Kuadrant CR. A cluster-admin installs Red Hat Connectivity Link and creates the Kuadrant CR, as platform-setup.md shows."
+		kPart.State, kPart.Message = "missing", fmt.Sprintf("No Kuadrant CR. Set up creates %s/kuadrant once Connectivity Link runs, as the docs' platform setup does.", kuadrantNS)
+		kPart.Commands = kuadrantCommands(kuadrantNS)
+		plan(fmt.Sprintf("Create the Kuadrant CR %s/kuadrant", kuadrantNS))
 	case kq.ready:
 		kPart.State, kPart.Message = "ready", "Kuadrant "+kq.namespace+"/kuadrant is Ready"
 	default:
 		kPart.State, kPart.Message = "waiting", "Kuadrant is not Ready: "+firstNonEmpty(kq.message, "no message")
 	}
-	kPart.Warning = rhclWarning(rhclVersion(c))
+	if kq.found {
+		kPart.ManagedByTool = kByTool && toolOwned(kq.meta)
+		kPart.NotManaged = !kPart.ManagedByTool
+	}
 	part(kPart)
 
-	// The database and its connection Secret, where setup put them.
+	// CloudNativePG, for this tool's database; not needed when
+	// maas-db-config names someone else's.
 	dbNS := firstNonEmpty(rec.DBNamespace, infra)
-	dbPart := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", dbNS))
+	foreignDB := secErr == nil && secFound && !toolOwned(secMeta)
+	cnpgServed, cnpgErr := groupServed(c, cnpgGroup)
+	if !foreignDB {
+		cnpgPart := types.MaaSPart{ID: "cnpg", Title: "CloudNativePG operator", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
+		_, cnpgByTool := rec.Shared["cnpg"]
+		switch {
+		case cnpgErr != nil:
+			cnpgPart.State, cnpgPart.Message = "unknown", cnpgErr.Error()
+		case cnpgServed:
+			cnpgPart.ManagedByTool = cnpgByTool && cnpg.sub != nil && toolOwned(cnpg.sub.Metadata)
+			cnpgPart.NotManaged = !cnpgPart.ManagedByTool
+			cnpgPart.State, cnpgPart.Message = "ready", "Its API (postgresql.cnpg.io) is served"
+			if cnpg.installed() {
+				cnpgPart.Message = fmt.Sprintf("Version %s runs in %s", cnpg.version, cnpg.csvNS)
+			}
+		case cnpgReadErr != nil:
+			cnpgPart.State, cnpgPart.Message = "unknown", "Cannot read the installed operators: "+cnpgReadErr.Error()
+		case cnpg.installed() || cnpg.sub != nil:
+			cnpgPart.ManagedByTool, cnpgPart.NotManaged = cnpgByTool, !cnpgByTool
+			cnpgPart.State, cnpgPart.Message = "waiting", "OLM is installing it"
+		default:
+			cnpgPart.State = "missing"
+			if p, msg, _ := planOperatorInstall(c, cnpgOperator); msg != "" {
+				cnpgPart.State, cnpgPart.Message = "problem", "Not installed, and Set up cannot install it: "+msg+" Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)."
+				blockers = append(blockers, cnpgPart.Message)
+			} else {
+				cnpgPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from certified-operators (channel %s) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).", p.head, p.channel)
+				cnpgPart.Commands = cnpgInstallCommands(p.channel)
+				plan(fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel))
+			}
+		}
+		part(cnpgPart)
+	}
+
+	// The database and its connection Secret, where setup put them.
+	dbPart := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	clMeta, clFound, clReady, clPhase, clErr := readMaaSDBCluster(c, dbNS)
+	_, nsFound, nsErr := readObjectMeta(c, "/api/v1/namespaces/"+dbNS)
+	dbPlan := fmt.Sprintf("Run a one-instance CloudNativePG database %s/%s (1 GiB volume, for development and test) and write Secret %s/%s with its address", dbNS, maasDBCluster, dbNS, maasDBConfigSecret)
 	switch {
 	case secErr != nil:
 		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read Secret %s/%s: %v", dbNS, maasDBConfigSecret, secErr)
-	case secFound && !toolOwned(secMeta):
+	case foreignDB:
 		dbPart.State, dbPart.NotManaged = "ready", true
 		dbPart.Message = fmt.Sprintf("Secret %s/%s exists: maas-api uses the database it names", dbNS, maasDBConfigSecret)
 	case clErr == nil && clFound && toolOwned(clMeta):
@@ -1121,14 +1220,32 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			dbPart.State, dbPart.Message = "ready", fmt.Sprintf("CloudNativePG %s/%s runs (1 instance, development and test use); Secret %s set", dbNS, maasDBCluster, maasDBConfigSecret)
 		case clReady:
 			dbPart.State, dbPart.Message = "missing", "The database runs; its connection Secret is not written yet"
+			plan(fmt.Sprintf("Write Secret %s/%s with the database's address", dbNS, maasDBConfigSecret))
 		default:
 			dbPart.State, dbPart.Message = "waiting", "The database is starting: "+clPhase
 		}
-	case servedVersionsMissing(c, cnpgGroup):
-		dbPart.State = "manual"
-		dbPart.Message = "The CloudNativePG operator is not installed. A cluster-admin installs it from OperatorHub (certified operators), or creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)."
+	case clErr == nil && clFound:
+		dbPart.State, dbPart.NotManaged = "problem", true
+		dbPart.Message = fmt.Sprintf("%s exists and was not created by this tool, so Set up leaves it alone. A cluster-admin creates Secret %s/%s for it, or removes it.", maasDesc("Cluster", dbNS), dbNS, maasDBConfigSecret)
+		blockers = append(blockers, dbPart.Message)
+	case nsErr != nil:
+		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read namespace %s: %v", dbNS, nsErr)
+	case !nsFound:
+		if _, ok := maasInfraNamespacePath(dbNS); ok {
+			dbPart.State = "missing"
+			dbPart.Message = fmt.Sprintf("Set up creates namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does (RHOAI makes it only once MaaS is on, and the database must come first), then runs a one-instance CloudNativePG database there (development and test use).", dbNS)
+			plan(fmt.Sprintf("Create namespace %s (the AI gateway's infrastructure namespace; recorded, and deleted by Remove when nothing else is in it)", dbNS))
+			plan(dbPlan)
+		} else {
+			dbPart.State, dbPart.Message = "problem", fmt.Sprintf("Namespace %s, where maas-api and its database go, does not exist, and this tool creates only the AI gateway's own infrastructure namespaces. A cluster-admin creates it.", dbNS)
+			blockers = append(blockers, dbPart.Message)
+		}
 	default:
-		dbPart.State, dbPart.Message = "missing", "Setup runs a one-instance CloudNativePG database (development and test use) in "+dbNS
+		dbPart.State, dbPart.Message = "missing", "Set up runs a one-instance CloudNativePG database (development and test use) in "+dbNS
+		plan(dbPlan)
+	}
+	if rec.InfraNamespace != "" && rec.InfraNamespace == dbNS {
+		dbPart.ManagedByTool = true
 	}
 	part(dbPart)
 
@@ -1139,10 +1256,18 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	case gwErr != nil:
 		gwPart.State, gwPart.Message = "unknown", "Cannot read the gateway: "+gwErr.Error()
 	case !gw.found:
-		gwPart.State, gwPart.Message = "missing", "Setup creates it with an external load balancer at "+firstNonEmpty(st.URL, "maas.<apps domain>")
+		gwPart.State, gwPart.Message = "missing", "Set up creates it with an external load balancer at "+firstNonEmpty(st.URL, "maas.<apps domain>")
+		plan(fmt.Sprintf("Create Gateway %s/%s with an external load balancer at %s (a cloud cost while it exists), and GatewayClass %s if the cluster has none", inferenceGatewayNamespace, maasGatewayName, firstNonEmpty(strings.TrimPrefix(st.URL, "https://"), "maas.<apps domain>"), maasGatewayClass))
 	default:
 		gwPart.ManagedByTool, gwPart.NotManaged = gw.owned, !gw.owned
 		switch {
+		case gw.gw.admitsAll() && gw.owned:
+			gwPart.State, gwPart.Message = "problem", "A listener admits routes from every namespace, which this tool never sets: any project could route through MaaS's gateway. Set up writes back the documented list of namespaces."
+			plan(fmt.Sprintf("Gateway %s/%s: admit routes only from the namespaces it lists again (the MaaS docs' setup-gateway.sh)", inferenceGatewayNamespace, maasGatewayName))
+		case gw.gw.admitsAll():
+			gwPart.State = "problem"
+			gwPart.Message = "This gateway, which this tool did not create, admits routes from every namespace, so any project editor could put a route on MaaS's gateway. The MaaS docs' gateway (setup-gateway.sh) lists the namespaces instead. This tool publishes nothing through it until its owner applies the command below; it does not change a gateway it did not create."
+			gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.projects()))
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+truncateMessage(gw.acceptedErr)
 		case gw.programmed && gw.address != "":
@@ -1158,29 +1283,107 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	}
 	part(gwPart)
 
-	// Authorino TLS: checked only.
-	tlsPart := types.MaaSPart{ID: "authorino-tls", Title: "Authorino TLS", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway", NotManaged: true}
+	// Authorino TLS (maas-setup.md "Authorino TLS",
+	// scripts/setup-authorino-tls.sh), on Kuadrant's Authorino.
+	tlsPart := types.MaaSPart{ID: "authorino-tls", Title: "Authorino TLS", DocURL: maasDocsBase + "configuration-and-management/tls-configuration.md"}
+	_, tlsByTool := rec.Shared["authorino-tls"]
+	tlsPlan := "Configure Authorino TLS as the docs' setup-authorino-tls.sh does: the serving-certificate annotation on Service authorino-authorino-authorization, TLS on the Authorino CR's listener, SSL_CERT_FILE on Deployment authorino, then restart it"
 	if kq.found {
 		missing, known, secret := authorinoTLS(c, kq.namespace)
 		switch {
 		case missing != "":
-			tlsPart.State = "manual"
 			cmds, why := authorinoTLSCommands(kq.namespace, secret)
 			if why != "" {
-				tlsPart.Message = "Not configured: " + missing + ". " + why + ". Without it, API keys are refused."
-			} else {
-				tlsPart.Message = "Not configured: " + missing + ". A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused."
-				tlsPart.Commands = cmds
+				tlsPart.State, tlsPart.Message = "problem", "Not configured: "+missing+". "+why+". Without it, API keys are refused."
+				blockers = append(blockers, tlsPart.Message)
+				break
 			}
+			tlsPart.State = "missing"
+			tlsPart.Message = "Not configured: " + missing + ". Without it, API keys are refused. Set up (or Configure Authorino TLS) applies the docs' setup-authorino-tls.sh steps in " + kq.namespace + "."
+			tlsPart.Commands = cmds
+			tlsPart.Actions = []types.MaaSAction{authorinoTLSAction(kq.namespace, secret, missing)}
+			plan(tlsPlan + " (in " + kq.namespace + ")")
 		case known:
 			tlsPart.State, tlsPart.Message = "ready", "Authorino in "+kq.namespace+" serves TLS and trusts the service CA"
+			tlsPart.ManagedByTool, tlsPart.NotManaged = tlsByTool, !tlsByTool
 		default:
 			tlsPart.State, tlsPart.Message = "unknown", "Cannot read Authorino's configuration"
 		}
 	} else {
-		tlsPart.State, tlsPart.Message = "unknown", "Needs Connectivity Link first"
+		tlsPart.State, tlsPart.Message = "missing", "Set up configures it once Kuadrant has made Authorino, as the docs' setup-authorino-tls.sh does."
+		plan(tlsPlan)
 	}
 	part(tlsPart)
+
+	// Gateway policies maas-controller does not manage: a tier-based MaaS
+	// left them (migration/upgrade-to-3.4.md).
+	if kvErr == nil && kVersion != "" {
+		policies, polErr := maasGatewayPolicies(c)
+		foreign := foreignGatewayPolicies(policies)
+		polPart := types.MaaSPart{ID: "tier-policies", Title: "Old gateway policies", DocURL: maasDocsBase + "migration/upgrade-to-3.4.md#phase-4-manual-cleanup-of-old-tier-resources"}
+		switch {
+		case polErr != nil:
+			polPart.State, polPart.Message = "unknown", "Cannot list the policies on the MaaS gateway: "+polErr.Error()
+			part(polPart)
+		case len(foreign) > 0:
+			polPart.State, polPart.NotManaged = "manual", true
+			polPart.Message = fmt.Sprintf("%s %s on %s and %s not managed by maas-controller. RHOAI's upgrade from the tier-based MaaS leaves its gateway policies in place, and with old and new gateway policies \"Kuadrant behavior is undefined\" (the MaaS docs' upgrade guide), so this tool publishes nothing until they are gone.",
+				strings.Join(policyNames(foreign), ", "), verb(len(foreign), "is", "are"), maasGatewayName, verb(len(foreign), "is", "are"))
+			var legacy, other []gatewayPolicy
+			for _, p := range foreign {
+				if legacyTierPolicy(p) {
+					legacy = append(legacy, p)
+				} else {
+					other = append(other, p)
+				}
+			}
+			if len(legacy) > 0 {
+				polPart.Actions = []types.MaaSAction{tierPoliciesAction(legacy)}
+			}
+			if len(other) > 0 {
+				polPart.Message += fmt.Sprintf(" %s %s not among the names the docs give for the old policies, so this tool leaves %s to a cluster-admin.", strings.Join(policyNames(other), ", "), verb(len(other), "is", "are"), verb(len(other), "it", "them"))
+			}
+			polPart.Commands = legacyPolicyCommands(foreign)
+			part(polPart)
+		}
+	}
+
+	// The DataScienceCluster: the AI gateway and MaaS in it, last.
+	dscPart := types.MaaSPart{ID: "dsc", Title: "MaaS in the DataScienceCluster", DocURL: maasDocsBase + "install/maas-setup.md#configure-datasciencecluster"}
+	switch {
+	case dscErr != nil:
+		dscPart.State, dscPart.Message = "unknown", "Cannot read the DataScienceCluster: "+dscErr.Error()
+	case dsc.read.Object == nil:
+		st.Blocked = &types.ComponentBlock{Component: "aigateway", Reason: "MaaS needs RHOAI's DataScienceCluster, and this cluster has none. A cluster-admin creates one on the Components page."}
+		dscPart.State, dscPart.Message = "problem", "No DataScienceCluster"
+	case dsc.maas == "Managed" && dsc.aigateway == "Managed":
+		dscPart.ManagedByTool, dscPart.NotManaged = rec.DSCChanged, !rec.DSCChanged
+		switch dsc.ready {
+		case "False":
+			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+truncateMessage(dsc.readyMsg)
+		default:
+			dscPart.State, dscPart.Message = "ready", "aigateway and modelsAsAService are Managed"
+		}
+	default:
+		var fields []string
+		if dsc.aigateway != "Managed" {
+			fields = append(fields, fmt.Sprintf("aigateway.managementState %s to Managed", firstNonEmpty(dsc.aigateway, "not set")))
+		}
+		if dsc.maas != "Managed" {
+			fields = append(fields, fmt.Sprintf("aigateway.modelsAsAService.managementState %s to Managed", firstNonEmpty(dsc.maas, "not set")))
+		}
+		dscPart.State = "missing"
+		dscPart.Message = fmt.Sprintf("aigateway is %s and modelsAsAService is %s. Set up sets them to Managed, last, as the docs' DataScienceCluster step does; Remove puts back what this tool changed.", firstNonEmpty(dsc.aigateway, "not set"), firstNonEmpty(dsc.maas, "not set"))
+		dscPart.Commands = maasDSCCommand(dsc.name)
+		dscPart.ManagedByTool = rec.AIGatewayChanged
+		if dsc.argoApp != "" {
+			dscPart.State = "problem"
+			dscPart.Message = gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git."
+			blockers = append(blockers, dscPart.Message)
+		} else {
+			plan(fmt.Sprintf("DataScienceCluster %s: %s (the values before are recorded, and Remove restores them)", dsc.name, strings.Join(fields, ", ")))
+		}
+	}
 
 	// maas-api and the default tenant, which the operator creates.
 	apiPart := types.MaaSPart{ID: "maas-api", Title: "MaaS API (maas-api)", DocURL: maasDocsBase + "install/validation.md"}
@@ -1213,17 +1416,24 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		apiPart.State, apiPart.Message = "missing", "The operator creates it once MaaS is turned on"
 		tenantPart.State, tenantPart.Message = "missing", "The operator creates it once MaaS is turned on"
 	}
+	part(dscPart)
 	part(apiPart)
 	part(tenantPart)
 
-	// The platform as a whole.
+	if denyNote != "" && len(st.SetupPlan) > 0 {
+		plan(denyNote)
+	}
+
+	// The platform as a whole. The shared pieces (Connectivity Link, its
+	// Kuadrant CR and Authorino TLS, CloudNativePG) do not make the
+	// platform this tool's to remove: Remove leaves them.
 	p := &st.Platform
 	p.Namespace = infra
 	p.Deployed = dsc.maas == "Managed"
 	p.Ready = true
 	var waiting []string
 	for _, pt := range st.Parts {
-		if pt.ManagedByTool {
+		if pt.ManagedByTool && !maasSharedPart(pt.ID) {
 			p.ManagedByTool = true
 		}
 		if pt.State != "ready" && (pt.ID != "authorino-tls" || pt.State != "unknown") {
@@ -1233,20 +1443,25 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			}
 		}
 	}
+	if rec.DSCChanged || rec.AIGatewayChanged || rec.InfraNamespace != "" {
+		p.ManagedByTool = true
+	}
 	switch {
 	case p.Ready:
 		p.Message = "Ready"
-	case !p.Deployed && !p.ManagedByTool:
+	case !p.Deployed && !p.ManagedByTool && len(waiting) == 0:
 		p.Message = "Not set up"
 	default:
 		p.Message = "Needs attention: " + strings.Join(waiting, ", ")
+		if len(waiting) == 0 {
+			p.Message = "Not set up completely"
+		}
 	}
-	if st.Blocked != nil {
+	switch {
+	case st.Blocked != nil:
 		p.SetupBlockedReason = st.Blocked.Reason
-	} else if !kq.found && kErr == nil {
-		p.SetupBlockedReason = kPart.Message
-	} else if dbPart.State == "manual" {
-		p.SetupBlockedReason = dbPart.Message
+	case len(blockers) > 0:
+		p.SetupBlockedReason = blockers[0]
 	}
 	if !p.ManagedByTool {
 		p.TeardownBlockedReason = "No part of the MaaS platform was set up by this tool, so there is nothing for it to remove."
@@ -1318,7 +1533,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				item.SetupBlockedReason = item.Message + "; it is left alone."
 			}
 			if !p.Ready {
-				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "Set up the MaaS platform first.")
+				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, maasNotReadyRowReason(st))
 			} else if !item.ModelReady {
 				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 			}
@@ -1342,7 +1557,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			}
 			st.Items = append(st.Items, types.MaaSModel{
 				ResourceState: types.ResourceState{Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
-					Message: "Partly published: the model is gone; " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
+					Message: "Partly published: no model of this name is in project " + p.project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
 				DisplayName: p.model,
 				Published:   true,
 				Partly:      true,
@@ -1376,13 +1591,6 @@ func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
 		left = append(left, "this tool's record of the publication")
 	}
 	return left
-}
-
-// servedVersionsMissing: API discovery says the group is not served
-// (false when discovery cannot tell).
-func servedVersionsMissing(c *Client, group string) bool {
-	v := servedVersions(c, group, nil)
-	return v.Discovered && len(v.Versions) == 0
 }
 
 // toolOwned: this tool created the object (its label, and a write by it).

@@ -215,6 +215,14 @@ func matchesSelector(obj map[string]interface{}, selector string) bool {
 	}
 	labels, _ := ensureMap(obj, "metadata")["labels"].(map[string]interface{})
 	for _, term := range strings.Split(selector, ",") {
+		// "!key": the label is absent (as listClusterCSVs excludes OLM's
+		// copies with !olm.copiedFrom).
+		if key, ok := strings.CutPrefix(term, "!"); ok {
+			if _, has := labels[key]; has {
+				return false
+			}
+			continue
+		}
 		kv := strings.SplitN(term, "=", 2)
 		if len(kv) != 2 || labels[kv[0]] != kv[1] {
 			return false

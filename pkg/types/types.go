@@ -919,19 +919,38 @@ type MaaSStatus struct {
 	Subscription string `json:"subscription"`
 	// DashboardURL is the RHOAI dashboard's address, for its MaaS pages.
 	DashboardURL string `json:"dashboardUrl,omitempty"`
+	// SetupPlan lists, in order, every change Set up would make now
+	// (operators installed, objects created, DataScienceCluster fields
+	// changed); empty when it has nothing to do.
+	SetupPlan []string `json:"setupPlan,omitempty"`
 	// Items are this tool's models in data science projects, published or
 	// not.
 	Items []MaaSModel `json:"items,omitempty"`
 }
 
+// MaaSAction is a change a platform part offers on its own (POST
+// /api/resources/maas/stream with Action ID), shown in a confirmation
+// that lists Changes first.
+type MaaSAction struct {
+	// ID is "upgrade-rhcl", "rhcl-memory", "authorino-tls" or
+	// "remove-tier-policies".
+	ID      string   `json:"id"`
+	Label   string   `json:"label"`
+	Summary string   `json:"summary"`
+	Changes []string `json:"changes"`
+	Danger  bool     `json:"danger,omitempty"`
+}
+
 // MaaSPart is one part of the MaaS platform.
 type MaaSPart struct {
-	// ID is "dsc", "kuadrant", "database", "gateway", "authorino-tls",
-	// "maas-api" or "tenant".
+	// ID is "rhcl", "kuadrant", "cnpg", "database", "gateway",
+	// "authorino-tls", "tier-policies", "dsc", "maas-api" or "tenant", in
+	// setup order.
 	ID    string `json:"id"`
 	Title string `json:"title"`
-	// State is "ready", "missing" (setup creates it), "waiting", "problem",
-	// "manual" (a cluster-admin does it; Commands says how) or "unknown".
+	// State is "ready", "missing" (setup creates it), "waiting", "problem"
+	// (Action or Commands say how to fix it), "manual" (a cluster-admin
+	// does it; Commands says how) or "unknown".
 	State   string `json:"state"`
 	Message string `json:"message,omitempty"`
 	// ManagedByTool: this tool created (or set) it; Setup and Remove
@@ -941,9 +960,11 @@ type MaaSPart struct {
 	NotManaged    bool `json:"notManaged,omitempty"`
 	// Warning is a problem that does not block setup.
 	Warning string `json:"warning,omitempty"`
-	// Commands are the documented commands a cluster-admin runs for a
-	// "manual" part.
+	// Commands are the documented commands a cluster-admin runs instead of
+	// Set up or Action (or, for a "manual" part, the only way).
 	Commands string `json:"commands,omitempty"`
+	// Actions are fixes the part offers on its own.
+	Actions []MaaSAction `json:"actions,omitempty"`
 	// DocURL is the MaaS documentation page for the part.
 	DocURL string `json:"docUrl,omitempty"`
 }
@@ -972,8 +993,10 @@ type MaaSModel struct {
 
 // MaaSRequest is the body of POST /api/resources/maas/stream.
 type MaaSRequest struct {
-	// Action is "setup" or "teardown" (the platform), or "publish" or
-	// "unpublish" (the tool's model Model in Project).
+	// Action is "setup" or "teardown" (the platform), "publish" or
+	// "unpublish" (the tool's model Model in Project), or a part's own fix:
+	// "upgrade-rhcl", "rhcl-memory", "authorino-tls" or
+	// "remove-tier-policies".
 	Action  string `json:"action"`
 	Project string `json:"project,omitempty"`
 	// Model is the catalog name of a chat model (publish and unpublish

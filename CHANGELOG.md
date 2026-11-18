@@ -20,6 +20,31 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **MaaS: set it all up from the tab.** Set up now does every step of the
+  MaaS install docs that is missing, in their order, after one
+  confirmation that lists each change: Red Hat Connectivity Link
+  (`redhat-operators`, the channel whose release meets the docs' minimum
+  for RHOAI 3.6, read from the catalog, set to deny traffic when rate
+  limiting fails as the docs recommend) with its Kuadrant CR, the
+  CloudNativePG operator (`certified-operators`, in `cnpg-system`, not
+  `openshift-operators`, where an install can pull an OSSM upgrade that
+  breaks the gateway), the AI gateway's
+  infrastructure namespace, the database, the gateway, Authorino TLS (the
+  docs' `setup-authorino-tls.sh`), and `aigateway` with
+  `modelsAsAService` in the DataScienceCluster. What exists is used as it
+  is; a failed run continues where it stopped. The tab is a checklist:
+  each part says what Set up will do, offers its own fix where it has one
+  (**Upgrade Connectivity Link**, along OLM's path one channel at a time
+  and with Authorino TLS restored afterwards; **Raise the memory limit**,
+  only after the Kuadrant operator was OOMKilled; **Deny traffic when
+  rate limiting fails**, for a Connectivity Link installed without it;
+  **Configure Authorino TLS**; **Remove the old tier policies**), and keeps the commands under
+  **Do it from the CLI instead**. Remove keeps the shared pieces
+  (Connectivity Link, Kuadrant, Authorino TLS, CloudNativePG), restores
+  `aigateway`, and deletes the infrastructure namespace it created only
+  when nothing else is in it. New RBAC (template revision 5, SECURITY.md
+  "MaaS one-click setup").
+
 - **Pipelines: set up as the RHOAI dashboard sets one up.** The pipeline
   server is named `dspa`, the only name odh-notebook-controller gives
   workbenches a pipeline config for, so Elyra pipelines from a workbench
@@ -366,6 +391,20 @@ only accepts a tag whose version is the top dated section. See
 
 ### Security
 
+- **MaaS on an older or older-style platform.** Publish refuses on
+  Connectivity Link 1.4.0 (it silently bypasses gateway authentication,
+  per the MaaS docs) and, while other MaaSSubscriptions exist, below 1.5;
+  this tool's subscription (every signed-in user) takes a priority below
+  every other subscription, so a key minted without naming one never goes
+  to it; gateway policies on `maas-default-gateway` that maas-controller
+  does not manage (a tier-based MaaS left them) hold publishing back, and
+  the gateway's authentication is judged by maas-controller's own
+  AuthPolicy, not the first one found; a `maas-default-gateway` someone
+  else made that admits every namespace is not published through (the
+  tab shows the patch). Refusals name the part that blocks. The
+  infrastructure namespace deadlock is gone (RHOAI creates it only once
+  MaaS is on; setup now creates it, as the docs' script does), and the
+  CloudNativePG check no longer misses an operator that is not installed.
 - **Your own token never goes to a model or a pipeline server** (final
   review). Those run in projects whose editors control what answers at
   their addresses. The Models tab shows commands only for this tool's model

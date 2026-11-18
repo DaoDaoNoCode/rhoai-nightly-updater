@@ -1,4 +1,4 @@
-import type { CatalogModel, MaaSPart, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
+import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 
@@ -28,7 +28,7 @@ export interface Busy {
 
 /** What a running MaaS operation changes. */
 export interface MaaSOp {
-  action: "setup" | "teardown" | "publish" | "unpublish";
+  action: MaaSRequest["action"];
   project: string | null;
   /** The model a publish or unpublish is about. */
   model?: string | null;
@@ -671,8 +671,9 @@ export function maasPartStatus(part: MaaSPart): EnvStatus {
 /** The MaaS platform as a whole. */
 export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus {
   if (!m) return "unknown";
-  if (busy.maas?.action === "setup") return "setting-up";
   if (busy.maas?.action === "teardown") return "deleting";
+  // Set up and a part's own fix change the platform.
+  if (busy.maas && busy.maas.action !== "publish" && busy.maas.action !== "unpublish") return "setting-up";
   const states = m.parts.map(maasPartStatus);
   if (states.every((s) => s === "ready")) return "ready";
   // Not turned on yet, with something setup makes still missing: setup

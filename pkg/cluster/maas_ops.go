@@ -61,7 +61,7 @@ func maasWriteCode(err error) string {
 // ValidateMaaSRequest returns why req cannot run, or "".
 func ValidateMaaSRequest(req types.MaaSRequest) string {
 	switch req.Action {
-	case "setup", "teardown":
+	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies":
 		if req.Project != "" {
 			return "the platform takes no project"
 		}
@@ -80,7 +80,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 			return "only chat models are published to MaaS"
 		}
 	default:
-		return "action must be setup, teardown, publish or unpublish"
+		return "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
 	}
 	return ""
 }
@@ -105,6 +105,21 @@ func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*t
 		return m.setup()
 	case "teardown":
 		return m.teardown()
+	case "upgrade-rhcl":
+		m.target = "Connectivity Link"
+		return m.upgradeRHCL()
+	case "rhcl-memory":
+		m.target = "Connectivity Link's memory limit"
+		return m.rhclMemory()
+	case "rhcl-deny-on-failure":
+		m.target = "Connectivity Link's rate-limit failure mode"
+		return m.rhclDenyOnFailure()
+	case "authorino-tls":
+		m.target = "Authorino TLS"
+		return m.authorinoTLSOnly()
+	case "remove-tier-policies":
+		m.target = "the old tier policies"
+		return m.removeTierPolicies()
 	case "publish":
 		return m.publish(req.Project, entry.Name)
 	}
@@ -174,15 +189,17 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("ConfigMap", ""), err, templateHint(err)), errorCodeFromK8sErr(err)
 	}
-	if cmOK && !toolOwned(cm) {
-		return nil, fmt.Sprintf("%s exists and was not created by this tool. Nothing was changed.", maasDesc("ConfigMap", "")), "not_managed"
-	}
 	plan.current["ConfigMap"], plan.found["ConfigMap"] = cm, cmOK
 	if ok && meta.terminating() {
 		return nil, fmt.Sprintf("%s is still being deleted. Wait until it is gone, then try again.", maasDesc("Gateway", "")), "terminating"
 	}
+	// A gateway someone else made is used as it is, with whatever options
+	// it names: the options ConfigMap matters only to the tool's own.
 	if ok && !gatewayOwned(meta) {
 		return nil, "", "foreign"
+	}
+	if cmOK && !toolOwned(cm) {
+		return nil, fmt.Sprintf("%s exists and was not created by this tool. Nothing was changed.", maasDesc("ConfigMap", "")), "not_managed"
 	}
 	// setup-gateway.sh uses an existing openshift-default as it is; only
 	// OpenShift's own controller's.
@@ -252,228 +269,6 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		}
 	}
 	return "", ""
-}
-
-// --- setup ----------------------------------------------------------------------
-
-func (m *maasRun) setup() (*types.OperationResponse, error) {
-	c := m.c
-	m.step("check", "running", "Checking what the MaaS platform needs...")
-	rec, err := readMaaSRecord(c)
-	if err != nil {
-		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
-	}
-	dsc, err := readMaaSDSC(c)
-	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "dsc read failed")
-	}
-	switch {
-	case dsc.read.Object == nil:
-		return m.fail("check", "This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites", "no dsc")
-	case dsc.aigateway != "Managed":
-		return m.fail("check", fmt.Sprintf("MaaS runs in RHOAI's AI gateway, which is %s in DataScienceCluster %s. A cluster-admin sets aigateway to Managed first (platform-setup.md). Nothing was changed.", firstNonEmpty(dsc.aigateway, "not set"), dsc.name), "prerequisites", "aigateway off")
-	case dsc.maas != "Managed" && dsc.argoApp != "":
-		return m.fail("check", gitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service")+" Set aigateway.modelsAsAService to Managed in Git. Nothing was changed.", ErrorCodeGitOpsManaged, "dsc gitops")
-	}
-	kq, err := readKuadrant(c)
-	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant CR; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "kuadrant read failed")
-	}
-	if !kq.found {
-		return m.fail("check", "MaaS needs Red Hat Connectivity Link with a Kuadrant CR, and there is none. A cluster-admin installs it as platform-setup.md shows; this tool does not. Nothing was changed.", "prerequisites", "no kuadrant")
-	}
-	if !kq.ready {
-		m.step("check", "running", "The Kuadrant CR is not Ready yet ("+firstNonEmpty(kq.message, "no message")+"); continuing.")
-	}
-	if w := rhclWarning(rhclVersion(c)); w != "" {
-		m.step("check", "running", w)
-	}
-	infra := maasInfraNamespace(c)
-	if _, found, err := readObjectMeta(c, "/api/v1/namespaces/"+infra); err != nil || !found {
-		return m.fail("check", fmt.Sprintf("The AI gateway's infrastructure namespace %s does not exist yet (the AI gateway operator creates it). Wait for the operator, then try again. Nothing was changed.", infra), "prerequisites", "no infra namespace")
-	}
-	if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
-		return m.fail("check", msg, code, "namespace not rhoai's")
-	}
-
-	// The database: a connection Secret someone else made is used as it is.
-	secMeta, secFound, err := readObjectMeta(c, maasObjectPath("Secret", infra))
-	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read Secret %s/%s; nothing was changed: %v.", infra, maasDBConfigSecret, err), errorCodeFromK8sErr(err), "secret read failed")
-	}
-	foreignDB := secFound && !toolOwned(secMeta)
-	var clMeta objectMeta
-	var clFound bool
-	if !foreignDB {
-		if v := servedVersions(c, cnpgGroup, nil); v.Discovered && !containsString(v.Versions, "v1") {
-			return m.fail("check", "The database needs the CloudNativePG operator (postgresql.cnpg.io/v1), which is not installed. A cluster-admin installs it from OperatorHub, or creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md). Nothing was changed.", "prerequisites", "no cnpg")
-		}
-		clMeta, clFound, _, _, err = readMaaSDBCluster(c, infra)
-		if err != nil && !IsK8sError(err, 404) {
-			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was changed: %v.", maasDesc("Cluster", infra), err), errorCodeFromK8sErr(err), "db read failed")
-		}
-		if clFound && !toolOwned(clMeta) {
-			return m.fail("check", fmt.Sprintf("%s exists and was not created by this tool, so it is left alone. Create Secret %s/%s for it yourself, or remove it. Nothing was changed.", maasDesc("Cluster", infra), infra, maasDBConfigSecret), "not_managed", "db foreign")
-		}
-	}
-
-	// The gateway: one someone else made is used as it is.
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
-	foreignGW := code == "foreign"
-	if msg != "" {
-		return m.fail("check", msg, code, "gateway check failed")
-	}
-
-	// Every write as a server-side dry run first.
-	if !foreignDB {
-		if _, _, _, err := ensureToolObject(c, maasDesc("Cluster", infra), maasObjectPath("Cluster", infra), maasCreatePath("Cluster", infra), maasDBClusterObject(infra), clMeta, clFound, func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Cluster", infra)) }, toolOwned, true); err != nil {
-			return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", maasDesc("Cluster", infra), err), maasWriteCode(err), "db dry run failed")
-		}
-		if _, _, _, err := ensureToolObject(c, maasDesc("Secret", infra), maasObjectPath("Secret", infra), maasCreatePath("Secret", infra), maasDBConfigObject(infra, "postgresql://dry-run@localhost/maas?sslmode=require"), secMeta, secFound, func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Secret", infra)) }, toolOwned, true); err != nil {
-			return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", maasDesc("Secret", infra), err), maasWriteCode(err), "secret dry run failed")
-		}
-	}
-	if !foreignGW {
-		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
-			return m.fail("check", msg, code, "gateway dry run failed")
-		}
-	}
-	m.step("check", "success", "Everything the platform needs is there.")
-
-	// 1. Database Setup.
-	if foreignDB {
-		m.step("database", "success", fmt.Sprintf("Secret %s/%s already exists and was not created by this tool: maas-api uses the database it names, and this tool does not change it.", infra, maasDBConfigSecret))
-	} else {
-		m.step("database", "running", fmt.Sprintf("Creating a one-instance CloudNativePG database %s/%s (for development and test)...", infra, maasDBCluster))
-		if rec.DBNamespace != infra {
-			rec.DBNamespace = infra
-			if err := writeMaaSRecord(c, rec); err != nil {
-				return m.fail("database", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
-			}
-		}
-		read := func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Cluster", infra)) }
-		if _, _, _, err := ensureToolObject(c, maasDesc("Cluster", infra), maasObjectPath("Cluster", infra), maasCreatePath("Cluster", infra), maasDBClusterObject(infra), clMeta, clFound, read, toolOwned, false); err != nil {
-			return m.fail("database", fmt.Sprintf("Failed to apply %s: %v.", maasDesc("Cluster", infra), err), maasWriteCode(err), "db apply failed")
-		}
-		m.step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)...")
-		ready, err := waitForGone(c, MaaSDatabaseTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-			_, _, ok, _, err := readMaaSDBCluster(cc, infra)
-			return ok, err
-		})
-		if err != nil {
-			return m.fail("database", fmt.Sprintf("Stopped waiting for the database: %v. It was created; set up again to continue.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "db wait failed")
-		}
-		if !ready {
-			return m.fail("database", fmt.Sprintf("The database is not running after %s, and maas-api needs it before MaaS is turned on. Set up again to continue; the MaaS tab shows its state.", clockText(MaaSDatabaseTimeout)), "not_ready", "db not ready")
-		}
-		connURL, err := maasConnectionURL(c, infra)
-		if err != nil {
-			return m.fail("database", err.Error()+" Set up again to retry.", errorCodeFromK8sErr(err), "db secret read failed")
-		}
-		cur, found, err := readObjectMeta(c, maasObjectPath("Secret", infra))
-		if err != nil {
-			return m.fail("database", fmt.Sprintf("Cannot read Secret %s/%s: %v.", infra, maasDBConfigSecret, err), errorCodeFromK8sErr(err), "secret read failed")
-		}
-		read = func() (objectMeta, bool, error) { return readObjectMeta(c, maasObjectPath("Secret", infra)) }
-		_, written, _, err := ensureToolObject(c, maasDesc("Secret", infra), maasObjectPath("Secret", infra), maasCreatePath("Secret", infra), maasDBConfigObject(infra, connURL), cur, found, read, toolOwned, false)
-		if err != nil {
-			return m.fail("database", fmt.Sprintf("Failed to write Secret %s/%s: %v.", infra, maasDBConfigSecret, maasWriteCode(err)), maasWriteCode(err), "secret apply failed")
-		}
-		// maas-api reads the Secret when it starts: one already running
-		// keeps the old connection until it restarts (maas-setup.md
-		// "Restarting maas-api"). The API server keeps the resourceVersion
-		// when an apply changes nothing.
-		if changed := !found || written.ResourceVersion != cur.ResourceVersion; changed && dsc.maas == "Managed" {
-			restarted, err := restartMaaSAPI(c, infra)
-			if err != nil {
-				return m.fail("database", fmt.Sprintf("Secret %s/%s was written, but maas-api could not be restarted to read it: %v. Restart it (oc rollout restart deployment/maas-api -n %s) or set up again.", infra, maasDBConfigSecret, err, infra), errorCodeFromK8sErr(err), "maas-api restart failed")
-			}
-			if restarted {
-				m.step("database", "running", "maas-api restarts to read the new connection Secret.")
-			}
-		}
-		m.step("database", "success", fmt.Sprintf("The database runs, and Secret %s/%s holds its connection URL (sslmode=require).", infra, maasDBConfigSecret))
-	}
-
-	// 2. Create Gateway.
-	if foreignGW {
-		m.step("gateway", "success", fmt.Sprintf("Gateway %s/%s already exists and was not created by this tool: MaaS uses it as it is.", inferenceGatewayNamespace, maasGatewayName))
-	} else {
-		m.step("gateway", "running", "Creating Gateway "+maasGatewayName+" with an external load balancer...")
-		if msg, code := m.applyGateway(gwPlan, false); msg != "" {
-			return m.fail("gateway", msg, code, "gateway apply failed")
-		}
-		m.step("gateway", "running", "Waiting for the gateway to be programmed (up to "+clockText(MaaSGatewayTimeout)+")...")
-		programmed, err := waitForGone(c, MaaSGatewayTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-			gw, err := readMaaSGateway(cc)
-			return gw.programmed && gw.address != "", err
-		})
-		switch {
-		case err != nil:
-			return m.fail("gateway", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
-		case !programmed:
-			m.step("gateway", "success", fmt.Sprintf("Created; not programmed after %s. It may still come up; the MaaS tab shows its state.", clockText(MaaSGatewayTimeout)))
-		default:
-			published, _ := waitForGone(c, InferenceGatewayDNSTimeout, MaaSPoll, func(cc *Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
-			if published {
-				m.step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
-			} else {
-				m.step("gateway", "success", fmt.Sprintf("Programmed; https://%s is not in DNS yet (a new load balancer's name can take a few minutes).", gwPlan.host))
-			}
-		}
-	}
-
-	// 3. Authorino TLS: checked; a cluster-admin runs the docs' script.
-	tlsNote := ""
-	if missing, _, _ := authorinoTLS(c, kq.namespace); missing != "" {
-		tlsNote = " Authorino TLS is not configured (" + missing + "): a cluster-admin runs the commands the MaaS tab shows, or API keys are refused."
-		m.step("authorino-tls", "success", "Not configured: "+missing+". This tool does not change Connectivity Link's Authorino; the MaaS tab shows the docs' commands for a cluster-admin.")
-	} else {
-		m.step("authorino-tls", "success", "Authorino serves TLS and trusts the service CA.")
-	}
-
-	// 4. Configure DataScienceCluster.
-	if dsc.maas == "Managed" {
-		who := "by this tool"
-		if !rec.DSCChanged {
-			who = "already, not by this tool"
-		}
-		m.step("dsc", "success", "modelsAsAService is Managed ("+who+").")
-	} else {
-		m.step("dsc", "running", fmt.Sprintf("Setting aigateway.modelsAsAService to Managed in DataScienceCluster %s (it was %s; removal restores that)...", dsc.name, firstNonEmpty(dsc.maas, "not set")))
-		rec.DSCChanged, rec.PreviousModelsAsAService = true, dsc.maas
-		if err := writeMaaSRecord(c, rec); err != nil {
-			return m.fail("dsc", err.Error()+" The DataScienceCluster was not changed.", errorCodeFromK8sErr(err), "record write failed")
-		}
-		if err := patchModelsAsAService(c, "Managed"); err != nil {
-			return m.fail("dsc", fmt.Sprintf("Failed to turn on MaaS in the DataScienceCluster: %v.", err), errorCodeFromK8sErr(err), "dsc patch failed")
-		}
-		m.step("dsc", "success", "modelsAsAService is Managed.")
-	}
-
-	// 5. Validation.
-	m.step("ready", "running", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)...")
-	last := ""
-	ready, err := waitForGone(c, MaaSPlatformTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-		api := deploymentAvailable(cc, infra, "maas-api")
-		ai, _ := readyCondition(cc, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
-		auth := maasGatewayAuth(cc)
-		msg := fmt.Sprintf("maas-api: %s; tenant: %s; gateway authentication: %s", map[string]string{"True": "available", "False": "starting", "missing": "not created yet"}[api], firstNonEmpty(map[string]string{"True": "ready", "False": "not ready", "missing": "not created yet"}[ai], "unknown"), firstNonEmpty(auth, "unknown"))
-		if msg != last {
-			last = msg
-			m.step("ready", "running", msg)
-		}
-		return api == "True" && ai == "True" && auth == "enforced", nil
-	})
-	if err != nil {
-		return m.fail("ready", fmt.Sprintf("Stopped waiting: %v. Setup itself is done; the MaaS tab shows the platform's state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
-	}
-	if !ready {
-		m.step("ready", "success", fmt.Sprintf("Still starting after %s (%s). The MaaS tab shows each part.", clockText(MaaSPlatformTimeout), last))
-		return m.done("The MaaS platform is set up and still starting." + tlsNote)
-	}
-	m.step("ready", "success", "maas-api is available, the tenant is ready, and the gateway checks every request.")
-	return m.done("The MaaS platform is ready." + tlsNote)
 }
 
 // patchModelsAsAService sets aigateway.modelsAsAService.managementState as
@@ -593,7 +388,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 			owned++
 		}
 	}
-	if owned == 0 && !rec.DSCChanged && len(rec.Published) == 0 {
+	if owned == 0 && !rec.DSCChanged && !rec.AIGatewayChanged && rec.InfraNamespace == "" && len(rec.Published) == 0 {
 		m.step("check", "success", "Nothing of the MaaS platform was set up by this tool.")
 		return m.done("The MaaS platform was not set up by this tool; nothing to remove.")
 	}
@@ -650,10 +445,32 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		if err := writeMaaSRecord(c, rec); err != nil {
 			return m.fail("dsc", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
-		m.step("dsc", "success", "modelsAsAService is "+prev+" again, as before setup.")
+		m.step("dsc", "running", "modelsAsAService is "+prev+" again, as before setup.")
 	} else {
-		m.step("dsc", "success", "Not changed: this tool did not turn MaaS on.")
+		m.step("dsc", "running", "modelsAsAService not changed: this tool did not turn MaaS on.")
 	}
+	// The AI gateway itself, back to what it was, only while nobody has set
+	// it since setup (the API server gives the field to whoever last set it).
+	if rec.AIGatewayChanged {
+		prev := firstNonEmpty(rec.PreviousAIGateway, "Removed")
+		switch {
+		case dsc.aigateway != "Managed":
+			m.logs = append(m.logs, "aigateway is "+firstNonEmpty(dsc.aigateway, "not set")+" already")
+		case !dscAIGatewayOwned(dsc):
+			m.logs = append(m.logs, "Kept aigateway Managed: it was set after this tool's setup, by someone else")
+			m.step("dsc", "running", "aigateway stays Managed: someone set it after this tool's setup.")
+		default:
+			if err := patchMaaSDSC(c, prev, "", false); err != nil {
+				return m.fail("dsc", fmt.Sprintf("Failed to restore aigateway: %v. Nothing else was deleted.", err), errorCodeFromK8sErr(err), "dsc patch failed")
+			}
+			m.logs = append(m.logs, "OK: aigateway is "+prev+" again")
+		}
+		rec.AIGatewayChanged, rec.PreviousAIGateway = false, ""
+		if err := writeMaaSRecord(c, rec); err != nil {
+			return m.fail("dsc", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+		}
+	}
+	m.step("dsc", "success", "The DataScienceCluster is back to what it was before setup, where this tool changed it.")
 
 	del := func(step string, o obj) (bool, *types.OperationResponse) {
 		if !o.found {
@@ -705,13 +522,25 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
 	}
-	m.step("database", "success", "The database and its connection Secret are deleted (with the database's volume).")
+	dbMsg := "The database and its connection Secret are deleted (with the database's volume)."
+	if ns := rec.InfraNamespace; ns != "" {
+		kept, err := m.deleteInfraNamespace(&rec, ns)
+		if err != nil {
+			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
+		}
+		if kept != "" {
+			dbMsg += " " + kept
+		} else {
+			dbMsg += " Namespace " + ns + ", which this tool created, is being deleted."
+		}
+	}
+	m.step("database", "success", dbMsg)
 	for _, o := range objs {
 		if o.found && !toolOwned(o.meta) {
 			kept = append(kept, maasDesc(o.kind, infra)+" (not created by this tool)")
 		}
 	}
-	msg := "The MaaS platform this tool set up is removed. Kept: GatewayClass " + maasGatewayClass + " (OpenShift's shared class for gateways; it costs nothing on its own), Connectivity Link (Kuadrant) and Authorino, the CloudNativePG operator, and the namespaces and objects RHOAI's operator made"
+	msg := "The MaaS platform this tool set up is removed. Kept, as shared platform pieces other RHOAI features use (RHOAI's inference gateway authentication is Kuadrant's), also where this tool installed them: Connectivity Link with its Kuadrant CR and Authorino TLS, and the CloudNativePG operator. Also kept: GatewayClass " + maasGatewayClass + " (OpenShift's shared class for gateways; it costs nothing on its own), and the namespaces and objects RHOAI's operator made"
 	if len(kept) > 0 {
 		msg += "; " + strings.Join(kept, "; ")
 	}
@@ -752,7 +581,7 @@ func maasModelRefObjectFor(c *Client, project, name, displayName, description, m
 // maasAccessObjects are the tool's MaaSSubscription and MaaSAuthPolicy for
 // the published models (the docs' free sample: system:authenticated, 100
 // tokens a minute, priority 10).
-func maasAccessObjects(c *Client, pubs []maasPub) (map[string]interface{}, map[string]interface{}) {
+func maasAccessObjects(c *Client, pubs []maasPub, priority int) (map[string]interface{}, map[string]interface{}) {
 	var subRefs, authRefs []interface{}
 	for _, p := range pubs {
 		subRefs = append(subRefs, map[string]interface{}{"name": p.model, "namespace": p.project,
@@ -765,7 +594,7 @@ func maasAccessObjects(c *Client, pubs []maasPub) (map[string]interface{}, map[s
 		"kind":       "MaaSSubscription",
 		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": toolLabels(),
 			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "100 tokens a minute for every signed-in user"}},
-		"spec": map[string]interface{}{"owner": group, "modelRefs": subRefs, "priority": 10},
+		"spec": map[string]interface{}{"owner": group, "modelRefs": subRefs, "priority": priority},
 	}
 	auth := map[string]interface{}{
 		"apiVersion": maasAPI(c),
@@ -866,7 +695,22 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "status failed")
 	}
 	if !st.Platform.Ready {
-		return m.fail("check", "The MaaS platform is not ready ("+st.Platform.Message+"). Set it up first. Nothing was changed.", "prerequisites", "platform not ready")
+		return m.fail("check", maasNotReadyReason(st)+" Nothing was changed.", "prerequisites", "platform not ready")
+	}
+	// Connectivity Link's version (fail closed when it cannot be read).
+	rhcl, err := readOperator(c, rhclOperator)
+	if err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot check Connectivity Link's version; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
+	}
+	if versionCore(rhcl.version) == rhclAuthBypassVersion {
+		return m.fail("check", rhclWarning(rhcl.version)+" Nothing was changed.", "prerequisites", "rhcl auth bypass")
+	}
+	priority, others, err := maasSubscriptionPriority(c)
+	if err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot list the MaaSSubscriptions, so this tool cannot pick a priority below the others'; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "subscription list failed")
+	}
+	if len(others) > 0 && rhclBelowMinimum(rhcl.version) {
+		return m.fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later with RHOAI 3.6), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
 	}
 	if msg, code := maasNamespaceRefusal(c, maasInfraNamespace(c)); msg != "" {
 		return m.fail("check", msg, code, "namespace not rhoai's")
@@ -956,7 +800,7 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
-	sub, auth := maasAccessObjects(c, live)
+	sub, auth := maasAccessObjects(c, live, priority)
 	// The catalog's display name and description (the text setup writes on
 	// the model), never the object's: MaaS shows them to every signed-in
 	// user, and a project editor can change the annotations.
@@ -1109,7 +953,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 
 	// The access policy and the subscription.
 	say("maas", "running", "Removing the model from the access policy and the subscription...")
-	sub, auth := maasAccessObjects(c, live)
+	sub, auth := maasAccessObjects(c, live, maasOwnSubscriptionPriority(c))
 	for _, w := range []struct {
 		kind, desc string
 		obj        map[string]interface{}

