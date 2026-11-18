@@ -247,9 +247,17 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
   );
 };
 
-/** One line about a catalog model: what it is and what it reserves. */
+/**
+ * What a catalog model is for, once: its use case as the dashboard shows it
+ * (opendatahub.io/genai-use-case), and an embedding model's vector size.
+ */
+export function modelUseWords(c: CatalogModel): string {
+  return c.type === "embedding" && c.embeddingDimension ? `${c.useCase}; vectors of ${c.embeddingDimension} numbers` : c.useCase;
+}
+
+/** One line about a catalog model: what it is for and what it reserves. */
 export function modelOptionWords(c: CatalogModel): string {
-  return `${modelTypeWords(c)}. For: ${c.useCase}. Reserves ${modelNeeds(c)}. Downloads about ${c.downloadSize}.`;
+  return `${modelUseWords(c)}. Reserves ${modelNeeds(c)}. Downloads about ${c.downloadSize}.`;
 }
 
 /**
@@ -367,14 +375,8 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
         )}
         {c && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Type</DescriptionListTerm>
-            <DescriptionListDescription>{modelTypeWords(c)}</DescriptionListDescription>
-          </DescriptionListGroup>
-        )}
-        {c && (
-          <DescriptionListGroup>
-            <DescriptionListTerm>For</DescriptionListTerm>
-            <DescriptionListDescription>{c.useCase}</DescriptionListDescription>
+            <DescriptionListTerm>Use case</DescriptionListTerm>
+            <DescriptionListDescription>{modelUseWords(c)}</DescriptionListDescription>
           </DescriptionListGroup>
         )}
         {c && (

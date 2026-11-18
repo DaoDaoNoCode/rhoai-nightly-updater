@@ -242,10 +242,13 @@ describe("Models tab", () => {
     renderAt("/test-resources?tab=models&project=dev");
     fireEvent.click(await screen.findByRole("button", { name: "Model" }));
     const smol = await screen.findByRole("option", { name: /SmolLM2 135M Instruct \(CPU\)/ });
-    expect(smol).toHaveTextContent("Chat. For: Chat (smoke test). Reserves 2 CPUs and 5 GiB of memory (up to 6 GiB). Downloads about 270 MB.");
-    expect(screen.getByRole("option", { name: /Granite Embedding/ })).toHaveTextContent("Embedding (768 dimensions)");
+    // What it is for, once: the use case the dashboard shows (no "Chat. For: Chat").
+    expect(smol).toHaveTextContent("Chat (smoke test). Reserves 2 CPUs and 5 GiB of memory (up to 6 GiB). Downloads about 270 MB.");
+    expect(screen.getByRole("option", { name: /Qwen2.5 0.5B/ })).toHaveTextContent(/^Qwen2.5 0.5B Instruct \(CPU\)Chat\. Reserves 4 CPUs/);
+    expect(screen.getByRole("option", { name: /Granite Embedding/ })).toHaveTextContent("Embeddings, Semantic search; vectors of 768 numbers. Reserves");
     const qwen3 = screen.getByRole("option", { name: /Qwen3 1.7B/ });
-    expect(qwen3).toHaveTextContent("Chat, tool calling");
+    expect(qwen3).toHaveTextContent("Chat, Tool calling, Reasoning. Reserves");
+    for (const o of screen.getAllByRole("option")) expect(o).not.toHaveTextContent("For:");
     expect(qwen3).toHaveTextContent("Cannot be set up now. No worker seems to have room for the model: it needs 4 CPUs and 10Gi of memory free.");
     expect(qwen3.closest("li")?.querySelector("button")).toBeDisabled();
   });
@@ -262,6 +265,14 @@ describe("Models tab", () => {
     const part = await screen.findByRole("listitem", { name: "Granite Embedding 125M English (CPU)" });
     expect(within(part).getByText(/An embedding model: it turns text into vectors of 768 numbers/)).toBeInTheDocument();
     expect(within(part).getByText("--runner pooling --max-model-len 512")).toBeInTheDocument();
+    // One "Use case" row, as the dashboard names it; no "Type" and "For" saying the same twice.
+    const details = part.querySelector<HTMLElement>('dl[aria-label="Model details"]')!;
+    expect(within(details).getByText("Use case")).toBeInTheDocument();
+    expect(within(details).getByText("Embeddings, Semantic search; vectors of 768 numbers")).toBeInTheDocument();
+    expect(within(details).queryByText("Type")).toBeNull();
+    expect(within(details).queryByText("For")).toBeNull();
+    // Under the picker, the same single line.
+    expect(screen.getAllByText(/^Embeddings, Semantic search; vectors of 768 numbers\. Reserves 2 CPUs/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Set up Granite Embedding 125M English in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Granite Embedding 125M English in dev\?/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
