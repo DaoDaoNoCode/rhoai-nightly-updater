@@ -39,6 +39,33 @@ func TestMCPSample_AddRemove(t *testing.T) {
 	}
 }
 
+// A 404 without MLflow's error body (the gateway's while MLflow restarts)
+// is not "no registry": the status cannot tell, and Remove fails instead of
+// reporting success with the entry still there.
+func TestRegistrySamples_BareNotFoundIsAnError(t *testing.T) {
+	env := newSamplesEnv(t)
+	if ok, msg, _ := env.run(t, "add", SampleMCPServer, SampleSkill); !ok {
+		t.Fatal(msg)
+	}
+	mcpGet := "GET /api/3.0/mlflow/mcp-servers/" + mcpSampleName
+	skillGet := "GET /api/3.0/mlflow/skills/" + skillSampleName
+	env.mlflow.bareNext[mcpGet], env.mlflow.bareNext[skillGet] = 404, 404
+	got := env.status(t)
+	for _, id := range []string{SampleMCPServer, SampleSkill} {
+		if got[id].State != "unknown" {
+			t.Errorf("%s status = %+v, want unknown", id, got[id])
+		}
+	}
+	env.mlflow.bareNext[mcpGet], env.mlflow.bareNext[skillGet] = 404, 404
+	ok, msg, steps := env.run(t, "remove", SampleMCPServer, SampleSkill)
+	if ok || strings.Contains(stepMessages(steps), "nothing to remove") {
+		t.Errorf("remove succeeded on a bare 404: %s\n%s", msg, stepMessages(steps))
+	}
+	if env.mlflow.mcp[mcpSampleName] == nil || env.mlflow.skills[skillSampleName] == nil {
+		t.Error("an entry was deleted")
+	}
+}
+
 func TestMCPSample_PartialIsCompleted(t *testing.T) {
 	env := newSamplesEnv(t)
 	env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{sampleMarkerKey: SampleMCPServer}, versions: map[string]string{mcpSampleVersion: "deprecated"}}

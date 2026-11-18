@@ -31,6 +31,9 @@ type mlflowFake struct {
 	used map[string]bool
 	// failNext maps "METHOD path" to a status to answer once.
 	failNext map[string]int
+	// bareNext maps "METHOD path" to a status answered once with an empty
+	// body, as the gateway answers while MLflow restarts.
+	bareNext map[string]int
 	// noSkills: this MLflow has no Skill Registry (RHOAI 3.5).
 	noSkills bool
 	requests []string
@@ -185,7 +188,7 @@ const fakeProject = "proj"
 
 func newMLflowFake(t *testing.T) *mlflowFake {
 	return &mlflowFake{
-		t: t, used: map[string]bool{}, failNext: map[string]int{},
+		t: t, used: map[string]bool{}, failNext: map[string]int{}, bareNext: map[string]int{},
 		experiments: map[string]*fakeExperiment{}, runs: map[string]*fakeRun{},
 		models: map[string]*fakeModel{}, mcp: map[string]*fakeMCP{}, skills: map[string]*fakeSkill{},
 		demo: fakeDemo{
@@ -293,6 +296,11 @@ func (f *mlflowFake) serve(w http.ResponseWriter, r *http.Request) {
 	if status, ok := f.failNext[r.Method+" "+path]; ok {
 		delete(f.failNext, r.Method+" "+path)
 		f.mlflowError(w, status, "INTERNAL_ERROR", "injected failure")
+		return
+	}
+	if status, ok := f.bareNext[r.Method+" "+path]; ok {
+		delete(f.bareNext, r.Method+" "+path)
+		w.WriteHeader(status)
 		return
 	}
 	var rule mlflowFakeRule

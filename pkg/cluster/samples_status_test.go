@@ -204,8 +204,14 @@ func TestParseSampleAPIError(t *testing.T) {
 		{`{"error_code":"RESOURCE_DOES_NOT_EXIST","message":"no"}`, "RESOURCE_DOES_NOT_EXIST", "no", false, true, false},
 		{`{"error_code":"ENDPOINT_NOT_FOUND","message":"Endpoint not found."}`, "ENDPOINT_NOT_FOUND", "Endpoint not found.", true, false, false},
 		{`{"detail":"Not Found"}`, "", "Not Found", true, false, false},
-		{`{"error":"x","code":5,"message":"run not found"}`, "", "run not found", true, false, false},
-		{"Forbidden (user=system:serviceaccount:a:b, verb=get)", "", "Forbidden (user=system:serviceaccount:a:b, verb=get)", true, false, false},
+		// Neither: a 404 without MLflow's code or FastAPI's exact body says
+		// nothing about the route or the object (the gateway's empty 404
+		// while MLflow restarts).
+		{`{"error":"x","code":5,"message":"run not found"}`, "", "run not found", false, false, false},
+		{"Forbidden (user=system:serviceaccount:a:b, verb=get)", "", "Forbidden (user=system:serviceaccount:a:b, verb=get)", false, false, false},
+		{"", "", "", false, false, false},
+		{`{"detail":"Item missing"}`, "", "Item missing", false, false, false},
+		{`{"error_code":"INVALID_PARAMETER_VALUE","message":"Not Found"}`, "INVALID_PARAMETER_VALUE", "Not Found", false, false, false},
 	} {
 		e := parseSampleAPIError("MLflow", 404, []byte(tc.body))
 		if e.Code != tc.code || e.Message != tc.msg || isEndpointMissing(e) != tc.missing || isNotFound(e) != tc.notFound {

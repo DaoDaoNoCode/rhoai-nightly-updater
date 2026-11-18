@@ -114,6 +114,8 @@ type sampleAPIError struct {
 	Code    string
 	Message string
 	server  string
+	// fastAPINotFound: the body was exactly FastAPI's {"detail":"Not Found"}.
+	fastAPINotFound bool
 }
 
 func (e *sampleAPIError) Error() string {
@@ -133,20 +135,26 @@ func asSampleAPIError(err error) (*sampleAPIError, bool) {
 	return e, ok
 }
 
-// isNotFound: the object does not exist. A 404 for a route the server does
-// not know is not this (see isEndpointMissing).
+// isNotFound: the object does not exist, as MLflow says it: 404
+// RESOURCE_DOES_NOT_EXIST (MlflowException's code for a missing experiment,
+// model, version, MCP server or skill). Any other 404 is not this: a route
+// the server does not know (isEndpointMissing), or a 404 without MLflow's
+// error body, such as the gateway's while MLflow restarts, which says
+// nothing about the object.
 func isNotFound(err error) bool {
 	e, ok := asSampleAPIError(err)
-	return ok && e.Status == http.StatusNotFound && !isEndpointMissing(err)
+	return ok && e.Status == http.StatusNotFound && e.Code == "RESOURCE_DOES_NOT_EXIST"
 }
 
-// isEndpointMissing: the server has no such API. The kubernetes-auth plugin
-// answers a route without an authorization rule with 404 ENDPOINT_NOT_FOUND
-// before any access review (auth/core.py:700-714); FastAPI answers an
-// unknown route with {"detail":"Not Found"}, so no MLflow error_code.
+// isEndpointMissing: the server has no such API. Only two answers say so:
+// the kubernetes-auth plugin's 404 ENDPOINT_NOT_FOUND for a route without
+// an authorization rule, sent before any access review (auth/core.py:
+// 700-714), and FastAPI's own {"detail":"Not Found"} for a route it does
+// not have. A 404 with any other body (an empty one from the gateway
+// during a redeploy) is neither, so it stays an error.
 func isEndpointMissing(err error) bool {
 	e, ok := asSampleAPIError(err)
-	return ok && e.Status == http.StatusNotFound && (e.Code == "ENDPOINT_NOT_FOUND" || e.Code == "")
+	return ok && e.Status == http.StatusNotFound && (e.Code == "ENDPOINT_NOT_FOUND" || e.fastAPINotFound)
 }
 
 // isAlreadyExists: MLflow's RESOURCE_ALREADY_EXISTS, or HTTP 409.
@@ -203,6 +211,7 @@ func parseSampleAPIError(server string, status int, body []byte) *sampleAPIError
 			var s string
 			if json.Unmarshal(parsed.Detail, &s) == nil {
 				e.Message = s
+				e.fastAPINotFound = e.Code == "" && s == "Not Found"
 			} else {
 				e.Message = string(parsed.Detail)
 			}
