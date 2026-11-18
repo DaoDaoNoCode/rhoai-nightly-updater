@@ -58,6 +58,7 @@ type mlflowCR struct {
 		Image *struct {
 			Image *string `json:"image"`
 		} `json:"image"`
+		Resources json.RawMessage `json:"resources"`
 	} `json:"spec"`
 	Status struct {
 		// URL is the public address the operator reports (on current
@@ -100,6 +101,25 @@ func (m mlflowCR) image() string {
 // allows the single name "mlflow" and deleting it garbage-collects mlflow-pvc.
 func (m mlflowCR) managedByTool() bool {
 	return m.Metadata.hasToolLabel() || m.Metadata.ownsFieldPath([]string{toolFieldManager}, "f:spec")
+}
+
+// oldToolResources: spec.resources is exactly what SetupMLflow set before
+// a80121f (requests 500m/1Gi, limits 2/2Gi). The 2Gi limit got the server
+// OOMKilled while MLflow generated its demo (live on 3.6); the operator's
+// chart defaults (limits 4 CPU / 3Gi) apply once spec.resources is unset.
+// Anything else is someone's own choice and is left alone.
+func (m mlflowCR) oldToolResources() bool {
+	if len(m.Spec.Resources) == 0 {
+		return false
+	}
+	var r map[string]map[string]interface{}
+	if json.Unmarshal(m.Spec.Resources, &r) != nil || len(r) != 2 {
+		return false
+	}
+	is := func(q map[string]interface{}, cpu, mem string) bool {
+		return len(q) == 2 && fmt.Sprint(q["cpu"]) == cpu && fmt.Sprint(q["memory"]) == mem
+	}
+	return is(r["requests"], "500m", "1Gi") && is(r["limits"], "2", "2Gi")
 }
 
 func prNumberFromImage(image string) int {

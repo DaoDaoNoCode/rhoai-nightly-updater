@@ -102,6 +102,28 @@ func demoForeignMessage(e *mlflowExperiment) string {
 // experiment of the demo's name without the tool's marker is "foreign"
 // (demoForeignMessage).
 func demoStatus(t *mlflowTarget) types.SampleStatus {
+	s := demoStatusOfExperiment(t)
+	if s.State == "unknown" || s.State == "foreign" || !t.cr.oldToolResources() {
+		return s
+	}
+	if !t.cr.managedByTool() {
+		s.State, s.Actions, s.Message, s.Missing = "unsupported", []string{}, demoLowMemoryMessage(false), nil
+		return s
+	}
+	s.Message = demoLowMemoryMessage(true)
+	return s
+}
+
+// demoLowMemoryMessage explains the 2Gi limit of an MLflow CR created by an
+// earlier version of this tool (mlflowCR.oldToolResources).
+func demoLowMemoryMessage(managed bool) string {
+	if !managed {
+		return "MLflow's memory limit is 2Gi (spec.resources of MLflow CR " + mlflowCRName + "), and generating the demo runs MLflow out of memory. This tool did not create that MLflow, so it does not change the limit: raise it, or remove spec.resources so the operator's defaults (3Gi) apply."
+	}
+	return "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR " + mlflowCRName + ", so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready."
+}
+
+func demoStatusOfExperiment(t *mlflowTarget) types.SampleStatus {
 	s := types.SampleStatus{}
 	exp, err := t.experimentByName(demoExperiment)
 	if err != nil {

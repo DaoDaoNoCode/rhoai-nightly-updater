@@ -207,6 +207,40 @@ func TestGenAIDemo_NoGeneratorIsUnsupported(t *testing.T) {
 	}
 }
 
+// An MLflow CR created before a80121f keeps requests 500m/1Gi, limits
+// 2/2Gi; generating the demo OOM-killed that server. Add first removes the
+// limit on the tool's CR (guarded), and refuses on someone else's.
+func TestGenAIDemo_OldMemoryLimit(t *testing.T) {
+	const oldSpec = `{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}`
+	t.Run("the tool's CR: Add removes the limit first", func(t *testing.T) {
+		env := newSamplesEnv(t)
+		putMLflow(env.k8s, toolLabelJSON, toolFieldManager, "Update", "", oldSpec, `{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
+		if s := env.status(t)[SampleGenAIDemo]; s.State != "absent" || !strings.Contains(s.Message, "2Gi memory limit") {
+			t.Errorf("status %+v", s)
+		}
+		ok, msg, steps := env.run(t, "add", SampleGenAIDemo)
+		if ok || !strings.HasSuffix(msg, "| in_progress") || !strings.Contains(stepMessages(steps), "add the demo again once MLflow is ready") || env.mlflow.generates != 0 {
+			t.Fatalf("%s\n%s", msg, stepMessages(steps))
+		}
+		if spec := env.k8s.get(mlflowPath)["spec"].(map[string]interface{}); spec["resources"] != nil {
+			t.Errorf("spec.resources still set: %v", spec["resources"])
+		}
+		if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok {
+			t.Errorf("second add: %s", msg)
+		}
+	})
+	t.Run("someone else's CR is left alone", func(t *testing.T) {
+		env := newSamplesEnv(t)
+		putMLflow(env.k8s, `{}`, "Mozilla", "Update", "", oldSpec, `{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
+		if s := env.status(t)[SampleGenAIDemo]; s.State != "unsupported" || len(s.Actions) != 0 || !strings.Contains(s.Message, "memory limit is 2Gi") {
+			t.Errorf("status %+v", s)
+		}
+		if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); ok || hasMutation(env.k8s, "PATCH") || env.mlflow.generates != 0 {
+			t.Errorf("add: %s %v", msg, env.k8s.mutations())
+		}
+	})
+}
+
 func TestGenAIDemo_PermissionDenied(t *testing.T) {
 	env := newSamplesEnv(t)
 	env.mlflow.allow = func(resource, verb, ns, name string) bool { return resource != "datasets" }

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -146,7 +147,32 @@ func regenerateGenAIDemo(t *mlflowTarget, log func(string)) (string, error) {
 	return demoAddOrRegenerate(t, log, true)
 }
 
+// errMLflowRestarting: the demo was not generated because MLflow restarts
+// with new resources first.
+var errMLflowRestarting = errors.New("MLflow restarts with the operator's default resources (limits 4 CPU / 3Gi) now; add the demo again once MLflow is ready (1 to 3 minutes). The demo was not generated: with the 2Gi memory limit an earlier version of this tool set, generating it runs MLflow out of memory")
+
+// raiseOldMemoryLimit removes spec.resources from a CR this tool created
+// with the old limit (oldToolResources), guarded by resourceVersion, so the
+// operator's defaults apply. The server restarts, so the demo waits for the
+// next Add.
+func (t *mlflowTarget) raiseOldMemoryLimit(log func(string)) error {
+	if err := patchMLflowCR(t.c, t.cr, nil, map[string]interface{}{"resources": nil}); err != nil {
+		if IsK8sError(err, 409) {
+			return fmt.Errorf("MLflow changed while its memory limit was being removed; nothing was changed, refresh and retry: %w", err)
+		}
+		return fmt.Errorf("remove the 2Gi memory limit from MLflow CR %s: %w", mlflowCRName, err)
+	}
+	log("Removed the 2Gi memory limit (spec.resources) an earlier version of this tool set on MLflow CR " + mlflowCRName)
+	return errMLflowRestarting
+}
+
 func demoAddOrRegenerate(t *mlflowTarget, log func(string), always bool) (string, error) {
+	if t.cr.oldToolResources() {
+		if !t.cr.managedByTool() {
+			return "", &sampleRefusal{demoLowMemoryMessage(false)}
+		}
+		return "", t.raiseOldMemoryLimit(log)
+	}
 	exp, err := t.experimentByName(demoExperiment)
 	if err != nil {
 		return "", err

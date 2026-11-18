@@ -52,6 +52,10 @@ type mlflowTarget struct {
 	api     *sampleAPI
 	ui      string // MLflow's public address, no trailing slash
 	project string
+	// c and cr are the cluster and the MLflow CR the target was read from;
+	// the demo checks the CR's memory limit (oldToolResources).
+	c  *Client
+	cr mlflowCR
 }
 
 // link is a page of the MLflow UI in the target's workspace.
@@ -93,7 +97,7 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 			ctx: c.ctx, base: base, token: c.token, server: "MLflow",
 			headers: map[string]string{mlflowWorkspaceHeader: project},
 		},
-		ui: base, project: project,
+		ui: base, project: project, c: c, cr: cr,
 	}, "", nil
 }
 
@@ -388,6 +392,8 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 				stepCode = "not_managed"
 			case errors.Is(err, errNoDemoGenerator), errors.Is(err, errNoMCPRegistry), errors.Is(err, errNoSkillRegistry):
 				stepCode = "unsupported"
+			case errors.Is(err, errMLflowRestarting):
+				stepCode = "in_progress"
 			}
 			code = firstNonEmpty(code, stepCode)
 			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err)), ErrorCode: stepCode})
