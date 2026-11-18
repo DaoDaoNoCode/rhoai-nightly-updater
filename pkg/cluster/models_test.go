@@ -899,18 +899,12 @@ func putModelDeployment(mc *modelsCluster, replicas, updated, available int) {
 func TestModelsSetup_WaitsForTheRollout(t *testing.T) {
 	mc := newModelsCluster(t)
 	putModelDeployment(mc, 2, 1, 1) // the new pod starts, the old one serves
-	reads := 0
-	mc.f.beforeServe = func(method, path string) {
-		if method == "GET" && strings.HasSuffix(path, "/namespaces/proj/deployments") {
-			mc.mu.Lock()
-			reads++
-			n := reads
-			mc.mu.Unlock()
-			if n == 3 {
-				putModelDeployment(mc, 1, 1, 1)
-			}
+	// The model reports Ready from its third read; the rollout ends later.
+	onModelRead(mc, func(n int) {
+		if n == 6 {
+			putModelDeployment(mc, 1, 1, 1)
 		}
-	}
+	})
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
 	if !res.Success || !strings.Contains(res.Message, "is ready in proj") {
 		t.Fatalf("setup: %+v", res)
@@ -919,8 +913,8 @@ func TestModelsSetup_WaitsForTheRollout(t *testing.T) {
 	for _, e := range events {
 		said = said || strings.Contains(e.Message, "Rolling out the change")
 	}
-	if !said || reads < 3 {
-		t.Errorf("did not wait for the rollout (said=%v, deployment reads=%d)", said, reads)
+	if !said || mc.modelReads < 6 {
+		t.Errorf("did not wait for the rollout (said=%v, model reads=%d)", said, mc.modelReads)
 	}
 }
 
@@ -955,5 +949,107 @@ func TestModelsSetup_ReadyMustBeForTheAppliedGeneration(t *testing.T) {
 	}
 	if stale <= 4 {
 		t.Errorf("Ready for an older generation counted: %d reads", stale)
+	}
+}
+
+// putModelPod stores a pod of the model, its main container on image, with
+// the given status.
+func putModelPod(mc *modelsCluster, name, image, status string) {
+	mc.f.putJSON("/api/v1/namespaces/proj/pods/"+name, `{"metadata":{"name":"`+name+`","labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"spec":{"containers":[{"name":"main","image":"`+image+`"}]},"status":`+status+`}`)
+}
+
+// putModelDeploymentImage stores the model's Deployment with its pod
+// template's main image, its generation and observed generation, and the
+// given replica counts.
+func putModelDeploymentImage(mc *modelsCluster, image string, generation, observed, replicas, updated, available int) {
+	mc.f.putJSON(testModelDeployment, fmt.Sprintf(`{"metadata":{"name":"qwen25-05b-instruct-kserve","generation":%d,
+		"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":"main","image":%q}]}}},
+		"status":{"observedGeneration":%d,"replicas":%d,"updatedReplicas":%d,"availableReplicas":%d}}`, generation, image, observed, replicas, updated, available))
+}
+
+const testOldPullFailure = `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"reading manifest sha256:978a: manifest unknown"}}}]}`
+
+// onModelRead runs fn(n) before the n-th GET of the model.
+func onModelRead(mc *modelsCluster, fn func(n int)) {
+	mc.f.beforeServe = func(method, path string) {
+		if method == "GET" && strings.HasSuffix(path, "/llminferenceservices/qwen25-05b-instruct") {
+			mc.mu.Lock()
+			n := mc.modelReads + 1
+			mc.mu.Unlock()
+			fn(n)
+		}
+	}
+}
+
+// Switching a failing model to another image: the old pod still fails to
+// pull while the new one starts. Only the new revision's pods count.
+func TestModelsSetup_OldRevisionPodDoesNotFailTheChange(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 8
+	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 2, 1, 0)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-old", testPresetImage, testOldPullFailure)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-new", "quay.io/new/vllm:1", `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)
+	onModelRead(mc, func(n int) {
+		if n == 8 {
+			putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 1, 1, 1)
+		}
+	})
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success || !strings.Contains(res.Message, "is ready in proj") {
+		t.Fatalf("the old pod failed the change: %+v", res)
+	}
+}
+
+// While the Deployment's controller has not seen the change, every pod is
+// the previous revision's: their problems are not the change's.
+func TestModelsSetup_PodProblemsWaitForTheObservedGeneration(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 8
+	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 4, 3, 1, 1, 0)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-old", "quay.io/new/vllm:1", testOldPullFailure)
+	onModelRead(mc, func(n int) {
+		if n == 8 {
+			mc.f.mu.Lock()
+			delete(mc.f.objects, fakeKey{gv: "v1", ns: "proj", plural: "pods", name: "qwen25-05b-instruct-kserve-old"})
+			mc.f.mu.Unlock()
+			putModelDeploymentImage(mc, "quay.io/new/vllm:1", 4, 4, 1, 1, 1)
+		}
+	})
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("a pod of the previous revision failed the change: %+v", res)
+	}
+	said := false
+	for _, e := range events {
+		said = said || strings.Contains(e.Message, "Waiting for KServe to apply the change")
+	}
+	if !said {
+		t.Error("the wait did not say it waits for the change to be applied")
+	}
+}
+
+// KServe reports Ready while the old pod serves; the new pod crash-loops:
+// the rollout wait stops with the new pod's problem.
+func TestModelsSetup_RolloutStopsOnAFailingNewPod(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 1
+	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 2, 1, 1)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-old", testPresetImage, `{"containerStatuses":[{"name":"main","ready":true,"state":{"running":{}}}]}`)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-new", "quay.io/new/vllm:1", `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}`)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "keeps crashing") {
+		t.Fatalf("the rollout did not stop on the new pod's crash loop: %+v", res)
+	}
+}
+
+// Every pod is judged: a problem on the second pod is not hidden by the first.
+func TestDescribeModelPods_ChecksEveryPod(t *testing.T) {
+	var ok, bad modelPod
+	_ = json.Unmarshal([]byte(`{"metadata":{"name":"a"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}}`), &ok)
+	_ = json.Unmarshal([]byte(`{"metadata":{"name":"b"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}`), &bad)
+	if got := describeModelPods([]modelPod{ok, bad}, nil); !strings.Contains(got.problem, "keeps crashing") {
+		t.Fatalf("got %+v", got)
 	}
 }
