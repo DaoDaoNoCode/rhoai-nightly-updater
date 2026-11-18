@@ -151,8 +151,17 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 		}
 	}
 	if !kq.found && kVersion != "" {
-		if err := createKuadrant(c, kVersion, kuadrantNS, true); err != nil {
-			return dry("the Kuadrant CR", err)
+		// Only where its namespace exists: Kuadrant's API can be served
+		// (CRDs left by an uninstall) before the install makes the
+		// namespace, and the API server refuses the dry run there (seen live).
+		_, kNSFound, err := readObjectMeta(c, "/api/v1/namespaces/"+kuadrantNS)
+		if err != nil {
+			return m.fail("check", fmt.Sprintf("Cannot read namespace %s; nothing was changed: %v.%s", kuadrantNS, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace read failed")
+		}
+		if kNSFound {
+			if err := createKuadrant(c, kVersion, kuadrantNS, true); err != nil {
+				return dry("the Kuadrant CR", err)
+			}
 		}
 	}
 	if !infraFound {

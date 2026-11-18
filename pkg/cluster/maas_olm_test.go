@@ -813,6 +813,24 @@ func TestMaaSSetup_LeftoverCRDsWithoutOperatorsAreInstalled(t *testing.T) {
 	f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
 	delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
 	f.mu.Unlock()
+	// As the API server does (seen live): a Kuadrant CR, dry run or not, in
+	// a namespace that does not exist yet is refused with 404.
+	const kuadrantsPath = "/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants"
+	prev := f.beforeServe
+	f.beforeServe = func(method, path string) {
+		prev(method, path)
+		if method != http.MethodPost || path != kuadrantsPath {
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "kuadrant-system"}] == nil {
+			f.fail["POST "+kuadrantsPath], f.failDryRun["POST "+kuadrantsPath] = 404, 404
+		} else {
+			delete(f.fail, "POST "+kuadrantsPath)
+			delete(f.failDryRun, "POST "+kuadrantsPath)
+		}
+	}
 	st, err := GetMaaSStatus(mc.c)
 	if err != nil {
 		t.Fatal(err)
