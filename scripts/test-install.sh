@@ -141,7 +141,7 @@ else
 fi
 FAKE
 # template-objects TEMPLATE [PARAM_FILE]: "kind<TAB>namespace<TAB>instance
-# label" of each object of an OpenShift Template, its ${PARAM}s replaced by the param
+# label<TAB>name" of each object of an OpenShift Template, its ${PARAM}s replaced by the param
 # file's values, else the template's defaults: what `oc process --local`
 # renders, for the fake oc (checked against the real oc below, when there is one).
 cat >"$BIN/template-objects" <<'FAKE'
@@ -160,10 +160,11 @@ section != "objects:" { next }
 /^    metadata:/ { meta = 1; next }
 /^    [^ ]/ { meta = 0 }
 meta && /^      namespace: / { ns[n] = $2 }
+meta && /^      name: / { nm[n] = $2 }
 meta && /^      labels:/ { labels = 1; next }
 meta && /^      [^ ]/ { labels = 0 }
 labels && /^        app\.kubernetes\.io\/instance: / { inst[n] = $2 }
-END { OFS = "\t"; for (i = 1; i <= n; i++) print kind[i], subst(ns[i]), subst(inst[i]) }
+END { OFS = "\t"; for (i = 1; i <= n; i++) print kind[i], subst(ns[i]), subst(inst[i]), subst(nm[i]) }
 ' "${2:-/dev/null}" "$1"
 FAKE
 chmod +x "$BIN/oc" "$BIN/curl" "$BIN/template-objects"
@@ -350,6 +351,11 @@ grep -qx "oc delete rolebinding,role -n scratch-ns-later -l app.kubernetes.io/in
 	fail "uninstall: a Role in a namespace the template gained is not deleted"
 git -C "$REPO" checkout -q deploy/template.yaml
 # Without the namespaces it would leave Roles behind: nothing is deleted.
+# UPGRADING.md's command for 2.3.x, which leaves them: the template's names
+# with its default parameters.
+name=$("$BIN/template-objects" "$SRC/deploy/template.yaml" | awk -F'\t' '$1 == "Role" && $2 == "openshift-ingress-operator" {print $4}')
+grep -qF "oc delete role,rolebinding $name -n openshift-ingress-operator" "$SRC/docs/UPGRADING.md" && pass ||
+	fail "docs/UPGRADING.md has no 'oc delete role,rolebinding $name -n openshift-ingress-operator'"
 FAKE_PROCESS_FAIL=1 expect_fail "uninstall: the template cannot be rendered" "nothing was deleted" run bash "$ASSET" uninstall --namespace scratch-ns
 expect_eq "uninstall: no delete when the template cannot be rendered" "" "$(calls delete)"
 

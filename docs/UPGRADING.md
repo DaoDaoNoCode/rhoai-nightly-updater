@@ -432,7 +432,12 @@ a cluster):
   applies 2.3.3's template and deletes nothing. `make undeploy` from a
   3.0.0 clone, or 3.0.0's `install.sh uninstall`, removes them with the
   rest; 2.3.3's `install.sh uninstall` leaves the one in
-  `openshift-ingress-operator`.
+  `openshift-ingress-operator`. To remove that one while you stay on 2.3.x
+  (2.3.x does not use it):
+  `oc delete role,rolebinding rhoai-nightly-updater-rhoai-nightly-updater -n openshift-ingress-operator`
+  (the names are `<APP_NAME>-<NAMESPACE>`, here with the defaults). It is
+  safe: only this tool uses that name, and the command deletes nothing
+  else.
 
 ## 6. Roll back
 
