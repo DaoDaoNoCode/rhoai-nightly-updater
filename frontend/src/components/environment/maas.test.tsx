@@ -176,4 +176,35 @@ describe("MaaS run dialog", () => {
     await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b" }]);
   });
+
+  it("several models of a project: each row has its own state, and Unpublish names its model", async () => {
+    const added = "Partly published: someone added team/team-gateway since the model was published, so direct calls to the model through that gateway fail with 500 once the rate limit applies to it. Unpublish and Publish refuse, since writing back the gateways the model had before would drop it. Set the gateways the model should use yourself, without maas-default-gateway (for KServe's default gateway: oc patch llminferenceservice smollm2-135m-instruct -n dev --type=merge -p '{\"spec\":{\"router\":{\"gateway\":{\"refs\":null}}}}'), then Unpublish.";
+    const api = stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true },
+        items: [
+          { namespace: "dev", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true, message: "Published" },
+          { namespace: "dev", name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", deployed: false, ready: false, managedByTool: true, modelReady: true, published: false, message: "Not published" },
+          { namespace: "dev", name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", deployed: true, ready: false, managedByTool: true, modelReady: true, published: true, partly: true, message: added },
+        ],
+      }),
+      "POST /api/resources/maas/stream": sse({ step: "operation_complete", status: "success", message: "done" }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const qwen25 = (await screen.findByText("Qwen2.5 0.5B Instruct (CPU)")).closest("tr")!;
+    expect(within(qwen25).getByRole("button", { name: "Unpublish" })).toBeInTheDocument();
+    const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
+    expect(within(qwen3).getByRole("button", { name: "Publish" })).toBeInTheDocument();
+    const smollm2 = screen.getByText("SmolLM2 135M Instruct (CPU)").closest("tr")!;
+    expect(within(smollm2).getByText(added)).toBeInTheDocument();
+    expect(within(smollm2).queryByText(/earlier build/)).toBeNull();
+    fireEvent.click(within(smollm2).getByRole("button", { name: "Unpublish" }));
+    const confirm = await screen.findByRole("dialog", { name: /Unpublish smollm2-135m-instruct in dev\?/ });
+    expect(within(confirm).getByText(/unless another model of this tool is published there/)).toBeInTheDocument();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Unpublish" }));
+    await screen.findByRole("dialog", { name: "Unpublish smollm2-135m-instruct in dev" });
+    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "unpublish", project: "dev", model: "smollm2-135m-instruct" }]);
+  });
 });

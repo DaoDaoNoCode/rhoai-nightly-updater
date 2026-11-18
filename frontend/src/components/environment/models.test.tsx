@@ -264,6 +264,26 @@ describe("Models tab", () => {
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "granite-embedding-125m-english" }]);
   });
 
+  it("a project with a published and an unpublished model: the MaaS pointer is only for the published one", async () => {
+    const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", url: "https://inference.apps.example.com/dev/qwen3-1-7b", maasPublished: true });
+    const qwen25 = model("dev");
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen25, qwen3] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
+    expect(await screen.findByRole("button", { name: "Use the MaaS tab's commands" })).toBeInTheDocument();
+    expect(screen.getByText(/its direct address answers 404 until it is unpublished/)).toBeInTheDocument();
+    // Its direct-address commands (tool calling, thinking) answer 404 meanwhile, so they are not shown.
+    expect(screen.queryByText(/"tools":\[/)).toBeNull();
+    expect(screen.queryByText(/Thinking is off by default/)).toBeNull();
+    view.unmount();
+    renderAt("/test-resources?tab=models&project=dev&model=qwen25-05b-instruct");
+    expect(await screen.findByText(/"model":"qwen25-05b-instruct"/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use the MaaS tab's commands" })).toBeNull();
+    expect(screen.queryByText(/answers 404/)).toBeNull();
+  });
+
   it("Use it fits the model: embeddings, and Qwen3's tool calling and thinking", async () => {
     const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", url: "https://inference.apps.example.com/dev/qwen3-1-7b" });
     const granite = model("dev", { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", url: "https://inference.apps.example.com/dev/granite-embedding-125m-english" });
