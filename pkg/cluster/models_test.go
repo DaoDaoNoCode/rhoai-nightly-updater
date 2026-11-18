@@ -59,7 +59,7 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 		"spec":{"template":{"containers":[{"name":"main","image":"`+testPresetImage+`"}]}}}`)
 	f.putJSON("/apis/config.openshift.io/v1/ingresses/cluster", `{"spec":{"domain":"apps.example.com"}}`)
 	f.putJSON("/apis/operator.openshift.io/v1/namespaces/openshift-ingress-operator/ingresscontrollers/default", `{"spec":{"defaultCertificate":{"name":"custom-cert"}}}`)
-	f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
+	f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true","rhoai-nightly-updater/inference-routes":"true"}}}`)
 	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external", `{
 		"spec":{"dnsName":"inference.apps.example.com."},
 		"status":{"zones":[{"conditions":[{"type":"Published","status":"True"}]},{"conditions":[{"type":"Published","status":"True"}]}]}}`)

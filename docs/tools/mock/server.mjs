@@ -288,6 +288,21 @@ const scenarios = {
     w.resources.inferenceGateway = F.gatewayStates.foreign(["llm-eval/qwen25-05b-instruct"]);
     w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.foreign("llm-eval")] });
   },
+  // A project without the routes label: Set up waits for a cluster-admin.
+  "env-models-unlabelled": (w) => {
+    w.resources.inferenceGateway = { ...F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), labelledProjects: ["a-test-project", "dev-project", "llm-eval"] };
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
+  },
+  // An earlier version's gateway open to every namespace: Restrict, or the
+  // labels it waits for.
+  "env-models-open-gateway": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.open(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
+  },
+  "env-models-open-gateway-waiting": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.open(["dev-project/qwen25-05b-instruct", "llm-eval/qwen25-05b-instruct"], ["llm-eval"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project"), F.modelStates.released("llm-eval")] });
+  },
   "env-models-unknown": (w) => { w.resources.inferenceGateway = F.gatewayStates.unknown; },
   "env-models-gateway-starting": (w) => { w.resources.inferenceGateway = F.gatewayStates.starting; },
   // The room check: no worker has room for Qwen3 now, so the picker disables it.

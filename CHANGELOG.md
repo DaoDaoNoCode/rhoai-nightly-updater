@@ -302,6 +302,22 @@ only accepts a tag whose version is the top dated section. See
   and the new port until SeaweedFS is ready and `minio-service` follows, so
   the admin UI is never blocked while the old pod still serves it.
 
+### Security
+
+- **Inference gateway: models only from projects a cluster-admin labelled.**
+  The gateway this tool creates accepted routes from every namespace (RHOAI's
+  chart default), so a route in any project with a model's exact path took
+  over that model's calls and its callers' tokens (confirmed live). Both
+  listeners now accept routes only from namespaces labelled
+  `rhoai-nightly-updater/inference-routes=true`, which only a cluster-admin
+  can set; the tool never sets it. A model setup in a project without the
+  label is refused before anything is written, and the Models tab shows the
+  `oc label namespace` command with a copy button. A gateway an earlier
+  version made is shown as open to every project, with **Restrict to
+  labelled projects**, which waits until every project whose models use the
+  gateway has the label. Someone else's gateway is not changed; the tab says
+  when it accepts routes from every project.
+
 ## [2.3.3] - 2026-11-16
 
 ### Fixed

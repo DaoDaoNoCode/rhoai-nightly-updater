@@ -786,6 +786,18 @@ export interface InferenceGatewayState extends ResourceState {
   dns?: "published" | "pending";
   /** The gateway's authentication (odh-model-controller adds it once a model uses the gateway); absent: unknown. */
   authPolicy?: "enforced" | "not-enforced" | "missing";
+  /** The namespace label (set to "true") that lets a project's models use the gateway this tool creates. Only a cluster-admin sets it. */
+  routesLabel?: string;
+  /** The namespaces that carry the label. */
+  labelledProjects?: string[];
+  /** Why the labelled namespaces could not be read. */
+  routesLabelProblem?: string;
+  /** A listener accepts routes from every namespace: a route in any project can take over a model's address. */
+  openToAllNamespaces?: boolean;
+  /** Projects whose models use the gateway and lack the label: Restrict waits for them. */
+  unlabelledModelProjects?: string[];
+  /** Why this tool's open gateway cannot be restricted now. */
+  restrictBlockedReason?: string;
 }
 
 /** A model the Models feature sets up (pkg/cluster modelCatalog). */

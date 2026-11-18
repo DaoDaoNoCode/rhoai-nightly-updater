@@ -321,3 +321,74 @@ describe("Models tab", () => {
     expect(within(row).getByRole("link", { name: "Open in dashboard" })).toBeInTheDocument();
   });
 });
+
+describe("Who may use the inference gateway (the routes label)", () => {
+  const LABEL = "rhoai-nightly-updater/inference-routes";
+  const labelled = (gw: InferenceGatewayState, projects: string[]): InferenceGatewayState => ({ ...gw, routesLabel: LABEL, labelledProjects: projects });
+
+  it("a project without the label: Set up waits for a cluster-admin, before or after the gateway exists", () => {
+    for (const gw of [labelled(noGateway, ["other"]), labelled(gateway, ["other"])]) {
+      expect(modelsState(status({ inferenceGateway: gw }), "dev", ["dev"]).next).toMatchObject({ kind: "set-up", reason: expect.stringMatching(/cluster-admin/) });
+    }
+    expect(modelsState(status({ inferenceGateway: labelled(gateway, ["dev"]) }), "dev", ["dev"]).next).toMatchObject({ kind: "set-up", reason: null });
+    // Someone else's gateway decides by its own listeners: no label needed here.
+    expect(modelsState(status({ inferenceGateway: labelled({ ...gateway, managedByTool: false }, []) }), "dev", ["dev"]).next).toMatchObject({ reason: null });
+  });
+
+  it("the Models tab shows the exact command for a cluster-admin, with a copy button", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: labelled(gateway, ["other"]) }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText("A cluster-admin must allow dev to use the inference gateway")).toBeInTheDocument();
+    expect(within(part).getByText(`oc label namespace dev ${LABEL}=true`)).toBeInTheDocument();
+    expect(within(part).getByRole("button", { name: "Copy the label command" })).toBeInTheDocument();
+    expect(within(part).getByText("Not allowed yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("a labelled project says so and has no command", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: labelled(gateway, ["dev"]) }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText(/Allowed: the project has the label/)).toBeInTheDocument();
+    expect(within(part).queryByText(/oc label namespace/)).toBeNull();
+  });
+
+  it("this tool's gateway open to every namespace: warns and offers Restrict, a gateway setup", async () => {
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: { ...labelled(gateway, ["dev"]), openToAllNamespaces: true }, models: modelsStatus({ items: [model("dev")] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    expect(within(gw).getByText("The gateway accepts models from every project")).toBeInTheDocument();
+    expect(within(gw).getByText(/take over a model's address/)).toBeInTheDocument();
+    fireEvent.click(within(gw).getByRole("button", { name: "Restrict to labelled projects" }));
+    const dialog = await screen.findByRole("dialog", { name: /Restrict the inference gateway to labelled projects\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restrict" }));
+    await screen.findByRole("dialog", { name: "Restrict the inference gateway to labelled projects" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", gateway: true }]);
+  });
+
+  it("Restrict waits while models use the gateway from projects without the label, and lists the commands", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: { ...labelled(gateway, ["dev"]), openToAllNamespaces: true, unlabelledModelProjects: ["team"], restrictBlockedReason: "Models in 'team' route through the inference gateway." } }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    expect(within(gw).getByText(`oc label namespace team ${LABEL}=true`)).toBeInTheDocument();
+    expect(within(gw).queryByRole("button", { name: "Restrict to labelled projects" })).toBeNull();
+    expect(within(gw).getByText(/Restrict is not available now/)).toBeInTheDocument();
+  });
+
+  it("someone else's open gateway: says what it means and offers nothing", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: { ...labelled(gateway, []), managedByTool: false, openToAllNamespaces: true } }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    expect(within(gw).getByText("This gateway accepts models from every project")).toBeInTheDocument();
+    expect(within(gw).getByText(/Its owner can limit/)).toBeInTheDocument();
+    expect(within(gw).queryByRole("button", { name: "Restrict to labelled projects" })).toBeNull();
+  });
+});

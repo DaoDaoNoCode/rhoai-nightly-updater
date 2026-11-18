@@ -593,18 +593,31 @@ const INFERENCE = `https://inference.${APPS}`;
 const PRESET = "v3-6-0-kserve-config-llm-template-cpu";
 const PRESET_IMAGE = `registry.redhat.io/rhaii/vllm-cpu-rhel9@${digest("vllm-cpu-nightly")}`;
 const RELEASED_IMAGE = `registry.redhat.io/rhaii/vllm-cpu-rhel9@${digest("vllm-cpu-3.5.3")}`;
-const GW = { namespace: "openshift-ingress", name: "openshift-ai-inference" };
+// The namespace label a cluster-admin sets so a project's models may use the
+// tool's gateway (pkg/cluster inferenceRoutesLabel); every mock project has it.
+export const ROUTES_LABEL = "rhoai-nightly-updater/inference-routes";
+const LABELLED = { routesLabel: ROUTES_LABEL, labelledProjects: ["a-test-project", "dev-project", "fraud-detection", "llm-eval"] };
+const GW = { namespace: "openshift-ingress", name: "openshift-ai-inference", ...LABELLED };
 const usedBy = (models) => models.length
   ? { usedBy: models, teardownBlockedReason: `Models route through it: ${models.join(", ")}. Delete ${models.length > 1 ? "those models" : "that model"} first.` }
   : {};
 
 export const gatewayStates = {
-  none: { deployed: false, ready: false, message: "Not set up", managedByTool: false },
+  none: { deployed: false, ready: false, message: "Not set up", managedByTool: false, ...LABELLED },
   starting: { ...GW, deployed: true, ready: false, managedByTool: true, message: "Programmed, waiting for an address", externalUrl: INFERENCE },
   ready: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: true, message: "Running", externalUrl: INFERENCE, address: "a1b2c3d4e5f6-1234567890.us-east-1.elb.amazonaws.com", dns: "published", authPolicy: models.length ? "enforced" : "missing", ...usedBy(models) }),
   // RHOAI's chart (or an admin) made it: used as it is, never changed.
-  foreign: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: false, message: "Running", externalUrl: INFERENCE, address: "a9f8e7d6-0987654321.us-east-1.elb.amazonaws.com", authPolicy: "enforced", ...usedBy(models), teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." }),
+  // RHOAI's chart sets allowedRoutes "All".
+  foreign: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: false, openToAllNamespaces: true, message: "Running", externalUrl: INFERENCE, address: "a9f8e7d6-0987654321.us-east-1.elb.amazonaws.com", authPolicy: "enforced", ...usedBy(models), teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." }),
   // Someone else's that reports no Programmed condition: unknown, not failed.
+  // An earlier version's gateway: routes from every namespace. unlabelled
+  // are the projects whose models use it without the label.
+  open: (models = [], unlabelled = []) => {
+    const words = unlabelled.map((p) => `'${p}'`).join(" and ");
+    return { ...gatewayStates.ready(models), openToAllNamespaces: true,
+      ...(unlabelled.length ? { labelledProjects: LABELLED.labelledProjects.filter((p) => !unlabelled.includes(p)), unlabelledModelProjects: unlabelled,
+        restrictBlockedReason: `Models in ${words} route through the inference gateway, and ${unlabelled.length > 1 ? "those projects do" : "that project does"} not have the label ${ROUTES_LABEL}=true, so restricting the gateway now would cut them off. A cluster-admin labels ${unlabelled.length > 1 ? "them" : "it"} first:\n${unlabelled.map((p) => `  oc label namespace ${p} ${ROUTES_LABEL}=true`).join("\n")}` } : {}) };
+  },
   unknown: { ...GW, deployed: true, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Programmed condition", externalUrl: INFERENCE, teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." },
 };
 

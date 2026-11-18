@@ -212,7 +212,7 @@ export type Pending =
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
   /** model: the catalog name of the model in project. */
-  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean }
+  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean; restrict?: boolean }
   | { kind: "teardown-model"; project: string; model: string }
   | { kind: "teardown-gateway" }
   /** The Gen AI playground in a project, through the dashboard's API (one streamed operation). */

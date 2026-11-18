@@ -643,6 +643,26 @@ type InferenceGatewayState struct {
 	// adds once a model uses the gateway: "enforced", "not-enforced",
 	// "missing", or "" when unknown.
 	AuthPolicy string `json:"authPolicy,omitempty"`
+	// RoutesLabel is the namespace label (set to "true") that lets a
+	// project's routes attach to the gateway this tool creates. Only a
+	// cluster-admin can set it; the tool never does.
+	RoutesLabel string `json:"routesLabel,omitempty"`
+	// LabelledProjects are the namespaces that carry RoutesLabel=true.
+	LabelledProjects []string `json:"labelledProjects,omitempty"`
+	// RoutesLabelProblem says why the labelled namespaces could not be
+	// read ("" when they were).
+	RoutesLabelProblem string `json:"routesLabelProblem,omitempty"`
+	// OpenToAllNamespaces: a listener of the gateway accepts routes from
+	// every namespace, so a route in any project can take over a model's
+	// address.
+	OpenToAllNamespaces bool `json:"openToAllNamespaces,omitempty"`
+	// UnlabelledModelProjects are the namespaces of models that route
+	// through the gateway and lack RoutesLabel: restricting the gateway
+	// waits until a cluster-admin labels them.
+	UnlabelledModelProjects []string `json:"unlabelledModelProjects,omitempty"`
+	// RestrictBlockedReason says why this tool's open gateway cannot be
+	// restricted to labelled projects now ("" when it can, or is not open).
+	RestrictBlockedReason string `json:"restrictBlockedReason,omitempty"`
 }
 
 // ModelsStatus is what setting up a model needs, and the models of the

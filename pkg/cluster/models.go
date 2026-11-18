@@ -879,11 +879,17 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		return nil, msg + " This tool sets up models only behind its own gateway. Nothing was changed.", "prerequisites"
 	}
 
-	// The gateway the model will route through.
+	// The gateway the model will route through. This tool's gateway admits
+	// only projects a cluster-admin labelled; someone else's decides by its
+	// own listeners.
 	switch {
 	case gw != nil && gw.foreign:
 		if gw.gateway.admits(req.Project, labels) == "no" {
 			return nil, fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not let routes from project '%s' attach (its listeners' allowedRoutes). Nothing was changed; ask its owner.", inferenceGatewayNamespace, inferenceGatewayName, req.Project), "prerequisites"
+		}
+	case gw != nil:
+		if labels[inferenceRoutesLabel] != "true" {
+			return nil, unlabelledProjectRefusal(req.Project), "prerequisites"
 		}
 	case gw == nil:
 		existing, found, err := readInferenceGateway(c)
@@ -895,6 +901,14 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		}
 		if existing.Metadata.terminating() {
 			return nil, "The inference gateway is being deleted. Set it up again first. Nothing was changed.", "terminating"
+		}
+		if gatewayOwned(existing.Metadata) {
+			// Also while an earlier version's gateway still admits every
+			// namespace: restricting it must not cut this model off.
+			if labels[inferenceRoutesLabel] != "true" {
+				return nil, unlabelledProjectRefusal(req.Project), "prerequisites"
+			}
+			break
 		}
 		switch existing.admits(req.Project, labels) {
 		case "no":

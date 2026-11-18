@@ -337,6 +337,22 @@ export function modelOptionReason(status: ResourcesStatus | null, project: strin
   return `Cannot be set up now. ${c.capacityWarning}`;
 }
 
+/**
+ * Whether the project lacks the label this tool's inference gateway admits
+ * models by (pkg/cluster inferenceRoutesLabel). Someone else's gateway
+ * decides by its own listeners, and an unreadable label state is no reason
+ * here (setup still checks).
+ */
+export function projectNeedsRoutesLabel(status: ResourcesStatus | null | undefined, project: string): boolean {
+  const gw = status?.inferenceGateway;
+  if (!gw?.routesLabel || gw.routesLabelProblem) return false;
+  if (gw.deployed && !gw.managedByTool) return false;
+  return !(gw.labelledProjects ?? []).includes(project);
+}
+
+/** The command a cluster-admin runs to let the project's models use the gateway. */
+export const routesLabelCommand = (label: string, project: string) => `oc label namespace ${project} ${label}=true`;
+
 export function gatewayStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
   return envStatus(status?.inferenceGateway, { busy: modelsBusy(busy, "gateway") });
 }
@@ -436,6 +452,7 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   let reason: string | null = modelsBlockedReason(status);
   if (!reason && moving) reason = `The ${moving.id === "gateway" ? "inference gateway" : "model"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is done.`;
   if (!reason && needGateway && status?.inferenceGateway?.setupBlockedReason) reason = status.inferenceGateway.setupBlockedReason;
+  if (!reason && projectNeedsRoutesLabel(status, project)) reason = `A cluster-admin must first allow ${project} to use the inference gateway, with the command shown under the model.`;
   if (!reason) reason = modelOptionReason(status, project, name);
   return {
     status: moving ? "setting-up" : "not-set-up",
