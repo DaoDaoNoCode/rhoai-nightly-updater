@@ -1279,7 +1279,7 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 		return m.fail("check", fmt.Sprintf("Cannot read the old storage's keys; nothing was deleted: %v.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "prerequisites"), "keys unreadable")
 	}
 	resume := source.why != ""
-	if pending := legacy.pvcsNotDeleting(); resume && len(pending) > 0 {
+	if pending := legacy.copiablePVCsNotDeleting(); resume && len(pending) > 0 {
 		return m.fail("check", sourceGoneMessage(legacy, source.why, pending), "prerequisites", "source gone, data not copied")
 	}
 	var keys *s3Keys
@@ -1404,7 +1404,10 @@ func (m *migrateRun) removeOldStorage(legacy *legacyStorage, dspas []dspaInfo, d
 func sourceGoneMessage(legacy *legacyStorage, why string, pending []string) string {
 	msg := fmt.Sprintf("The old storage in namespace '%s' cannot be copied from (%s), and its data %s %s %s not being deleted, so %s may hold objects that were never copied. Nothing was deleted.",
 		legacyNamespace, why, verb(len(pending), "volume", "volumes"), strings.Join(pending, ", "), verb(len(pending), "is", "are"), verb(len(pending), "it", "they"))
-	if legacy.server != "" && !legacy.ready {
+	// A server whose data volume is being deleted cannot start again (a
+	// new pod cannot use a PVC with a deletionTimestamp): only the manual
+	// path is left then.
+	if legacy.server != "" && !legacy.ready && !legacy.anyPVCTerminating() {
 		deployment := map[string]string{"SeaweedFS": s3Deployment, "MinIO": legacyMinIODeployment}[legacy.server]
 		return msg + fmt.Sprintf(" Start the server again (Deployment %s), then run Remove old storage again.", deployment)
 	}

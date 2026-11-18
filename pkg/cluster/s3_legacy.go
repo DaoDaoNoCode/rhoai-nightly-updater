@@ -357,6 +357,33 @@ func (l *legacyStorage) pvcsNotDeleting() []string {
 	return names
 }
 
+// copiablePVCsNotDeleting is pvcsNotDeleting without the uncopiable PVCs:
+// their objects were never reachable by a copy, and the removal plan says
+// they are deleted, so they do not stop a removal that got past the copy.
+func (l *legacyStorage) copiablePVCsNotDeleting() []string {
+	skip := map[string]bool{}
+	for _, n := range l.uncopiable() {
+		skip[n] = true
+	}
+	var names []string
+	for _, n := range l.pvcsNotDeleting() {
+		if !skip[n] {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// anyPVCTerminating reports whether a data PVC is being deleted.
+func (l *legacyStorage) anyPVCTerminating() bool {
+	for _, p := range l.pvcs {
+		if p.Meta.terminating() {
+			return true
+		}
+	}
+	return false
+}
+
 // uncopiable returns the data PVCs whose objects no server of the earlier
 // storage serves, so a copy through its Service cannot reach them: MinIO's
 // volume once SeaweedFS replaced MinIO (2.1 to 2.3 kept it, unused).

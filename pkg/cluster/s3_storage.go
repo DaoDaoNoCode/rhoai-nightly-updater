@@ -780,6 +780,8 @@ func s3CreatePath(kind string) (string, bool) {
 // not read by name (see listPVCs).
 func s3GetPath(kind, name string) (string, bool) {
 	switch {
+	case kind == "Job" && name == migrateJobName:
+		return namespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName), true
 	case kind == "Secret" && name == s3Secret:
 		return namespacedPath("v1", "secrets", s3Namespace, s3Secret), true
 	case kind == "Deployment" && name == s3Deployment:
@@ -797,6 +799,8 @@ func s3GetPath(kind, name string) (string, bool) {
 // s3DeletePath returns the path of a storage object teardown may delete.
 func s3DeletePath(kind, name string) (string, bool) {
 	switch {
+	case kind == "Job" && name == migrateJobName:
+		return namespacedPath("batch/v1", "jobs", s3Namespace, migrateJobName), true
 	case kind == "PersistentVolumeClaim" && name == s3PVC:
 		return namespacedPath("v1", "persistentvolumeclaims", s3Namespace, s3PVC), true
 	case kind == "Secret" && name == s3Secret:
@@ -1416,6 +1420,9 @@ func s3KeptNamespaceHint(namespaces []string) string {
 // namespace, in order. The Deployment goes first, so its pod releases the
 // PVC (whose kubernetes.io/pvc-protection finalizer waits for that).
 var s3TeardownObjects = []struct{ kind, name string }{
+	// Migrate storage's copy Job first: it must not keep copying into a
+	// storage that is being deleted.
+	{"Job", migrateJobName},
 	{"Deployment", s3Deployment},
 	{"NetworkPolicy", s3NetworkPolicy},
 	{"Route", s3AdminRoute},

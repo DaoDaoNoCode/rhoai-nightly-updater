@@ -932,3 +932,45 @@ func TestS3AdminPasswordIsItsOwn(t *testing.T) {
 		t.Error("a Deployment whose admin password is the S3 secret key is not noticed")
 	}
 }
+
+// Tear down stops Migrate storage's copy Job (by UID, only the tool's): it
+// must not keep copying into a storage being deleted.
+func TestTeardownS3Storage_DeletesTheCopyJob(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putDeployedS3(f)
+	f.putJSON(migrateJobPathT, `{"metadata":{"uid":"copy-job","labels":`+toolLabelJSON+`}}`)
+	if resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{}); !resp.Success || f.has(migrateJobPathT) {
+		t.Fatalf("teardown = %+v; job left: %v", resp, f.has(migrateJobPathT))
+	}
+	f2, c2 := newResourceFake(t)
+	putDeployedS3(f2)
+	f2.putJSON(migrateJobPathT, `{"metadata":{"uid":"theirs"}}`)
+	TeardownS3Storage(c2, types.S3TeardownRequest{})
+	if !f2.has(migrateJobPathT) {
+		t.Error("a Job of that name the tool did not create was deleted")
+	}
+}
+
+// A removal past the copy is not stopped by MinIO's uncopiable volume, and
+// a server whose data volume is being deleted is not offered as "start it
+// again" (it cannot start).
+func TestSourceGone_UncopiableAndTerminatingPVCs(t *testing.T) {
+	pvc := func(name string, terminating bool) storagePVC {
+		p := storagePVC{Meta: objectMeta{Name: name}}
+		if terminating {
+			now := "2026-11-17T12:00:00Z"
+			p.Meta.DeletionTimestamp = now
+		}
+		return p
+	}
+	l := &legacyStorage{server: "SeaweedFS", pvcs: []storagePVC{pvc(legacyMinIOPVC, false), pvc("seaweedfs-pvc", true)}}
+	if got := l.copiablePVCsNotDeleting(); len(got) != 0 {
+		t.Errorf("pending = %v, want none (minio-pvc cannot be copied)", got)
+	}
+	l = &legacyStorage{server: "SeaweedFS", pvcs: []storagePVC{pvc("seaweedfs-pvc", true), pvc("other-data", false)}}
+	msg := sourceGoneMessage(l, "SeaweedFS there is not running", l.copiablePVCsNotDeleting())
+	if strings.Contains(msg, "Start the server again") || !strings.Contains(msg, "oc delete pvc other-data -n minio") {
+		t.Errorf("message = %s", msg)
+	}
+}
