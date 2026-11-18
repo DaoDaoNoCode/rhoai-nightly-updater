@@ -370,7 +370,13 @@ func (l *legacyStorage) uncopiable() []string {
 // legacyStorageState converts the earlier storage into its status entry;
 // dspas are the pipeline servers, to name those that still use it, and
 // newReady tells whether the new storage is ready (see MigrateS3Storage).
-func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady bool) *types.LegacyStorageState {
+//
+// The stage is "remove" only on proof that the data moved: Migrate storage
+// recorded a verified copy (copied, migrationCopiedAnnotation), nothing is
+// left to move, and every pipeline server of this tool on the new storage
+// reaches it (DSPO's ObjectStoreAvailable). Until then it stays "migrate",
+// so Migrate storage finishes the job.
+func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady, copied bool) *types.LegacyStorageState {
 	if l == nil {
 		return nil
 	}
@@ -405,8 +411,14 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady bool) *type
 	sort.Strings(state.UsedBy)
 	sort.Strings(state.Repoint)
 	sort.Strings(state.NotMoved)
+	movedReady := true
+	for _, d := range dspas {
+		if d.managedByTool() && !d.Meta.terminating() && !l.address.usedBy(d.Meta.Namespace, d.Host) && !d.objectStoreReady() {
+			movedReady = false
+		}
+	}
 	state.Stage = "migrate"
-	if newReady && len(state.Repoint) == 0 {
+	if newReady && copied && movedReady && len(state.Repoint) == 0 {
 		state.Stage = "remove"
 		state.RemoveBlockedReason = s3TeardownBlocker(dspas, l.address)
 	}
