@@ -35,6 +35,7 @@ parameters: {}
   #
   # Full profile only: where OpenShift's ingress and its operator are; the
   # app gets a Role in each for the Models feature's inference gateway.
+  # Fixed: the code uses these names, so the schema accepts no other value.
   # INGRESS_NAMESPACE: openshift-ingress
   # INGRESS_OPERATOR_NAMESPACE: openshift-ingress-operator
   #

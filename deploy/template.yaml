@@ -27,7 +27,9 @@ parameters:
     value: openshift-marketplace
   # Namespaces of OpenShift's ingress (where the inference gateway runs)
   # and of its operator (the default IngressController), for the Models
-  # feature's Roles.
+  # feature's Roles. Fixed: the code uses these names (pkg/cluster
+  # inference_gateway.go), so do not change them. They are parameters only
+  # because oc process drops a literal namespace from a Template's objects.
   - name: INGRESS_NAMESPACE
     value: openshift-ingress
   - name: INGRESS_OPERATOR_NAMESPACE

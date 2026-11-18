@@ -73,7 +73,7 @@ dialog.
 | `parameters.NAMESPACE` | the release namespace | Must be the Application's destination namespace ([section 5](#5-the-namespace)) |
 | `parameters.APP_NAME` | `rhoai-nightly-updater` | The name of the app's objects; cluster-scoped names are `<APP_NAME>-<NAMESPACE>` |
 | `parameters.PULL_SECRET_NAMESPACE`, `parameters.MARKETPLACE_NAMESPACE` | `kube-system`, `openshift-marketplace` | Where the app gets a Role for the pull secret (full profile only) and the CatalogSources |
-| `parameters.INGRESS_NAMESPACE`, `parameters.INGRESS_OPERATOR_NAMESPACE` | `openshift-ingress`, `openshift-ingress-operator` | Full profile only: where the app gets a Role for the Models feature's inference gateway, and reads the default IngressController |
+| `parameters.INGRESS_NAMESPACE`, `parameters.INGRESS_OPERATOR_NAMESPACE` | `openshift-ingress`, `openshift-ingress-operator` | Full profile only: where the app gets a Role for the Models feature's inference gateway, and reads the default IngressController. Fixed: the code uses these names, so the chart schema accepts no other value |
 | `parameters.IMAGE_REPOSITORY`, `parameters.RELEASES_URL` | the Template's | The update check and its release-notes link ([README: Configuration](../README.md#configuration)) |
 | `parameters.INSTALL_METHOD` | `gitops` | Leave it: it words the app's notices for Git |
 | `gitops.subscriptionEnvAllowlist` | `["DISABLE_DSC_CONFIG"]` | `profile: gitops` only: the environment variables the RHOAI Subscription's `spec.config.env` may set; any other `spec.config` field is refused ([section 11](#the-admission-policy)). `parameters.SUBSCRIPTION_ENV_ALLOWLIST` itself fails the render |
