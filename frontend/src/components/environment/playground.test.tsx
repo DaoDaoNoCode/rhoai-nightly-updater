@@ -39,7 +39,7 @@ describe("playgroundState", () => {
 
   it("ready opens the dashboard's playground page for the project; ownership shows in the label only", () => {
     expect(playgroundState(status, pg({ items: [item("dev")] }), "dev")).toMatchObject({ status: "ready", label: "Ready in dev", next: { kind: "open", href: "https://rh-ai.apps.example.com/gen-ai-studio/playground/dev" } });
-    expect(playgroundState(status, pg({ items: [item("dev", { managedByTool: false, requested: false })] }), "dev")).toMatchObject({ status: "ready", label: "Ready in dev · not managed by this tool" });
+    expect(playgroundState(status, pg({ items: [item("dev", { managedByTool: false, requested: false })] }), "dev")).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open playground" } });
   });
 
   it("starting, failed, deleting and an unreported phase", () => {
@@ -58,7 +58,8 @@ describe("playgroundState", () => {
   it("the Overview summarises the projects that have one, from the same function as the tab", () => {
     const st = pg({ items: [item("dev"), item("team", { ready: false, phase: "Failed", terminalError: true })] });
     const summary = playgroundState(status, st, null);
-    expect(summary).toEqual({ ...playgroundState(status, st, "team"), label: "Error in 1 of 2 projects" });
+    const team = playgroundState(status, st, "team");
+    expect(summary).toEqual({ ...team, label: "Error in 1 of 2 projects", next: { kind: "show-issue", part: "playground", project: "team" }, projects: [playgroundState(status, st, "dev"), team] });
     expect(playgroundState(status, pg({ items: [item("dev")] }), null)).toEqual(playgroundState(status, pg({ items: [item("dev")] }), "dev"));
     expect(playgroundState(status, pg({ items: [] }), null)).toMatchObject({ status: "not-set-up", label: "Not set up in any project" });
     expect(playgroundState(status, null, null)).toMatchObject({ status: "unknown" });

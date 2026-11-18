@@ -44,9 +44,9 @@ describe("modelsState", () => {
     expect(foreign.next).toMatchObject({ setup: [{ gateway: false }] });
   });
 
-  it("ready opens the project in the dashboard; ownership shows in the label only", () => {
+  it("ready opens the project in the dashboard; ownership is said apart from the label", () => {
     const s = modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false }, models: modelsStatus({ items: [model("dev")] }) }), "dev", ["dev"]);
-    expect(s).toMatchObject({ status: "ready", label: "Ready in dev · not managed by this tool", next: { kind: "open", href: "https://rh-ai.apps.example.com/projects/dev?section=model-server" } });
+    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open in dashboard", href: "https://rh-ai.apps.example.com/projects/dev?section=model-server" } });
   });
 
   it("a cluster that cannot serve models says why on Set up", () => {
@@ -66,6 +66,7 @@ describe("modelsState", () => {
     const two = status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("a"), model("b")] }) });
     // Counted among the projects that have a model, not every project.
     expect(modelsState(two, null, ["a", "b", "c"])).toMatchObject({ status: "ready", label: "Ready in 2 projects", next: { kind: "choose-project" } });
+    expect(modelsState(two, null, ["a", "b", "c"]).projects?.map((p) => p.project)).toEqual(["a", "b"]);
     const ten = status({ inferenceGateway: gateway, models: modelsStatus({ items: Array.from({ length: 10 }, (_, i) => model(`p${i}`)) }) });
     expect(modelsState(ten, null, Array.from({ length: 25 }, (_, i) => `p${i}`))).toMatchObject({ status: "ready", label: "Ready in 10 projects" });
     expect(modelsState(status({ inferenceGateway: gateway }), null, ["a"])).toMatchObject({ label: "Not set up in any project", next: { kind: "choose-project" } });
@@ -217,6 +218,6 @@ describe("Models tab", () => {
     const table = await screen.findByRole("grid", { name: "Features" });
     const row = within(table).getByRole("link", { name: "Models" }).closest("tr")!;
     expect(within(row).getByText("Ready in dev")).toBeInTheDocument();
-    expect(within(row).getByRole("link", { name: /Open dev in the dashboard/ })).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "Open in dashboard" })).toBeInTheDocument();
   });
 });

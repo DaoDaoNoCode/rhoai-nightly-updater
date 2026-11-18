@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, Content, Flex, FlexItem, HelperText, HelperTextItem, Stack, StackItem, Title } from "@patternfly/react-core";
+import { Button, Content, Flex, FlexItem, HelperText, HelperTextItem, Popover, Stack, StackItem, Title } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import { Link } from "react-router-dom";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
@@ -22,6 +22,49 @@ export interface OverviewRow {
   /** Once it works, its samples: the link's label and the id of the tab's samples heading. */
   samples?: { label: string; focus: string };
 }
+
+/**
+ * A link in a table cell stays on one line: a wrapped inline-flex button
+ * takes the cell's width and pushes its icon to the far edge.
+ */
+const ONE_LINE = "pf-v6-u-text-nowrap";
+
+const NotManaged: React.FC = () => (
+  <HelperText><HelperTextItem>Not managed by this tool</HelperTextItem></HelperText>
+);
+
+/** The projects a feature is in, each with its state and a link to the feature's tab there. */
+const ProjectsPopover: React.FC<{ row: OverviewRow; projects: FeatureState[] }> = ({ row, projects }) => (
+  <Popover
+    headerContent={`${row.name} in ${projects.length} projects`}
+    maxWidth="40rem"
+    bodyContent={
+      <Table variant="compact" borders={false} isPlain gridBreakPoint="" aria-label={`${row.name} by project`}>
+        <Thead>
+          <Tr>
+            <Th>Project</Th>
+            <Th modifier="nowrap">State</Th>
+          </Tr>
+        </Thead>
+        <Tbody>
+          {projects.map((p) => (
+            <Tr key={p.project}>
+              <Td dataLabel="Project"><Link to={`?tab=${row.id}&project=${encodeURIComponent(p.project ?? "")}`}>{p.project}</Link></Td>
+              <Td dataLabel="State">
+                <Stack>
+                  <StackItem><EnvStatusLabel status={p.status} /></StackItem>
+                  {p.unmanaged && <StackItem><NotManaged /></StackItem>}
+                </Stack>
+              </Td>
+            </Tr>
+          ))}
+        </Tbody>
+      </Table>
+    }
+  >
+    <Button variant="link" isInline className={ONE_LINE}>Show projects</Button>
+  </Popover>
+);
 
 /**
  * The Overview: what the page is for, how many features are ready, then
@@ -49,28 +92,30 @@ export const Overview: React.FC<{
   // The next step is text in a cell, so it is an inline link, as PatternFly
   // puts links in table cells (Button variant="link" isInline): it sits on
   // the row's text line. A step that opens a dialog ends with an ellipsis.
+  // The State cell names the project, so the links do not repeat it.
   const next = (row: OverviewRow, step: NextStep | null) => {
     switch (step?.kind) {
       case "open":
-        return <Button variant="link" isInline component="a" href={step.href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">{step.label}</Button>;
+        return <Button variant="link" isInline component="a" href={step.href} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end" className={ONE_LINE}>{step.label}</Button>;
       case "set-up": {
         const reason = setUpReason ?? baseReason ?? step.reason;
         const reasonId = `overview-${row.id}-reason`;
         return (
           <Stack>
-            <StackItem><TooltipButton variant="link" isInline onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}…</TooltipButton></StackItem>
+            <StackItem><TooltipButton variant="link" isInline className={ONE_LINE} onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}…</TooltipButton></StackItem>
             {reason && <StackItem><HelperText id={reasonId}><HelperTextItem>{reason}</HelperTextItem></HelperText></StackItem>}
           </Stack>
         );
       }
       case "show-issue":
-        return <Button variant="link" isInline onClick={() => onShowIssue(row, step.part)}>Show issue</Button>;
+        // Among several projects, the step names the one with the problem.
+        return <Button variant="link" isInline className={ONE_LINE} onClick={() => onShowIssue(row, step.part)}>{step.project ? `Open ${step.project}` : "Show issue"}</Button>;
       case "migrate":
         return setUpReason
-          ? <Button variant="link" isInline onClick={() => onShowIssue(row, "storage")}>Show issue</Button>
-          : <Button variant="link" isInline onClick={onMigrate}>Migrate storage…</Button>;
+          ? <Button variant="link" isInline className={ONE_LINE} onClick={() => onShowIssue(row, "storage")}>Show issue</Button>
+          : <Button variant="link" isInline className={ONE_LINE} onClick={onMigrate}>Migrate storage…</Button>;
       case "choose-project":
-        return <Button variant="link" isInline onClick={() => onOpenTab(row)}>Choose a project</Button>;
+        return <Button variant="link" isInline className={ONE_LINE} onClick={() => onOpenTab(row)}>Choose a project</Button>;
       default:
         return null;
     }
@@ -87,13 +132,14 @@ export const Overview: React.FC<{
         <Content component="p">Set up what you need to develop or reproduce an issue on this cluster: each feature takes a few minutes and asks before it changes anything. Its tab shows how to use it.</Content>
       </StackItem>
       <StackItem>
-        <Table variant="compact" aria-label="Features">
+        {/* Below lg the rows stack (label: value), so the one-line State and Next step never squeeze the table. */}
+        <Table variant="compact" aria-label="Features" gridBreakPoint="grid-lg">
           <Thead>
             <Tr>
-              <Th>Feature</Th>
+              <Th modifier="fitContent">Feature</Th>
               <Th>What it gives you</Th>
-              <Th>State</Th>
-              <Th>Next step</Th>
+              <Th width={25}>State</Th>
+              <Th width={20}>Next step</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -101,12 +147,18 @@ export const Overview: React.FC<{
               <Tr key={row.id}>
                 <Td dataLabel="Feature"><Link to={row.href}>{row.name}</Link></Td>
                 <Td dataLabel="What it gives you">{row.gives}</Td>
-                <Td dataLabel="State"><EnvStatusLabel status={row.state.status} text={row.state.label} /></Td>
+                <Td dataLabel="State">
+                  <Stack>
+                    <StackItem><EnvStatusLabel status={row.state.status} text={row.state.label} /></StackItem>
+                    {row.state.unmanaged && <StackItem><NotManaged /></StackItem>}
+                    {row.state.projects && <StackItem><ProjectsPopover row={row} projects={row.state.projects} /></StackItem>}
+                  </Stack>
+                </Td>
                 <Td dataLabel="Next step">
                   {row.samples ? (
                     <Stack>
                       <StackItem>{next(row, row.state.next)}</StackItem>
-                      <StackItem><Button variant="link" isInline onClick={() => onSamples(row, row.samples!.focus)}>{row.samples.label}</Button></StackItem>
+                      <StackItem><Button variant="link" isInline className={ONE_LINE} onClick={() => onSamples(row, row.samples!.focus)}>{row.samples.label}</Button></StackItem>
                     </Stack>
                   ) : next(row, row.state.next)}
                 </Td>

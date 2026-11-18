@@ -45,7 +45,7 @@ describe("maasState", () => {
       items: [{ namespace: "p", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
     }), IDLE);
     expect(s.label).toBe("Ready, 1 model published");
-    expect(s.next).toEqual({ kind: "open", label: "Open MaaS in the dashboard", href: "https://rh-ai.apps.example.com/maas" });
+    expect(s.next).toEqual({ kind: "open", label: "Open MaaS", href: "https://rh-ai.apps.example.com/maas" });
   });
 
   it("a publication left half-way says what is left, is not counted, and does not keep the tab polling", () => {
@@ -59,7 +59,7 @@ describe("maasState", () => {
 
   it("someone else's MaaS is labelled not managed", () => {
     const s = maasState(base([{ id: "dsc", title: "DSC", state: "ready", notManaged: true }], { platform: { deployed: true, ready: true, managedByTool: false } }), IDLE);
-    expect(s.label).toContain("not managed by this tool");
+    expect(s).toMatchObject({ label: "Ready, no model of this tool published", unmanaged: true });
   });
 });
 
