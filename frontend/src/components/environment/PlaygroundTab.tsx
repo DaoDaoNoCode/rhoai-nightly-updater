@@ -67,14 +67,18 @@ const BreakableName: React.FC<{ name: string }> = ({ name }) => (
   <code>{name.split("/").map((part, i) => <React.Fragment key={i}>{i > 0 && <>/<wbr /></>}{part}</React.Fragment>)}</code>
 );
 
-/** A chat request to the project's playground with the user's own OpenShift token. */
+/** s as one single-quoted shell word (a ' inside becomes '\''). */
+const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/** A chat request to the project's playground with the user's own OpenShift token. The model name comes from the dashboard, so the body is built as JSON and quoted for the shell. */
 export function playgroundCurl(dashboardUrl: string, project: string, model: string, source: string): string {
   const base = dashboardUrl.replace(/\/+$/, "");
+  const body = JSON.stringify({ model, model_source_type: source, input: "Say hello in one sentence.", stream: false });
   return [
     "TOKEN=$(oc whoami -t)",
-    `curl -s -X POST "${base}/gen-ai/api/v1/lsd/responses?namespace=${project}" \\`,
+    `curl -s -X POST "${base}/gen-ai/api/v1/lsd/responses?namespace=${encodeURIComponent(project)}" \\`,
     `  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\`,
-    `  -d '{"model":"${model}","model_source_type":"${source}","input":"Say hello in one sentence.","stream":false}'`,
+    `  -d ${shellQuote(body)}`,
   ].join("\n");
 }
 

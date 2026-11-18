@@ -57,6 +57,30 @@ func quantityString(v interface{}) string {
 	}
 }
 
+// hardwareProfileVisibilityAnnotation lists, as a JSON array, the dashboard
+// features a profile is offered in (the dashboard's values: "workbench",
+// "model-serving").
+const hardwareProfileVisibilityAnnotation = "opendatahub.io/dashboard-feature-visibility"
+
+// visibleForModelServing follows the dashboard's isHardwareProfileVisibleIn
+// (rhoai-3.6 packages/hardware-profiles): no annotation, one that does not
+// parse, or an empty list is visible everywhere; a list without
+// "model-serving" hides the profile from model serving. The dashboard
+// ignores values it does not know; this check counts them, so such a
+// profile is skipped (the model then records another one, or none): the
+// safe side.
+func (p hardwareProfileObject) visibleForModelServing() bool {
+	raw, ok := p.Metadata.Annotations[hardwareProfileVisibilityAnnotation]
+	if !ok {
+		return true
+	}
+	var in []string
+	if json.Unmarshal([]byte(raw), &in) != nil || len(in) == 0 {
+		return true
+	}
+	return containsString(in, "model-serving")
+}
+
 // fits says why the profile cannot hold the model, or "" when it can: it
 // must be enabled, describe only CPU and memory (no accelerator), add no
 // scheduling (the tool would have to apply it as the wizard does), and its
@@ -64,6 +88,9 @@ func quantityString(v interface{}) string {
 func (p hardwareProfileObject) fits(entry catalogModel) string {
 	if p.Metadata.Annotations[hardwareProfileDisabledAnnotation] == "true" {
 		return "disabled"
+	}
+	if !p.visibleForModelServing() {
+		return "the dashboard shows it only for " + p.Metadata.Annotations[hardwareProfileVisibilityAnnotation]
 	}
 	if s := p.Spec.Scheduling; s != nil && (s.Kueue != nil || (s.Node != nil && (len(s.Node.NodeSelector) > 0 || len(s.Node.Tolerations) > 0))) {
 		return "it adds scheduling rules"

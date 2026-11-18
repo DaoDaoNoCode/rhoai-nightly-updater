@@ -322,13 +322,10 @@ func planModelImage(c *Client, presetImage string, wantReleased bool, existing *
 	if err == nil && mirrored {
 		return imagePlan{Kind: "preset", Reason: "A mirror set on this cluster serves the preset's repository " + repo + ", so its nightly image can be pulled."}, nil
 	}
-	plan, perr := released(fmt.Sprintf("This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves %s; the newest released Red Hat image is used instead.", repo))
-	if perr != nil {
-		// Not found: keep the preset's image and say why; the status
-		// offers the released image again if the pull fails.
-		return imagePlan{Kind: "preset", Reason: fmt.Sprintf("The preset's image may not be published for this nightly build, but %v", perr)}, nil
-	}
-	return plan, nil
+	// The status (and the confirmation built from it) names the released
+	// image, so a failed lookup refuses with the catalog's error rather
+	// than quietly using another image than the one confirmed.
+	return released(fmt.Sprintf("This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves %s; the newest released Red Hat image is used instead.", repo))
 }
 
 // --- capacity ----------------------------------------------------------------
@@ -363,15 +360,17 @@ const capacityCacheTTL = time.Minute
 
 // modelCapacityWarning returns a warning when no schedulable amd64 node
 // has the model's CPU and memory requests free, or "" (room found, or the
-// check could not run: unknown is not a warning).
-func modelCapacityWarning(c *Client, entry catalogModel) string {
-	key := c.baseURL + "|" + entry.Name
+// check could not run: unknown is not a warning). The model's own pods in
+// project ("" for none) are not counted: setting it up again there
+// replaces them, so their room is the new pod's.
+func modelCapacityWarning(c *Client, entry catalogModel, project string) string {
+	key := c.baseURL + "|" + entry.Name + "|" + project
 	if w, ok := capacityCache.Get(key); ok {
 		return w
 	}
 	cpu, _ := parseQuantity(entry.CPU)
 	mem, _ := parseQuantity(entry.MemoryRequest)
-	w, err := capacityWarning(c, cpu, mem, entry)
+	w, err := capacityWarning(c, cpu, mem, entry, project)
 	if err != nil {
 		return ""
 	}
@@ -379,7 +378,7 @@ func modelCapacityWarning(c *Client, entry catalogModel) string {
 	return w
 }
 
-func capacityWarning(c *Client, cpu, mem float64, entry catalogModel) (string, error) {
+func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project string) (string, error) {
 	body, _, err := c.get("/api/v1/nodes")
 	if err != nil {
 		return "", err
@@ -429,7 +428,8 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel) (string, e
 	}
 	var pods struct {
 		Items []struct {
-			Spec struct {
+			Metadata objectMeta `json:"metadata"`
+			Spec     struct {
 				NodeName   string `json:"nodeName"`
 				Containers []struct {
 					Resources struct {
@@ -448,6 +448,9 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel) (string, e
 	for _, p := range pods.Items {
 		r := free[p.Spec.NodeName]
 		if r == nil || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
+			continue
+		}
+		if project != "" && p.Metadata.Namespace == project && p.Metadata.Labels["app.kubernetes.io/name"] == entry.Name && p.Metadata.Labels["app.kubernetes.io/component"] == modelPodComponent {
 			continue
 		}
 		for _, ctr := range p.Spec.Containers {
@@ -523,6 +526,6 @@ func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObjec
 		}
 		st.ImagePlan, st.ImagePlanReason = plan.Kind, plan.Reason
 	}
-	st.CapacityWarning = modelCapacityWarning(c, modelCatalog[0])
+	st.CapacityWarning = modelCapacityWarning(c, modelCatalog[0], "")
 	return st
 }

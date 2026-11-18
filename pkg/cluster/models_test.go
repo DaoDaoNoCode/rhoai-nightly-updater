@@ -696,13 +696,13 @@ func TestModelCapacityWarning(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
 	mc.f.putJSON("/api/v1/nodes/m1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"spec":{"taints":[{"effect":"NoSchedule"}]},"status":{"allocatable":{"cpu":"64","memory":"256Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"14","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	w := modelCapacityWarning(mc.c, modelCatalog[0])
+	w := modelCapacityWarning(mc.c, modelCatalog[0], "")
 	if !strings.Contains(w, "the most CPU free is 1.5 CPUs and 53.0 GiB on w1") {
 		t.Fatalf("warning: %q", w)
 	}
 	capacityCache.Purge()
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"2","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	if w := modelCapacityWarning(mc.c, modelCatalog[0]); w != "" {
+	if w := modelCapacityWarning(mc.c, modelCatalog[0], ""); w != "" {
 		t.Fatalf("warning: %q", w)
 	}
 }
@@ -1115,5 +1115,65 @@ func TestGatewayTeardown_WaitsForRoutesOfModelsJustDeleted(t *testing.T) {
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Gateway: true, Project: "proj"})
 	if !res.Success || mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
+	}
+}
+
+// Setting the model up again in its project: the room its own pod holds
+// is the room the new pod gets, so that pod is not counted against it.
+func TestModelCapacityWarning_IgnoresTheModelsOwnPod(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
+	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"metadata":{"namespace":"a"},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"10","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
+	mc.f.putJSON("/api/v1/namespaces/proj/pods/qwen", `{"metadata":{"namespace":"proj","labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"4","memory":"6Gi"}}}]},"status":{"phase":"Running"}}`)
+	if w := modelCapacityWarning(mc.c, modelCatalog[0], "proj"); w != "" {
+		t.Fatalf("its own pod was counted: %q", w)
+	}
+	// In another project the running copy is a real occupant.
+	if w := modelCapacityWarning(mc.c, modelCatalog[0], "other"); w == "" {
+		t.Fatal("a copy in another project was not counted")
+	}
+}
+
+// A profile the dashboard shows only for workbenches is not recorded on a
+// model (rhoai-3.6 isHardwareProfileVisibleIn: a list without
+// "model-serving" hides it from model serving).
+func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
+	mc := newModelsCluster(t)
+	putProfiles(mc,
+		hwProfile("a-workbench", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"[\"workbench\"]"}`),
+		hwProfile("b-serving", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"[\"workbench\",\"model-serving\"]"}`))
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	model := mc.f.get(testModelPath)
+	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if ann[hardwareProfileNameAnnotation] != "b-serving" {
+		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
+	}
+	var p hardwareProfileObject
+	_ = json.Unmarshal([]byte(hwProfile("x", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"not json"}`)), &p)
+	if why := p.fits(modelCatalog[0]); why != "" {
+		t.Errorf("an unreadable visibility hides the profile (the dashboard shows it): %s", why)
+	}
+}
+
+// The confirmation promised the newest released image: when the catalog
+// cannot be read, setup refuses and names the catalog's error instead of
+// quietly using the preset's image.
+func TestModelsSetup_ReleasedImageLookupFailureRefuses(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	prev := lookupReleasedImage
+	t.Cleanup(func() { lookupReleasedImage = prev })
+	lookupReleasedImage = func(context.Context, string) (releasedImage, error) {
+		return releasedImage{}, fmt.Errorf("catalog.redhat.com answered 503")
+	}
+	before := len(mc.f.mutations())
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || !strings.Contains(res.Message, "catalog.redhat.com answered 503") || !strings.Contains(res.Message, "Nothing was changed") {
+		t.Fatalf("got %+v", res)
+	}
+	if m := mc.f.mutations()[before:]; len(m) != 0 {
+		t.Errorf("wrote %v", m)
 	}
 }

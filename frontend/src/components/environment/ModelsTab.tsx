@@ -285,7 +285,8 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const noProjects = projectsLoaded && projects.length === 0;
   const toolModels = (models?.items ?? []).filter((m) => m.managedByTool !== false);
   const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
-  const capacity = models?.capacityWarning && project && (!model || !model.ready) ? models.capacityWarning : null;
+  // Only before the project has the model: once it does, its own pod holds the room the check counts, and the model's state says why it waits.
+  const capacity = models?.capacityWarning && project && !model?.deployed ? models.capacityWarning : null;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose="Serve a small chat model on CPU in a project, and call it with your OpenShift token or from the dashboard's Gen AI playground." state={state} /></StackItem>

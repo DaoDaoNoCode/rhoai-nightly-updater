@@ -74,6 +74,11 @@ describe("Playground clean-up and steps", () => {
     expect(playgroundSteps({ kind: "teardown-playground", project: "dev" }).map((s) => s.id)).toEqual(["delete", "gone"]);
   });
 
+  it("the chat request quotes a model name for the shell and JSON", () => {
+    const curl = playgroundCurl("https://rh-ai.apps.example.com", "dev", `it's "x" $(id)`, "maas");
+    expect(curl).toContain(`-d '{"model":"it'\\''s \\"x\\" $(id)","model_source_type":"maas",`);
+  });
+
   it("the chat request uses the user's own token and the plain model name", () => {
     const curl = playgroundCurl("https://rh-ai.apps.example.com/", "dev", "qwen25-05b-instruct", "namespace");
     expect(curl).toContain("TOKEN=$(oc whoami -t)");

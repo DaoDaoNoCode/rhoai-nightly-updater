@@ -670,7 +670,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("check", msg, code, "model check failed")
 		}
 		mp = plan
-		if warning := modelCapacityWarning(c, mp.entry); warning != "" {
+		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
 			notes = append(notes, warning)
 		}
 	}
