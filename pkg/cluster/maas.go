@@ -140,6 +140,9 @@ type maasRecord struct {
 	// through the MaaS gateway alone; Unpublish writes them back. A
 	// publication by an earlier build has none.
 	ModelRefs map[string]maasModelRefs `json:"modelRefs,omitempty"`
+	// GenAI is, by publication, the genai label and annotation publish
+	// removed from the model (maas_genai.go); Unpublish puts them back.
+	GenAI map[string]maasGenAI `json:"genAI,omitempty"`
 	// DBNamespace is where setup put the database and maas-db-config, so
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
@@ -274,6 +277,10 @@ func (r *maasRecord) setPublished(project, model string, on bool) {
 		out = append(out, key)
 	} else {
 		delete(r.ModelRefs, key)
+		delete(r.GenAI, key)
+		if len(r.GenAI) == 0 {
+			r.GenAI = nil
+		}
 		if len(r.ModelRefs) == 0 {
 			r.ModelRefs = nil
 		}

@@ -226,7 +226,8 @@ func TestMaaSPublish_FromAnEarlierBuildsPublicationGoesThroughTheDefaultFirst(t 
 		if prev != nil {
 			prev(r, k, patch, next)
 		}
-		if k.plural == "llminferenceservices" {
+		// The refs writes (publish also patches the model's metadata).
+		if _, refs := patch["spec"]; k.plural == "llminferenceservices" && refs {
 			spec, _ := patch["spec"].(map[string]interface{})
 			router, _ := spec["router"].(map[string]interface{})
 			gw, _ := router["gateway"].(map[string]interface{})

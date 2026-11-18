@@ -893,6 +893,11 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		original = maasModelRefs{Refs: refs.earlierBuildOriginal()}
 	}
 	rec.setModelRefs(project, name, original)
+	// What the model had before a first publish; a publish again (after a
+	// failed one) keeps what the first recorded.
+	if _, recordedGenAI := rec.GenAI[maasPub{project, name}.key()]; !recordedGenAI {
+		rec.setGenAI(project, name, genAIOf(model.Metadata))
+	}
 	rec.setPublished(project, name, true)
 	infra := maasInfraNamespace(c)
 	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
@@ -958,6 +963,10 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	if msg, code := m.routeModelThroughMaaS(project, name, original); msg != "" {
 		return m.fail("model", msg, code, "model routing failed")
 	}
+	if err := stripModelGenAI(c, project, name); err != nil {
+		return m.fail("model", err.Error()+". Publish again to retry, or Unpublish to undo.", maasWriteCode(err), "genai metadata failed")
+	}
+	m.logs = append(m.logs, "OK: the model left Gen AI studio's AI assets (label "+genAIAssetLabel+" and annotation "+genAIUseCaseAnnotation+" removed, as the dashboard's MaaS option does); MaaS lists it")
 	m.step("maas", "running", "Creating the model reference, the subscription and the access policy...")
 	for _, w := range []struct {
 		desc, path, create string
@@ -1048,6 +1057,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	// gateway someone added since publishing stops Unpublish here, before
 	// anything changes.
 	recordedRefs, hasRecordedRefs := rec.modelRefs(project, name)
+	recordedGenAI, hasRecordedGenAI := rec.GenAI[maasPub{project, name}.key()]
 	if routed && hasRecordedRefs {
 		refs, _, err := readModelGatewayRefs(c, project, name)
 		if err != nil {
@@ -1132,6 +1142,12 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	default:
 		if msg, code := m.restoreModelRoute(project, name, recordedRefs, hasRecordedRefs, say); msg != "" {
 			return m.fail("model", msg, code, "model routing failed")
+		}
+		if hasRecordedGenAI {
+			if err := restoreModelGenAI(c, project, name, recordedGenAI); err != nil {
+				return m.fail("model", err.Error()+". Unpublish again to retry.", maasWriteCode(err), "genai metadata failed")
+			}
+			m.logs = append(m.logs, "OK: the model is back in Gen AI studio's AI assets (its "+genAIAssetLabel+" label and "+genAIUseCaseAnnotation+" annotation)")
 		}
 	}
 

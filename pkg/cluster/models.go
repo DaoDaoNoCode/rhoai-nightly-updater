@@ -512,7 +512,11 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 }
 
 // modelManifest is the LLMInferenceService setup applies.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile) map[string]interface{} {
+//
+// published: the model is published to MaaS, which took it out of Gen AI
+// studio's AI assets (maas_genai.go), so the genai label and annotation
+// are left out until Unpublish puts them back.
+func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published bool) map[string]interface{} {
 	annotations := map[string]interface{}{
 		// The dashboard's llmd deploy wizard writes these three
 		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
@@ -554,17 +558,22 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			annotations[modelImageVersionAnnotation] = img.Version
 		}
 	}
+	labels := map[string]interface{}{
+		managedByLabelKey:          managedByLabelValue,
+		"opendatahub.io/dashboard": "true",
+		genAIAssetLabel:            "true",
+	}
+	if published {
+		delete(labels, genAIAssetLabel)
+		delete(annotations, genAIUseCaseAnnotation)
+	}
 	return map[string]interface{}{
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
 		"metadata": map[string]interface{}{
-			"name":      entry.Name,
-			"namespace": project,
-			"labels": map[string]interface{}{
-				managedByLabelKey:            managedByLabelValue,
-				"opendatahub.io/dashboard":   "true",
-				"opendatahub.io/genai-asset": "true",
-			},
+			"name":        entry.Name,
+			"namespace":   project,
+			"labels":      labels,
 			"annotations": annotations,
 		},
 		"spec": map[string]interface{}{
@@ -976,6 +985,12 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if msg != "" {
 		return nil, msg, code
 	}
+	published := false
+	if found {
+		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
+			return nil, fmt.Sprintf("Cannot check whether %s in '%s' is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+		}
+	}
 	hw, why := pickHardwareProfile(c, entry)
 	if hw.Name != "" {
 		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
@@ -983,7 +998,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found, rec: rec, token: tok}, "", ""
+		obj: modelManifest(req.Project, entry, preset.name, img, hw, published), current: existing.Metadata, found: found, rec: rec, token: tok}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
