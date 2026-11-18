@@ -7,9 +7,13 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-# Type errors, lint errors or failing frontend tests stop the build, so CI
-# never publishes them.
-RUN npm run typecheck && npm run lint && npm test
+# Type errors, lint errors or failing tests stop the build. RUN_CHECKS=false
+# skips the checks (not the build): only for builds whose own pipeline has
+# just run the same checks on the same commit (the GitLab image jobs need
+# their test jobs). Any other value runs them.
+ARG RUN_CHECKS=true
+RUN if [ "$RUN_CHECKS" = false ]; then echo "RUN_CHECKS=false: frontend checks skipped"; \
+    else npm run typecheck && npm run lint && npm test; fi
 RUN NODE_OPTIONS="--max-old-space-size=2048" npm run build
 
 # golang:1.27.4-alpine
@@ -28,7 +32,9 @@ COPY main.go ./
 COPY pkg/ ./pkg/
 COPY deploy/template.yaml ./deploy/template.yaml
 COPY deploy/rbac-gitops.yaml ./deploy/rbac-gitops.yaml
-RUN go vet ./... && go test ./...
+ARG RUN_CHECKS=true
+RUN if [ "$RUN_CHECKS" = false ]; then echo "RUN_CHECKS=false: backend checks skipped"; \
+    else go vet ./... && go test ./...; fi
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} go build -trimpath \
     -ldflags "-s -w \
       -X github.com/juntwang/rhoai-nightly-updater/pkg/api.Version=${VERSION} \

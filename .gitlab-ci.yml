@@ -10,6 +10,8 @@
 # :latest never moves to a new major automatically: deployments that still
 # pull :latest stay on their major line until someone upgrades on purpose.
 # Release logic lives in scripts/release.sh (tested by scripts/test-release.sh).
+# Every image job needs the Go and frontend test jobs of its pipeline and
+# builds the Containerfile with RUN_CHECKS=false (see .kaniko-build).
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -149,6 +151,12 @@ release-guard:
   rules:
     - if: $CI_COMMIT_TAG
 
+# The image jobs build with RUN_CHECKS=false: the Containerfile then skips
+# its own copy of the checks (frontend typecheck, lint and tests; go vet and
+# go test) but still installs and builds everything. Each image job `needs`
+# the test jobs of this pipeline, which ran those checks (and more: -race,
+# govulncheck, golangci-lint) on this same commit; a failing check stops the
+# pipeline before any image is built. `make build` keeps them on.
 .kaniko-build:
   stage: build
   image:
@@ -172,6 +180,7 @@ build-main:
       --build-arg GIT_SHA=$CI_COMMIT_SHA
       --build-arg VERSION=$CI_COMMIT_SHORT_SHA
       --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
+      --build-arg RUN_CHECKS=false
       --destination=$IMAGE:$CI_COMMIT_SHORT_SHA
       --no-push
       --tar-path=image.tar
@@ -194,6 +203,7 @@ build-branch:
       --build-arg GIT_SHA=$CI_COMMIT_SHA
       --build-arg VERSION=$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
       --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
+      --build-arg RUN_CHECKS=false
       --destination=$IMAGE:$CI_COMMIT_REF_SLUG
       --cache=true
   rules:
@@ -216,6 +226,7 @@ release-build:
       --build-arg GIT_SHA=$CI_COMMIT_SHA
       --build-arg VERSION=$CI_COMMIT_TAG
       --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
+      --build-arg RUN_CHECKS=false
       --destination=$IMAGE:$CI_COMMIT_TAG
       --no-push
       --tar-path=image.tar

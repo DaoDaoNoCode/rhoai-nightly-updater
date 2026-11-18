@@ -209,12 +209,12 @@ make build             # Build using podman or docker (auto-detected)
 2. Builds a multi-stage image from `Containerfile`:
    - **Stage 1 (frontend)**: `node:22-alpine`
      - Installs dependencies: `npm ci`
-     - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test`
+     - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test` (skipped with `--build-arg RUN_CHECKS=false`, which only GitLab's image jobs pass: their pipeline's test jobs have run these checks on the same commit)
      - Builds production bundle: `npm run build` → `frontend/dist/`
      - Uses `NODE_OPTIONS="--max-old-space-size=2048"` to handle large bundles
    - **Stage 2 (backend)**: `golang:1.27.3-alpine`
      - Downloads Go modules: `go mod download`
-     - Vets and tests: `go vet ./... && go test ./...`
+     - Vets and tests: `go vet ./... && go test ./...` (also skipped with `RUN_CHECKS=false`)
      - Builds a static binary with the version, commit and build date linked in
    - **Stage 3 (runtime)**: `registry.access.redhat.com/ubi9/ubi-minimal` 9.8 (all base images pinned by digest)
      - Sets the `org.opencontainers.image.revision` label to the commit (`make deploy`/`upgrade` check it)
@@ -262,6 +262,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.
+- **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` the Go and frontend test jobs of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters; an existing tag is kept when it is a build of the same commit, and refused from another commit) and moves `:main` only while the commit is still the tip of `main`. It never touches `:latest`.
 - **Other branches**: a manual job publishes `:$CI_COMMIT_REF_SLUG`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
