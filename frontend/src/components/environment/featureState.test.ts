@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, mlflowState, pipelinesState, setUpBlocked } from "./featureState";
+import { defaultProject, IDLE, mlflowState, pipelinesState, setUpBlocked } from "./featureState";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const storage: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running" };
@@ -36,11 +36,13 @@ describe("defaultProject", () => {
 });
 
 describe("pipelinesState and mlflowState", () => {
-  it("readiness is health: someone else's running MLflow is Ready, with ownership in the label", () => {
+  it("readiness is health: someone else's running MLflow is Ready, with ownership apart from the label", () => {
     // MLflow's root is its list of workspaces: the label says so.
-    expect(mlflowState(FIXTURES.live)).toEqual({ status: "ready", label: "Ready · not managed by this tool", next: { kind: "open", label: "Open MLflow workspaces", href: "https://mlflow" }, project: null });
+    expect(mlflowState(FIXTURES.live)).toEqual({ status: "ready", label: "Ready", unmanaged: true, next: { kind: "open", label: "Open MLflow workspaces", href: "https://mlflow" }, project: null });
     const broken = { ...FIXTURES.live, mlflow: { ...FIXTURES.live.mlflow, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff" } };
-    expect(mlflowState(broken)).toMatchObject({ status: "error", label: "Error · not managed by this tool", next: { kind: "show-issue", part: "mlflow" } });
+    expect(mlflowState(broken)).toMatchObject({ status: "error", label: "Error", unmanaged: true, next: { kind: "show-issue", part: "mlflow" } });
+    // This tool's own: nothing to say about ownership.
+    expect(mlflowState({ ...FIXTURES.live, mlflow: { ...FIXTURES.live.mlflow, managedByTool: true } })).not.toHaveProperty("unmanaged");
     expect(mlflowState(FIXTURES.none)).toMatchObject({ status: "not-set-up", next: { kind: "set-up", setup: [{ kind: "setup-mlflow" }], reason: null } });
   });
 
@@ -51,7 +53,7 @@ describe("pipelinesState and mlflowState", () => {
     ["starting", "setting-up", "Setting up in juntao-test"],
     ["storageError", "error", "Error"],
     ["serverError", "error", "Error in zeta"],
-    ["foreign", "ready", "Ready in zeta · not managed by this tool"],
+    ["foreign", "ready", "Ready in zeta"],
     ["migrate", "needs-attention", "Needs attention"],
     ["migrateRemove", "ready", "Ready in juntao-test"],
     ["incomplete", "needs-attention", "Needs attention"],
@@ -71,9 +73,10 @@ describe("pipelinesState and mlflowState", () => {
       const tab = pipelinesState(s, tabProject, projects);
       expect(tab.status).toBe(overview.status);
       if (!overview.label.includes(" of ")) expect(tab.label).toBe(overview.label.startsWith("Needs attention") || overview.label.startsWith("Error") && !overview.label.includes(" in ") ? `${overview.label} in ${tabProject}` : overview.label);
-      // A link to a project says which, and the Overview's is the tab's.
+      expect(tab.unmanaged).toBe(overview.unmanaged);
+      // The label already names the project: the link does not repeat it, and the Overview's is the tab's.
       if (overview.next?.kind === "open") {
-        expect(overview.next.label).toBe(`Open pipelines in ${tabProject}`);
+        expect(overview.next.label).toBe("Open pipelines");
         expect(tab.next).toEqual(overview.next);
       }
     } else {
@@ -106,12 +109,42 @@ describe("pipelinesState and mlflowState", () => {
     expect(m.next).toMatchObject({ kind: "set-up", label: "Set up MLflow", reason: "MLflow is turned off." });
   });
 
-  it("several ready projects: the Overview offers the tab's picker, not a jump into one of them", () => {
+  it("several ready projects: the Overview offers the tab's picker, not a jump into one of them, and lists each project", () => {
     const two: ResourcesStatus = { ...FIXTURES.live, pipelineServers: [dspa("juntao-test"), dspa("zeta")] };
     const overview = pipelinesState(two, null, projects);
-    expect(overview).toMatchObject({ status: "ready", label: "Ready in 2 projects", next: { kind: "choose-project" } });
-    // The tab, in one of them, links there by name.
-    expect(pipelinesState(two, "zeta", projects).next).toMatchObject({ kind: "open", label: "Open pipelines in zeta" });
+    expect(overview).toMatchObject({ status: "ready", label: "Ready in 2 projects", next: { kind: "choose-project" }, project: null });
+    // Each project with its own state, as its tab shows it, in the projects' order.
+    expect(overview.projects).toEqual([pipelinesState(two, "juntao-test", projects), pipelinesState(two, "zeta", projects)]);
+    // The tab, in one of them, links there; its label names the project.
+    expect(pipelinesState(two, "zeta", projects)).toMatchObject({ label: "Ready in zeta", next: { kind: "open", label: "Open pipelines" } });
+  });
+
+  it("one project: no list of projects", () => {
+    expect(pipelinesState(FIXTURES.live, null, projects)).not.toHaveProperty("projects");
+    expect(pipelinesState(FIXTURES.none, null, projects)).not.toHaveProperty("projects");
+  });
+
+  it("a problem among several projects: counted among those that have it, its step names the project with the problem", () => {
+    const mixed: ResourcesStatus = { ...FIXTURES.live, pipelineServers: [dspa("a-test-project"), dspa("juntao-test"), dspa("zeta", { ready: false, terminalError: true, message: "Could not connect" })] };
+    const overview = pipelinesState(mixed, null, [...projects, "empty"]);
+    expect(overview).toMatchObject({ status: "error", label: "Error in 1 of 3 projects", project: "zeta", next: { kind: "show-issue", part: "pipeline-server", project: "zeta" } });
+    expect(overview.projects?.map((p) => [p.project, p.status])).toEqual([["a-test-project", "ready"], ["juntao-test", "ready"], ["zeta", "error"]]);
+    // In the project itself (its tab), the step does not name it again.
+    expect(pipelinesState(mixed, "zeta", projects).next).toEqual({ kind: "show-issue", part: "pipeline-server" });
+    // An error comes before a warning, whichever project sorts first; the label counts the projects in that state, the list shows the others.
+    const two: ResourcesStatus = { ...mixed, pipelineServers: [dspa("a-test-project", { ready: true, warning: "old image" }), dspa("zeta", { ready: false, terminalError: true, message: "Could not connect" })] };
+    expect(pipelinesState(two, null, projects)).toMatchObject({ status: "error", label: "Error in 1 of 2 projects", project: "zeta", next: { project: "zeta" } });
+  });
+
+  it("the operation running from this page comes first, even among several projects", () => {
+    const two: ResourcesStatus = { ...FIXTURES.live, pipelineServers: [dspa("juntao-test"), dspa("zeta", { ready: false, terminalError: true, message: "Could not connect" })] };
+    const busy = { ...IDLE, resAction: "setup-pipeline-server", actionProject: "a-test-project" };
+    expect(pipelinesState(two, null, projects, busy)).toMatchObject({ status: "setting-up", label: "Setting up in a-test-project", project: "a-test-project" });
+  });
+
+  it("someone else's part that has the problem is said apart from the label, in the project's own state", () => {
+    const s: ResourcesStatus = { ...FIXTURES.foreign, unmanagedPipelineServers: [dspa("zeta", { managedByTool: false, name: "dspa", ready: false, terminalError: true, message: "Could not connect" })] };
+    expect(pipelinesState(s, "zeta", projects)).toMatchObject({ status: "error", label: "Error in zeta", unmanaged: true });
   });
 
   it("nothing is offered while every part exists and one is starting; storage of an earlier version points at Migrate storage", () => {

@@ -198,7 +198,9 @@ describe("health and ownership are separate", () => {
     expect(ps).not.toHaveTextContent("keeps their artifacts in the S3 storage");
     expect(within(ps).getByRole("link", { name: /Open pipelines/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
-    expect(screen.getByText("Ready in team-x · not managed by this tool")).toBeInTheDocument();
+    expect(screen.getByText("Ready in team-x")).toBeInTheDocument();
+    // Ownership beside the state, not in its words.
+    expect(screen.getByText("Ready in team-x").closest(".pf-v6-l-flex")).toHaveTextContent("Not managed by this tool");
     expect(within(ps).queryByRole("button", { name: "Pipeline server actions" })).not.toBeInTheDocument();
     // The project picker says what each project has, and whose it is.
     fireEvent.click(screen.getByRole("button", { name: "Show projects" }));

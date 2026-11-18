@@ -275,6 +275,31 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the Environment Overview with one project, several,
+    // a problem in one of several, someone else's parts and a 40-character
+    // project name, light and dark, wide and narrow (the table stacks), with
+    // the list of projects open where there is one (screenshots.sh
+    // overview-review, THEMES_DIR).
+    async "overview-review"() {
+      for (const sc of ["env-live", "env-foreign", "env-overview-three", "env-overview-mixed", "env-overview-long-name"]) {
+        for (const dark of [false, true]) {
+          for (const width of [1440, 800]) {
+            const name = `overview-${sc.replace(/^env-(overview-)?/, "")}-${dark ? "dark" : "light"}-${width}`;
+            await open("/test-resources", sc, { dark, width });
+            await fit();
+            await page.screenshot({ path: `${out}/themes/${name}.png` });
+            const show = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Pipelines", exact: true }) }).getByRole("button", { name: "Show projects" });
+            if (await show.count()) {
+              await show.click();
+              await page.getByRole("dialog", { name: /^Pipelines in \d+ projects$/ }).waitFor();
+              await wait(300);
+              await page.screenshot({ path: `${out}/themes/${name}-projects.png` });
+            }
+          }
+        }
+      }
+    },
+
     // Not a docs image: the Playground tab in every state, light and dark,
     // to check it by eye (screenshots.sh playground-review, THEMES_DIR).
     async "playground-review"() {
@@ -448,7 +473,7 @@ async (page) => {
         notes: [
           { at: page.getByText(/^\d+ of \d+ ready$/), n: 1, pos: "r" },
           { at: table.getByRole("link", { name: "Pipelines", exact: true }), n: 2, pos: "l" },
-          { at: label(table, "Ready · not managed by this tool"), n: 3, pos: "tl" },
+          { at: table.getByRole("row").filter({ has: page.getByRole("link", { name: "MLflow", exact: true }) }).locator('td[data-label="State"]'), n: 3, pos: "tl" },
           { at: table.getByRole("link", { name: /Open MLflow/ }), n: 4, pos: "r" },
         ],
         pad: 24,

@@ -322,6 +322,34 @@ const scenarios = {
   "env-playground-failed": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.failed()]; },
   "env-playground-api-differs": (w) => { scenarios["env-models-ready"](w); w.playground.apiProblem = F.PLAYGROUND_API_DIFFERS; w.playground.apiCode = "api_missing"; },
   "env-playground-blocked": (w) => { scenarios["env-models-ready"](w); w.playground.blocked = F.PLAYGROUND_BLOCKED; },
+  // The Overview with features in several projects (overview-review).
+  // Pipelines, Models and Playground ready in all three projects.
+  "env-overview-three": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.resources.pipelineServers = F.projects.map((ns) => F.pipelineServerIn(ns));
+    w.resources.inferenceGateway = F.gatewayStates.ready(F.projects.map((ns) => `${ns}/qwen25-05b-instruct`));
+    w.resources.models = F.modelsStatus({ items: F.projects.map((ns) => F.modelStates.released(ns)) });
+    w.playground.items = F.projects.map((ns) => F.playgroundStates.ready(ns));
+    w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] });
+  },
+  // The same, with one project failing in each: "Error in 1 of 3 projects".
+  "env-overview-mixed": (w) => {
+    scenarios["env-overview-three"](w);
+    w.resources.pipelineServers = [F.pipelineServerIn("dev-project"), F.pipelineServerStuck("fraud-detection"), F.pipelineServerIn("llm-eval")];
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.released("dev-project"), F.modelStates.released("fraud-detection"), F.modelStates.imageMissing("llm-eval")] });
+    w.playground.items = [F.playgroundStates.ready("dev-project"), F.playgroundStates.failed("fraud-detection"), F.playgroundStates.ready("llm-eval")];
+  },
+  // A 40-character project name: alone (Pipelines, Playground) and as the project with the problem (Models).
+  "env-overview-long-name": (w) => {
+    const long = "customer-churn-prediction-experiments-v2";
+    w.projects = [long, ...F.projects];
+    w.resources.mlflow = F.mlflowStates.foreign;
+    w.resources.pipelineServers = [F.pipelineServerIn(long)];
+    w.resources.inferenceGateway = F.gatewayStates.ready([`${long}/qwen25-05b-instruct`, "dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.imageMissing(long), F.modelStates.released("dev-project")] });
+    w.playground.items = [F.playgroundStates.ready(long)];
+    w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] });
+  },
   // Sample changes wait for /__docs/advance: a row shows its operation.
   "env-samples-gated": (w) => { scenarios["env-samples-new"](w); w.gated = true; },
 };

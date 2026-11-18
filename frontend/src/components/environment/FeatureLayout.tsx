@@ -41,6 +41,7 @@ export const FeatureHeader: React.FC<{ title: string; purpose: string; state: Fe
       <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
         <FlexItem><Title headingLevel="h2" size="xl">{title}</Title></FlexItem>
         <FlexItem><EnvStatusLabel status={state.status} text={state.label} /></FlexItem>
+        {state.unmanaged && <FlexItem><NotManagedLabel /></FlexItem>}
       </Flex>
     </StackItem>
     <StackItem><Content component="p">{purpose}</Content></StackItem>

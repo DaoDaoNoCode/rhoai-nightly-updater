@@ -549,6 +549,17 @@ export const foreignPipelineServer = {
 /** A pipeline server that has just been set up (DSPO is starting it). */
 export const pipelineServerStarting = { ...pipelineServer, ready: false, message: "Starting (1/3 ready)", uiRoute: undefined };
 
+/** This tool's pipeline server in project ns. */
+export const pipelineServerIn = (ns, over = {}) => ({
+  ...pipelineServer, namespace: ns, apiRoute: pipelineServer.apiRoute.replace("dev-project", ns), uiRoute: pipelineServer.uiRoute.replace("dev-project", ns), ...over,
+});
+
+/** Not ready long after it was created (pkg/cluster pipeline_server.go: dspaStuckAfter), with the Ready condition's message. */
+export const pipelineServerStuck = (ns) => pipelineServerIn(ns, {
+  ready: false, terminalError: true, uiRoute: undefined, apiRoute: undefined,
+  message: "Deployment ds-pipeline-nightly-dspa: 0/1 replicas available (database connection refused)",
+});
+
 export const mlflowStates = {
   none: { deployed: false, ready: false, message: "Not deployed", managedByTool: false },
   // Made in the dashboard, not by this tool.

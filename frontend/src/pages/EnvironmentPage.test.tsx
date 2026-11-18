@@ -60,10 +60,12 @@ describe("Environment page", () => {
     const router = renderPage("/test-resources");
     expect(await screen.findByText("2 of 5 ready")).toBeInTheDocument();
     const mlflow = await row("MLflow");
-    expect(mlflow).toHaveTextContent("Ready · not managed by this tool");
+    // Ownership under the status label, in its own words.
+    expect(mlflow.querySelector(".pf-v6-c-label")).toHaveTextContent(/^Ready$/);
+    expect(within(mlflow).getByText("Not managed by this tool")).toBeInTheDocument();
     expect(within(mlflow).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
-    // One ready project: the link says which, as an inline link in the cell.
-    expect(within(await row("Pipelines")).getByRole("link", { name: /Open pipelines in juntao-test/ })).toHaveClass("pf-m-inline");
+    // One ready project: the State names it, the link does not repeat it; an inline link in the cell.
+    expect(within(await row("Pipelines")).getByRole("link", { name: "Open pipelines" })).toHaveClass("pf-m-inline");
     const pipelines = await row("Pipelines");
     expect(pipelines).toHaveTextContent("Ready in juntao-test");
     expect(within(pipelines).getByRole("link", { name: "Pipelines" })).toHaveAttribute("href", "/test-resources?tab=pipelines&project=juntao-test");
@@ -72,9 +74,11 @@ describe("Environment page", () => {
     await waitFor(() => expect(router.state.location.search).toBe("?tab=pipelines"));
     expect(await screen.findByText("Ready in juntao-test")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toHaveValue("juntao-test");
-    // The MLflow tab says the same as its row.
+    // The MLflow tab says the same as its row: Ready, with ownership beside it.
     fireEvent.click(screen.getByRole("tab", { name: "MLflow" }));
-    expect(await screen.findByText("Ready · not managed by this tool")).toBeInTheDocument();
+    const header = (await screen.findByRole("heading", { name: "MLflow", level: 2 })).closest(".pf-v6-l-flex") as HTMLElement;
+    expect(header.querySelector(".pf-v6-c-label")).toHaveTextContent(/^Ready$/);
+    expect(header).toHaveTextContent("Not managed by this tool");
   });
 
   it("project-scoped features summarise across projects", async () => {
@@ -84,6 +88,11 @@ describe("Environment page", () => {
     });
     renderPage("/test-resources");
     expect(await row("Pipelines")).toHaveTextContent("Ready in 2 projects");
+    // Which ones: a popover lists each with its state and a link to the tab there.
+    fireEvent.click(within(await row("Pipelines")).getByRole("button", { name: "Show projects" }));
+    const popover = await screen.findByRole("dialog", { name: "Pipelines in 2 projects" });
+    expect(within(popover).getAllByRole("link").map((l) => [l.textContent, l.getAttribute("href")])).toEqual([["a", "/test-resources?tab=pipelines&project=a"], ["b", "/test-resources?tab=pipelines&project=b"]]);
+    fireEvent.click(within(await row("Pipelines")).getByRole("button", { name: "Show projects" }));
     // Several ready projects: no jump into one of them; the tab's picker decides.
     expect(within(await row("Pipelines")).queryByRole("link", { name: /Open pipelines/ })).not.toBeInTheDocument();
     fireEvent.click(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" }));

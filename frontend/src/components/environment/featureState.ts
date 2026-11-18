@@ -6,7 +6,8 @@ import type { Pending } from "./resourceRow";
  * The state of each Environment feature, computed in one place: the
  * feature's tab and the Overview both render what these functions return,
  * so they cannot disagree. Readiness is health; ownership ("not managed by
- * this tool") is reported apart and only limits actions.
+ * this tool") is reported apart (FeatureState.unmanaged) and only limits
+ * actions.
  */
 
 /** What this page is doing now, for the parts it changes. */
@@ -51,8 +52,11 @@ export type NextStep =
   | { kind: "open"; label: string; href: string }
   /** Set up the missing parts (setup); reason, when set, is why it cannot run now (a dependency). */
   | { kind: "set-up"; label: string; setup: Pending[]; reason: string | null }
-  /** A part needs attention: show it. */
-  | { kind: "show-issue"; part: string }
+  /**
+   * A part needs attention: show it. project is set when the state covers
+   * several projects: the step names the project with the problem.
+   */
+  | { kind: "show-issue"; part: string; project?: string }
   /** Storage of an earlier version holds the data: Migrate storage moves it. */
   | { kind: "migrate" }
   /** A project-scoped feature with no project chosen. */
@@ -61,11 +65,15 @@ export type NextStep =
 export interface FeatureState {
   /** The feature's health: the worst part that is not fine, or Ready. */
   status: EnvStatus;
-  /** "Ready in juntao-test", "Ready · not managed by this tool", "Not set up in any project", ... */
+  /** "Ready in juntao-test", "Ready in 3 projects", "Not set up in any project", ... */
   label: string;
+  /** The part the state is about was not created by this tool (shown apart from the label). Absent when it was. */
+  unmanaged?: boolean;
   next: NextStep | null;
   /** The project this state is about (project-scoped features). */
   project: string | null;
+  /** When the state summarises several projects: each one's own state, in the projects' order. */
+  projects?: FeatureState[];
 }
 
 /** One part of a feature, with its health and ownership. */
@@ -75,7 +83,8 @@ export interface PartState {
   unmanaged: boolean;
 }
 
-const NOT_MANAGED = " · not managed by this tool";
+/** FeatureState.unmanaged, set only when true. */
+const owner = (unmanaged: boolean): { unmanaged?: true } => (unmanaged ? { unmanaged: true } : {});
 const PROBLEM: EnvStatus[] = ["error", "needs-attention"];
 const MOVING: EnvStatus[] = ["setting-up", "deleting"];
 
@@ -154,15 +163,15 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   const [storage, server] = parts;
   const unmanaged = parts.some((p) => p.unmanaged);
   const problem = parts.find((p) => PROBLEM.includes(p.status));
-  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}${problem.unmanaged ? NOT_MANAGED : ""}`, next: issueStep(status, problem.id), project };
+  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   // Ready when the pipeline server is, on ready storage; someone else's server keeps its
   // artifacts in storage of its own, so this tool's storage is not its dependency.
   if (server.status === "ready" && (storage.status === "ready" || server.unmanaged)) {
     const href = pipelineServerIn(status, project)?.uiRoute;
-    return { status: "ready", label: `Ready in ${project}${unmanaged ? NOT_MANAGED : ""}`, next: href ? { kind: "open", label: `Open pipelines in ${project}`, href } : null, project };
+    return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open pipelines", href } : null, project };
   }
-  if (server.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${NOT_MANAGED}`, next: null, project };
+  if (server.status === "unknown") return { status: "unknown", label: `Unknown in ${project}`, unmanaged: true, next: null, project };
   const setup: Pending[] = [];
   const storageSetUp = storageCanSetUp(status, busy);
   if (storageSetUp) setup.push({ kind: "setup-minio" });
@@ -204,35 +213,43 @@ export function setUpBlocked(state: FeatureState): string | null {
 /**
  * A project-scoped feature summarised across the projects that have it (the
  * Overview), in the order someone scanning the table needs: the operation
- * running from this page; then problems, which ready projects never hide;
- * then ready; then anything moving or unknown. Counts are of the projects
- * that have the feature, never of every project on the cluster. Null when no
- * project has it.
+ * running from this page; then problems, which ready projects never hide
+ * (an error before a warning); then ready; then anything moving or unknown.
+ * Counts are of the projects that have the feature, never of every project
+ * on the cluster: a problem counts the projects in its state ("Error in 1
+ * of 3 projects"), and its next step names the project with the problem
+ * (show-issue with project: "Open zeta"); ready ones are counted ("Ready in
+ * 3 projects") and the next step is the tab's picker. With several
+ * projects, projects lists each one's own state, as its tab shows it.
+ * Null when no project has it.
  */
 function acrossProjects(states: FeatureState[], running: FeatureState | null): FeatureState | null {
   if (running && MOVING.includes(running.status)) return running;
+  const several = states.length > 1 ? { projects: states } : {};
   const problems = states.filter((s) => PROBLEM.includes(s.status));
   const ready = states.filter((s) => s.status === "ready");
   if (problems.length > 0) {
     const first = problems.find((s) => s.status === "error") ?? problems[0];
-    if (problems.length === 1 && ready.length === 0) return first;
-    // The next step still opens the first problem's project.
-    return { ...first, label: `${envStatusText(first.status)} in ${problems.length} of ${states.length} projects` };
+    if (states.length === 1) return first;
+    const count = problems.filter((s) => s.status === first.status).length;
+    const next: NextStep | null = first.next?.kind === "show-issue" && first.project ? { ...first.next, project: first.project } : first.next;
+    // About the project with the problem: its row and step open the tab there.
+    return { status: first.status, label: `${envStatusText(first.status)} in ${count} of ${states.length} projects`, next, project: first.project, ...several };
   }
-  if (ready.length === 1) return ready[0];
-  if (ready.length > 1) return { status: "ready", label: `Ready in ${ready.length} projects`, next: { kind: "choose-project" }, project: null };
-  return states.find((s) => MOVING.includes(s.status)) ?? states.find((s) => s.status === "unknown") ?? null;
+  if (ready.length > 1) return { status: "ready", label: `Ready in ${ready.length} projects`, next: { kind: "choose-project" }, project: null, ...several };
+  const one = ready[0] ?? states.find((s) => MOVING.includes(s.status)) ?? states.find((s) => s.status === "unknown");
+  return one ? { ...one, ...several } : null;
 }
 
 /**
  * Pipelines: in a project (the tab), or, without one, summarised across
- * the projects (the Overview): "Ready in juntao-test", "Ready in 2 of 5
- * projects", "Not set up in any project".
+ * the projects (the Overview): "Ready in juntao-test", "Ready in 2
+ * projects", "Error in 1 of 3 projects", "Not set up in any project".
  */
 export function pipelinesState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE): FeatureState {
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
-  if (PROBLEM.includes(storage)) return { status: storage, label: `${envStatusText(storage)}${notManaged(status?.minio) ? NOT_MANAGED : ""}`, next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
+  if (PROBLEM.includes(storage)) return { status: storage, label: envStatusText(storage), ...owner(notManaged(status?.minio)), next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
   const states = projectsWithServers(status, projects).map((p) => pipelinesIn(status, p, busy));
   const running = busy.actionProject ? pipelinesIn(status, busy.actionProject, busy) : null;
   const summary = acrossProjects(states, running);
@@ -260,20 +277,19 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
   const mlflow = status?.mlflow;
   const s = mlflowStatus(status, busy);
   const unmanaged = notManaged(mlflow);
-  const suffix = unmanaged ? NOT_MANAGED : "";
   switch (s) {
     case "ready":
-      return { status: s, label: `Ready${suffix}`, next: mlflow?.uiRoute ? { kind: "open", label: MLFLOW_WORKSPACES, href: mlflow.uiRoute } : null, project: null };
+      return { status: s, label: "Ready", ...owner(unmanaged), next: mlflow?.uiRoute ? { kind: "open", label: MLFLOW_WORKSPACES, href: mlflow.uiRoute } : null, project: null };
     case "error":
     case "needs-attention":
-      return { status: s, label: `${s === "error" ? "Error" : "Needs attention"}${suffix}`, next: { kind: "show-issue", part: "mlflow" }, project: null };
+      return { status: s, label: s === "error" ? "Error" : "Needs attention", ...owner(unmanaged), next: { kind: "show-issue", part: "mlflow" }, project: null };
     case "setting-up":
     case "deleting":
       return { status: s, label: s === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
     case "not-set-up":
       return { status: s, label: "Not set up", next: { kind: "set-up", label: "Set up MLflow", setup: [{ kind: "setup-mlflow" }], reason: status?.mlflowBlocked?.reason ?? mlflow?.setupBlockedReason ?? null }, project: null };
     default:
-      return { status: s, label: `Unknown${suffix}`, next: null, project: null };
+      return { status: s, label: "Unknown", ...owner(unmanaged), next: null, project: null };
   }
 }
 
@@ -330,13 +346,13 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy): 
   const parts = modelsParts(status, project, busy);
   const [gateway, model] = parts;
   const problem = parts.find((p) => PROBLEM.includes(p.status));
-  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}${problem.unmanaged ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: problem.id }, project };
+  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: { kind: "show-issue", part: problem.id }, project };
   const unmanaged = parts.some((p) => p.unmanaged);
   if (model.status === "ready") {
     const href = dashboardProjectHref(status?.dashboardUrl, project);
-    return { status: "ready", label: `Ready in ${project}${unmanaged ? NOT_MANAGED : ""}`, next: href ? { kind: "open", label: `Open ${project} in the dashboard`, href } : null, project };
+    return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open in dashboard", href } : null, project };
   }
-  if (model.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${model.unmanaged ? NOT_MANAGED : ""}`, next: null, project };
+  if (model.status === "unknown") return { status: "unknown", label: `Unknown in ${project}`, ...owner(model.unmanaged), next: null, project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   if (moving && parts.every((p) => p.status !== "not-set-up")) {
     return { status: moving.status === "deleting" ? "deleting" : "setting-up", label: moving.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
@@ -362,7 +378,7 @@ export function modelsState(status: ResourcesStatus | null, project: string | nu
   if (project) return modelsIn(status, project, busy);
   const gateway = gatewayStatus(status, busy);
   if (PROBLEM.includes(gateway)) {
-    return { status: gateway, label: `${envStatusText(gateway)}${notManaged(status?.inferenceGateway) ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: "gateway" }, project: defaultModelsProject(status, projects, null) };
+    return { status: gateway, label: envStatusText(gateway), ...owner(notManaged(status?.inferenceGateway)), next: { kind: "show-issue", part: "gateway" }, project: defaultModelsProject(status, projects, null) };
   }
   const states = projectsWithModels(status, projects).map((p) => modelsIn(status, p, busy));
   const running = busy.models?.project ? modelsIn(status, busy.models.project, busy) : null;
@@ -440,15 +456,15 @@ function playgroundInProject(status: ResourcesStatus | null, pg: PlaygroundStatu
   const parts = playgroundParts(pg, project, busy);
   const [models, playground] = parts;
   const item = playgroundIn(pg, project);
-  const suffix = playground.unmanaged ? NOT_MANAGED : "";
-  if (PROBLEM.includes(playground.status)) return { status: playground.status, label: `${envStatusText(playground.status)} in ${project}${suffix}`, next: { kind: "show-issue", part: "playground" }, project };
+  const own = owner(playground.unmanaged);
+  if (PROBLEM.includes(playground.status)) return { status: playground.status, label: `${envStatusText(playground.status)} in ${project}`, ...own, next: { kind: "show-issue", part: "playground" }, project };
   if (playground.status === "ready") {
     const href = playgroundHref(status?.dashboardUrl, project);
-    return { status: "ready", label: `Ready in ${project}${suffix}`, next: href ? { kind: "open", label: `Open the playground in ${project}`, href } : null, project };
+    return { status: "ready", label: `Ready in ${project}`, ...own, next: href ? { kind: "open", label: "Open playground", href } : null, project };
   }
   if (MOVING.includes(playground.status)) return { status: playground.status, label: playground.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
-  if (playground.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${suffix}`, next: null, project };
-  if (item?.deployed) return { status: "unknown", label: `Unknown in ${project}${suffix}`, next: null, project };
+  if (playground.status === "unknown") return { status: "unknown", label: `Unknown in ${project}`, ...own, next: null, project };
+  if (item?.deployed) return { status: "unknown", label: `Unknown in ${project}`, ...own, next: null, project };
   let reason = playgroundClusterReason(pg);
   if (!reason && models.status === "unknown") reason = pg?.modelsProblem ?? "The project's models are still loading.";
   if (!reason && models.status === "not-set-up") reason = `Needs: Models. ${project} has no ready chat model; set one up on the Models tab first.`;
@@ -534,19 +550,19 @@ export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState
   if (!m) return { status: "unknown", label: "Checking", next: null, project: null };
   const status = maasPlatformStatus(m, busy);
   const unmanaged = m.platform.deployed && !m.platform.managedByTool;
-  const suffix = unmanaged ? NOT_MANAGED : "";
+  const own = owner(unmanaged);
   const published = (m.items ?? []).filter((i) => i.published && !i.partly);
   if (status === "ready") {
     const what = published.length === 0 ? "no model of this tool published" : `${published.length} ${published.length === 1 ? "model" : "models"} published`;
     const href = maasDashboardHref(m.dashboardUrl);
-    return { status, label: `Ready, ${what}${suffix}`, next: href ? { kind: "open", label: "Open MaaS in the dashboard", href } : null, project: null };
+    return { status, label: `Ready, ${what}`, ...own, next: href ? { kind: "open", label: "Open MaaS", href } : null, project: null };
   }
   if (MOVING.includes(status)) return { status, label: status === "deleting" ? "Removing" : "Setting up", next: null, project: null };
   if (PROBLEM.includes(status)) {
     const part = m.parts.find((p) => PROBLEM.includes(maasPartStatus(p)));
-    return { status, label: `${envStatusText(status)}${suffix}`, next: { kind: "show-issue", part: `maas-${part?.id ?? "dsc"}` }, project: null };
+    return { status, label: envStatusText(status), ...own, next: { kind: "show-issue", part: `maas-${part?.id ?? "dsc"}` }, project: null };
   }
-  if (status === "unknown") return { status, label: `Unknown${suffix}`, next: null, project: null };
+  if (status === "unknown") return { status, label: "Unknown", ...own, next: null, project: null };
   return {
     status: "not-set-up",
     label: "Not set up",
