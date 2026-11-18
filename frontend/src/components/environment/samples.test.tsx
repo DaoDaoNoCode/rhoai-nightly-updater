@@ -272,7 +272,12 @@ describe("MLflow tab: Sample data", () => {
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: /Add the training experiment and registered model to dev\?/ })).getByRole("button", { name: "Add" }));
     await tick();
-    expect(screen.getByRole("dialog", { name: "Add the training experiment and registered model to dev" })).toHaveTextContent("This tool allows one change per user every 30 seconds on this action. Nothing was changed; try again in 18 seconds.");
+    const runDialog = screen.getByRole("dialog", { name: "Add the training experiment and registered model to dev" });
+    expect(runDialog).toHaveTextContent("This tool allows one change per user every 30 seconds on this action. Nothing was changed; try again in 18 seconds.");
+    // A warning that nothing ran, not a failure of the change.
+    expect(runDialog).toHaveTextContent("Not started: wait before repeating this change");
+    expect(runDialog).not.toHaveTextContent(": stopped");
+    expect(runDialog.querySelector(".pf-m-warning")).not.toBeNull();
   });
 
   it("read-only: every action is disabled with the reason shown", async () => {
