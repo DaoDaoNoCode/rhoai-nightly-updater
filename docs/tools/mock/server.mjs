@@ -322,6 +322,12 @@ const scenarios = {
   "env-maas-none": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { items: [F.maasModel(false)] }); },
   "env-maas-blocked": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { blocked: F.MAAS_BLOCKED, items: [F.maasModel(false)] }); },
   "env-maas-no-cnpg": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { noCNPG: true, items: [F.maasModel(false)] }); },
+  // A cluster that never had MaaS: Set up installs and creates everything.
+  "env-maas-fresh": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { rhcl: "missing", items: [F.maasModel(false)] }); },
+  // Set up by this tool on Connectivity Link 1.4.3: Upgrade Connectivity Link is offered.
+  "env-maas-rhcl-143": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { rhcl: "1.4.3", items: [F.maasModel(false)] }); },
+  // A tier-based MaaS left its gateway policies: Remove the old tier policies is offered.
+  "env-maas-tier-policies": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tierPolicies: true, items: [F.maasModel(false)] }); },
   "env-maas-starting": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("starting", { items: [F.maasModel(false)] }); },
   "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
   // Authorino's CR names a certificate Secret that is not a Kubernetes name: no commands.

@@ -242,18 +242,15 @@ Needs a ready chat model in the project (step 9) and the DataScienceCluster comp
 
 Models as a Service lets everyone signed in to the cluster call a published model with a MaaS API key. The **MaaS** tab sets up the platform as the MaaS install docs do and publishes this tool's chat models, one at a time.
 
-It needs, installed by a cluster-admin first (the tab says which is missing, and Set up stays disabled until then):
-- Red Hat Connectivity Link, with its Kuadrant CR (the MaaS docs ask for 1.5; the tab warns about an older one);
-- the CloudNativePG operator, for MaaS's database (or your own PostgreSQL in Secret `maas-db-config`);
-- the DataScienceCluster's `aigateway` component Managed.
+Nothing has to be installed first: the tab lists every part MaaS needs and what Set up will do about each.
 
-1. Click **Set up** and confirm (about 5 minutes). It creates the database, Gateway `maas-default-gateway` at `maas.<apps domain>` (another cloud load balancer) and turns MaaS on in the DataScienceCluster.
-2. If **Authorino TLS** needs attention, a cluster-admin runs the commands the part shows; until then API keys are refused.
+1. Click **Set up**, read the changes it lists, and confirm (about 10 minutes on a cluster without any of it). It installs what is missing as the MaaS docs do: Red Hat Connectivity Link and its Kuadrant CR, the CloudNativePG operator, the AI gateway's namespace, the database, Gateway `maas-default-gateway` at `maas.<apps domain>` (another cloud load balancer), Authorino TLS, and `aigateway` with MaaS turned on in the DataScienceCluster. If a step fails, **Set up** again continues from there.
+2. If a part offers a fix of its own (**Upgrade Connectivity Link** on a version below the docs' 1.5, **Remove the old tier policies** after a tier-based MaaS), run it; each lists its changes first. **Do it from the CLI instead** under a part shows the same change as commands.
 3. **Publish** a chat model. While it is published, it is reached through MaaS only: its direct address answers 404 until you unpublish it.
 
 <img src="images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts with their health, and the published model with Unpublish" width="760">
 
-**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Remove MaaS** unpublishes and removes what the tool set up. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
+**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Remove MaaS** unpublishes and removes what the tool set up for MaaS alone; Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, since other RHOAI features use them. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
 
 Each tab has **Clean up** at the bottom, and the Overview has **Clean up everything**: one confirmed operation with a checkbox per part.
 

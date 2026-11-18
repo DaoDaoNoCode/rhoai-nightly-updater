@@ -77,6 +77,22 @@ func maasOwnSubscriptionPriority(c *Client) int {
 	return *sub.Spec.Priority
 }
 
+// maasNotReadyRowReason is why a model row cannot be published while the
+// platform is not ready: short, since the part above the table says the
+// rest.
+func maasNotReadyRowReason(st *types.MaaSStatus) string {
+	if !st.Platform.Deployed && !st.Platform.ManagedByTool {
+		return "Set up the MaaS platform first."
+	}
+	for _, p := range st.Parts {
+		if p.State == "ready" || (p.ID == "authorino-tls" && p.State == "unknown") {
+			continue
+		}
+		return "The MaaS platform is not ready: " + p.Title + " (see above)."
+	}
+	return "The MaaS platform is not ready."
+}
+
 // maasNotReadyReason names the first part that keeps the platform from
 // being ready, with its message.
 func maasNotReadyReason(st *types.MaaSStatus) string {

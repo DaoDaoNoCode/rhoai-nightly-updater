@@ -402,6 +402,17 @@ a commit build):
   the direct address back. A publication by an earlier build shows as
   **Partly published** (its direct address answered 500): Unpublish, then
   Publish again ([RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service)).
+- *MaaS setup.* Set up now installs what MaaS needs (Connectivity Link,
+  the Kuadrant CR, CloudNativePG, Authorino TLS, the infrastructure
+  namespace, `aigateway`) when it is missing; what a cluster-admin
+  installed by hand is used as it is and shown as not managed by this
+  tool. On a platform a pre-release build set up, the tab may now ask for
+  attention where it did not: Connectivity Link below 1.5 (**Upgrade
+  Connectivity Link**; Publish refuses on 1.4.0, and below 1.5 while other
+  MaaSSubscriptions exist), tier-era gateway policies (**Remove the old
+  tier policies**), or a foreign gateway that admits every namespace.
+  Publishing again moves this tool's subscription below every other
+  subscription's priority. Remove keeps the shared pieces it installed.
 
 ### Rolling back from 3.0.0 to 2.3.x
 

@@ -276,7 +276,7 @@ async (page) => {
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
-      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "earlier-build", "someone-added", "orphan", "foreign", "no-model"]) {
+      for (const st of ["fresh", "rhcl-143", "tier-policies", "none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "earlier-build", "someone-added", "orphan", "foreign", "no-model"]) {
         for (const dark of [false, true]) {
           await open("/test-resources?tab=maas", `env-maas-${st}`, { dark, width: 1440 });
           await fit();
@@ -285,6 +285,21 @@ async (page) => {
       }
       for (const dark of [false, true]) {
         const theme = dark ? "dark" : "light";
+        // The one-click setup: every change listed before it runs; each
+        // part's own fix confirms its changes.
+        for (const [scenario, button, name] of [["env-maas-fresh", "Set up MaaS", "setup-confirm"], ["env-maas-rhcl-143", "Upgrade Connectivity Link", "upgrade-confirm"],
+          ["env-maas-tier-policies", "Remove the old tier policies", "tier-policies-confirm"], ["env-maas-tls", "Configure Authorino TLS", "tls-confirm"]]) {
+          await open("/test-resources?tab=maas", scenario, { dark, width: 1440 });
+          await page.getByRole("button", { name: button, exact: true }).click();
+          await page.getByRole("dialog").waitFor();
+          await page.getByRole("dialog").getByRole("button", { name: "Details" }).click();
+          await page.screenshot({ path: `${out}/themes/maas-${name}-${theme}.png` });
+        }
+        // Do it from the CLI instead, opened.
+        await open("/test-resources?tab=maas", "env-maas-fresh", { dark, width: 1440 });
+        await page.getByRole("button", { name: "Do it from the CLI instead" }).first().click();
+        await fit();
+        await page.screenshot({ path: `${out}/themes/maas-cli-${theme}.png` });
         // Publish says, before you confirm, that the direct address answers 404.
         await open("/test-resources?tab=maas", "env-maas-ready", { dark, width: 1440 });
         await page.getByRole("button", { name: "Publish", exact: true }).click();

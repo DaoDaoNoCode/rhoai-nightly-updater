@@ -1520,7 +1520,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				item.SetupBlockedReason = item.Message + "; it is left alone."
 			}
 			if !p.Ready {
-				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, maasNotReadyReason(st))
+				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, maasNotReadyRowReason(st))
 			} else if !item.ModelReady {
 				item.SetupBlockedReason = firstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 			}
