@@ -138,8 +138,9 @@ only accepts a tag whose version is the top dated section. See
   Clean up everything deletes the models, then the gateway. The CPU preset
   is found at run time; on a nightly cluster that cannot pull the preset's
   image, the newest released Red Hat image is used (`VLLM_CPU_IMAGE`
-  overrides it). "Use it" calls the model with the user's own token; no
-  account or token is created. The Overview gets a Models row.
+  overrides it). "Use it" calls the model with the model's own token
+  (the dashboard's token authentication, below), never the user's. The
+  Overview gets a Models row.
 - RBAC (template revision 5): Roles in `openshift-ingress` and
   `openshift-ingress-operator` (new template parameters `INGRESS_NAMESPACE`,
   `INGRESS_OPERATOR_NAMESPACE`) and named ClusterRole rules for the
@@ -196,8 +197,10 @@ only accepts a tag whose version is the top dated section. See
   shows in the dashboard; Add all and Remove all are one operation. The
   Pipelines tab's Run a sample pipeline offers a two-step write-and-read
   pipeline as a file, the dashboard's import, and curl commands that
-  upload it and start a run with your own token: the updater never calls
-  a pipeline server's API, so its token never reaches a user's project.
+  upload it and start a run with a token of ServiceAccount `pipeline-api`,
+  which may only use that pipeline server's API and expires in 15 minutes
+  (never your own token): the updater never calls a pipeline server's API,
+  so its token never reaches a user's project.
   The Overview and What next point to them once a feature works.
 - **Migrate storage** says why at the top of the Pipelines tab, and a
   successful migration ends with its outcome: Delete old storage is a
@@ -242,7 +245,8 @@ only accepts a tag whose version is the top dated section. See
     endpoint, the bucket and the admin UI login, with the password masked
     behind an eye toggle and a copy button. **Set up** confirms every change
     and then sets up the missing parts in order with their progress. **What
-    this creates** and **Tear down** are collapsed under the parts. Without
+    this creates** is collapsed under the parts; Delete and Repair are in
+    each part's menu, and Clean up is at the bottom of the tab. Without
     a project in the address it opens the first project with a ready
     pipeline server.
   - **MLflow**: the MLflow server with Open MLflow, Deploy PR and Revert.
@@ -250,13 +254,13 @@ only accepts a tag whose version is the top dated section. See
     up, Setting up, Ready, Needs attention, Error, Deleting, Unknown), and
     something this tool did not create gets a **Not managed by this tool**
     label beside it. It can be Ready and counts as ready; it only gets no
-    Tear down or Repair. The status also reports the health of pipeline
+    Delete or Repair. The status also reports the health of pipeline
     servers this tool did not create.
 - The admin UI password is read from the server only when you show or copy
   it, instead of an `oc extract` command on the page. Only cluster-admins
   get it; it is never part of the status, never cached and never logged,
   and it is gone when you hide it or leave the tab.
-- **Tear down the S3 storage** can also delete namespace `seaweedfs`
+- **Delete** of the S3 storage can also delete namespace `seaweedfs`
   ("Also delete namespace seaweedfs (created by this tool)"): offered only
   when the namespace carries the tool label and the tool wrote it,
   unticked, with what it deletes and what the tool sees there. Needs the
@@ -296,9 +300,10 @@ only accepts a tag whose version is the top dated section. See
   when it carries the tool's label.
   Each run resumes where the last stopped, the removal too: it deletes the
   old server last among what can fail, and once the server is gone a
-  re-run finishes without copying again. Until then the Storage card
-  reads **Migration needed**, with the old storage's objects under
-  **Details**, and the in-place MinIO-to-SeaweedFS replacement of 2.x is
+  re-run finishes without copying again. Until then the S3 storage
+  reads **Needs attention**, with a warning at the top of the Pipelines
+  tab that offers Migrate storage and the old storage's objects under
+  **Storage of an earlier version**, and the in-place MinIO-to-SeaweedFS replacement of 2.x is
   retired. `RCLONE_IMAGE` overrides the pinned rclone 1.76.0 image.
 - The appearance popover follows a Contrast mode change: it stayed 8 px
   off its button (glass has a narrower masthead inset) until the next
@@ -328,7 +333,7 @@ only accepts a tag whose version is the top dated section. See
 - The appearance popover's arrow points at the appearance button.
 - Action rows use one PatternFly action group each, so related actions get
   the standard spacing: the Environment cards' rows (Open admin UI,
-  Migrate storage, Repair, Tear down, Set up, Open MLflow, Open pipelines) and the
+  Migrate storage, Repair, Set up, Open MLflow, Open pipelines) and the
   Status page's installed-build actions.
 - The installed-build actions on the Status page are full-size buttons in
   one row: **Choose another build** is a secondary button and **View build

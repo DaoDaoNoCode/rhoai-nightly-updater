@@ -6,7 +6,7 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 
 ### Required Versions
 
-- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.3)
+- **Go**: 1.27 (`go.mod`; CI and the Containerfile use golang 1.27.4)
 - **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
 - **TypeScript**: 5.x
 
@@ -60,7 +60,7 @@ The frontend uses:
 
 - **React 18.3.0** with TypeScript 5.6.x
 - **PatternFly 6.x** for UI components (`@patternfly/react-core`, `@patternfly/react-table`)
-- **React Router 7.16.0** for client-side routing
+- **React Router 7** (`react-router-dom` ^7.18.4) for client-side routing
 - **Webpack 5** for bundling (configured in `frontend/webpack.config.js`)
 
 #### TypeScript Configuration
@@ -93,7 +93,7 @@ devServer: {
 ## Project Structure
 
 ```
-/Users/juntaowang/Desktop/ODH/rhoai-nightly-updater/
+rhoai-nightly-updater/
 ├── main.go                  # HTTP server entry point
 ├── go.mod                   # Go module definition
 ├── Makefile                 # Build/test/deploy automation
@@ -212,7 +212,7 @@ make build             # Build using podman or docker (auto-detected)
      - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test` (skipped with `--build-arg RUN_CHECKS=false`, which only GitLab's image jobs pass: their pipeline's test jobs have run these checks on the same commit)
      - Builds production bundle: `npm run build` → `frontend/dist/`
      - Uses `NODE_OPTIONS="--max-old-space-size=2048"` to handle large bundles
-   - **Stage 2 (backend)**: `golang:1.27.3-alpine`
+   - **Stage 2 (backend)**: `golang:1.27.4-alpine`
      - Downloads Go modules: `go mod download`
      - Vets and tests: `go vet ./... && go test ./...` (also skipped with `RUN_CHECKS=false`)
      - Builds a static binary with the version, commit and build date linked in
@@ -258,7 +258,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
   - `golangci-lint`;
   - `frontend-checks` (typecheck, ESLint, `npm audit`), `frontend-test` (tests) and `frontend-build` (production build), in parallel, each after its own `npm ci`;
-  - `release-scripts`: `scripts/test-release.sh` and `scripts/test-install.sh`;
+  - `release-scripts`: `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` (skipped in GitLab, whose Go image has no `jq`; GitHub runs it with `jq` and `REQUIRE_JQ=1`, so there it cannot skip);
   - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.
@@ -344,8 +344,9 @@ var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *ht
 
 ```go
 var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-    // Adds per-user rate limiting (30s window)
-    // Prevents concurrent cluster mutations via atomic.Bool lock
+    // The wrapper has checked cluster-admin and taken the per-user rate-limit slot (30s window).
+    // A cluster-changing handler then calls lockCluster: this pod's lock, then the cross-pod
+    // lease in the operation ConfigMap (pkg/api/operation_lease.go); 409 cluster_busy if either is taken.
 })
 ```
 
@@ -438,10 +439,10 @@ useEffect(() => {
 
 #### 3. API Calls
 
-API calls are centralized in `frontend/src/services/api.ts` (not shown, but inferred from imports in `App.tsx`):
+API calls are centralized in `frontend/src/services/api.ts` (`getStatus`, `getUserPermissions`, `trackPageView`, ...); each component imports the calls it uses. `App.tsx`, for example:
 
 ```tsx
-import { getStatus, getUserPermissions, trackPageView } from "./services/api";
+import { trackPageView } from "./services/api";
 ```
 
 ## Deploying Changes

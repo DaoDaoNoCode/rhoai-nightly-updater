@@ -103,7 +103,7 @@ Finding a digest:
 
 ```bash
 # The updater (public on quay.io). install.sh reads it the same way.
-oc image info quay.io/juntao_wang/rhoai-nightly-updater:v2.2.0 --filter-by-os=linux/amd64 -o json | jq -r '.listDigest // .digest'
+oc image info quay.io/juntao_wang/rhoai-nightly-updater:v3.0.0 --filter-by-os=linux/amd64 -o json | jq -r '.listDigest // .digest'
 
 # The oauth-proxy and CLI images (registry.redhat.io needs a login: podman
 # login registry.redhat.io, or the cluster's pull secret in
@@ -197,8 +197,8 @@ for `values-<cluster>.yaml` and the CLI image in the digests-only rule:
 An image only works with the template of its own release (ports, probes,
 environment, RBAC). `install.sh` checks this by the commit the image was
 built from; the chart cannot read the image, so its tag-consistency check
-compares only the tag text: `:v2.1.0@sha256:...` with the v2.2.0 chart
-fails, but a digest of another release behind the `:v2.2.0` tag, a digest
+compares only the tag text: `:v2.3.3@sha256:...` with the v3.0.0 chart
+fails, but a digest of another release behind the `:v3.0.0` tag, a digest
 without a tag, or a `:main@sha256:...` build all render. When you change
 `parameters.IMAGE` by hand, check the digest against the chart's release:
 
@@ -208,7 +208,7 @@ without a tag, or a `:main@sha256:...` build all render. When you change
 skopeo inspect docker://quay.io/juntao_wang/rhoai-nightly-updater@sha256:<digest> \
   | jq -r '.Labels["org.opencontainers.image.revision"], .Labels["org.opencontainers.image.version"]'
 # The commit of the chart's release (targetRevision), in a clone:
-git rev-parse 'v2.2.0^{commit}'
+git rev-parse 'v3.0.0^{commit}'
 ```
 
 The two commits must be the same. `oc image info <image> --filter-by-os=linux/amd64`
@@ -436,7 +436,7 @@ spec:
   sources:
     # The chart, at a release tag.
     - repoURL: https://github.com/DaoDaoNoCode/rhoai-nightly-updater.git
-      targetRevision: v2.2.0
+      targetRevision: v3.0.0
       path: deploy/chart
       helm:
         releaseName: rhoai-nightly-updater
@@ -469,7 +469,7 @@ spec:
 
 ```yaml
 parameters:
-  IMAGE: quay.io/juntao_wang/rhoai-nightly-updater:v2.2.0@sha256:<digest>
+  IMAGE: quay.io/juntao_wang/rhoai-nightly-updater:v3.0.0@sha256:<digest>
   OAUTH_PROXY_IMAGE: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.17@sha256:<digest>
 ```
 
@@ -509,7 +509,7 @@ spec:
       project: default
       sources:
         - repoURL: https://github.com/DaoDaoNoCode/rhoai-nightly-updater.git
-          targetRevision: v2.2.0
+          targetRevision: v3.0.0
           path: deploy/chart
           helm:
             releaseName: rhoai-nightly-updater
