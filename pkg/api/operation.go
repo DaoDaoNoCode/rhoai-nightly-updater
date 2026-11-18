@@ -201,6 +201,7 @@ var operationTypes = map[string][2]string{
 	"/api/resources/models/stream":            {"models", "Models"},
 	"/api/resources/playground/stream":        {"playground", "Playground"},
 	"/api/resources/maas/stream":              {"maas", "Models as a Service"},
+	"/api/resources/prerequisites/stream":     {"prerequisites", "Set up a feature's prerequisites"},
 	"/api/resources/cleanup/stream":           {"cleanup", "Clean up the environment"},
 	"/api/resources/samples/mlflow/stream":    {"mlflow-samples", "MLflow samples"},
 	"/api/diagnostics/fix":                    {"diagnostics-fix", "Apply diagnostics fix"},

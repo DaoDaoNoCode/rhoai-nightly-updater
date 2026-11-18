@@ -30,6 +30,8 @@ var (
 
 // operatorSpec is an operator this tool installs and how.
 type operatorSpec struct {
+	// id names the operator in step and part IDs ("cert-manager").
+	id    string
 	title string
 	pkg   string
 	// subName is the Subscription this tool creates; subNames the names an

@@ -25,6 +25,9 @@ type fakePackage struct {
 	source, defaultChannel string
 	channels               map[string]fakeChannel
 	order                  []string
+	// installModes the channels' heads support (none: the catalog does
+	// not say).
+	installModes []string
 }
 
 // rhclFakePackage is the RHCL catalog as seen live on 2026-11-18
@@ -62,7 +65,15 @@ func packageManifestStatus(pkg string, p fakePackage) string {
 		for _, v := range ch.entries {
 			entries = append(entries, map[string]interface{}{"name": pkg + ".v" + v, "version": v})
 		}
-		chans = append(chans, map[string]interface{}{"name": name, "currentCSV": pkg + ".v" + ch.head, "currentCSVDesc": map[string]interface{}{"version": ch.head}, "entries": entries})
+		desc := map[string]interface{}{"version": ch.head}
+		if len(p.installModes) > 0 {
+			var modes []interface{}
+			for _, m := range []string{"OwnNamespace", "SingleNamespace", "MultiNamespace", "AllNamespaces"} {
+				modes = append(modes, map[string]interface{}{"type": m, "supported": containsString(p.installModes, m)})
+			}
+			desc["installModes"] = modes
+		}
+		chans = append(chans, map[string]interface{}{"name": name, "currentCSV": pkg + ".v" + ch.head, "currentCSVDesc": desc, "entries": entries})
 	}
 	raw, _ := json.Marshal(map[string]interface{}{"packageName": pkg, "catalogSource": p.source, "catalogSourceNamespace": "openshift-marketplace", "defaultChannel": p.defaultChannel, "channels": chans})
 	return string(raw)
@@ -124,14 +135,32 @@ func (s *fakeOLMSim) installed(pkg, ns, subName, channel, version string) {
 	}
 }
 
-// step is OLM's move on a Subscription read (call from beforeServe).
+// step is OLM's move on a Subscription read, by name or in a namespace's
+// list (call from beforeServe).
 func (s *fakeOLMSim) step(method, path string) {
-	if method != http.MethodGet || !strings.Contains(path, "/subscriptions/") {
+	if method != http.MethodGet || !strings.Contains(path, "/subscriptions") {
+		return
+	}
+	k, isList := parseFakePath(path)
+	if isList && k.ns == "" {
 		return
 	}
 	s.f.mu.Lock()
+	var keys []fakeKey
+	for key := range s.f.objects {
+		if key.plural == "subscriptions" && key.ns == k.ns && (isList || key.name == k.name) {
+			keys = append(keys, key)
+		}
+	}
+	s.f.mu.Unlock()
+	for _, key := range keys {
+		s.stepOne(key)
+	}
+}
+
+func (s *fakeOLMSim) stepOne(k fakeKey) {
+	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
-	k, _ := parseFakePath(path)
 	sub := s.f.objects[k]
 	if sub == nil {
 		return

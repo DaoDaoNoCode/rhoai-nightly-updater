@@ -89,33 +89,38 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	// The API server gives the fields a merge patch sets to its field
 	// manager (here for the DataScienceCluster, whose modelsAsAService
 	// ownership removal checks).
-	f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
-		manager := r.URL.Query().Get("fieldManager")
-		if k.plural != "datascienceclusters" || manager == "" {
-			return
-		}
-		var fields func(v interface{}) map[string]interface{}
-		fields = func(v interface{}) map[string]interface{} {
-			out := map[string]interface{}{}
-			if m, ok := v.(map[string]interface{}); ok {
-				for key, child := range m {
-					out["f:"+key] = fields(child)
-				}
-			}
-			return out
-		}
-		meta := ensureMap(next, "metadata")
-		var kept []interface{}
-		entries, _ := meta["managedFields"].([]interface{})
-		for _, e := range entries {
-			if em, _ := e.(map[string]interface{}); em["manager"] != manager {
-				kept = append(kept, e)
-			}
-		}
-		meta["managedFields"] = append(kept, map[string]interface{}{"manager": manager, "operation": "Update", "fieldsV1": map[string]interface{}{"f:spec": fields(patch["spec"])}})
-	}
+	f.onMergePatch = recordDSCFieldManagers
 	mc.route = simulateKServeRoute(mc)
 	return mc
+}
+
+// recordDSCFieldManagers is an onMergePatch that gives the fields a merge
+// patch of the DataScienceCluster sets to its field manager, as the API
+// server does (the manager's earlier entry is replaced).
+func recordDSCFieldManagers(r *http.Request, k fakeKey, patch, next map[string]interface{}) {
+	manager := r.URL.Query().Get("fieldManager")
+	if k.plural != "datascienceclusters" || manager == "" {
+		return
+	}
+	var fields func(v interface{}) map[string]interface{}
+	fields = func(v interface{}) map[string]interface{} {
+		out := map[string]interface{}{}
+		if m, ok := v.(map[string]interface{}); ok {
+			for key, child := range m {
+				out["f:"+key] = fields(child)
+			}
+		}
+		return out
+	}
+	meta := ensureMap(next, "metadata")
+	var kept []interface{}
+	entries, _ := meta["managedFields"].([]interface{})
+	for _, e := range entries {
+		if em, _ := e.(map[string]interface{}); em["manager"] != manager {
+			kept = append(kept, e)
+		}
+	}
+	meta["managedFields"] = append(kept, map[string]interface{}{"manager": manager, "operation": "Update", "fieldsV1": map[string]interface{}{"f:spec": fields(patch["spec"])}})
 }
 
 // hasLocked is has for use inside onGet, which runs under the fake's lock.

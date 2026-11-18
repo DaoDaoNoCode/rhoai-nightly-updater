@@ -55,10 +55,10 @@ const rhclDocsMinimum = "1.5"
 const rhclAuthBypassVersion = "1.4.0"
 
 var (
-	rhclOperator = operatorSpec{title: "Red Hat Connectivity Link", pkg: "rhcl-operator", subName: "kuadrant-operator", subNames: []string{"kuadrant-operator", "rhcl-operator"},
+	rhclOperator = operatorSpec{id: "rhcl", title: "Red Hat Connectivity Link", pkg: "rhcl-operator", subName: "kuadrant-operator", subNames: []string{"kuadrant-operator", "rhcl-operator"},
 		namespace: "kuadrant-system", source: "redhat-operators", group: "kuadrant-operator-group",
 		api: kuadrantGroup, controller: kuadrantController, channel: rhclChannel, env: rhclDenyOnFailureEnv}
-	cnpgOperator = operatorSpec{title: "CloudNativePG", pkg: "cloudnative-pg", subName: "cloudnative-pg", subNames: []string{"cloudnative-pg"},
+	cnpgOperator = operatorSpec{id: "cnpg", title: "CloudNativePG", pkg: "cloudnative-pg", subName: "cloudnative-pg", subNames: []string{"cloudnative-pg"},
 		namespace: "cnpg-system", source: "certified-operators", group: "cloudnative-pg",
 		api: cnpgGroup, controller: cnpgController}
 )

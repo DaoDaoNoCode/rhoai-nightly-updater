@@ -18,10 +18,28 @@ type featureComponent struct {
 	// DataScienceCluster is read at the newest version that works, and the
 	// key it has is used.
 	keys []string
+	// v1Key is the key DataScienceCluster v1 uses, when it differs (a
+	// component the DataScienceCluster does not name yet is written with
+	// it at v1, else with keys[0]).
+	v1Key string
+}
+
+// keyIn is the key the component is written with in the DataScienceCluster
+// as read: the one it names, else the read version's own.
+func (fc featureComponent) keyIn(r dscRead) string {
+	for _, key := range fc.keys {
+		if _, found := componentManagement(r.Object, key); found {
+			return key
+		}
+	}
+	if r.Version == "v1" && fc.v1Key != "" {
+		return fc.v1Key
+	}
+	return fc.keys[0]
 }
 
 var (
-	pipelinesComponent = featureComponent{feature: "Data Science Pipelines", keys: []string{"aipipelines", "datasciencepipelines"}}
+	pipelinesComponent = featureComponent{feature: "Data Science Pipelines", keys: []string{"aipipelines", "datasciencepipelines"}, v1Key: "datasciencepipelines"}
 	mlflowComponent    = featureComponent{feature: "MLflow", keys: []string{"mlflowoperator"}}
 )
 

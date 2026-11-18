@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -221,15 +220,7 @@ func writeMaaSRecord(c *Client, rec maasRecord) error {
 	if err != nil {
 		return err
 	}
-	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{maasRecordKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {maasRecordManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if err := writeSnapshotKey(c, maasRecordKey, maasRecordManager, string(data)); err != nil {
 		return fmt.Errorf("record this tool's MaaS changes: %w", err)
 	}
 	return nil

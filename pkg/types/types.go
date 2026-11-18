@@ -1004,6 +1004,49 @@ type MaaSRequest struct {
 	Model string `json:"model,omitempty"`
 }
 
+// PrerequisitesStatus is what each Environment feature needs on the cluster
+// before its own setup can run (GET /api/resources/prerequisites), by
+// feature: "pipelines", "mlflow", "models", "playground".
+type PrerequisitesStatus struct {
+	Features map[string]FeaturePrerequisites `json:"features"`
+}
+
+// FeaturePrerequisites is one feature's cluster prerequisites: its
+// DataScienceCluster components and the operators they need.
+type FeaturePrerequisites struct {
+	// Ready: every part is ready; the feature's own setup can run.
+	Ready bool `json:"ready"`
+	// Parts are the prerequisites in setup order, as the MaaS tab's parts.
+	Parts []MaaSPart `json:"parts"`
+	// SetupPlan lists, in order, every change Set up makes now for them
+	// (components turned on, operators installed); empty when none.
+	SetupPlan []string `json:"setupPlan,omitempty"`
+	// SetupBlockedReason says why Set up cannot make them ready (the
+	// DataScienceCluster is managed by Argo CD, there is none, a catalog
+	// lacks a package, a read failed), or is "".
+	SetupBlockedReason string `json:"setupBlockedReason,omitempty"`
+	// Restorable are the components this tool turned on for the feature
+	// and still owns: Clean up offers to turn them back.
+	Restorable []RestorableComponent `json:"restorable,omitempty"`
+}
+
+// RestorableComponent is a DataScienceCluster component this tool set to
+// Managed, and what it was before.
+type RestorableComponent struct {
+	// Component is its key in spec.components ("kserve").
+	Component string `json:"component"`
+	// Previous is its managementState before ("" when it was not set).
+	Previous string `json:"previous,omitempty"`
+	// Feature is the feature it was turned on for.
+	Feature string `json:"feature"`
+}
+
+// PrerequisitesRequest is the body of POST
+// /api/resources/prerequisites/stream: set up what Feature needs.
+type PrerequisitesRequest struct {
+	Feature string `json:"feature"`
+}
+
 // ComponentBlock is a DataScienceCluster component a feature needs that is
 // not turned on.
 type ComponentBlock struct {
@@ -1043,6 +1086,10 @@ type CleanupRequest struct {
 	// removes the MaaS platform this tool set up, last.
 	MaaSPublished []string `json:"maasPublished,omitempty"`
 	MaaSPlatform  bool     `json:"maasPlatform,omitempty"`
+	// Components are the DataScienceCluster components ("kserve") this
+	// tool turned on that go back to what they were, last, each only while
+	// this tool still owns the field and nothing on the cluster uses it.
+	Components []string `json:"components,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/minio/teardown.
