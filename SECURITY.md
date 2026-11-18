@@ -61,7 +61,7 @@ Token rules (pkg/api/identity.go, handlers.go):
 | DataScienceClusters | `get list patch create` | no |
 | DSCInitializations, Platforms | `list` (`get` Platform `default`) | read-only |
 | `components.platform.opendatahub.io/*` (module CRs) | `list patch` | no; the kinds change between releases and are discovered |
-| DSPAs | `list create`; `get patch delete` | only `nightly-dspa` and legacy `dspa` (Migrate storage moves a `dspa` an earlier version created to the new storage) |
+| DSPAs | `list create`; `get patch delete` | only `dspa` (what setup creates since 3.0.0: the dashboard's name, which workbench pipelines need; also the earliest versions' name, which Migrate storage moves) and `nightly-dspa` (the name 2.x used: status, teardown, Migrate storage, and Recreate with the standard name, which deletes it) |
 | Jobs | `create`; `get delete` | `get delete` only `seaweedfs-migrate`, Migrate storage's copy Job in namespace `seaweedfs` |
 | MLflows | `create`; `get patch delete` | the second set only on `mlflow` |
 | ClusterVersion, Console, IDMS, ConfigMap `odh-upgrade-acks` | read | — |

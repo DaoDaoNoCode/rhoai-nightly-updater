@@ -189,7 +189,13 @@ func TestGetResourcesStatus_DSPAListErrorFails(t *testing.T) {
 	}
 }
 
-func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T) {
+// Setup names the DSPA "dspa", as the dashboard does (DEFAULT_PIPELINE_
+// DEFINITION_NAME): odh-notebook-controller builds a workbench's pipeline
+// config from the DSPA named "dspa" and binds Role ds-pipeline-user-access-
+// dspa (kubeflow rhoai-3.6 notebook_dspa_secret.go dspaInstanceName,
+// notebook_rbac.go ReconcileRoleBindings). The S3 secret keeps a name of
+// the tool's own, never the dashboard's dashboard-dspa-secret.
+func TestSetupPipelineServer_CreatesTheStandardName(t *testing.T) {
 	f, c := newResourceFake(t)
 	putManagedDSC(f)
 	putReadyManagedS3(f)
@@ -205,7 +211,10 @@ func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T)
 			t.Errorf("setup changed a namespace: %s", m)
 		}
 	}
-	for _, path := range []string{dspaPath("new-project", dspaName), secretPath("new-project", dspaSecretName)} {
+	if dspaName != "dspa" {
+		t.Fatalf("dspaName = %q, want the workbench controller's dspa", dspaName)
+	}
+	for _, path := range []string{dspaPath("new-project", "dspa"), secretPath("new-project", dspaSecretName)} {
 		obj := f.get(path)
 		if obj == nil {
 			t.Fatalf("%s not created", path)
@@ -215,8 +224,8 @@ func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T)
 			t.Errorf("%s lacks the ownership label", path)
 		}
 	}
-	if f.has(dspaPath("new-project", "dspa")) || f.has(secretPath("new-project", legacyDSPASecretName)) {
-		t.Error("the tool must not use odh-dashboard's DSPA or secret names")
+	if f.has(dspaPath("new-project", previousDSPAName)) || f.has(secretPath("new-project", legacyDSPASecretName)) {
+		t.Error("setup must create only dspa and the tool's own secret name")
 	}
 	raw, _ := json.Marshal(f.get(dspaPath("new-project", dspaName)))
 	if strings.Contains(string(raw), "instructLab") {
@@ -376,6 +385,13 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
 			putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
+		}, "validation"},
+		// A server this tool set up under its earlier name: Set up does not
+		// add dspa next to it; Recreate replaces it.
+		{"project has the tool's nightly-dspa", func(f *resourceFake) {
+			putReadyManagedS3(f)
+			putDSProject(f, "proj")
+			putDSPA(f, "proj", previousDSPAName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 		}, "validation"},
 		{"secret name taken by someone else", func(f *resourceFake) {
 			putReadyManagedS3(f)

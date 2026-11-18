@@ -1995,8 +1995,12 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 		return
 	}
 	beginOperation(w, req.Project)
-	slog.Info("mutation", "op", "setup-pipeline-server", "project", req.Project)
-	result, err := cluster.SetupPipelineServer(c, req.Project)
+	slog.Info("mutation", "op", "setup-pipeline-server", "project", req.Project, "recreate", req.Recreate)
+	setup := cluster.SetupPipelineServer
+	if req.Recreate {
+		setup = cluster.RecreatePipelineServer
+	}
+	result, err := setup(c, req.Project)
 	if err != nil {
 		slog.Error("setup-pipeline-server failed", "error", err)
 		writeError(w, "pipeline server setup failed", http.StatusInternalServerError)

@@ -78,7 +78,7 @@ func TestTemplateGrantsTheSamplesNoUnnamedDelete(t *testing.T) {
 func TestTemplateGrantsNoPipelineServerAPI(t *testing.T) {
 	for _, g := range templateGrants(t) {
 		for _, verb := range []string{"get", "create", "delete", "update", "patch", "list"} {
-			for _, name := range []string{dspaName, legacyDSPAName, ""} {
+			for _, name := range []string{dspaName, previousDSPAName, ""} {
 				r := rbacRequest{Verb: verb, Group: "datasciencepipelinesapplications.opendatahub.io", Resource: "datasciencepipelinesapplications/api", Namespace: "p", Name: name, NamedReview: true}
 				if g.allows(r) {
 					t.Errorf("the template grants %s on the KFP API of %q", verb, name)

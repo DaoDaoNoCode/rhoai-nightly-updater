@@ -137,7 +137,7 @@ func fastMigrateTimings(t *testing.T) {
 func putMigrationCase(f *resourceFake) {
 	putLegacySeaweedFS(f)
 	putDSPAOn(f, "juntao-test", legacyDSPAName, `{}`, legacyPostManager, legacyDSPASecretName)
-	putDSPAOn(f, "team-a", dspaName, toolLabelJSON, toolFieldManager, dspaSecretName)
+	putDSPAOn(f, "team-a", previousDSPAName, toolLabelJSON, toolFieldManager, dspaSecretName)
 	f.putJSON(secretPath("team-a", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth(legacyKeyID)+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth(legacyKey)+`"}}`)
 	putDSPAOn(f, "hand-made", legacyDSPAName, `{}`, "Mozilla", "my-secret")
 }
@@ -242,7 +242,7 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 	}
 	// 3. Both tool pipeline servers point at the new storage with the
 	// standard secret; the earlier version's one is now labelled.
-	for _, ps := range [][2]string{{"juntao-test", legacyDSPAName}, {"team-a", dspaName}} {
+	for _, ps := range [][2]string{{"juntao-test", legacyDSPAName}, {"team-a", previousDSPAName}} {
 		es := externalStorage(t, f, ps[0], ps[1])
 		if es["host"] != s3Host() || ensureMap(es, "s3CredentialsSecret")["secretName"] != dspaSecretName || es["bucket"] != "pipelines" || es["scheme"] != "http" {
 			t.Errorf("%s/%s external storage = %v", ps[0], ps[1], es)
@@ -550,7 +550,7 @@ func TestMigrate_CopyModeFollowsThePipelineServers(t *testing.T) {
 		}
 		for _, k := range []fakeKey{
 			{gv: dspaAPIGroup, ns: "juntao-test", plural: "datasciencepipelinesapplications", name: legacyDSPAName},
-			{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: dspaName},
+			{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: previousDSPAName},
 		} {
 			delete(f.objects, k)
 		}
@@ -645,7 +645,7 @@ func TestMigrate_PipelineServerNotReadyStops(t *testing.T) {
 		t.Fatalf("got %v %s: %s", ok, code, msg)
 	}
 	// The second one was not moved; nothing old was deleted.
-	if es := externalStorage(t, f, "team-a", dspaName); es["host"] != legacyS3Host() {
+	if es := externalStorage(t, f, "team-a", previousDSPAName); es["host"] != legacyS3Host() {
 		t.Error("the next pipeline server was moved after one failed")
 	}
 	noWritesIn(t, f, legacyNamespace)
@@ -665,7 +665,7 @@ func TestMigrate_DryRunRejectionChangesNothing(t *testing.T) {
 		putMigrationCase(f)
 		putNewStorageWithLegacyKeys(f)
 		simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
-		f.failDryRun["PATCH "+dspaPath("team-a", dspaName)] = 422
+		f.failDryRun["PATCH "+dspaPath("team-a", previousDSPAName)] = 422
 		ok, msg, _, _ := runMigrate(t, c, MigrateOptions{})
 		if ok || !strings.Contains(msg, "rejects the change to pipeline server team-a/nightly-dspa") || !strings.Contains(msg, "No pipeline server was moved") {
 			t.Fatalf("got %v: %s", ok, msg)
@@ -884,7 +884,7 @@ func TestMigrate_Refusals(t *testing.T) {
 		}
 	})
 	t.Run("a pipeline server with its own port is listed, not moved", func(t *testing.T) {
-		d := dspaInfo{Meta: objectMeta{Name: dspaName, Namespace: "p", Labels: map[string]string{managedByLabelKey: managedByLabelValue}}, Host: legacyS3Host(), Scheme: "http", Port: "9000"}
+		d := dspaInfo{Meta: objectMeta{Name: previousDSPAName, Namespace: "p", Labels: map[string]string{managedByLabelKey: managedByLabelValue}}, Host: legacyS3Host(), Scheme: "http", Port: "9000"}
 		if why, ok := repointable(d); ok || !strings.Contains(why, "port") {
 			t.Errorf("repointable = %v %q", ok, why)
 		}
@@ -1178,7 +1178,7 @@ func TestLegacyStorageState_RemoveNeedsProof(t *testing.T) {
 	l := &legacyStorage{address: storageAddress{service: legacyService, namespace: legacyNamespace}}
 	moved := func(storeReady string) dspaInfo {
 		return dspaInfo{
-			Meta: objectMeta{Name: dspaName, Namespace: "team-a", Labels: map[string]string{managedByLabelKey: managedByLabelValue}, Generation: 2},
+			Meta: objectMeta{Name: previousDSPAName, Namespace: "team-a", Labels: map[string]string{managedByLabelKey: managedByLabelValue}, Generation: 2},
 			Host: s3Host(), ObjectStore: &dspaCondition{Status: storeReady, ObservedGeneration: 2},
 		}
 	}

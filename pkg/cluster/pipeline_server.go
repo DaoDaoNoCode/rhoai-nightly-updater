@@ -14,18 +14,34 @@ import (
 )
 
 const (
-	// dspaName and dspaSecretName are unique to this tool. odh-dashboard
-	// creates its pipeline server as "dspa" with secret "dashboard-dspa-secret"
-	// (frontend/src/concepts/pipelines/const.ts DEFAULT_PIPELINE_DEFINITION_NAME
-	// and configurePipelinesServer/const.ts DSPA_SECRET_NAME), which older
-	// versions of this tool also used. The dashboard finds a project's
-	// pipeline server by listing DSPAs, not by name
-	// (concepts/pipelines/context/usePipelineNamespaceCR.ts), so the
-	// pipelines UI still works with this name.
-	dspaName       = "nightly-dspa"
+	// dspaName is the name odh-dashboard gives its pipeline server
+	// (frontend/src/concepts/pipelines/const.ts DEFAULT_PIPELINE_DEFINITION_NAME,
+	// createPipelinesCR in api/pipelines/k8s.ts, rhoai-3.6). The dashboard
+	// finds a project's pipeline server by listing DSPAs
+	// (concepts/pipelines/context/usePipelineNamespaceCR.ts), but
+	// odh-notebook-controller reads only the DSPA named "dspa": it builds a
+	// workbench's Elyra runtime config (Secret ds-pipeline-config) from it and
+	// binds the workbench to Role ds-pipeline-user-access-dspa, which DSPO
+	// names ds-pipeline-user-access-<DSPA name> (red-hat-data-services/
+	// kubeflow rhoai-3.6 components/odh-notebook-controller/controllers/
+	// notebook_dspa_secret.go dspaInstanceName L42/L51, notebook_rbac.go
+	// L149). Any other name leaves workbenches without pipelines. Setup
+	// refuses a project that already has a DSPA, so the name never meets
+	// the dashboard's; the tool's label marks the one it created.
+	dspaName = "dspa"
+	// dspaSecretName stays the tool's own: odh-dashboard's Delete pipeline
+	// server deletes "dashboard-dspa-secret" by name (concepts/pipelines/
+	// utils.ts deleteServer), and a dashboard secret must never be mistaken
+	// for the tool's. The DSPA owns it (setDSPAOwner).
 	dspaSecretName = "nightly-dspa-s3"
-	// Names used by older versions; see dspaInfo.managedByTool.
-	legacyDSPAName       = "dspa"
+	// previousDSPAName is the name the tool used before it used "dspa"
+	// (2.x and early 3.0.0). Such servers keep working and are still the
+	// tool's everywhere (status, teardown, Migrate storage, Clean up); the
+	// Pipelines tab offers to recreate them as "dspa".
+	previousDSPAName = "nightly-dspa"
+	// Names used by the earliest versions; see dspaInfo.managedByTool. The
+	// DSPA name is the current one again.
+	legacyDSPAName       = dspaName
 	legacyDSPASecretName = "dashboard-dspa-secret"
 	dspaAPIGroup         = "datasciencepipelinesapplications.opendatahub.io/v1"
 	// dspaFinalizer is removed by the data-science-pipelines-operator once
@@ -123,8 +139,8 @@ func toolDSPAPath(project, name string) (string, bool) {
 	switch name {
 	case dspaName:
 		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName), true
-	case legacyDSPAName:
-		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, legacyDSPAName), true
+	case previousDSPAName:
+		return namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, previousDSPAName), true
 	}
 	return "", false
 }
@@ -294,6 +310,8 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		Deployed:      true,
 		ManagedByTool: true,
 		Terminating:   d.Meta.terminating(),
+		// Workbench pipelines need the name dspa (see dspaName).
+		NonStandardName: d.Meta.Name != dspaName,
 	}
 	if !d.ExternalDB {
 		// DSPO's MariaDB PVC is named mariadb-<dspa> and owned by the DSPA
@@ -350,9 +368,27 @@ func recordPipelineActivity(c *Client, action, detail string, success bool) {
 
 // SetupPipelineServer creates a pipeline server (DSPA) in the given project.
 func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+	return setupPipelineServer(c, project, false)
+}
+
+// RecreatePipelineServer replaces the pipeline server the tool set up in
+// project under its earlier name (previousDSPAName) with one named dspaName,
+// so workbench pipelines work. Every check and a dry run of every new write
+// come first; only then is the old server deleted (its database, and so its
+// run history, goes with it; artifacts in the S3 storage stay) and the new
+// one set up. Without an old server it is a plain setup.
+func RecreatePipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+	return setupPipelineServer(c, project, true)
+}
+
+func setupPipelineServer(c *Client, project string, recreate bool) (*types.OperationResponse, error) {
 	logs := []string{}
+	op := "setup-pipeline-server"
+	if recreate {
+		op = "recreate-pipeline-server"
+	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
+		recordPipelineActivity(c, op, fmt.Sprintf("project=%s (%s)", project, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -385,18 +421,30 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	}
 	var dspaMeta objectMeta
 	dspaFound := false
-	for _, d := range existing {
-		if d.Meta.Name == dspaName && d.Meta.hasToolLabel() {
+	var old *dspaInfo
+	for i, d := range existing {
+		switch {
+		case d.Meta.Name == dspaName && d.Meta.hasToolLabel():
 			if d.Meta.terminating() {
 				return fail(fmt.Sprintf("The pipeline server in '%s' is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
 			}
 			dspaMeta, dspaFound = d.Meta, true
-			continue
-		}
-		if d.managedByTool() {
+		case d.Meta.Name == previousDSPAName && d.managedByTool():
+			if d.Meta.terminating() {
+				return fail(fmt.Sprintf("Pipeline server '%s' in '%s' is still being deleted. Wait for it to finish, then set up again. Nothing was changed.", d.Meta.Name, project), "terminating", "earlier name terminating")
+			}
+			if !recreate {
+				return fail(fmt.Sprintf("Project '%s' already has pipeline server '%s', which an earlier version of this tool set up. Workbench pipelines need it to be named '%s': use Recreate with the standard name on the Pipelines tab (its run history is lost), or keep it as it is. Nothing was changed.", project, d.Meta.Name, dspaName), "validation", "earlier name exists")
+			}
+			old = &existing[i]
+		case d.managedByTool():
 			return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') created by an earlier version of this tool. Delete it first to recreate it.", project, d.Meta.Name), "validation", "legacy pipeline server exists")
+		default:
+			return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
 		}
-		return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
+	}
+	if old != nil && dspaFound {
+		return fail(fmt.Sprintf("Project '%s' has both '%s' and '%s' from this tool; delete one of them first. Nothing was changed.", project, previousDSPAName, dspaName), "validation", "both names exist")
 	}
 
 	// Step 1: Read the S3 credentials
@@ -517,6 +565,9 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
 		return fail(msg+" Nothing was changed.", code, "DSPA dry run failed")
 	}
+	if old != nil {
+		return replacePipelineServer(c, project, old, logs)
+	}
 	secretAction, err := writeSecret(false)
 	if err != nil {
 		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
@@ -556,6 +607,41 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		Success: true, Message: "Pipeline server created. It will take 1-3 minutes to become ready.",
 		Logs: logs,
 	}, nil
+}
+
+// replacePipelineServer is Recreate's second half, after every check and dry
+// run passed: it deletes the old server with the regular teardown (which
+// checks the operator before deleting and waits for the finalizer), then
+// sets up the new one from scratch, so every check runs again on what is
+// there now.
+func replacePipelineServer(c *Client, project string, old *dspaInfo, logs []string) (*types.OperationResponse, error) {
+	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server '%s'...", old.Meta.Name))
+	down, err := TeardownPipelineServer(c, project)
+	if err != nil {
+		return nil, err
+	}
+	logs = append(logs, down.Logs...)
+	if !down.Success {
+		recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (teardown of %s: %s)", project, old.Meta.Name, down.ErrorCode), false)
+		msg := down.Message
+		if !strings.Contains(msg, "Nothing was deleted") {
+			msg += fmt.Sprintf(" Pipeline server '%s' was not created; once '%s' is gone, use Set up.", dspaName, old.Meta.Name)
+		}
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: down.ErrorCode}, nil
+	}
+	up, err := setupPipelineServer(c, project, false)
+	if err != nil {
+		return nil, err
+	}
+	up.Logs = append(logs, up.Logs...)
+	if !up.Success {
+		up.Message = fmt.Sprintf("Pipeline server '%s' was deleted, but '%s' could not be set up: %s Use Set up to try again.", old.Meta.Name, dspaName, up.Message)
+		recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s (setup failed)", project), false)
+		return up, nil
+	}
+	recordPipelineActivity(c, "recreate-pipeline-server", fmt.Sprintf("project=%s %s -> %s", project, old.Meta.Name, dspaName), true)
+	up.Message = fmt.Sprintf("Pipeline server '%s' replaced by '%s', which workbench pipelines use. It will take 1-3 minutes to become ready.", old.Meta.Name, dspaName)
+	return up, nil
 }
 
 // dspoRunning reports whether a data-science-pipelines-operator replica is

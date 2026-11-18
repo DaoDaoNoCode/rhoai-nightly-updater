@@ -1131,6 +1131,10 @@ type ResourceState struct {
 	// readiness this tool can read (no condition, or one it cannot
 	// interpret): its health is unknown, which is not a failure.
 	HealthUnknown bool `json:"healthUnknown,omitempty"`
+	// NonStandardName is true on a pipeline server this tool set up under
+	// its earlier name (nightly-dspa): workbench pipelines (Elyra) need the
+	// DSPA named dspa, so the Pipelines tab offers to recreate it.
+	NonStandardName bool `json:"nonStandardName,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.
@@ -1142,6 +1146,9 @@ type KeptPVC struct {
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.
 type PipelineServerRequest struct {
 	Project string `json:"project"`
+	// Recreate (setup only) replaces the tool's pipeline server named
+	// nightly-dspa with one named dspa.
+	Recreate bool `json:"recreate,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

@@ -82,7 +82,7 @@ func TestRemoveOldStorage_FinalCopyNeverOverwrites(t *testing.T) {
 	f, c := migratedForRemoval(t)
 	for _, k := range []fakeKey{
 		{gv: dspaAPIGroup, ns: "juntao-test", plural: "datasciencepipelinesapplications", name: legacyDSPAName},
-		{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: dspaName},
+		{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: previousDSPAName},
 	} {
 		delete(f.objects, k)
 	}
