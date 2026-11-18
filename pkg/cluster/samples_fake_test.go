@@ -130,6 +130,7 @@ var mlflowFakeRules = []mlflowFakeRule{
 	{"GET", "/api/2.0/mlflow/registered-models/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{trainingModel}, "rules_base.py:659-662"},
 	{"POST", "/api/2.0/mlflow/registered-models/create", []fakeCheck{{"registeredmodels", "create"}}, "", nil, "rules_base.py:658"},
 	{"DELETE", "/api/2.0/mlflow/registered-models/delete", []fakeCheck{{"registeredmodels", "delete"}}, "body:name", []string{trainingModel}, "rules_base.py:663-666"},
+	{"GET", "/api/2.0/mlflow/model-versions/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{trainingModel}, "rules_base.py:738-741"},
 	{"POST", "/api/2.0/mlflow/model-versions/create", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{trainingModel}, "rules_base.py:682-685"},
 	{"POST", "/api/2.0/mlflow/registered-models/alias", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{trainingModel}, "rules_base.py:714-717"},
 	{"POST", "/ajax-api/3.0/mlflow/demo/generate", []fakeCheck{{"experiments", "create"}, {"datasets", "create"}, {"registeredmodels", "create"}}, "", nil, "rules_base.py:1178-1182"},
@@ -538,6 +539,14 @@ func (f *mlflowFake) handle(w http.ResponseWriter, r *http.Request, rule mlflowF
 		}
 		delete(f.models, str("name"))
 		f.writeJSON(w, map[string]string{})
+	case "GET /api/2.0/mlflow/model-versions/get":
+		m := f.models[r.URL.Query().Get("name")]
+		v, _ := strconv.Atoi(r.URL.Query().Get("version"))
+		if m == nil || v < 1 || v > len(m.versions) {
+			notFound("model version")
+			return
+		}
+		f.writeJSON(w, map[string]interface{}{"model_version": map[string]string{"name": r.URL.Query().Get("name"), "version": strconv.Itoa(v), "run_id": m.versions[v-1]}})
 	case "POST /api/2.0/mlflow/model-versions/create":
 		m := f.models[str("name")]
 		if m == nil {

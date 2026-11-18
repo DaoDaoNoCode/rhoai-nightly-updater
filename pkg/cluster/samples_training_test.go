@@ -134,6 +134,47 @@ func TestTrainingSample_InterruptedAddIsPartialAndCompletes(t *testing.T) {
 	if m := env.mlflow.models[trainingModel]; m.aliases[trainingAlias] == "" || len(env.mlflow.runs) != 3 {
 		t.Errorf("model %+v, %d runs", m, len(env.mlflow.runs))
 	}
+	// The retry reuses the two versions the first Add registered.
+	if m := env.mlflow.models[trainingModel]; len(m.versions) != 2 || m.aliases[trainingAlias] != "2" {
+		t.Errorf("versions %v, alias %v: the retry registered extra versions", m.versions, m.aliases)
+	}
+}
+
+// A retry after an Add that stopped part way adds no second run for a rate
+// and no extra model version.
+func TestTrainingSample_RetryReusesRunsAndVersions(t *testing.T) {
+	t.Run("a run left RUNNING is completed, not duplicated", func(t *testing.T) {
+		env := newSamplesEnv(t)
+		env.mlflow.failNext["POST /api/2.0/mlflow/runs/log-batch"] = 500
+		if ok, msg, _ := env.run(t, "add", SampleTraining); ok {
+			t.Fatalf("first add: %s", msg)
+		}
+		if ok, msg, steps := env.run(t, "add", SampleTraining); !ok {
+			t.Fatalf("%s\n%s", msg, stepMessages(steps))
+		}
+		if len(env.mlflow.runs) != 3 {
+			t.Errorf("%d runs, want 3", len(env.mlflow.runs))
+		}
+		for _, run := range env.mlflow.runs {
+			if run.status != "FINISHED" || run.metrics != 2*trainingEpochs {
+				t.Errorf("run %s: %s, %d metrics", run.name, run.status, run.metrics)
+			}
+		}
+	})
+	t.Run("a version whose run matches is reused", func(t *testing.T) {
+		env := newSamplesEnv(t)
+		if ok, msg, _ := env.run(t, "add", SampleTraining); !ok {
+			t.Fatal(msg)
+		}
+		m := env.mlflow.models[trainingModel]
+		m.versions, m.aliases = m.versions[:1], map[string]string{}
+		if ok, msg, steps := env.run(t, "add", SampleTraining); !ok {
+			t.Fatalf("%s\n%s", msg, stepMessages(steps))
+		}
+		if len(m.versions) != 2 || m.aliases[trainingAlias] != "2" {
+			t.Errorf("versions %v, alias %v", m.versions, m.aliases)
+		}
+	})
 }
 
 func TestTrainingSample_PermissionDenied(t *testing.T) {

@@ -107,6 +107,11 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 			t.Fatalf("%s %v: %s\n%s", s.action, s.samples, msg, stepMessages(st))
 		}
 	}
+	// A model without its alias: Add reads its versions (model-versions/get).
+	env.mlflow.models[trainingModel].aliases = map[string]string{}
+	if ok, msg, _ := env.run(t, "add", SampleTraining); !ok {
+		t.Fatal(msg)
+	}
 	// A feature this generator lacks: its tag is dropped (delete-experiment-tag).
 	env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"] = "0"
 	env.mlflow.mlflowDeleteDemo()
