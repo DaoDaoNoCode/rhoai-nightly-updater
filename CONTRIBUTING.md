@@ -41,16 +41,19 @@ Open **http://127.0.0.1:9000** in your browser.
 
 1. Verifies Node.js is installed
 2. Verifies you're logged into an OpenShift cluster (`oc whoami -t`)
-3. Installs frontend dependencies (`npm install`) if `node_modules` is missing
-4. Starts the Go backend with these environment variables:
+3. Takes a lock for this checkout (one `dev.sh` per checkout: a second would fight over ports 8080, 9000 and the S3 port-forward). A second copy stops with `ERROR: dev.sh already runs for this checkout (PID <pid>). Stop it first: kill <pid>`; a lock left by a `dev.sh` that was killed hard is taken over
+4. Installs frontend dependencies (`npm install`) if `node_modules` is missing
+5. Keeps a port-forward to the S3 storage open (`oc port-forward -n seaweedfs svc/seaweedfs-s3 127.0.0.1:${S3_LOCAL_PORT:-18333}`): the backend's one direct S3 request (creating the bucket) goes to the storage Service, whose cluster DNS name does not resolve on your machine. The loop retries until the Service exists and after the port-forward ends, and the backend gets `DEV_S3_ENDPOINT` pointing at it (honoured only in dev mode, loopback only)
+6. Starts the Go backend with these environment variables:
    - `KUBERNETES_SERVICE_HOST` — cluster API host (extracted from `oc whoami --show-server`)
    - `KUBERNETES_SERVICE_PORT` — cluster API port
    - `DEV_TOKEN` — your current `oc` token
    - `DEV_USER` — your OpenShift username
    - `DEV_MODE=true` — enables dev mode (no oauth-proxy and no cluster-admin gate: every request uses your token; listens on `127.0.0.1` only; Host/Origin must be this machine). API server TLS is still verified (see [Environment Variables](#environment-variables))
-5. Starts the frontend dev server (`npm run dev`) which runs webpack-dev-server with:
+7. Starts the frontend dev server (`npm run dev`) which runs webpack-dev-server with:
    - Hot reload enabled
    - Proxy: `/api` → `http://127.0.0.1:8080` (override with `API_TARGET`)
+8. Stops everything it started, with their child processes (the compiled server `go run` leaves, webpack under `npm run dev`, the port-forward), on Ctrl-C, `kill`, a closed terminal (HUP) or its own exit, and removes the lock. After `kill -9`, which skips that, a watchdog that waits for the script's PID stops the backend and the dev server, and the port-forward loop ends by itself
 
 ### Frontend Development
 

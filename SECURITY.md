@@ -416,7 +416,9 @@ oc auth can-i delete authpolicies.kuadrant.io/maas-gateway-auth -n openshift-ing
 oc auth can-i delete tokenratelimitpolicies.kuadrant.io/gateway-default-deny -n openshift-ingress --as=$SA # no
 ```
 
-**Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
+### Residual risk
+
+The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
 
 ## Network exposure
 
@@ -463,7 +465,7 @@ oc auth can-i delete tokenratelimitpolicies.kuadrant.io/gateway-default-deny -n 
 
 ## Known limitations and residual risks
 
-- **SA token.** See *Residual risk* above.
+- **SA token.** See [Residual risk](#residual-risk) above.
 - **S3 storage (SeaweedFS).** The Environment page's S3 storage runs SeaweedFS 4.54 (`ghcr.io/chrislusf/seaweedfs`, Apache-2.0, pinned by digest), the object store upstream Kubeflow Pipelines uses by default. It replaced the bundled MinIO, whose open-source line ended (advisories such as GHSA-hv4r-mvr4-25vw are fixed only in the commercial AIStor). SeaweedFS is not supported by Red Hat, publishes advisories often (bump the digest when one applies), and `weed mini` opens many listeners: master, volume and filer HTTP/gRPC, Iceberg and Lance, plus the admin's worker gRPC on loopback, and the master and filer HTTP APIs need no authentication. Mitigations:
   - NetworkPolicy `seaweedfs-ingress`: only the S3 port 8333 from pods in any namespace and the admin UI port 12535 only from the router; every other port is unreachable from the pod network. The admin's compatibility listener on the old port 23646 is turned off (`-admin.port.legacy=0`);
   - no Route to the S3 API;

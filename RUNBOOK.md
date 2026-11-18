@@ -278,6 +278,8 @@ The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PV
 
 The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server), **MLflow**, **Models** (the inference gateway and a project's CPU models, §10.2), **Playground** (§10.3) and **MaaS** (§10.4). The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): first the MaaS publications (Unpublish), then the pipeline servers, the storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, a notification brings it back.
 
+While the page reads the cluster, each Overview row and each tab shows loading placeholders where its state and parts will be: nothing reads **Not set up** or empty until the status that says so has been read. A status that cannot be read (the playground's or MaaS's) reads **Unknown: cannot be read** on the Overview, with the reason and **Try again** above the table. **Refresh** reads everything again and keeps what is shown until the new answers are in; if that read fails, the last data stays with a warning that it may be out of date, and **Retry**.
+
 <img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
 
 1. **Needs attention**: SeaweedFS does not serve through `seaweedfs-s3` and `seaweedfs-admin`.
@@ -341,121 +343,6 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | Sample pipeline run Failed: an image cannot be pulled | Disconnected or mirrored cluster: mirror the image the section shows, or set `SAMPLE_PIPELINE_IMAGE` on the updater to a pullable copy, download the file again and import it as a new pipeline (or a new version) |
 | Sample pipeline commands: `curl: (22) ... 401` or `403` | The commands use a token of ServiceAccount `pipeline-api` that expires in 15 minutes: `401`, it expired (run the `oc create token` line again); `403`, its Role does not allow the call (`oc get role pipeline-api -n <project> -o yaml` must name `datasciencepipelinesapplications/api`, the pipeline server's name, and `get` `create`). Creating the Role needs an admin of the project. The updater does not run the sample for you |
 | Sample pipeline commands: upload fails with "already exists" | A pipeline `rhoai-nightly-sample` is in the project already. Start another run with the last command (in the same shell), or delete the pipeline in the dashboard first |
-
-### 10.2 Models: the inference gateway and CPU models
-
-The **Models** tab sets up two parts with one **Set up**: the cluster's **inference gateway** (Gateway `openshift-ingress/openshift-ai-inference`, which every model is reached through) and the model chosen in the picker, on CPU in the chosen project (an LLMInferenceService of the model's name: `smollm2-135m-instruct`, `qwen25-05b-instruct` (the default), `qwen3-1-7b` or `granite-embedding-125m-english`). A project can hold several; Set up and Delete act on the chosen one. Objects: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#models-inference-gateway-cluster-and-cpu-models-a-project-you-choose).
-
-Before Set up the tab says what is missing: model serving turned off (DataScienceCluster `kserve` not Managed, or `KserveLLMInferenceServiceDependencies=False`), no CPU preset on this release, no data science project, or too little room on the workers: the picker disables a model no amd64 worker has room for now, and says what it needs (SmolLM2 2 CPUs / 4 GiB, Qwen2.5 4 / 6 GiB, Qwen3 4 / 12 GiB, Granite 2 / 3 GiB requested). The check is a snapshot: a cluster that adds nodes on demand may still fit it; the API's setup only warns. A gateway someone else made (RHOAI's install, an admin) reads **Not managed by this tool** and is used as it is.
-
-Each model also gets the dashboard's token authentication (ServiceAccount `<model>-sa` that may only `get` the model, Role `<model>-view-role`, RoleBinding `<model>-view`, token Secret `default-name-<model>-sa`, all owned by the model): the dashboard lists that token for the model, and its **Edit** keeps authentication on. Call a ready model with that token. The Models tab shows these commands only for a model this tool set up with its token: send a model only its own token, never your OpenShift token, because whoever can edit the project controls what answers at the model's address (SECURITY.md, [Which token is used where](SECURITY.md#which-token-is-used-where)). For a model deployed in the dashboard, use the token its Token authentication shows.
-
-```bash
-TOKEN=$(oc get secret default-name-qwen25-05b-instruct-sa -n <project> -o jsonpath='{.data.token}' | base64 -d)
-URL=$(oc get llminferenceservice qwen25-05b-instruct -n <project> -o jsonpath='{.status.url}')
-curl -s -H "Authorization: Bearer $TOKEN" $URL/v1/models
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
-  -d '{"model":"qwen25-05b-instruct","messages":[{"role":"user","content":"Say hello"}],"max_tokens":64}'
-# Qwen3: thinking is off by default; turn it on for one request (streamed: it can take over a minute)
-URL=$(oc get llminferenceservice qwen3-1-7b -n <project> -o jsonpath='{.status.url}')
-curl -N -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
-  -d '{"model":"qwen3-1-7b","messages":[{"role":"user","content":"Is 1001 prime?"}],"max_tokens":1024,"stream":true,"chat_template_kwargs":{"enable_thinking":true}}'
-# The embedding model: one 768-number vector per input
-URL=$(oc get llminferenceservice granite-embedding-125m-english -n <project> -o jsonpath='{.status.url}')
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/embeddings \
-  -d '{"model":"granite-embedding-125m-english","input":["Red Hat OpenShift AI serves models."]}'
-```
-
-`401`: no or expired token. `403`: the token cannot `get` the model (each model's token is only for its own model). The `model` field is the resource name, as the dashboard's playground expects. The Qwen3 token above is in `default-name-qwen3-1-7b-sa`, the embedding model's in `default-name-granite-embedding-125m-english-sa`. Requests that take longer than about a minute must stream (`"stream": true`, and `curl -N`), because the cloud load balancer in front of the gateway closes a connection that sends nothing for 60 seconds (the AWS default): a non-streamed one gets no answer and ends after about 60 seconds (HTTP code `000` in curl).
-
-| Symptom | Cause and fix |
-|---|---|
-| Model **Error**: "The cluster preset's image is not published yet" (`ErrImagePull ... manifest unknown`) | A nightly build's CPU preset names a runtime image Red Hat has not published. Use **Use the newest released Red Hat image** on the model: it sets the newest released `registry.redhat.io/rhaii/vllm-cpu-rhel9` image, pinned by digest. Or mirror `registry.redhat.io/rhaii` to `registry.stage.redhat.io/rhaii` (ImageDigestMirrorSet) with a pull credential for that registry, then set the model up again. On disconnected clusters set `VLLM_CPU_IMAGE` on the updater |
-| Model stays **Setting up**, "Waiting for a worker with room" | `FailedScheduling: Insufficient cpu/memory`. Free what the picker says the model reserves on one amd64 worker, or add a node; it starts by itself |
-| Model **Error**: "keeps crashing ... OOMKilled" | The memory limit was too small (each limit is the model's memory measured idle on RHOAI 3.6 with vLLM CPU 0.24, plus 1.7 to 2.7 GiB for load): `oc logs deploy/<model>-kserve -n <project> -c main --previous`, and report the model and its peak |
-| Qwen3 answers without `tool_calls`, or a tool request is refused | The model is served with `--enable-auto-tool-choice --tool-call-parser hermes`; check them in `oc get deploy qwen3-1-7b-kserve -n <project> -o yaml` (env `VLLM_ADDITIONAL_ARGS`) and the vLLM log for an unknown option |
-| The embedding model refuses an input | Its context is 512 tokens; split longer text |
-| A model reads "not created by this tool" although this tool set it up | A model is the tool's only when its UID is in the tool's record (snapshot ConfigMap, key `models`). A model a pre-release 3.0.0 build set up has none, nor one made again elsewhere under the name. Delete it yourself (`oc delete llminferenceservice <model> -n <project>`, after unpublishing it on the MaaS tab), then set it up again |
-| Model details: "has no token of its own yet", and Use it shows no commands | Set up before the token objects existed: **Set up again to create its token** (only the missing objects are made); the commands appear once the token Secret is recorded. "Off: ... enable-auth is false": someone turned token authentication off in the dashboard; turn it back on there |
-| Set up refuses: "already has a ServiceAccount / Role / RoleBinding / Secret ... that this tool did not make for this model" | An object of the dashboard's token name for this model exists and is not owned by the model (left over, or someone else's). Delete it (`oc delete <kind> <name> -n <project>`) or use another project |
-| Set up warns "no room in its quota" | A ResourceQuota of the project leaves less than the model requests (`oc describe resourcequota -n <project>`). Raise it or stop other workloads; KServe cannot create the pod until then |
-| Model stays **Setting up**, `Insufficient ephemeral-storage` | The model requests node disk for its download (about 1.5 times it; KServe's default model volume is an emptyDir). Free disk on a worker or add one |
-| Hardware profile "None fits" (Qwen3) | No profile allows 4 CPUs and 12-14 GiB (the default allows 8 GiB): the dashboard's Deployments table shows "No hardware profile" and the details "Hardware profile: Unknown". The model runs as set up |
-| A model deployed in the dashboard never becomes ready; its HTTPRoute says `NotAllowedByListeners` | The inference gateway does not list its project (`oc get gateway openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.listeners[*].allowedRoutes}'`). The Models tab and the Overview name the model: **Allow <project>** adds the project. For a gateway this tool did not create, a cluster admin adds the project to the values array of its listeners' `allowedRoutes` |
-| After Unpublish, the direct address does not answer | The inference gateway does not list the project (someone took it off while the model was published): **Allow <project>** on the Models tab adds it back. For a gateway this tool did not create, a cluster admin adds the project to the values array of its listeners' `allowedRoutes` |
-| Model **Error**: "KServe cannot resolve its preset" | The preset named in `spec.baseRefs` is gone (RHOAI was updated and its prefix changed). Set the model up again: it re-reads the prefix |
-| Gateway **Needs attention**: "The gateway's authentication is missing" | odh-model-controller adds AuthPolicy `openshift-ai-inference-authn` once a model uses the gateway; check that odh-model-controller and Connectivity Link (Kuadrant) run: `oc get authpolicy -n openshift-ingress` |
-| Gateway **Setting up** for minutes | `oc get gateway openshift-ai-inference -n openshift-ingress -o yaml`: `Programmed=False` names the reason (no load balancer quota, for example). DNS for a new load balancer can take a few minutes |
-| Gateway **Unknown · not managed by this tool** | Someone else's gateway that reports no `Programmed` condition: the tool cannot tell; ask its owner |
-| **Delete inference gateway** unavailable | Models route through it (named), or routes are attached to it (`oc get httproute -A`). Delete those first; models of other tools are never deleted here |
-
-Rollback: **Delete model**, then **Delete inference gateway** (or **Clean up Models**, which runs both in that order). By hand, only for what the tool made (`app.kubernetes.io/managed-by=rhoai-nightly-updater`): `oc delete llminferenceservice <model> -n <project>` for each model, then `oc delete gateway openshift-ai-inference -n openshift-ingress`, `oc delete configmap openshift-ai-inference-options -n openshift-ingress`, `oc delete gatewayclass openshift-ai-inference`.
-
-### 10.3 Playground: the dashboard's Gen AI playground
-
-The **Playground** tab asks the RHOAI dashboard's own gen-ai API to create or delete its Gen AI playground in a project. Calls and objects: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#playground-the-dashboards-gen-ai-playground-a-project-you-choose).
-
-Chat with a ready playground from a terminal (the dashboard checks that your user may use the project):
-
-```bash
-TOKEN=$(oc whoami -t)
-curl -s -X POST "https://rh-ai.<apps domain>/gen-ai/api/v1/lsd/responses?namespace=<project>" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"model":"qwen25-05b-instruct","model_source_type":"namespace","input":"Say hello","stream":false}'
-```
-
-For a Models as a Service model, the body names the source and a subscription to the model, `"model_source_type":"maas","subscription":"<name>"` (this tool's is `rhoai-nightly-updater-subscription`): the dashboard mints the MaaS key for that subscription, and without one the playground answers 500. The Playground tab's **Use it** builds the command for the chosen model.
-
-| Symptom | Cause and fix |
-|---|---|
-| Set up unavailable: "Needs: Models" | The project has no ready chat model. Set one up on the Models tab, or wait until it is ready |
-| A playground this tool set up now reads "not managed by this tool" | Its OGXServer has another UID than the one recorded: it was deleted and made again in Gen AI studio, or the project was recreated. The new one is someone else's; the next Set up or Delete in the project drops the old record. Delete it in Gen AI studio if you no longer need it |
-| "This RHOAI release's dashboard gen-ai API differs" | A gen-ai path answered 404 on this release. Use the playground from the dashboard's Gen AI studio; report the call the message names |
-| "The dashboard's gen-ai API refused the request (HTTP 403)" | The updater's ServiceAccount lacks a rule the dashboard needs: re-apply the template (`deploy/template.yaml`). `oc auth can-i list ogxservers.ogx.io -n <project> --as=system:serviceaccount:<ns>:<sa>` must say yes |
-| Install fails: "An earlier playground ... left objects behind" | ConfigMaps of a playground whose server is gone (400 "already exists"). Someone with edit rights deletes the one named, for example `oc delete configmap -n <project> llama-stack-config` (check `oc get configmap -n <project> -l opendatahub.io/dashboard=true`), then Set up again |
-| "still being removed after 3:00" | The previous playground's database (`genai-pgvector*`) is still terminating: `oc get deploy,pvc -n <project> -l gen-ai.opendatahub.io/pgvector=true`. Set up again once it is gone |
-| Playground **Error** (phase Failed) | `oc get ogxserver lsd-genai-playground -n <project> -o yaml` and `oc get events -n <project>`; the OGX operator's webhook and `default-ogx` must be ready. Delete and set up again |
-| Delete unavailable, **Not managed by this tool** | Someone set it up in the dashboard; delete it there |
-
-Rollback: **Delete** in the playground's menu (or **Clean up Playground**). By hand, the dashboard's way: `oc delete ogxserver lsd-genai-playground -n <project>`, then the `genai-pgvector*` objects (`oc delete deploy,svc,networkpolicy,pvc,secret,configmap -n <project> -l gen-ai.opendatahub.io/pgvector=true`), then remove `<project>` from the `playgrounds` key of ConfigMap `rhoai-nightly-updater-snapshot` in the updater's namespace.
-
-### 10.4 MaaS: Models as a Service
-
-The **MaaS** tab sets up the MaaS platform as the MaaS install docs do and publishes this tool's model. Objects and order: [CLUSTER_CHANGES](docs/CLUSTER_CHANGES.md#maas-models-as-a-service-cluster-and-this-tools-published-models).
-
-```bash
-INFRA=redhat-ai-gateway-infra   # odh-ai-gateway-infra on ODH
-oc get dsc -o jsonpath='{.items[0].spec.components.aigateway}'; echo
-oc get clusters.postgresql.cnpg.io maas-db -n $INFRA
-oc get gateway maas-default-gateway -n openshift-ingress
-oc get deploy maas-api -n $INFRA
-oc get aitenant -n ai-tenants; oc get maastenantconfig -n models-as-a-service
-oc get authpolicy -n openshift-ingress
-oc get maasmodelref -A; oc get maassubscription,maasauthpolicy -n models-as-a-service
-```
-
-| Symptom | Cause and fix |
-|---|---|
-| Set up or Publish refuses: "Namespace models-as-a-service (or redhat-ai-gateway-infra) was made through a project request by ..." | Someone made that namespace with a project request before MaaS ran, and MaaS takes over a namespace of that name, which would make them an admin of a namespace the MaaS gateway admits routes from. `oc get namespace <name> -o yaml`: check `openshift.io/requester` and what runs there. If it is not RHOAI's, delete it (`oc delete namespace <name>`); RHOAI makes it again, then retry |
-| Set up stops at Connectivity Link or CloudNativePG | Set up installs them from `redhat-operators` and `certified-operators`; the message says why OLM did not (`oc describe subscription kuadrant-operator -n kuadrant-system`, `oc describe subscription cloudnative-pg -n cnpg-system`). Fix that, then **Set up** again: it continues where it stopped. A catalog that does not offer the package, more than one OperatorGroup in the namespace, or one that targets only some namespaces refuses before anything changes |
-| Set up stops: "Namespace ... does not exist, and this tool creates only the AI gateway's own infrastructure namespaces" | A custom applications namespace without an infrastructure namespace: create the namespace maas-api uses yourself, then Set up again |
-| **Authorino TLS** needs attention | **Configure Authorino TLS** on the part (or **Set up**) applies the docs' `setup-authorino-tls.sh` steps; **Do it from the CLI instead** has the same commands. Until then API keys are refused |
-| maas-api restarts | It restarts until the database answers: `oc get cluster maas-db -n $INFRA`, `oc logs deploy/maas-api -n $INFRA --previous` |
-| Gateway not programmed, or `maas.<apps domain>` does not resolve | OpenShift is making the load balancer; `oc get dnsrecords -n openshift-ingress` shows the record |
-| Connectivity Link version warning | The docs ask for RHCL 1.5 with RHOAI 3.6; 1.4.x can hang callers with two or more subscriptions (Publish then refuses while other MaaSSubscriptions exist), and 1.4.0 bypasses gateway authentication (Publish refuses). **Upgrade Connectivity Link** switches the Subscription to the channel the catalog shows meets 1.5; when OLM stays at the old version (`AtLatestKnown`: seen live, 1.5.0 skips only `>=1.4.4 <1.5.0`), it goes through a channel that lists the installed version and has a newer one (`stable-1.4`), then to the target, and sets Authorino TLS up again (the 1.4.4 step recreates Authorino's Service, which removes its certificate). It refuses a Subscription with Manual approval, one managed by Argo CD, or one not named `kuadrant-operator` or `rhcl-operator`. 1.5 replaces the separate Authorino, Limitador and DNS operators with one (`oc get kuadrantcontrolplane default`); a hand-installed upstream MCP gateway controller then fights its MCP controller |
-| Connectivity Link part recommends denying traffic when rate limiting fails | The MaaS docs set `RATELIMIT_CHECK_SERVICE_FAILURE_MODE` and `RATELIMIT_REPORT_SERVICE_FAILURE_MODE` to `deny` on the Connectivity Link Subscription, so requests are refused instead of let through unlimited while Limitador is unavailable. A Subscription this tool creates has them; one installed otherwise is not changed by Set up: **Deny traffic when rate limiting fails** sets them and keeps the other env entries (the part also shows the docs' `oc patch`) |
-| Kuadrant operator OOMKilled (the Connectivity Link part says so) | Known issue of RHCL 1.5.0 (CONNLINK-1878; its CSV limits it to 500Mi). **Raise the memory limit** sets the Subscription's `spec.config.resources` with a 1Gi memory limit and the CSV's other values (a patch to the Deployment is reverted by OLM). Offered only after an OOM kill is seen: `oc get pods -n kuadrant-system -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[*].lastState.terminated.reason}{"\n"}{end}'` |
-| **Old gateway policies** needs attention | A tier-based MaaS (RHOAI 3.2) left `gateway-auth-policy` and `gateway-tier-rate-limits` on `maas-default-gateway`; RHOAI does not remove them, and with old and new gateway policies Kuadrant's behaviour is undefined. **Remove the old tier policies** deletes those two by name; any other policy not managed by maas-controller is only listed, with its `oc delete` |
-| Publish refuses: Gateway maas-default-gateway admits routes from every namespace | Someone else's gateway with `allowedRoutes` `from: All`: apply the `oc patch` the gateway part shows (the docs' namespace list). On this tool's own gateway, **Set up** writes the list back |
-| Model delete refused: published | Unpublish it on the MaaS tab first |
-| A published model's direct address (`inference.<apps domain>/<project>/<model>`) answers 404 | Expected: while published, the model routes through `maas-default-gateway` only. Use it through MaaS with an API key (the MaaS tab's commands) or the dashboard's playground; Unpublish brings the direct address back |
-| A published model's direct address answers 500 (Envoy log: `kuadrant_wasm_shim: Failed to apply predicates ... selected_subscription_id`) | A publication by an earlier build, which kept the model on the inference gateway too; the MaaS tab shows it as "Partly published". Unpublish, then Publish again. `oc get llminferenceservice <model> -n <project> -o jsonpath='{.spec.router.gateway.refs}'` then names `maas-default-gateway` alone |
-| Publish refuses: "The spec of <model> ... was changed since this tool set it up: <fields>" | Someone (a project editor, `oc edit`, the dashboard's Edit) changed what the model runs (the fields named: image, model URI, preset, command, environment, volumes, ...), so it may no longer be the catalog's model, and it is not offered to every signed-in user. `oc get llminferenceservice <model> -n <project> --show-managed-fields -o yaml` shows who wrote what. Set it up again on the Models tab, then publish; if a field someone added stays, delete the model there and set it up again |
-| Publish or Unpublish stops with "Partly published: the model's route ..." | KServe did not move the model's HTTPRoute within 2 minutes: `oc get httproute <model>-kserve-route -n <project> -o jsonpath='{.spec.parentRefs}'`, and the model's `HTTPRoutesReady` condition. Unpublish (again) once KServe runs |
-| Unpublish refused: someone added a gateway | Someone added a gateway to the published model; writing back the refs from before publishing would drop it. Set the refs the model should use without `maas-default-gateway` (the message has the `oc patch` for KServe's default), then Unpublish again |
-| The embedding model has no Publish | This tool publishes chat models only; use the embedding model at its own address, or in the playground |
-
-Rollback: **Remove MaaS** (or Clean up everything). It keeps Connectivity Link, its Kuadrant CR and Authorino TLS, and CloudNativePG, also when this tool installed them (data key `maas`, field `shared`, of ConfigMap `rhoai-nightly-updater-snapshot` lists what it installed): RHOAI's inference gateway authentication uses Kuadrant. Remove them from the OpenShift console only if nothing needs them. By hand, in order: `oc delete maasauthpolicy rhoai-nightly-updater-access maassubscription rhoai-nightly-updater-subscription -n models-as-a-service`, `oc delete maasmodelref <model> -n <project>` for each published model, set `aigateway.modelsAsAService` and `aigateway.managementState` back to the values in data key `maas` (`previousModelsAsAService`, `previousAIGateway`), then `oc delete gateway maas-default-gateway -n openshift-ingress`, `oc delete secret maas-db-config -n $INFRA`, `oc delete cluster.postgresql.cnpg.io maas-db -n $INFRA`, `oc delete namespace $INFRA` if the record's `infraNamespace` names it and nothing else is in it, and remove the `maas` key.
 
 ### 10.1 Migrate storage from an earlier version
 
@@ -583,6 +470,121 @@ oc -n minio delete networkpolicy minio-old-ingress
 ```
 
 Old runs' artifacts resolve again, because KFP stores bucket and key only.
+
+### 10.2 Models: the inference gateway and CPU models
+
+The **Models** tab sets up two parts with one **Set up**: the cluster's **inference gateway** (Gateway `openshift-ingress/openshift-ai-inference`, which every model is reached through) and the model chosen in the picker, on CPU in the chosen project (an LLMInferenceService of the model's name: `smollm2-135m-instruct`, `qwen25-05b-instruct` (the default), `qwen3-1-7b` or `granite-embedding-125m-english`). A project can hold several; Set up and Delete act on the chosen one. Objects: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#models-inference-gateway-cluster-and-cpu-models-a-project-you-choose).
+
+Before Set up the tab says what is missing: model serving turned off (DataScienceCluster `kserve` not Managed, or `KserveLLMInferenceServiceDependencies=False`), no CPU preset on this release, no data science project, or too little room on the workers: the picker disables a model no amd64 worker has room for now, and says what it needs (SmolLM2 2 CPUs / 4 GiB, Qwen2.5 4 / 6 GiB, Qwen3 4 / 12 GiB, Granite 2 / 3 GiB requested). The check is a snapshot: a cluster that adds nodes on demand may still fit it; the API's setup only warns. A gateway someone else made (RHOAI's install, an admin) reads **Not managed by this tool** and is used as it is.
+
+Each model also gets the dashboard's token authentication (ServiceAccount `<model>-sa` that may only `get` the model, Role `<model>-view-role`, RoleBinding `<model>-view`, token Secret `default-name-<model>-sa`, all owned by the model): the dashboard lists that token for the model, and its **Edit** keeps authentication on. Call a ready model with that token. The Models tab shows these commands only for a model this tool set up with its token: send a model only its own token, never your OpenShift token, because whoever can edit the project controls what answers at the model's address (SECURITY.md, [Which token is used where](SECURITY.md#which-token-is-used-where)). For a model deployed in the dashboard, use the token its Token authentication shows.
+
+```bash
+TOKEN=$(oc get secret default-name-qwen25-05b-instruct-sa -n <project> -o jsonpath='{.data.token}' | base64 -d)
+URL=$(oc get llminferenceservice qwen25-05b-instruct -n <project> -o jsonpath='{.status.url}')
+curl -s -H "Authorization: Bearer $TOKEN" $URL/v1/models
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
+  -d '{"model":"qwen25-05b-instruct","messages":[{"role":"user","content":"Say hello"}],"max_tokens":64}'
+# Qwen3: thinking is off by default; turn it on for one request (streamed: it can take over a minute)
+URL=$(oc get llminferenceservice qwen3-1-7b -n <project> -o jsonpath='{.status.url}')
+curl -N -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
+  -d '{"model":"qwen3-1-7b","messages":[{"role":"user","content":"Is 1001 prime?"}],"max_tokens":1024,"stream":true,"chat_template_kwargs":{"enable_thinking":true}}'
+# The embedding model: one 768-number vector per input
+URL=$(oc get llminferenceservice granite-embedding-125m-english -n <project> -o jsonpath='{.status.url}')
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/embeddings \
+  -d '{"model":"granite-embedding-125m-english","input":["Red Hat OpenShift AI serves models."]}'
+```
+
+`401`: no or expired token. `403`: the token cannot `get` the model (each model's token is only for its own model). The `model` field is the resource name, as the dashboard's playground expects. The Qwen3 token above is in `default-name-qwen3-1-7b-sa`, the embedding model's in `default-name-granite-embedding-125m-english-sa`. Requests that take longer than about a minute must stream (`"stream": true`, and `curl -N`), because the cloud load balancer in front of the gateway closes a connection that sends nothing for 60 seconds (the AWS default): a non-streamed one gets no answer and ends after about 60 seconds (HTTP code `000` in curl).
+
+| Symptom | Cause and fix |
+|---|---|
+| Model **Error**: "The cluster preset's image is not published yet" (`ErrImagePull ... manifest unknown`) | A nightly build's CPU preset names a runtime image Red Hat has not published. Use **Use the newest released Red Hat image** on the model: it sets the newest released `registry.redhat.io/rhaii/vllm-cpu-rhel9` image, pinned by digest. Or mirror `registry.redhat.io/rhaii` to `registry.stage.redhat.io/rhaii` (ImageDigestMirrorSet) with a pull credential for that registry, then set the model up again. On disconnected clusters set `VLLM_CPU_IMAGE` on the updater |
+| Model stays **Setting up**, "Waiting for a worker with room" | `FailedScheduling: Insufficient cpu/memory`. Free what the picker says the model reserves on one amd64 worker, or add a node; it starts by itself |
+| Model **Error**: "keeps crashing ... OOMKilled" | The memory limit was too small (each limit is the model's memory measured idle on RHOAI 3.6 with vLLM CPU 0.24, plus 1.7 to 2.7 GiB for load): `oc logs deploy/<model>-kserve -n <project> -c main --previous`, and report the model and its peak |
+| Qwen3 answers without `tool_calls`, or a tool request is refused | The model is served with `--enable-auto-tool-choice --tool-call-parser hermes`; check them in `oc get deploy qwen3-1-7b-kserve -n <project> -o yaml` (env `VLLM_ADDITIONAL_ARGS`) and the vLLM log for an unknown option |
+| The embedding model refuses an input | Its context is 512 tokens; split longer text |
+| A model reads "not created by this tool" although this tool set it up | A model is the tool's only when its UID is in the tool's record (snapshot ConfigMap, key `models`). A model a pre-release 3.0.0 build set up has none, nor one made again elsewhere under the name. Delete it yourself (`oc delete llminferenceservice <model> -n <project>`, after unpublishing it on the MaaS tab), then set it up again |
+| Model details: "has no token of its own yet", and Use it shows no commands | Set up before the token objects existed: **Set up again to create its token** (only the missing objects are made); the commands appear once the token Secret is recorded. "Off: ... enable-auth is false": someone turned token authentication off in the dashboard; turn it back on there |
+| Set up refuses: "already has a ServiceAccount / Role / RoleBinding / Secret ... that this tool did not make for this model" | An object of the dashboard's token name for this model exists and is not owned by the model (left over, or someone else's). Delete it (`oc delete <kind> <name> -n <project>`) or use another project |
+| Set up warns "no room in its quota" | A ResourceQuota of the project leaves less than the model requests (`oc describe resourcequota -n <project>`). Raise it or stop other workloads; KServe cannot create the pod until then |
+| Model stays **Setting up**, `Insufficient ephemeral-storage` | The model requests node disk for its download (about 1.5 times it; KServe's default model volume is an emptyDir). Free disk on a worker or add one |
+| Hardware profile "None fits" (Qwen3) | No profile allows 4 CPUs and 12-14 GiB (the default allows 8 GiB): the dashboard's Deployments table shows "No hardware profile" and the details "Hardware profile: Unknown". The model runs as set up |
+| A model deployed in the dashboard never becomes ready; its HTTPRoute says `NotAllowedByListeners` | The inference gateway does not list its project (`oc get gateway openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.listeners[*].allowedRoutes}'`). The Models tab and the Overview name the model: **Allow <project>** adds the project. For a gateway this tool did not create, a cluster admin adds the project to the values array of its listeners' `allowedRoutes` |
+| After Unpublish, the direct address does not answer | The inference gateway does not list the project (someone took it off while the model was published): **Allow <project>** on the Models tab adds it back. For a gateway this tool did not create, a cluster admin adds the project to the values array of its listeners' `allowedRoutes` |
+| Model **Error**: "KServe cannot resolve its preset" | The preset named in `spec.baseRefs` is gone (RHOAI was updated and its prefix changed). Set the model up again: it re-reads the prefix |
+| Gateway **Needs attention**: "The gateway's authentication is missing" | odh-model-controller adds AuthPolicy `openshift-ai-inference-authn` once a model uses the gateway; check that odh-model-controller and Connectivity Link (Kuadrant) run: `oc get authpolicy -n openshift-ingress` |
+| Gateway **Setting up** for minutes | `oc get gateway openshift-ai-inference -n openshift-ingress -o yaml`: `Programmed=False` names the reason (no load balancer quota, for example). DNS for a new load balancer can take a few minutes |
+| Gateway **Unknown · not managed by this tool** | Someone else's gateway that reports no `Programmed` condition: the tool cannot tell; ask its owner |
+| **Delete inference gateway** unavailable | Models route through it (named), or routes are attached to it (`oc get httproute -A`). Delete those first; models of other tools are never deleted here |
+
+Rollback: **Delete model**, then **Delete inference gateway** (or **Clean up Models**, which runs both in that order). By hand, only for what the tool made (`app.kubernetes.io/managed-by=rhoai-nightly-updater`): `oc delete llminferenceservice <model> -n <project>` for each model, then `oc delete gateway openshift-ai-inference -n openshift-ingress`, `oc delete configmap openshift-ai-inference-options -n openshift-ingress`, `oc delete gatewayclass openshift-ai-inference`.
+
+### 10.3 Playground: the dashboard's Gen AI playground
+
+The **Playground** tab asks the RHOAI dashboard's own gen-ai API to create or delete its Gen AI playground in a project. Calls and objects: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#playground-the-dashboards-gen-ai-playground-a-project-you-choose).
+
+Chat with a ready playground from a terminal (the dashboard checks that your user may use the project):
+
+```bash
+TOKEN=$(oc whoami -t)
+curl -s -X POST "https://rh-ai.<apps domain>/gen-ai/api/v1/lsd/responses?namespace=<project>" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"model":"qwen25-05b-instruct","model_source_type":"namespace","input":"Say hello","stream":false}'
+```
+
+For a Models as a Service model, the body names the source and a subscription to the model, `"model_source_type":"maas","subscription":"<name>"` (this tool's is `rhoai-nightly-updater-subscription`): the dashboard mints the MaaS key for that subscription, and without one the playground answers 500. The Playground tab's **Use it** builds the command for the chosen model.
+
+| Symptom | Cause and fix |
+|---|---|
+| Set up unavailable: "Needs: Models" | The project has no ready chat model. Set one up on the Models tab, or wait until it is ready |
+| A playground this tool set up now reads "not managed by this tool" | Its OGXServer has another UID than the one recorded: it was deleted and made again in Gen AI studio, or the project was recreated. The new one is someone else's; the next Set up or Delete in the project drops the old record. Delete it in Gen AI studio if you no longer need it |
+| "This RHOAI release's dashboard gen-ai API differs" | A gen-ai path answered 404 on this release. Use the playground from the dashboard's Gen AI studio; report the call the message names |
+| "The dashboard's gen-ai API refused the request (HTTP 403)" | The updater's ServiceAccount lacks a rule the dashboard needs: re-apply the template (`deploy/template.yaml`). `oc auth can-i list ogxservers.ogx.io -n <project> --as=system:serviceaccount:<ns>:<sa>` must say yes |
+| Install fails: "An earlier playground ... left objects behind" | ConfigMaps of a playground whose server is gone (400 "already exists"). Someone with edit rights deletes the one named, for example `oc delete configmap -n <project> llama-stack-config` (check `oc get configmap -n <project> -l opendatahub.io/dashboard=true`), then Set up again |
+| "still being removed after 3:00" | The previous playground's database (`genai-pgvector*`) is still terminating: `oc get deploy,pvc -n <project> -l gen-ai.opendatahub.io/pgvector=true`. Set up again once it is gone |
+| Playground **Error** (phase Failed) | `oc get ogxserver lsd-genai-playground -n <project> -o yaml` and `oc get events -n <project>`; the OGX operator's webhook and `default-ogx` must be ready. Delete and set up again |
+| Delete unavailable, **Not managed by this tool** | Someone set it up in the dashboard; delete it there |
+
+Rollback: **Delete** in the playground's menu (or **Clean up Playground**). By hand, the dashboard's way: `oc delete ogxserver lsd-genai-playground -n <project>`, then the `genai-pgvector*` objects (`oc delete deploy,svc,networkpolicy,pvc,secret,configmap -n <project> -l gen-ai.opendatahub.io/pgvector=true`), then remove `<project>` from the `playgrounds` key of ConfigMap `rhoai-nightly-updater-snapshot` in the updater's namespace.
+
+### 10.4 MaaS: Models as a Service
+
+The **MaaS** tab sets up the MaaS platform as the MaaS install docs do and publishes this tool's model. Objects and order: [CLUSTER_CHANGES](docs/CLUSTER_CHANGES.md#maas-models-as-a-service-cluster-and-this-tools-published-models).
+
+```bash
+INFRA=redhat-ai-gateway-infra   # odh-ai-gateway-infra on ODH
+oc get dsc -o jsonpath='{.items[0].spec.components.aigateway}'; echo
+oc get clusters.postgresql.cnpg.io maas-db -n $INFRA
+oc get gateway maas-default-gateway -n openshift-ingress
+oc get deploy maas-api -n $INFRA
+oc get aitenant -n ai-tenants; oc get maastenantconfig -n models-as-a-service
+oc get authpolicy -n openshift-ingress
+oc get maasmodelref -A; oc get maassubscription,maasauthpolicy -n models-as-a-service
+```
+
+| Symptom | Cause and fix |
+|---|---|
+| Set up or Publish refuses: "Namespace models-as-a-service (or redhat-ai-gateway-infra) was made through a project request by ..." | Someone made that namespace with a project request before MaaS ran, and MaaS takes over a namespace of that name, which would make them an admin of a namespace the MaaS gateway admits routes from. `oc get namespace <name> -o yaml`: check `openshift.io/requester` and what runs there. If it is not RHOAI's, delete it (`oc delete namespace <name>`); RHOAI makes it again, then retry |
+| Set up stops at Connectivity Link or CloudNativePG | Set up installs them from `redhat-operators` and `certified-operators`; the message says why OLM did not (`oc describe subscription kuadrant-operator -n kuadrant-system`, `oc describe subscription cloudnative-pg -n cnpg-system`). Fix that, then **Set up** again: it continues where it stopped. A catalog that does not offer the package, more than one OperatorGroup in the namespace, or one that targets only some namespaces refuses before anything changes |
+| Set up stops: "Namespace ... does not exist, and this tool creates only the AI gateway's own infrastructure namespaces" | A custom applications namespace without an infrastructure namespace: create the namespace maas-api uses yourself, then Set up again |
+| **Authorino TLS** needs attention | **Configure Authorino TLS** on the part (or **Set up**) applies the docs' `setup-authorino-tls.sh` steps; **Do it from the CLI instead** has the same commands. Until then API keys are refused |
+| maas-api restarts | It restarts until the database answers: `oc get cluster maas-db -n $INFRA`, `oc logs deploy/maas-api -n $INFRA --previous` |
+| Gateway not programmed, or `maas.<apps domain>` does not resolve | OpenShift is making the load balancer; `oc get dnsrecords -n openshift-ingress` shows the record |
+| Connectivity Link version warning | The docs ask for RHCL 1.5 with RHOAI 3.6; 1.4.x can hang callers with two or more subscriptions (Publish then refuses while other MaaSSubscriptions exist), and 1.4.0 bypasses gateway authentication (Publish refuses). **Upgrade Connectivity Link** switches the Subscription to the channel the catalog shows meets 1.5; when OLM stays at the old version (`AtLatestKnown`: seen live, 1.5.0 skips only `>=1.4.4 <1.5.0`), it goes through a channel that lists the installed version and has a newer one (`stable-1.4`), then to the target, and sets Authorino TLS up again (the 1.4.4 step recreates Authorino's Service, which removes its certificate). It refuses a Subscription with Manual approval, one managed by Argo CD, or one not named `kuadrant-operator` or `rhcl-operator`. 1.5 replaces the separate Authorino, Limitador and DNS operators with one (`oc get kuadrantcontrolplane default`); a hand-installed upstream MCP gateway controller then fights its MCP controller |
+| Connectivity Link part recommends denying traffic when rate limiting fails | The MaaS docs set `RATELIMIT_CHECK_SERVICE_FAILURE_MODE` and `RATELIMIT_REPORT_SERVICE_FAILURE_MODE` to `deny` on the Connectivity Link Subscription, so requests are refused instead of let through unlimited while Limitador is unavailable. A Subscription this tool creates has them; one installed otherwise is not changed by Set up: **Deny traffic when rate limiting fails** sets them and keeps the other env entries (the part also shows the docs' `oc patch`) |
+| Kuadrant operator OOMKilled (the Connectivity Link part says so) | Known issue of RHCL 1.5.0 (CONNLINK-1878; its CSV limits it to 500Mi). **Raise the memory limit** sets the Subscription's `spec.config.resources` with a 1Gi memory limit and the CSV's other values (a patch to the Deployment is reverted by OLM). Offered only after an OOM kill is seen: `oc get pods -n kuadrant-system -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[*].lastState.terminated.reason}{"\n"}{end}'` |
+| **Old gateway policies** needs attention | A tier-based MaaS (RHOAI 3.2) left `gateway-auth-policy` and `gateway-tier-rate-limits` on `maas-default-gateway`; RHOAI does not remove them, and with old and new gateway policies Kuadrant's behaviour is undefined. **Remove the old tier policies** deletes those two by name; any other policy not managed by maas-controller is only listed, with its `oc delete` |
+| Publish refuses: Gateway maas-default-gateway admits routes from every namespace | Someone else's gateway with `allowedRoutes` `from: All`: apply the `oc patch` the gateway part shows (the docs' namespace list). On this tool's own gateway, **Set up** writes the list back |
+| Model delete refused: published | Unpublish it on the MaaS tab first |
+| A published model's direct address (`inference.<apps domain>/<project>/<model>`) answers 404 | Expected: while published, the model routes through `maas-default-gateway` only. Use it through MaaS with an API key (the MaaS tab's commands) or the dashboard's playground; Unpublish brings the direct address back |
+| A published model's direct address answers 500 (Envoy log: `kuadrant_wasm_shim: Failed to apply predicates ... selected_subscription_id`) | A publication by an earlier build, which kept the model on the inference gateway too; the MaaS tab shows it as "Partly published". Unpublish, then Publish again. `oc get llminferenceservice <model> -n <project> -o jsonpath='{.spec.router.gateway.refs}'` then names `maas-default-gateway` alone |
+| Publish refuses: "The spec of <model> ... was changed since this tool set it up: <fields>" | Someone (a project editor, `oc edit`, the dashboard's Edit) changed what the model runs (the fields named: image, model URI, preset, command, environment, volumes, ...), so it may no longer be the catalog's model, and it is not offered to every signed-in user. `oc get llminferenceservice <model> -n <project> --show-managed-fields -o yaml` shows who wrote what. Set it up again on the Models tab, then publish; if a field someone added stays, delete the model there and set it up again |
+| Publish or Unpublish stops with "Partly published: the model's route ..." | KServe did not move the model's HTTPRoute within 2 minutes: `oc get httproute <model>-kserve-route -n <project> -o jsonpath='{.spec.parentRefs}'`, and the model's `HTTPRoutesReady` condition. Unpublish (again) once KServe runs |
+| Unpublish refused: someone added a gateway | Someone added a gateway to the published model; writing back the refs from before publishing would drop it. Set the refs the model should use without `maas-default-gateway` (the message has the `oc patch` for KServe's default), then Unpublish again |
+| The embedding model has no Publish | This tool publishes chat models only; use the embedding model at its own address, or in the playground |
+
+Rollback: **Remove MaaS** (or Clean up everything). It keeps Connectivity Link, its Kuadrant CR and Authorino TLS, and CloudNativePG, also when this tool installed them (data key `maas`, field `shared`, of ConfigMap `rhoai-nightly-updater-snapshot` lists what it installed): RHOAI's inference gateway authentication uses Kuadrant. Remove them from the OpenShift console only if nothing needs them. By hand, in order: `oc delete maasauthpolicy rhoai-nightly-updater-access maassubscription rhoai-nightly-updater-subscription -n models-as-a-service`, `oc delete maasmodelref <model> -n <project>` for each published model, set `aigateway.modelsAsAService` and `aigateway.managementState` back to the values in data key `maas` (`previousModelsAsAService`, `previousAIGateway`), then `oc delete gateway maas-default-gateway -n openshift-ingress`, `oc delete secret maas-db-config -n $INFRA`, `oc delete cluster.postgresql.cnpg.io maas-db -n $INFRA`, `oc delete namespace $INFRA` if the record's `infraNamespace` names it and nothing else is in it, and remove the `maas` key.
 
 ## 11. Manual recovery for operator deadlocks
 

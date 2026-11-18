@@ -42,6 +42,17 @@ only accepts a tag whose version is the top dated section. See
   (`/develop-train/mlflow/experiments/<id>/runs`), as the dashboard's own
   links do. Without the dashboard's address they open MLflow's own UI as
   before.
+- Release notes (GitLab and GitHub) open with the install and upgrade
+  block (download, checksum, dry run, install), then the CHANGELOG
+  section; 3.0.0's long section had buried it.
+- Internal, CI only: faster pipelines with every check kept. The frontend
+  checks run as three parallel jobs (checks, tests, build), the GitLab Go
+  and golangci-lint jobs keep their module and build caches, and GitLab's
+  image jobs skip the Containerfile's checks (`RUN_CHECKS=false`), which
+  the pipeline's test jobs already ran on the same commit. Docker Hub
+  images can come through GitLab's Dependency Proxy (project variable
+  `DOCKER_HUB`; unset, nothing changes), after Docker Hub's anonymous
+  pull limit stopped a job.
 
 ## [3.0.0] - 2026-11-18
 

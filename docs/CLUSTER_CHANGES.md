@@ -27,8 +27,8 @@ Conventions:
 | Object | When |
 |---|---|
 | ConfigMap `rhoai-nightly-updater-activity` | create, then update, on every recorded action (audit log) |
-| ConfigMap `rhoai-nightly-updater-snapshot` | SSA before each operator operation (deployment snapshot). Key `operator-subscription` records the live Subscription after each operator operation |
-| ConfigMap `rhoai-nightly-updater-operation` | SSA/patch when an operation starts and ends (the marker used to report an interrupted operation) |
+| ConfigMap `rhoai-nightly-updater-snapshot` | SSA before each operator operation (deployment snapshot). Key `operator-subscription` records the live Subscription after each operator operation. Environment page records, each SSA under a field manager of its own: key `models` (the UID of each model the tool created, by `<project>/<model>`, and its token Secret; Models setup and Delete), `playgrounds` (the projects the tool requested a playground in, with the playground server's UID; Playground Set up and Delete) and `maas` (what the tool did to the MaaS platform: the shared pieces it installed, the infrastructure namespace it created, the DataScienceCluster setting it changed, and the models it published; MaaS Set up, Publish, Unpublish and Remove). A record is the tool's proof of ownership: an object whose UID is not recorded is someone else's |
+| ConfigMap `rhoai-nightly-updater-operation` | SSA/patch when an operation starts and ends: key `operation` (the marker used to report an interrupted operation), `lastCompleted`, and `lock`, the cross-pod lease every operation takes before it starts and renews every 10 seconds while it runs (a lease without a heartbeat for 45 seconds has expired); another updater pod that finds a live lease refuses with 409 `cluster_busy`, and one that cannot read or write it refuses with 503 `lock_unavailable` |
 
 ## 3. One-time cluster setup
 

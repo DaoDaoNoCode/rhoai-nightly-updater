@@ -335,6 +335,7 @@ Environment variables of the `app` container. The template sets the first group;
 | `SEAWEEDFS_IMAGE` | pinned `ghcr.io/chrislusf/seaweedfs@sha256:...` (4.54) | the S3 storage image, for example a mirror; must be a SeaweedFS 4.x whose `weed mini` reads `WEED_ADMIN_*`. `MINIO_IMAGE` is no longer read |
 | `RCLONE_IMAGE` | pinned `docker.io/rclone/rclone@sha256:...` (1.76.0) | the image of Migrate storage's copy Job, for example a mirror; must be an rclone 1.x image with `/bin/sh` |
 | `SEAWEEDFS_ACCESS_KEY_ID`, `SEAWEEDFS_SECRET_ACCESS_KEY` | random per install, kept in `seaweedfs/seaweedfs-s3-credentials` | S3 access key and secret key on a first setup; keys already stored are kept. The admin UI password is always random, its own, and kept in the same Secret only. `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are no longer read |
+| `SAMPLE_PIPELINE_IMAGE` | pinned `registry.access.redhat.com/ubi9/ubi-minimal@sha256:...` | the image both steps of the sample pipeline run (Pipelines tab, **Run a sample pipeline**), for example a mirror on a disconnected cluster; it needs `sh`, `mkdir`, `dirname`, `echo` and `cat` |
 | `STABLE_SOURCE`, `STABLE_CHANNEL` | `redhat-operators`, detected | the catalog and channel used for "stable" |
 | `DSC_SAMPLE_REF` | unset | take DSC defaults from this rhods-operator git ref instead of the installed CSV's `alm-examples` |
 | `LOG_LEVEL` | `info` | `debug`, `warn`, `error` |
