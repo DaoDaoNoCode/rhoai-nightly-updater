@@ -292,6 +292,9 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	if _, found, err := readObjectMeta(c, "/api/v1/namespaces/"+infra); err != nil || !found {
 		return m.fail("check", fmt.Sprintf("The AI gateway's infrastructure namespace %s does not exist yet (the AI gateway operator creates it). Wait for the operator, then try again. Nothing was changed.", infra), "prerequisites", "no infra namespace")
 	}
+	if msg, code := maasNamespaceRefusal(c, infra); msg != "" {
+		return m.fail("check", msg, code, "namespace not rhoai's")
+	}
 
 	// The database: a connection Secret someone else made is used as it is.
 	secMeta, secFound, err := readObjectMeta(c, maasObjectPath("Secret", infra))
@@ -864,6 +867,9 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	}
 	if !st.Platform.Ready {
 		return m.fail("check", "The MaaS platform is not ready ("+st.Platform.Message+"). Set it up first. Nothing was changed.", "prerequisites", "platform not ready")
+	}
+	if msg, code := maasNamespaceRefusal(c, maasInfraNamespace(c)); msg != "" {
+		return m.fail("check", msg, code, "namespace not rhoai's")
 	}
 	refPath, _ := maasModelRefPath(c, project, name)
 	model, found, err := readToolModel(c, project, name)

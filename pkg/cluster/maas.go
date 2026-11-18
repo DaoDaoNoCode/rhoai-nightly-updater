@@ -576,6 +576,35 @@ func readMaaSGateway(c *Client) (maasGatewayState, error) {
 	return st, nil
 }
 
+// maasNamespaceRefusal checks the namespaces maas-default-gateway always
+// admits routes from, and where this tool writes its MaaSSubscription and
+// MaaSAuthPolicy: models-as-a-service and the infrastructure namespace.
+// maas-controller adopts a namespace of that name that already exists
+// (models-as-a-service rhoai-3.6 maas-controller/cmd/manager/main.go,
+// ensureManagedNamespaceWithClient: "managed namespace already exists",
+// then only its required labels are patched), so a user who made one
+// first through a project request (annotation openshift.io/requester,
+// which every ProjectRequest sets and RHOAI's operators do not) is an
+// admin of it: they could attach routes to the MaaS gateway and change
+// what this tool writes there. Such a namespace is refused, as is one that
+// cannot be read (fail closed); one that does not exist yet is fine (RHOAI
+// creates it). It returns a message and an error code, or "".
+func maasNamespaceRefusal(c *Client, infra string) (string, string) {
+	for _, ns := range []string{maasTenantNamespace, infra} {
+		meta, found, err := readObjectMeta(c, "/api/v1/namespaces/"+ns)
+		if err != nil {
+			return fmt.Sprintf("Cannot read namespace %s, so this tool cannot tell who made it; nothing was changed: %v.%s", ns, err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+		}
+		if !found {
+			continue
+		}
+		if who := meta.Annotations[projectRequesterAnnotation]; who != "" {
+			return fmt.Sprintf("Namespace %s was made through a project request by %s (annotation %s), not by RHOAI, and MaaS takes over a namespace of that name that exists. Its admins could attach routes to the MaaS gateway and change MaaS's subscriptions and access policies there, so this tool does not set up or publish MaaS while it exists. A cluster-admin checks it and, if it is not RHOAI's, deletes it; RHOAI makes it again. Nothing was changed.", ns, who, projectRequesterAnnotation), "not_managed"
+		}
+	}
+	return "", ""
+}
+
 // maasGatewayNamespaces are the namespaces the gateway admits routes from
 // (setup-gateway.sh ALLOWED_ROUTE_NAMESPACES): the infrastructure namespace
 // (maas-api's route), the default tenant's namespace, and each project

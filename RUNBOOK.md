@@ -433,6 +433,7 @@ oc get maasmodelref -A; oc get maassubscription,maasauthpolicy -n models-as-a-se
 
 | Symptom | Cause and fix |
 |---|---|
+| Set up or Publish refuses: "Namespace models-as-a-service (or redhat-ai-gateway-infra) was made through a project request by ..." | Someone made that namespace with a project request before MaaS ran, and MaaS takes over a namespace of that name, which would make them an admin of a namespace the MaaS gateway admits routes from. `oc get namespace <name> -o yaml`: check `openshift.io/requester` and what runs there. If it is not RHOAI's, delete it (`oc delete namespace <name>`); RHOAI makes it again, then retry |
 | Set up refused: no Kuadrant CR | A cluster-admin installs Red Hat Connectivity Link and creates the Kuadrant CR (MaaS `platform-setup.md`) |
 | Set up refused: CloudNativePG not installed | Install the CloudNativePG operator from OperatorHub, or create Secret `maas-db-config` for your own PostgreSQL |
 | **Authorino TLS** needs attention | Run the commands the part shows (the docs' `setup-authorino-tls.sh`) as a cluster-admin; until then API keys are refused |
