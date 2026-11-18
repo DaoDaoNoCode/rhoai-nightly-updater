@@ -137,8 +137,8 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
         </Table>
       )}
       {notReady.length > 0 && (
-        <Alert variant="warning" isInline component="p" title="Not every model in the project is ready">
-          The dashboard sets up a playground only when every model deployed for Gen AI in the project is ready. Not ready: {notReady.map((m) => `${m.name} (${m.status ?? "unknown"})`).join(", ")}. Wait until they are ready, or delete the ones you do not need.
+        <Alert variant="info" isInline component="p" title="Some models are not ready">
+          These models are not ready, so Set up leaves them out: {notReady.map((m) => `${m.name} (${m.status ?? "unknown"})`).join(", ")}. Once one is ready, the playground offers it without setting it up again.
         </Alert>
       )}
     </PartItem>

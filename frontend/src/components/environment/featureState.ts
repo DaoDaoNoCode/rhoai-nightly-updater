@@ -389,7 +389,7 @@ export function defaultPlaygroundModels(pg: PlaygroundStatus | null, project: st
   return playgroundChatModels(pg, project).filter((m) => m.source === "namespace");
 }
 
-/** Models deployed for Gen AI in the project that are not ready: the dashboard's install fails while one is. */
+/** Models deployed for Gen AI in the project that are not ready: Set up leaves them out (the dashboard's install checks only the models it is given). */
 export function playgroundModelsNotReady(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
   return pg?.project === project ? (pg.models ?? []).filter((m) => m.source === "namespace" && !m.ready) : [];
 }
@@ -450,9 +450,7 @@ function playgroundInProject(status: ResourcesStatus | null, pg: PlaygroundStatu
   if (playground.status === "unknown") return { status: "unknown", label: `Unknown in ${project}${suffix}`, next: null, project };
   if (item?.deployed) return { status: "unknown", label: `Unknown in ${project}${suffix}`, next: null, project };
   let reason = playgroundClusterReason(pg);
-  const notReady = playgroundModelsNotReady(pg, project);
   if (!reason && models.status === "unknown") reason = pg?.modelsProblem ?? "The project's models are still loading.";
-  if (!reason && notReady.length > 0) reason = `Not every model in ${project} is ready (${notReady.map((m) => m.name).join(", ")}); the dashboard's install needs all of them ready.`;
   if (!reason && models.status === "not-set-up") reason = `Needs: Models. ${project} has no ready chat model; set one up on the Models tab first.`;
   return {
     status: "not-set-up",

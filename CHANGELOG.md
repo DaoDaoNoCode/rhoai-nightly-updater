@@ -24,8 +24,8 @@ only accepts a tag whose version is the top dated section. See
   dashboard's own gen-ai API to create its Gen AI playground in a project,
   with the project's ready chat models, as a click in its Gen AI studio does
   (nothing of the playground is copied into this tool); Delete asks it to
-  remove it. Only playgrounds this tool requested are deleted; one made in
-  the dashboard shows as not managed. Clean up everything deletes the
+  remove it. Only the playground server this tool requested (its recorded UID) is deleted; one made in
+  the dashboard, also after deleting this tool's, shows as not managed. Clean up everything deletes the
   playgrounds before the models. The calls use the updater's ServiceAccount
   token; new ClusterRole rules for the dashboard's install and delete are
   audited in SECURITY.md. The Overview gets a Playground row.

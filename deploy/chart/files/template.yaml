@@ -445,7 +445,8 @@ objects:
       # OGXServer lsd-genai-playground and its ConfigMaps (create cannot be
       # limited by name), sets ownerReferences on them (which needs delete),
       # labels odh-trusted-ca-bundle ogx.io/watch=true (update), reads the
-      # optional custom-endpoints ConfigMap, and deletes the server. The
+      # optional custom-endpoints ConfigMap, and deletes the server (this tool
+      # also reads the server itself: its UID marks the one it requested). The
       # pgvector database and the router CA are the dashboard's own
       # ServiceAccount's. SECURITY.md audits each rule.
       - apiGroups: ["ogx.io"]
