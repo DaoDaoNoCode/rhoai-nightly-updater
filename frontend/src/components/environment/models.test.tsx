@@ -71,6 +71,13 @@ describe("modelsState", () => {
     expect(foreign.next).toMatchObject({ setup: [{ gateway: false }] });
   });
 
+  it("a ready model whose last call failed needs attention; one not checked stays ready", () => {
+    const failed = model("dev", { callCheck: { result: "route", ok: false, status: 404, message: "Nothing answers.", at: "2026-11-18T18:00:00Z" } });
+    expect(modelsState(status({ inferenceGateway: gateway, models: modelsStatus({ items: [failed] }) }), "dev", ["dev"])).toMatchObject({ status: "needs-attention", label: "Needs attention in dev", next: { kind: "show-issue", part: "model" } });
+    const unchecked = model("dev", { callCheck: { result: "not-checked", ok: false, message: "Not checked.", at: "2026-11-18T18:00:00Z" } });
+    expect(modelsState(status({ inferenceGateway: gateway, models: modelsStatus({ items: [unchecked] }) }), "dev", ["dev"]).status).toBe("ready");
+  });
+
   it("ready opens the project in the dashboard; ownership is said apart from the label", () => {
     const s = modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false }, models: modelsStatus({ items: [model("dev")] }) }), "dev", ["dev"]);
     expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open in dashboard", href: "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev" } });

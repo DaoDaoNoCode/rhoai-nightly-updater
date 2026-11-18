@@ -481,6 +481,11 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   const notAllowed = notAllowedState(status, project);
   if (notAllowed) return notAllowed;
   const unmanaged = parts.some((p) => p.unmanaged);
+  // Ready but its last "Can it be called?" failed: a caller would not get an answer.
+  const check = modelIn(status, project, name)?.callCheck;
+  if (model.status === "ready" && check && !check.ok && check.result !== "not-checked") {
+    return { status: "needs-attention", label: `Needs attention in ${project}`, ...owner(unmanaged), next: { kind: "show-issue", part: "model" }, project };
+  }
   if (model.status === "ready") {
     const href = dashboardProjectHref(status?.dashboardUrl, project);
     return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open in dashboard", href } : null, project };
