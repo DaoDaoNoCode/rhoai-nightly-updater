@@ -996,9 +996,10 @@ type gatewayPlan struct {
 // planInferenceGateway reads everything a gateway write needs, for a list
 // with the namespaces in add. The list keeps every name the listeners
 // list now, whoever added it. A gateway an earlier build made (from All,
-// or its namespace label) also gets every namespace whose models route
-// through it, so no model is detached; when the models cannot be listed,
-// that is refused. The list and the resourceVersion that guards the write
+// or its namespace label) also gets the projects of this tool's own
+// models that route through it (by its record), so none of them is
+// detached; other projects with models on it become Allow candidates.
+// When the models or the record cannot be read, that is refused. The list and the resourceVersion that guards the write
 // come from the same read. A refusal is returned as a message and an
 // error code; nothing is written.
 func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string) {
@@ -1020,8 +1021,22 @@ func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string
 		if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
 			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so its list of allowed projects was not written (that could cut a model off); nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
 		}
+		// Only this tool's own models (by its record): anyone may make an
+		// LLMInferenceService that points at the gateway, and listing its
+		// project would let that project's editors attach routes to the
+		// shared gateway. The others are Allow candidates in the status.
+		rec, err := readModelsRecord(c)
+		if err != nil {
+			return nil, fmt.Sprintf("Cannot read this tool's record of its models, so the inference gateway's list of allowed projects was not written (that could cut one of its models off); nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
+		}
+		var ours []llmisvcObject
+		for _, m := range models {
+			if rec.owns(m.Metadata) {
+				ours = append(ours, m)
+			}
+		}
 		def, _ := readKServeGateway(c)
-		routed = routeNamespaces(models, def, gw)
+		routed = routeNamespaces(ours, def, gw)
 	}
 	plan.names = gatewayNamespaceList(listed, routed, add)
 	plan.listChanges = !found || !shaped

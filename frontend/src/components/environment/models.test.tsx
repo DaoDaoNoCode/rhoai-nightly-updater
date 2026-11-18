@@ -495,6 +495,7 @@ describe("The projects the inference gateway allows (RHOAI's names list)", () =>
     const row = within(gw).getByText("Projects allowed on the gateway").closest("div")!.parentElement!;
     expect(within(row).getByText("dev")).toBeInTheDocument();
     expect(within(row).getByText("openshift-ingress")).toBeInTheDocument();
+    expect(within(gw).getByText(/Allow only a project you trust: anyone who can edit team can then attach routes to this shared gateway/)).toBeInTheDocument();
     expect(within(gw).getByText("team/granite can't be reached: its project isn't allowed on the inference gateway")).toBeInTheDocument();
     fireEvent.click(within(gw).getByRole("button", { name: "Allow team" }));
     const dialog = await screen.findByRole("dialog", { name: /Allow team on the inference gateway\?/ });

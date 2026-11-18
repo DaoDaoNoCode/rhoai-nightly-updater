@@ -357,7 +357,11 @@ only accepts a tag whose version is the top dated section. See
   model deployed elsewhere (in the dashboard, say) in a project not on the
   list never becomes ready; the Models tab and the Overview name it, with
   **Allow <project>**. A gateway an earlier build made gets the list at its
-  next change, with every project whose models use it. Someone else's
+  next change, with the projects of this tool's own models on it; other
+  projects with models there are named with **Allow <project>** (anyone
+  who can edit an allowed project can attach routes to the gateway, so a
+  dummy LLMInferenceService no longer gets its project listed). Someone
+  else's
   gateway is not changed: the tab says which projects it allows and gives
   RHOAI's step for a cluster admin.
 - The MLflow samples and the playground no longer follow HTTP redirects

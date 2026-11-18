@@ -173,7 +173,7 @@ const NotAllowedAlert: React.FC<{ gw: InferenceGatewayState; project: string; mo
   return (
     <Alert variant="warning" isInline component="div" title={title}
       actionLinks={!reason ? <AlertActionLink onClick={() => setPending({ kind: "allow-gateway-project", project })}>Allow {project}</AlertActionLink> : undefined}>
-      <Content component="p">{why} Allow adds {project} to the list.</Content>
+      <Content component="p">{why} Allow adds {project} to the list. Allow only a project you trust: anyone who can edit {project} can then attach routes to this shared gateway, which carries every model's calls and their tokens.</Content>
       {reason && <Content component="p">{readOnly ? reason : `Not available now: ${reason}`}</Content>}
     </Alert>
   );

@@ -380,8 +380,12 @@ a commit build):
   `kubernetes.io/metadata.name In [...]`); a model setup adds its project.
   A gateway a pre-release build created (routes from every project, or from
   projects with a namespace label) gets that list at its next change, a
-  model setup or **Allow <project>**, with every project whose models use
-  it, so no model is detached. Before, a route in any project could take
+  model setup or **Allow <project>**, with the projects of this tool's own
+  models on it, so none of them is detached. A model of another project on
+  that gateway (one deployed in the dashboard, or any LLMInferenceService
+  someone made) is then cut off: the Models tab and the Overview name it,
+  with **Allow <project>**. Allow only a project you trust, since anyone
+  who can edit it can then attach routes to the shared gateway. Before, a route in any project could take
   over a model's address and receive its callers' tokens (SECURITY.md,
   "Route takeover on the inference gateway", just before
   [Which models are the tool's](../SECURITY.md#which-models-are-the-tools)).

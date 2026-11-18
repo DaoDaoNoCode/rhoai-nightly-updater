@@ -213,9 +213,12 @@ func TestModelsSetup_GatewayEditedMeanwhileKeepsTheOtherEdit(t *testing.T) {
 
 // A gateway a pre-release build made (routes from every namespace, or
 // the namespace label it used) becomes the names list at the next write,
-// with every namespace whose models route through it, the tool's or
-// anyone's: nothing is detached. When the models cannot be listed,
-// nothing is written.
+// with the projects of this tool's own models that route through it (by
+// the tool's record): a dummy LLMInferenceService anyone makes must not
+// get its project listed, since that lets the project's editors attach
+// routes to the shared gateway. Other projects with models on it are
+// reported as Allow candidates. When the models or the record cannot be
+// read, nothing is written.
 func TestInferenceGateway_ConvertsAPreReleaseGateway(t *testing.T) {
 	for name, allowed := range map[string]string{
 		"from All":    `{"namespaces":{"from":"All"}}`,
@@ -242,11 +245,25 @@ func TestInferenceGateway_ConvertsAPreReleaseGateway(t *testing.T) {
 				t.Fatalf("an unknown model list must refuse before any write: %+v %v", res, mc.f.mutations()[before:])
 			}
 			delete(mc.f.fail, "GET /apis/serving.kserve.io/v1alpha2/llminferenceservices")
+			// The tool's record cannot be read: nothing is written either.
+			recPath := "GET /api/v1/namespaces/" + getActivityNamespace() + "/configmaps/" + snapshotConfigMapName
+			mc.f.fail[recPath] = 500
+			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "dev"}); res.Success || len(mc.f.mutations()[before:]) != 0 {
+				t.Fatalf("an unreadable record must refuse before any write: %+v %v", res, mc.f.mutations()[before:])
+			}
+			delete(mc.f.fail, recPath)
 
 			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "dev"}); !res.Success {
 				t.Fatalf("setup in dev: %+v", res)
 			}
-			wantAllowed(t, mc, "dev", "lab", "openshift-ingress", "proj", "team")
+			wantAllowed(t, mc, "dev", "openshift-ingress", "proj")
+			st, err := GetResourcesStatus(mc.c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(st.InferenceGateway.NotAllowedModelProjects, ","); got != "lab,team" {
+				t.Fatalf("Allow candidates = %q, want lab,team", got)
+			}
 		})
 	}
 }
