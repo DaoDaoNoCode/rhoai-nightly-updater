@@ -257,7 +257,7 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
 - **test** stage, all must pass, no lint exceptions:
   - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
   - `golangci-lint`;
-  - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build;
+  - `frontend-checks` (typecheck, ESLint, `npm audit`), `frontend-test` (tests) and `frontend-build` (production build), in parallel, each after its own `npm ci`;
   - `release-scripts`: `scripts/test-release.sh` and `scripts/test-install.sh`;
   - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
   - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);

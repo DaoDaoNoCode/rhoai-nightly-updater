@@ -109,20 +109,39 @@ golangci-lint:
     # The tree is lint-clean: every issue fails the pipeline.
     - golangci-lint run ./...
 
-frontend:
+# The frontend checks run as three parallel jobs, each with its own npm ci
+# from one npm cache (keyed on package-lock.json): the tests take longest,
+# and the other checks and the build finish within their time. Only
+# frontend-checks uploads the cache; the others only read it.
+.frontend:
   extends: .test
   image: $NODE_IMAGE
   cache:
     key:
       files: [frontend/package-lock.json]
     paths: [frontend/.npm/]
-  script:
+    policy: pull
+  before_script:
     - cd frontend
     - npm ci --cache .npm --prefer-offline
+
+frontend-checks:
+  extends: .frontend
+  cache:
+    policy: pull-push
+  script:
     - npm run typecheck
     - npm run lint
-    - npm test
     - npm audit --omit=dev --audit-level=high
+
+frontend-test:
+  extends: .frontend
+  script:
+    - npm test
+
+frontend-build:
+  extends: .frontend
+  script:
     - npm run build
 
 release-scripts:
@@ -195,7 +214,7 @@ release-guard:
 # :latest: that only moves with releases.
 build-main:
   extends: .kaniko-build
-  needs: [go, golangci-lint, frontend, release-scripts, chart]
+  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart]
   script:
     - >-
       /kaniko/executor
@@ -219,7 +238,7 @@ build-main:
 # Manual trigger for any other branch → :<branch-slug>
 build-branch:
   extends: .kaniko-build
-  needs: [go, golangci-lint, frontend]
+  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build]
   script:
     - >-
       /kaniko/executor
@@ -242,7 +261,7 @@ build-branch:
 # the push cannot interleave with another release job.
 release-build:
   extends: .kaniko-build
-  needs: [go, golangci-lint, frontend, release-scripts, chart, release-guard]
+  needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, release-guard]
   variables:
     # It pushes nothing: no image registry credentials.
     REGISTRY_LOGIN: "false"
