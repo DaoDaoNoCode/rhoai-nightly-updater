@@ -170,20 +170,26 @@ export function samplesConfirm(pending: Pending): ConfirmSpec | null {
       const { project, action, samples } = pending;
       const ids = MLFLOW_SAMPLE_IDS.filter((id) => samples.includes(id));
       const names = ids.map(nameInSentence);
+      // A cluster change made first instead of the demo (the MLflow server's old 2Gi memory limit).
+      const repairs = pending.repairs ?? [];
+      const repairNote = repairs.length > 0
+        ? " First, MLflow's 2Gi memory limit, which an earlier version of this tool set, is removed: MLflow restarts and the demo is not generated in this run; add it again once MLflow is ready."
+        : "";
       if (action === "add") {
         const many = ids.length > 1;
         return {
           title: many ? `Add sample data to ${project}?` : `Add the ${names[0]} to ${project}?`, confirm: "Add",
           runTitle: many ? `Add sample data to ${project}` : `Add the ${names[0]} to ${project}`,
-          summary: <Content component="p">In {project}&apos;s MLflow workspace: {listWords(ids.map((id) => SAMPLE_INFO[id].adds))}. Everything is tagged as sample data of this tool; anyone with access to {project} sees it.</Content>,
-          changes: ids.map((id) => SAMPLE_INFO[id].creates),
+          summary: <Content component="p">In {project}&apos;s MLflow workspace: {listWords(ids.map((id) => SAMPLE_INFO[id].adds))}. Everything is tagged as sample data of this tool; anyone with access to {project} sees it.{repairNote}</Content>,
+          changes: [...repairs, ...ids.map((id) => SAMPLE_INFO[id].creates)],
         };
       }
       if (action === "regenerate") {
         return {
           title: `Regenerate the agent and prompt demo in ${project}?`, confirm: "Regenerate", runTitle: `Regenerate the agent and prompt demo in ${project}`,
-          summary: <Content component="p">MLflow generates its demo in {project} again, replacing the demo&apos;s prompts, traces and evaluations. Use it when the demo is incomplete. About 30 seconds.</Content>,
-          changes: [<>Experiment <code>MLflow Demo</code> (this tool&apos;s): its demo version tags (<code>mlflow.demo.version.*</code>) are reset, then MLflow&apos;s demo generator runs; it deletes and regenerates each part of the demo, including traces and evaluations logged into that experiment by anyone.</>],
+          summary: <Content component="p">MLflow generates its demo in {project} again, replacing the demo&apos;s prompts, traces and evaluations. Use it when the demo is incomplete. About 30 seconds.{repairNote}</Content>,
+          changes: [
+            ...repairs,<>Experiment <code>MLflow Demo</code> (this tool&apos;s): its demo version tags (<code>mlflow.demo.version.*</code>) are reset, then MLflow&apos;s demo generator runs; it deletes and regenerates each part of the demo, including traces and evaluations logged into that experiment by anyone.</>],
         };
       }
       return {

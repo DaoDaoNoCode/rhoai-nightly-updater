@@ -383,6 +383,8 @@ export interface SampleStatus {
   link?: string;
   /** What the state allows. */
   actions: MLflowSampleAction[];
+  /** A cluster change Add and Regenerate make first instead of the sample (pkg/types SampleStatus.Repair). */
+  repair?: string;
 }
 
 /** GET /api/resources/samples/mlflow?project=. */

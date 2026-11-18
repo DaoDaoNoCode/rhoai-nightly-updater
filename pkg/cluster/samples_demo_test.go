@@ -215,7 +215,7 @@ func TestGenAIDemo_OldMemoryLimit(t *testing.T) {
 	t.Run("the tool's CR: Add removes the limit first", func(t *testing.T) {
 		env := newSamplesEnv(t)
 		putMLflow(env.k8s, toolLabelJSON, toolFieldManager, "Update", "", oldSpec, `{"url":"`+env.srv.URL+`/mlflow","conditions":[{"type":"Available","status":"True"}]}`)
-		if s := env.status(t)[SampleGenAIDemo]; s.State != "absent" || !strings.Contains(s.Message, "2Gi memory limit") {
+		if s := env.status(t)[SampleGenAIDemo]; s.State != "absent" || !strings.Contains(s.Message, "2Gi memory limit") || !strings.Contains(s.Repair, "spec.resources") {
 			t.Errorf("status %+v", s)
 		}
 		ok, msg, steps := env.run(t, "add", SampleGenAIDemo)

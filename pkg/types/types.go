@@ -1227,6 +1227,10 @@ type SampleStatus struct {
 	Link string `json:"link,omitempty"`
 	// Actions the state allows: "add", "remove", "regenerate".
 	Actions []string `json:"actions"`
+	// Repair, when set, is a change to the cluster that Add and Regenerate
+	// make first instead of the sample (the demo on an MLflow CR with the
+	// 2Gi limit an earlier version set); the confirmation names it.
+	Repair string `json:"repair,omitempty"`
 }
 
 // MLflowSamplesStatus is GET /api/resources/samples/mlflow?project=.

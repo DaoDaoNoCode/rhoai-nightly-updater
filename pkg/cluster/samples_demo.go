@@ -111,8 +111,12 @@ func demoStatus(t *mlflowTarget) types.SampleStatus {
 		return s
 	}
 	s.Message = demoLowMemoryMessage(true)
+	s.Repair = demoMemoryRepair
 	return s
 }
+
+// demoMemoryRepair is what Add or Regenerate does first on such a CR.
+const demoMemoryRepair = "MLflow CR " + mlflowCRName + ": spec.resources (requests 500m/1Gi, limits 2/2Gi, set by an earlier version of this tool) is removed, so the operator's defaults (limits 4 CPU / 3Gi) apply. MLflow restarts, and the demo is not generated in this run: add it again once MLflow is ready."
 
 // demoLowMemoryMessage explains the 2Gi limit of an MLflow CR created by an
 // earlier version of this tool (mlflowCR.oldToolResources).

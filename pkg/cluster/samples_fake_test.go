@@ -915,7 +915,7 @@ func (env *samplesEnv) status(t *testing.T) map[string]typesSample {
 	}
 	out := map[string]typesSample{}
 	for _, s := range st.Samples {
-		out[s.ID] = typesSample{State: s.State, Missing: s.Missing, Actions: s.Actions, Message: s.Message, Link: s.Link}
+		out[s.ID] = typesSample{State: s.State, Missing: s.Missing, Actions: s.Actions, Message: s.Message, Link: s.Link, Repair: s.Repair}
 	}
 	return out
 }
@@ -927,6 +927,7 @@ type typesSample struct {
 	Actions []string
 	Message string
 	Link    string
+	Repair  string
 }
 
 // run runs a samples operation and returns its result and steps.
