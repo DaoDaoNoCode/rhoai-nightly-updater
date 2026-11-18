@@ -271,6 +271,11 @@ const scenarios = {
     w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
     w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
   },
+  // Several catalog models in one project: Qwen2.5, Qwen3 and the embedding model.
+  "env-models-several": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/granite-embedding-125m-english", "dev-project/qwen25-05b-instruct", "dev-project/qwen3-1-7b"]);
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project"), F.modelStates.readyAs("qwen3-1-7b"), F.modelStates.readyAs("granite-embedding-125m-english")] });
+  },
   "env-models-starting": (w) => {
     w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
     w.resources.models = F.modelsStatus({ items: [F.modelStates.starting("dev-project")] });
@@ -285,7 +290,11 @@ const scenarios = {
   },
   "env-models-unknown": (w) => { w.resources.inferenceGateway = F.gatewayStates.unknown; },
   "env-models-gateway-starting": (w) => { w.resources.inferenceGateway = F.gatewayStates.starting; },
-  "env-models-capacity": (w) => { w.resources.models = F.modelsStatus({ capacityWarning: F.CAPACITY_WARNING }); },
+  // The room check: no worker has room for Qwen3 now, so the picker disables it.
+  "env-models-capacity": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ catalog: F.catalogWithoutRoom(), items: [F.modelStates.released("dev-project")] });
+  },
   "env-models-blocked": (w) => {
     w.resources.models = F.modelsStatus({ imagePlan: undefined, imagePlanReason: undefined, preset: undefined, dependencies: "False",
       blocked: { component: "kserve", reason: "KServe cannot serve LLMInferenceServices yet: DataScienceCluster default-dsc reports KserveLLMInferenceServiceDependencies=False (LeaderWorkerSet operator is not installed). A cluster-admin installs what it names; the Components page shows the details." } });
@@ -293,7 +302,8 @@ const scenarios = {
   "env-models-reader": (w) => { scenarios["env-models-ready"](w); w.canMutate = false; },
   "env-models-gated": (w) => { w.resources.models = F.modelsStatus(); w.gated = true; },
   // Playground: every state in dev-project, on a ready model.
-  "env-playground-none": (w) => { scenarios["env-models-ready"](w); },
+  // With this tool's embedding model, which Set up adds as one.
+  "env-playground-none": (w) => { scenarios["env-models-several"](w); w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.granite, F.playgroundModels.maas, F.playgroundModels.opt]; },
   // MaaS: the platform and this tool's model in dev-project.
   "env-maas-none": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { items: [F.maasModel(false)] }); },
   "env-maas-blocked": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { blocked: F.MAAS_BLOCKED, items: [F.maasModel(false)] }); },
@@ -302,11 +312,11 @@ const scenarios = {
   "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
   "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
   "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
-  "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); F.setMaaSPublished(w.resources, "dev-project", true); },
+  "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
   // The same, on the Models tab: Use it points at the MaaS tab's commands.
   "env-models-published": (w) => { scenarios["env-maas-published"](w); },
   // A publication by an earlier build (the model also on the inference gateway): partly published.
-  "env-maas-earlier-build": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasEarlierBuildPublication()] }); F.setMaaSPublished(w.resources, "dev-project", true); },
+  "env-maas-earlier-build": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasEarlierBuildPublication()] }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
   "env-maas-foreign": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] }); },
   "env-maas-no-model": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready"); },
   // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
@@ -504,7 +514,7 @@ async function cleanupStream(req, res) {
     ...(storage ? [{ id: "storage", title: "the S3 storage", done: deleteNamespace ? "S3 storage removed. Namespace 'seaweedfs' is being deleted." : "S3 storage removed.", apply: () => { world.resources.minio = F.s3States.none; delete world.resources.legacyStorage; } }] : []),
     ...(mlflow ? [{ id: "mlflow", title: "MLflow", done: "MLflow removed.", apply: () => { world.resources.mlflow = F.mlflowStates.none; } }] : []),
     ...playgrounds.map((p) => ({ id: `playground:${p}`, title: `the playground in '${p}'`, done: `Playground deleted from ${p}: the dashboard removed its server, configuration and database. The project and its models stay.`, apply: () => removePlayground(p) })),
-    ...models.map((p) => ({ id: `model:${p}`, title: `the model in '${p}'`, done: `Model qwen25-05b-instruct deleted from '${p}'; KServe removed its Deployment, Service and route. The project stays.`, apply: () => removeModel(p) })),
+    ...models.map((p) => ({ id: `model:${p}`, title: `the models in '${p}'`, done: `Model ${(world.resources.models?.items ?? []).filter((i) => i.namespace === p && i.managedByTool !== false).map((i) => i.name).join(", ")} deleted from '${p}'; KServe removed its Deployment, Service and route. The project stays.`, apply: () => removeModel(p) })),
     ...(inferenceGateway ? [{ id: "inference-gateway", title: "the inference gateway", done: "Inference gateway deleted: Gateway openshift-ingress/openshift-ai-inference, ConfigMap openshift-ingress/openshift-ai-inference-options and GatewayClass openshift-ai-inference. OpenShift removes its load balancer and the ingress operator its DNS record.", apply: () => { world.resources.inferenceGateway = F.gatewayStates.none; } }] : []),
   ];
   let n = 0;
@@ -530,17 +540,19 @@ function modelsWorld() {
   return world.resources.models;
 }
 
-function removeModel(project) {
+/** Deletes this tool's model name in project (every one of its models when no name is given). */
+function removeModel(project, name) {
   const m = modelsWorld();
-  m.items = (m.items ?? []).filter((i) => i.namespace !== project || i.managedByTool === false);
+  m.items = (m.items ?? []).filter((i) => i.namespace !== project || i.managedByTool === false || (name && i.name !== name));
   const left = (m.items ?? []).filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
   if (world.resources.inferenceGateway?.managedByTool) world.resources.inferenceGateway = F.gatewayStates.ready(left);
 }
 
 /** POST /api/resources/models/stream (pkg/cluster RunModels). */
 async function modelsStream(req, res) {
-  const { action, gateway = false, project, releasedImage = false } = await body(req);
-  beginOperation("models", "Models", `${action} ${[gateway ? "inference gateway" : "", project ? `model in ${project}` : ""].filter(Boolean).join(", ")}`);
+  const { action, gateway = false, project, releasedImage = false, model = "qwen25-05b-instruct" } = await body(req);
+  const display = F.MODEL_CATALOG.find((c) => c.name === model)?.displayName ?? model;
+  beginOperation("models", "Models", `${action} ${[gateway ? "inference gateway" : "", project ? `model ${model} in ${project}` : ""].filter(Boolean).join(", ")}`);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
@@ -548,10 +560,10 @@ async function modelsStream(req, res) {
   const done = [];
   if (action === "teardown") {
     if (project) {
-      send({ step: "model", status: "running", message: `Deleting the model in '${project}'...` });
+      send({ step: "model", status: "running", message: `Deleting ${model} in '${project}'...` });
       await nextStep();
-      removeModel(project);
-      const msg = `Model qwen25-05b-instruct deleted from '${project}'; KServe removed its Deployment, Service and route. The project stays.`;
+      removeModel(project, model);
+      const msg = `Model ${model} deleted from '${project}'; KServe removed its Deployment, Service and route. The project stays.`;
       send({ step: "model", status: "success", message: msg });
       done.push(msg);
     }
@@ -578,18 +590,19 @@ async function modelsStream(req, res) {
       done.push("The inference gateway is set up.");
     }
     if (project) {
-      send({ step: "model", status: "running", message: `Creating Qwen2.5 0.5B Instruct (CPU) in '${project}'...` });
-      m.items = [...(m.items ?? []).filter((i) => i.namespace !== project), F.modelStates.starting(project)];
-      send({ step: "model", status: "success", message: `LLMInferenceService ${project}/qwen25-05b-instruct applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3.` });
+      send({ step: "model", status: "running", message: `Creating ${display} in '${project}'...` });
+      const others = (i) => i.namespace !== project || i.name !== model;
+      m.items = [...(m.items ?? []).filter(others), F.modelStates.startingAs(model, project)];
+      send({ step: "model", status: "success", message: `LLMInferenceService ${project}/${model} applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3.` });
       send({ step: "model-ready", status: "running", message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." });
       await nextStep();
       send({ step: "model-ready", status: "running", message: "Starting vLLM and loading the model..." });
       await nextStep();
-      m.items = [...m.items.filter((i) => i.namespace !== project), releasedImage || m.imagePlan === "released" ? F.modelStates.released(project) : F.modelStates.ready(project)];
+      m.items = [...m.items.filter(others), model !== "qwen25-05b-instruct" ? F.modelStates.readyAs(model, project) : releasedImage || m.imagePlan === "released" ? F.modelStates.released(project) : F.modelStates.ready(project)];
       const users = m.items.filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
       if (world.resources.inferenceGateway?.managedByTool) world.resources.inferenceGateway = F.gatewayStates.ready(users);
-      send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/qwen25-05b-instruct.` });
-      done.push(`Qwen2.5 0.5B Instruct (CPU) is ready in ${project}.`);
+      send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/${model}.` });
+      done.push(`${display} is ready in ${project}.`);
     }
   }
   const message = done.join(" ");
@@ -628,7 +641,7 @@ async function playgroundStream(req, res) {
     send({ step: "gone", status: "success", message: `The playground in ${project} is gone.` });
     message = `Playground deleted from ${project}: the dashboard removed its server, configuration and database. The project and its models stay.`;
   } else {
-    const names = models.length ? models.map((m) => m.name) : (world.playground.modelsByProject[project] ?? []).filter((m) => m.source === "namespace" && m.ready && m.chat).map((m) => m.name);
+    const names = models.length ? models.map((m) => m.name) : (world.playground.modelsByProject[project] ?? []).filter((m) => m.source === "namespace" && m.ready && (m.chat || m.embeddingDimension)).map((m) => m.name);
     send({ step: "check", status: "running", message: "Checking what the playground needs..." });
     await nextStep();
     send({ step: "check", status: "success", message: `Ready to set up: ${project} with ${names.join(", ")}.` });
@@ -648,7 +661,7 @@ async function playgroundStream(req, res) {
 
 /** POST /api/resources/maas/stream (pkg/cluster RunMaaS), in the backend's steps. */
 async function maasStream(req, res) {
-  const { action, project } = await body(req);
+  const { action, project, model = "qwen25-05b-instruct" } = await body(req);
   beginOperation("maas", "Models as a Service", project ? `${action} model in ${project}` : `${action} MaaS platform`);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   let n = 0;
@@ -680,14 +693,14 @@ async function maasStream(req, res) {
     await nextStep();
     send({ step, status: "success", message: done });
   }
-  const item = (published) => (world.maas.items ?? []).map((i) => (i.namespace === project ? F.maasModel(published) : i));
+  const item = (published) => (world.maas.items ?? []).map((i) => (i.namespace === project && i.name === model ? F.maasModel(published, { name: model }) : i));
   if (action === "setup") world.maas = F.maasWorld("ready", { items: world.maas.items });
   if (action === "teardown") world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map(() => F.maasModel(false)) });
   if (action === "publish") world.maas = { ...world.maas, items: item(true) };
   if (action === "unpublish") world.maas = { ...world.maas, items: item(false) };
   // The Models tab's model follows: published, it routes through the MaaS gateway alone.
-  if (action === "publish" || action === "unpublish") F.setMaaSPublished(world.resources, project, action === "publish");
-  const message = { setup: "The MaaS platform is ready.", teardown: "The MaaS platform this tool set up is removed.", publish: `The model in '${project}' is published to MaaS.`, unpublish: `The model in '${project}' is unpublished from MaaS.` }[action];
+  if (action === "publish" || action === "unpublish") F.setMaaSPublished(world.resources, project, model, action === "publish");
+  const message = { setup: "The MaaS platform is ready.", teardown: "The MaaS platform this tool set up is removed.", publish: `${model} in '${project}' is published to MaaS.`, unpublish: `${model} in '${project}' is unpublished from MaaS.` }[action];
   endOperation(true, message);
   send({ step: "operation_complete", status: "success", message });
   res.end();

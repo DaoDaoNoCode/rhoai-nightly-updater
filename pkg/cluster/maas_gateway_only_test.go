@@ -194,7 +194,7 @@ func TestMaaSPublish_RoutesTheModelThroughTheMaaSGatewayOnly(t *testing.T) {
 	if got := routeParents(t, mc); got != "maas-default-gateway" {
 		t.Fatalf("route = %s", got)
 	}
-	if rec := rawMaaSRecord(mc); !strings.Contains(rec, `"modelRefs":{"proj":{}}`) {
+	if rec := rawMaaSRecord(mc); !strings.Contains(rec, `"modelRefs":{"proj/qwen25-05b-instruct":{}}`) {
 		t.Fatalf("record = %s", rec)
 	}
 	logs := strings.Join(res.Logs, " ")
@@ -392,12 +392,12 @@ func TestMaaSStatus_AnEarlierBuildsPublicationIsPartlyPublished(t *testing.T) {
 // commands instead of the direct address, which answers 404 meanwhile.
 func TestModelState_SaysWhenTheModelRoutesThroughMaaS(t *testing.T) {
 	mc := modelReadyForMaaS(t)
-	model, _, _ := readToolModel(mc.c, "proj", maasModelRefName)
+	model, _, _ := readToolModel(mc.c, "proj", "qwen25-05b-instruct")
 	if raw, _ := json.Marshal(modelState(mc.c, model, false)); strings.Contains(string(raw), "maasPublished") {
 		t.Fatalf("unpublished model state = %s", raw)
 	}
 	setModelRefs(mc, []interface{}{tMaaSGatewayRef})
-	model, _, _ = readToolModel(mc.c, "proj", maasModelRefName)
+	model, _, _ = readToolModel(mc.c, "proj", "qwen25-05b-instruct")
 	if raw, _ := json.Marshal(modelState(mc.c, model, false)); !strings.Contains(string(raw), `"maasPublished":true`) {
 		t.Fatalf("published model state = %s", raw)
 	}

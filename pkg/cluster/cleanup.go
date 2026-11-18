@@ -14,7 +14,7 @@ var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
-	cleanupModels         = TeardownModels
+	cleanupModels         = func(c *Client, project string) (*types.OperationResponse, error) { return TeardownModels(c, project) }
 	cleanupGateway        = TeardownInferenceGateway
 	cleanupPlayground     = TeardownPlayground
 	cleanupUnpublish      = UnpublishMaaSModel

@@ -74,8 +74,8 @@ describe("MaaS use and steps", () => {
   it("the steps match the backend's order", () => {
     expect(maasSteps({ kind: "setup-maas" }).map((s) => s.id)).toEqual(["check", "database", "gateway", "authorino-tls", "dsc", "ready"]);
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
-    expect(maasSteps({ kind: "publish-maas", project: "p" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
-    expect(maasSteps({ kind: "unpublish-maas", project: "p" }).map((s) => s.id)).toEqual(["check", "maas", "model", "gateway"]);
+    expect(maasSteps({ kind: "publish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
+    expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove qwen3-1-7b from MaaS");
   });
 });
 
@@ -125,7 +125,7 @@ describe("MaaS run dialog", () => {
     expect(await screen.findByText(/its direct address on the Models tab answers 404 until it is unpublished/)).toBeInTheDocument();
     expect(screen.queryByText(/keep working/)).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
-    const confirm = await screen.findByRole("dialog", { name: /Publish the model in dev to MaaS\?/ });
+    const confirm = await screen.findByRole("dialog", { name: /Publish qwen25-05b-instruct in dev to MaaS\?/ });
     expect(within(confirm).getByText(/its direct address \(the Models tab's commands\) answers 404 until it is unpublished/)).toBeInTheDocument();
     expect(within(confirm).getByText(/routes through the MaaS gateway only/)).toBeInTheDocument();
     expect(within(confirm).queryByText(/keep working/)).toBeNull();
@@ -149,5 +149,31 @@ describe("MaaS run dialog", () => {
     expect(await within(run).findByText(/publish a model to offer it through MaaS/)).toBeInTheDocument();
     expect(within(run).queryByText(/import a pipeline/)).toBeNull();
     expect(within(run).queryByRole("link", { name: /Open pipelines/ })).toBeNull();
+  });
+
+  it("publishes the row's model by name; the embedding model says why it is not offered", async () => {
+    const reason = "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground.";
+    const api = stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true },
+        items: [
+          { namespace: "dev", name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", deployed: false, ready: false, managedByTool: true, modelReady: true, published: false, message: "Not offered for MaaS", setupBlockedReason: reason },
+          { namespace: "dev", name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", deployed: false, ready: false, managedByTool: true, modelReady: true, published: false, message: "Not published" },
+        ],
+      }),
+      "POST /api/resources/maas/stream": sse({ step: "operation_complete", status: "success", message: "done" }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const granite = (await screen.findByText("Granite Embedding 125M English (CPU)")).closest("tr")!;
+    expect(within(granite).getByText(reason)).toBeInTheDocument();
+    expect(within(granite).getByRole("button", { name: "Publish" })).toHaveAttribute("aria-disabled", "true");
+    const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
+    fireEvent.click(within(qwen3).getByRole("button", { name: "Publish" }));
+    const confirm = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Publish" }));
+    await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
+    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b" }]);
   });
 });

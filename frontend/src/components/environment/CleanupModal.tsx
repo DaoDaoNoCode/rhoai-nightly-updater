@@ -32,7 +32,7 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   // MaaS: this tool's publications first (with the models, since a published
   // model cannot go without its publication), the platform last (Clean up
   // everything only).
-  const maasPublished = scope === "all" || scope === "models" ? (maas?.items ?? []).filter((i) => i.published && i.namespace).map((i) => i.namespace!) : [];
+  const maasPublished = scope === "all" || scope === "models" ? [...new Set((maas?.items ?? []).filter((i) => i.published && i.namespace).map((i) => i.namespace!))] : [];
   const maasPlatform = scope === "all" && !!maas?.platform.managedByTool;
   // The playgrounds this tool asked the dashboard for (playground status).
   const playgrounds = scope === "playground" || scope === "all"
@@ -58,12 +58,12 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
 export function cleanupSteps(req: CleanupRequest): { id: string; title: string }[] {
   return [
-    ...(req.maasPublished ?? []).map((p) => ({ id: `maas-unpublish:${p}`, title: `Unpublish the model in ${p} from MaaS` })),
+    ...(req.maasPublished ?? []).map((p) => ({ id: `maas-unpublish:${p}`, title: `Unpublish the models in ${p} from MaaS` })),
     ...(req.pipelineServers ?? []).map((p) => ({ id: `pipeline-server:${p}`, title: `Delete the pipeline server in ${p}` })),
     ...(req.storage ? [{ id: "storage", title: req.deleteNamespace ? `Delete the S3 storage and namespace ${S3_NAMESPACE}` : "Delete the S3 storage" }] : []),
     ...(req.mlflow ? [{ id: "mlflow", title: "Delete MLflow" }] : []),
     ...(req.playgrounds ?? []).map((p) => ({ id: `playground:${p}`, title: `Delete the playground in ${p}` })),
-    ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the model in ${p}` })),
+    ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the models in ${p}` })),
     ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
     ...(req.maasPlatform ? [{ id: "maas-platform", title: "Remove the MaaS platform" }] : []),
   ];
@@ -77,7 +77,7 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
 export function cleanupBlocked(status: ResourcesStatus, req: CleanupRequest, published: string[] = []): string | null {
   const stillPublished = (req.models ?? []).filter((p) => published.includes(p) && !(req.maasPublished ?? []).includes(p));
   if (stillPublished.length > 0) {
-    return `The model in ${stillPublished.join(", ")} is published to MaaS. Select its MaaS publication too, or keep the model.`;
+    return `A model in ${stillPublished.join(", ")} is published to MaaS. Select the MaaS publications there too, or keep the models.`;
   }
   if (req.inferenceGateway) {
     const selected = new Set(req.models ?? []);
@@ -217,7 +217,7 @@ export const CleanupModal: React.FC<{
                 {(offered.models.length > 0 || offered.gateway) && (
                   <FormGroup role="group" isStack label="Models" fieldId="cleanup-models">
                     {offered.models.map((p) => (
-                      <Checkbox key={p} id={`cleanup-model-${p}`} label={<>Model in {p}</>} isChecked={models.includes(p)} onChange={(_e, v) => toggleModel(p, v)} />
+                      <Checkbox key={p} id={`cleanup-model-${p}`} label={<>Models in {p}</>} description={(status.models?.items ?? []).filter((m) => m.namespace === p && m.managedByTool !== false).map((m) => m.name).join(", ")} isChecked={models.includes(p)} onChange={(_e, v) => toggleModel(p, v)} />
                     ))}
                     {offered.gateway && (
                       <Checkbox id="cleanup-gateway" label="Inference gateway" description="With its cloud load balancer and DNS record. Deleted after the models." isChecked={gateway} onChange={(_e, v) => setGateway(v)} />

@@ -33,6 +33,8 @@ import {
   playgroundModelStatus,
   playgroundModelsNotReady,
   playgroundStatusOf,
+  playgroundOtherEmbeddingModels,
+  playgroundUsableModels,
 } from "./featureState";
 
 export interface PlaygroundTabProps {
@@ -99,32 +101,35 @@ function playgroundUse(m: PlaygroundModel, picked: string[] | null): string {
 const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: string[] | null; onPick: ((keys: string[]) => void) | null }> = ({ playground, project, onModels, picked, onPick }) => {
   const s = playgroundModelStatus(playground, project);
   const chat = playgroundChatModels(playground, project);
+  const usable = playgroundUsableModels(playground, project);
+  const otherEmbedding = playgroundOtherEmbeddingModels(playground, project);
   const notReady = playgroundModelsNotReady(playground, project);
   const toggle = (m: PlaygroundModel, on: boolean) => onPick?.(on ? [...(picked ?? []).filter((k) => k !== modelKey(m)), modelKey(m)] : (picked ?? []).filter((k) => k !== modelKey(m)));
   return (
-    <PartItem id="playground-models" title="Chat models" scope={`In project ${project}`} status={s} unmanaged={false}
+    <PartItem id="playground-models" title="Models" scope={`In project ${project}`} status={s} unmanaged={false}
       actions={<ActionListItem><Button variant="link" isInline onClick={onModels}>{chat.length > 0 ? "Show on the Models tab" : "Set up a model on the Models tab"}</Button></ActionListItem>}>
       <Content component="p">
         {s === "unknown"
           ? playground?.modelsProblem ?? "The project's models are being read from the dashboard."
           : chat.length > 0
             ? onPick
-              ? "The playground uses the models you choose: the project's own ready models are chosen. A model added to the project later shows up in the playground without setting it up again."
+              ? "The playground uses the models you choose: the project's own ready models are chosen, chat models and this tool's embedding model. A chat model added to the project later shows up in the playground without setting it up again."
               : "The playground chats with the project's own ready models. A model added to the project later shows up without setting it up again."
             : `${project} has no ready chat model yet. The playground needs one: the Models tab sets up a small one on CPU.`}
       </Content>
-      {chat.length > 0 && (
-        <Table variant="compact" aria-label="Chat models">
+      {usable.length > 0 && chat.length > 0 && (
+        <Table variant="compact" aria-label="Models the playground can use">
           <Thead>
             <Tr>
               {onPick && <Th screenReaderText="Use" />}
               <Th modifier="wrap">Model</Th>
+              <Th modifier="wrap">Type</Th>
               <Th modifier="wrap">Where it runs</Th>
               <Th modifier="wrap">In the playground</Th>
             </Tr>
           </Thead>
           <Tbody>
-            {chat.map((m, i) => (
+            {usable.map((m, i) => (
               <Tr key={modelKey(m)}>
                 {onPick && <Td select={{ rowIndex: i, onSelect: (_e, on) => toggle(m, on), isSelected: !!picked?.includes(modelKey(m))}} />}
                 <Td dataLabel="Model" modifier="wrap">
@@ -133,12 +138,21 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
                     {m.displayName && m.displayName !== m.name && <StackItem><Content component="small"><BreakableName name={m.name} /></Content></StackItem>}
                   </Stack>
                 </Td>
+                <Td dataLabel="Type" modifier="wrap">{m.chat ? "Chat" : `Embedding (${m.embeddingDimension} dimensions), for searching documents`}</Td>
                 <Td dataLabel="Where it runs" modifier="wrap">{sourceWords(m)}</Td>
                 <Td dataLabel="In the playground" modifier="wrap">{playgroundUse(m, picked)}</Td>
               </Tr>
             ))}
           </Tbody>
         </Table>
+      )}
+      {otherEmbedding.length > 0 && (
+        <Alert variant="info" isInline component="div" title="Embedding models to add in the dashboard">
+          <Content component="p">
+            Set up here does not add {otherEmbedding.map((m) => m.name).join(", ")}: this tool did not set {otherEmbedding.length === 1 ? "it" : "them"} up, so the size of {otherEmbedding.length === 1 ? "its" : "their"} vectors is not known.
+            To use one, open the playground&apos;s settings in the dashboard&apos;s Gen AI studio, choose <strong>Embedding</strong> as its type, and enter its embedding dimension (the model card on Hugging Face gives it).
+          </Content>
+        </Alert>
       )}
       {notReady.length > 0 && (
         <Alert variant="info" isInline component="p" title="Some models are not ready">
@@ -249,10 +263,12 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
   React.useEffect(() => setChosen(null), [project]);
   const picked = chosen ?? defaults;
   const chat = project ? playgroundChatModels(playground, project) : [];
-  const models: PlaygroundModelRef[] = chat.filter((m) => picked.includes(modelKey(m))).map((m) => ({ name: m.name, source: m.source }));
+  const usable = project ? playgroundUsableModels(playground, project) : [];
+  const pickedModels = usable.filter((m) => picked.includes(modelKey(m)));
+  const models: PlaygroundModelRef[] = pickedModels.map((m) => ({ name: m.name, source: m.source }));
   const settingUp = next?.kind === "set-up";
   const choosing = settingUp && !readOnly;
-  const pickReason = settingUp && chat.length > 0 && models.length === 0 ? "Choose at least one model." : null;
+  const pickReason = settingUp && chat.length > 0 && !pickedModels.some((m) => m.chat) ? "Choose at least one chat model." : null;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Playground" purpose="The dashboard's Gen AI playground in a project: a chat page to try the project's models and ask about your documents." state={state} /></StackItem>

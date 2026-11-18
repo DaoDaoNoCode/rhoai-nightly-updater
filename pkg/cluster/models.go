@@ -58,7 +58,7 @@ var (
 var errLLMISvcAPIMissing = errors.New("the LLMInferenceService API (serving.kserve.io) is not installed")
 
 // catalogModel is a model the Models feature sets up: what it is, and the
-// resources it needs on CPU.
+// resources it needs on CPU. CatalogModel.Args is VLLM_ADDITIONAL_ARGS.
 type catalogModel struct {
 	types.CatalogModel
 	// threads is OMP_NUM_THREADS, the CPU count.
@@ -68,28 +68,87 @@ type catalogModel struct {
 	kvCacheGiB string
 }
 
-// modelCatalog: one small chat model with a chat template, ungated on
-// Hugging Face (Apache-2.0), which serves chat on 4 CPUs.
-//
-// Memory, measured live (RHOAI 3.6, vLLM CPU 3.5.3): with the preset's
-// 4 GiB KV cache the container held 7.6 GiB from start to four parallel
-// 600-token chats (cgroup memory.peak 7.73 GiB). A 2 GiB cache still holds
-// over 100k tokens for this model (24 layers x 2 KV heads x 64 x 2 x 2 bytes
-// = 12 KiB per token), about 25 full 4096-token contexts, and keeps it near
-// 5.6 GiB: so 6 GiB requested and 8 GiB limit, which also fits the
-// dashboard's default hardware profile (up to 4 CPUs and 8 GiB on 3.6).
-var modelCatalog = []catalogModel{{
-	CatalogModel: types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct", CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi"},
-	threads:      "4",
-	kvCacheGiB:   "2",
-}}
+// The catalog's model types.
+const (
+	modelTypeChat      = "chat"
+	modelTypeEmbedding = "embedding"
+)
 
+// modelCatalog: small models that run on CPU, ungated on Hugging Face,
+// Apache-2.0, safetensors weights and no custom code, each pinned to a
+// commit in KServe's hf://<org>/<repo>:<revision> form (kserve rhoai-3.6
+// python/storage/kserve_storage/kserve_storage.py _download_hf:
+// model_part.partition(":") gives snapshot_download its revision). The
+// order is the page's; qwen25 is the default (an empty Model).
+//
+// Every model's arguments go to vLLM through VLLM_ADDITIONAL_ARGS, which
+// the CPU preset expands inside eval "exec vllm serve ... ${VLLM_ADDITIONAL_ARGS} ..."
+// (kserve rhoai-3.6 config/llmisvcconfig/config-llm-template.yaml), so
+// shell quoting in them is honoured: Qwen3's JSON is one argument.
+//
+// Memory (requests and limits below, in one place). Measured live only
+// for qwen25 (RHOAI 3.6, vLLM CPU): 7.6 GiB with the preset's 4 GiB KV
+// cache (cgroup memory.peak 7.73 GiB over four parallel 600-token chats),
+// 5.8 GiB with a 2 GiB cache, which still holds over 100k tokens for it
+// (24 layers x 2 KV heads x 64 x 2 x 2 bytes = 12 KiB per token). That is
+// about 1 GB of weights, the cache, and some 3 GiB of runtime. The others
+// are estimates from the same parts (weights + KV cache + about 3 GiB),
+// to be measured live: SmolLM2 0.27 GB + 1 GiB, Qwen3 4.1 GB + 2 GiB,
+// Granite embedding 0.25 GB + 1 GiB. qwen25 also fits the dashboard's
+// default hardware profile (up to 4 CPUs and 8 GiB on 3.6).
+//
+// DownloadSize is what the storage-initializer fetches at the pinned
+// commit with storageIgnorePatterns applied (Hugging Face API file sizes).
+var modelCatalog = []catalogModel{
+	{
+		CatalogModel: types.CatalogModel{Name: "smollm2-135m-instruct", DisplayName: "SmolLM2 135M Instruct (CPU)", URI: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac",
+			CPU: "2", MemoryRequest: "5Gi", Memory: "6Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
+			Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+			Args:        "--max-model-len 4096"},
+		threads: "2", kvCacheGiB: "1",
+	},
+	{
+		CatalogModel: types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
+			CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: modelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
+			Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+			Args:        "--max-model-len 4096"},
+		threads: "4", kvCacheGiB: "2",
+	},
+	{
+		// Thinking is off by default (the user's choice); a request turns
+		// it on with chat_template_kwargs {"enable_thinking": true}.
+		CatalogModel: types.CatalogModel{Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+			CPU: "4", MemoryRequest: "10Gi", Memory: "12Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
+			Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'`},
+		threads: "4", kvCacheGiB: "2",
+	},
+	{
+		// A RobertaModel, which vLLM serves as an embedding model with the
+		// pooling runner (vLLM 0.24 removed --task); 512 positions.
+		CatalogModel: types.CatalogModel{Name: "granite-embedding-125m-english", DisplayName: "Granite Embedding 125M English (CPU)", URI: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f",
+			CPU: "2", MemoryRequest: "4Gi", Memory: "6Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
+			Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
+			Args:        "--runner pooling --max-model-len 512"},
+		threads: "2", kvCacheGiB: "1",
+	},
+}
+
+// storageIgnorePatterns (STORAGE_IGNORE_PATTERNS on the storage-initializer)
+// leaves out the repository files vLLM does not load: ONNX exports and
+// PyTorch .bin/.pt files (SmolLM2 has 1.7 GB of onnx/, Granite a
+// model.onnx and a pytorch_model.bin next to its safetensors). KServe
+// rhoai-3.6 reads it as a JSON list (kserve_storage.py
+// _parse_patterns_from_env) and merges a user's storage-initializer env
+// into the one it generates (pkg/controller/v1alpha2/llmisvc
+// workload_storage.go attachStorageInitializer; tested by "should merge
+// user-provided env vars into storage-initializer for hf:// URI").
+const storageIgnorePatterns = `["onnx/*","*.onnx","*.bin","*.pt"]`
+
+// catalogEntry is the catalog model of that name; "" is the default.
 func catalogEntry(name string) (catalogModel, bool) {
-	if name == "" {
-		return modelCatalog[0], true
-	}
 	for _, m := range modelCatalog {
-		if m.Name == name {
+		if m.Name == name || (name == "" && m.Default) {
 			return m, true
 		}
 	}
@@ -103,11 +162,18 @@ func ValidModelName(name string) bool {
 }
 
 // toolModelPath returns the path of a catalog model in project; only the
-// catalog's names, so the RBAC rules stay limited to them.
+// catalog's names, written out so the RBAC rules (resourceNames) can be
+// checked against them (rbac_coverage_test.go).
 func toolModelPath(project, name string) (string, bool) {
 	switch name {
+	case "smollm2-135m-instruct":
+		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "smollm2-135m-instruct"), true
 	case "qwen25-05b-instruct":
 		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "qwen25-05b-instruct"), true
+	case "qwen3-1-7b":
+		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "qwen3-1-7b"), true
+	case "granite-embedding-125m-english":
+		return namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, "granite-embedding-125m-english"), true
 	}
 	return "", false
 }
@@ -433,18 +499,26 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 // modelManifest is the LLMInferenceService setup applies.
 func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile) map[string]interface{} {
 	annotations := map[string]interface{}{
+		// The dashboard's llmd deploy wizard writes these three
+		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
+		// assembleLLMInferenceService: model-type "generative" on every
+		// LLMInferenceService, embedding ones too). Its gen-ai BFF reads the
+		// display name, description and use case (token_k8s_client.go
+		// extract*FromLLMInferenceService).
 		"openshift.io/display-name": entry.DisplayName,
+		"openshift.io/description":  entry.Description,
 		"opendatahub.io/model-type": "generative",
 		// With the genai-asset label: listed under the dashboard's AI
-		// assets, so its Gen AI playground offers the model.
-		"opendatahub.io/genai-use-case": "chat",
+		// assets, so its Gen AI playground offers the model (as the
+		// wizard's applyModelAvailabilityData sets them).
+		"opendatahub.io/genai-use-case": entry.UseCase,
 	}
 	main := map[string]interface{}{
 		"name": "main",
 		"env": []interface{}{
 			map[string]interface{}{"name": "OMP_NUM_THREADS", "value": entry.threads},
 			map[string]interface{}{"name": "VLLM_CPU_KVCACHE_SPACE", "value": entry.kvCacheGiB},
-			map[string]interface{}{"name": "VLLM_ADDITIONAL_ARGS", "value": "--max-model-len 4096"},
+			map[string]interface{}{"name": "VLLM_ADDITIONAL_ARGS", "value": entry.Args},
 		},
 		"resources": map[string]interface{}{
 			"requests": map[string]interface{}{"cpu": entry.CPU, "memory": entry.MemoryRequest},
@@ -469,7 +543,7 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
 		"metadata": map[string]interface{}{
-			"name":      "qwen25-05b-instruct",
+			"name":      entry.Name,
 			"namespace": project,
 			"labels": map[string]interface{}{
 				managedByLabelKey:            managedByLabelValue,
@@ -487,8 +561,15 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			"replicas": 1,
 			// The default gateway (the inference gateway); no scheduler: one
 			// replica needs no endpoint picker.
-			"router":   map[string]interface{}{"route": map[string]interface{}{}, "gateway": map[string]interface{}{}},
-			"template": map[string]interface{}{"containers": []interface{}{main}},
+			"router": map[string]interface{}{"route": map[string]interface{}{}, "gateway": map[string]interface{}{}},
+			"template": map[string]interface{}{
+				"containers": []interface{}{main},
+				// Only env: KServe generates the rest of its storage-initializer.
+				"initContainers": []interface{}{map[string]interface{}{
+					"name": "storage-initializer",
+					"env":  []interface{}{map[string]interface{}{"name": "STORAGE_IGNORE_PATTERNS", "value": storageIgnorePatterns}},
+				}},
+			},
 		},
 	}
 }
@@ -586,7 +667,8 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	var parts []string
 	if req.Project != "" {
-		parts = append(parts, "model in "+req.Project)
+		entry, _ := catalogEntry(req.Model)
+		parts = append(parts, fmt.Sprintf("model %s in %s", firstNonEmpty(entry.Name, req.Model), req.Project))
 	}
 	if req.Gateway {
 		parts = append(parts, "inference gateway")
@@ -604,8 +686,9 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse, error) {
 	var done []string
 	if req.Project != "" {
-		m.step("model", "running", fmt.Sprintf("Deleting the model in '%s'...", req.Project))
-		res, _ := TeardownModels(m.c, req.Project)
+		entry, _ := catalogEntry(req.Model)
+		m.step("model", "running", fmt.Sprintf("Deleting %s in '%s'...", entry.Name, req.Project))
+		res, _ := TeardownModels(m.c, req.Project, entry.Name)
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
 			if m.emit != nil {
@@ -672,7 +755,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		}
 		mp = plan
 		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
-			notes = append(notes, warning)
+			notes = append(notes, warning+" It may stay pending until a node is added or other workloads stop; the setup still runs.")
 		}
 	}
 
@@ -829,7 +912,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		return nil, fmt.Sprintf("Project '%s' already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
 	}
 	if found && existing.Metadata.terminating() {
-		return nil, fmt.Sprintf("The model in '%s' is still being deleted. Wait until it is gone, then set it up again.", req.Project), "terminating"
+		return nil, fmt.Sprintf("The model %s in '%s' is still being deleted. Wait until it is gone, then set it up again.", entry.Name, req.Project), "terminating"
 	}
 	var prev *llmisvcObject
 	if found {
@@ -882,25 +965,37 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	return fmt.Sprintf("Failed to apply %s: %v. Set up again to retry.%s", desc, err, templateHint(err)), code
 }
 
-// TeardownModels deletes the catalog models this tool created in project,
-// and waits (bounded) until KServe's finalizer has removed them, so the
-// gateway they used can go next. Models of the same name it did not
-// create are left alone.
-func TeardownModels(c *Client, project string) (*types.OperationResponse, error) {
+// TeardownModels deletes the catalog models named (every catalog model
+// when none is) that this tool created in project, and waits (bounded)
+// until KServe's finalizer has removed them, so the gateway they used can
+// go next. Models of the same name it did not create are left alone.
+func TeardownModels(c *Client, project string, names ...string) (*types.OperationResponse, error) {
 	logs := []string{}
+	detail := "project=" + project
+	if len(names) > 0 {
+		detail += " model=" + strings.Join(names, ",")
+	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		recordModelsActivity(c, "teardown-model", fmt.Sprintf("project=%s (%s)", project, activity), false)
+		recordModelsActivity(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
+	}
+	var entries []catalogModel
+	for _, entry := range modelCatalog {
+		if len(names) == 0 || containsString(names, entry.Name) {
+			entries = append(entries, entry)
+		}
 	}
 	// A published model is unpublished first (MaaS tab): its MaaSModelRef
 	// and access entries would point at nothing.
-	if published, err := MaaSPublishedIn(c, project); err != nil {
-		return fail(fmt.Sprintf("Cannot check whether the model in '%s' is published to MaaS; nothing was deleted: %v.", project, err), errorCodeFromK8sErr(err), "maas check failed")
-	} else if published {
-		return fail(fmt.Sprintf("The model in '%s' is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", project), "in_use", "published to maas")
+	for _, entry := range entries {
+		if published, err := MaaSPublishedIn(c, project, entry.Name); err != nil {
+			return fail(fmt.Sprintf("Cannot check whether %s in '%s' is published to MaaS; nothing was deleted: %v.", entry.Name, project, err), errorCodeFromK8sErr(err), "maas check failed")
+		} else if published {
+			return fail(fmt.Sprintf("%s in '%s' is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
+		}
 	}
 	var deleted, kept []string
-	for _, entry := range modelCatalog {
+	for _, entry := range entries {
 		model, found, err := readToolModel(c, project, entry.Name)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
@@ -938,11 +1033,15 @@ func TeardownModels(c *Client, project string) (*types.OperationResponse, error)
 		logs = append(logs, fmt.Sprintf("OK: LLMInferenceService %s/%s deleted", project, entry.Name))
 	}
 	if len(deleted) == 0 && len(kept) > 0 {
-		return fail(fmt.Sprintf("The model in '%s' was not created by this tool, so it was not deleted.", project), "not_managed", "not managed")
+		return fail(fmt.Sprintf("The model %s in '%s' was not created by this tool, so it was not deleted.", strings.Join(kept, ", "), project), "not_managed", "not managed")
 	}
-	recordModelsActivity(c, "teardown-model", "project="+project, true)
+	recordModelsActivity(c, "teardown-model", detail, true)
 	if len(deleted) == 0 {
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No model of this tool in '%s'; nothing to delete.", project), Logs: logs}, nil
+		what := "No model of this tool"
+		if len(names) > 0 {
+			what = "No " + strings.Join(names, ", ") + " of this tool"
+		}
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("%s in '%s'; nothing to delete.", what, project), Logs: logs}, nil
 	}
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Model %s deleted from '%s'; KServe removed its Deployment, Service and route. The project stays.", strings.Join(deleted, ", "), project), Logs: logs}, nil
 }

@@ -608,9 +608,31 @@ export const gatewayStates = {
   unknown: { ...GW, deployed: true, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Programmed condition", externalUrl: INFERENCE, teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." },
 };
 
+/** The Models catalog, as pkg/cluster modelCatalog reports it. */
+export const MODEL_CATALOG = [
+  { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", cpu: "2", memoryRequest: "5Gi", memory: "6Gi",
+    type: "chat", useCase: "Chat (smoke test)", downloadSize: "270 MB", args: "--max-model-len 4096",
+    description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
+  { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775", cpu: "4", memoryRequest: "6Gi", memory: "8Gi",
+    type: "chat", useCase: "Chat", downloadSize: "1.0 GB", args: "--max-model-len 4096", default: true,
+    description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
+  { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "10Gi", memory: "12Gi",
+    type: "chat", toolCalling: true, useCase: "Chat, Tool calling, Reasoning", downloadSize: "4.1 GB",
+    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'`,
+    description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
+  { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "4Gi", memory: "6Gi",
+    type: "embedding", embeddingDimension: 768, useCase: "Embeddings, Semantic search", downloadSize: "250 MB", args: "--runner pooling --max-model-len 512",
+    description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
+];
+const displayOf = (name) => MODEL_CATALOG.find((c) => c.name === name)?.displayName ?? name;
+
 const MODEL = { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true };
 export const modelStates = {
-  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/qwen25-05b-instruct`, imageKind: "preset", hardwareProfile: "redhat-ods-applications/default-profile", ...over }),
+  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/${over.name ?? MODEL.name}`, imageKind: "preset", hardwareProfile: "redhat-ods-applications/default-profile", ...over }),
+  /** Another catalog model, ready (on the released image, as the mock cluster is a nightly one). */
+  readyAs: (name, ns = "dev-project") => modelStates.ready(ns, { name, displayName: displayOf(name), imageKind: "released", imageVersion: "3.5.3", currentImage: RELEASED_IMAGE,
+    hardwareProfile: name === "qwen3-1-7b" ? undefined : "redhat-ods-applications/default-profile" }),
+  startingAs: (name, ns = "dev-project") => ({ ...MODEL, name, displayName: displayOf(name), namespace: ns, ready: false, managedByTool: true, message: `MainWorkloadReady: Deployment ${name}-kserve is not ready`, imageKind: "released" }),
   released: (ns = "dev-project") => modelStates.ready(ns, { imageKind: "released", imageVersion: "3.5.3", currentImage: RELEASED_IMAGE }),
   starting: (ns = "dev-project") => ({ ...MODEL, namespace: ns, ready: false, managedByTool: true, message: "MainWorkloadReady: Deployment qwen25-05b-instruct-kserve is not ready", imageKind: "preset" }),
   imageMissing: (ns = "dev-project") => ({
@@ -623,12 +645,15 @@ export const modelStates = {
 export const modelsStatus = (over = {}) => ({
   dependencies: "True", preset: PRESET, imagePlan: "released",
   imagePlanReason: "This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves registry.redhat.io/rhaii/vllm-cpu-rhel9; the newest released Red Hat image is used instead.",
-  catalog: [{ name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct", cpu: "4", memoryRequest: "6Gi", memory: "8Gi" }],
+  catalog: MODEL_CATALOG,
   items: [],
   ...over,
 });
 
-export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 6Gi of memory free (up to 8Gi), and the most CPU free is 2.3 CPUs and 41.2 GiB on ip-10-0-1-23.ec2.internal. It may stay pending until a node is added or other workloads stop; the setup still runs.";
+/** The status's room check of one catalog model (pkg/cluster roomWarning). */
+export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 10Gi of memory free (up to 12Gi), and the most CPU free is 5.5 CPUs and 8.2 GiB on ip-10-0-1-23.ec2.internal.";
+/** The catalog with that warning on Qwen3. */
+export const catalogWithoutRoom = (name = "qwen3-1-7b") => MODEL_CATALOG.map((c) => (c.name === name ? { ...c, capacityWarning: CAPACITY_WARNING } : c));
 
 // --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleSpec) ---
 // The names, messages and actions are the backend's (pkg/cluster samples_*.go).
@@ -846,6 +871,7 @@ export function updateSteps(image) {
 
 export const playgroundModels = {
   qwen: { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true },
+  granite: { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", source: "namespace", status: "Running", ready: true, chat: false, embeddingDimension: 768 },
   deepseek: { name: "deepseek-r1-qwen-7b", displayName: "DeepSeek R1 Distill Qwen 7B", source: "namespace", status: "Failed", ready: false, chat: true },
   maas: { name: "gpt-oss-20b", source: "maas", status: "Ready", ready: true, chat: true },
   opt: { name: "publishers/llm/models/facebook/opt-125m", displayName: "Facebook OPT 125M (Simulated)", source: "maas", status: "Ready", ready: true, chat: true },
@@ -914,30 +940,31 @@ export function maasParts(state, { tls = true } = {}) {
   ];
 }
 
-/** This tool's model in dev-project: published or not. */
-export function maasModel(published, { ready = true } = {}) {
+/** This tool's model in dev-project (qwen25 unless named): published or not. */
+export function maasModel(published, { ready = true, name = "qwen25-05b-instruct" } = {}) {
   return {
-    namespace: "dev-project", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", managedByTool: true, modelReady: true,
+    namespace: "dev-project", name, displayName: displayOf(name), managedByTool: true, modelReady: true,
     deployed: published, ready: published && ready, published, message: published ? (ready ? "Published" : "Published; waiting") : "Not published",
-    ...(published ? { phase: ready ? "Ready" : "Pending", endpoint: `https://maas.${APPS}/dev-project/qwen25-05b-instruct`, access: ready ? "Active" : "Pending", subscription: ready ? "Active" : "Pending" } : {}),
+    ...(published ? { phase: ready ? "Ready" : "Pending", endpoint: `https://maas.${APPS}/dev-project/${name}`, access: ready ? "Active" : "Pending", subscription: ready ? "Active" : "Pending" } : {}),
   };
 }
 
 /** A publication by an earlier build: the model on the MaaS and the inference gateway (GetMaaSStatus). */
-export function maasEarlierBuildPublication() {
-  return { ...maasModel(true), ready: false, partly: true,
+export function maasEarlierBuildPublication({ name = "qwen25-05b-instruct" } = {}) {
+  return { ...maasModel(true, { name }), ready: false, partly: true,
     message: "Partly published: the model routes through openshift-ingress/maas-default-gateway and openshift-ingress/openshift-ai-inference, as an earlier build of this tool published it, so calls to its direct address fail with 500. Unpublish, then Publish again." };
 }
 
 /**
  * Routes the Models tab's model in project through the MaaS gateway alone
  * (ModelState.maasPublished), or back: the inference gateway then no longer
- * lists it under Used by (pkg/cluster gatewayUsers).
+ * lists it under Used by (pkg/cluster gatewayUsers). Other models of the
+ * project keep their routes.
  */
-export function setMaaSPublished(resources, project, published) {
-  const ref = `${project}/qwen25-05b-instruct`;
+export function setMaaSPublished(resources, project, model, published) {
+  const ref = `${project}/${model}`;
   for (const m of resources?.models?.items ?? []) {
-    if (m.namespace !== project) continue;
+    if (m.namespace !== project || m.name !== model) continue;
     if (published) m.maasPublished = true;
     else delete m.maasPublished;
   }
@@ -947,6 +974,13 @@ export function setMaaSPublished(resources, project, published) {
   const { usedBy: _list, teardownBlockedReason: _reason, ...rest } = gw;
   resources.inferenceGateway = { ...rest, ...usedBy(published ? others : [...others, ref].sort()) };
 }
+
+/** This tool's embedding model in MaaS's list: never offered (pkg/cluster maasEmbeddingReason). */
+export const maasEmbeddingModel = () => ({
+  namespace: "dev-project", name: "granite-embedding-125m-english", displayName: displayOf("granite-embedding-125m-english"), managedByTool: true, modelReady: true,
+  deployed: false, ready: false, published: false, message: "Not offered for MaaS",
+  setupBlockedReason: "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground.",
+});
 
 /** A recorded publication whose model is gone (GetMaaSStatus's extra row). */
 export function maasOrphanPublication(namespace) {

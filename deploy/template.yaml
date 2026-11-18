@@ -429,7 +429,7 @@ objects:
         resources: ["imagetagmirrorsets"]
         verbs: ["list"]
       # The model: an LLMInferenceService in the user's data science project
-      # (create cannot be limited by name; the rest only the catalog's name),
+      # (create cannot be limited by name; the rest only the catalog's names),
       # all of them listed to find the models that use the gateway, and the
       # CPU preset, whose name is found at run time (read-only)
       - apiGroups: ["serving.kserve.io"]
@@ -437,7 +437,7 @@ objects:
         verbs: ["create"]
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceservices"]
-        resourceNames: ["qwen25-05b-instruct"]
+        resourceNames: ["smollm2-135m-instruct", "qwen25-05b-instruct", "qwen3-1-7b", "granite-embedding-125m-english"]
         verbs: ["get", "patch", "delete"]
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceserviceconfigs"]
@@ -524,7 +524,7 @@ objects:
         resources: ["maastenantconfigs"]
         resourceNames: ["default-tenant"]
         verbs: ["get"]
-      # Publishing the tool's model: its MaaSModelRef (in the model's
+      # Publishing the tool's chat models: their MaaSModelRefs (in the model's
       # project), and the tool's own MaaSSubscription and MaaSAuthPolicy (in
       # the tenant namespace models-as-a-service, which the MaaS controller
       # creates); create cannot be limited by name, the rest only these names
@@ -533,7 +533,7 @@ objects:
         verbs: ["create"]
       - apiGroups: ["maas.opendatahub.io"]
         resources: ["maasmodelrefs"]
-        resourceNames: ["qwen25-05b-instruct"]
+        resourceNames: ["smollm2-135m-instruct", "qwen25-05b-instruct", "qwen3-1-7b"]
         verbs: ["get", "patch", "delete"]
       # The HTTPRoute KServe makes for the tool's model (in the model's
       # project), read-only: publishing waits until it names the MaaS gateway

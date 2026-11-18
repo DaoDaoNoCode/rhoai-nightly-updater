@@ -354,9 +354,15 @@ func parseQuantity(s string) (float64, bool) {
 
 // capacityCache keeps the capacity check for a minute: it lists every
 // pod of the cluster.
-var capacityCache = newLRU[string, string](8)
+var capacityCache = newLRU[string, string](16)
 
 const capacityCacheTTL = time.Minute
+
+// capacityKey is a model's cache entry: the cluster, the model, and the
+// project whose copy of it is not counted.
+func capacityKey(c *Client, name, project string) string {
+	return c.baseURL + "|" + name + "|" + project
+}
 
 // modelCapacityWarning returns a warning when no schedulable amd64 node
 // has the model's CPU and memory requests free, or "" (room found, or the
@@ -364,24 +370,52 @@ const capacityCacheTTL = time.Minute
 // project ("" for none) are not counted: setting it up again there
 // replaces them, so their room is the new pod's.
 func modelCapacityWarning(c *Client, entry catalogModel, project string) string {
-	key := c.baseURL + "|" + entry.Name + "|" + project
+	key := capacityKey(c, entry.Name, project)
 	if w, ok := capacityCache.Get(key); ok {
 		return w
 	}
-	cpu, _ := parseQuantity(entry.CPU)
-	mem, _ := parseQuantity(entry.MemoryRequest)
-	w, err := capacityWarning(c, cpu, mem, entry, project)
+	free, err := freeRoom(c, project, entry.Name)
 	if err != nil {
 		return ""
 	}
+	w := roomWarning(entry, free)
 	capacityCache.Add(key, w, capacityCacheTTL)
 	return w
 }
 
-func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project string) (string, error) {
+// catalogCapacityWarnings is modelCapacityWarning (with no project) for
+// every catalog model, from one read of the nodes and pods.
+func catalogCapacityWarnings(c *Client) map[string]string {
+	out := map[string]string{}
+	missing := false
+	for _, m := range modelCatalog {
+		w, ok := capacityCache.Get(capacityKey(c, m.Name, ""))
+		out[m.Name], missing = w, missing || !ok
+	}
+	if !missing {
+		return out
+	}
+	free, err := freeRoom(c, "", "")
+	if err != nil {
+		return map[string]string{}
+	}
+	for _, m := range modelCatalog {
+		out[m.Name] = roomWarning(m, free)
+		capacityCache.Add(capacityKey(c, m.Name, ""), out[m.Name], capacityCacheTTL)
+	}
+	return out
+}
+
+// nodeRoom is the CPU (cores) and memory (bytes) a node has unrequested.
+type nodeRoom struct{ cpu, mem float64 }
+
+// freeRoom is what every schedulable, untainted amd64 node has left after
+// the requests of its pods; the pods of model in project are not counted
+// (both "" for none).
+func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 	body, _, err := c.get("/api/v1/nodes")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var nodes struct {
 		Items []struct {
@@ -398,10 +432,9 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project st
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &nodes); err != nil {
-		return "", err
+		return nil, err
 	}
-	type room struct{ cpu, mem float64 }
-	free := map[string]*room{}
+	free := map[string]*nodeRoom{}
 	for _, n := range nodes.Items {
 		if n.Spec.Unschedulable || n.Metadata.Labels["kubernetes.io/arch"] != "amd64" {
 			continue
@@ -416,15 +449,15 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project st
 		cc, ok1 := parseQuantity(n.Status.Allocatable["cpu"])
 		mm, ok2 := parseQuantity(n.Status.Allocatable["memory"])
 		if ok1 && ok2 {
-			free[n.Metadata.Name] = &room{cc, mm}
+			free[n.Metadata.Name] = &nodeRoom{cc, mm}
 		}
 	}
 	if len(free) == 0 {
-		return fmt.Sprintf("No schedulable amd64 worker was found; the model needs one with %s CPUs and %s of memory free.", entry.CPU, entry.MemoryRequest), nil
+		return free, nil
 	}
 	body, _, err = c.get("/api/v1/pods?fieldSelector=" + url.QueryEscape("status.phase!=Succeeded,status.phase!=Failed"))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var pods struct {
 		Items []struct {
@@ -443,14 +476,14 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project st
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &pods); err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, p := range pods.Items {
 		r := free[p.Spec.NodeName]
 		if r == nil || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
 			continue
 		}
-		if project != "" && p.Metadata.Namespace == project && p.Metadata.Labels["app.kubernetes.io/name"] == entry.Name && p.Metadata.Labels["app.kubernetes.io/component"] == modelPodComponent {
+		if project != "" && p.Metadata.Namespace == project && p.Metadata.Labels["app.kubernetes.io/name"] == model && p.Metadata.Labels["app.kubernetes.io/component"] == modelPodComponent {
 			continue
 		}
 		for _, ctr := range p.Spec.Containers {
@@ -462,6 +495,17 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project st
 			}
 		}
 	}
+	return free, nil
+}
+
+// roomWarning says that no node in free has the model's requests free, or
+// is "".
+func roomWarning(entry catalogModel, free map[string]*nodeRoom) string {
+	if len(free) == 0 {
+		return fmt.Sprintf("No schedulable amd64 worker was found; the model needs one with %s CPUs and %s of memory free.", entry.CPU, entry.MemoryRequest)
+	}
+	cpu, _ := parseQuantity(entry.CPU)
+	mem, _ := parseQuantity(entry.MemoryRequest)
 	names := make([]string, 0, len(free))
 	for n := range free {
 		names = append(names, n)
@@ -471,14 +515,14 @@ func capacityWarning(c *Client, cpu, mem float64, entry catalogModel, project st
 	for _, n := range names {
 		r := free[n]
 		if r.cpu >= cpu && r.mem >= mem {
-			return "", nil
+			return ""
 		}
 		if best == "" || r.cpu > free[best].cpu {
 			best = n
 		}
 	}
-	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s), and the most CPU free is %.1f CPUs and %.1f GiB on %s. It may stay pending until a node is added or other workloads stop; the setup still runs.",
-		entry.CPU, entry.MemoryRequest, entry.Memory, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30), best), nil
+	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s), and the most CPU free is %.1f CPUs and %.1f GiB on %s.",
+		entry.CPU, entry.MemoryRequest, entry.Memory, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30), best)
 }
 
 func maxFloat(a, b float64) float64 {
@@ -526,6 +570,9 @@ func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObjec
 		}
 		st.ImagePlan, st.ImagePlanReason = plan.Kind, plan.Reason
 	}
-	st.CapacityWarning = modelCapacityWarning(c, modelCatalog[0], "")
+	warnings := catalogCapacityWarnings(c)
+	for i := range st.Catalog {
+		st.Catalog[i].CapacityWarning = warnings[st.Catalog[i].Name]
+	}
 	return st
 }
