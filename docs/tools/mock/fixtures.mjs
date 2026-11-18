@@ -450,14 +450,14 @@ const BLOCKED = (ps) => `1 pipeline server uses this S3 storage: ${ps}. Delete i
 export const s3States = {
   running: {
     deployed: true, ready: true, message: "Running", namespace: "seaweedfs", uiRoute: S3_UI, currentImage: SEAWEEDFS,
-    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", namespaceDeletable: true, teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"), usedBy: ["dev-project/nightly-dspa"],
+    managedByTool: true, dataPVCs: ["seaweedfs-data"], uiUser: "admin", namespaceDeletable: true, teardownBlockedReason: BLOCKED("dev-project/dspa"), usedBy: ["dev-project/dspa"],
   },
   incomplete: {
     deployed: true, ready: false, terminalError: true, namespace: "seaweedfs", currentImage: SEAWEEDFS, managedByTool: true, uiUser: "admin",
     dataPVCs: ["seaweedfs-data"],
     message: "Deployment seaweedfs is scaled to 0 replicas.",
     repairNeeded: "Deployment seaweedfs is scaled to 0 replicas.",
-    teardownBlockedReason: BLOCKED("dev-project/nightly-dspa"), usedBy: ["dev-project/nightly-dspa"],
+    teardownBlockedReason: BLOCKED("dev-project/dspa"), usedBy: ["dev-project/dspa"],
   },
   none: { deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false },
   starting: {
@@ -535,8 +535,15 @@ export function migrateSteps(kind) {
 }
 
 export const pipelineServer = {
-  deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "nightly-dspa", managedByTool: true,
-  apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-nightly-dspa"],
+  deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "dspa", managedByTool: true,
+  apiRoute: `https://ds-pipeline-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-dspa"],
+  connection: "rhoai-nightly-updater-s3",
+};
+
+/** A pipeline server an earlier version set up as nightly-dspa (pkg/types NonStandardName): Recreate is offered. */
+export const pipelineServerOldName = {
+  ...pipelineServer, name: "nightly-dspa", nonStandardName: true, connection: undefined,
+  apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, dataPVCs: ["mariadb-nightly-dspa"],
 };
 
 /** A pipeline server made in the dashboard, not by this tool (pkg/types UnmanagedPipelineServers). */
@@ -557,7 +564,7 @@ export const pipelineServerIn = (ns, over = {}) => ({
 /** Not ready long after it was created (pkg/cluster pipeline_server.go: dspaStuckAfter), with the Ready condition's message. */
 export const pipelineServerStuck = (ns) => pipelineServerIn(ns, {
   ready: false, terminalError: true, uiRoute: undefined, apiRoute: undefined,
-  message: "Deployment ds-pipeline-nightly-dspa: 0/1 replicas available (database connection refused)",
+  message: "Deployment ds-pipeline-dspa: 0/1 replicas available (database connection refused)",
 });
 
 export const mlflowStates = {

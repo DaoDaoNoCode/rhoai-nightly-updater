@@ -291,7 +291,8 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 2. The project.
 3. The S3 endpoint and the bucket.
 4. The admin UI password, masked: show or copy it (cluster-admins only; it is read from the server only then).
-5. **Open pipelines**. In the storage's menu, **Delete** stays disabled while a pipeline server uses it, and says which.
+5. The dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address).
+6. **Open pipelines**. In the storage's menu, **Delete** stays disabled while a pipeline server uses it, and says which.
 
 | Problem | Fix |
 |---|---|
@@ -313,6 +314,11 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | S3 storage deletion refused | A pipeline server still uses the storage (the message names it). Delete that first, or select it in **Clean up**. After a partial deletion, run Delete again |
 | "Data Science Pipelines (or MLflow) is turned off on this cluster" | The DataScienceCluster's component (`aipipelines`, `datasciencepipelines` on DSC v1, `mlflowoperator`) is not Managed: the operator keeps the CRD, so a pipeline server or MLflow would be created and never start. Set up refuses before changing anything. A cluster-admin sets the component to Managed (`oc edit datasciencecluster <name>`), waits for it to be ready on the Components page, then sets up |
 | Clean up stopped | The message names the part that failed and what was not done. Fix that part's cause (the same as for its own Delete) and run Clean up again: parts already deleted are no longer offered |
+| "Workbench pipelines don't work with this pipeline server" | The pipeline server was set up by an earlier version as `nightly-dspa`; odh-notebook-controller gives workbenches the pipeline config of the DSPA named `dspa` only. **Recreate with the standard name** (it checks everything first, then deletes `nightly-dspa` with its run history; S3 artifacts stay) or keep it: the dashboard's pipelines pages and the KFP SDK work either way. If the old server stays Terminating, Recreate stops there; use **Set up** once it is gone |
+| Set up: "already has pipeline server 'nightly-dspa'" | Same cause: use **Recreate with the standard name** instead of Set up |
+| Set up: "is not a Data Science project" | The pipeline server goes only into an existing data science project; the tool never creates one. Create the project in the RHOAI dashboard |
+| Set up or Delete: "Secret 'rhoai-nightly-updater-s3' already exists ... not created by this tool" | Someone else made a Secret with the Connection's name in the project. Nothing was changed; rename or delete theirs |
+| Pipeline server reads Error after 5 minutes | Its API server is not ready 5 minutes after creation (`APIServerReady`, the dashboard's own timeout). `Ready=False` alone (another component restarting) does not count |
 | "Project ... no longer exists" | The address names a project that was deleted (or is no longer a data science project). Choose another; Set up is not offered for it: a pipeline server goes only into an existing data science project, and setup refuses any other namespace |
 | Namespace left after deletion | Delete keeps namespace `seaweedfs` unless you tick **Also delete namespace seaweedfs (created by this tool)**; it is offered only when the namespace carries the tool label and the tool wrote it, and deletes everything in it. Otherwise `oc delete project seaweedfs` (or `minio`) once `oc get all,pvc,secret -n <namespace>` is empty |
 | Pipelines tab: the project picker is empty after clearing it | Expected: a clear is kept in the address (`project=` with no value), so the default project does not come back; choose a project, or open the tab without `project=` for the default |

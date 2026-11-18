@@ -529,10 +529,29 @@ async (page) => {
           { at: page.getByRole("combobox"), n: 2, pos: "r" },
           { at: row(storage, "Endpoint"), n: 3, pos: "l" },
           { at: storage.getByRole("button", { name: "Show the S3 secret key" }), n: 4, pos: "r" },
-          { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 5, pos: "l" },
+          { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 6, pos: "l" },
+          { at: row(part("Pipeline server"), "Connection in the dashboard"), n: 5, pos: "l" },
         ],
         pad: 24,
       });
+
+      // A pipeline server an earlier version named nightly-dspa: the
+      // workbench notice with Recreate, and its confirmation.
+      await open("/test-resources?tab=pipelines&project=dev-project", "env-old-name");
+      const oldServer = part("Pipeline server");
+      await crop("environment-pipelines-old-name", oldServer, {
+        notes: [
+          { at: oldServer.getByText(/Workbench pipelines don.t work/), n: 1, pos: "r" },
+          { at: oldServer.getByRole("button", { name: "Recreate with the standard name" }), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+      await oldServer.getByRole("button", { name: "Recreate with the standard name" }).click();
+      await wait(800);
+      await page.getByRole("dialog").getByRole("button", { name: "Details" }).click().catch(() => {});
+      await wait(300);
+      await crop("environment-pipelines-recreate-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
+      await page.keyboard.press("Escape");
 
       await open("/test-resources?tab=mlflow", "env-live");
       await crop("environment-mlflow", [panel().getByRole("heading", { name: "MLflow", level: 2 }), part("MLflow server")], {

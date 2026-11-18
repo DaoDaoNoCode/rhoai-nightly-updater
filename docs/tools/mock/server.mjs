@@ -192,6 +192,11 @@ const scenarios = {
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // A pipeline server an earlier version set up as nightly-dspa: the workbench notice and Recreate.
+  "env-old-name": (w) => {
+    w.resources.pipelineServers = [F.pipelineServerOldName];
+    w.resources.minio = { ...w.resources.minio, teardownBlockedReason: "1 pipeline server uses this S3 storage: dev-project/nightly-dspa. Delete it first.", usedBy: ["dev-project/nightly-dspa"] };
+  },
   "env-starting": (w) => { w.resources = { minio: F.s3States.starting, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServerStarting] }; },
   "env-error": (w) => {
     w.resources = { minio: { ...F.s3States.imagePull, teardownBlockedReason: F.s3States.running.teardownBlockedReason, usedBy: F.s3States.running.usedBy }, mlflow: F.mlflowStates.prBroken, pipelineServers: [F.pipelineServer] };
@@ -854,10 +859,12 @@ async function api(req, res, u) {
   }
   if (key === "POST /api/resources/samples/mlflow/stream") return mlflowSamplesStream(req, res);
   if (key === "POST /api/resources/pipeline-server/setup") {
-    const { project = "dev-project" } = await body(req);
+    const { project = "dev-project", recreate = false } = await body(req);
     return mutation(res, "setup-pipeline-server", "Set up pipeline server", () => {
       world.resources.pipelineServers = [...world.resources.pipelineServers.filter((ps) => ps.namespace !== project), { ...F.pipelineServerStarting, namespace: project }];
-      return { success: true, message: "Pipeline server created. It will take 1-3 minutes to become ready.", logs: [] };
+      return recreate
+        ? { success: true, message: "Pipeline server 'nightly-dspa' replaced by 'dspa', which workbench pipelines use. It will take 1-3 minutes to become ready.", logs: [] }
+        : { success: true, message: "Pipeline server created. It will take 1-3 minutes to become ready.", logs: [] };
     });
   }
   if (key === "POST /api/diagnostics/fix") {

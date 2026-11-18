@@ -319,7 +319,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
             <DescriptionListGroup>
               <DescriptionListTerm>Connection in the dashboard</DescriptionListTerm>
               <DescriptionListDescription>
-                <code>{server.connection}</code> ({CONNECTION_DISPLAY_NAME}), type S3: the S3 storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Attach it to workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.
+                <code>{server.connection}</code>, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}
@@ -531,7 +531,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         summary: <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>,
         changes: [
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
-          <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> and Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code> (both owned by it) are created, storing artifacts in the same S3 storage.</>,
+          <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> is created, storing artifacts in the same S3 storage, with Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code>, both owned by it.</>,
         ],
         dataLoss: <>
           The run history of <code>{pending.name}</code>: its runs, experiments and imported pipelines{pvcList(ps).length > 0 ? <> (volume {pvcList(ps).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)})</> : null}.

@@ -20,6 +20,22 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **Pipelines: set up as the RHOAI dashboard sets one up.** The pipeline
+  server is named `dspa`, the only name odh-notebook-controller gives
+  workbenches a pipeline config for, so Elyra pipelines from a workbench
+  work. It carries the dashboard's settings (`managedPipelines`, `mlflow`,
+  when the installed CRD declares them), its S3 Secret is owned by it, and a
+  dashboard S3 Connection `rhoai-nightly-updater-s3` ("Shared S3 storage
+  (RHOAI Nightly Updater)") lets workbenches and model deployments use the
+  shared storage. Deleting the server, here or in the dashboard, deletes
+  both. A server an earlier version named `nightly-dspa` keeps working; the
+  Pipelines tab explains the workbench limitation and offers **Recreate
+  with the standard name** (its run history is lost; S3 artifacts stay).
+  Setup now refuses a namespace that is not a Data Science project instead
+  of creating it, and a server is reported stuck after 5 minutes only while
+  its API server is not ready, as the dashboard does. New RBAC: Secret
+  `rhoai-nightly-updater-s3` (`get patch delete`).
+
 - **Models tab: a catalog of four CPU models.** A model picker offers
   SmolLM2 135M Instruct (smoke test), Qwen2.5 0.5B Instruct (the default),
   Qwen3 1.7B (tool calling; thinking off by default) and Granite Embedding
