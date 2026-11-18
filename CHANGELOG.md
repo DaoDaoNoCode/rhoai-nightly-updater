@@ -320,6 +320,9 @@ only accepts a tag whose version is the top dated section. See
 - The MLflow samples and the playground no longer follow HTTP redirects
   with the app's token: a 3xx answer is reported as an error that says
   where it pointed.
+- MaaS tab, Authorino TLS commands: the certificate Secret's name read from
+  Authorino's CR must be a valid Kubernetes name, or no commands are shown
+  and the tab says why; every substitution is shell-quoted.
 
 ## [2.3.3] - 2026-11-16
 

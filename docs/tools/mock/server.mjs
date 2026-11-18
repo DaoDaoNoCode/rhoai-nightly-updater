@@ -325,6 +325,8 @@ const scenarios = {
   "env-maas-no-cnpg": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { noCNPG: true, items: [F.maasModel(false)] }); },
   "env-maas-starting": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("starting", { items: [F.maasModel(false)] }); },
   "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
+  // Authorino's CR names a certificate Secret that is not a Kubernetes name: no commands.
+  "env-maas-tls-invalid": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: "invalid-secret", items: [F.maasModel(false)] }); },
   "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
   "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
   // Three models in dev-project: Qwen2.5 published, Qwen3 not, the embedding model never offered.

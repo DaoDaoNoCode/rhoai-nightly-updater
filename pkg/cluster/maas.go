@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -970,16 +971,29 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 }
 
 // authorinoTLSCommands are scripts/setup-authorino-tls.sh's commands for ns,
-// and deploy.sh's restart of Authorino after them.
-func authorinoTLSCommands(ns, secret string) string {
+// and deploy.sh's restart of Authorino after them. The Secret's name comes
+// from Authorino's CR (whoever may edit it chooses it) and a cluster-admin
+// pastes these commands into a shell, so a name that is not a Kubernetes
+// object name (DNS-1123 subdomain) gets no commands: why says so. Every
+// substitution is shell-quoted as well.
+func authorinoTLSCommands(ns, secret string) (cmds, why string) {
+	if len(ns) > 63 || !dns1123Label.MatchString(ns) {
+		return "", fmt.Sprintf("Connectivity Link's namespace %s is not a valid Kubernetes name", strconv.Quote(truncateMessage(ns)))
+	}
+	if len(secret) > 253 || !dns1123Subdomain.MatchString(secret) {
+		return "", fmt.Sprintf("Authorino's CR names its certificate Secret %s (spec.listener.tls.certSecretRef.name), which is not a valid Kubernetes name, so no commands are shown. A cluster-admin checks Authorino authorino in %s", strconv.Quote(truncateMessage(secret)), ns)
+	}
+	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"listener": map[string]interface{}{"tls": map[string]interface{}{
+		"enabled": true, "certSecretRef": map[string]interface{}{"name": secret}}}}})
+	q := shellQuote(ns)
 	return fmt.Sprintf(`oc annotate service authorino-authorino-authorization -n %[1]s \
   service.beta.openshift.io/serving-cert-secret-name=%[2]s --overwrite
 oc patch authorino authorino -n %[1]s --type=merge \
-  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"%[2]s"}}}}}'
+  -p %[3]s
 oc -n %[1]s set env deployment/authorino \
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
-oc rollout restart deployment/authorino -n %[1]s`, ns, secret)
+oc rollout restart deployment/authorino -n %[1]s`, q, shellQuote(secret), shellQuote(string(patch))), ""
 }
 
 // --- status --------------------------------------------------------------------
@@ -1103,8 +1117,13 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		switch {
 		case missing != "":
 			tlsPart.State = "manual"
-			tlsPart.Message = "Not configured: " + missing + ". A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused."
-			tlsPart.Commands = authorinoTLSCommands(kq.namespace, secret)
+			cmds, why := authorinoTLSCommands(kq.namespace, secret)
+			if why != "" {
+				tlsPart.Message = "Not configured: " + missing + ". " + why + ". Without it, API keys are refused."
+			} else {
+				tlsPart.Message = "Not configured: " + missing + ". A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused."
+				tlsPart.Commands = cmds
+			}
 		case known:
 			tlsPart.State, tlsPart.Message = "ready", "Authorino in "+kq.namespace+" serves TLS and trusts the service CA"
 		default:
