@@ -470,13 +470,73 @@ func dnsPublished(c *Client, host string) string {
 	return "pending"
 }
 
+// kserveGateway is KServe's default gateway for LLMInferenceServices, read
+// at run time from ConfigMap inferenceservice-config in the applications
+// namespace, data key "ingress", field kserveIngressGateway: "namespace/name",
+// or "name" in KServe's own namespace (rhoai-3.6 llmisvc NewConfig). A
+// model whose spec.router.gateway is {} routes through it. Known is false
+// when it cannot be read.
+type kserveGateway struct {
+	Namespace, Name string
+	Known           bool
+}
+
+const kserveConfigMap = "inferenceservice-config"
+
+func (g kserveGateway) String() string { return g.Namespace + "/" + g.Name }
+
+// isInferenceGateway: the default is the gateway this tool manages, or
+// unknown (then assumed to be, as on RHOAI 3.x: the safe side for guards).
+func (g kserveGateway) isInferenceGateway() bool {
+	return !g.Known || (g.Namespace == inferenceGatewayNamespace && g.Name == inferenceGatewayName)
+}
+
+// readKServeGateway reads KServe's default gateway. A missing ConfigMap or
+// key is unknown, not an error; err is set when it cannot be read.
+func readKServeGateway(c *Client) (kserveGateway, error) {
+	ns := appsNamespace(c)
+	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
+	if IsK8sError(err, 404) {
+		return kserveGateway{}, nil
+	}
+	if err != nil {
+		return kserveGateway{}, fmt.Errorf("read ConfigMap %s/%s: %w", ns, kserveConfigMap, err)
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	var ingress struct {
+		KserveIngressGateway string `json:"kserveIngressGateway"`
+	}
+	if json.Unmarshal(body, &cm) != nil || json.Unmarshal([]byte(cm.Data["ingress"]), &ingress) != nil {
+		return kserveGateway{}, fmt.Errorf("parse ConfigMap %s/%s (ingress)", ns, kserveConfigMap)
+	}
+	name := strings.TrimSpace(ingress.KserveIngressGateway)
+	if name == "" {
+		return kserveGateway{}, nil
+	}
+	if gwNS, gwName, ok := strings.Cut(name, "/"); ok {
+		return kserveGateway{Namespace: gwNS, Name: gwName, Known: true}, nil
+	}
+	return kserveGateway{Namespace: ns, Name: name, Known: true}, nil
+}
+
+// defaultGatewayElsewhere says, in words, that KServe's default gateway is
+// not the one this tool manages ("" when it is, or is unknown).
+func defaultGatewayElsewhere(def kserveGateway) string {
+	if def.isInferenceGateway() {
+		return ""
+	}
+	return fmt.Sprintf("KServe's default gateway is %s (ConfigMap %s, ingress.kserveIngressGateway), not %s/%s, which this tool manages: a model on the default route goes through %s.", def, kserveConfigMap, inferenceGatewayNamespace, inferenceGatewayName, def)
+}
+
 // gatewayUsers lists the LLMInferenceServices ("namespace/name") that
-// route through the inference gateway: spec.router.gateway {} (the default
-// gateway) or a ref to it.
-func gatewayUsers(models []llmisvcObject) []string {
+// route through the inference gateway: spec.router.gateway {} while it is
+// KServe's default gateway (def), or a ref to it.
+func gatewayUsers(models []llmisvcObject, def kserveGateway) []string {
 	var users []string
 	for _, m := range models {
-		if m.routesThroughInferenceGateway() {
+		if m.routesThroughInferenceGateway(def) {
 			users = append(users, m.Metadata.Namespace+"/"+m.Metadata.Name)
 		}
 	}
@@ -494,8 +554,12 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 		state.HealthUnknown = true
 		return state
 	}
+	def, defErr := readKServeGateway(c)
+	if defErr != nil {
+		slog.Debug("cannot read KServe's default gateway", "error", defErr)
+	}
 	if modelsErr == nil {
-		state.UsedBy = gatewayUsers(models)
+		state.UsedBy = gatewayUsers(models, def)
 	}
 	if !found {
 		state.Message = "Not set up"
@@ -553,6 +617,9 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 		}
 	}
 	var warnings []string
+	if msg := defaultGatewayElsewhere(def); msg != "" {
+		warnings = append(warnings, msg)
+	}
 	if len(state.UsedBy) > 0 && (state.AuthPolicy == "missing" || state.AuthPolicy == "not-enforced") {
 		what := map[string]string{"missing": "is missing", "not-enforced": "is not enforced"}[state.AuthPolicy]
 		warnings = append(warnings, fmt.Sprintf("The gateway's authentication %s (AuthPolicy %s/%s, which odh-model-controller adds once a model uses the gateway). Check that odh-model-controller and Connectivity Link (Kuadrant) run; until then models behind it may answer without checking who calls.", what, inferenceGatewayNamespace, inferenceGatewayAuthPolicy))
@@ -840,7 +907,10 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 	if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
 		return fail(fmt.Sprintf("Cannot check which models use the gateway, so it was not deleted: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "model list failed")
 	}
-	if users := gatewayUsers(models); len(users) > 0 {
+	// A model on the default route uses this gateway unless KServe's
+	// default is known to be another one (unreadable counts as this one).
+	def, _ := readKServeGateway(c)
+	if users := gatewayUsers(models, def); len(users) > 0 {
 		return fail(fmt.Sprintf("Models route through the inference gateway: %s. Delete %s first; nothing was deleted.", strings.Join(users, ", "), verb(len(users), "that model", "those models")), "in_use", "in use")
 	}
 	// The gateway controller's count of attached routes also sees models

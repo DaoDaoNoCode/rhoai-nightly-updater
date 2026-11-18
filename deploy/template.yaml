@@ -162,6 +162,13 @@ objects:
         resources: ["configmaps"]
         resourceNames: ["odh-upgrade-acks"]
         verbs: ["get"]
+      # Models: KServe's default gateway (ConfigMap inferenceservice-config,
+      # key ingress) in the applications namespace, which is found at run
+      # time, so cluster-wide but only this name; read-only
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["inferenceservice-config"]
+        verbs: ["get"]
       # Webhook and CRD-conversion backing Services and their endpoints
       # (stale-webhook check), and the S3 storage's Service; minio-service
       # is the earlier storage's, only deleted

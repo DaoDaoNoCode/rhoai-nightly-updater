@@ -1118,6 +1118,56 @@ func TestGatewayTeardown_WaitsForRoutesOfModelsJustDeleted(t *testing.T) {
 	}
 }
 
+const testISVCConfig = "/api/v1/namespaces/redhat-ods-applications/configmaps/inferenceservice-config"
+
+// KServe's default gateway (inferenceservice-config, ingress
+// kserveIngressGateway) is read at run time. When it is not the gateway
+// this tool manages, a model whose route is the default would not use it:
+// setup refuses before writing anything.
+func TestModelsSetup_RefusesWhenKServesDefaultGatewayIsAnother(t *testing.T) {
+	for _, gw := range []string{"istio-system/kserve-gateway", "kserve-gateway"} {
+		mc := newModelsCluster(t)
+		mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"`+gw+`\"}"}}`)
+		before := len(mc.f.mutations())
+		res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+		want := gw
+		if !strings.Contains(gw, "/") {
+			want = "redhat-ods-applications/" + gw
+		}
+		if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "KServe's default gateway is "+want) {
+			t.Fatalf("%s: got %+v", gw, res)
+		}
+		if m := mc.f.mutations()[before:]; len(m) != 0 {
+			t.Errorf("%s: wrote %v", gw, m)
+		}
+	}
+	// The default named as this tool's gateway: setup runs.
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"openshift-ingress/openshift-ai-inference\"}"}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("matching default: %+v", res)
+	}
+}
+
+// A model on KServe's default route does not use this gateway when the
+// default is another one: it does not hold the teardown, and the status
+// says where default routes go.
+func TestGatewayTeardown_ADefaultRouteElsewhereDoesNotBlock(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"istio-system/kserve-gateway\"}"}}`)
+	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"metadata":{"name":"granite","namespace":"team"},"spec":{"router":{"gateway":{}}}}`)
+	st, _ := GetResourcesStatus(mc.c)
+	if len(st.InferenceGateway.UsedBy) != 0 || !strings.Contains(st.InferenceGateway.Warning, "KServe's default gateway is istio-system/kserve-gateway") {
+		t.Errorf("status: %+v", st.InferenceGateway)
+	}
+	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+}
+
 // Setting the model up again in its project: the room its own pod holds
 // is the room the new pod gets, so that pod is not counted against it.
 func TestModelCapacityWarning_IgnoresTheModelsOwnPod(t *testing.T) {

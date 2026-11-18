@@ -141,16 +141,16 @@ type llmisvcObject struct {
 	} `json:"status"`
 }
 
-// routesThroughInferenceGateway: spec.router.gateway is {} (KServe's
-// default gateway, openshift-ingress/openshift-ai-inference) or refers to
-// the inference gateway. A model whose default is configured elsewhere is
-// counted too: teardown then refuses, which is the safe side.
-func (m llmisvcObject) routesThroughInferenceGateway() bool {
+// routesThroughInferenceGateway: spec.router.gateway is {} and KServe's
+// default gateway (def) is the inference gateway, or it refers to the
+// inference gateway. With the default unknown, {} counts: teardown then
+// refuses, which is the safe side.
+func (m llmisvcObject) routesThroughInferenceGateway(def kserveGateway) bool {
 	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
 		return false
 	}
 	if len(m.Spec.Router.Gateway.Refs) == 0 {
-		return true
+		return def.isInferenceGateway()
 	}
 	for _, ref := range m.Spec.Router.Gateway.Refs {
 		ns := firstNonEmpty(ref.Namespace, m.Metadata.Namespace)
@@ -783,6 +783,16 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	preset := discoverCPUPreset(c, ns)
 	if preset.problem != "" {
 		return nil, preset.problem + " Nothing was changed.", "prerequisites"
+	}
+
+	// The model's route is KServe's default gateway (spec.router.gateway
+	// {}), read at run time: it must be the gateway this tool manages.
+	def, err := readKServeGateway(c)
+	if err != nil {
+		m.step("check", "running", fmt.Sprintf("Cannot read KServe's default gateway (%v); assuming %s/%s, as on RHOAI 3.x.", err, inferenceGatewayNamespace, inferenceGatewayName))
+	}
+	if msg := defaultGatewayElsewhere(def); msg != "" {
+		return nil, msg + " This tool sets up models only behind its own gateway. Nothing was changed.", "prerequisites"
 	}
 
 	// The gateway the model will route through.

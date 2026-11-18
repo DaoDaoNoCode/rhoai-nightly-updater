@@ -42,7 +42,9 @@ only accepts a tag whose version is the top dated section. See
 - RBAC (template revision 5): Roles in `openshift-ingress` and
   `openshift-ingress-operator` (new template parameters `INGRESS_NAMESPACE`,
   `INGRESS_OPERATOR_NAMESPACE`) and named ClusterRole rules for the
-  GatewayClass, LLMInferenceServices and their presets; each is audited in
+  GatewayClass, LLMInferenceServices and their presets, KServe's ConfigMap
+  `inferenceservice-config` (read, by name) and Gateways (list, read-only);
+  each is audited in
   SECURITY.md.
 
 ### Changed
