@@ -353,7 +353,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     const spec = modelsConfirm(p, resStatus);
     const op: ModelsOp = p.kind === "setup-models"
       ? { action: "setup", gateway: p.gateway, project: p.project, model: p.project ? p.model : null }
-      : p.kind === "teardown-model" ? { action: "teardown", gateway: false, project: p.project, model: p.model } : { action: "teardown", gateway: true, project: null, model: null };
+      : p.kind === "teardown-model" ? { action: "teardown", gateway: false, project: p.project, model: p.model }
+      : p.kind === "allow-gateway-project" ? { action: "allow", gateway: true, project: null, model: null, allowProject: p.project }
+      : { action: "teardown", gateway: true, project: null, model: null };
     setPending(null);
     setSampleRun(null);
     setRunOpen(true);
@@ -367,13 +369,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setModelsOp(null);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels({
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(op.action === "allow" ? { action: "allow", project: op.allowProject } : {
       action: op.action,
       ...(op.gateway ? { gateway: true } : {}),
       ...(op.project ? { project: op.project } : {}),
       ...(op.project && op.model ? { model: op.model } : {}),
       ...(p.kind === "setup-models" && p.releasedImage ? { releasedImage: true } : {}),
-    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
+    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "teardown" ? "delete" : "setup");
   };
 
   /** A confirmed Playground change: one streamed request whose steps the run dialog shows. */
@@ -684,6 +686,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       : "On the MaaS tab, publish a model to offer it through MaaS: callers then use an API key instead of their OpenShift token, within the subscription's token limits."}</Content>
     : run.run?.kind === "setup" && runFeature === "playground"
     ? <Content component="p">{`Open the playground in ${playgroundRun?.project}, choose a model and ask it something. On the Playground tab, Use it also has a chat request to run from a terminal.`}</Content>
+    : run.run?.kind === "setup" && runFeature === "models" && modelsRun?.action === "allow"
+    ? <Content component="p">{`The models in ${modelsRun.allowProject} attach to the inference gateway within a few seconds, and the dashboard shows them as it shows any other model.`}</Content>
     : run.run?.kind === "setup" && runFeature === "models"
     ? <Content component="p">{modelsRun?.project
       ? `On the Models tab, Use it has the model's address and commands that call it with your OpenShift token. In the dashboard, ${modelsRun.project} lists the model, and Gen AI studio offers it in the playground.`

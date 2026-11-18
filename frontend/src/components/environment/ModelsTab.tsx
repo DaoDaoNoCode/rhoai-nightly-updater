@@ -30,7 +30,7 @@ import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { envStatusText, notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
-import { type Busy, type FeatureState, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, projectNeedsRoutesLabel, routesLabelCommand, shortModelName } from "./featureState";
+import { type Busy, type FeatureState, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, foreignGatewayStep, shortModelName } from "./featureState";
 
 /** "6Gi" as "6 GiB". */
 const gib = (q: string) => q.replace(/^(\d+(?:\.\d+)?)Gi$/, "$1 GiB");
@@ -151,59 +151,44 @@ const AUTH_WORDS: Record<string, string> = {
 };
 
 /**
- * A gateway that accepts routes from every namespace: what that means, and,
- * for this tool's gateway, Restrict (a gateway setup, which applies the
- * label selector once every project whose models use it has the label).
+ * Models in the chosen project route through the gateway, but it does not
+ * allow the project (a model deployed there from the dashboard, for
+ * example): their routes do not attach. For this tool's gateway, Allow
+ * adds the project to its list; for someone else's, RHOAI's documented
+ * step for a cluster admin.
  */
-const OpenGatewayAlert: React.FC<{ gw: InferenceGatewayState; model: string; baseReason: string | null; readOnly: boolean; setPending: (p: Pending) => void }> = ({ gw, model, baseReason, readOnly, setPending }) => {
-  const risk = "A route in any project can attach to it and take over a model's address: it then receives that model's calls, with the callers' tokens.";
+const NotAllowedAlert: React.FC<{ gw: InferenceGatewayState; project: string; baseReason: string | null; readOnly: boolean; setPending: (p: Pending) => void }> = ({ gw, project, baseReason, readOnly, setPending }) => {
+  const title = `The gateway does not allow ${project}`;
   if (!gatewayManaged(gw)) {
     return (
-      <Alert variant="warning" isInline component="div" title="This gateway accepts models from every project">
-        <Content component="p">
-          {risk} It was not created by this tool, which does not change it. Its owner can limit the listeners&apos; <code>allowedRoutes</code> to chosen namespaces.
-        </Content>
+      <Alert variant="warning" isInline component="div" title={title}>
+        <Content component="p">Models in {project} route through this gateway, but their routes do not attach, so they cannot be reached. {foreignGatewayStep(project)}</Content>
       </Alert>
     );
   }
-  const label = gw.routesLabel ?? "";
-  const waiting = gw.unlabelledModelProjects ?? [];
-  const reason = readOnly ? "A cluster-admin makes this change." : baseReason ?? gw.restrictBlockedReason ?? null;
-  const restrict = () => setPending({ kind: "setup-models", gateway: true, project: null, model, restrict: true });
+  const reason = readOnly ? "A cluster-admin makes this change." : baseReason;
   return (
-    <Alert variant="warning" isInline component="div" title="The gateway accepts models from every project"
-      actionLinks={!reason ? <AlertActionLink onClick={restrict}>Restrict to labelled projects</AlertActionLink> : undefined}>
-      <Stack hasGutter>
-        <StackItem>
-          <Content component="p">
-            An earlier version of this tool set it up this way. {risk} Restrict it to projects a cluster-admin has labelled <code>{label}=true</code>; models in other projects can then no longer use it.
-          </Content>
-        </StackItem>
-        {waiting.length > 0 && (
-          <>
-            <StackItem><Content component="p">Models in {waiting.join(", ")} use the gateway, so Restrict waits until a cluster-admin labels {waiting.length === 1 ? "that project" : "those projects"}:</Content></StackItem>
-            <StackItem><CopyableCode id="gateway-label-commands" label="the label commands" code={waiting.map((p) => routesLabelCommand(label, p)).join("\n")} /></StackItem>
-          </>
-        )}
-        {reason && waiting.length === 0 && <StackItem><Content component="p">Restrict is not available now: {reason}</Content></StackItem>}
-        {reason && waiting.length > 0 && <StackItem><Content component="p">Restrict is not available now: the projects above need the label first.</Content></StackItem>}
-      </Stack>
+    <Alert variant="warning" isInline component="div" title={title}
+      actionLinks={!reason ? <AlertActionLink onClick={() => setPending({ kind: "allow-gateway-project", project })}>Allow {project}</AlertActionLink> : undefined}>
+      <Content component="p">
+        Models in {project} (for example one deployed from the dashboard) route through this gateway, but {project} is not on its list of projects, so they cannot be reached. Allow adds {project} to the list.
+      </Content>
+      {reason && <Content component="p">{readOnly ? reason : `Not available now: ${reason}`}</Content>}
     </Alert>
   );
 };
 
-/** Who may attach models to the gateway, in words. */
-function admittedWords(gw: InferenceGatewayState): string | null {
-  if (!gw.deployed || !gw.routesLabel) return null;
-  if (gw.openToAllNamespaces) return "Every project";
-  if (!gatewayManaged(gw)) return null;
-  return `Projects labelled ${gw.routesLabel}=true by a cluster-admin`;
+/** The projects the gateway allows, in words. */
+function allowedWords(gw: InferenceGatewayState): React.ReactNode {
+  if (gw.allProjectsAllowed) return "Every project";
+  if (!gw.allowedProjects) return "Chosen by its namespace selector";
+  if (gw.allowedProjects.length === 0) return "None";
+  return gw.allowedProjects.map((p, i) => <React.Fragment key={p}>{i > 0 ? ", " : ""}<code>{p}</code></React.Fragment>);
 }
 
 /** The inference gateway (cluster). */
-const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending, model }) => {
+const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending, project }) => {
   const gw = status.inferenceGateway;
-  const admitted = gw ? admittedWords(gw) : null;
   const unmanaged = notManaged(gw);
   const deployed = !!gw?.deployed;
   const menu: PartMenuItem[] = !readOnly && gatewayManaged(gw) && !isTerminating(gw)
@@ -216,10 +201,15 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
         The front door to every model on the cluster: it answers at <code>{gw?.externalUrl ?? gw?.plannedUrl ?? "https://inference.<apps domain>"}</code>, sends each call to its model, and checks the caller&apos;s OpenShift token.
         {unmanaged
           ? " It was created outside this tool (for example by RHOAI's installation): models use it as it is, and this tool does not change or delete it."
-          : deployed ? " It runs on a cloud load balancer, which costs money while it exists." : " Setting it up creates a cloud load balancer, which costs money while it exists."}
+          : <>
+            {gw?.allProjectsAllowed ? null : " It accepts models only from the projects on its list, as RHOAI documents it; setting up a model adds its project."}
+            {deployed ? " It runs on a cloud load balancer, which costs money while it exists." : " Setting it up creates a cloud load balancer, which costs money while it exists."}
+          </>}
       </Content>
       {gw && <ProblemAlerts kind="gateway" state={gw} />}
-      {gw?.deployed && gw.openToAllNamespaces && !isTerminating(gw) && <OpenGatewayAlert gw={gw} model={model} baseReason={baseReason} readOnly={readOnly} setPending={setPending} />}
+      {gw?.deployed && project && (gw.notAllowedModelProjects ?? []).includes(project) && !isTerminating(gw) && s !== "setting-up" && (
+        <NotAllowedAlert gw={gw} project={project} baseReason={baseReason} readOnly={readOnly} setPending={setPending} />
+      )}
       {deployed && s === "setting-up" && !terminalReason(gw) && !isTerminating(gw) && <StartingNote state={gw!} typical="under a minute" />}
       {deployed && (
         <DescriptionList isCompact isHorizontal aria-label="Inference gateway details">
@@ -247,10 +237,10 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
               <DescriptionListDescription>{gw.authPolicy ? AUTH_WORDS[gw.authPolicy] : "Unknown"}</DescriptionListDescription>
             </DescriptionListGroup>
           )}
-          {admitted && (
+          {gw && (
             <DescriptionListGroup>
-              <DescriptionListTerm>Accepts models from</DescriptionListTerm>
-              <DescriptionListDescription>{admitted}</DescriptionListDescription>
+              <DescriptionListTerm>Projects allowed on the gateway</DescriptionListTerm>
+              <DescriptionListDescription>{allowedWords(gw)}</DescriptionListDescription>
             </DescriptionListGroup>
           )}
           {(gw?.usedBy ?? []).length > 0 && (
@@ -340,11 +330,6 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
     : [];
   const useReleased = () => setPending({ kind: "setup-models", gateway: false, project, model: name, releasedImage: true });
   const s = modelStatus(status, project, busy, name);
-  const gw = status.inferenceGateway;
-  const label = gw?.routesLabel;
-  const needsLabel = projectNeedsRoutesLabel(status, project);
-  // The label matters for this tool's gateway, or the one setup will create.
-  const showAccess = !!label && !gw?.routesLabelProblem && !(gw?.deployed && !gw.managedByTool);
   return (
     <PartItem id="model" title={model?.displayName || title} scope={`In project ${project}`} status={s} unmanaged={unmanaged}
       actions={model?.ready && href && !isTerminating(model) ? <ActionListItem><ExternalLink href={href}>Open {project} in the dashboard</ExternalLink></ActionListItem> : undefined}
@@ -364,20 +349,6 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           {readOnly ? <Content component="p">A cluster-admin makes this change.</Content> : baseReason && <Content component="p">Not available now: {baseReason}</Content>}
         </Alert>
       )}
-      {needsLabel && label && (
-        <Alert variant="info" isInline component="div" title={`A cluster-admin must allow ${project} to use the inference gateway`}>
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p">
-                The inference gateway accepts models only from projects that carry the label <code>{label}=true</code>, so that a route in another project cannot take over a model&apos;s address and receive its callers&apos; tokens.
-                Project admins cannot set this label, and this tool does not set it. A cluster-admin runs:
-              </Content>
-            </StackItem>
-            <StackItem><CopyableCode id="models-label-command" label="the label command" code={routesLabelCommand(label, project)} /></StackItem>
-            <StackItem><Content component="p">{model ? "Until then, restricting the gateway waits for this project." : "Then set up the model here."}</Content></StackItem>
-          </Stack>
-        </Alert>
-      )}
       {model && !model.presetImageMissing && <ProblemAlerts kind="model" state={model} />}
       {model && s === "setting-up" && !terminalReason(model) && !isTerminating(model) && <StartingNote state={model} typical="3 to 5 minutes the first time" />}
       <DescriptionList isCompact isHorizontal aria-label="Model details">
@@ -385,12 +356,6 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           <DescriptionListTerm>Name</DescriptionListTerm>
           <DescriptionListDescription><code>{model?.name ?? name}</code></DescriptionListDescription>
         </DescriptionListGroup>
-        {showAccess && (
-          <DescriptionListGroup>
-            <DescriptionListTerm>Gateway access</DescriptionListTerm>
-            <DescriptionListDescription>{needsLabel ? "Not allowed yet" : <>Allowed: the project has the label <code>{label}=true</code></>}</DescriptionListDescription>
-          </DescriptionListGroup>
-        )}
         {c && (
           <DescriptionListGroup>
             <DescriptionListTerm>Use case</DescriptionListTerm>
@@ -626,8 +591,8 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>On the cluster, unless one exists: GatewayClass <code>{GATEWAY}</code>, and in namespace <code>{GATEWAY_NS}</code> ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> (hostname <code>inference.&lt;apps domain&gt;</code>), which accepts models only from projects labelled <code>{status.inferenceGateway?.routesLabel ?? "rhoai-nightly-updater/inference-routes"}=true</code>. OpenShift adds a cloud load balancer and a DNS record for it; RHOAI adds its AuthPolicy once a model uses it</>,
-            <>No namespace label: a cluster-admin labels each project that may use the gateway; this tool cannot change namespaces</>,
+            <>On the cluster, unless one exists: GatewayClass <code>{GATEWAY}</code>, and in namespace <code>{GATEWAY_NS}</code> ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> (hostname <code>inference.&lt;apps domain&gt;</code>), which accepts models only from the projects it lists by name, as RHOAI documents it. OpenShift adds a cloud load balancer and a DNS record for it; RHOAI adds its AuthPolicy once a model uses it</>,
+            <>On this tool&apos;s gateway, each project you set up a model in is added to that list (and stays on it when the model is deleted, since other models there may use it). Allow adds a project whose model was deployed elsewhere, such as in the dashboard</>,
             <>In the project, for each model you set up: an LLMInferenceService of the model&apos;s name (here <code>{name}</code>), downloaded from Hugging Face, on the cluster&apos;s CPU preset{models?.preset ? <> <code>{models.preset}</code></> : null}. KServe adds its Deployment, Service and route</>,
             <>For each model, its token authentication as the dashboard&apos;s &quot;Require token authentication&quot; makes it: ServiceAccount <code>{tokenSA(name)}</code>, Role <code>{name}-view-role</code> (get on that model only), RoleBinding <code>{name}-view</code> and token Secret <code>default-name-{tokenSA(name)}</code>, all owned by the model, so they go with it</>,
           ]} />
@@ -649,14 +614,23 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
     case "setup-models":
       return [
         { id: "check", title: "Check what every part needs" },
-        ...(p.gateway ? [{ id: "gateway", title: p.restrict ? "Restrict the inference gateway to labelled projects" : "Create the inference gateway" }, { id: "gateway-ready", title: "Wait for the gateway and its load balancer" }] : []),
+        ...(p.gateway ? [{ id: "gateway", title: "Create the inference gateway" }, { id: "gateway-ready", title: "Wait for the gateway and its load balancer" }] : []),
         ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch ${p.model} in ${p.project} to the released image` : `Create ${p.model} in ${p.project}` }, { id: "model-ready", title: "Wait until the model answers" }] : []),
       ];
     case "teardown-model":
       return [{ id: "model", title: `Delete ${p.model} in ${p.project}` }];
     case "teardown-gateway":
       return [{ id: "gateway", title: "Delete the inference gateway" }];
+    case "allow-gateway-project":
+      return [{ id: "check", title: "Check the gateway and the project" }, { id: "gateway", title: `Add ${p.project} to the gateway's projects` }];
   }
+}
+
+/** Whether a model setup in project adds it to this tool's gateway's list. */
+function setupAddsProject(status: ResourcesStatus | null, project: string | null, gateway: boolean): boolean {
+  const gw = status?.inferenceGateway;
+  if (!project || gateway || !gw?.deployed || gw.managedByTool !== true) return false;
+  return !(gw.allowedProjects ?? []).includes(project);
 }
 
 /** The confirmation of a Models change, or null for another feature's change. */
@@ -667,17 +641,6 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
       const c = catalogModel(status, name);
       const short = shortModelName(status, name);
       const reason = status?.models?.imagePlanReason;
-      const label = status?.inferenceGateway?.routesLabel ?? "the routes label";
-      if (pending.restrict) {
-        return {
-          title: "Restrict the inference gateway to labelled projects?", confirm: "Restrict", runTitle: "Restrict the inference gateway to labelled projects",
-          summary: <Content component="p">The gateway then accepts models only from projects a cluster-admin has labelled. A route in any other project, including one made to take over a model&apos;s address, no longer reaches it. It is refused while a model uses the gateway from a project without the label.</Content>,
-          changes: [
-            <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: both listeners accept routes only from namespaces labelled <code>{label}=true</code>. Nothing else changes.</>,
-            <>Routes in projects without the label are detached from the gateway.</>,
-          ],
-        };
-      }
       if (releasedImage && project) {
         return {
           title: `Use the newest released Red Hat image for ${short} in ${project}?`, confirm: "Use the released image", runTitle: `Use the released image for ${short} in ${project}`,
@@ -697,7 +660,10 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         changes: [
           ...(gateway ? [
             <>GatewayClass <code>{GATEWAY}</code> (OpenShift&apos;s gateway controller) is created, unless one exists.</>,
-            <>In namespace <code>{GATEWAY_NS}</code>: ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> with two HTTPS listeners: <code>inference.&lt;apps domain&gt;</code> on the cluster&apos;s default certificate, and the gateway&apos;s in-cluster name. Both accept models only from projects labelled <code>{label}=true</code>, which a cluster-admin sets. OpenShift adds a load balancer and a DNS record.</>,
+            <>In namespace <code>{GATEWAY_NS}</code>: ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> with two HTTPS listeners: <code>inference.&lt;apps domain&gt;</code> on the cluster&apos;s default certificate, and the gateway&apos;s in-cluster name. Both accept models only from the projects they list by name: <code>{GATEWAY_NS}</code>{project ? <> and <code>{project}</code></> : null}. OpenShift adds a load balancer and a DNS record.</>,
+          ] : []),
+          ...(setupAddsProject(status, project, gateway) ? [
+            <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: <code>{project}</code> is added to the projects it allows, before the model is created. The projects already on the list stay.</>,
           ] : []),
           ...(project ? [
             <>Project <code>{project}</code>: LLMInferenceService <code>{name}</code> ({c?.displayName ?? name} from Hugging Face), labelled for the dashboard and its Gen AI studio, on the CPU preset{status?.models?.preset ? <> <code>{status.models.preset}</code></> : null}. KServe adds its Deployment, Service and route. Other models in the project are not changed.</>,
@@ -725,6 +691,14 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         changes: [
           <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>, ConfigMap <code>{GATEWAY_NS}/{GATEWAY}-options</code> and GatewayClass <code>{GATEWAY}</code> are deleted, those of them this tool created.</>,
           <>Kept: anything of these names this tool did not create, every other gateway (for example <code>maas-default-gateway</code>), and the GatewayClass while another gateway uses it.</>,
+        ],
+      };
+    case "allow-gateway-project":
+      return {
+        title: `Allow ${pending.project} on the inference gateway?`, confirm: "Allow", runTitle: `Allow ${pending.project} on the inference gateway`,
+        summary: <Content component="p">The models in {pending.project} then attach to the gateway and can be reached. Anyone who may edit {pending.project} can then also attach routes to the gateway, as on every project on its list.</Content>,
+        changes: [
+          <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: <code>{pending.project}</code> is added to the projects both listeners allow (the values array of their <code>allowedRoutes</code>). The projects already on the list stay; nothing else changes.</>,
         ],
       };
     default:

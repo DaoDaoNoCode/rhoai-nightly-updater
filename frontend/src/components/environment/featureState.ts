@@ -42,11 +42,13 @@ export interface PlaygroundOp {
 
 /** What a running Models operation changes. */
 export interface ModelsOp {
-  action: "setup" | "teardown";
+  /** allow: adds allowProject to the gateway's list (a gateway change; gateway is true). */
+  action: "setup" | "teardown" | "allow";
   gateway: boolean;
   project: string | null;
   /** The catalog name of the model in project. */
   model?: string | null;
+  allowProject?: string;
 }
 
 export const IDLE: Busy = { resAction: null, actionProject: null, migrating: false, models: null };
@@ -302,7 +304,7 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
 const modelsBusy = (busy: Busy, part: "gateway" | "model", project?: string, model?: string): "setting-up" | "deleting" | null => {
   const op = busy.models;
   if (!op || (part === "gateway" ? !op.gateway : op.project !== project || (!!model && !!op.model && op.model !== model))) return null;
-  return op.action === "setup" ? "setting-up" : "deleting";
+  return op.action === "teardown" ? "deleting" : "setting-up";
 };
 
 /** The default catalog name, before the status has loaded (pkg/cluster modelCatalog). */
@@ -338,20 +340,21 @@ export function modelOptionReason(status: ResourcesStatus | null, project: strin
 }
 
 /**
- * Whether the project lacks the label this tool's inference gateway admits
- * models by (pkg/cluster inferenceRoutesLabel). Someone else's gateway
- * decides by its own listeners, and an unreadable label state is no reason
- * here (setup still checks).
+ * Whether the inference gateway lets the project's routes attach: "yes",
+ * "no", or "unknown" (not there, or it chooses projects by labels).
  */
-export function projectNeedsRoutesLabel(status: ResourcesStatus | null | undefined, project: string): boolean {
+export function gatewayAllows(status: ResourcesStatus | null | undefined, project: string): "yes" | "no" | "unknown" {
   const gw = status?.inferenceGateway;
-  if (!gw?.routesLabel || gw.routesLabelProblem) return false;
-  if (gw.deployed && !gw.managedByTool) return false;
-  return !(gw.labelledProjects ?? []).includes(project);
+  if (!gw?.deployed) return "unknown";
+  if ((gw.notAllowedModelProjects ?? []).includes(project)) return "no";
+  if (gw.allProjectsAllowed) return "yes";
+  if (!gw.allowedProjects) return "unknown";
+  return gw.allowedProjects.includes(project) ? "yes" : "no";
 }
 
-/** The command a cluster-admin runs to let the project's models use the gateway. */
-export const routesLabelCommand = (label: string, project: string) => `oc label namespace ${project} ${label}=true`;
+/** RHOAI's documented step for a gateway this tool did not create, in words. */
+export const foreignGatewayStep = (project: string) =>
+  `A cluster admin adds ${project} to the projects the Gateway's listeners allow (the values array of allowedRoutes, as RHOAI documents it); this tool does not change a gateway it did not create.`;
 
 export function gatewayStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
   return envStatus(status?.inferenceGateway, { busy: modelsBusy(busy, "gateway") });
@@ -452,7 +455,11 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   let reason: string | null = modelsBlockedReason(status);
   if (!reason && moving) reason = `The ${moving.id === "gateway" ? "inference gateway" : "model"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is done.`;
   if (!reason && needGateway && status?.inferenceGateway?.setupBlockedReason) reason = status.inferenceGateway.setupBlockedReason;
-  if (!reason && projectNeedsRoutesLabel(status, project)) reason = `A cluster-admin must first allow ${project} to use the inference gateway, with the command shown under the model.`;
+  // This tool's gateway: setup adds the project to its list. Someone else's
+  // is never changed.
+  if (!reason && status?.inferenceGateway?.managedByTool === false && gatewayAllows(status, project) === "no") {
+    reason = `The inference gateway does not allow ${project}. ${foreignGatewayStep(project)}`;
+  }
   if (!reason) reason = modelOptionReason(status, project, name);
   return {
     status: moving ? "setting-up" : "not-set-up",

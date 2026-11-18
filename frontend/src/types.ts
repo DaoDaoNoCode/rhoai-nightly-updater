@@ -795,18 +795,16 @@ export interface InferenceGatewayState extends ResourceState {
   dns?: "published" | "pending";
   /** The gateway's authentication (odh-model-controller adds it once a model uses the gateway); absent: unknown. */
   authPolicy?: "enforced" | "not-enforced" | "missing";
-  /** The namespace label (set to "true") that lets a project's models use the gateway this tool creates. Only a cluster-admin sets it. */
-  routesLabel?: string;
-  /** The namespaces that carry the label. */
-  labelledProjects?: string[];
-  /** Why the labelled namespaces could not be read. */
-  routesLabelProblem?: string;
-  /** A listener accepts routes from every namespace: a route in any project can take over a model's address. */
-  openToAllNamespaces?: boolean;
-  /** Projects whose models use the gateway and lack the label: Restrict waits for them. */
-  unlabelledModelProjects?: string[];
-  /** Why this tool's open gateway cannot be restricted now. */
-  restrictBlockedReason?: string;
+  /**
+   * The projects the gateway's listeners list by name (RHOAI's documented
+   * allowedRoutes values array). Absent: they choose otherwise (every
+   * project, or labels).
+   */
+  allowedProjects?: string[];
+  /** The listeners accept routes from every project. */
+  allProjectsAllowed?: boolean;
+  /** Projects whose models (anyone's, such as the dashboard's) route through the gateway but are not allowed: they do not attach. */
+  notAllowedModelProjects?: string[];
 }
 
 /** A model the Models feature sets up (pkg/cluster modelCatalog). */
@@ -877,10 +875,11 @@ export interface ModelsStatus {
 
 /** The body of POST /api/resources/models/stream (pkg/types ModelsRequest). */
 export interface ModelsRequest {
-  action: "setup" | "teardown";
+  /** allow: add project to the projects this tool's inference gateway allows. */
+  action: "setup" | "teardown" | "allow";
   /** The inference gateway: set up before the model, deleted after it. */
   gateway?: boolean;
-  /** The model's project; absent: no model part. */
+  /** The model's project (absent: no model part), or the project allow adds. */
   project?: string;
   model?: string;
   /** Setup: run the newest released Red Hat image instead of the preset's. */
