@@ -55,6 +55,7 @@ import {
   updateOperator,
   fetchLatestNightly,
   verifyNodes,
+  checkNodePull,
   trackFeature,
   toApiError,
   type OperatorOperationOptions,
@@ -123,7 +124,10 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
     setVerifying(true);
     setVerifyResult(null);
     try {
-      const res = await verifyNodes(controller.signal);
+      // On a self-managed (or unknown) cluster the nodes do not pull with the
+      // secret GET /api/verify-nodes checks with Quay, so a temporary
+      // catalog pod pulls the target image instead.
+      const res = status?.pullSecret.nodes && target ? await checkNodePull(target.image) : await verifyNodes(controller.signal);
       if (!controller.signal.aborted) setVerifyResult(res);
     } catch (e) {
       if (!controller.signal.aborted) setVerifyResult({ success: false, message: toApiError(e, "Verification failed").message, logs: [] });

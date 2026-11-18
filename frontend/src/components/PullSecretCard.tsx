@@ -6,6 +6,7 @@ import {
   Alert,
   Button,
   Content,
+  ExpandableSection,
   Flex,
   Form,
   FormGroup,
@@ -21,8 +22,9 @@ import {
 } from "@patternfly/react-core";
 import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
-import type { OperationResponse, PullSecretInfo } from "../types";
-import { createPullSecret, testPullSecret, toApiError } from "../services/api";
+import type { ClusterInfo, OperationResponse, PullSecretInfo } from "../types";
+import { checkNodePull, createPullSecret, testPullSecret, toApiError } from "../services/api";
+import { CopyableCode } from "./environment/UseIt";
 import { describeError } from "../errors";
 import { sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
@@ -48,7 +50,151 @@ interface PullSecretSetupProps {
   titleId?: string;
   /** State only, no test or replace (the gitops profile). */
   readOnly?: boolean;
+  /** status.cluster.controlPlane: words the nodes' part (pullSecret.nodes). */
+  controlPlane?: ClusterInfo["controlPlane"];
+  /** The catalog image Check that the nodes can pull runs: the build Update would install. */
+  checkImage?: string;
+  /** Why there is no checkImage yet (the newest build is being looked up, or the lookup failed). */
+  checkImageReason?: string;
+  /** The last node check's result, when the parent keeps it (the setup card counts it). */
+  nodeCheck?: OperationResponse | null;
+  onNodeCheck?: (result: OperationResponse | null) => void;
 }
+
+/** The pull secret is saved and valid, and the nodes are known to have it (or use it). */
+export function nodePullState(pullSecret: PullSecretInfo, nodeCheck: OperationResponse | null | undefined): "ready" | "unchecked" | "failed" | "not-applicable" {
+  if (!pullSecret.nodes || !pullSecret.exists || !pullSecret.valid) return "not-applicable";
+  if (pullSecret.nodes.pulled || nodeCheck?.success) return "ready";
+  return nodeCheck && nodeCheck.errorCode === "catalog_image_pull" ? "failed" : "unchecked";
+}
+
+const NODE_PULL_RESULT_TITLE: Record<string, string> = {
+  success: "The nodes can pull from quay.io/rhoai",
+  catalog_image_pull: "The nodes cannot pull from quay.io/rhoai",
+};
+
+/**
+ * The nodes' side of the pull secret on a self-managed cluster (or one whose
+ * control plane is unknown): they pull with openshift-config/pull-secret,
+ * which the updater cannot read, so it shows the command a cluster-admin
+ * runs, and a check that runs a temporary catalog pod.
+ */
+const NodePullSecret: React.FC<{
+  nodes: NonNullable<PullSecretInfo["nodes"]>;
+  controlPlane?: ClusterInfo["controlPlane"];
+  checkImage?: string;
+  checkImageReason?: string;
+  result: OperationResponse | null;
+  onResult: (result: OperationResponse | null) => void;
+}> = ({ nodes, controlPlane, checkImage, checkImageReason, result, onResult }) => {
+  const blocker = useMutationBlocker({ ignoreReconcile: true });
+  const onBusy = useClusterBusyHandler();
+  const [checking, setChecking] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const selfManaged = controlPlane === "self-managed";
+
+  const handleCheck = async () => {
+    if (!checkImage) return;
+    setChecking(true);
+    onResult(null);
+    try {
+      onResult(await checkNodePull(checkImage));
+    } catch (e) {
+      onResult({ success: false, message: toApiError(e, "The check could not run").message, logs: [] });
+      onBusy(errorResult(e, "The check could not run"));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const command = (
+    <Stack hasGutter>
+      <StackItem>
+        <CopyableCode id="node-pull-secret-command" label="the command" code={nodes.command} />
+      </StackItem>
+      <StackItem>
+        <Content component="p" className="pf-v6-u-text-color-subtle">
+          Run it in bash or zsh with jq 1.6 or later. It asks for the token you saved above (base64 user:password, with
+          its = padding) without showing it, and changes only the quay.io/rhoai entry. The nodes pick it up within a few
+          minutes without a reboot; <code>oc get mcp</code> shows UPDATED True for every pool when done.
+        </Content>
+      </StackItem>
+    </Stack>
+  );
+
+  if (nodes.pulled) {
+    return (
+      <Stack hasGutter>
+        <StackItem>
+          <Content component="p">
+            The nodes pull with the cluster pull secret, openshift-config/pull-secret. The nightly catalog runs its
+            quay.io/rhoai image, so they can pull.
+          </Content>
+        </StackItem>
+        <StackItem>
+          <ExpandableSection
+            toggleText="The command that adds the quay.io/rhoai entry"
+            isExpanded={commandOpen}
+            onToggle={(_e, open) => setCommandOpen(open)}
+            isIndented
+          >
+            {command}
+          </ExpandableSection>
+        </StackItem>
+      </Stack>
+    );
+  }
+
+  const checkReason = blocker ?? (checking ? null : checkImage ? null : checkImageReason ?? "Looking up the newest nightly build...");
+  return (
+    <Stack hasGutter>
+      <StackItem>
+        <Content component="p">
+          {selfManaged
+            ? "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret. The secret saved above is the updater's own copy, for its Quay lookups. The updater has no access to openshift-config/pull-secret, so a cluster-admin adds the quay.io/rhoai entry with this command:"
+            : "The updater could not read whether this cluster has a hosted control plane. On ROSA HCP the nodes use the secret saved above. If this cluster is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret, which the updater has no access to: a cluster-admin adds the quay.io/rhoai entry with this command:"}
+        </Content>
+      </StackItem>
+      <StackItem>{command}</StackItem>
+      <StackItem>
+        <ActionList>
+          <ActionListGroup>
+            <ActionListItem>
+              <TooltipButton
+                variant="secondary"
+                onClick={handleCheck}
+                isLoading={checking || undefined}
+                isDisabled={checking}
+                disabledReason={checkReason}
+              >
+                Check that the nodes can pull
+              </TooltipButton>
+            </ActionListItem>
+          </ActionListGroup>
+        </ActionList>
+        <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-mt-sm">
+          {checking
+            ? "Waiting for a temporary catalog pod to pull the image. This takes up to two minutes."
+            : "Runs a temporary catalog pod with the newest nightly catalog image, then removes it. Nothing else changes."}
+        </Content>
+      </StackItem>
+      {result && (
+        <StackItem>
+          <Alert
+            component="p"
+            variant={result.success ? "success" : result.errorCode === "catalog_image_pull" ? "danger" : "warning"}
+            title={NODE_PULL_RESULT_TITLE[result.success ? "success" : result.errorCode ?? ""] ?? "The check found no answer"}
+            isInline
+            isPlain
+            isLiveRegion
+          >
+            {result.message}
+          </Alert>
+        </StackItem>
+      )}
+    </Stack>
+  );
+};
 
 const CREDENTIALS_HELP = (
   <>
@@ -63,7 +209,16 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   onStatusRefresh,
   titleId = "pull-secret-title",
   readOnly = false,
+  controlPlane,
+  checkImage,
+  checkImageReason,
+  nodeCheck,
+  onNodeCheck,
 }) => {
+  // The node check's result: the parent's when it keeps it, else this row's.
+  const [ownNodeCheck, setOwnNodeCheck] = useState<OperationResponse | null>(null);
+  const nodeResult = onNodeCheck ? nodeCheck ?? null : ownNodeCheck;
+  const setNodeResult = onNodeCheck ?? setOwnNodeCheck;
   // The unified gate (permissions, session, this tab's stream, the backend
   // lock). Saving the secret repairs an install, so OLM still installing
   // after an operation does not block it.
@@ -73,6 +228,11 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   // readOnly is the gitops profile, which does not use the secret
   // (utils.ts, pullSecretNotUsed).
   const notUsed = readOnly;
+  // The nodes' part: after the updater's copy is saved, on a cluster whose
+  // nodes may not use it (the backend leaves nodes out on a hosted control
+  // plane and in the gitops profile).
+  const nodes = notUsed ? undefined : pullSecret.nodes;
+  const nodeState = notUsed ? "not-applicable" : nodePullState(pullSecret, nodeResult);
   const [authValue, setAuthValue] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authResult, setAuthResult] = useState<OperationResponse | null>(null);
@@ -181,7 +341,12 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             {tokenInvalid ? (
               <HelperTextItem variant="error">Expected base64 of user:password (the &quot;auth&quot; value of a Docker config).</HelperTextItem>
             ) : (
-              <HelperTextItem>{CREDENTIALS_HELP} Saved as additional-pull-secret in kube-system.</HelperTextItem>
+              <HelperTextItem>
+                {CREDENTIALS_HELP} Saved as additional-pull-secret in kube-system.
+                {nodes && !pullSecret.exists && (controlPlane === "self-managed"
+                  ? " The nodes of this self-managed cluster need it in openshift-config/pull-secret too: once it is saved, this item shows the command."
+                  : " If this cluster is self-managed, its nodes need it in openshift-config/pull-secret too: once it is saved, this item shows the command.")}
+              </HelperTextItem>
             )}
           </HelperText>
         </FormHelperText>
@@ -220,6 +385,10 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
           <FlexItem>
             {notUsed
               ? <StatusLabel status="neutral">Not used</StatusLabel>
+              : nodeState === "unchecked"
+              ? <StatusLabel status="warning">Nodes not checked</StatusLabel>
+              : nodeState === "failed"
+              ? <StatusLabel status="danger">Nodes can&apos;t pull</StatusLabel>
               : pullSecret.exists && pullSecret.valid
               ? <StatusLabel status="success">Ready</StatusLabel>
               : pullSecret.exists
@@ -230,7 +399,9 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
         <Content component="p" className="pf-v6-u-text-color-subtle">
           {notUsed
             ? "The gitops profile does not use additional-pull-secret: the cluster's pull secret is used. Git or ACM manage it here; the updater does not read or check it."
-            : "Credentials the cluster uses to pull nightly images from quay.io/rhoai."}
+            : nodes
+              ? "Credentials for quay.io/rhoai: the updater's copy here, and the cluster pull secret the nodes use."
+              : "Credentials the cluster uses to pull nightly images from quay.io/rhoai."}
         </Content>
       </StackItem>
 
@@ -295,6 +466,19 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             isInline
             isPlain
             isLiveRegion
+          />
+        </StackItem>
+      )}
+
+      {nodes && pullSecret.exists && pullSecret.valid && (
+        <StackItem>
+          <NodePullSecret
+            nodes={nodes}
+            controlPlane={controlPlane}
+            checkImage={checkImage}
+            checkImageReason={checkImageReason}
+            result={nodeResult}
+            onResult={setNodeResult}
           />
         </StackItem>
       )}

@@ -285,6 +285,26 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **Self-managed OpenShift: the nodes' pull secret.** Only hosted control
+  planes (ROSA HCP) pass `kube-system/additional-pull-secret` to the nodes;
+  a self-managed cluster's nodes pull with `openshift-config/pull-secret`.
+  The Pull secret item said Ready there, and Update then failed with
+  "Replacement catalog validation failed ... ErrImagePull ... (Setup step
+  1)". The app now reads the control plane topology (Infrastructure
+  `cluster`). On a self-managed cluster, or one whose topology it cannot
+  read, once the token is saved the item says **Nodes not checked** and
+  shows the `oc` command a cluster-admin runs to add only the
+  `quay.io/rhoai` entry to `openshift-config/pull-secret` (the token is
+  typed at a silent prompt, never written to disk; the app gets no access
+  to that Secret), and **Check that the nodes can pull**, which runs
+  Update's own catalog check with a temporary CatalogSource and removes it.
+  The catalog pull error of Update, Install a different build and the
+  check names the pull secret the nodes use; Diagnostics' Pull secret check
+  warns with the command; the setup instructions show the `oc`
+  ImageDigestMirrorSet on self-managed clusters; the Update dialog's node
+  check runs the real pull check there. The gitops profile's pull error no
+  longer points to a setup it does not have. New RBAC: `get` on
+  Infrastructure `cluster` (SECURITY.md).
 - `install.sh uninstall` and `make undeploy` read the namespaces of the
   Roles and RoleBindings from the template they install, instead of a fixed
   list that missed `openshift-ingress-operator` (template revision 5): its

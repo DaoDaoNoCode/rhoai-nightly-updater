@@ -1,0 +1,191 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { PullSecretSetup } from "./PullSecretCard";
+import { ClusterSetupCard } from "./StatusCards";
+import { SetupModal } from "./PrerequisitesPanel";
+import { nodePullUnverified, prerequisitesMet } from "../utils";
+import { nightlyStatus, renderWithApp } from "../test/providers";
+import type { PullSecretInfo, StatusResponse } from "../types";
+
+// The command the backend sends (pkg/cluster/node_pull_secret.sh); the card
+// shows it as it comes.
+const COMMAND = `printf 'quay.io/rhoai token (base64 user:password from step 1, with its = padding): ' && read -rs QUAY_AUTH && echo
+[ -n "$QUAY_AUTH" ] && oc get secret pull-secret -n openshift-config -o json \\
+  | QUAY_AUTH="$QUAY_AUTH" jq '.data[".dockerconfigjson"] |= (@base64d | fromjson | .auths["quay.io/rhoai"] = {auth: $ENV.QUAY_AUTH} | tojson | @base64)' \\
+  | oc replace -f -
+unset QUAY_AUTH`;
+const IMAGE = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + "0b3f9b4d".padEnd(64, "1");
+
+const saved = (nodes?: PullSecretInfo["nodes"]): PullSecretInfo => ({ exists: true, valid: true, nodes });
+const unchecked = { command: COMMAND, pulled: false };
+
+/** A fresh cluster: the updater's copy saved, the mirror there, nothing installed. */
+function freshStatus(controlPlane: StatusResponse["cluster"]["controlPlane"], pullSecret: PullSecretInfo): StatusResponse {
+  return nightlyStatus({
+    cluster: { server: "s", version: "4.22.8", user: "me", controlPlane },
+    pullSecret,
+    catalogSource: { exists: false, name: "rhoai-catalog-dev", image: "", state: "" },
+  });
+}
+
+function stubCheck(answer: object) {
+  const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+    if (url === "/api/setup/node-pull-check") {
+      return new Response(JSON.stringify(answer), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response("{}", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("The pull secret's node part, by control plane", () => {
+  it("is not there on a hosted control plane: the saved secret is Ready", () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved()} controlPlane="hosted" />);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByText(/openshift-config\/pull-secret/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
+  });
+
+  it("on a self-managed cluster shows the command and does not say Ready before the nodes are checked", () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
+    expect(screen.getByText("Nodes not checked")).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.getByText(/This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config\/pull-secret/)).toBeInTheDocument();
+    expect(screen.getByText(/a cluster-admin adds the quay.io\/rhoai entry with this command/)).toBeInTheDocument();
+    expect(document.getElementById("node-pull-secret-command-code")).toHaveTextContent(/oc replace -f -/);
+    expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
+    expect(screen.getByRole("button", { name: "Copy the command" })).toBeInTheDocument();
+    expect(screen.getByText(/oc get mcp/)).toBeInTheDocument();
+  });
+
+  it("when the control plane is unknown says it only applies if the cluster is self-managed", () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} checkImage={IMAGE} />);
+    expect(screen.getByText("Nodes not checked")).toBeInTheDocument();
+    expect(screen.getByText(/could not read whether this cluster has a hosted control plane/)).toBeInTheDocument();
+    expect(screen.getByText(/If this cluster is self-managed, its nodes pull with the cluster pull secret/)).toBeInTheDocument();
+    expect(screen.queryByText(/This cluster is self-managed:/)).not.toBeInTheDocument();
+  });
+
+  it("is not there before the updater's copy is saved; the form says it comes next", () => {
+    renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false, nodes: unchecked }} controlPlane="self-managed" />);
+    expect(screen.getByText("Missing")).toBeInTheDocument();
+    expect(screen.getByText(/The nodes of this self-managed cluster need it in openshift-config\/pull-secret too: once it is saved, this item shows the command/)).toBeInTheDocument();
+    expect(document.getElementById("node-pull-secret-command-code")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
+    cleanup();
+    renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false, nodes: unchecked }} />);
+    expect(screen.getByText(/If this cluster is self-managed, its nodes need it in openshift-config\/pull-secret too/)).toBeInTheDocument();
+    cleanup();
+    renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false }} controlPlane="hosted" />);
+    expect(screen.queryByText(/openshift-config\/pull-secret/)).not.toBeInTheDocument();
+  });
+
+  it("is Ready, with the command folded away, when the nightly catalog shows that the nodes pull", () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved({ command: COMMAND, pulled: true })} controlPlane="self-managed" />);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText(/The nightly catalog runs its quay.io\/rhoai image, so they can pull/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "The command that adds the quay.io/rhoai entry" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(document.getElementById("node-pull-secret-command-code")?.textContent).toBe(COMMAND);
+  });
+
+  it("is not shown in the gitops profile", () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" readOnly />);
+    expect(screen.getByText("Not used")).toBeInTheDocument();
+    expect(screen.queryByText(/openshift-config\/pull-secret/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Check that the nodes can pull", () => {
+  it("runs the check with the build Update would install and shows success", async () => {
+    const fetchMock = stubCheck({ success: true, message: `A temporary catalog pod pulled ${IMAGE} with the nodes' pull secret, and was removed again.`, logs: [] });
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
+    const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(check);
+    expect(await screen.findByText("The nodes can pull from quay.io/rhoai")).toBeInTheDocument();
+    const call = fetchMock.mock.calls.find(([url]) => url === "/api/setup/node-pull-check");
+    expect(call?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ image: IMAGE });
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByText("Nodes not checked")).not.toBeInTheDocument();
+  });
+
+  it("shows why the nodes cannot pull", async () => {
+    stubCheck({ success: false, errorCode: "catalog_image_pull", message: "The catalog image x cannot be pulled (ErrImagePull: unauthorized).", logs: [] });
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
+    const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(check);
+    expect(await screen.findByText("The nodes cannot pull from quay.io/rhoai")).toBeInTheDocument();
+    expect(screen.getByText(/ErrImagePull: unauthorized/)).toBeInTheDocument();
+    expect(screen.getByText("Nodes can't pull")).toBeInTheDocument();
+  });
+
+  it("waits for the build to check, and says why", async () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImageReason="The newest nightly build could not be looked up: quay down" />);
+    const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    expect(check).toHaveAttribute("aria-disabled", "true");
+    fireEvent.mouseEnter(check);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/quay down/);
+  });
+
+  it("is disabled for a read-only user", async () => {
+    renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />, { permissions: async () => ({ canMutate: false, user: "viewer" }) });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check that the nodes can pull" })).toHaveAttribute("aria-disabled", "true"));
+  });
+});
+
+describe("The cluster setup on a self-managed cluster", () => {
+  it("does not count the pull secret as done before the nodes are checked, and does once they pass", async () => {
+    stubCheck({ success: true, message: "ok", logs: [] });
+    const status = freshStatus("self-managed", saved(unchecked));
+    renderWithApp(<ClusterSetupCard status={status} onStatusRefresh={vi.fn()} onShowInstructions={vi.fn()} checkImage={IMAGE} />);
+    expect(screen.getByText("1 of 2 ready")).toBeInTheDocument();
+    const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
+    await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(check);
+    await screen.findByText("The nodes can pull from quay.io/rhoai");
+    const header = screen.getByRole("heading", { name: "One-time cluster setup" }).closest(".pf-v6-c-card__header") as HTMLElement;
+    expect(within(header).getByText("Ready")).toBeInTheDocument();
+  });
+
+  it("keeps the card at the top (nodes unverified) but does not hold back Update", () => {
+    const status = freshStatus("self-managed", saved(unchecked));
+    expect(nodePullUnverified(status)).toBe(true);
+    expect(prerequisitesMet(status)).toBe(true);
+    expect(nodePullUnverified(freshStatus("self-managed", saved({ command: COMMAND, pulled: true })))).toBe(false);
+    expect(nodePullUnverified(freshStatus("hosted", saved()))).toBe(false);
+    expect(nodePullUnverified(status, true)).toBe(false);
+    expect(nodePullUnverified(freshStatus("self-managed", { exists: false, valid: false, nodes: unchecked }))).toBe(false);
+  });
+});
+
+describe("The setup instructions by control plane", () => {
+  it("show the rosa steps on ROSA HCP", () => {
+    renderWithApp(<SetupModal isOpen onClose={vi.fn()} status={freshStatus("hosted", saved())} />);
+    expect(document.getElementById("cmd-image-mirror")).toHaveTextContent(/rosa create image-mirror/);
+    expect(document.getElementById("cmd-image-mirror-oc")).toBeNull();
+  });
+
+  it("show the oc ImageDigestMirrorSet on a self-managed cluster, and point to the nodes' command", () => {
+    renderWithApp(<SetupModal isOpen onClose={vi.fn()} status={freshStatus("self-managed", saved(unchecked))} />);
+    expect(document.getElementById("cmd-image-mirror-oc")).toHaveTextContent(/kind: ImageDigestMirrorSet/);
+    expect(document.getElementById("cmd-image-mirror-oc")).toHaveTextContent(/name: rhoai-quay-mirror/);
+    expect(document.getElementById("cmd-image-mirror")).toBeNull();
+    expect(screen.getByText(/The nodes of a self-managed cluster pull with openshift-config\/pull-secret/)).toBeInTheDocument();
+  });
+
+  it("show both, labelled, when the control plane is unknown", () => {
+    renderWithApp(<SetupModal isOpen onClose={vi.fn()} status={freshStatus(undefined, saved(unchecked))} />);
+    expect(screen.getByText("On ROSA HCP")).toBeInTheDocument();
+    expect(screen.getByText("On self-managed OpenShift")).toBeInTheDocument();
+    expect(document.getElementById("cmd-image-mirror")).not.toBeNull();
+    expect(document.getElementById("cmd-image-mirror-oc")).not.toBeNull();
+  });
+});

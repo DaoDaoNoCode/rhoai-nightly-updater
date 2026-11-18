@@ -67,6 +67,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: sh scripts/test-release.sh
       - run: bash scripts/test-install.sh
+      # The runner image has jq: the self-managed pull secret command runs
+      # here (the GitLab job's Go image has none and skips it).
+      - run: REQUIRE_JQ=1 bash scripts/test-node-pull-secret.sh
 
   chart:
     runs-on: ubuntu-latest

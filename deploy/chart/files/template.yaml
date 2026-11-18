@@ -105,6 +105,14 @@ objects:
         resources: ["consoles"]
         resourceNames: ["cluster"]
         verbs: ["get"]
+      # The control plane topology (status.controlPlaneTopology): a
+      # self-managed cluster's nodes do not use additional-pull-secret, so
+      # the setup shows the command for openshift-config/pull-secret
+      # (read-only, non-secret cluster config; SECURITY.md)
+      - apiGroups: ["config.openshift.io"]
+        resources: ["infrastructures"]
+        resourceNames: ["cluster"]
+        verbs: ["get"]
       - apiGroups: ["config.openshift.io"]
         resources: ["imagedigestmirrorsets"]
         verbs: ["list"]

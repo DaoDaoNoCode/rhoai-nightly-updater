@@ -35,7 +35,9 @@ Conventions:
 | Action | Object | Change |
 |---|---|---|
 | Pull secret card | Secret `kube-system/additional-pull-secret` | Created if missing; otherwise SSA. Only the `quay.io/rhoai` entry of `.dockerconfigjson` is replaced (equivalent spellings removed); other registries are kept. Unpadded base64 is stored padded |
-| — | IDMS | **Never created by the tool.** You create it (`rosa create image-mirror`) |
+| Check that the nodes can pull (self-managed or unknown topology) | CatalogSource `openshift-marketplace/rhoai-catalog-dev-verify-<id>` | The verification catalog of §4 with the newest nightly catalog image: created, read until READY (pulled) or a pull failure (at most 2 minutes), then deleted. Gated and locked like any change |
+| — | Secret `openshift-config/pull-secret` | **Never read or written by the tool.** On a self-managed cluster the Pull secret card shows the `oc` command a cluster-admin runs to add the `quay.io/rhoai` entry |
+| — | IDMS | **Never created by the tool.** You create it (`rosa create image-mirror` on ROSA HCP, `oc apply` of an ImageDigestMirrorSet on self-managed OpenShift) |
 
 ## 4. Operator lifecycle (Status page)
 

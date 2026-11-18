@@ -54,6 +54,9 @@ type fakeOLM struct {
 	intercept func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool
 	// admission: the objects served at these paths (servesGitOpsPolicy).
 	admission map[string]map[string]interface{}
+	// topology: Infrastructure cluster's status.controlPlaneTopology, ""
+	// = Infrastructure not readable (403).
+	topology string
 
 	requests []fakeRequest
 }
@@ -124,6 +127,8 @@ func olmInstalls(csv string) func(*fakeOLM, map[string]interface{}) {
 func (f *fakeOLM) client(ctx context.Context) *Client {
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	f.t.Cleanup(srv.Close)
+	// A new server may reuse an earlier test's address, which keys the cache.
+	controlPlaneCache.Purge()
 	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}
 }
 
@@ -180,6 +185,13 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	last := p[strings.LastIndex(p, "/")+1:]
 	switch {
+	case p == "/apis/config.openshift.io/v1/infrastructures/cluster":
+		if f.topology == "" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}`)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"status":{"controlPlaneTopology":%q}}`, f.topology)
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
 		_, _ = io.WriteString(w, pullSecretBody(f.t, map[string]interface{}{"quay.io/rhoai": map[string]interface{}{"auth": exampleAuth("user:pass")}}))
 	case strings.HasSuffix(p, "/imagedigestmirrorsets"):

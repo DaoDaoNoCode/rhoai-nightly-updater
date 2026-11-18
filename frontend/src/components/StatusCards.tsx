@@ -29,11 +29,11 @@ import ArrowCircleUpIcon from "@patternfly/react-icons/dist/esm/icons/arrow-circ
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import SearchIcon from "@patternfly/react-icons/dist/esm/icons/search-icon";
 import { useNavigate } from "react-router-dom";
-import type { LatestNightlyResponse, NightlyBuild, StatusResponse } from "../types";
+import type { LatestNightlyResponse, NightlyBuild, OperationResponse, StatusResponse } from "../types";
 import { isOnNightly, tagLine } from "../build";
 import { operatorInstalled, prerequisitesMet as setupComplete, pullSecretReady } from "../utils";
 import { BuildSummary } from "./BuildSummary";
-import { PullSecretSetup } from "./PullSecretCard";
+import { nodePullState, PullSecretSetup } from "./PullSecretCard";
 import { CardList, CardListItem } from "./CardList";
 import { StatusLabel, TagLabel } from "./StatusLabel";
 import { TooltipButton } from "./TooltipButton";
@@ -468,6 +468,9 @@ interface ClusterSetupCardProps {
   collapsible?: boolean;
   /** Show the state only (the gitops profile, which does not set the cluster up). */
   readOnly?: boolean;
+  /** The catalog image the nodes' pull check runs (the build Update would install), or why there is none yet. */
+  checkImage?: string;
+  checkImageReason?: string;
 }
 
 /**
@@ -475,11 +478,16 @@ interface ClusterSetupCardProps {
  * one card. While either is missing it is open and comes first; once both
  * are ready it is an expandable card that shows "Ready".
  */
-export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onStatusRefresh, onShowInstructions, collapsible = false, readOnly = false }) => {
+export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onStatusRefresh, onShowInstructions, collapsible = false, readOnly = false, checkImage, checkImageReason }) => {
   const [expanded, setExpanded] = useState(false);
+  const [nodeCheck, setNodeCheck] = useState<OperationResponse | null>(null);
   // readOnly is the gitops profile, where a missing pull secret is not used.
-  const ready = setupComplete(status, readOnly);
-  const done = (pullSecretReady(status, readOnly) ? 1 : 0) + (status.imageMirror.exists ? 1 : 0);
+  // On a self-managed cluster the pull secret is done only once the nodes
+  // are known to pull (a READY nightly catalog, or a passed check).
+  const nodesPending = !readOnly && ["unchecked", "failed"].includes(nodePullState(status.pullSecret, nodeCheck));
+  const pullSecretDone = pullSecretReady(status, readOnly) && !nodesPending;
+  const ready = setupComplete(status, readOnly) && !nodesPending;
+  const done = (pullSecretDone ? 1 : 0) + (status.imageMirror.exists ? 1 : 0);
   const titleId = collapsible ? "cluster-setup-title" : "setup-title";
   const body = (
     <CardBody>
@@ -493,7 +501,17 @@ export const ClusterSetupCard: React.FC<ClusterSetupCardProps> = ({ status, onSt
         <StackItem>
           <CardList aria-label="Cluster setup">
             <CardListItem labelledBy="setup-pull-secret">
-              <PullSecretSetup pullSecret={status.pullSecret} onStatusRefresh={onStatusRefresh} titleId="setup-pull-secret" readOnly={readOnly} />
+              <PullSecretSetup
+                pullSecret={status.pullSecret}
+                onStatusRefresh={onStatusRefresh}
+                titleId="setup-pull-secret"
+                readOnly={readOnly}
+                controlPlane={status.cluster.controlPlane}
+                checkImage={checkImage}
+                checkImageReason={checkImageReason}
+                nodeCheck={nodeCheck}
+                onNodeCheck={setNodeCheck}
+              />
             </CardListItem>
             <CardListItem labelledBy="setup-image-mirror">
               <Stack hasGutter>

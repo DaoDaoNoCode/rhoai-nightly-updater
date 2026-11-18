@@ -273,6 +273,43 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the cluster setup of a self-managed cluster (and one
+    // whose topology is unknown) in every state, light and dark, to check it
+    // by eye (screenshots.sh self-managed-review, THEMES_DIR).
+    async "self-managed-review"() {
+      const shoot = async (name, dark, el) => {
+        await fit();
+        await el.screenshot({ path: `${out}/themes/self-managed-${name}-${dark ? "dark" : "light"}.png` });
+      };
+      for (const dark of [false, true]) {
+        await open("/", "self-managed", { dark, width: 1440 });
+        await shoot("1-before-step-1", dark, card("One-time cluster setup"));
+        await open("/", "self-managed-saved", { dark, width: 1440 });
+        await shoot("2-after-step-1", dark, card("One-time cluster setup"));
+        await card("One-time cluster setup").getByRole("button", { name: "Check that the nodes can pull" }).click();
+        await alert("The nodes can pull from quay.io/rhoai").waitFor();
+        await wait(300);
+        await shoot("3-check-passed", dark, card("One-time cluster setup"));
+        await open("/", "self-managed-saved-fails", { dark, width: 1440 });
+        await card("One-time cluster setup").getByRole("button", { name: "Check that the nodes can pull" }).click();
+        await alert("The nodes cannot pull from quay.io/rhoai").waitFor();
+        await wait(300);
+        await shoot("4-check-failed", dark, card("One-time cluster setup"));
+        await open("/", "self-managed-unknown", { dark, width: 1440 });
+        await shoot("5-topology-unknown", dark, card("One-time cluster setup"));
+        await open("/", "self-managed-installed", { dark, width: 1440 });
+        await page.locator("#cluster-setup-toggle").click();
+        await page.getByRole("button", { name: "The command that adds the quay.io/rhoai entry" }).click();
+        await wait(300);
+        await shoot("6-installed", dark, card("Cluster setup"));
+        await open("/", "self-managed", { dark, width: 1440 });
+        await page.getByRole("button", { name: "How to create the image mirror" }).click();
+        await page.getByRole("dialog").waitFor();
+        await wait(300);
+        await shoot("7-mirror-instructions", dark, page.locator(".pf-v6-c-modal-box"));
+      }
+    },
+
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
@@ -465,6 +502,20 @@ async (page) => {
         notes: [
           { at: setup.getByRole("button", { name: "Create secret" }), n: 1, pos: "r" },
           { at: setup.getByRole("button", { name: "How to create the image mirror" }), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+
+      // Self-managed OpenShift after step 1: the nodes' command and check.
+      await open("/", "self-managed-saved");
+      const selfManaged = card("One-time cluster setup");
+      await selfManaged.getByRole("button", { name: "Check that the nodes can pull" }).click();
+      await selfManaged.locator(".pf-v6-c-alert__title", { hasText: "The nodes can pull from quay.io/rhoai" }).waitFor();
+      await crop("status-cluster-setup-self-managed", selfManaged, {
+        notes: [
+          { at: selfManaged.locator("#node-pull-secret-command-code"), n: 1, pos: "l" },
+          { at: selfManaged.getByRole("button", { name: "Check that the nodes can pull" }), n: 2, pos: "r" },
+          { at: selfManaged.locator(".pf-v6-c-alert__title", { hasText: "The nodes can pull from quay.io/rhoai" }), n: 3, pos: "r" },
         ],
         pad: 24,
       });

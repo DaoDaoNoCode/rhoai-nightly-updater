@@ -148,9 +148,12 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 // admission policy, and that policy against the cluster's
 // (gitOpsWriteProblem): before the first deletion,
 // and again on the live Subscription before it is deleted.
+//
+// pullAdvice words a catalog image pull failure for the profile
+// (pullFailureWatch.advice).
 func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV types.CSVInfo, g operatorGitOps,
 	recovery *operatorRecovery, logs *[]string, emit func(UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error),
-	policy func(newSub, restoreSub map[string]interface{}) string,
+	policy func(newSub, restoreSub map[string]interface{}) string, pullAdvice func(*Client) string,
 ) (*types.OperationResponse, error) {
 	stopped := func(msg string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.ctx.Err()
@@ -165,7 +168,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	// --- Steps 4 and 5: wait_catalog_ready, detect_channel ---
 	emit(UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build..."})
 	*logs = append(*logs, "Waiting for the catalog to serve the build...")
-	serving, err := waitForCatalogServing(c, image, target, changedBy, emit, logs)
+	serving, err := waitForCatalogServing(c, image, target, changedBy, emit, logs, pullAdvice)
 	var changed *errCatalogImageChanged
 	switch {
 	case errors.As(err, &changed):

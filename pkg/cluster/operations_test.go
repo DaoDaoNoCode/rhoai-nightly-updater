@@ -49,6 +49,8 @@ func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 		httpClient: server.Client(),
 		ctx:        context.Background(),
 	}
+	// A new server may reuse an earlier test's address, which keys the cache.
+	controlPlaneCache.Purge()
 
 	return client, server.Close
 }

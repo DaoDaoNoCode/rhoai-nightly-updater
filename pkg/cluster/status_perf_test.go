@@ -24,6 +24,7 @@ type statusAPI struct {
 	csvList  string
 	csImage  string
 	failPath map[string]int
+	infra    string // Infrastructure status.controlPlaneTopology; "" = the field is absent
 }
 
 func (a *statusAPI) count(path string) int {
@@ -76,6 +77,11 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = fmt.Fprintf(w, `{"spec":{"image":%q},"status":{"connectionState":{"lastObservedState":"READY"}}}`, a.csImage)
+	case p == "/apis/config.openshift.io/v1/infrastructures/cluster":
+		a.mu.Lock()
+		infra := a.infra
+		a.mu.Unlock()
+		_, _ = fmt.Fprintf(w, `{"status":{"controlPlaneTopology":%q}}`, infra)
 	case p == "/apis/config.openshift.io/v1/consoles/cluster":
 		_, _ = fmt.Fprint(w, `{"status":{"consoleURL":"https://console.example"}}`)
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
@@ -100,8 +106,10 @@ func newStatusAPI(t *testing.T, a *statusAPI) *Client {
 	t.Cleanup(srv.Close)
 	stableTargetCache.Purge()
 	consoleURLCache.Purge()
+	controlPlaneCache.Purge()
 	t.Cleanup(stableTargetCache.Purge)
 	t.Cleanup(consoleURLCache.Purge)
+	t.Cleanup(controlPlaneCache.Purge)
 	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background(), username: "tester"}
 }
 

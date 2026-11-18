@@ -93,8 +93,8 @@ export const HelpButton: React.FC = () => {
 
             <Content component={ContentVariants.h3}>One-time cluster setup</Content>
             <List>
-              <ListItem><strong>Pull secret:</strong> <code>additional-pull-secret</code> in kube-system with credentials for quay.io/rhoai.</ListItem>
-              <ListItem><strong>Image mirror (IDMS):</strong> redirects registry.redhat.io/rhoai to quay.io/rhoai; created with the <code>rosa</code> CLI.</ListItem>
+              <ListItem><strong>Pull secret:</strong> <code>additional-pull-secret</code> in kube-system with credentials for quay.io/rhoai. On self-managed OpenShift the nodes pull with <code>openshift-config/pull-secret</code> instead: a cluster-admin adds the quay.io/rhoai entry with the command the setup shows.</ListItem>
+              <ListItem><strong>Image mirror (IDMS):</strong> redirects registry.redhat.io/rhoai to quay.io/rhoai; created with the <code>rosa</code> CLI on ROSA HCP, with <code>oc</code> on self-managed OpenShift.</ListItem>
             </List>
             <Content component={ContentVariants.p}>The Status page shows both and how to set them up until they are ready.</Content>
 

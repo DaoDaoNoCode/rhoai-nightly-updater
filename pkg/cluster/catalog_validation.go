@@ -136,73 +136,96 @@ func verificationCatalogPrefix() string {
 // pinned builds) before uninstall. Its unique identity avoids stale package
 // metadata from the previous nightly build. No unrelated tag is resolved.
 func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget, error) {
-	cleanupStaleVerificationCatalogs(c)
-	name := verificationCatalogPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
-	path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, name)
-	defer func() {
-		ctx, cancel := postOperationContext(c, 30*time.Second)
-		defer cancel()
-		if _, err := c.WithContext(ctx).delete(path); err != nil && !IsK8sError(err, 404) {
-			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)
-		}
-	}()
-	spec := buildCatalogSourceSpec(image)
-	meta := spec["metadata"].(map[string]interface{})
-	meta["name"] = name
-	meta["labels"] = map[string]interface{}{managedByLabel: managedByValue, catalogPurposeLabel: verificationCatalogRole}
-	if _, _, err := c.apply(path, spec); err != nil {
-		return catalogTarget{}, fmt.Errorf("create verification catalog: %w", err)
+	name, path, remove, err := createVerificationCatalog(c, image)
+	if err != nil {
+		return catalogTarget{}, err
 	}
+	defer remove()
 	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
 	lastProblem := "the catalog has not reported its state yet"
-	var pull pullFailureWatch
+	pull := pullFailureWatch{advice: nodePullAdvice}
 	for clk.Now().Before(deadline) {
-		body, _, err := c.get(path)
+		state, err := verificationCatalogState(c, path)
 		if err != nil {
-			lastProblem = "read verification catalog: " + err.Error()
-		} else {
-			var cs struct {
-				Status struct {
-					Connection struct {
-						State string `json:"lastObservedState"`
-					} `json:"connectionState"`
-				} `json:"status"`
+			lastProblem = err.Error()
+		} else if state != "READY" {
+			lastProblem = "catalog state is " + state
+			if pullErr := pull.check(c, name, image); pullErr != nil {
+				return catalogTarget{}, pullErr
 			}
-			if err := json.Unmarshal(body, &cs); err != nil {
-				lastProblem = "parse verification catalog: " + err.Error()
-			} else if state := cs.Status.Connection.State; state != "READY" {
-				if state == "" {
-					state = "unknown"
-				}
-				lastProblem = "catalog state is " + state
-				if pullErr := pull.check(c, name, image); pullErr != nil {
-					return catalogTarget{}, pullErr
-				}
-			} else if channels, channelErr := catalogChannels(c, name); channelErr != nil {
-				lastProblem = channelErr.Error()
-			} else if len(channels) == 0 {
-				lastProblem = "the catalog does not list the " + SubName + " package yet"
-			} else if override != "" {
-				if entry := findChannel(channels, override); entry != nil {
-					head, _ := entry["currentCSV"].(string)
-					return catalogTarget{Channel: override, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
-				}
-				lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(channelNames(channels), ", "))
-			} else if ch, err := detectBestChannel(channels, image); err != nil {
-				lastProblem = err.Error()
-			} else if ch != "" {
-				entry := findChannel(channels, ch)
+		} else if channels, channelErr := catalogChannels(c, name); channelErr != nil {
+			lastProblem = channelErr.Error()
+		} else if len(channels) == 0 {
+			lastProblem = "the catalog does not list the " + SubName + " package yet"
+		} else if override != "" {
+			if entry := findChannel(channels, override); entry != nil {
 				head, _ := entry["currentCSV"].(string)
-				return catalogTarget{Channel: ch, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
-			} else {
-				lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
+				return catalogTarget{Channel: override, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
 			}
+			lastProblem = fmt.Sprintf("channel %q is not in the catalog (available: %s)", override, strings.Join(channelNames(channels), ", "))
+		} else if ch, err := detectBestChannel(channels, image); err != nil {
+			lastProblem = err.Error()
+		} else if ch != "" {
+			entry := findChannel(channels, ch)
+			head, _ := entry["currentCSV"].(string)
+			return catalogTarget{Channel: ch, HeadCSV: head, OwnedCRDs: ownedCRDVersions(entry), Fingerprint: headFingerprint(entry)}, nil
+		} else {
+			lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 		}
 		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
 			return catalogTarget{}, err
 		}
 	}
 	return catalogTarget{}, fmt.Errorf("selected image did not publish a ready RHOAI catalog with a matching channel: %s", lastProblem)
+}
+
+// createVerificationCatalog creates a temporary CatalogSource for image,
+// labelled so that a leftover is found and removed later, after removing
+// stale ones. remove deletes it (also after the operation's context ended).
+func createVerificationCatalog(c *Client, image string) (name, path string, remove func(), err error) {
+	cleanupStaleVerificationCatalogs(c)
+	name = verificationCatalogPrefix() + strconv.FormatInt(time.Now().UnixNano(), 36)
+	path = namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, name)
+	remove = func() {
+		ctx, cancel := postOperationContext(c, 30*time.Second)
+		defer cancel()
+		if _, err := c.WithContext(ctx).delete(path); err != nil && !IsK8sError(err, 404) {
+			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)
+		}
+	}
+	spec := buildCatalogSourceSpec(image)
+	meta := spec["metadata"].(map[string]interface{})
+	meta["name"] = name
+	meta["labels"] = map[string]interface{}{managedByLabel: managedByValue, catalogPurposeLabel: verificationCatalogRole}
+	if _, _, err := c.apply(path, spec); err != nil {
+		// The apply may have created it before failing.
+		remove()
+		return "", "", nil, fmt.Errorf("create verification catalog: %w", err)
+	}
+	return name, path, remove, nil
+}
+
+// verificationCatalogState reads a verification catalog's
+// status.connectionState.lastObservedState ("unknown" while it has none).
+func verificationCatalogState(c *Client, path string) (string, error) {
+	body, _, err := c.get(path)
+	if err != nil {
+		return "", fmt.Errorf("read verification catalog: %w", err)
+	}
+	var cs struct {
+		Status struct {
+			Connection struct {
+				State string `json:"lastObservedState"`
+			} `json:"connectionState"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(body, &cs); err != nil {
+		return "", fmt.Errorf("parse verification catalog: %w", err)
+	}
+	if cs.Status.Connection.State == "" {
+		return "unknown", nil
+	}
+	return cs.Status.Connection.State, nil
 }
 
 // findChannel returns the PackageManifest channel entry with the given name.
@@ -261,10 +284,16 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 type catalogImagePullError struct {
 	image  string
 	detail string
+	// advice says which pull secret to check (pullFailureWatch.advice).
+	advice string
 }
 
 func (e *catalogImagePullError) Error() string {
-	return fmt.Sprintf("the catalog image %s cannot be pulled (%s). Check that the pull secret has access to quay.io/rhoai (Setup step 1) and that the image exists; on a new cluster the credentials can take a few minutes to reach every node", e.image, e.detail)
+	advice := e.advice
+	if advice == "" {
+		advice = "Check that the nodes' pull secret has access to quay.io/rhoai and that the image exists"
+	}
+	return fmt.Sprintf("the catalog image %s cannot be pulled (%s). %s", e.image, e.detail, advice)
 }
 
 func isCatalogImagePullError(err error) bool {
@@ -275,6 +304,12 @@ func isCatalogImagePullError(err error) bool {
 // pullFailureWatch tracks how long a catalog pod has been failing to pull.
 type pullFailureWatch struct {
 	since time.Time
+	// advice, when set, words what the error tells the user to check:
+	// nodePullAdvice in the full profile (it depends on the control plane),
+	// gitOpsProfilePullAdvice in the gitops profile. A function value, so
+	// the gitops profile, which passes its own, never reaches the control
+	// plane read (deploy/rbac-gitops.yaml does not grant it).
+	advice func(*Client) string
 }
 
 // check reads the pod OLM runs for the CatalogSource (label
@@ -290,7 +325,11 @@ func (w *pullFailureWatch) check(c *Client, source, image string) error {
 		w.since = clk.Now()
 	}
 	if reason == "InvalidImageName" || clk.Since(w.since) >= CatalogImagePullGrace {
-		return &catalogImagePullError{image: image, detail: detail}
+		err := &catalogImagePullError{image: image, detail: detail}
+		if w.advice != nil {
+			err.advice = w.advice(c)
+		}
+		return err
 	}
 	return nil
 }

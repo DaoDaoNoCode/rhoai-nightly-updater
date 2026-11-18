@@ -32,17 +32,20 @@ func getStableSource() string {
 }
 
 // statusRegistryReads are the reads of GetStatus that the gitops profile
-// leaves out: the pull secret (a Secret, checked with Quay) and the newest
-// nightly of the installed stream (from Quay). nil fields are skipped.
+// leaves out: the pull secret (a Secret, checked with Quay), the newest
+// nightly of the installed stream (from Quay), and the control plane
+// topology, which only the pull secret's node part uses. nil fields are
+// skipped.
 type statusRegistryReads struct {
-	pullSecret func(c *Client) (types.PullSecretInfo, string, error)
-	nightly    func(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus
+	pullSecret   func(c *Client) (types.PullSecretInfo, string, error)
+	nightly      func(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus
+	controlPlane func(c *Client) string
 }
 
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
 // All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
-	return getStatus(c, statusRegistryReads{pullSecret: readPullSecret, nightly: getNightlyStatus})
+	return getStatus(c, statusRegistryReads{pullSecret: readPullSecret, nightly: getNightlyStatus, controlPlane: cachedControlPlane})
 }
 
 // GetStatusGitOps is GetStatus in the gitops profile, which reads no Secret
@@ -161,6 +164,17 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		}
 	})
 
+	controlPlane := ""
+	run(func() {
+		if reads.controlPlane == nil {
+			return
+		}
+		cp := reads.controlPlane(c)
+		mu.Lock()
+		controlPlane = cp
+		mu.Unlock()
+	})
+
 	run(func() {
 		if idms, err := getIDMS(c); err != nil {
 			addErr(fmt.Sprintf("image mirror: %v", err))
@@ -231,6 +245,15 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	})
 
 	wg.Wait()
+
+	// The nodes' side of the pull secret: shown, with the command, unless
+	// the control plane is known to be hosted. An unreadable topology
+	// counts as possibly self-managed: the status never claims that the
+	// nodes have the credentials.
+	if reads.controlPlane != nil {
+		status.Cluster.ControlPlane = controlPlane
+		status.PullSecret.Nodes = nodePullInfo(controlPlane, status.CatalogSource)
+	}
 
 	// Cached per installed catalog image; only the first poll after an image
 	// change waits for Quay (bounded by nightlyStatusTimeout).

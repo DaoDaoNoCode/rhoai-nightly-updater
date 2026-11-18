@@ -103,19 +103,30 @@ Nightly builds come from `quay.io/rhoai`. The cluster needs a pull secret for it
 
 ### Self-managed OpenShift: the cluster pull secret
 
-Only hosted control planes (ROSA HCP) pass `kube-system/additional-pull-secret` to the nodes. On a self-managed cluster the nodes pull with the cluster pull secret, `openshift-config/pull-secret`, so add the `quay.io/rhoai` entry there too. The standard procedure (OpenShift docs: "Updating the global cluster pull secret"):
+Only hosted control planes (ROSA HCP) pass `kube-system/additional-pull-secret` to the nodes. On a self-managed cluster the nodes pull with the cluster pull secret, `openshift-config/pull-secret`, so the `quay.io/rhoai` entry has to go there too. The app keeps writing `additional-pull-secret` on every cluster: its own Quay lookups (the newest nightly, Build Explorer) read it. On a self-managed cluster that copy is the app's only; the nodes never see it.
+
+The app reads the cluster's control plane topology (Infrastructure `cluster`, `status.controlPlaneTopology`; `External` is a hosted control plane). It has no access to `openshift-config/pull-secret`, which holds every registry credential of the cluster. So once the token is saved, the **Pull secret** item of a self-managed cluster (or one whose topology it could not read) shows **Nodes not checked** and this command for a cluster-admin (bash or zsh, `jq` 1.6 or later):
 
 ```bash
-oc get secret/pull-secret -n openshift-config --template='{{index .data ".dockerconfigjson" | base64decode}}' > pull-secret.json
-oc registry login --registry=quay.io/rhoai --auth-basic=<user>:<token> --to=pull-secret.json
-oc set data secret/pull-secret -n openshift-config --from-file=.dockerconfigjson=pull-secret.json
-rm pull-secret.json
+printf 'quay.io/rhoai token (base64 user:password from step 1, with its = padding): ' && read -rs QUAY_AUTH && echo
+[ -n "$QUAY_AUTH" ] && oc get secret pull-secret -n openshift-config -o json \
+  | QUAY_AUTH="$QUAY_AUTH" jq '.data[".dockerconfigjson"] |= (@base64d | fromjson | .auths["quay.io/rhoai"] = {auth: $ENV.QUAY_AUTH} | tojson | @base64)' \
+  | oc replace -f -
+unset QUAY_AUTH
 ```
 
-- `<user>:<token>` is the token from step 0 decoded: `echo '<token from step 0>' | base64 -d`.
-- `pull-secret.json` holds every registry credential of the cluster: delete it right away.
-- The nodes pick up the new pull secret within a few minutes, without a drain or a reboot.
-- The app's **Pull secret** item checks `kube-system/additional-pull-secret` only, so it does not show whether this step is done.
+- It asks for the token from step 0 (the value you pasted into the app) and does not echo it, so it stays off the screen and out of the shell history. The prompt is printed by `printf` because zsh's `read` has no `-p`.
+- The token reaches `jq` through its environment, not its arguments, which `ps` shows to every user of the machine. Without a token (an empty line, Ctrl-D) nothing runs.
+- `jq` changes only the `quay.io/rhoai` key; every other registry login stays as it is.
+- `oc get -o json` keeps the Secret's `resourceVersion`, so `oc replace` fails with a conflict if someone changed the Secret meanwhile, instead of overwriting their change. A missing or garbled Secret makes `jq` fail, so `oc replace` gets nothing and changes nothing. Nothing is written to disk.
+- The token must keep its `=` padding: CRI-O rejects an unpadded value. (The app pads it for its own copy; the token Bitwarden gives is padded.)
+- The nodes pick it up within a few minutes, without a drain or a reboot; `oc get mcp` shows `UPDATED True` for every pool when done.
+
+<img src="images/status-cluster-setup-self-managed.png" alt="Self-managed cluster setup: the Pull secret item with the command for openshift-config/pull-secret, Check that the nodes can pull, and its result" width="760">
+
+(1) the command, with its copy button; (2) **Check that the nodes can pull**; (3) its result.
+
+Then click **Check that the nodes can pull**. It runs Update's own catalog check: a temporary CatalogSource with the newest nightly catalog image, which tells whether a node can pull it, and removes it again (about a minute). The item says **Ready** once the check passes, and from then on while the nightly catalog runs its `quay.io/rhoai` image. Until then the setup card stays at the top of the page; **Install latest nightly** is not held back, and its own catalog check says the same if the nodes cannot pull.
 
 ### The image mirror
 
@@ -134,7 +145,7 @@ rosa create image-mirror --cluster=<cluster-name> \
 
 (Syntax checked with `rosa create image-mirror --help`, rosa 1.2.57. `digest` is the default and only type.) A 403 means you lack OCM write access to the cluster; ask its owner.
 
-On self-managed OpenShift, create the ImageDigestMirrorSet with `oc` (cluster-admin). Creating it does not drain or reboot the nodes; deleting it later does drain them.
+On self-managed OpenShift, create the ImageDigestMirrorSet with `oc` (cluster-admin); **How to create the image mirror** shows this command there (both, when the app could not read the topology). Creating it does not drain or reboot the nodes; deleting it later does drain them.
 
 ```bash
 oc apply -f - <<'EOF'

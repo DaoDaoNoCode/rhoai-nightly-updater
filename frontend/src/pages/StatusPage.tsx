@@ -30,7 +30,7 @@ import {
 } from "@patternfly/react-core";
 import type { LatestNightlyResponse, NightlyBuild, NightlyTag, OperationResponse } from "../types";
 import { createDSC, fetchLatestNightly, fetchNightlyTags, getDSCPreview, toApiError, trackFeature } from "../services/api";
-import { prerequisitesMet as checkPrereqs, operatorInstalled } from "../utils";
+import { nodePullUnverified, prerequisitesMet as checkPrereqs, operatorInstalled, pullSecretReady } from "../utils";
 import { ClusterSetupCard, InstalledBuildCard } from "../components/StatusCards";
 import { UpdateConfirmModal, UpdatePanel } from "../components/UpdatePanel";
 import { ReinstallPanel } from "../components/ReinstallPanel";
@@ -72,13 +72,20 @@ export const StatusPage: React.FC = () => {
   const policyProblem = gitOpsPolicyProblem(useVersion());
 
   const prerequisitesMet = checkPrereqs(status, gitOpsProfile);
+  // A self-managed cluster's nodes are not known to pull yet: the setup card
+  // stays open at the top with the command for them.
+  const setupFirst = !prerequisitesMet || nodePullUnverified(status, gitOpsProfile);
   const installed = operatorInstalled(status);
+  // The newest nightly is a Quay lookup with the updater's own copy of the
+  // pull secret, so it is read once that copy works (the nodes' pull check
+  // needs it before the image mirror exists).
+  const quayReadable = pullSecretReady(status, gitOpsProfile);
 
   // --- Newest nightly overall (for the hero when not on nightly, and to prefill the form) ---
   const [latest, setLatest] = useState<LatestNightlyResponse | null>(null);
   const [latestLoading, setLatestLoading] = useState(false);
   useEffect(() => {
-    if (!prerequisitesMet || profile !== "full") return;
+    if (!quayReadable || profile !== "full") return;
     const controller = new AbortController();
     setLatestLoading(true);
     fetchLatestNightly(controller.signal)
@@ -86,7 +93,27 @@ export const StatusPage: React.FC = () => {
       .catch((e) => { if (!controller.signal.aborted) setLatest({ tag: "", image: "", error: toApiError(e).message }); })
       .finally(() => { if (!controller.signal.aborted) setLatestLoading(false); });
     return () => controller.abort();
-  }, [prerequisitesMet, profile]);
+  }, [quayReadable, profile]);
+
+  // The build Update would install (the hero's target): the nodes' pull
+  // check in the setup runs its catalog image.
+  const checkImage = status?.nightly?.latest?.image || (latest?.image && !latest.error ? latest.image : undefined);
+  const checkImageReason = checkImage
+    ? undefined
+    : latest?.error
+      ? `The newest nightly build could not be looked up: ${latest.error}`
+      : "Looking up the newest nightly build...";
+  const setupCard = (collapsible: boolean) => status && (
+    <ClusterSetupCard
+      status={status}
+      onStatusRefresh={refresh}
+      onShowInstructions={() => setSetupOpen(true)}
+      collapsible={collapsible}
+      readOnly={gitOpsProfile}
+      checkImage={checkImage}
+      checkImageReason={checkImageReason}
+    />
+  );
 
   // --- Nightly tags for Reinstall ---
   const [nightlyTags, setNightlyTags] = useState<NightlyTag[]>([]);
@@ -238,11 +265,7 @@ export const StatusPage: React.FC = () => {
       )}
 
       {/* --- One-time setup comes first while it is incomplete: nothing else works without it --- */}
-      {status && !prerequisitesMet && (
-        <PageSection>
-          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} readOnly={gitOpsProfile} />
-        </PageSection>
-      )}
+      {status && setupFirst && <PageSection>{setupCard(false)}</PageSection>}
 
       {/* --- Installed vs latest, with the primary action --- */}
       {status && (
@@ -450,11 +473,7 @@ export const StatusPage: React.FC = () => {
         </PageSection>
       )}
 
-      {status && prerequisitesMet && (
-        <PageSection isFilled>
-          <ClusterSetupCard status={status} onStatusRefresh={refresh} onShowInstructions={() => setSetupOpen(true)} collapsible readOnly={gitOpsProfile} />
-        </PageSection>
-      )}
+      {status && !setupFirst && <PageSection isFilled>{setupCard(true)}</PageSection>}
 
       {status && <SetupModal isOpen={setupOpen} onClose={() => setSetupOpen(false)} status={status} gitOpsProfile={gitOpsProfile} />}
 

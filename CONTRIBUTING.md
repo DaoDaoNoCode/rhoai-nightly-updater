@@ -152,7 +152,7 @@ Runs the Node test runner over `frontend/tests/*.test.cjs`, then Vitest (`npm ru
 ### Script and chart tests
 
 ```bash
-make test-scripts      # scripts/test-release.sh and scripts/test-install.sh (offline, fake oc/curl/crane)
+make test-scripts      # scripts/test-release.sh, test-install.sh and test-node-pull-secret.sh (offline, fake oc/curl/crane; the last needs jq)
 make test-chart        # scripts/test-chart.sh: helm lint and helm template of deploy/chart (offline)
 make check-chart       # only: the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml are current
 ```
