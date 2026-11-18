@@ -203,3 +203,127 @@ func TestTeardownModels_RefusesWhileAPublicationIsLeft(t *testing.T) {
 		t.Fatal("the model was deleted")
 	}
 }
+
+// Finding 1: removal refuses, before changing anything, while MaaS objects
+// someone else made exist: removing the platform would break them.
+func TestMaaSTeardown_RefusesWhileOthersUseMaaS(t *testing.T) {
+	for name, path := range map[string]string{
+		"model reference": "/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model",
+		"subscription":    "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
+		"access policy":   "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maasauthpolicies/team-access",
+	} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMaaSCluster(t)
+			if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+				t.Fatalf("setup: %+v", res)
+			}
+			mc.f.putJSON(path, `{"spec":{}}`)
+			mc.f.requests = nil
+			res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+			if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, path[strings.LastIndex(path, "/")+1:]) {
+				t.Fatalf("teardown = %+v", res)
+			}
+			if muts := mc.f.mutations(); len(muts) != 0 {
+				t.Fatalf("wrote %v", muts)
+			}
+		})
+	}
+}
+
+// Finding 1: the gateway is not deleted while routes are attached to it.
+func TestMaaSTeardown_KeepsTheGatewayWhileRoutesAreAttached(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	prev := mc.f.onGet
+	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		prev(k, obj)
+		if k.plural == "gateways" && k.name == maasGatewayName {
+			obj["status"] = map[string]interface{}{"listeners": []interface{}{map[string]interface{}{"name": "https", "attachedRoutes": 1}}}
+		}
+	}
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if res.Success || res.ErrorCode != "in_use" || !mc.f.has(tMaaSGateway) || !mc.f.has(tMaaSDB) {
+		t.Fatalf("teardown = %+v (gateway kept: %v)", res, mc.f.has(tMaaSGateway))
+	}
+}
+
+// Finding 8: removal restores modelsAsAService only while the tool still
+// owns that field; someone who set it since keeps their value.
+func TestMaaSTeardown_KeepsADSCValueSomeoneElseSetSinceSetup(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.mu.Lock()
+	k, _ := parseFakePath(tMaaSDSC)
+	meta := ensureMap(mc.f.objects[k], "metadata")
+	meta["managedFields"] = []interface{}{map[string]interface{}{"manager": "kubectl-edit", "operation": "Update",
+		"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:components": map[string]interface{}{"f:aigateway": map[string]interface{}{"f:modelsAsAService": map[string]interface{}{"f:managementState": map[string]interface{}{}}}}}}}}
+	mc.f.mu.Unlock()
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	dsc, _ := json.Marshal(mc.f.get(tMaaSDSC))
+	if !strings.Contains(string(dsc), `"modelsAsAService":{"managementState":"Managed"}`) || !strings.Contains(res.Message+strings.Join(res.Logs, " "), "kept") {
+		t.Fatalf("teardown = %+v; dsc = %s", res, dsc)
+	}
+}
+
+// Finding 9: with maas-controller gone (MaaS turned off by someone else),
+// unpublish takes the finalizer off the tool's own terminating reference.
+func TestMaaSUnpublish_FinishesWhenMaaSControllerIsGone(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	mc.f.mu.Lock()
+	k, _ := parseFakePath(tMaaSRef)
+	ensureMap(mc.f.objects[k], "metadata")["finalizers"] = []interface{}{"maas.opendatahub.io/model-cleanup"}
+	dk, _ := parseFakePath(tMaaSDSC)
+	ensureMap(ensureMap(ensureMap(mc.f.objects[dk], "spec"), "components"), "aigateway")["modelsAsAService"] = map[string]interface{}{"managementState": "Removed"}
+	mc.f.mu.Unlock()
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	if !res.Success || mc.f.has(tMaaSRef) || !strings.Contains(strings.Join(res.Logs, " "), "maas-controller") {
+		t.Fatalf("unpublish = %+v (ref left: %v)", res, mc.f.has(tMaaSRef))
+	}
+}
+
+// Finding 6: removal deletes the database where setup made it, also when
+// the tenant reports another infrastructure namespace since.
+func TestMaaSTeardown_UsesTheRecordedDatabaseNamespace(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if rec, _ := readMaaSRecord(mc.c); rec.DBNamespace != "redhat-ai-gateway-infra" {
+		t.Fatalf("record = %+v", rec)
+	}
+	mc.f.beforeServe = nil
+	mc.f.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maastenantconfigs/default-tenant", `{"status":{"infraNamespace":"elsewhere"}}`)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"}); !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if mc.f.has(tMaaSDB) || mc.f.has(tMaaSDBConfig) {
+		t.Fatal("the database setup made was left")
+	}
+}
+
+// Finding 7: a connection Secret written while MaaS is already Managed
+// restarts maas-api (maas-setup.md "Restarting maas-api"); the first setup
+// (MaaS turned on after the Secret) does not.
+func TestMaaSSetup_RestartsMaaSAPIWhenTheSecretChangesUnderARunningMaaS(t *testing.T) {
+	const api = "PATCH /apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/maas-api"
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success || hasMutation(mc.f, api) {
+		t.Fatalf("first setup: %+v", res)
+	}
+	deleteFakeObject(mc, tMaaSDBConfig)
+	mc.f.requests = nil
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("second setup: %+v", res)
+	}
+	if !hasMutation(mc.f, api) {
+		t.Fatalf("maas-api not restarted: %v", mc.f.mutations())
+	}
+	tmpl, _ := json.Marshal(mc.f.get("/apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/maas-api")["spec"])
+	if !strings.Contains(string(tmpl), restartAnnotation) {
+		t.Fatalf("maas-api spec = %s", tmpl)
+	}
+}

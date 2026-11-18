@@ -524,6 +524,11 @@ objects:
         resources: ["maasmodelrefs"]
         resourceNames: ["qwen25-05b-instruct"]
         verbs: ["get", "patch", "delete"]
+      # Removing the platform: whether others use MaaS (their model
+      # references, subscriptions and access policies; read-only)
+      - apiGroups: ["maas.opendatahub.io"]
+        resources: ["maasmodelrefs", "maassubscriptions", "maasauthpolicies"]
+        verbs: ["list"]
       - apiGroups: ["maas.opendatahub.io"]
         resources: ["maassubscriptions"]
         resourceNames: ["rhoai-nightly-updater-subscription"]

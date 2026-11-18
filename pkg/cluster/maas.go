@@ -78,9 +78,15 @@ const (
 	maasSubscriptionName  = "rhoai-nightly-updater-subscription"
 	// maasModelManager is the field manager of the gateway ref this tool
 	// adds to its model: removing it reverts exactly that change.
-	maasModelManager  = "rhoai-nightly-updater-maas"
-	maasRecordKey     = "maas"
-	maasRecordManager = "rhoai-nightly-updater-maas-record"
+	maasModelManager = "rhoai-nightly-updater-maas"
+	// maasDSCManager is the field manager of modelsAsAService, so removal
+	// restores it only while nobody has set it since.
+	maasDSCManager = "rhoai-nightly-updater-maas-dsc"
+	// maasModelFinalizer is maas-controller's on a MaaSModelRef
+	// (maasmodelref_controller.go).
+	maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
+	maasRecordKey      = "maas"
+	maasRecordManager  = "rhoai-nightly-updater-maas-record"
 	// The group a published model is offered to, as the docs' sample.
 	maasSubjectGroup = "system:authenticated"
 	cnpgGroup        = "postgresql.cnpg.io"
@@ -110,8 +116,12 @@ type maasRecord struct {
 	DSCChanged               bool     `json:"dscChanged,omitempty"`
 	PreviousModelsAsAService string   `json:"previousModelsAsAService,omitempty"`
 	Published                []string `json:"published,omitempty"`
-	At                       string   `json:"at,omitempty"`
-	By                       string   `json:"by,omitempty"`
+	// DBNamespace is where setup put the database and maas-db-config, so
+	// removal and the status look there even when the infrastructure
+	// namespace reads differently later.
+	DBNamespace string `json:"dbNamespace,omitempty"`
+	At          string `json:"at,omitempty"`
+	By          string `json:"by,omitempty"`
 }
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
@@ -897,21 +907,22 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	kPart.Warning = rhclWarning(rhclVersion(c))
 	part(kPart)
 
-	// The database and its connection Secret.
+	// The database and its connection Secret, where setup put them.
+	dbNS := firstNonEmpty(rec.DBNamespace, infra)
 	dbPart := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
-	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", infra))
-	clMeta, clFound, clReady, clPhase, clErr := readMaaSDBCluster(c, infra)
+	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", dbNS))
+	clMeta, clFound, clReady, clPhase, clErr := readMaaSDBCluster(c, dbNS)
 	switch {
 	case secErr != nil:
-		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read Secret %s/%s: %v", infra, maasDBConfigSecret, secErr)
+		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read Secret %s/%s: %v", dbNS, maasDBConfigSecret, secErr)
 	case secFound && !toolOwned(secMeta):
 		dbPart.State, dbPart.NotManaged = "ready", true
-		dbPart.Message = fmt.Sprintf("Secret %s/%s exists: maas-api uses the database it names", infra, maasDBConfigSecret)
+		dbPart.Message = fmt.Sprintf("Secret %s/%s exists: maas-api uses the database it names", dbNS, maasDBConfigSecret)
 	case clErr == nil && clFound && toolOwned(clMeta):
 		dbPart.ManagedByTool = true
 		switch {
 		case clReady && secFound:
-			dbPart.State, dbPart.Message = "ready", fmt.Sprintf("CloudNativePG %s/%s runs (1 instance, development and test use); Secret %s set", infra, maasDBCluster, maasDBConfigSecret)
+			dbPart.State, dbPart.Message = "ready", fmt.Sprintf("CloudNativePG %s/%s runs (1 instance, development and test use); Secret %s set", dbNS, maasDBCluster, maasDBConfigSecret)
 		case clReady:
 			dbPart.State, dbPart.Message = "missing", "The database runs; its connection Secret is not written yet"
 		default:
@@ -921,7 +932,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		dbPart.State = "manual"
 		dbPart.Message = "The CloudNativePG operator is not installed. A cluster-admin installs it from OperatorHub (certified operators), or creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)."
 	default:
-		dbPart.State, dbPart.Message = "missing", "Setup runs a one-instance CloudNativePG database (development and test use) in "+infra
+		dbPart.State, dbPart.Message = "missing", "Setup runs a one-instance CloudNativePG database (development and test use) in "+dbNS
 	}
 	part(dbPart)
 
