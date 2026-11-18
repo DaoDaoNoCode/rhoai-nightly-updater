@@ -1,0 +1,205 @@
+package cluster
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// publishedMaaSCluster is newMaaSCluster with the platform set up, the
+// tool's model in proj, and that model published.
+func publishedMaaSCluster(t *testing.T) *modelsCluster {
+	t.Helper()
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("model: %+v", res)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+	return mc
+}
+
+func modelGateway(t *testing.T, mc *modelsCluster) map[string]interface{} {
+	t.Helper()
+	spec, _ := mc.f.get(testModelPath)["spec"].(map[string]interface{})
+	router, _ := spec["router"].(map[string]interface{})
+	gw, ok := router["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("model router has no gateway object: %v", router)
+	}
+	return gw
+}
+
+func setModelRefs(mc *modelsCluster, refs []interface{}) {
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	k, _ := parseFakePath(testModelPath)
+	spec := ensureMap(mc.f.objects[k], "spec")
+	router := ensureMap(spec, "router")
+	if refs == nil {
+		router["gateway"] = map[string]interface{}{}
+		return
+	}
+	router["gateway"] = map[string]interface{}{"refs": refs}
+}
+
+func deleteFakeObject(mc *modelsCluster, path string) {
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	k, _ := parseFakePath(path)
+	delete(mc.f.objects, k)
+}
+
+// Finding 10: the refs list is atomic (KServe rhoai-3.6 GatewaySpec.Refs has
+// no list-map markers), so publish and unpublish must write the whole list
+// from what they read: someone else's ref survives both.
+func TestMaaSPublish_KeepsAGatewayRefSomeoneElseAdded(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("model: %+v", res)
+	}
+	other := map[string]interface{}{"name": "team-gateway", "namespace": "team"}
+	setModelRefs(mc, []interface{}{other})
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+	refs, _ := json.Marshal(modelGateway(t, mc)["refs"])
+	if want := `[{"name":"maas-default-gateway","namespace":"openshift-ingress"},{"name":"team-gateway","namespace":"team"}]`; string(refs) != want {
+		t.Fatalf("refs after publish = %s, want %s", refs, want)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
+		t.Fatalf("unpublish: %+v", res)
+	}
+	refs, _ = json.Marshal(modelGateway(t, mc)["refs"])
+	if want := `[{"name":"team-gateway","namespace":"team"}]`; string(refs) != want {
+		t.Fatalf("refs after unpublish = %s, want %s", refs, want)
+	}
+}
+
+// Finding 10: the model changing between the read and the write is a
+// conflict, not a silent overwrite (resourceVersion precondition).
+func TestMaaSUnpublish_ModelRefsWriteHasAResourceVersionPrecondition(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	var sent string
+	prev := mc.f.beforeServe
+	mc.f.beforeServe = func(method, path string) {
+		prev(method, path)
+		if method == "PATCH" && path == testModelPath {
+			// Someone writes the model between the tool's read and its patch.
+			mc.f.mu.Lock()
+			k, _ := parseFakePath(testModelPath)
+			meta := ensureMap(mc.f.objects[k], "metadata")
+			sent = meta["resourceVersion"].(string)
+			mc.f.bumpRV(meta)
+			mc.f.mu.Unlock()
+		}
+	}
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	if sent == "" || res.Success || res.ErrorCode != "conflict" {
+		t.Fatalf("unpublish over a concurrent change = %+v (patched: %v)", res, sent != "")
+	}
+}
+
+// Finding 11: a model left only with the MaaS gateway ref (no reference, no
+// record) shows "Partly published", and Unpublish then takes the ref off.
+func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	deleteFakeObject(mc, tMaaSRef)
+	if err := writeMaaSRecord(mc.c, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil || len(st.Items) != 1 || !strings.Contains(st.Items[0].Message, "Partly published") {
+		t.Fatalf("status = %+v, %v", st.Items, err)
+	}
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	if !res.Success {
+		t.Fatalf("unpublish: %+v", res)
+	}
+	if gw := modelGateway(t, mc); len(gw) != 0 {
+		t.Fatalf("model gateway after unpublish = %v", gw)
+	}
+}
+
+// Finding 12: an unpublish that could not update the gateway says so.
+func TestMaaSUnpublish_SaysWhenTheGatewayWasNotUpdated(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	mc.f.fail["GET "+tMaaSClass] = 500
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	all := res.Message + " " + strings.Join(res.Logs, " ")
+	if strings.Contains(all, "no longer admits") || !strings.Contains(all, "not updated") {
+		t.Fatalf("unpublish = %+v", res)
+	}
+}
+
+// Finding 2: a recorded project whose model and reference are gone is not
+// put back into the shared subscription and access policy.
+func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	rec, _ := readMaaSRecord(mc.c)
+	rec.Published = []string{"gone"}
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("model: %+v", res)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+	for _, path := range []string{tMaaSSub, tMaaSAuth} {
+		body, _ := json.Marshal(mc.f.get(path)["spec"])
+		if strings.Contains(string(body), `"gone"`) || !strings.Contains(string(body), `"proj"`) {
+			t.Fatalf("%s spec = %s", path, body)
+		}
+	}
+}
+
+// Finding 2: a recorded publication whose model is gone still has a row, so
+// Unpublish can clear it.
+func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	rec, _ := readMaaSRecord(mc.c)
+	rec.Published = []string{"gone"}
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil || len(st.Items) != 1 || st.Items[0].Namespace != "gone" || !st.Items[0].Published {
+		t.Fatalf("status items = %+v, %v", st.Items, err)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "gone"}); !res.Success {
+		t.Fatalf("unpublish: %+v", res)
+	}
+	if st, _ := GetMaaSStatus(mc.c); len(st.Items) != 0 {
+		t.Fatalf("status items after unpublish = %+v", st.Items)
+	}
+}
+
+// Finding 2: the Models teardown refuses while the record or the model's
+// gateway ref still says published, not only while the reference exists.
+func TestTeardownModels_RefusesWhileAPublicationIsLeft(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	deleteFakeObject(mc, tMaaSRef)
+	if res, _ := TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "in_use" {
+		t.Fatalf("model teardown with a recorded publication: %+v", res)
+	}
+	if !mc.f.has(testModelPath) {
+		t.Fatal("the model was deleted")
+	}
+}

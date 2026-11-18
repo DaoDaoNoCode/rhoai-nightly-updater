@@ -1089,6 +1089,29 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		}
 		st.Items = append(st.Items, item)
 	}
+	// A recorded publication whose model is gone (the model or its project
+	// was deleted elsewhere): a row, so Unpublish can clear what is left.
+	if recErr == nil {
+		for _, p := range rec.Published {
+			shown := false
+			for _, it := range st.Items {
+				shown = shown || it.Namespace == p
+			}
+			if shown {
+				continue
+			}
+			left := []string{"this tool's record of the publication"}
+			if ref, found, _ := readMaaSModelRef(c, p); found && toolOwned(ref.Metadata) {
+				left = append([]string{"MaaSModelRef " + maasModelRefName}, left...)
+			}
+			st.Items = append(st.Items, types.MaaSModel{
+				ResourceState: types.ResourceState{Namespace: p, Name: maasModelRefName, ManagedByTool: true, Deployed: true,
+					Message: "Partly published: the model is gone; " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
+				DisplayName: maasModelRefName,
+				Published:   true,
+			})
+		}
+	}
 	sort.Slice(st.Items, func(i, j int) bool { return st.Items[i].Namespace < st.Items[j].Namespace })
 	return st, nil
 }
@@ -1098,13 +1121,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 // gateway, and this tool's record of the publication.
 func maasLeftovers(m llmisvcObject, recorded bool) []string {
 	var left []string
-	if m.Spec.Router != nil && m.Spec.Router.Gateway != nil {
-		for _, ref := range m.Spec.Router.Gateway.Refs {
-			if ref.Name == maasGatewayName {
-				left = append(left, "the model's route through "+maasGatewayName)
-				break
-			}
-		}
+	if modelHasMaaSRef(m) {
+		left = append(left, "the model's route through "+maasGatewayName)
 	}
 	if recorded {
 		left = append(left, "this tool's record of the publication")
@@ -1167,12 +1185,29 @@ func maasPhase(c *Client, path string) (string, bool) {
 	return obj.Status.Phase, true
 }
 
-// MaaSPublishedIn reports whether this tool's model in project is
-// published to MaaS (its MaaSModelRef exists), for the Models teardown.
+// MaaSPublishedIn reports whether anything of a publication of this tool's
+// model in project is left, for the Models teardown: its MaaSModelRef,
+// this tool's record of it, or the model's route through the MaaS gateway.
+// Unpublish removes all three (and the project from the shared
+// subscription, access policy and gateway), so the model goes after it.
 func MaaSPublishedIn(c *Client, project string) (bool, error) {
 	_, found, err := readObjectMeta(c, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"))
-	if IsK8sError(err, 404) {
-		return false, nil
+	if err != nil && !IsK8sError(err, 404) {
+		return false, err
 	}
-	return found, err
+	if found {
+		return true, nil
+	}
+	rec, err := readMaaSRecord(c)
+	if err != nil {
+		return false, err
+	}
+	if rec.published(project) {
+		return true, nil
+	}
+	model, found, err := readToolModel(c, project, maasModelRefName)
+	if err != nil {
+		return false, err
+	}
+	return found && modelOwned(model.Metadata) && modelHasMaaSRef(model), nil
 }
