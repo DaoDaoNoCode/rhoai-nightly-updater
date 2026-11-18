@@ -324,7 +324,7 @@ async (page) => {
     // the list of projects open where there is one (screenshots.sh
     // overview-review, THEMES_DIR).
     async "overview-review"() {
-      for (const sc of ["env-live", "env-foreign", "env-overview-three", "env-overview-mixed", "env-overview-long-name"]) {
+      for (const sc of ["env-live", "env-foreign", "env-overview-three", "env-overview-mixed", "env-overview-long-name", "env-models-not-allowed"]) {
         for (const dark of [false, true]) {
           for (const width of [1440, 800]) {
             const name = `overview-${sc.replace(/^env-(overview-)?/, "")}-${dark ? "dark" : "light"}-${width}`;

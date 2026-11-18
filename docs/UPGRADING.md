@@ -375,21 +375,16 @@ apply), MLflow restarts, and you add the demo again once it is ready.
 notes are only for clusters that ran a pre-release 3.0.0 build (`:main` or
 a commit build):
 
-- *Inference gateway.* The gateway this tool creates now accepts models
-  only from namespaces labelled `rhoai-nightly-updater/inference-routes=true`,
-  which only a cluster-admin can set; the tool never sets it. Before that,
-  a route in any project could take over a model's address and receive its
-  callers' tokens (SECURITY.md, "Route takeover on the inference gateway",
-  just before [Which models are the tool's](../SECURITY.md#which-models-are-the-tools)).
-  A gateway an earlier build created
-  open to every project shows as such, with **Restrict to labelled
-  projects**, which waits until every project whose models use the gateway
-  has the label. A cluster-admin labels a project with:
-
-  ```bash
-  oc label namespace <project> rhoai-nightly-updater/inference-routes=true
-  ```
-
+- *Inference gateway.* The gateway this tool creates now lists the
+  projects it allows by name, as RHOAI documents it (`allowedRoutes`
+  `kubernetes.io/metadata.name In [...]`); a model setup adds its project.
+  A gateway a pre-release build created (routes from every project, or from
+  projects with a namespace label) gets that list at its next change, a
+  model setup or **Allow <project>**, with every project whose models use
+  it, so no model is detached. Before, a route in any project could take
+  over a model's address and receive its callers' tokens (SECURITY.md,
+  "Route takeover on the inference gateway", just before
+  [Which models are the tool's](../SECURITY.md#which-models-are-the-tools)).
   A gateway someone else made (RHOAI's install, an admin) is not changed.
 - *Which models are the tool's.* A model is the tool's only when its UID
   is in the tool's record. A model a pre-release build set up has none and

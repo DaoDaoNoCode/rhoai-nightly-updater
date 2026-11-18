@@ -219,13 +219,7 @@ Open the **Models** tab and pick a data science project.
    | Qwen3 1.7B | chat, tool calling, reasoning | 4, 12 GiB |
    | Granite Embedding 125M English | embeddings (768 dimensions) | 2, 3 GiB |
 
-2. **Label the project (a cluster-admin).** The inference gateway this tool sets up accepts models only from projects labelled `rhoai-nightly-updater/inference-routes=true`, so that a route in another project cannot take over a model's address and receive its callers' tokens. Project admins cannot set this label, and the tool does not set it. The tab shows the command with a copy button:
-
-   ```bash
-   oc label namespace <project> rhoai-nightly-updater/inference-routes=true
-   ```
-
-3. Click **Set up** and confirm. It creates what is missing: the inference gateway (once per cluster; it runs a cloud load balancer, which costs money while it exists), then the model. The first time takes 3 to 5 minutes.
+2. Click **Set up** and confirm. It creates what is missing: the inference gateway (once per cluster; it runs a cloud load balancer, which costs money while it exists), then the model. The gateway accepts models only from the projects on its list, as RHOAI documents it; the setup adds the project to that list before it creates the model. The first time takes 3 to 5 minutes.
 
 <img src="images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
 

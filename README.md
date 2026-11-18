@@ -124,11 +124,11 @@ The Models tab serves small models from Hugging Face on CPU in a data science pr
 | `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 12 / 14 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` |
 | `granite-embedding-125m-english`, Granite Embedding 125M English | Embeddings (768 dimensions), semantic search | 2 CPUs, 3 / 4 GiB | about 250 MB | `--runner pooling --max-model-len 512` |
 
-<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS and authentication; Qwen3 Ready with its use case, resources, source, vLLM options, address, runtime image, no fitting hardware profile and its token authentication" width="760">
+<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS, authentication and the projects it allows; Qwen3 Ready with its use case, resources, source, vLLM options, address, runtime image, no fitting hardware profile and its token authentication" width="760">
 
 1. The feature's state in the selected project, for the chosen model.
 2. The **model picker**: which catalog model the tab shows, sets up and deletes (the address keeps it as `model=<name>`).
-3. The **inference gateway**, shared by the cluster: every model is reached through it at `https://inference.<apps domain>`, and it checks each caller's OpenShift token. It runs on a cloud load balancer, which costs money while it exists. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
+3. The **inference gateway**, shared by the cluster: every model is reached through it at `https://inference.<apps domain>`, and it checks each caller's OpenShift token. It runs on a cloud load balancer, which costs money while it exists. It accepts models only from the projects it lists by name (**Projects allowed on the gateway**), as RHOAI documents it; setting up a model adds its project. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
 4. The chosen **model** in the project: what it is, what it is for, what it reserves, where it comes from and its vLLM options. **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
 5. Its address, which copies with one click. The runtime image below it: on a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
 6. The hardware profile the dashboard shows. No profile fits Qwen3 on a default cluster, so the dashboard shows "No hardware profile" (and "Unknown" in its details); the model runs as set up.
@@ -147,6 +147,12 @@ Each model also asks for node disk of about 1.5 times its download (KServe downl
 
 1. Qwen3 calls tools: describe them in the request's `tools`, and the answer has `tool_calls` when one fits.
 2. Its thinking is off by default; `"chat_template_kwargs": {"enable_thinking": true}` turns it on for one request. That command streams (`"stream": true`, `curl -N`): thinking on CPU can take over a minute, and the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).
+
+<img src="docs/images/environment-models-not-allowed.png" alt="Inference gateway part: fraud-detection/fraud-assistant can't be reached because its project isn't allowed on the inference gateway, with Allow fraud-detection; Projects allowed on the gateway lists openshift-ingress, a-test-project, dev-project and llm-eval" width="760">
+
+1. A model deployed elsewhere (in the dashboard, say) in a project the gateway does not list: its route is rejected, so it never becomes ready. The Overview's Models row says so too.
+2. **Allow <project>** adds the project to the gateway's list; the projects already on it stay. For a gateway this tool did not create, the tab gives RHOAI's step for a cluster admin instead.
+3. The projects the gateway allows. Deleting a model leaves its project on the list, since another model there may use the gateway.
 
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 

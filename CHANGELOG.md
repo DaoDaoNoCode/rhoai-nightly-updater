@@ -346,19 +346,20 @@ only accepts a tag whose version is the top dated section. See
 
 ### Security
 
-- **Inference gateway: models only from projects a cluster-admin labelled.**
-  The gateway this tool creates accepted routes from every namespace (RHOAI's
-  chart default), so a route in any project with a model's exact path took
-  over that model's calls and its callers' tokens (confirmed live). Both
-  listeners now accept routes only from namespaces labelled
-  `rhoai-nightly-updater/inference-routes=true`, which only a cluster-admin
-  can set; the tool never sets it. A model setup in a project without the
-  label is refused before anything is written, and the Models tab shows the
-  `oc label namespace` command with a copy button. A gateway an earlier
-  version made is shown as open to every project, with **Restrict to
-  labelled projects**, which waits until every project whose models use the
-  gateway has the label. Someone else's gateway is not changed; the tab says
-  when it accepts routes from every project.
+- **Inference gateway: only the projects on its list.** The gateway this
+  tool creates accepted routes from every namespace (`from: All`, the RHOAI
+  chart's default until August 2026), so a route in any project with a
+  model's exact path took over that model's calls and its callers' tokens
+  (confirmed live). Both listeners now list the projects they allow by
+  name, as RHOAI documents the gateway (`allowedRoutes` `from: Selector`,
+  `kubernetes.io/metadata.name In [...]`): the gateway's own namespace and
+  each project a model is set up in, added before the model is created. A
+  model deployed elsewhere (in the dashboard, say) in a project not on the
+  list never becomes ready; the Models tab and the Overview name it, with
+  **Allow <project>**. A gateway an earlier build made gets the list at its
+  next change, with every project whose models use it. Someone else's
+  gateway is not changed: the tab says which projects it allows and gives
+  RHOAI's step for a cluster admin.
 - The MLflow samples and the playground no longer follow HTTP redirects
   with the app's token: a 3xx answer is reported as an error that says
   where it pointed.
