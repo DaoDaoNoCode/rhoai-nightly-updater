@@ -26,7 +26,7 @@ const catalog: CatalogModel[] = [
     type: "chat", useCase: "Chat", description: "A small chat model.", args: "--max-model-len 4096", downloadSize: "1.0 GB", default: true },
   { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "10Gi", memory: "12Gi",
     type: "chat", toolCalling: true, useCase: "Chat, Tool calling, Reasoning", description: "A chat model that can call tools.", downloadSize: "4.1 GB",
-    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'` },
+    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` },
   { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "4Gi", memory: "6Gi",
     type: "embedding", embeddingDimension: 768, useCase: "Embeddings, Semantic search", description: "An English embedding model.", args: "--runner pooling --max-model-len 512", downloadSize: "250 MB" },
 ];

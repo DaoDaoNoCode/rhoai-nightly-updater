@@ -109,7 +109,7 @@ The Models tab serves small models from Hugging Face on CPU in a data science pr
 |---|---|---|---|---|
 | `smollm2-135m-instruct`, SmolLM2 135M Instruct | Chat (smoke test) | 2 CPUs, 5 / 6 GiB | about 270 MB | `--max-model-len 4096` |
 | `qwen25-05b-instruct`, Qwen2.5 0.5B Instruct (the default) | Chat | 4 CPUs, 6 / 8 GiB | about 1.0 GB | `--max-model-len 4096` |
-| `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 10 / 12 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'` |
+| `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 10 / 12 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` |
 | `granite-embedding-125m-english`, Granite Embedding 125M English | Embeddings (768 dimensions), semantic search | 2 CPUs, 4 / 6 GiB | about 250 MB | `--runner pooling --max-model-len 512` |
 
 <img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS and authentication; Qwen3 Ready with its type, use, resources, source, vLLM options, address and runtime image" width="760">

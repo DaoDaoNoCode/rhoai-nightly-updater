@@ -84,7 +84,11 @@ const (
 // Every model's arguments go to vLLM through VLLM_ADDITIONAL_ARGS, which
 // the CPU preset expands inside eval "exec vllm serve ... ${VLLM_ADDITIONAL_ARGS} ..."
 // (kserve rhoai-3.6 config/llmisvcconfig/config-llm-template.yaml), so
-// shell quoting in them is honoured: Qwen3's JSON is one argument.
+// shell quoting in them is honoured: Qwen3's JSON is one argument. No
+// argument holds a space, quoted or not: the dashboard's Edit splits
+// VLLM_ADDITIONAL_ARGS on spaces and writes the parts back joined by one
+// (odh-dashboard rhoai-3.6 packages/llmd-serving/src/deployments/model.ts
+// extractRuntimeArgs L147-159), and would list a spaced JSON as two.
 //
 // Memory (requests and limits below, in one place). Measured live only
 // for qwen25 (RHOAI 3.6, vLLM CPU): 7.6 GiB with the preset's 4 GiB KV
@@ -120,7 +124,7 @@ var modelCatalog = []catalogModel{
 		CatalogModel: types.CatalogModel{Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
 			CPU: "4", MemoryRequest: "10Gi", Memory: "12Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
 			Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'`},
+			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`},
 		threads: "4", kvCacheGiB: "2",
 	},
 	{
