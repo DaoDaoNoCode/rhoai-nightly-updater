@@ -45,11 +45,14 @@ import (
 // The objects also carry the tool label. Which are the tool's: the
 // ServiceAccount, Role and RoleBinding are owned by the tool's model (an
 // ownerReference to its recorded UID); the Secret is the one whose UID the
-// tool recorded when it created it. The tool never reads a Secret: with
-// "create" on Secrets anywhere, "get" on a token Secret's name would let a
-// leaked token of this tool mint and read a token for any ServiceAccount
-// (SECURITY.md), so its existence is checked with a dry-run delete carrying
-// the recorded UID as a precondition.
+// tool recorded when it created it. The tool never reads these Secrets
+// (it has no get on their names), so their existence is checked with a
+// dry-run delete carrying the recorded UID as a precondition. That does
+// not keep a leaked token of this tool from minting tokens: "create" on
+// Secrets anywhere plus the named "get" on other Secrets lets it create a
+// token Secret of such a name for any ServiceAccount and read it back
+// (SECURITY.md, within the accepted "leaked SA token is about as good as
+// cluster-admin" risk).
 const (
 	tokenDisplayName  = "default-name"
 	dashboardLabel    = "opendatahub.io/dashboard"

@@ -346,6 +346,26 @@ only accepts a tag whose version is the top dated section. See
 
 ### Security
 
+- **Your own token never goes to a model or a pipeline server** (final
+  review). Those run in projects whose editors control what answers at
+  their addresses. The Models tab shows commands only for this tool's model
+  with its own token Secret (no `oc whoami -t` fallback, none for a model
+  this tool did not set up; **Set up again to create its token** for one
+  without). The sample pipeline commands and the KFP snippet make
+  ServiceAccount `pipeline-api` with a Role for that pipeline server's API
+  only and a 15-minute token. SECURITY.md has a new section, "Which token
+  is used where", which also explains why a MaaS API key is still minted
+  with your token through the MaaS gateway (RHOAI's design).
+- Publish refuses a model whose spec someone other than this tool wrote
+  (an editor could change its image before a cluster-admin publishes it);
+  MaaS setup and publish refuse a `models-as-a-service` or infrastructure
+  namespace a user made with a project request (MaaS adopts it); the MLflow
+  and dashboard addresses in copied commands are single-quoted and must be
+  plain https addresses. SECURITY.md corrects what a leaked ServiceAccount
+  token can do with Secrets (mint any ServiceAccount's token), why the
+  model token Role passes the escalation check, and the `list gateways`
+  check, and documents the SeaweedFS admin Route's unauthenticated
+  `/metrics`.
 - **Inference gateway: only the projects on its list.** The gateway this
   tool creates accepted routes from every namespace (`from: All`, the RHOAI
   chart's default until August 2026), so a route in any project with a
