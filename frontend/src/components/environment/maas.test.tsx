@@ -217,7 +217,7 @@ describe("MaaS run dialog", () => {
     const confirm = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
     fireEvent.click(within(confirm).getByRole("button", { name: "Publish" }));
     await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
-    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b" }]);
+    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "free" }, access: { everyone: true } }]);
   });
 
   it("several models of a project: each row has its own state, and Unpublish names its model", async () => {
