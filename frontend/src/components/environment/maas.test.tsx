@@ -112,6 +112,25 @@ describe("MaaS run dialog", () => {
   const none = { deployed: false, ready: false, managedByTool: false };
   const status: ResourcesStatus = { minio: none, mlflow: none, pipelineServers: [], dashboardUrl: "https://rh-ai.apps.example.com" };
 
+  it("Publish says, before you confirm, that the model's direct address answers 404 while it is published", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true },
+        items: [{ namespace: "dev", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true, ready: false, managedByTool: true, modelReady: true, published: false, message: "Not published" }],
+      }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    expect(await screen.findByText(/its direct address on the Models tab answers 404 until it is unpublished/)).toBeInTheDocument();
+    expect(screen.queryByText(/keep working/)).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
+    const confirm = await screen.findByRole("dialog", { name: /Publish the model in dev to MaaS\?/ });
+    expect(within(confirm).getByText(/its direct address \(the Models tab's commands\) answers 404 until it is unpublished/)).toBeInTheDocument();
+    expect(within(confirm).getByText(/routes through the MaaS gateway only/)).toBeInTheDocument();
+    expect(within(confirm).queryByText(/keep working/)).toBeNull();
+  });
+
   it("after setting up the platform, says what to do with MaaS (live: it showed the Pipelines tab's next step)", async () => {
     stubApi({
       "/api/resources/status": status,

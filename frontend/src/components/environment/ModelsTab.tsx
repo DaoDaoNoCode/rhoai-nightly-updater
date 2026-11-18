@@ -3,6 +3,7 @@ import {
   ActionListItem,
   Alert,
   AlertActionLink,
+  Button,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -59,6 +60,8 @@ export interface ModelsTabProps {
   setPending: (p: Pending) => void;
   onSetUp: (setup: Pending[]) => void;
   onCleanup: () => void;
+  /** Opens the MaaS tab (a published model is used through MaaS). */
+  onMaaS: () => void;
 }
 
 const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByTool === true;
@@ -238,19 +241,35 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason
   );
 };
 
-/** How to call a ready model: its address, curl with the user's own token, the dashboard. */
-const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: string }> = ({ model, project, dashboardUrl }) => {
+/**
+ * How to call a ready model: its address, curl with the user's own token,
+ * the dashboard. A model published to MaaS answers only through MaaS, so
+ * then it points at the MaaS tab's commands instead.
+ */
+const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: string; onMaaS: () => void }> = ({ model, project, dashboardUrl, onMaaS }) => {
   const href = dashboardProjectHref(dashboardUrl, project);
+  const published = !!model.maasPublished;
   return (
     <TabSection title="Use it" id="models-use">
       <DescriptionList aria-label="How to use the model">
         <DescriptionListGroup>
           <DescriptionListTerm>From a terminal</DescriptionListTerm>
           <DescriptionListDescription>
-            <Stack hasGutter>
-              <StackItem><Content component="p">The model speaks the OpenAI API. Call it with your own OpenShift token: anyone who can see {project} can, and no extra account or key is made.</Content></StackItem>
-              <StackItem><CopyableCode id="models-curl" label="the commands" code={modelCurl(model.url!, model.name ?? MODEL_NAME)} /></StackItem>
-            </Stack>
+            {published ? (
+              <Stack hasGutter>
+                <StackItem>
+                  <Content component="p">
+                    The model is published to Models as a Service. While it is published, it is used through MaaS with an API key and in the dashboard&apos;s playground; its direct address answers 404 until it is unpublished, because MaaS counts every call against a subscription, which a direct call does not have.
+                  </Content>
+                </StackItem>
+                <StackItem><Button variant="link" isInline onClick={onMaaS}>Use the MaaS tab&apos;s commands</Button></StackItem>
+              </Stack>
+            ) : (
+              <Stack hasGutter>
+                <StackItem><Content component="p">The model speaks the OpenAI API. Call it with your own OpenShift token: anyone who can see {project} can, and no extra account or key is made.</Content></StackItem>
+                <StackItem><CopyableCode id="models-curl" label="the commands" code={modelCurl(model.url!, model.name ?? MODEL_NAME)} /></StackItem>
+              </Stack>
+            )}
           </DescriptionListDescription>
         </DescriptionListGroup>
         {href && (
@@ -262,7 +281,11 @@ const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: st
           </DescriptionListGroup>
         )}
       </DescriptionList>
-      <WhatNext id="models-next" items={[
+      <WhatNext id="models-next" items={published ? [
+        <>Run the MaaS tab&apos;s commands: they get an API key and ask the model to say hello.</>,
+        <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
+        <>To call its direct address with your OpenShift token again, unpublish it on the MaaS tab.</>,
+      ] : [
         <>Copy the commands above and run them: the first lists the model, the second asks it to say hello.</>,
         <>Point an OpenAI client at the address, with your token as the API key and <code>{model.name ?? MODEL_NAME}</code> as the model.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
@@ -278,7 +301,7 @@ const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: st
  * a ready model; what it creates; and Clean up.
  */
 export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
-  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, baseReason, readOnly, onSetUp, onCleanup } = props;
+  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, baseReason, readOnly, onSetUp, onCleanup, onMaaS } = props;
   const models = status.models;
   const model = project ? modelIn(status, project) : undefined;
   const next = state.next;
@@ -330,7 +353,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
           <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
         </StackItem>
       )}
-      {project && model?.ready && model.url && !isTerminating(model) && <StackItem><UseModel model={model} project={project} dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {project && model?.ready && model.url && !isTerminating(model) && <StackItem><UseModel model={model} project={project} dashboardUrl={status.dashboardUrl} onMaaS={onMaaS} /></StackItem>}
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
