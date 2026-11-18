@@ -2,6 +2,7 @@ import React from "react";
 import {
   ActionListItem,
   Alert,
+  AlertActionLink,
   Button,
   Content,
   DescriptionList,
@@ -19,10 +20,11 @@ import {
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import type { PlaygroundModel, PlaygroundModelRef, PlaygroundStatus, ResourcesStatus } from "../../types";
 import { type ConfirmSpec, type Pending, type PlaygroundPending, ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
-import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
+import { LinesSkeleton, LoadFailed, PartsSkeleton } from "./Loading";
 import {
   type Busy,
   type FeatureState,
@@ -39,9 +41,16 @@ import {
 
 export interface PlaygroundTabProps {
   status: ResourcesStatus;
-  /** GET /api/resources/playground for the project; null while it loads. */
+  /**
+   * GET /api/resources/playground: null until it has been read; while
+   * another project's answer is shown (playground.project), the project's
+   * models are still loading.
+   */
   playground: PlaygroundStatus | null;
+  /** Why the project's playground status cannot be read, or null. */
   playgroundError: string | null;
+  /** Reads it again (Try again). */
+  onRetry: () => void;
   project: string | null;
   projects: ProjectOption[];
   projectsLoaded: boolean;
@@ -97,7 +106,15 @@ function playgroundUse(m: PlaygroundModel, picked: string[] | null): string {
  * where it runs, whether the playground uses it). Before Set up its rows
  * are selectable: the project's own models are chosen, as in the dashboard.
  */
-const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: string[] | null; onPick: ((keys: string[]) => void) | null }> = ({ playground, project, onModels, picked, onPick }) => {
+const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: string[] | null; onPick: ((keys: string[]) => void) | null }> = ({ playground, playgroundError, project, onModels, picked, onPick }) => {
+  // The answer shown is another project's (the picker just changed): this one's models are on their way.
+  if (playground?.project !== project) {
+    return (
+      <PartItem id="playground-models" title="Models" scope={`In project ${project}`} status="unknown" unmanaged={false} loading={!playgroundError}>
+        {playgroundError ? <Content component="p">The project&apos;s models cannot be read now: the alert above says why.</Content> : <LinesSkeleton what={`the models in ${project}`} />}
+      </PartItem>
+    );
+  }
   const s = playgroundModelStatus(playground, project);
   const chat = playgroundChatModels(playground, project);
   const usable = playgroundUsableModels(playground, project);
@@ -109,7 +126,7 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
       actions={<ActionListItem><Button variant="link" isInline onClick={onModels}>{chat.length > 0 ? "Show on the Models tab" : "Set up a model on the Models tab"}</Button></ActionListItem>}>
       <Content component="p">
         {s === "unknown"
-          ? playground?.modelsProblem ?? "The project's models are being read from the dashboard."
+          ? playground?.modelsProblem ?? "The dashboard does not say which models the project has."
           : chat.length > 0
             ? onPick
               ? "The playground uses the models you choose: the project's own ready models are chosen, chat models and this tool's embedding model. A chat model added to the project later shows up in the playground without setting it up again."
@@ -252,7 +269,7 @@ const UsePlayground: React.FC<{ dashboardUrl?: string; project: string; model?: 
  * creates, and Clean up.
  */
 export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
-  const { status, playground, playgroundError, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, baseReason, readOnly, onSetUp, onCleanup } = props;
+  const { status, playground, playgroundError, onRetry, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, baseReason, readOnly, onSetUp, onCleanup } = props;
   const next = state.next;
   const noProjects = projectsLoaded && projects.length === 0;
   const item = project ? playgroundIn(playground, project) : undefined;
@@ -270,9 +287,13 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
   const pickReason = settingUp && chat.length > 0 && !pickedModels.some((m) => m.chat) ? "Choose at least one chat model." : null;
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Playground" purpose="The dashboard's Gen AI playground in a project: a chat page to try the project's models and ask about your documents." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="Playground" purpose={FEATURE_PURPOSE.playground} state={state} /></StackItem>
       {playground?.blocked && <StackItem><ComponentAlert feature="The Gen AI playground" block={playground.blocked} /></StackItem>}
-      {playgroundError && <StackItem><Alert variant="danger" isInline component="p" title="Cannot read the playground">{playgroundError}</Alert></StackItem>}
+      {playground && playgroundError && (
+        <StackItem>
+          <Alert variant="danger" isInline component="p" title="Cannot read the playground" actionLinks={<AlertActionLink onClick={onRetry}>Try again</AlertActionLink>}>{playgroundError}</Alert>
+        </StackItem>
+      )}
       {playground?.apiProblem && <StackItem><Alert variant="warning" isInline component="p" title="The dashboard's gen-ai API cannot be used">{playground.apiProblem}</Alert></StackItem>}
       {!playground?.blocked && playground?.genAiUi === "missing" && (
         <StackItem><Alert variant="warning" isInline component="p" title="Gen AI studio is not deployed">The dashboard&apos;s Gen AI studio, which makes the playground, is not on this cluster. A cluster-admin turns it on in the dashboard&apos;s settings (Gen AI studio).</Alert></StackItem>
@@ -299,7 +320,10 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
         </Form>
       </StackItem>
       <StackItem>
-        {project ? (
+        {project && !playground ? (
+          playgroundError ? <LoadFailed title="Cannot read the playground" error={playgroundError} onRetry={onRetry} />
+            : <PartsSkeleton aria-label="What Playground needs" what="what Playground needs" count={2} />
+        ) : project ? (
           <PartList aria-label="What Playground needs">
             <ModelsPart {...props} project={project} picked={choosing ? picked : null} onPick={choosing ? setChosen : null} />
             <PlaygroundPart {...props} project={project} />

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   ActionListItem,
   Alert,
+  AlertActionLink,
   Button,
   Content,
   DescriptionList,
@@ -18,8 +19,9 @@ import { getMaaS, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink } from "./resourceRow";
-import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ComponentAlert, CopyableCode, shellQuote } from "./UseIt";
+import { LoadFailed, PartsSkeleton, RowsSkeleton } from "./Loading";
 import { EnvStatusLabel } from "./resourceStatus";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { type Busy, type FeatureState, maasDashboardHref, maasPartStatus } from "./featureState";
@@ -58,8 +60,11 @@ export function useMaaSStatus(refreshKey: number, busy: boolean, enabled = true)
 }
 
 export interface MaaSTabProps {
+  /** GET /api/resources/maas; null until it has been read. */
   maas: MaaSStatus | null;
   maasError: string | null;
+  /** Reads MaaS's status again (Try again on a failed read). */
+  onRetry: () => void;
   /** maasState: the same as the Overview's. */
   state: FeatureState;
   busy: Busy;
@@ -114,12 +119,12 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
       <Content component="p">
         Publishing offers one of this tool&apos;s chat models to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample; counted from the token usage a response reports). While it is published, the model is used through MaaS (with an API key) and the dashboard&apos;s playground; its direct address on the Models tab answers 404 until it is unpublished. Unpublish routes it as before.
       </Content>
-      {items.length === 0 ? (
+      {maas && items.length === 0 ? (
         <Content component="p">
           No model of this tool yet. <Button variant="link" isInline onClick={onModels}>Set one up on the Models tab</Button>, then publish it here.
         </Content>
       ) : (
-        <Table variant="compact" aria-label="This tool's models in MaaS">
+        <Table variant="compact" aria-label="This tool's models in MaaS" aria-busy={!maas}>
           <Thead>
             <Tr>
               <Th modifier="wrap" width={20}>Model</Th>
@@ -128,7 +133,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
               <Th screenReaderText="Actions" />
             </Tr>
           </Thead>
-          <Tbody>
+          {!maas ? <RowsSkeleton what="this tool's models in MaaS" columns={["Model", "Project", "In MaaS", "Actions"]} /> : <Tbody>
             {items.map((i) => {
               const project = i.namespace!;
               const model = i.name!;
@@ -152,7 +157,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                 </Tr>
               );
             })}
-          </Tbody>
+          </Tbody>}
         </Table>
       )}
     </TabSection>
@@ -203,19 +208,28 @@ const UseMaaS: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
  * to call a published model, what setup creates, and Remove.
  */
 export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
-  const { maas, maasError, state, baseReason, readOnly, setPending, onSetUp } = props;
+  const { maas, maasError, onRetry, state, baseReason, readOnly, setPending, onSetUp } = props;
   const next = state.next;
   const published = (maas?.items ?? []).some((i) => i.published);
   const attention = (maas?.parts ?? []).filter((p) => ["manual", "waiting", "problem"].includes(p.state));
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="MaaS" purpose="Models as a Service: offer models to everyone on the cluster through one gateway, with API keys and token limits." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="MaaS" purpose={FEATURE_PURPOSE.maas} state={state} /></StackItem>
       {maas?.blocked && <StackItem><ComponentAlert feature="Models as a Service" block={maas.blocked} /></StackItem>}
-      {maasError && <StackItem><Alert variant="danger" isInline component="p" title="Cannot read Models as a Service">{maasError}</Alert></StackItem>}
+      {maas && maasError && (
+        <StackItem>
+          <Alert variant="warning" isInline component="p" title="Models as a Service may be out of date" actionLinks={<AlertActionLink onClick={onRetry}>Try again</AlertActionLink>}>
+            The parts and models below are from the last successful read. {maasError}
+          </Alert>
+        </StackItem>
+      )}
       <StackItem>
-        <PartList aria-label="What MaaS needs">
-          {(maas?.parts ?? []).map((p) => <PlatformPart key={p.id} part={p} />)}
-        </PartList>
+        {maas ? (
+          <PartList aria-label="What MaaS needs">
+            {maas.parts.map((p) => <PlatformPart key={p.id} part={p} />)}
+          </PartList>
+        ) : maasError ? <LoadFailed title="Cannot read Models as a Service" error={maasError} onRetry={onRetry} />
+          : <PartsSkeleton aria-label="What MaaS needs" what="what MaaS needs" count={3} />}
       </StackItem>
       {next?.kind === "set-up" && attention.length > 0 && (
         <StackItem>
@@ -229,7 +243,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
           <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
         </StackItem>
       )}
-      <StackItem><PublishedModels {...props} /></StackItem>
+      {(maas || !maasError) && <StackItem><PublishedModels {...props} /></StackItem>}
       {maas && state.status === "ready" && published && <StackItem><UseMaaS maas={maas} /></StackItem>}
       <StackItem>
         <FeatureSection title="What this creates">

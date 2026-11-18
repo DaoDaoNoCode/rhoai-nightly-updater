@@ -25,7 +25,7 @@ import {
 import type { CatalogModel, InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
 import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type ModelsPending, type Pending, ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
-import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { envStatusText, notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
@@ -596,7 +596,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Models" purpose="Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with each model's own token or from the dashboard's Gen AI playground." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="Models" purpose={FEATURE_PURPOSE.models} state={state} /></StackItem>
       {models?.blocked && <StackItem><ComponentAlert feature="Model serving" block={models.blocked} /></StackItem>}
       {!models?.blocked && models?.presetProblem && (
         <StackItem>

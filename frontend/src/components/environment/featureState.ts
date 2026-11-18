@@ -80,7 +80,18 @@ export interface FeatureState {
   project: string | null;
   /** When the state summarises several projects: each one's own state, in the projects' order. */
   projects?: FeatureState[];
+  /**
+   * The status this state comes from has not been read yet: the state is
+   * not known, so it is shown as loading (a Skeleton), never as a state.
+   */
+  loading?: true;
 }
+
+/** The state of a feature whose status has not been read yet. */
+export const loadingState = (project: string | null = null): FeatureState => ({ status: "unknown", label: "Loading", next: null, project, loading: true });
+
+/** The state of a feature whose status could not be read, and never was: not a state, and nothing to do but read it again. */
+export const unreadableState = (project: string | null = null): FeatureState => ({ status: "unknown", label: "Unknown: cannot be read", next: null, project });
 
 /** One part of a feature, with its health and ownership. */
 export interface PartState {
@@ -253,6 +264,7 @@ function acrossProjects(states: FeatureState[], running: FeatureState | null): F
  * projects", "Error in 1 of 3 projects", "Not set up in any project".
  */
 export function pipelinesState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE): FeatureState {
+  if (!status) return loadingState(project);
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
   if (PROBLEM.includes(storage)) return { status: storage, label: envStatusText(storage), ...owner(notManaged(status?.minio)), next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
@@ -280,6 +292,7 @@ export function mlflowStatus(status: ResourcesStatus | null, busy: Busy): EnvSta
 export const MLFLOW_WORKSPACES = "Open MLflow workspaces";
 
 export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): FeatureState {
+  if (!status) return loadingState();
   const mlflow = status?.mlflow;
   const s = mlflowStatus(status, busy);
   const unmanaged = notManaged(mlflow);
@@ -496,6 +509,7 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
  * across the projects (the Overview), as pipelinesState does.
  */
 export function modelsState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE, model?: string): FeatureState {
+  if (!status) return loadingState(project);
   if (project) return modelsIn(status, project, busy, model);
   const gateway = gatewayStatus(status, busy);
   if (PROBLEM.includes(gateway)) {
@@ -619,11 +633,12 @@ export function defaultPlaygroundProject(pg: PlaygroundStatus | null, fromUrl: s
 /**
  * Playground: in a project (the tab), or summarised across the projects
  * that have one (the Overview), as pipelinesState does. pg is the
- * playground status (GET /api/resources/playground), null while it loads.
+ * playground status (GET /api/resources/playground), null while it loads
+ * (the state is loading then, as it is before status has loaded).
  */
 export function playgroundState(status: ResourcesStatus | null, pg: PlaygroundStatus | null, project: string | null, busy: Busy = IDLE): FeatureState {
+  if (!status || !pg) return loadingState(project);
   if (project) return playgroundInProject(status, pg, project, busy);
-  if (!pg) return { status: "unknown", label: "Checking", next: null, project: null };
   const projects = [...new Set((pg.items ?? []).filter((i) => i.deployed || i.terminating).map((i) => i.namespace!))];
   const states = projects.map((p) => playgroundInProject(status, pg, p, busy));
   const running = busy.playground ? playgroundInProject(status, pg, busy.playground.project, busy) : null;
@@ -680,7 +695,7 @@ export function maasDashboardHref(dashboardUrl: string | undefined): string | un
  * published models. The tab and the Overview both show this.
  */
 export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState {
-  if (!m) return { status: "unknown", label: "Checking", next: null, project: null };
+  if (!m) return loadingState();
   const status = maasPlatformStatus(m, busy);
   const unmanaged = m.platform.deployed && !m.platform.managedByTool;
   const own = owner(unmanaged);

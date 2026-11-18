@@ -22,7 +22,7 @@ import type { ResourceState, ResourcesStatus } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type Pending, ExternalLink, ProblemAlerts, StartingNote, consolePodsHref, isTerminating, pvcsLost, terminalReason } from "./resourceRow";
-import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { notManaged } from "./resourceStatus";
 import { MLFLOW_WORKSPACES, type Busy, type FeatureState, mlflowStatus } from "./featureState";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
@@ -167,7 +167,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
     : [];
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="MLflow" purpose="Track experiments: log runs, metrics and models to an MLflow server on the cluster, with a workspace per data science project." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="MLflow" purpose={FEATURE_PURPOSE.mlflow} state={state} /></StackItem>
       {status.mlflowBlocked && <StackItem><ComponentAlert feature="MLflow" block={status.mlflowBlocked} /></StackItem>}
       <StackItem>
         <PartList aria-label="What MLflow needs">

@@ -32,6 +32,7 @@ import {
   streamPlayground,
   streamMaaS,
   toApiError,
+  type ApiError,
   type StreamDoneHandler,
   type StreamDetachHandler,
   type CleanupRequest,
@@ -40,7 +41,7 @@ import { exponentialBackoff, usePolling } from "../hooks/usePolling";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../constants";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
-import { PageLoading } from "./PageStates";
+import { PageErrorState } from "./PageStates";
 import { errorResult } from "../outcomes";
 import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { ModelsTab, modelsConfirm, modelsSteps } from "./environment/ModelsTab";
@@ -51,7 +52,7 @@ import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview, type OverviewRow } from "./environment/Overview";
-import { partTitleId } from "./environment/FeatureLayout";
+import { FEATURE_PURPOSE, partTitleId } from "./environment/FeatureLayout";
 import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
@@ -83,7 +84,9 @@ import {
   pipelineServerUnmanaged,
   pipelinesState,
   setUpBlocked,
+  unreadableState,
 } from "./environment/featureState";
+import { FeatureLoading, LoadFailed } from "./environment/Loading";
 
 export { nextStep, terminalReason } from "./environment/resourceRow";
 
@@ -109,6 +112,10 @@ const BUSY_REASON = "Another operation is in progress";
 export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models", "playground", "maas"] as const;
 export type EnvironmentTab = (typeof ENVIRONMENT_TABS)[number];
 const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "Playground", maas: "MaaS" };
+/** How many parts each feature tab lists: as many skeleton rows show while its status loads. */
+const TAB_PARTS: Record<Exclude<EnvironmentTab, "overview" | "maas">, number> = { pipelines: 2, mlflow: 1, models: 2, playground: 2 };
+/** The tabs with a project picker. */
+const PROJECT_TABS: EnvironmentTab[] = ["pipelines", "mlflow", "models", "playground"];
 /** Tabs of the earlier layout: links to them open Pipelines. */
 const OLD_TABS = ["cluster", "projects"];
 
@@ -202,38 +209,46 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     }
   }, [focusTarget, tabParam, urlProject]);
 
-  const [resError, setResError] = useState<string | null>(null);
+  const [resError, setResError] = useState<ApiError | null>(null);
+  const [projectsError, setProjectsError] = useState<ApiError | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
-  const refreshProjects = useCallback(async () => {
-    try {
-      const r = await getDSProjects();
-      setProjectList(r.projects || []);
-    } catch {
-      setProjectList((l) => l ?? []);
-    }
-  }, []);
   // The Pipelines tab's selected project (set below, once it is known):
   // the status also reads its dashboard Connection from the Secret itself.
   const selectedPipelinesProject = useRef<string | null>(tab === "pipelines" ? urlProject : null);
-  // The status and the projects load together, on every refresh and poll:
-  // a project deleted elsewhere leaves the picker with the next load.
+  // The project the status shown was read for: until the selected project's
+  // is in, its Connection shows as loading (never another project's).
+  const [statusProject, setStatusProject] = useState<string | null>(null);
+  const statusRequest = useRef(0);
+  // The status and the projects load together, on every refresh and poll,
+  // and are shown together: the first view never has part of the projects,
+  // and a project deleted elsewhere leaves the picker with the next load.
+  // Only the latest read is shown: an earlier one (a poll, another
+  // project's) that answers later would show older data.
   const fetchResources = useCallback(async () => {
+    const req = ++statusRequest.current;
+    const asked = selectedPipelinesProject.current;
     setStatusLoading(true);
-    const projects = refreshProjects();
-    try {
-      const s = await getResourcesStatus(selectedPipelinesProject.current);
-      setResStatus(s);
+    const [s, p] = await Promise.allSettled([getResourcesStatus(asked), getDSProjects()]);
+    if (req !== statusRequest.current) return;
+    if (p.status === "fulfilled") {
+      setProjectList(p.value.projects || []);
+      setProjectsError(null);
+    } else {
+      // Keep the last list; until one is read, no project list is shown as empty.
+      setProjectsError(toApiError(p.reason, "Could not load the data science projects"));
+    }
+    if (s.status === "fulfilled") {
+      setResStatus(s.value);
+      setStatusProject(asked);
       setResError(null);
       setLastRefreshed(new Date());
-    } catch (e) {
+    } else {
       // Keep the last known state; show why it may be stale.
-      setResError(toApiError(e, "Could not load resource status").message);
-    } finally {
-      await projects;
-      setStatusLoading(false);
+      setResError(toApiError(s.reason, "Could not load resource status"));
     }
-  }, [refreshProjects]);
+    setStatusLoading(false);
+  }, []);
 
   useEffect(() => { void fetchResources(); }, [fetchResources]);
 
@@ -263,12 +278,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       return exponentialBackoff(attempt, RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS);
     },
   });
-  const checkAgain = () => {
-    setPollGaveUp(false);
-    setPollRound((n) => n + 1);
-    void fetchResources();
-  };
-
   /** Runs one request of a run; the run's dialog shows its outcome. */
   const runAction = async (action: string, fn: () => Promise<OperationResponse>, target: string | null): Promise<OperationResponse> => {
     trackFeature(action);
@@ -329,6 +338,16 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
+  // Refresh (and Check again) reads everything the page shows again; what
+  // is shown stays until the new answers are in.
+  const checkAgain = () => {
+    setPollGaveUp(false);
+    setPollRound((n) => n + 1);
+    setPlaygroundRefresh((n) => n + 1);
+    setMaaSRefresh((n) => n + 1);
+    setSamplesRefresh((n) => n + 1);
+    void fetchResources();
+  };
 
   const request = (p: ResourcePending): [string, () => Promise<OperationResponse>, string | null] => {
     switch (p.kind) {
@@ -633,9 +652,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const playgroundProject = missingProject ? null : playgroundProjectParam;
   const playgroundNow: FeatureState = cleared
     ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
-    : playgroundState(resStatus, pg, playgroundProject, busy);
-  const playgroundSummary = playgroundState(resStatus, pg, null, busy);
-  const maasNow = maasState(maas, busy);
+    : !pg && playgroundRead.error ? unreadableState(playgroundProject) : playgroundState(resStatus, pg, playgroundProject, busy);
+  // A status that was never read is loading; one that could not be read says so.
+  const playgroundSummary = !pg && playgroundRead.error ? unreadableState() : playgroundState(resStatus, pg, null, busy);
+  const maasNow = !maas && maasRead.error ? unreadableState() : maasState(maas, busy);
   const playgroundOptions: ProjectOption[] = projectNames.map((name) => {
     const i = playgroundIn(pg, name);
     return { name, description: i?.deployed ? `Playground: ${i.ready ? "Ready" : i.terminating ? "Deleting" : "Not ready"}${i.managedByTool ? "" : " · not managed by this tool"}` : undefined };
@@ -713,13 +733,26 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       doneMessage: done,
       // Every part's prerequisites on the latest status, before anything changes.
       preflight: async () => {
-        const fresh = await getResourcesStatus(selectedPipelinesProject.current);
+        const asked = selectedPipelinesProject.current;
+        const fresh = await getResourcesStatus(asked);
         setResStatus(fresh);
+        setStatusProject(asked);
         statusRef.current = fresh;
         return setUpBlocked(recheck(fresh, projectNames));
       },
     });
   };
+
+  // Rows still loading (the status, the playground's, MaaS's) show Skeletons.
+  const overview = (
+    <Overview rows={overviewRows} baseReason={baseReason} setUpReason={readOnly ? READ_ONLY_SETUP : null}
+      onSetUp={(row, setup) => setUp(row.name, setup)}
+      onShowIssue={(row, part) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(partTitleId(part)); }}
+      onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget(`${row.id}-project`); }}
+      onMigrate={() => setMigrateKind("migrate")}
+      onSamples={(row, focus) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(focus); }}
+      onCleanup={!readOnly && anythingToClean ? () => setCleanupScope("all") : null} />
+  );
 
   return (
     <>
@@ -731,76 +764,92 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           ))}
         </Tabs>
       </PageSection>
-      {!resStatus && !resError ? (
-        <PageLoading title="Loading the environment" />
-      ) : (
-        // Only the active tab is rendered: leaving a tab clears what it
-        // fetched on request (the storage's keys).
-        <PageSection isFilled id="environment-tab-content" role="tabpanel" aria-labelledby={`environment-tab-${tab}`}>
-          <Stack hasGutter>
-            {resError && (
-              <StackItem>
-                <Alert variant="warning" title="Resource status may be out of date" isInline component="p">
-                  <TruncatedText>{resError}</TruncatedText>
-                </Alert>
-              </StackItem>
-            )}
-            {pollGaveUp && resourcesSettling && (
-              <StackItem>
-                <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline component="p"
-                  actionLinks={<AlertActionLink onClick={checkAgain}>Check again</AlertActionLink>} />
-              </StackItem>
-            )}
-            {resStatus && (
-              <StackItem>
-                {tab === "overview" && (
-                  <Overview rows={overviewRows} baseReason={baseReason} setUpReason={readOnly ? READ_ONLY_SETUP : null}
-                    onSetUp={(row, setup) => setUp(row.name, setup)}
-                    onShowIssue={(row, part) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(partTitleId(part)); }}
-                    onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget(`${row.id}-project`); }}
-                    onMigrate={() => setMigrateKind("migrate")}
-                    onSamples={(row, focus) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(focus); }}
-                    onCleanup={!readOnly && anythingToClean ? () => setCleanupScope("all") : null} />
-                )}
-                {tab === "pipelines" && (
-                  <PipelinesTab status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
-                    onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
-                    state={pipelines} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
-                    setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
-                    onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
-                    sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
-                )}
-                {tab === "mlflow" && (
-                  <MLflowTab status={resStatus} state={mlflowNow} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
-                    project={project} projects={workspaceOptions} projectsLoaded={projectList !== null}
-                    onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
-                    setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")}
-                    sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
-                )}
-                {tab === "models" && (
-                  <ModelsTab status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
-                    onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
-                    model={modelsModel} onModel={chooseModel}
-                    state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
-                    setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
-                    onMaaS={() => navigate({ tab: "maas" })} />
-                )}
-                {tab === "playground" && (
-                  <PlaygroundTab status={resStatus} playground={pg} playgroundError={playgroundRead.error} project={playgroundProject} projects={playgroundOptions} projectsLoaded={projectList !== null}
-                    onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
-                    state={playgroundNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
-                    setPending={setPending} onSetUp={(setup) => setUp("Playground", setup)} onCleanup={() => setCleanupScope("playground")}
-                    onModels={() => navigate({ tab: "models", ...(playgroundProject ? { project: playgroundProject } : {}) })} />
-                )}
-                {tab === "maas" && (
-                  <MaaSTab maas={maas} maasError={maasRead.error} state={maasNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
-                    setPending={setPending} onSetUp={(setup) => setUp("MaaS", setup)} onModels={() => navigate({ tab: "models" })} />
-                )}
-              </StackItem>
-            )}
-          </Stack>
-        </PageSection>
-      )}
+      {/*
+        Only the active tab is rendered: leaving a tab clears what it
+        fetched on request (the storage's keys). Until a tab's status is
+        read, it shows where its data will be (Skeletons), never an empty
+        or "not set up" state; a status that cannot be read shows why,
+        with Retry.
+      */}
+      <PageSection isFilled id="environment-tab-content" role="tabpanel" aria-labelledby={`environment-tab-${tab}`}>
+        <Stack hasGutter>
+          {resError && resStatus && tab !== "maas" && (
+            <StackItem>
+              <Alert variant="warning" title="Resource status may be out of date" isInline component="p"
+                actionLinks={<AlertActionLink onClick={checkAgain}>Retry</AlertActionLink>}>
+                <TruncatedText>The data below is from the last successful refresh. {resError.message}</TruncatedText>
+              </Alert>
+            </StackItem>
+          )}
+          {projectsError && resStatus && PROJECT_TABS.includes(tab) && (
+            <StackItem>
+              <Alert variant="warning" title="Cannot load the data science projects" isInline component="p"
+                actionLinks={<AlertActionLink onClick={checkAgain}>Retry</AlertActionLink>}>
+                <TruncatedText>{projectList ? "The project list is from the last successful refresh. " : "Until it loads, the project picker lists only the projects with a pipeline server. "}{projectsError.message}</TruncatedText>
+              </Alert>
+            </StackItem>
+          )}
+          {tab === "overview" && !pg && playgroundRead.error && (
+            <StackItem><LoadFailed title="Cannot read the playground" error={playgroundRead.error} onRetry={() => void playgroundRead.reload()} /></StackItem>
+          )}
+          {tab === "overview" && !maas && maasRead.error && (
+            <StackItem><LoadFailed title="Cannot read Models as a Service" error={maasRead.error} onRetry={() => void maasRead.reload()} /></StackItem>
+          )}
+          {pollGaveUp && resourcesSettling && (
+            <StackItem>
+              <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline component="p"
+                actionLinks={<AlertActionLink onClick={checkAgain}>Check again</AlertActionLink>} />
+            </StackItem>
+          )}
+          {!resStatus && tab !== "maas" ? (
+            <StackItem>
+              {resError ? <PageErrorState inSection={false} error={resError} title="Cannot load the environment" onRetry={checkAgain} />
+                : tab === "overview" ? overview
+                  : <FeatureLoading title={TAB_TITLES[tab]} purpose={FEATURE_PURPOSE[tab]} parts={TAB_PARTS[tab]} />}
+            </StackItem>
+          ) : (
+            <StackItem>
+              {tab === "overview" && overview}
+              {tab === "pipelines" && resStatus && (
+                <PipelinesTab status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
+                  onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                  connectionLoading={!!project && statusProject !== project}
+                  state={pipelines} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
+                  setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
+                  onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
+                  sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
+              )}
+              {tab === "mlflow" && resStatus && (
+                <MLflowTab status={resStatus} state={mlflowNow} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                  project={project} projects={workspaceOptions} projectsLoaded={projectList !== null}
+                  onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
+                  setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")}
+                  sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
+              )}
+              {tab === "models" && resStatus && (
+                <ModelsTab status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
+                  onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                  model={modelsModel} onModel={chooseModel}
+                  state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                  setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
+                  onMaaS={() => navigate({ tab: "maas" })} />
+              )}
+              {tab === "playground" && resStatus && (
+                <PlaygroundTab status={resStatus} playground={pg} playgroundError={playgroundRead.error} onRetry={() => void playgroundRead.reload()}
+                  project={playgroundProject} projects={playgroundOptions} projectsLoaded={projectList !== null}
+                  onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                  state={playgroundNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
+                  setPending={setPending} onSetUp={(setup) => setUp("Playground", setup)} onCleanup={() => setCleanupScope("playground")}
+                  onModels={() => navigate({ tab: "models", ...(playgroundProject ? { project: playgroundProject } : {}) })} />
+              )}
+              {tab === "maas" && (
+                <MaaSTab maas={maas} maasError={maasRead.error} onRetry={() => void maasRead.reload()} state={maasNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
+                  setPending={setPending} onSetUp={(setup) => setUp("MaaS", setup)} onModels={() => navigate({ tab: "models" })} />
+              )}
+            </StackItem>
+          )}
+        </Stack>
+      </PageSection>
 
       {migrateKind && (
         <MigrateStorageModal

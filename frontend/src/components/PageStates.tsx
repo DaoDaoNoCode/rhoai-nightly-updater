@@ -29,39 +29,40 @@ interface PageErrorStateProps {
   /** "Can't load the cluster status" */
   title: string;
   onRetry: () => void;
+  /** In its own PageSection (the default), or inside one (a tab's panel). */
+  inSection?: boolean;
 }
 
 /**
  * A back-end failure that leaves the page with nothing to show: what
  * failed in plain words, Retry, Diagnostics, and the raw error on demand.
  */
-export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, onRetry }) => {
+export const PageErrorState: React.FC<PageErrorStateProps> = ({ error, title, onRetry, inSection = true }) => {
   const navigate = useNavigate();
   const { title: cause, body } = describeLoadError(error, title);
-  return (
-    <PageSection isFilled>
-      <EmptyState
-        headingLevel="h2"
-        titleText={title}
-        icon={ExclamationCircleIcon}
-        status="danger"
-        variant={EmptyStateVariant.lg}
-      >
-        <EmptyStateBody>
-          {cause !== title && <><strong>{cause}.</strong>{" "}</>}Retry in a moment; Diagnostics checks the cluster and the operator.
-          {body && <TechnicalDetails text={body} toggleText="Show the error" />}
-        </EmptyStateBody>
-        <EmptyStateFooter>
-          <EmptyStateActions>
-            <Button variant="primary" onClick={onRetry}>Retry</Button>
-          </EmptyStateActions>
-          <EmptyStateActions>
-            <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
-          </EmptyStateActions>
-        </EmptyStateFooter>
-      </EmptyState>
-    </PageSection>
+  const state = (
+    <EmptyState
+      headingLevel="h2"
+      titleText={title}
+      icon={ExclamationCircleIcon}
+      status="danger"
+      variant={EmptyStateVariant.lg}
+    >
+      <EmptyStateBody>
+        {cause !== title && <><strong>{cause}.</strong>{" "}</>}Retry in a moment; Diagnostics checks the cluster and the operator.
+        {body && <TechnicalDetails text={body} toggleText="Show the error" />}
+      </EmptyStateBody>
+      <EmptyStateFooter>
+        <EmptyStateActions>
+          <Button variant="primary" onClick={onRetry}>Retry</Button>
+        </EmptyStateActions>
+        <EmptyStateActions>
+          <Button variant="link" onClick={() => navigate("/diagnostics")}>Open Diagnostics</Button>
+        </EmptyStateActions>
+      </EmptyStateFooter>
+    </EmptyState>
   );
+  return inSection ? <PageSection isFilled>{state}</PageSection> : state;
 };
 
 /** The whole page once the OpenShift session expired: nothing else works until the user signs in again. */
