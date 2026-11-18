@@ -56,9 +56,11 @@ func playgroundServerRequests() []rbacRequest {
 // user:check-access): it identifies the user and runs access reviews, and
 // cannot act. A --scope flag would put a full token in every session
 // cookie; the Playground calls the dashboard with the ServiceAccount's
-// token instead.
+// token instead. Only deploy/template.yaml is read: the image build copies
+// just that file, and scripts/test-chart.sh (CI's chart job) fails when the
+// chart's copy differs from it.
 func TestTemplateOAuthProxyKeepsTheDefaultScope(t *testing.T) {
-	for _, path := range []string{"../../deploy/template.yaml", "../../deploy/chart/files/template.yaml"} {
+	for _, path := range []string{"../../deploy/template.yaml"} {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
