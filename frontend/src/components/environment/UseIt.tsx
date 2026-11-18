@@ -97,13 +97,19 @@ export function mlflowClientEnv(url: string, project: string): string {
   ].join("\n");
 }
 
-/** A KFP SDK client for a pipeline server's API. */
+/**
+ * A KFP SDK client for a pipeline server's API, with the short-lived token
+ * pipelineTokenCommands puts in $TOKEN (never the user's own: the server is
+ * in a project its editors control). The address is a JSON string, which is
+ * also a valid Python string literal.
+ */
 export function kfpClientSnippet(apiUrl: string): string {
   return [
+    "import os",
     "import kfp",
     "",
-    "# Your OpenShift token: oc whoami -t",
-    `client = kfp.Client(host="${apiUrl}", existing_token="<token>")`,
+    "# TOKEN: the 15-minute token from the commands above, which may only use this pipeline server's API",
+    `client = kfp.Client(host=${JSON.stringify(apiUrl)}, existing_token=os.environ["TOKEN"])`,
     "print(client.list_experiments())",
   ].join("\n");
 }

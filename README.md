@@ -204,11 +204,11 @@ Once MLflow or a pipeline server works, one click shows it working, with no code
 
 The other samples are a training experiment with three runs and a registered model (`champion` alias), an MCP server entry (DeepWiki's public server; the Gen AI playground needs internet access to call it) and an agent skill. Everything the tool adds is tagged `rhoai-nightly-updater.sample`, and Remove deletes only that. Readers see every action disabled with the reason; without a working MLflow the section links to Set up.
 
-<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Run a sample pipeline in dev-project: Download rhoai-nightly-sample.yaml, Open pipelines in dev-project, and the curl commands that upload it and start a run with your own token" width="760">
+<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Run a sample pipeline in dev-project: Download rhoai-nightly-sample.yaml, Open pipelines in dev-project, and the commands that make a 15-minute token for the pipeline API, upload it and start a run" width="760">
 
 1. **Download rhoai-nightly-sample.yaml**: a two-step pipeline (write a small file to the S3 storage, read it back). The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. **Show the pipeline YAML** shows it with a copy button.
 2. **Open pipelines in dev-project**: choose Import pipeline and the file, then Create run.
-3. Or copy the commands: `curl` against the pipeline server's API (upload, then start a run), with your own token from `oc whoami -t`. They need `jq`.
+3. Or copy the commands (as an admin of the project): they make ServiceAccount `pipeline-api` with a Role that may only use this pipeline server's API (`datasciencepipelinesapplications/api`, `get` `create`, the check its kube-rbac-proxy makes) and a token for it that expires in 15 minutes, then `curl` the pipeline server's API (upload, then start a run). They need `jq`. Your own OpenShift token is not sent there: whoever can edit the project controls what answers at that address. `oc delete rolebinding/pipeline-api role/pipeline-api serviceaccount/pipeline-api -n <project>` removes them.
 
 You run the sample yourself: the updater never calls a pipeline server's API, because that API is a Service in your project and the updater's token must not reach it ([SECURITY.md](SECURITY.md#serviceaccount-rbac)). It works on any ready pipeline server, the dashboard's too.
 

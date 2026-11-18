@@ -346,20 +346,23 @@ describe("Pipelines tab: Run a sample pipeline", () => {
   };
   const section = () => screen.getByRole("region", { name: "Run a sample pipeline" });
 
-  it("offers the file, the dashboard import and commands with the user's own token; the tool sends nothing to the pipeline server", async () => {
+  it("offers the file, the dashboard import and commands with a scoped short-lived token; the tool sends nothing to the pipeline server", async () => {
     const api = stubApi({
       "/api/resources/status": status({ pipelineServers: [dspa("dev", { apiRoute: API, uiRoute: UI })] }), "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/samples/pipeline/spec": spec,
     });
     renderAt("/test-resources?tab=pipelines&project=dev");
     await tick();
-    expect(section()).toHaveTextContent("They use your own OpenShift token");
+    expect(section()).toHaveTextContent("They do not send your OpenShift token to the pipeline server");
+    expect(section()).not.toHaveTextContent("whoami");
     const download = within(section()).getByRole("link", { name: "Download rhoai-nightly-sample.yaml" });
     expect(download).toHaveAttribute("download", "rhoai-nightly-sample.yaml");
     expect(download).toHaveAttribute("href", pipelineFileHref(spec.yaml));
     expect(decodeURIComponent(download.getAttribute("href")!.split(",")[1])).toBe(spec.yaml);
     expect(within(section()).getByRole("link", { name: "Open pipelines in dev" })).toHaveAttribute("href", UI);
-    expect(within(section()).getByText(/TOKEN=\$\(oc whoami -t\)/)).toBeInTheDocument();
+    expect(within(section()).getByText(/TOKEN=\$\(oc create token pipeline-api -n dev --duration=15m\)/)).toBeInTheDocument();
+    // How to remove what the commands make.
+    expect(section()).toHaveTextContent("oc delete rolebinding/pipeline-api role/pipeline-api serviceaccount/pipeline-api -n dev");
     expect(within(section()).getByRole("button", { name: "Copy the commands" })).toBeInTheDocument();
     fireEvent.click(within(section()).getByRole("button", { name: "Show the pipeline YAML" }));
     expect(within(section()).getByText(/schemaVersion: 2.1.0/)).toBeInTheDocument();
@@ -377,6 +380,8 @@ describe("Pipelines tab: Run a sample pipeline", () => {
     renderAt("/test-resources?tab=pipelines&project=team");
     await tick();
     expect(within(section()).getByText(/namespace=team/)).toBeInTheDocument();
+    // The token may use only that server's API (its name, from the status).
+    expect(within(section()).getByText(/--resource-name=dspa/)).toBeInTheDocument();
   });
 
   it("a failed read says so, with Try again", async () => {
@@ -395,11 +400,20 @@ describe("Pipelines tab: Run a sample pipeline", () => {
   });
 
   it("the commands upload the file to the project and start a run of its newest version", () => {
-    const c = samplePipelineCommands(API + "/", "dev", spec);
+    const c = samplePipelineCommands(API + "/", "dev", "nightly-dspa", spec);
     expect(c).toContain(`API='${API}'\n`);
     // An address from the cluster is single-quoted: $() and backticks stay text.
-    expect(samplePipelineCommands("https://x.example.com/$(id)'`id`", "dev", spec)).toContain(`API='https://x.example.com/$(id)'\\''\`id\`'\n`);
-    expect(c).toContain("TOKEN=$(oc whoami -t)");
+    expect(samplePipelineCommands("https://x.example.com/$(id)'`id`", "dev", "dspa", spec)).toContain(`API='https://x.example.com/$(id)'\\''\`id\`'\n`);
+    // Never the user's own token: the pipeline server's Route and Service are
+    // in a project its editors control. A ServiceAccount that may only use
+    // this server's API (the attributes its kube-rbac-proxy checks), and a
+    // token for it that expires in 15 minutes.
+    expect(c).not.toContain("whoami");
+    expect(c).toContain("oc create serviceaccount pipeline-api -n dev\n");
+    expect(c).toContain("oc create role pipeline-api -n dev --verb=get,create \\\n  --resource=datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io/api --resource-name=nightly-dspa\n");
+    expect(c).toContain("oc create rolebinding pipeline-api -n dev --role=pipeline-api --serviceaccount=dev:pipeline-api\n");
+    expect(c).toContain("export TOKEN=$(oc create token pipeline-api -n dev --duration=15m)\n");
+    expect(c.indexOf("oc create token")).toBeLessThan(c.indexOf("curl"));
     expect(c).toContain('-F "uploadfile=@rhoai-nightly-sample.yaml"');
     expect(c).toContain('"$API/apis/v2beta1/pipelines/upload?name=rhoai-nightly-sample&namespace=dev"');
     expect(c).toContain('"$API/apis/v2beta1/pipelines/$PIPELINE_ID/versions?page_size=1&sort_by=created_at%20desc"');

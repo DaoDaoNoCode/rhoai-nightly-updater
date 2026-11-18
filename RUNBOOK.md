@@ -338,7 +338,7 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | Agent and prompt demo has no Remove | By design: the updater holds no right to delete MLflow data it did not name. Remove it in the MLflow UI; Clean up leaves it |
 | Agent skill **Not available** | This MLflow has no Skill Registry (older RHOAI releases). The dashboard's AI hub > Skills also needs the `skillRegistry` flag |
 | Sample pipeline run Failed: an image cannot be pulled | Disconnected or mirrored cluster: mirror the image the section shows, or set `SAMPLE_PIPELINE_IMAGE` on the updater to a pullable copy, download the file again and import it as a new pipeline (or a new version) |
-| Sample pipeline commands: `curl: (22) ... 401` or `403` | The commands use your own token (`oc whoami -t`): log in again with `oc login`, and check you can edit the project. The updater does not run the sample for you |
+| Sample pipeline commands: `curl: (22) ... 401` or `403` | The commands use a token of ServiceAccount `pipeline-api` that expires in 15 minutes: `401`, it expired (run the `oc create token` line again); `403`, its Role does not allow the call (`oc get role pipeline-api -n <project> -o yaml` must name `datasciencepipelinesapplications/api`, the pipeline server's name, and `get` `create`). Creating the Role needs an admin of the project. The updater does not run the sample for you |
 | Sample pipeline commands: upload fails with "already exists" | A pipeline `rhoai-nightly-sample` is in the project already. Start another run with the last command (in the same shell), or delete the pipeline in the dashboard first |
 
 ### 10.2 Models: the inference gateway and CPU models

@@ -252,7 +252,14 @@ describe("Pipelines: use it", () => {
     const use = await screen.findByRole("region", { name: "Use it" });
     expect(use).toHaveTextContent("Choose Import pipeline");
     expect(use).toHaveTextContent("API endpointhttps://ds-pipeline-nightly-dspa-dev.apps.example.com");
-    expect(use).toHaveTextContent('client = kfp.Client(host="https://ds-pipeline-nightly-dspa-dev.apps.example.com", existing_token="<token>")');
+    // A short-lived token that may only use this server's API, never the
+    // user's own: the server runs in a project its editors control.
+    expect(use).toHaveTextContent("oc create role pipeline-api -n dev --verb=get,create");
+    expect(use).toHaveTextContent("--resource-name=nightly-dspa");
+    expect(use).toHaveTextContent("export TOKEN=$(oc create token pipeline-api -n dev --duration=15m)");
+    expect(use).toHaveTextContent('client = kfp.Client(host="https://ds-pipeline-nightly-dspa-dev.apps.example.com", existing_token=os.environ["TOKEN"])');
+    expect(use).not.toHaveTextContent("whoami");
+    expect(use).not.toHaveTextContent("Sign in with your OpenShift token");
     expect(screen.getByRole("region", { name: "What next" })).toHaveTextContent("Create a run");
   });
 });

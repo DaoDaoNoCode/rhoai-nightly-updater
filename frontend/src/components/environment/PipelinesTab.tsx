@@ -38,7 +38,7 @@ import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, kfpClientSnippet } from "./UseIt";
-import { PipelineSample } from "./PipelineSample";
+import { PipelineSample, pipelineTokenCommands, pipelineTokenRemoval } from "./PipelineSample";
 import type { SampleOp } from "./samples";
 import {
   type Busy,
@@ -369,7 +369,7 @@ const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ se
           </DescriptionListDescription>
         </DescriptionListGroup>
       )}
-      {server.apiRoute && (
+      {server.apiRoute && server.name && (
         <>
           <DescriptionListGroup>
             <DescriptionListTerm>API endpoint</DescriptionListTerm>
@@ -381,8 +381,10 @@ const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ se
             <DescriptionListTerm>From Python (KFP SDK)</DescriptionListTerm>
             <DescriptionListDescription>
               <Stack hasGutter>
-                <StackItem><Content component="p">Sign in with your OpenShift token; you need access to {project}.</Content></StackItem>
+                <StackItem><Content component="p">Use a token that may only use this server&apos;s API, not your OpenShift token: whoever can edit {project} controls what answers at the server&apos;s address. As an admin of {project}, run these commands to make a ServiceAccount with only that permission and a token for it that expires in 15 minutes, then start Python in the same shell.</Content></StackItem>
+                <StackItem><CopyableCode id="pipelines-kfp-token" label="the token commands" code={pipelineTokenCommands(project, server.name)} /></StackItem>
                 <StackItem><CopyableCode id="pipelines-kfp" label="the Python snippet" code={kfpClientSnippet(server.apiRoute)} /></StackItem>
+                <StackItem><Content component="p">To remove them afterwards: <code>{pipelineTokenRemoval(project)}</code></Content></StackItem>
               </Stack>
             </DescriptionListDescription>
           </DescriptionListGroup>
@@ -444,7 +446,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
         <>
           <StackItem><UsePipelines server={server} project={project} /></StackItem>
           <StackItem>
-            <PipelineSample project={project} apiRoute={server.apiRoute} uiRoute={server.uiRoute} />
+            <PipelineSample project={project} dspa={server.name} apiRoute={server.apiRoute} uiRoute={server.uiRoute} />
           </StackItem>
           <StackItem>
             <WhatNext id="pipelines-next" items={[
