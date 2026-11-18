@@ -119,7 +119,7 @@ If the Deployment was created from an older template than the running image
 expects (typically an install on `:latest` that pulled a newer image), every
 page shows this notice for admins. Upgrade as in sections 3 to 5:
 
-<img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, template revision 3 where 4 is expected" width="760">
+<img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, template revision 3 where 5 is expected" width="760">
 
 Dismissing the release notice hides it until an even newer release.
 
