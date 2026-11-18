@@ -45,7 +45,7 @@ describe("maasState", () => {
       items: [{ namespace: "p", deployed: true, ready: true, managedByTool: true, modelReady: true, published: true }],
     }), IDLE);
     expect(s.label).toBe("Ready, 1 model published");
-    expect(s.next).toEqual({ kind: "open", label: "Open MaaS", href: "https://rh-ai.apps.example.com/maas" });
+    expect(s.next).toEqual({ kind: "open", label: "Open MaaS", href: "https://rh-ai.apps.example.com/maas/maas-governance" });
   });
 
   it("a publication left half-way says what is left, is not counted, and does not keep the tab polling", () => {

@@ -16,6 +16,16 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
+## [3.0.1] - unreleased
+
+### Changed
+
+- Links to the RHOAI dashboard open the matching section page, not a
+  project's details page: a project's models open its Deployments page
+  (`/ai-hub/models/deployments/internal/<project>`), and MaaS opens MaaS
+  governance (`/maas/maas-governance`). Pipelines (`/develop-train/pipelines/definitions/<project>`)
+  and the playground (`/gen-ai-studio/playground/<project>`) already did.
+
 ## [3.0.0] - 2026-11-18
 
 ### Added

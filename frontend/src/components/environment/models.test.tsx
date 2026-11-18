@@ -59,7 +59,7 @@ describe("modelsState", () => {
 
   it("ready opens the project in the dashboard; ownership is said apart from the label", () => {
     const s = modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false }, models: modelsStatus({ items: [model("dev")] }) }), "dev", ["dev"]);
-    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open in dashboard", href: "https://rh-ai.apps.example.com/projects/dev?section=model-server" } });
+    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open in dashboard", href: "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev" } });
   });
 
   it("a cluster that cannot serve models says why on Set up", () => {
@@ -276,7 +276,7 @@ describe("Models tab", () => {
     expect(within(gw).getAllByText(gateway.externalUrl!)[0]).toBeInTheDocument();
     expect(within(gw).queryByText(/apps domain/)).toBeNull();
     const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
-    expect(within(part).getByRole("link", { name: /Open dev in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects/dev?section=model-server");
+    expect(within(part).getByRole("link", { name: /Open dev in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev");
     expect(screen.getByRole("heading", { name: "Use it" })).toBeInTheDocument();
     // No token of its own yet: no commands (Set up again creates it).
     expect(screen.queryByText(/"model":"qwen25-05b-instruct"/)).toBeNull();

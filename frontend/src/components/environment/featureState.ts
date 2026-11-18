@@ -439,9 +439,14 @@ export function modelsBlockedReason(status: ResourcesStatus | null): string | nu
   return status?.models?.blocked?.reason ?? status?.models?.presetProblem ?? null;
 }
 
-/** The dashboard's page of a project's deployed models (odh-dashboard /projects/<ns>). */
+/**
+ * The dashboard's Deployments page of a project's models, not the project's
+ * details page (odh-dashboard rhoai-3.6 packages/model-serving
+ * src/components/global/deploymentsPaths.ts deploymentsInternalPath:
+ * /ai-hub/models/deployments/internal/<ns>).
+ */
 export function dashboardProjectHref(dashboardUrl: string | undefined, project: string): string | undefined {
-  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/projects/${encodeURIComponent(project)}?section=model-server` : undefined;
+  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/ai-hub/models/deployments/internal/${encodeURIComponent(project)}` : undefined;
 }
 
 const projectsWithModels = (status: ResourcesStatus | null, projects: string[]) => projects.filter((p) => !!modelIn(status, p));
@@ -686,9 +691,9 @@ export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus 
   return "not-set-up";
 }
 
-/** The dashboard's MaaS pages (odh-dashboard packages/maas: /maas). */
+/** The dashboard's MaaS governance page (odh-dashboard rhoai-3.6 packages/maas navigation: /maas/maas-governance). */
 export function maasDashboardHref(dashboardUrl: string | undefined): string | undefined {
-  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/maas` : undefined;
+  return dashboardUrl?.startsWith("https://") ? `${dashboardUrl.replace(/\/$/, "")}/maas/maas-governance` : undefined;
 }
 
 /**
