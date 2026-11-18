@@ -230,13 +230,15 @@ Open the **Models** tab and pick a data science project.
    | Qwen3 1.7B | chat, tool calling, reasoning | 4, 12 GiB |
    | Granite Embedding 125M English | embeddings (768 dimensions) | 2, 3 GiB |
 
-2. Click **Set up** and confirm. It creates what is missing: the inference gateway (once per cluster; it runs a cloud load balancer, which costs money while it exists), then the model. The gateway accepts models only from the projects on its list, as RHOAI documents it; the setup adds the project to that list before it creates the model. The first time takes 3 to 5 minutes.
+2. If **On the cluster first** lists missing parts (KServe, cert-manager, and Connectivity Link when the model goes through a gateway), click **Set up what Models needs** and confirm.
+3. Under **How it is reached**, keep the recommended choice or pick another: the cluster's default inference gateway, MaaS only, another gateway that admits the project, or only inside the cluster. When no gateway fits, the tab recommends **Set up the inference gateway** (once per cluster; it runs a cloud load balancer, which costs money while it exists).
+4. Click **Set up** and confirm. The first time takes 3 to 5 minutes. Once the model runs, the tool calls it once, as a user would; the setup succeeds only when it answers.
 
 <img src="images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
 
 **The runtime image.** A model runs on the vLLM CPU image that the installed RHOAI's CPU preset names. On a nightly build that image is not published yet, so the cluster cannot pull it, and the tool uses the newest released Red Hat vLLM CPU image instead (`registry.redhat.io/rhaii/vllm-cpu-rhel9`, found in Red Hat's container catalog and pinned by digest); the model's details say which image it runs. A released RHOAI, or a cluster with a mirror for the preset's image, uses the preset's own image. `VLLM_CPU_IMAGE` sets an image of your own, for example a mirror on a disconnected cluster.
 
-**What you should see:** the model **Ready**, with its address, and under **Use it** the `curl` commands that call it with its own token. The dashboard lists it with the project's deployments. Troubleshooting: [RUNBOOK §10.2](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
+**What you should see:** the model **Ready**, **Can it be called?** reading **Answers requests**, its address and the exact name to send as `"model"`, and under **Use it** the `curl` commands that call it with its own token. The dashboard lists it with the project's deployments. Troubleshooting: [RUNBOOK §10.2](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 
 ## 10. Environment: the Gen AI playground
 
