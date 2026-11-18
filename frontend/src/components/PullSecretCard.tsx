@@ -341,7 +341,12 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             {tokenInvalid ? (
               <HelperTextItem variant="error">Expected base64 of user:password (the &quot;auth&quot; value of a Docker config).</HelperTextItem>
             ) : (
-              <HelperTextItem>{CREDENTIALS_HELP} Saved as additional-pull-secret in kube-system.</HelperTextItem>
+              <HelperTextItem>
+                {CREDENTIALS_HELP} Saved as additional-pull-secret in kube-system.
+                {nodes && !pullSecret.exists && (controlPlane === "self-managed"
+                  ? " The nodes of this self-managed cluster need it in openshift-config/pull-secret too: once it is saved, this item shows the command."
+                  : " If this cluster is self-managed, its nodes need it in openshift-config/pull-secret too: once it is saved, this item shows the command.")}
+              </HelperTextItem>
             )}
           </HelperText>
         </FormHelperText>

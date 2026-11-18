@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { PullSecretSetup } from "./PullSecretCard";
 import { ClusterSetupCard } from "./StatusCards";
 import { SetupModal } from "./PrerequisitesPanel";
@@ -69,9 +69,17 @@ describe("The pull secret's node part, by control plane", () => {
     expect(screen.queryByText(/This cluster is self-managed:/)).not.toBeInTheDocument();
   });
 
-  it("is not there before the updater's copy is saved", () => {
+  it("is not there before the updater's copy is saved; the form says it comes next", () => {
     renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false, nodes: unchecked }} controlPlane="self-managed" />);
     expect(screen.getByText("Missing")).toBeInTheDocument();
+    expect(screen.getByText(/The nodes of this self-managed cluster need it in openshift-config\/pull-secret too: once it is saved, this item shows the command/)).toBeInTheDocument();
+    expect(document.getElementById("node-pull-secret-command-code")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check that the nodes can pull" })).not.toBeInTheDocument();
+    cleanup();
+    renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false, nodes: unchecked }} />);
+    expect(screen.getByText(/If this cluster is self-managed, its nodes need it in openshift-config\/pull-secret too/)).toBeInTheDocument();
+    cleanup();
+    renderWithApp(<PullSecretSetup pullSecret={{ exists: false, valid: false }} controlPlane="hosted" />);
     expect(screen.queryByText(/openshift-config\/pull-secret/)).not.toBeInTheDocument();
   });
 
@@ -95,7 +103,7 @@ describe("The pull secret's node part, by control plane", () => {
 
 describe("Check that the nodes can pull", () => {
   it("runs the check with the build Update would install and shows success", async () => {
-    const fetchMock = stubCheck({ success: true, message: `The nodes can pull from quay.io/rhoai: a temporary catalog pod pulled ${IMAGE} (and was removed).`, logs: [] });
+    const fetchMock = stubCheck({ success: true, message: `A temporary catalog pod pulled ${IMAGE} with the nodes' pull secret, and was removed again.`, logs: [] });
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
     const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
     await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));
@@ -109,7 +117,7 @@ describe("Check that the nodes can pull", () => {
   });
 
   it("shows why the nodes cannot pull", async () => {
-    stubCheck({ success: false, errorCode: "catalog_image_pull", message: "The nodes cannot pull from quay.io/rhoai: the catalog image x cannot be pulled (ErrImagePull: unauthorized).", logs: [] });
+    stubCheck({ success: false, errorCode: "catalog_image_pull", message: "The catalog image x cannot be pulled (ErrImagePull: unauthorized).", logs: [] });
     renderWithApp(<PullSecretSetup pullSecret={saved(unchecked)} controlPlane="self-managed" checkImage={IMAGE} />);
     const check = screen.getByRole("button", { name: "Check that the nodes can pull" });
     await waitFor(() => expect(check).not.toHaveAttribute("aria-disabled", "true"));

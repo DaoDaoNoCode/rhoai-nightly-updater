@@ -966,7 +966,7 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 			Evidence: []string{topology, catalog},
 			Fix: "A cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. " +
 				"Then click Check that the nodes can pull under Pull secret in the cluster setup on the Status page.",
-			LearnMore:    "The nodes pick up the change within a few minutes, without a reboot; `oc get mcp` shows UPDATED True for every pool when they all have it.",
+			LearnMore:    "The nodes pick up the change within a few minutes, without a reboot; oc get mcp shows UPDATED True for every pool when they all have it.",
 			TechnicalCmd: NodePullSecretCommand,
 		}},
 	}

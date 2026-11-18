@@ -37,7 +37,7 @@ func TestCheckNodePull_ImagePulled(t *testing.T) {
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if !strings.Contains(result.Message, "The nodes can pull from quay.io/rhoai") || !strings.Contains(result.Message, testNightlyImage) || !strings.Contains(result.Message, "oc get mcp") {
+	if !strings.HasPrefix(result.Message, "A temporary catalog pod pulled "+testNightlyImage+" with the nodes' pull secret") || !strings.Contains(result.Message, "oc get mcp") {
 		t.Fatalf("message %q", result.Message)
 	}
 	verificationCatalogWrites(t, f)
@@ -70,7 +70,7 @@ func TestCheckNodePull_PullFailsPerTopology(t *testing.T) {
 			if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
-			if !strings.HasPrefix(result.Message, "The nodes cannot pull from quay.io/rhoai: the catalog image "+testNightlyImage+" cannot be pulled (ErrImagePull: unauthorized") ||
+			if !strings.HasPrefix(result.Message, "The catalog image "+testNightlyImage+" cannot be pulled (ErrImagePull: unauthorized") ||
 				!strings.Contains(result.Message, tc.want) || strings.Contains(result.Message, tc.notWant) {
 				t.Fatalf("message %q", result.Message)
 			}

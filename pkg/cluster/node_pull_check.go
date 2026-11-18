@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -42,14 +43,16 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 			logs = append(logs, "OK: the catalog pod pulled the image and serves it")
 			return &types.OperationResponse{
 				Success: true,
-				Message: "The nodes can pull from quay.io/rhoai: a temporary catalog pod pulled " + image + " (and was removed). " +
-					"A node whose machine config pool is still updating may not have the credentials yet: `oc get mcp` shows UPDATED True for every pool when they all do.",
+				Message: "A temporary catalog pod pulled " + image + " with the nodes' pull secret, and was removed again. " +
+					"A node whose machine config pool is still updating may not have the credentials yet: oc get mcp shows UPDATED True for every pool when they all do.",
 				Logs: logs,
 			}, nil
 		default:
 			last = "catalog state is " + state
 			if pullErr := pull.check(c, name, image); pullErr != nil {
-				msg := "The nodes cannot pull from quay.io/rhoai: " + pullErr.Error() + "."
+				// "The catalog image ... cannot be pulled (...). <advice>."
+				text := pullErr.Error()
+				msg := strings.ToUpper(text[:1]) + text[1:] + "."
 				return &types.OperationResponse{Success: false, Message: msg, Logs: append(logs, msg), ErrorCode: "catalog_image_pull"}, nil
 			}
 		}
