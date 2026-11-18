@@ -355,17 +355,17 @@ URL=$(oc get llminferenceservice qwen25-05b-instruct -n <project> -o jsonpath='{
 curl -s -H "Authorization: Bearer $TOKEN" $URL/v1/models
 curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
   -d '{"model":"qwen25-05b-instruct","messages":[{"role":"user","content":"Say hello"}],"max_tokens":64}'
-# Qwen3: thinking is off by default; turn it on for one request
+# Qwen3: thinking is off by default; turn it on for one request (streamed: it can take over a minute)
 URL=$(oc get llminferenceservice qwen3-1-7b -n <project> -o jsonpath='{.status.url}')
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
-  -d '{"model":"qwen3-1-7b","messages":[{"role":"user","content":"Is 1001 prime?"}],"chat_template_kwargs":{"enable_thinking":true}}'
+curl -N -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/chat/completions \
+  -d '{"model":"qwen3-1-7b","messages":[{"role":"user","content":"Is 1001 prime?"}],"max_tokens":1024,"stream":true,"chat_template_kwargs":{"enable_thinking":true}}'
 # The embedding model: one 768-number vector per input
 URL=$(oc get llminferenceservice granite-embedding-125m-english -n <project> -o jsonpath='{.status.url}')
 curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' $URL/v1/embeddings \
   -d '{"model":"granite-embedding-125m-english","input":["Red Hat OpenShift AI serves models."]}'
 ```
 
-`401`: no or expired token. `403`: the token's user cannot `get` the model (the model's token is only for its own model; your user needs access to the project). The `model` field is the resource name, as the dashboard's playground expects. The Qwen3 token above is in `default-name-qwen3-1-7b-sa`, the embedding model's in `default-name-granite-embedding-125m-english-sa`.
+`401`: no or expired token. `403`: the token's user cannot `get` the model (the model's token is only for its own model; your user needs access to the project). The `model` field is the resource name, as the dashboard's playground expects. The Qwen3 token above is in `default-name-qwen3-1-7b-sa`, the embedding model's in `default-name-granite-embedding-125m-english-sa`. Requests that take longer than about a minute must stream (`"stream": true`, and `curl -N`), because the cloud load balancer in front of the gateway closes a connection that sends nothing for 60 seconds (the AWS default): a non-streamed one gets no answer and ends after about 60 seconds (HTTP code `000` in curl).
 
 | Symptom | Cause and fix |
 |---|---|

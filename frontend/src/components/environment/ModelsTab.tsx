@@ -96,13 +96,18 @@ export function modelCurl(url: string, model: string, token: string = TOKEN): st
   ].join("\n");
 }
 
-/** A chat request that turns the model's reasoning (thinking) on for this request only. */
+/**
+ * A chat request that turns the model's reasoning (thinking) on for this
+ * request only. It streams (curl -N prints each event as it arrives):
+ * thinking on CPU can take over a minute, and the cloud load balancer in
+ * front of the gateway closes a connection that sends nothing for 60 s.
+ */
 export function thinkingCurl(url: string, model: string, token: string = TOKEN): string {
   const base = url.replace(/\/+$/, "");
   return [
     token,
-    `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":512,"chat_template_kwargs":{"enable_thinking":true}}'`,
+    `curl -N -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
+    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":1024,"stream":true,"chat_template_kwargs":{"enable_thinking":true}}'`,
   ].join("\n");
 }
 
@@ -498,6 +503,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
                   </Content>
                 </StackItem>
                 <StackItem><CopyableCode id="models-curl" label="the commands" code={embedding ? embeddingCurl(url, name, token) : modelCurl(url, name, token)} /></StackItem>
+                {!embedding && <StackItem><Content component="p">Requests that take longer than about a minute must stream (<code>{`"stream": true`}</code>), because the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).</Content></StackItem>}
                 {embedding && <StackItem><Content component="p">The answer holds one vector of {c?.embeddingDimension ?? "fixed"} numbers per input text, under <code>data[].embedding</code>. Inputs longer than 512 tokens are refused.</Content></StackItem>}
               </Stack>
             )}

@@ -133,6 +133,11 @@ describe("Models runs and clean-up", () => {
     }
     expect(toolCurl(base, "qwen3-1-7b")).toContain(`"tools":[{"type":"function"`);
     expect(thinkingCurl(base, "qwen3-1-7b")).toContain(`"chat_template_kwargs":{"enable_thinking":true}`);
+    // Thinking on CPU can take over a minute: the command streams (curl -N
+    // prints each event as it comes), so the load balancer's 60 s idle
+    // timeout never sees a silent connection.
+    expect(thinkingCurl(base, "qwen3-1-7b")).toContain("\ncurl -N -s ");
+    expect(thinkingCurl(base, "qwen3-1-7b")).toContain(`"max_tokens":1024,"stream":true,`);
     for (const c of [embeddingCurl(base, "x"), toolCurl(base, "x"), thinkingCurl(base, "x")]) {
       expect(c).toContain("TOKEN=$(oc whoami -t)");
       // One single-quoted body: no single quote inside it.
@@ -351,11 +356,17 @@ describe("Models tab", () => {
     const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
     expect(await screen.findByText(/"chat_template_kwargs":\{"enable_thinking":true\}/)).toBeInTheDocument();
     expect(screen.getByText(/Thinking is off by default/)).toBeInTheDocument();
+    expect(screen.getByText(/"stream":true/)).toBeInTheDocument();
+    // Why: the cloud load balancer closes a connection that is silent for 60 s.
+    expect(screen.getByText(/Requests that take longer than about a minute must stream/)).toHaveTextContent(
+      'Requests that take longer than about a minute must stream ("stream": true), because the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).');
     expect(screen.getByText(/"tools":\[/)).toBeInTheDocument();
     view.unmount();
     renderAt("/test-resources?tab=models&project=dev&model=granite-embedding-125m-english");
     expect(await screen.findByText(/\/v1\/embeddings/)).toBeInTheDocument();
     expect(screen.queryByText(/v1\/chat\/completions/)).toBeNull();
+    // An embedding request cannot stream, so the sentence is only for chat models.
+    expect(screen.queryByText(/must stream/)).toBeNull();
   });
 
   it("a model no hardware profile fits says plainly what the dashboard shows for it", async () => {

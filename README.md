@@ -143,10 +143,10 @@ Each model also asks for node disk of about 1.5 times its download (KServe downl
 
 **Set up** creates whatever is missing (the gateway, then the chosen model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. With the model it makes the dashboard's token authentication, as "Require token authentication" does: ServiceAccount `<model>-sa`, which may only `get` the model, its Role and RoleBinding, and token Secret `default-name-<model>-sa`, all owned by the model. The dashboard then lists that token for the model, and its Edit keeps authentication on. Once ready, **Use it** has commands that read that token (`oc get secret default-name-<model>-sa ... | base64 -d`) and call the model: `/v1/chat/completions` for a chat model, `/v1/embeddings` for the embedding model.
 
-<img src="docs/images/environment-models-use-qwen3.png" alt="Use it for Qwen3: a chat request, a tool-calling request with a tools list, and a request that turns thinking on with chat_template_kwargs enable_thinking true" width="760">
+<img src="docs/images/environment-models-use-qwen3.png" alt="Use it for Qwen3: a chat request, a tool-calling request with a tools list, the note that requests longer than about a minute must stream, and a streamed request that turns thinking on with chat_template_kwargs enable_thinking true" width="760">
 
 1. Qwen3 calls tools: describe them in the request's `tools`, and the answer has `tool_calls` when one fits.
-2. Its thinking is off by default; `"chat_template_kwargs": {"enable_thinking": true}` turns it on for one request.
+2. Its thinking is off by default; `"chat_template_kwargs": {"enable_thinking": true}` turns it on for one request. That command streams (`"stream": true`, `curl -N`): thinking on CPU can take over a minute, and the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).
 
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 
