@@ -68,6 +68,14 @@ const scenarios = {
     scenarios.fresh(w);
     w.status = F.readyToInstallStatus();
   },
+  // Self-managed OpenShift: the nodes pull with openshift-config/pull-secret.
+  // Before step 1, after it (nodes not checked; the check passes, or fails
+  // with -fails), with an unreadable topology, and once a nightly runs.
+  "self-managed": (w) => { scenarios.fresh(w); F.selfManaged(w.status); },
+  "self-managed-saved": (w) => { scenarios["ready-to-install"](w); F.selfManaged(w.status); },
+  "self-managed-saved-fails": (w) => { scenarios["self-managed-saved"](w); w.nodePullFails = true; },
+  "self-managed-unknown": (w) => { scenarios["ready-to-install"](w); F.selfManaged(w.status, { known: false }); },
+  "self-managed-installed": (w) => { F.selfManaged(w.status, { pulled: true }); },
   // The update GIFs: steps wait for /__docs/advance.
   "update-flow": (w) => { w.status = F.updateAvailableStatus(); w.gated = true; },
   "install-flow": (w) => { scenarios["ready-to-install"](w); w.gated = true; w.afterUpdate = F.noDSCStatus; },
@@ -833,6 +841,7 @@ const routes = {
   "GET /api/activity": () => world.status.activity ?? [],
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
+  "POST /api/setup/node-pull-check": () => F.nodePullCheck(F.latestNightly().image, !world.nodePullFails),
   "GET /api/setup/dsc/preview": () => ({
     yaml: `apiVersion: ${world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2"}\n` + "kind: DataScienceCluster\nmetadata:\n  name: default-dsc\nspec:\n  components:\n    aipipelines:\n      managementState: Managed\n    dashboard:\n      managementState: Managed\n    kserve:\n      managementState: Managed\n    workbenches:\n      managementState: Managed\n",
     apiVersion: world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2",

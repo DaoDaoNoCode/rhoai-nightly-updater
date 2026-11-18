@@ -319,6 +319,19 @@ of creating it: create the project in the RHOAI dashboard first.
   adds Jobs, LLMInferenceServices, OGXServers and CloudNativePG Clusters.
   Together they give a leaked ServiceAccount token cluster-admin reach
   ([SECURITY.md, Worst case](../SECURITY.md#worst-case-cluster-wide-workload-create)).
+- `get` on Infrastructure `cluster` (`config.openshift.io`, read-only), for
+  the control plane topology: on a self-managed cluster the setup shows the
+  command that adds `quay.io/rhoai` to `openshift-config/pull-secret`. Until
+  the template is re-applied the app cannot read the topology and shows that
+  part as "if this cluster is self-managed".
+
+**Self-managed clusters: the nodes' pull secret.** If an earlier version
+was set up on a self-managed cluster, the nodes already have the
+`quay.io/rhoai` entry in `openshift-config/pull-secret` (Update would have
+failed otherwise), and the running nightly catalog shows it: the
+**Pull secret** item says **Ready**. Otherwise it shows **Nodes not
+checked**, the command and **Check that the nodes can pull**
+([QUICKSTART](QUICKSTART.md#self-managed-openshift-the-cluster-pull-secret)).
 
 If a tab says a call is "not allowed ... run `make upgrade`", the template
 was not re-applied: run the installer again.

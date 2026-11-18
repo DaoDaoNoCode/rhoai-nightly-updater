@@ -66,7 +66,7 @@ const activityAfter = (b, minutesAgo) => [updateEntry(minutesAgo, b), ...(b === 
 /** Up to date: the newest build was installed `updatedMinutesAgo` ago. */
 export function healthyStatus(updatedMinutesAgo = 60 * 10) {
   return {
-    cluster: { server: "https://api.example-cluster.example.com:443", version: "4.20.6", user: USER },
+    cluster: { server: "https://api.example-cluster.example.com:443", version: "4.20.6", user: USER, controlPlane: "hosted" },
     subscription: { name: "rhods-operator", source: "rhoai-catalog-dev", channel: "stable-3.x", state: "AtLatestKnown" },
     csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Succeeded" },
     catalogSource: { exists: true, name: "rhoai-catalog-dev", image: LATEST_IMAGE, state: "READY" },
@@ -141,6 +141,29 @@ export function readyToInstallStatus() {
   s.activity = [olderActivity[5]];
   return s;
 }
+
+/**
+ * The command a self-managed cluster's setup shows: the backend's own file
+ * (pkg/cluster/node_pull_secret.sh, embedded as NodePullSecretCommand).
+ */
+export const NODE_PULL_SECRET_COMMAND = readFileSync(join(here, "../../../pkg/cluster/node_pull_secret.sh"), "utf8").trim();
+
+/**
+ * A self-managed cluster (controlPlane "self-managed"), or one whose topology
+ * could not be read (controlPlane absent): the nodes pull with
+ * openshift-config/pull-secret, so the status carries pullSecret.nodes.
+ */
+export function selfManaged(s, { known = true, pulled = false } = {}) {
+  if (known) s.cluster.controlPlane = "self-managed";
+  else delete s.cluster.controlPlane;
+  s.pullSecret = { ...s.pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, pulled } };
+  return s;
+}
+
+/** What POST /api/setup/node-pull-check answers. */
+export const nodePullCheck = (image, ok) => ok
+  ? { success: true, message: `A temporary catalog pod pulled ${image} with the nodes' pull secret, and was removed again. A node whose machine config pool is still updating may not have the credentials yet: oc get mcp shows UPDATED True for every pool when they all do.`, logs: [] }
+  : { success: false, errorCode: "catalog_image_pull", message: `The catalog image ${image} cannot be pulled (ErrImagePull: unauthorized: access to the requested resource is not authorized). This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with additional-pull-secret, which only the updater uses here. A cluster-admin adds the quay.io/rhoai entry with the command under Pull secret in the cluster setup (Status page); the nodes pick it up within a few minutes. Also check that the image exists.`, logs: [] };
 
 /** Just installed: the operator runs, no DataScienceCluster yet. */
 export function noDSCStatus() {

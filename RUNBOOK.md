@@ -217,7 +217,8 @@ oc get installplan,csv -n redhat-ods-operator
 
 | Message / state | Fix |
 |---|---|
-| "Replacement catalog validation failed", `catalog_image_pull` | Pull secret or IDMS problem, or a bad image. Nothing was changed. Test the pull secret on the Status page |
+| "Replacement catalog validation failed", `catalog_image_pull` | The nodes cannot pull the catalog image (the kubelet's reason, often `ErrImagePull ... unauthorized`), or the image does not exist. Nothing was changed. The message names the pull secret the nodes use: on a hosted control plane (ROSA HCP) `kube-system/additional-pull-secret` (test it on the Status page); on a self-managed cluster, or one whose topology the app could not read, `openshift-config/pull-secret` |
+| "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret" | The nodes do not use the app's `additional-pull-secret`, and the app cannot read `openshift-config/pull-secret`. A cluster-admin runs the command under **Pull secret** in the cluster setup (also in Diagnostics, and in [QUICKSTART](docs/QUICKSTART.md#self-managed-openshift-the-cluster-pull-secret)), waits until `oc get mcp` shows `UPDATED True` for every pool, then clicks **Check that the nodes can pull** and runs Update again. A "conflict" from `oc replace` means the Secret changed meanwhile: run the command again |
 | "older than the installed" | Update never downgrades. Use Install a different build and tick the confirmation (see "Downgrades" below) |
 | Succeeded, but "an upgrade gate holds it" | The operator waits for an admin acknowledgement (set its key to "true" in ConfigMap `odh-upgrade-acks` in `redhat-ods-operator`) or cannot resolve a gate because it is older than the resources it found. The note reads the Platform and every DataScienceCluster condition |
 | Diagnostics: "Objects the operator cannot update" | Upgrade leftovers; see §11.6 |
