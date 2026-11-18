@@ -33,10 +33,20 @@ variables:
   # IMAGE overrides this default (with QUAY_USER / QUAY_TOKEN for its
   # registry).
   IMAGE: quay.io/juntao_wang/rhoai-nightly-updater
+  # Where Docker Hub images come from: the job images below and the
+  # Containerfile's node and golang bases (build arg DOCKER_HUB). Docker Hub
+  # limits anonymous pulls per IP, which shared runners hit. To pull through
+  # GitLab's Dependency Proxy (a cache in the group) instead, turn on the
+  # proxy (group Settings > Packages and registries > Dependency Proxy >
+  # Enable Proxy; Owner role) and set a project CI/CD variable DOCKER_HUB to
+  # $CI_DEPENDENCY_PROXY_DIRECT_GROUP_IMAGE_PREFIX (keep "Expand variable
+  # reference" on). Runners and the image jobs log in to it with the job's
+  # own credentials. The digests below pin the images either way.
+  DOCKER_HUB: docker.io
   # Images pinned by digest; keep in step with the Containerfile.
-  GO_IMAGE: docker.io/library/golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
-  NODE_IMAGE: docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
-  GOLANGCI_IMAGE: docker.io/golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
+  GO_IMAGE: $DOCKER_HUB/library/golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
+  NODE_IMAGE: $DOCKER_HUB/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+  GOLANGCI_IMAGE: $DOCKER_HUB/golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
   # Kaniko is archived upstream; it is kept pinned until a replacement
   # (for example buildah) is validated on these runners.
   KANIKO_IMAGE: gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
@@ -162,9 +172,23 @@ release-guard:
   image:
     name: $KANIKO_IMAGE
     entrypoint: [""]
+  variables:
+    # Whether kaniko logs in to the image registry (QUAY_USER/QUAY_TOKEN).
+    REGISTRY_LOGIN: "true"
+  # Kaniko's logins: the image registry (REGISTRY_LOGIN), and the
+  # Dependency Proxy when DOCKER_HUB points at it (the Containerfile's
+  # Docker Hub bases come through it), with the job's proxy credentials.
   before_script:
-    - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${IMAGE%%/*}\":{\"auth\":\"$(printf '%s:%s' "${QUAY_USER}" "${QUAY_TOKEN}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
+    - |
+      login() { printf '"%s":{"auth":"%s"}' "$1" "$(printf '%s:%s' "$2" "$3" | base64 -w0)"; }
+      auths=""
+      if [ "$REGISTRY_LOGIN" = true ]; then auths=$(login "${IMAGE%%/*}" "$QUAY_USER" "$QUAY_TOKEN"); fi
+      hub=${DOCKER_HUB%%/*}
+      if [ -n "${CI_DEPENDENCY_PROXY_SERVER:-}" ] && { [ "$hub" = "$CI_DEPENDENCY_PROXY_SERVER" ] || [ "$hub" = "${CI_DEPENDENCY_PROXY_SERVER%:443}" ]; }; then
+        auths="${auths:+$auths,}$(login "$hub" "$CI_DEPENDENCY_PROXY_USER" "$CI_DEPENDENCY_PROXY_PASSWORD")"
+      fi
+      mkdir -p /kaniko/.docker
+      printf '{"auths":{%s}}\n' "$auths" > /kaniko/.docker/config.json
 
 # Push to main → an image tarball; publish-main pushes it as the write-once
 # 8-character commit tag (CI_COMMIT_SHORT_SHA) and moves :main. Never
@@ -181,6 +205,7 @@ build-main:
       --build-arg VERSION=$CI_COMMIT_SHORT_SHA
       --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
       --build-arg RUN_CHECKS=false
+      --build-arg DOCKER_HUB=$DOCKER_HUB
       --destination=$IMAGE:$CI_COMMIT_SHORT_SHA
       --no-push
       --tar-path=image.tar
@@ -204,6 +229,7 @@ build-branch:
       --build-arg VERSION=$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
       --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
       --build-arg RUN_CHECKS=false
+      --build-arg DOCKER_HUB=$DOCKER_HUB
       --destination=$IMAGE:$CI_COMMIT_REF_SLUG
       --cache=true
   rules:
@@ -217,7 +243,9 @@ build-branch:
 release-build:
   extends: .kaniko-build
   needs: [go, golangci-lint, frontend, release-scripts, chart, release-guard]
-  before_script: []
+  variables:
+    # It pushes nothing: no image registry credentials.
+    REGISTRY_LOGIN: "false"
   script:
     - >-
       /kaniko/executor
@@ -227,6 +255,7 @@ release-build:
       --build-arg VERSION=$CI_COMMIT_TAG
       --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
       --build-arg RUN_CHECKS=false
+      --build-arg DOCKER_HUB=$DOCKER_HUB
       --destination=$IMAGE:$CI_COMMIT_TAG
       --no-push
       --tar-path=image.tar

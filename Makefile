@@ -131,7 +131,7 @@ test-frontend:  ## Run frontend tests
 	cd frontend && npm test
 
 frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image, so npm ci passes in CI (needs RUNTIME)
-	@NODE_IMAGE=$$(sed -n 's/^  NODE_IMAGE: //p' .gitlab-ci.yml); \
+	@NODE_IMAGE=$$(sed -n 's/^  NODE_IMAGE: \$$DOCKER_HUB\//docker.io\//p' .gitlab-ci.yml); \
 	test -n "$$NODE_IMAGE" || { echo "NODE_IMAGE not found in .gitlab-ci.yml"; exit 1; }; \
 	$(RUNTIME) run --rm -v "$(CURDIR)/frontend:/w:Z" -w /w "$$NODE_IMAGE" \
 		sh -c 'echo "npm $$(npm --version)"; npm install --package-lock-only --ignore-scripts --no-audit --no-fund'
