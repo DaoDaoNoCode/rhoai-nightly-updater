@@ -729,14 +729,16 @@ func maasGatewayAuth(c *Client) string {
 // CA (authorinoTrustsServiceCA). It
 // returns "" when all are set (or cannot be read: unknown is not a
 // failure), else what is missing.
-func authorinoTLS(c *Client, ns string) (string, bool) {
+//
+// The certificate Secret is the one the Authorino CR's listener names
+// (spec.listener.tls.certSecretRef.name; RHOAI's AI gateway may use
+// another than the script's authorino-server-cert), returned for the
+// commands; the Service must ask service-ca for that one.
+func authorinoTLS(c *Client, ns string) (string, bool, string) {
 	var missing []string
 	known := true
-	if meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization")); err != nil {
-		known = false
-	} else if !found || meta.Annotations[servingCertAnnotation] != "authorino-server-cert" {
-		missing = append(missing, "the Service's serving certificate")
-	}
+	secret := "authorino-server-cert"
+	tlsOK := false
 	if body, _, err := c.get(namespacedPath("operator.authorino.kuadrant.io/v1beta1", "authorinos", ns, "authorino")); err != nil {
 		known = false
 	} else {
@@ -744,21 +746,33 @@ func authorinoTLS(c *Client, ns string) (string, bool) {
 			Spec struct {
 				Listener struct {
 					TLS struct {
-						Enabled bool `json:"enabled"`
+						Enabled       bool `json:"enabled"`
+						CertSecretRef struct {
+							Name string `json:"name"`
+						} `json:"certSecretRef"`
 					} `json:"tls"`
 				} `json:"listener"`
 			} `json:"spec"`
 		}
-		if json.Unmarshal(body, &a) != nil || !a.Spec.Listener.TLS.Enabled {
-			missing = append(missing, "TLS on Authorino's listener")
+		if json.Unmarshal(body, &a) == nil {
+			secret = firstNonEmpty(a.Spec.Listener.TLS.CertSecretRef.Name, secret)
+			tlsOK = a.Spec.Listener.TLS.Enabled
 		}
+	}
+	if meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization")); err != nil {
+		known = false
+	} else if !found || meta.Annotations[servingCertAnnotation] != secret {
+		missing = append(missing, "the Service's serving certificate")
+	}
+	if known && !tlsOK {
+		missing = append(missing, "TLS on Authorino's listener")
 	}
 	if body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "authorino")); err != nil {
 		known = false
 	} else if !authorinoTrustsServiceCA(body) {
 		missing = append(missing, "trust of the service CA (SSL_CERT_FILE)")
 	}
-	return strings.Join(missing, ", "), known
+	return strings.Join(missing, ", "), known, secret
 }
 
 // authorinoTrustsServiceCA says whether Authorino's Deployment trusts an
@@ -837,15 +851,15 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 
 // authorinoTLSCommands are scripts/setup-authorino-tls.sh's commands for ns,
 // and deploy.sh's restart of Authorino after them.
-func authorinoTLSCommands(ns string) string {
+func authorinoTLSCommands(ns, secret string) string {
 	return fmt.Sprintf(`oc annotate service authorino-authorino-authorization -n %[1]s \
-  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite
+  service.beta.openshift.io/serving-cert-secret-name=%[2]s --overwrite
 oc patch authorino authorino -n %[1]s --type=merge \
-  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}'
+  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"%[2]s"}}}}}'
 oc -n %[1]s set env deployment/authorino \
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
-oc rollout restart deployment/authorino -n %[1]s`, ns)
+oc rollout restart deployment/authorino -n %[1]s`, ns, secret)
 }
 
 // --- status --------------------------------------------------------------------
@@ -965,12 +979,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	// Authorino TLS: checked only.
 	tlsPart := types.MaaSPart{ID: "authorino-tls", Title: "Authorino TLS", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway", NotManaged: true}
 	if kq.found {
-		missing, known := authorinoTLS(c, kq.namespace)
+		missing, known, secret := authorinoTLS(c, kq.namespace)
 		switch {
 		case missing != "":
 			tlsPart.State = "manual"
 			tlsPart.Message = "Not configured: " + missing + ". A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused."
-			tlsPart.Commands = authorinoTLSCommands(kq.namespace)
+			tlsPart.Commands = authorinoTLSCommands(kq.namespace, secret)
 		case known:
 			tlsPart.State, tlsPart.Message = "ready", "Authorino in "+kq.namespace+" serves TLS and trusts the service CA"
 		default:
@@ -1025,7 +1039,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		if pt.ManagedByTool {
 			p.ManagedByTool = true
 		}
-		if pt.State != "ready" {
+		if pt.State != "ready" && (pt.ID != "authorino-tls" || pt.State != "unknown") {
 			p.Ready = false
 			if pt.State != "missing" {
 				waiting = append(waiting, pt.Title)

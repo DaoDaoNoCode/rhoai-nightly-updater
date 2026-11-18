@@ -327,3 +327,57 @@ func TestMaaSSetup_RestartsMaaSAPIWhenTheSecretChangesUnderARunningMaaS(t *testi
 		t.Fatalf("maas-api spec = %s", tmpl)
 	}
 }
+
+// Finding 5: a listener that selects namespaces with expressions is
+// evaluated (kubernetes.io/metadata.name is on every namespace).
+func TestGatewayAdmits_EvaluatesMatchExpressions(t *testing.T) {
+	gw := func(exprs string) gatewayObject {
+		var g gatewayObject
+		_ = json.Unmarshal([]byte(`{"metadata":{"namespace":"openshift-ingress"},"spec":{"listeners":[{"name":"https","allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchExpressions":`+exprs+`}}}}]}}`), &g)
+		return g
+	}
+	for _, tc := range []struct {
+		exprs, ns string
+		labels    map[string]string
+		want      string
+	}{
+		{`[{"key":"kubernetes.io/metadata.name","operator":"In","values":["proj","b"]}]`, "proj", nil, "yes"},
+		{`[{"key":"kubernetes.io/metadata.name","operator":"In","values":["a","b"]}]`, "proj", nil, "no"},
+		{`[{"key":"tier","operator":"NotIn","values":["prod"]}]`, "proj", map[string]string{"tier": "dev"}, "yes"},
+		{`[{"key":"tier","operator":"NotIn","values":["prod"]}]`, "proj", map[string]string{"tier": "prod"}, "no"},
+		{`[{"key":"maas.opendatahub.io/gateway-access","operator":"Exists"}]`, "proj", map[string]string{"maas.opendatahub.io/gateway-access": "true"}, "yes"},
+		{`[{"key":"maas.opendatahub.io/gateway-access","operator":"Exists"}]`, "proj", nil, "no"},
+		{`[{"key":"tier","operator":"DoesNotExist"}]`, "proj", nil, "yes"},
+		{`[{"key":"tier","operator":"Gt","values":["1"]}]`, "proj", nil, "unknown"},
+	} {
+		if got := gw(tc.exprs).admits(tc.ns, tc.labels); got != tc.want {
+			t.Errorf("%s for %s %v: %s, want %s", tc.exprs, tc.ns, tc.labels, got, tc.want)
+		}
+	}
+}
+
+// Finding 4: Authorino's TLS Secret is the one its CR names, and a check
+// that cannot read Authorino does not block publishing.
+func TestMaaSStatus_AuthorinoTLSFollowsTheCRsSecret(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{"annotations":{"service.beta.openshift.io/serving-cert-secret-name":"aigw-authorino-tls"}}}`)
+	mc.f.putJSON("/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"aigw-authorino-tls"}}}}}`)
+	st, _ := GetMaaSStatus(mc.c)
+	if !st.Platform.Ready {
+		t.Fatalf("platform = %+v; parts = %+v", st.Platform, st.Parts)
+	}
+	mc.f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{}}`)
+	st, _ = GetMaaSStatus(mc.c)
+	for _, p := range st.Parts {
+		if p.ID == "authorino-tls" && (p.State != "manual" || !strings.Contains(p.Commands, "serving-cert-secret-name=aigw-authorino-tls")) {
+			t.Fatalf("part = %+v", p)
+		}
+	}
+	mc.f.fail["GET /apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino"] = 500
+	if st, _ = GetMaaSStatus(mc.c); !st.Platform.Ready {
+		t.Fatalf("an unreadable Authorino blocks the platform: %+v", st.Platform)
+	}
+}

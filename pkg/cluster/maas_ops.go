@@ -387,7 +387,7 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 
 	// 3. Authorino TLS: checked; a cluster-admin runs the docs' script.
 	tlsNote := ""
-	if missing, _ := authorinoTLS(c, kq.namespace); missing != "" {
+	if missing, _, _ := authorinoTLS(c, kq.namespace); missing != "" {
 		tlsNote = " Authorino TLS is not configured (" + missing + "): a cluster-admin runs the commands the MaaS tab shows, or API keys are refused."
 		m.step("authorino-tls", "success", "Not configured: "+missing+". This tool does not change Connectivity Link's Authorino; the MaaS tab shows the docs' commands for a cluster-admin.")
 	} else {
@@ -945,7 +945,9 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		if msg != "" {
 			return m.fail("check", msg+" Nothing was changed.", code, "project check failed")
 		}
-		if gw.gw.admits(project, labels) == "no" {
+		if admits := gw.gw.admits(project, labels); admits == "unknown" {
+			return m.fail("check", fmt.Sprintf("Gateway %s/%s, which this tool did not create, selects the namespaces it admits in a way this tool cannot evaluate, so it cannot tell whether '%s' is admitted. Its owner checks the listeners' allowedRoutes. Nothing was changed.", inferenceGatewayNamespace, maasGatewayName, project), "prerequisites", "gateway admission unknown")
+		} else if admits == "no" {
 			return m.fail("check", fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not admit routes from '%s'. Its owner adds the project (maas-setup.md: label it maas.opendatahub.io/gateway-access=true when the gateway selects that label). Nothing was changed.", inferenceGatewayNamespace, maasGatewayName, project), "prerequisites", "gateway does not admit")
 		}
 		gwPlan = nil
