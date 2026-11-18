@@ -648,26 +648,20 @@ type InferenceGatewayState struct {
 	// adds once a model uses the gateway: "enforced", "not-enforced",
 	// "missing", or "" when unknown.
 	AuthPolicy string `json:"authPolicy,omitempty"`
-	// RoutesLabel is the namespace label (set to "true") that lets a
-	// project's routes attach to the gateway this tool creates. Only a
-	// cluster-admin can set it; the tool never does.
-	RoutesLabel string `json:"routesLabel,omitempty"`
-	// LabelledProjects are the namespaces that carry RoutesLabel=true.
-	LabelledProjects []string `json:"labelledProjects,omitempty"`
-	// RoutesLabelProblem says why the labelled namespaces could not be
-	// read ("" when they were).
-	RoutesLabelProblem string `json:"routesLabelProblem,omitempty"`
-	// OpenToAllNamespaces: a listener of the gateway accepts routes from
-	// every namespace, so a route in any project can take over a model's
-	// address.
-	OpenToAllNamespaces bool `json:"openToAllNamespaces,omitempty"`
-	// UnlabelledModelProjects are the namespaces of models that route
-	// through the gateway and lack RoutesLabel: restricting the gateway
-	// waits until a cluster-admin labels them.
-	UnlabelledModelProjects []string `json:"unlabelledModelProjects,omitempty"`
-	// RestrictBlockedReason says why this tool's open gateway cannot be
-	// restricted to labelled projects now ("" when it can, or is not open).
-	RestrictBlockedReason string `json:"restrictBlockedReason,omitempty"`
+	// AllowedProjects are the namespaces the gateway's listeners list by
+	// name (allowedRoutes from Selector, kubernetes.io/metadata.name In
+	// [...], RHOAI's documented values array; from Same lists the
+	// gateway's own namespace). Nil when the listeners choose namespaces
+	// otherwise (every namespace, or labels).
+	AllowedProjects []string `json:"allowedProjects,omitempty"`
+	// AllProjectsAllowed: the listeners accept routes from every namespace
+	// (from All).
+	AllProjectsAllowed bool `json:"allProjectsAllowed,omitempty"`
+	// NotAllowedModelProjects are the namespaces of LLMInferenceServices
+	// that route through the gateway (the tool's or anyone's, such as a
+	// model deployed from the dashboard) that the gateway does not allow:
+	// their routes do not attach. For this tool's gateway, Allow adds them.
+	NotAllowedModelProjects []string `json:"notAllowedModelProjects,omitempty"`
 }
 
 // ModelsStatus is what setting up a model needs, and the models of the
@@ -770,12 +764,14 @@ type ModelState struct {
 
 // ModelsRequest is the body of POST /api/resources/models/stream.
 type ModelsRequest struct {
-	// Action is "setup" or "teardown".
+	// Action is "setup", "teardown", or "allow": add Project to the
+	// projects this tool's inference gateway allows (no model).
 	Action string `json:"action"`
 	// Gateway: set up (or delete) the inference gateway. Setup does it
 	// before the model, teardown after.
 	Gateway bool `json:"gateway,omitempty"`
-	// Project is the model's project; "" when the request has no model.
+	// Project is the model's project ("" when the request has no model),
+	// or the project Allow adds.
 	Project string `json:"project,omitempty"`
 	// Model is the catalog name; "" means the catalog's default
 	// (qwen25-05b-instruct). Setup and teardown act on that model only.

@@ -680,8 +680,13 @@ func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationRespon
 func ValidateModelsRequest(req types.ModelsRequest) string {
 	switch req.Action {
 	case "setup", "teardown":
+	case "allow":
+		if req.Project == "" || req.Gateway || req.ReleasedImage {
+			return "allow takes a project only"
+		}
+		return ""
 	default:
-		return "action must be setup or teardown"
+		return "action must be setup, teardown or allow"
 	}
 	if !req.Gateway && req.Project == "" {
 		return "nothing to do: name the gateway, a project, or both"
@@ -703,7 +708,9 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 // before it writes anything.
 func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	var parts []string
-	if req.Project != "" {
+	if req.Action == "allow" {
+		parts = append(parts, fmt.Sprintf("project %s on the inference gateway", req.Project))
+	} else if req.Project != "" {
 		entry, _ := catalogEntry(req.Model)
 		parts = append(parts, fmt.Sprintf("model %s in %s", firstNonEmpty(entry.Name, req.Model), req.Project))
 	}
@@ -714,10 +721,60 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 	if problem := ValidateModelsRequest(req); problem != "" {
 		return m.fail("check", problem, "validation", "invalid request")
 	}
-	if req.Action == "teardown" {
+	switch req.Action {
+	case "teardown":
 		return m.teardown(req)
+	case "allow":
+		return m.allow(req.Project)
 	}
 	return m.setup(req)
+}
+
+// allow adds project to the projects this tool's inference gateway allows
+// (steps "check", "gateway"), for a model someone else deployed there (the
+// dashboard). Only the Gateway is written. Someone else's gateway is
+// never changed: the refusal gives RHOAI's documented step.
+func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
+	c := m.c
+	m.step("check", "running", fmt.Sprintf("Checking the inference gateway and project '%s'...", project))
+	if _, msg, code := projectNamespace(c, project); msg != "" {
+		return m.fail("check", msg+" Nothing was changed.", code, "project check failed")
+	}
+	gw, found, err := readInferenceGateway(c)
+	switch {
+	case err != nil:
+		return m.fail("check", fmt.Sprintf("Cannot read the inference gateway: %v. Nothing was changed.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "gateway read failed")
+	case !found:
+		return m.fail("check", "The inference gateway is not set up. Setting up a model sets it up, with the model's project on its list. Nothing was changed.", "prerequisites", "no gateway")
+	case !gatewayOwned(gw.Metadata):
+		return m.fail("check", foreignGatewayRefusal(project), "not_managed", "foreign gateway")
+	}
+	plan, msg, code := planGatewayAllow(c, project)
+	if msg != "" {
+		return m.fail("check", msg, code, "gateway check failed")
+	}
+	if plan == nil {
+		m.step("check", "success", "Checked.")
+		m.step("gateway", "success", fmt.Sprintf("The inference gateway already allows '%s'.", project))
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The inference gateway already allows '%s'.", project), Logs: m.logs}, nil
+	}
+	if plan.foreign {
+		return m.fail("check", foreignGatewayRefusal(project), "not_managed", "foreign gateway")
+	}
+	if msg, code, _ := applyInferenceGateway(c, plan, true, func(string) {}); msg != "" {
+		return m.fail("check", msg, code, "gateway dry run failed")
+	}
+	m.step("check", "success", "The gateway is this tool's; the project exists.")
+	m.step("gateway", "running", fmt.Sprintf("Adding '%s' to the projects the inference gateway allows...", project))
+	written, msg, code := writeInferenceGateway(c, plan, func(line string) { m.step("gateway", "running", line) })
+	if msg != "" {
+		return m.fail("gateway", msg, code, "gateway list failed")
+	}
+	done := fmt.Sprintf("The inference gateway now allows '%s'; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
+	m.step("gateway", "success", done)
+	slog.Info("models allow", "project", project, "user", getUser(c))
+	recordModelsActivity(c, m.activity, m.target, true)
+	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
 
 func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -782,21 +839,35 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 	// The gateway part.
 	var gw *gatewayPlan
 	if req.Gateway {
-		plan, msg, code := planInferenceGateway(c)
+		var add []string
+		if req.Project != "" {
+			add = []string{req.Project}
+		}
+		plan, msg, code := planInferenceGateway(c, add)
 		if msg != "" {
 			return m.fail("check", msg, code, "gateway check failed")
 		}
 		gw = plan
 	}
 
-	// The model part.
+	// The model part. A model behind this tool's existing gateway: its
+	// project is added to the gateway's list first, when it is not on it.
 	var mp *modelPlan
+	var allow *gatewayPlan
 	if req.Project != "" {
 		plan, msg, code := m.planModel(req, gw)
 		if msg != "" {
 			return m.fail("check", msg, code, "model check failed")
 		}
 		mp = plan
+		if gw == nil {
+			if allow, msg, code = planGatewayAllow(c, mp.project); msg != "" {
+				return m.fail("check", msg, code, "gateway check failed")
+			}
+			if allow != nil && allow.foreign {
+				allow = nil // planModel checked that it admits the project
+			}
+		}
 		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
 			notes = append(notes, warning+" It may stay pending until a node is added or other workloads stop; the setup still runs.")
 		}
@@ -806,9 +877,11 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 	}
 
 	// Every write, as a server-side dry run, before any real one.
-	if gw != nil && !gw.foreign {
-		if msg, code := applyInferenceGateway(c, gw, true, func(string) {}); msg != "" {
-			return m.fail("check", msg, code, "gateway dry run failed")
+	for _, plan := range []*gatewayPlan{gw, allow} {
+		if plan != nil && !plan.foreign {
+			if msg, code, _ := applyInferenceGateway(c, plan, true, func(string) {}); msg != "" {
+				return m.fail("check", msg, code, "gateway dry run failed")
+			}
 		}
 	}
 	if mp != nil {
@@ -830,10 +903,11 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			summary = append(summary, "The existing inference gateway is used.")
 		} else {
 			m.step("gateway", "running", "Creating the inference gateway...")
-			if msg, code := applyInferenceGateway(c, gw, false, func(line string) { m.step("gateway", "running", line) }); msg != "" {
+			written, msg, code := writeInferenceGateway(c, gw, func(line string) { m.step("gateway", "running", line) })
+			if msg != "" {
 				return m.fail("gateway", msg, code, "gateway apply failed")
 			}
-			m.step("gateway", "success", fmt.Sprintf("GatewayClass, ConfigMap and Gateway %s/%s applied; external hostname %s.", inferenceGatewayNamespace, inferenceGatewayName, gw.host))
+			m.step("gateway", "success", fmt.Sprintf("GatewayClass, ConfigMap and Gateway %s/%s applied; external hostname %s. Projects it allows: %s.", inferenceGatewayNamespace, inferenceGatewayName, gw.host, strings.Join(written.names, ", ")))
 			m.step("gateway-ready", "running", "Waiting for the gateway and its load balancer...")
 			ready, dns, problem, pending, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
 			switch {
@@ -857,6 +931,12 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 	}
 
 	if mp != nil {
+		if allow != nil {
+			m.step("model", "running", fmt.Sprintf("Adding '%s' to the projects the inference gateway allows...", mp.project))
+			if _, msg, code := writeInferenceGateway(c, allow, func(line string) { m.step("model", "running", line) }); msg != "" {
+				return m.fail("model", msg, code, "gateway list failed")
+			}
+		}
 		m.step("model", "running", fmt.Sprintf("Creating %s in '%s' (%s)...", mp.entry.DisplayName, mp.project, mp.image.describe()))
 		if msg, code := m.applyModel(mp, false); msg != "" {
 			return m.fail("model", msg, code, "model apply failed")
@@ -864,7 +944,11 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if msg, code := m.applyToken(mp); msg != "" {
 			return m.fail("model", msg, code, "token apply failed")
 		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), tokenWords(mp.project, mp.entry.Name, mp.token)))
+		listed := ""
+		if allow != nil {
+			listed = fmt.Sprintf(" '%s' was added to the projects the inference gateway allows.", mp.project)
+		}
+		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 		timeout := ModelReadyTimeout
 		if dl, ok := c.ctx.Deadline(); ok {
@@ -931,17 +1015,13 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		return nil, msg + " This tool sets up models only behind its own gateway. Nothing was changed.", "prerequisites"
 	}
 
-	// The gateway the model will route through. This tool's gateway admits
-	// only projects a cluster-admin labelled; someone else's decides by its
-	// own listeners.
+	// The gateway the model will route through. This tool's gateway lists
+	// the project before the model is created (setup adds it); someone
+	// else's decides by its own listeners.
 	switch {
 	case gw != nil && gw.foreign:
 		if gw.gateway.admits(req.Project, labels) == "no" {
-			return nil, fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not let routes from project '%s' attach (its listeners' allowedRoutes). Nothing was changed; ask its owner.", inferenceGatewayNamespace, inferenceGatewayName, req.Project), "prerequisites"
-		}
-	case gw != nil:
-		if labels[inferenceRoutesLabel] != "true" {
-			return nil, unlabelledProjectRefusal(req.Project), "prerequisites"
+			return nil, foreignGatewayRefusal(req.Project), "prerequisites"
 		}
 	case gw == nil:
 		existing, found, err := readInferenceGateway(c)
@@ -955,16 +1035,11 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 			return nil, "The inference gateway is being deleted. Set it up again first. Nothing was changed.", "terminating"
 		}
 		if gatewayOwned(existing.Metadata) {
-			// Also while an earlier version's gateway still admits every
-			// namespace: restricting it must not cut this model off.
-			if labels[inferenceRoutesLabel] != "true" {
-				return nil, unlabelledProjectRefusal(req.Project), "prerequisites"
-			}
-			break
+			break // setup adds the project to its list
 		}
 		switch existing.admits(req.Project, labels) {
 		case "no":
-			return nil, fmt.Sprintf("Gateway %s/%s does not let routes from project '%s' attach (its listeners' allowedRoutes). Nothing was changed.", inferenceGatewayNamespace, inferenceGatewayName, req.Project), "prerequisites"
+			return nil, foreignGatewayRefusal(req.Project), "prerequisites"
 		case "unknown":
 			m.step("check", "running", "The gateway selects namespaces with expressions this tool does not evaluate; check that it admits this project if the model does not become ready.")
 		}

@@ -59,7 +59,7 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 		"spec":{"template":{"containers":[{"name":"main","image":"`+testPresetImage+`"}]}}}`)
 	f.putJSON("/apis/config.openshift.io/v1/ingresses/cluster", `{"spec":{"domain":"apps.example.com"}}`)
 	f.putJSON("/apis/operator.openshift.io/v1/namespaces/openshift-ingress-operator/ingresscontrollers/default", `{"spec":{"defaultCertificate":{"name":"custom-cert"}}}`)
-	f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true","rhoai-nightly-updater/inference-routes":"true"}}}`)
+	f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
 	f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external", `{
 		"spec":{"dnsName":"inference.apps.example.com."},
 		"status":{"zones":[{"conditions":[{"type":"Published","status":"True"}]},{"conditions":[{"type":"Published","status":"True"}]}]}}`)
@@ -606,10 +606,11 @@ func TestInferenceGatewayStatus_WarnsWithoutItsAuthPolicy(t *testing.T) {
 
 func TestValidateModelsRequest(t *testing.T) {
 	cases := map[string]types.ModelsRequest{
-		"action must be setup or teardown":                    {Action: "delete", Gateway: true},
+		"action must be setup, teardown or allow":             {Action: "delete", Gateway: true},
 		"nothing to do: name the gateway, a project, or both": {Action: "setup"},
 		"unknown model":                     {Action: "setup", Project: "p", Model: "llama"},
 		"releasedImage needs a model setup": {Action: "teardown", Project: "p", ReleasedImage: true},
+		"allow takes a project only":        {Action: "allow", Gateway: true, Project: "p"},
 		"":                                  {Action: "setup", Gateway: true, Project: "p", ReleasedImage: true},
 	}
 	for want, req := range cases {

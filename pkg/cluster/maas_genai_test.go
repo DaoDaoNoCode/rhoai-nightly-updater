@@ -73,26 +73,31 @@ func TestMaaSPublish_TheModelRefIsOwnedByTheModelAndCarriesItsDescription(t *tes
 	}
 }
 
-// A model published before the inference gateway was restricted is not
-// counted by Restrict (it routed through MaaS only). Unpublished in a
-// project without the routes label, its route goes back to the inference
-// gateway, which does not admit it: Unpublish says so, with the command a
-// cluster-admin runs.
-func TestMaaSUnpublish_InAnUnlabelledProjectSaysTheDirectRouteNeedsTheLabel(t *testing.T) {
+// Unpublish puts the model's route back on the inference gateway. When the
+// gateway no longer lists the project (someone took it off while the model
+// was published), Unpublish says that the direct address does not answer
+// and how to allow the project; it does not change the gateway itself.
+func TestMaaSUnpublish_InAProjectTheGatewayDoesNotListSaysSo(t *testing.T) {
 	mc := publishedMaaSCluster(t)
-	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
+	setListeners(t, mc, namesList("openshift-ingress"))
+	before := len(mc.f.mutations())
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
 	if !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	if !strings.Contains(res.Message, "oc label namespace proj rhoai-nightly-updater/inference-routes=true") || !strings.Contains(res.Message, "direct address") {
+	if !strings.Contains(res.Message, "direct address") || !strings.Contains(res.Message, "Allow proj") {
 		t.Errorf("message %q", res.Message)
 	}
-	// A labelled project needs no word.
+	for _, w := range mc.f.mutations()[before:] {
+		if strings.Contains(w, "/gateways/openshift-ai-inference") {
+			t.Errorf("unpublish wrote the inference gateway: %s", w)
+		}
+	}
+	// A listed project needs no word.
 	mc2 := publishedMaaSCluster(t)
 	res, _ = runMaaSOp(t, mc2.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
-	if strings.Contains(res.Message, "oc label namespace") {
-		t.Errorf("labelled project: %q", res.Message)
+	if strings.Contains(res.Message, "direct address") {
+		t.Errorf("listed project: %q", res.Message)
 	}
 }
 

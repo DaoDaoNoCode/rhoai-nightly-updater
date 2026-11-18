@@ -34,17 +34,28 @@ import (
 //     dashboard's gen-ai proxy) use that name as SNI; a gateway with only
 //     the external hostname resets them.
 //
-// Both listeners admit routes only from namespaces labelled
-// inferenceRoutesLabel=true (allowedRoutes.namespaces from: Selector). The
-// chart's default, "All", lets any project editor attach an HTTPRoute to
-// the gateway: one with an Exact path to another project's model outranks
-// KServe's PathPrefix route (Gateway API route precedence) and receives
-// that model's calls, with the callers' bearer tokens. odh-model-controller's
-// AuthPolicy (<gateway>-authn) checks who calls, not which backend answers,
-// so it does not stop that (confirmed live 2026-11-18). Project admins and
-// editors cannot set the label: the admin, edit and view roles only read
-// namespaces, and a project update cannot change labels (SECURITY.md). This
-// tool never sets it either: a cluster-admin runs the command it shows.
+// Both listeners admit routes only from the namespaces they list by name,
+// as RHOAI documents it for this Gateway: allowedRoutes.namespaces from
+// Selector with matchExpressions kubernetes.io/metadata.name In [...]
+// (odh-gitops rhai-on-openshift-chart values.yaml: "set `from` to Selector
+// (recommended) or Same", whose example is that list; the RHOAI 3.4 llm-d
+// guide: "Ensure your model deployment namespace is listed in the values
+// array"; RHOAI 3.6's own data-science-gateway lists openshift-ingress and
+// redhat-ods-applications the same way). The list holds the gateway's own
+// namespace, so it is never empty (an empty In is invalid), and each
+// project a model is set up in, added before the model is created. Allow
+// adds a project whose model someone else deployed (the dashboard). The
+// tool never removes an entry: deleting its model leaves the project
+// listed, since another model there may use the gateway.
+//
+// Why a list: from All (the chart's default until August 2026; OpenShift's
+// Gateway API docs say not to set it) lets any project editor attach an
+// HTTPRoute to the gateway. One with an Exact path to another project's
+// model outranks KServe's PathPrefix route (Gateway API route precedence)
+// and receives that model's calls, with the callers' bearer tokens;
+// odh-model-controller's AuthPolicy (<gateway>-authn) checks who calls, not
+// which backend answers (confirmed live 2026-11-18). With the list, only
+// routes in listed projects attach (SECURITY.md).
 const (
 	gatewayAPIVersion          = "gateway.networking.k8s.io/v1"
 	inferenceGatewayName       = "openshift-ai-inference"
@@ -66,51 +77,47 @@ const (
 	gatewayNameLabel      = "gateway.networking.k8s.io/gateway-name"
 	servingCertAnnotation = "service.beta.openshift.io/serving-cert-secret-name"
 	kuadrantGroup         = "kuadrant.io"
-	// inferenceRoutesLabel=true on a namespace lets its routes attach to
-	// the gateway this tool creates. Its one definition: the status sends
-	// it to the UI, which shows the command with it.
-	inferenceRoutesLabel = "rhoai-nightly-updater/inference-routes"
+	// namespaceNameLabel is the label the API server sets on every
+	// namespace to its name; the listeners list namespaces by it.
+	namespaceNameLabel = "kubernetes.io/metadata.name"
 )
 
-// inferenceRoutesCommand is the command a cluster-admin runs to let
-// namespace's routes attach to the gateway. Namespace names are DNS-1123
-// labels (no shell metacharacters).
-func inferenceRoutesCommand(namespace string) string {
-	return "oc label namespace " + namespace + " " + inferenceRoutesLabel + "=true"
-}
-
-// inferenceRoutesAllowed is the allowedRoutes of the gateway's listeners.
-func inferenceRoutesAllowed() map[string]interface{} {
+// allowedRoutesFor is the listeners' allowedRoutes: the namespaces, by
+// name.
+func allowedRoutesFor(namespaces []string) map[string]interface{} {
+	values := make([]interface{}, len(namespaces))
+	for i, n := range namespaces {
+		values[i] = n
+	}
 	return map[string]interface{}{"namespaces": map[string]interface{}{
-		"from":     "Selector",
-		"selector": map[string]interface{}{"matchLabels": map[string]interface{}{inferenceRoutesLabel: "true"}},
+		"from": "Selector",
+		"selector": map[string]interface{}{"matchExpressions": []interface{}{map[string]interface{}{
+			"key": namespaceNameLabel, "operator": "In", "values": values,
+		}}},
 	}}
 }
 
-// labelledNamespaces lists the namespaces labelled inferenceRoutesLabel=true.
-func labelledNamespaces(c *Client) ([]string, error) {
-	body, _, err := c.get("/api/v1/namespaces?labelSelector=" + url.QueryEscape(inferenceRoutesLabel+"=true"))
-	if err != nil {
-		return nil, fmt.Errorf("list the namespaces labelled %s=true: %w", inferenceRoutesLabel, err)
-	}
-	var list struct {
-		Items []struct {
-			Metadata objectMeta `json:"metadata"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, fmt.Errorf("parse the namespace list: %w", err)
-	}
-	var out []string
-	for _, ns := range list.Items {
-		// Checked again, so a selector the server ignored admits nothing.
-		if ns.Metadata.Labels[inferenceRoutesLabel] == "true" {
-			out = append(out, ns.Metadata.Name)
+// gatewayNamespaceList is the list the tool writes: the gateway's own
+// namespace first, then every other name once, sorted.
+func gatewayNamespaceList(names ...[]string) []string {
+	seen := map[string]bool{inferenceGatewayNamespace: true}
+	var rest []string
+	for _, list := range names {
+		for _, n := range list {
+			if n != "" && !seen[n] {
+				seen[n] = true
+				rest = append(rest, n)
+			}
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Strings(rest)
+	return append([]string{inferenceGatewayNamespace}, rest...)
 }
+
+// errGatewayChanged: the Gateway changed after a plan read its list; the
+// write is planned again from a fresh read, so someone else's entry is
+// kept.
+var errGatewayChanged = errors.New("the gateway changed since it was read")
 
 var (
 	// InferenceGatewayReadyTimeout bounds the wait for Programmed=True and
@@ -200,33 +207,83 @@ func (g gatewayObject) attachedRoutes() int {
 	return n
 }
 
-// openToAllNamespaces: a listener accepts routes from every namespace.
-func (g gatewayObject) openToAllNamespaces() bool {
-	for _, l := range g.Spec.Listeners {
-		if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil && l.AllowedRoutes.Namespaces.From == "All" {
-			return true
-		}
+// listedNames returns the namespaces the listener lists by name (one
+// kubernetes.io/metadata.name In expression and nothing else, the shape
+// this tool writes), and whether it has that shape.
+func (l gatewayListener) listedNames() ([]string, bool) {
+	if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil {
+		return nil, false
 	}
-	return false
+	ns := l.AllowedRoutes.Namespaces
+	if ns.From != "Selector" || ns.Selector == nil || len(ns.Selector.MatchLabels) > 0 || len(ns.Selector.MatchExpressions) != 1 {
+		return nil, false
+	}
+	var e struct {
+		Key      string   `json:"key"`
+		Operator string   `json:"operator"`
+		Values   []string `json:"values"`
+	}
+	if json.Unmarshal(ns.Selector.MatchExpressions[0], &e) != nil || e.Key != namespaceNameLabel || e.Operator != "In" {
+		return nil, false
+	}
+	return e.Values, true
 }
 
-// restrictedToRoutesLabel: every listener accepts routes only from
-// namespaces labelled inferenceRoutesLabel=true, as this tool sets it.
-func (g gatewayObject) restrictedToRoutesLabel() bool {
-	if len(g.Spec.Listeners) == 0 {
-		return false
-	}
+// listedNamespaces returns every name the listeners list (whoever added
+// it), and whether every listener has the names-list shape. A gateway an
+// earlier build made (from All, or a namespace label) does not.
+func (g gatewayObject) listedNamespaces() ([]string, bool) {
+	var names []string
+	shaped := len(g.Spec.Listeners) > 0
 	for _, l := range g.Spec.Listeners {
-		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil {
-			return false
-		}
-		ns := l.AllowedRoutes.Namespaces
-		if ns.From != "Selector" || ns.Selector == nil || len(ns.Selector.MatchExpressions) > 0 ||
-			len(ns.Selector.MatchLabels) != 1 || ns.Selector.MatchLabels[inferenceRoutesLabel] != "true" {
-			return false
-		}
+		values, ok := l.listedNames()
+		shaped = shaped && ok
+		names = append(names, values...)
 	}
-	return true
+	return names, shaped
+}
+
+// allowedProjects is what the status says the gateway allows: the
+// namespaces every listener admits by name (from Same: the gateway's own;
+// a missing allowedRoutes is Same), all when every listener admits every
+// namespace, and known false when a listener chooses by labels.
+func (g gatewayObject) allowedProjects() (names []string, all, known bool) {
+	var set map[string]bool // nil: no listener narrowed it yet
+	for _, l := range g.Spec.Listeners {
+		from := "Same"
+		if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil {
+			from = firstNonEmpty(l.AllowedRoutes.Namespaces.From, "Same")
+		}
+		var these []string
+		switch from {
+		case "All":
+			continue
+		case "Same":
+			these = []string{g.Metadata.Namespace}
+		default:
+			values, ok := l.listedNames()
+			if !ok {
+				return nil, false, false
+			}
+			these = values
+		}
+		next := map[string]bool{}
+		for _, n := range these {
+			if set == nil || set[n] {
+				next[n] = true
+			}
+		}
+		set = next
+	}
+	if set == nil {
+		return nil, len(g.Spec.Listeners) > 0, len(g.Spec.Listeners) > 0
+	}
+	names = []string{}
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names, false, true
 }
 
 // hosts are the listeners' hostnames.
@@ -452,14 +509,14 @@ func defaultIngressCertificate(c *Client) (string, error) {
 }
 
 // inferenceGatewayObjects are the objects setup applies, by kind.
-func inferenceGatewayObjects(domain, certificate string) map[string]map[string]interface{} {
+func inferenceGatewayObjects(domain, certificate string, namespaces []string) map[string]map[string]interface{} {
 	listener := func(name, host, cert string) map[string]interface{} {
 		return map[string]interface{}{
 			"name":          name,
 			"port":          443,
 			"protocol":      "HTTPS",
 			"hostname":      host,
-			"allowedRoutes": inferenceRoutesAllowed(),
+			"allowedRoutes": allowedRoutesFor(namespaces),
 			"tls": map[string]interface{}{
 				"mode":            "Terminate",
 				"certificateRefs": []interface{}{map[string]interface{}{"group": "", "kind": "Secret", "name": cert}},
@@ -700,52 +757,40 @@ func routeNamespaces(models []llmisvcObject, def kserveGateway, gw gatewayObject
 	return out
 }
 
-// unlabelled returns the namespaces that are not in labelled.
-func unlabelled(namespaces, labelled []string) []string {
+// notAllowedModelProjects lists the namespaces of the models that route
+// through gw (routeNamespaces: the tool's or anyone's, such as a model
+// deployed from the dashboard) whose routes its listeners do not admit.
+// A namespace is read only when the listeners select by labels; one that
+// cannot be read is left out (unknown is not "no").
+func notAllowedModelProjects(c *Client, models []llmisvcObject, def kserveGateway, gw gatewayObject) []string {
+	_, _, byName := gw.allowedProjects()
 	var out []string
-	for _, ns := range namespaces {
-		if !containsString(labelled, ns) {
+	for _, ns := range routeNamespaces(models, def, gw) {
+		var labels map[string]string
+		if !byName {
+			meta, ok, err := readObjectMeta(c, clusterPath("v1", "namespaces", ns))
+			if err != nil || !ok {
+				continue
+			}
+			labels = meta.Labels
+		}
+		if gw.admits(ns, labels) == "no" {
 			out = append(out, ns)
 		}
 	}
 	return out
 }
 
-// labelCommands are the commands that label namespaces, one per line.
-func labelCommands(namespaces []string) string {
-	lines := make([]string, len(namespaces))
-	for i, ns := range namespaces {
-		lines[i] = "  " + inferenceRoutesCommand(ns)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// unlabelledProjectRefusal says that a model cannot be set up in project
-// until a cluster-admin labels it.
-func unlabelledProjectRefusal(project string) string {
-	return fmt.Sprintf("Project '%s' is not allowed to use the inference gateway yet. The gateway this tool sets up accepts models only from projects a cluster-admin has labelled, so that a route in another project cannot take over a model's address. A cluster-admin runs:\n  %s\nThen set up again. Nothing was changed.", project, inferenceRoutesCommand(project))
-}
-
-// restrictRefusal says why the tool's open gateway is not restricted now:
-// models in these namespaces would lose their route.
-func restrictRefusal(namespaces []string) string {
-	quoted := make([]string, len(namespaces))
-	for i, ns := range namespaces {
-		quoted[i] = "'" + ns + "'"
-	}
-	return fmt.Sprintf("Models in %s route through the inference gateway, and %s not have the label %s=true, so restricting the gateway now would cut them off. A cluster-admin labels %s first:\n%s", joinTitles(quoted), verb(len(namespaces), "that project does", "those projects do"), inferenceRoutesLabel, verb(len(namespaces), "it", "them"), labelCommands(namespaces))
+// foreignGatewayRefusal says that someone else's gateway does not let
+// project's routes attach, and RHOAI's documented step.
+func foreignGatewayRefusal(project string) string {
+	return fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not let routes from project '%s' attach (its listeners' allowedRoutes), and this tool does not change it. As RHOAI documents it, a cluster admin adds '%s' to the projects the Gateway's listeners allow: the values array of allowedRoutes.namespaces.selector (%s In [...]). Nothing was changed.", inferenceGatewayNamespace, inferenceGatewayName, project, project, namespaceNameLabel)
 }
 
 // getInferenceGatewayStatus reports the inference gateway. models are the
 // cluster's LLMInferenceServices (modelsErr when they cannot be listed).
 func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr error) types.InferenceGatewayState {
-	state := types.InferenceGatewayState{ResourceState: types.ResourceState{Namespace: inferenceGatewayNamespace, Name: inferenceGatewayName}, RoutesLabel: inferenceRoutesLabel}
-	labelled, labelErr := labelledNamespaces(c)
-	if labelErr != nil {
-		state.RoutesLabelProblem = "Cannot read which projects may use the inference gateway: " + labelErr.Error()
-	} else {
-		state.LabelledProjects = labelled
-	}
+	state := types.InferenceGatewayState{ResourceState: types.ResourceState{Namespace: inferenceGatewayNamespace, Name: inferenceGatewayName}}
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
 		state.Message = "Cannot read the inference gateway: " + err.Error()
@@ -828,19 +873,11 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 		}
 	}
 	state.Warning = strings.Join(warnings, " ")
-	state.OpenToAllNamespaces = gw.openToAllNamespaces()
-	if state.ManagedByTool && !gw.restrictedToRoutesLabel() {
-		switch {
-		case modelsErr != nil && !errors.Is(modelsErr, errLLMISvcAPIMissing):
-			state.RestrictBlockedReason = "Cannot check which models use the gateway: " + modelsErr.Error()
-		case labelErr != nil:
-			state.RestrictBlockedReason = state.RoutesLabelProblem
-		default:
-			state.UnlabelledModelProjects = unlabelled(routeNamespaces(models, def, gw), labelled)
-			if len(state.UnlabelledModelProjects) > 0 {
-				state.RestrictBlockedReason = restrictRefusal(state.UnlabelledModelProjects)
-			}
-		}
+	if names, all, known := gw.allowedProjects(); known {
+		state.AllowedProjects, state.AllProjectsAllowed = names, all
+	}
+	if modelsErr == nil {
+		state.NotAllowedModelProjects = notAllowedModelProjects(c, models, def, gw)
 	}
 	switch {
 	case !state.ManagedByTool:
@@ -923,12 +960,25 @@ type gatewayPlan struct {
 	// used, never changed).
 	classForeign bool
 	host         string
+	// add are the namespaces this write adds to the list; names the full
+	// list it writes. listChanges: the write changes the Gateway's list
+	// (or creates the Gateway).
+	add         []string
+	names       []string
+	listChanges bool
+	// gatewayOnly: write the Gateway alone (a project added to the list).
+	gatewayOnly bool
 }
 
-// planInferenceGateway reads everything the gateway setup writes or needs.
-// A refusal is returned as a message and an error code; nothing is
-// written.
-func planInferenceGateway(c *Client) (*gatewayPlan, string, string) {
+// planInferenceGateway reads everything a gateway write needs, for a list
+// with the namespaces in add. The list keeps every name the listeners
+// list now, whoever added it. A gateway an earlier build made (from All,
+// or its namespace label) also gets every namespace whose models route
+// through it, so no model is detached; when the models cannot be listed,
+// that is refused. The list and the resourceVersion that guards the write
+// come from the same read. A refusal is returned as a message and an
+// error code; nothing is written.
+func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string) {
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read Gateway %s/%s; nothing was changed: %v.%s", inferenceGatewayNamespace, inferenceGatewayName, err, templateHint(err)), errorCodeFromK8sErr(err)
@@ -939,26 +989,27 @@ func planInferenceGateway(c *Client) (*gatewayPlan, string, string) {
 	if found && gw.Metadata.terminating() {
 		return nil, fmt.Sprintf("Gateway %s/%s is still being deleted. Wait until it is gone, then set it up again.", inferenceGatewayNamespace, inferenceGatewayName), "terminating"
 	}
-	// The tool's gateway from an earlier version accepts routes from every
-	// namespace. Applying the selector detaches the routes of namespaces
-	// without the label: never a model's. Fails closed.
-	if found && !gw.restrictedToRoutesLabel() {
+	plan := &gatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}, gateway: gw, add: add}
+	listed, shaped := gw.listedNamespaces()
+	var routed []string
+	if found && !shaped {
 		models, err := listLLMInferenceServices(c)
 		if err != nil && !errors.Is(err, errLLMISvcAPIMissing) {
-			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so it was not restricted to labelled projects; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
-		}
-		labelled, err := labelledNamespaces(c)
-		if err != nil {
-			return nil, fmt.Sprintf("Cannot check which projects carry the label %s, so the gateway was not restricted; nothing was changed: %v.%s", inferenceRoutesLabel, err, templateHint(err)), errorCodeFromK8sErr(err)
+			return nil, fmt.Sprintf("Cannot check which models use the inference gateway, so its list of allowed projects was not written (that could cut a model off); nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
 		}
 		def, _ := readKServeGateway(c)
-		if missing := unlabelled(routeNamespaces(models, def, gw), labelled); len(missing) > 0 {
-			return nil, restrictRefusal(missing) + "\nThen set up the gateway again. Nothing was changed.", "prerequisites"
-		}
+		routed = routeNamespaces(models, def, gw)
 	}
-	plan := &gatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}}
+	plan.names = gatewayNamespaceList(listed, routed, add)
+	plan.listChanges = !found || !shaped
+	for _, n := range plan.names {
+		plan.listChanges = plan.listChanges || !containsString(listed, n)
+	}
 	for _, kind := range gatewayKinds {
-		meta, ok, err := readGatewayObject(c, kind)
+		meta, ok, err := gw.Metadata, found, error(nil)
+		if kind != "Gateway" {
+			meta, ok, err = readGatewayObject(c, kind)
+		}
 		if err != nil {
 			return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", gatewayDesc(kind), err, templateHint(err)), errorCodeFromK8sErr(err)
 		}
@@ -991,50 +1042,109 @@ func planInferenceGateway(c *Client) (*gatewayPlan, string, string) {
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot find the cluster's default ingress certificate; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err)
 	}
-	plan.objects = inferenceGatewayObjects(domain, cert)
+	plan.objects = inferenceGatewayObjects(domain, cert, plan.names)
 	plan.host = inferenceHostPrefix + domain
 	return plan, "", ""
 }
 
+// planGatewayAllow plans adding project to the list of this tool's
+// gateway, writing the Gateway alone. It returns nil without a refusal
+// when there is nothing to write: the gateway lists the project already,
+// or does not exist. Someone else's gateway is returned as foreign.
+func planGatewayAllow(c *Client, project string) (*gatewayPlan, string, string) {
+	plan, msg, code := planInferenceGateway(c, []string{project})
+	if msg != "" || plan.foreign {
+		return plan, msg, code
+	}
+	if !plan.found["Gateway"] || !plan.listChanges {
+		return nil, "", ""
+	}
+	plan.gatewayOnly = true
+	return plan, "", ""
+}
+
+// writeInferenceGateway applies the plan. When the Gateway changed after
+// the plan read it (someone else edited its list), the write is refused
+// by its resourceVersion; it is planned again from a fresh read, which
+// keeps their edit, up to three times. It returns the plan it wrote, and
+// a refusal message and an error code, or "".
+func writeInferenceGateway(c *Client, plan *gatewayPlan, logf func(string)) (*gatewayPlan, string, string) {
+	for attempt := 1; ; attempt++ {
+		msg, code, changed := applyInferenceGateway(c, plan, false, logf)
+		if !changed {
+			return plan, msg, code
+		}
+		if attempt == 3 {
+			return plan, fmt.Sprintf("Gateway %s/%s kept changing while this ran (someone else is editing it), so its list of allowed projects was not written. Try again.", inferenceGatewayNamespace, inferenceGatewayName), "conflict"
+		}
+		logf("The gateway changed while this ran; reading it again.")
+		next, msg, code := planInferenceGateway(c, plan.add)
+		if msg != "" {
+			return plan, msg, code
+		}
+		if next.foreign {
+			return plan, fmt.Sprintf("Gateway %s/%s was replaced by one this tool did not create while this ran, so it was left alone.", inferenceGatewayNamespace, inferenceGatewayName), "not_managed"
+		}
+		next.gatewayOnly = plan.gatewayOnly
+		plan = next
+	}
+}
+
 // applyInferenceGateway writes the plan's objects (a server-side dry run
 // of all of them first, when dryRun). It returns a refusal message and an
-// error code, or "".
-func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(string)) (string, string) {
+// error code, or "", and changed when the Gateway was changed by someone
+// else after the plan read it (nothing of the Gateway was written).
+func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(string)) (string, string, bool) {
 	var applied []string
 	for _, kind := range gatewayKinds {
-		if kind == "GatewayClass" && plan.classForeign {
+		if kind == "GatewayClass" && plan.classForeign || plan.gatewayOnly && kind != "Gateway" {
 			continue
 		}
 		path, _ := gatewayObjectPath(kind)
 		createPath, _ := gatewayCreatePath(kind)
 		k := kind
 		read := func() (objectMeta, bool, error) { return readGatewayObject(c, k) }
+		if kind == "Gateway" {
+			// The list was computed from what the plan read: a write
+			// refused because the Gateway changed is planned again, never
+			// retried with the old list.
+			read = func() (objectMeta, bool, error) {
+				meta, ok, err := readGatewayObject(c, k)
+				if err == nil {
+					err = errGatewayChanged
+				}
+				return meta, ok, err
+			}
+		}
 		action, meta, found, err := ensureToolObject(c, gatewayDesc(kind), path, createPath, plan.objects[kind], plan.current[kind], plan.found[kind], read, gatewayOwned, dryRun)
 		plan.current[kind], plan.found[kind] = meta, found
 		if err != nil {
+			if errors.Is(err, errGatewayChanged) && !dryRun {
+				return "", "", true
+			}
 			code := errorCodeFromK8sErr(err)
 			var foreign *foreignObjectError
 			switch {
 			case errors.As(err, &foreign):
 				code = "not_managed"
-			case errors.Is(err, errObjectChanged) || IsK8sError(err, 409):
+			case errors.Is(err, errObjectChanged) || errors.Is(err, errGatewayChanged) || IsK8sError(err, 409):
 				code = "conflict"
 			}
 			if dryRun {
-				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", gatewayDesc(kind), err, templateHint(err)), code
+				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", gatewayDesc(kind), err, templateHint(err)), code, false
 			}
 			done := "nothing"
 			if len(applied) > 0 {
 				done = strings.Join(applied, ", ")
 			}
-			return fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. Set up again to retry, or delete the gateway to remove it.%s", gatewayDesc(kind), err, done, templateHint(err)), code
+			return fmt.Sprintf("Failed to apply %s: %v. Already applied: %s. Set up again to retry, or delete the gateway to remove it.%s", gatewayDesc(kind), err, done, templateHint(err)), code, false
 		}
 		if !dryRun {
 			applied = append(applied, gatewayDesc(kind))
 			logf(fmt.Sprintf("OK: %s %s", gatewayDesc(kind), action))
 		}
 	}
-	return "", ""
+	return "", "", false
 }
 
 // waitInferenceGateway waits (bounded) until the gateway is programmed
