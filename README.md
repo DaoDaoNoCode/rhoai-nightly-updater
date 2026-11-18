@@ -25,7 +25,7 @@ bash install.sh --dry-run && bash install.sh
 
 The installer prints the app URL when it is done. To check the download, compare `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) with the SHA-256 in the [release notes](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest). For a specific version, download `https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh` instead.
 
-**New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup and your first update, step by step. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first. Cluster configured from Git by Argo CD? Deploy the Helm chart `deploy/chart` instead: [GITOPS.md](docs/GITOPS.md).
+**New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup, your first update and the Environment page, step by step. Upgrading from 2.x to 3.0.0? Read [UPGRADING §5](docs/UPGRADING.md#5-upgrade-to-v300): the S3 storage moves, and models need a project label. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first. Cluster configured from Git by Argo CD? Deploy the Helm chart `deploy/chart` instead: [GITOPS.md](docs/GITOPS.md).
 
 ## A short tour
 
@@ -233,8 +233,8 @@ The app follows your system's light or dark mode and contrast settings; the appe
 
 | Doc | For |
 |---|---|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Install, one-time setup, first update, the Environment page |
-| [UPGRADING.md](docs/UPGRADING.md) | Which version you run, installs from before releases, moving between releases |
+| [QUICKSTART.md](docs/QUICKSTART.md) | Install, one-time setup (self-managed OpenShift too), first update, the Environment page |
+| [UPGRADING.md](docs/UPGRADING.md) | Which version you run, installs from before releases, moving between releases, 2.x to 3.0.0 |
 | [GITOPS.md](docs/GITOPS.md) | Deploying with Argo CD: the Helm chart, its values, upgrades and removal |
 | [RUNBOOK.md](RUNBOOK.md) | Troubleshooting: what the app shows, and the fix |
 | [CHANGELOG.md](CHANGELOG.md) | What each release changed, and its upgrade notes |

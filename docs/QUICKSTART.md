@@ -1,6 +1,6 @@
 # Quick Start
 
-From an empty ROSA HCP (or OpenShift) cluster to a running RHOAI nightly in about 15 minutes. After step 1, everything happens in the app.
+From an empty ROSA HCP (or OpenShift) cluster to a running RHOAI nightly in about 15 minutes, then a test environment on the Environment page. After step 1, everything happens in the app, except the image mirror (step 3) and, on self-managed OpenShift, the cluster pull secret.
 
 Before your first change, read **[How the tool keeps your cluster safe](../README.md#how-the-tool-keeps-your-cluster-safe)**.
 
@@ -13,7 +13,11 @@ Before your first change, read **[How the tool keeps your cluster safe](../READM
 | [4](#4-install-rhoai) | Install the latest RHOAI nightly | 5–8 min |
 | [5](#5-create-the-datasciencecluster) | Create the DataScienceCluster | 1 min |
 | [6](#6-check-that-rhoai-is-healthy) | Check that RHOAI is healthy | 2 min |
-| [7](#7-environment-s3-storage-and-a-pipeline-server) | Optional: S3 storage and a pipeline server | 3 min |
+| [7](#7-environment-pipelines-and-s3-storage) | Optional: pipelines and S3 storage | 3 min |
+| [8](#8-environment-mlflow-and-sample-data) | Optional: MLflow and sample data | 3 min |
+| [9](#9-environment-a-model-on-cpu) | Optional: a model on CPU | 5 min |
+| [10](#10-environment-the-gen-ai-playground) | Optional: the dashboard's Gen AI playground | 2 min |
+| [11](#11-environment-maas) | Optional: Models as a Service | 10 min |
 
 ## 0. Before you start
 
@@ -84,9 +88,9 @@ Open the printed URL, or use the grid icon in the OpenShift console (Red Hat App
 oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
-<img src="images/masthead-version.png" alt="The masthead: the release v2.0.0, the theme switch, Help, Applications and the user menu" width="380">
+<img src="images/masthead-version.png" alt="The masthead: the release v2.0.0, the appearance button, Help, Applications and the user menu" width="380">
 
-**What you should see:** the **Status** page. The masthead shows (1) the release you installed, for example `v2.0.0`, then the theme switch, **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
+**What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v2.0.0` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
 
 ## 3. One-time setup: pull secret and image mirror
 
@@ -94,8 +98,26 @@ Nightly builds come from `quay.io/rhoai`. The cluster needs a pull secret for it
 
 <img src="images/status-cluster-setup.png" alt="One-time cluster setup: Pull secret and Image mirror (IDMS), both Missing" width="760">
 
-1. **Pull secret:** paste the `quay.io/rhoai` token (step 0) and click **Create secret**. The tool stores it in `kube-system/additional-pull-secret` and replaces only the `quay.io/rhoai` entry.
+1. **Pull secret:** paste the `quay.io/rhoai` token (step 0) and click **Create secret**. The tool stores it in `kube-system/additional-pull-secret` and replaces only the `quay.io/rhoai` entry. On self-managed OpenShift, also add it to the cluster pull secret (below).
 2. **Image mirror (IDMS):** click **How to create the image mirror** for the instructions. RHOAI images reference `registry.redhat.io/rhoai`; the mirror redirects them to `quay.io/rhoai`.
+
+### Self-managed OpenShift: the cluster pull secret
+
+Only hosted control planes (ROSA HCP) pass `kube-system/additional-pull-secret` to the nodes. On a self-managed cluster the nodes pull with the cluster pull secret, `openshift-config/pull-secret`, so add the `quay.io/rhoai` entry there too. The standard procedure (OpenShift docs: "Updating the global cluster pull secret"):
+
+```bash
+oc get secret/pull-secret -n openshift-config --template='{{index .data ".dockerconfigjson" | base64decode}}' > pull-secret.json
+oc registry login --registry=quay.io/rhoai --auth-basic=<user>:<token> --to=pull-secret.json
+oc set data secret/pull-secret -n openshift-config --from-file=.dockerconfigjson=pull-secret.json
+rm pull-secret.json
+```
+
+- `<user>:<token>` is the token from step 0 decoded: `echo '<token from step 0>' | base64 -d`.
+- `pull-secret.json` holds every registry credential of the cluster: delete it right away.
+- The nodes pick up the new pull secret within a few minutes, without a drain or a reboot.
+- The app's **Pull secret** item checks `kube-system/additional-pull-secret` only, so it does not show whether this step is done.
+
+### The image mirror
 
 On ROSA HCP the mirror is created through OCM. You need the Red Hat VPN and ROSA CLI access (separate from `oc`):
 
@@ -112,7 +134,7 @@ rosa create image-mirror --cluster=<cluster-name> \
 
 (Syntax checked with `rosa create image-mirror --help`, rosa 1.2.57. `digest` is the default and only type.) A 403 means you lack OCM write access to the cluster; ask its owner.
 
-On self-managed OpenShift instead:
+On self-managed OpenShift, create the ImageDigestMirrorSet with `oc` (cluster-admin). Creating it does not drain or reboot the nodes; deleting it later does drain them.
 
 ```bash
 oc apply -f - <<'EOF'
@@ -160,18 +182,86 @@ Open **Components**, then **Diagnostics**.
 - **Components:** DataScienceCluster `default-dsc` is **Ready** and every enabled component is ready. Right after step 5, some deployments are still rolling out; refresh after a few minutes.
 - **Diagnostics:** **All 15 checks passed, no issues detected**. If a problem is listed, open it: it shows what was observed and the fix. [RUNBOOK §11.7](../RUNBOOK.md#117-datasciencecluster-not-ready) explains each one.
 
-## 7. Environment: S3 storage and a pipeline server
+## 7. Environment: pipelines and S3 storage
 
-Optional, for testing pipelines in the dashboard. Open **Environment**.
+Steps 7 to 11 are optional: each sets up one feature to develop against or reproduce an issue with. Open **Environment**. The **Overview** has one row per feature (Pipelines, MLflow, Models, Playground, MaaS) with its state and next step; each feature has its own tab.
 
 <img src="images/environment-overview.png" alt="Overview: each feature with its state and next step" width="760">
 
-1. On the **Overview**, **Pipelines** reads **Not set up in any project**: click **Set up in a project**, or open the **Pipelines** tab.
-2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then a pipeline server in the project that uses it, and shows each step. (If S3 storage reads **Needs attention**, an earlier version's storage is still in namespace `minio`: click **Migrate storage**.)
+Before **Set up**, each tab says what it still needs, and Set up stays disabled with the reason under it: a DataScienceCluster component that is not Managed (with **Open Components**), or no data science project. The tool never creates a project: create one in the RHOAI dashboard (Projects, then Create project) first. Every Set up asks first, names what it creates, and shows its steps.
+
+1. On the **Overview**, **Pipelines** reads **Not set up in any project**: click **Choose a project**, or open the **Pipelines** tab.
+2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then the pipeline server `dspa` in the project, as the dashboard sets one up, with a dashboard S3 Connection that workbenches can use. (If S3 storage reads **Needs attention** with **Migrate storage**, an earlier version's storage is still in namespace `minio`: see [UPGRADING §5](UPGRADING.md#5-upgrade-to-v300).)
 
 <img src="images/environment-pipelines.png" alt="Pipelines tab: Ready in the project, with the storage's endpoint and admin login, and Open pipelines" width="760">
 
-**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes) and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). To remove it all, use **Clean up Pipelines** at the bottom of the tab (or **Delete** in a part's menu: the storage's stays disabled while a pipeline server uses it).
+**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes) and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). **Run a sample pipeline** on the same tab offers a two-step pipeline to import in the dashboard, or `curl` commands that upload and run it with your own token. To remove it all, use **Clean up Pipelines** at the bottom of the tab (or **Delete** in a part's menu: the storage's stays disabled while a pipeline server uses it).
+
+## 8. Environment: MLflow and sample data
+
+1. Open the **MLflow** tab, click **Set up** and confirm. MLflow runs in `redhat-ods-applications`, with the MLflow operator's own resource defaults. One someone set up in the dashboard reads **Not managed by this tool** and works the same; the tool does not delete it.
+2. Under **Sample data**, choose a project (its MLflow workspace) and click **Add all**: MLflow's agent and prompt demo, a training experiment with a registered model, an MCP server entry and an agent skill. Each row says where it shows in the dashboard.
+
+<img src="images/environment-mlflow-samples.png" alt="MLflow tab, Sample data for dev-project: Add all and Remove all, and each sample with its state" width="760">
+
+**What you should see:** MLflow **Ready**, with **Open MLflow** and the client settings (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN`, `MLFLOW_WORKSPACE`) under **Use it**. **Remove all** removes the samples the tool added (the agent and prompt demo is removed in the MLflow UI).
+
+## 9. Environment: a model on CPU
+
+Open the **Models** tab and pick a data science project.
+
+1. **Choose a model** in the picker. Each option says what it is for, what it reserves and how much it downloads; one no worker has room for is disabled, with the reason.
+
+   | Model | For | Reserves (CPUs, memory) |
+   |---|---|---|
+   | SmolLM2 135M Instruct | chat, a quick smoke test | 2, 4 GiB |
+   | Qwen2.5 0.5B Instruct (the default) | chat | 4, 6 GiB |
+   | Qwen3 1.7B | chat, tool calling, reasoning | 4, 12 GiB |
+   | Granite Embedding 125M English | embeddings (768 dimensions) | 2, 3 GiB |
+
+2. **Label the project (a cluster-admin).** The inference gateway this tool sets up accepts models only from projects labelled `rhoai-nightly-updater/inference-routes=true`, so that a route in another project cannot take over a model's address and receive its callers' tokens. Project admins cannot set this label, and the tool does not set it. The tab shows the command with a copy button:
+
+   ```bash
+   oc label namespace <project> rhoai-nightly-updater/inference-routes=true
+   ```
+
+3. Click **Set up** and confirm. It creates what is missing: the inference gateway (once per cluster; it runs a cloud load balancer, which costs money while it exists), then the model. The first time takes 3 to 5 minutes.
+
+<img src="images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
+
+**The runtime image.** A model runs on the vLLM CPU image that the installed RHOAI's CPU preset names. On a nightly build that image is not published yet, so the cluster cannot pull it, and the tool uses the newest released Red Hat vLLM CPU image instead (`registry.redhat.io/rhaii/vllm-cpu-rhel9`, found in Red Hat's container catalog and pinned by digest); the model's details say which image it runs. A released RHOAI, or a cluster with a mirror for the preset's image, uses the preset's own image. `VLLM_CPU_IMAGE` sets an image of your own, for example a mirror on a disconnected cluster.
+
+**What you should see:** the model **Ready**, with its address, and under **Use it** the `curl` commands that call it with its own token. The dashboard lists it with the project's deployments. Troubleshooting: [RUNBOOK §10.2](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
+
+## 10. Environment: the Gen AI playground
+
+Needs a ready chat model in the project (step 9) and the DataScienceCluster component that runs the playground Managed (the tab says which).
+
+1. Open the **Playground** tab and pick the project. Before Set up, the project's ready chat models are chosen, and this tool's embedding model is added for searching your documents.
+2. Click **Set up** and confirm. The tool asks the RHOAI dashboard to create its playground, as a click in its Gen AI studio does; this takes 1 to 2 minutes.
+
+<img src="images/environment-playground.png" alt="Playground tab: Ready in dev-project; the project's models, and the playground Ready with Open the playground" width="760">
+
+**What you should see:** the playground **Ready**, with **Open the playground** (Gen AI studio, then Playground, then the project). Troubleshooting: [RUNBOOK §10.3](../RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).
+
+## 11. Environment: MaaS
+
+Models as a Service lets everyone signed in to the cluster call a published model with a MaaS API key. The **MaaS** tab sets up the platform as the MaaS install docs do and publishes this tool's chat models, one at a time.
+
+It needs, installed by a cluster-admin first (the tab says which is missing, and Set up stays disabled until then):
+- Red Hat Connectivity Link, with its Kuadrant CR (the MaaS docs ask for 1.5; the tab warns about an older one);
+- the CloudNativePG operator, for MaaS's database (or your own PostgreSQL in Secret `maas-db-config`);
+- the DataScienceCluster's `aigateway` component Managed.
+
+1. Click **Set up** and confirm (about 5 minutes). It creates the database, Gateway `maas-default-gateway` at `maas.<apps domain>` (another cloud load balancer) and turns MaaS on in the DataScienceCluster.
+2. If **Authorino TLS** needs attention, a cluster-admin runs the commands the part shows; until then API keys are refused.
+3. **Publish** a chat model. While it is published, it is reached through MaaS only: its direct address answers 404 until you unpublish it.
+
+<img src="images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts with their health, and the published model with Unpublish" width="760">
+
+**What you should see:** MaaS **Ready**, and under **Use it** the commands to get an API key and call the model. **Remove MaaS** unpublishes and removes what the tool set up. More: [README: MaaS](../README.md#maas-models-as-a-service), troubleshooting: [RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service).
+
+Each tab has **Clean up** at the bottom, and the Overview has **Clean up everything**: one confirmed operation with a checkbox per part.
 
 ## Day to day
 
@@ -181,16 +271,16 @@ Optional, for testing pipelines in the dashboard. Open **Environment**.
 | Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator...** |
 | Switch to stable, another nightly, or an exact older build | Status → Recovery → **Choose a build...** (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |
-| S3 storage (SeaweedFS), pipeline servers, MLflow | Environment |
+| S3 storage (SeaweedFS), pipeline servers, MLflow, models, the playground, MaaS | Environment |
 | Which nightly contains PR #N? | Build Explorer → search `#123` ([Build Explorer search](../README.md#build-explorer-search)) |
 | Something looks wrong | Diagnostics → open the problem; automatic fixes ask for confirmation. [RUNBOOK](../RUNBOOK.md) |
 
 ## Upgrade, roll back or remove the updater
 
-- **Upgrade:** when the app says "vX.Y.Z is available", download that release's `install.sh` (step 1) and run it; it sees the existing install and upgrades it, keeping everyone signed in. From a clone: `git fetch --tags && git checkout vX.Y.Z && make upgrade`. Details, and installs from before releases: [UPGRADING.md](UPGRADING.md).
-- **Roll back:** from a clone, `git fetch --tags && make rollback TAG=v1.0.0` (`DRY_RUN=1` validates). It applies that release's own template with its image and keeps sessions. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. [UPGRADING §5](UPGRADING.md#6-roll-back).
+- **Upgrade:** when the app says "vX.Y.Z is available", download that release's `install.sh` (step 1) and run it; it sees the existing install and upgrades it, keeping everyone signed in. From a clone: `git fetch --tags && git checkout vX.Y.Z && make upgrade`. Details, and installs from before releases: [UPGRADING.md](UPGRADING.md); from 2.x to 3.0.0: [UPGRADING §5](UPGRADING.md#5-upgrade-to-v300).
+- **Roll back:** from a clone, `git fetch --tags && make rollback TAG=v1.0.0` (`DRY_RUN=1` validates). It applies that release's own template with its image and keeps sessions. `oc rollout undo` does not work, because old ReplicaSets are pruned on purpose. [UPGRADING §6](UPGRADING.md#6-roll-back).
 - If a cluster operation is running, an upgrade or rollback waits for it: the updater (UI included) is offline for up to ~17 minutes.
-- **Remove:** `bash install.sh uninstall` (or `make undeploy` from a clone) removes the updater, its cluster-wide RBAC and its ConsoleLink. It does **not** remove RHOAI, the nightly catalog, the pull secret, the IDMS, or anything created from Test resources. Tear those down in the app first.
+- **Remove:** `bash install.sh uninstall` (or `make undeploy` from a clone) removes the updater, its cluster-wide RBAC and its ConsoleLink. It does **not** remove RHOAI, the nightly catalog, the pull secret, the IDMS, or anything set up on the Environment page. Remove those in the app first (Environment, Overview, **Clean up everything**).
 
 ## Notes
 
