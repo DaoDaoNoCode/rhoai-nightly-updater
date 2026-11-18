@@ -318,7 +318,7 @@ export function modelOptionReason(status: ResourcesStatus | null, project: strin
   const c = catalogModel(status, name);
   if (!c?.capacityWarning) return null;
   if (project && modelIn(status, project, name)?.deployed) return null;
-  return `No room for it now. ${c.capacityWarning}`;
+  return `Cannot be set up now. ${c.capacityWarning}`;
 }
 
 export function gatewayStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {

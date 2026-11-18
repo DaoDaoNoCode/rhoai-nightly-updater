@@ -211,7 +211,7 @@ describe("Models tab", () => {
     });
     renderAt("/test-resources?tab=models&project=dev&model=qwen25-05b-instruct");
     expect(await screen.findAllByText(/Starting vLLM/)).not.toHaveLength(0);
-    expect(screen.queryByText(/No room for it now/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cannot be set up now/)).not.toBeInTheDocument();
   });
 
   it("the picker shows what each model is for and reserves, and disables a model with no room, saying why", async () => {
@@ -226,7 +226,7 @@ describe("Models tab", () => {
     expect(screen.getByRole("option", { name: /Granite Embedding/ })).toHaveTextContent("Embedding (768 dimensions)");
     const qwen3 = screen.getByRole("option", { name: /Qwen3 1.7B/ });
     expect(qwen3).toHaveTextContent("Chat, tool calling");
-    expect(qwen3).toHaveTextContent("No room for it now. No worker seems to have room for the model: it needs 4 CPUs and 10Gi of memory free.");
+    expect(qwen3).toHaveTextContent("Cannot be set up now. No worker seems to have room for the model: it needs 4 CPUs and 10Gi of memory free.");
     expect(qwen3.closest("li")?.querySelector("button")).toBeDisabled();
   });
 

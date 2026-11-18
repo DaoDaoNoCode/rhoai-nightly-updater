@@ -206,7 +206,7 @@ export const ModelPicker: React.FC<{ status: ResourcesStatus; project: string | 
     </MenuToggle>
   );
   return (
-    <Select id="models-model-select" isOpen={isOpen} selected={selected} toggle={toggle} shouldFocusToggleOnSelect
+    <Select id="models-model-select" isOpen={isOpen} selected={selected} toggle={toggle} shouldFocusToggleOnSelect popperProps={{ width: "trigger" }}
       onOpenChange={setIsOpen} onSelect={(_e, v) => { if (typeof v === "string") onSelect(v); setIsOpen(false); }}>
       <SelectList aria-label="Models this tool can set up">
         {catalog.map((c) => {
@@ -260,7 +260,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
       {unmanaged
         ? <Content component="p">A model named <code>{model?.name}</code> was created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
         : model
-          ? <Content component="p">{modelPurpose(c)} Served by vLLM on CPU ({modelNeeds(c)}) in {project}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}</Content>
+          ? <Content component="p">{modelPurpose(c)} It runs on vLLM on CPU in {project} and reserves {modelNeeds(c)}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}</Content>
           : <Content component="p">{modelPurpose(c)} Not set up in {project} yet: it needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time.</Content>}
       {model?.presetImageMissing && managed && (
         <Alert variant="danger" isInline component="div" title="The cluster preset's image is not published yet"
