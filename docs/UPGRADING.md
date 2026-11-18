@@ -3,7 +3,8 @@
 For anyone who installed the updater before releases existed (before
 2026-10-06), or who wants to move between releases. Versions follow
 `vMAJOR.MINOR.PATCH`; a new MAJOR means the deployment template changed and
-needs a full redeploy ([CHANGELOG.md](../CHANGELOG.md)).
+needs a full redeploy ([CHANGELOG.md](../CHANGELOG.md)). From 2.x to 3.0.0:
+[section 5](#5-upgrade-to-v300).
 
 Releases: [GitHub](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases)
 and [GitLab](https://gitlab.com/redhat/ai/rhoai-dashboard-team/rhoai-nightly-updater/-/releases)
@@ -56,16 +57,19 @@ second copy under the default names. Likewise pass `--image-repo` (or
 flowchart TD
   pre["Before releases: June builds, V0, V1, V2<br>(Deployment on image :latest)"]
   v1["v1.0.0 (template revision 2)"]
-  v2["v2.0.0 (template revision 4)"]
+  v2["v2.x (template revision 4)"]
+  v3["v3.0.0 (template revision 5)"]
   pre -->|"§3: make upgrade TAG=v1.0.0"| v1
   pre -->|"§4: v2.0.0 install.sh"| v2
   v1 -->|"§4: v2.0.0 install.sh"| v2
-  v2 -.->|"§5: make rollback TAG=v1.0.0"| v1
+  v2 -->|"§5: v3.0.0 install.sh"| v3
+  v2 -.->|"§6: make rollback TAG=v1.0.0"| v1
+  v3 -.->|"§5, §6: make rollback TAG=v2.3.3"| v2
   pre -.->|"§2: by itself, :latest pulls v1.x"| v1
 ```
 
-Solid arrows are upgrades you run (sections 3 and 4). The dashed arrows are
-a rollback (section 5) and what an install on `:latest` does by itself
+Solid arrows are upgrades you run (sections 3 to 5). The dashed arrows are
+rollbacks (section 6) and what an install on `:latest` does by itself
 (section 2). Every upgrade re-applies the release's own template; a new major
 version never works with only a new image.
 
@@ -113,7 +117,7 @@ A MINOR or PATCH release needs only that release's `install.sh` (or
 
 If the Deployment was created from an older template than the running image
 expects (typically an install on `:latest` that pulled a newer image), every
-page shows this notice for admins. Upgrade as in sections 3 and 4:
+page shows this notice for admins. Upgrade as in sections 3 to 5:
 
 <img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, template revision 3 where 4 is expected" width="760">
 
@@ -151,7 +155,8 @@ The running app also reports it: the masthead shows a release (for example
 | V1 (template 68f6f58, July 3 – Sept 29) | as V0 but `replicas=1` |
 | V2 (template b394d00, Sept 30 – Oct 5) | as V1 but Route timeout 960s |
 | v1.0.0 | image `@sha256:...`, `Recreate`, grace 1020, `TEMPLATE_REVISION=2`, cookie secret in Secret `<APP_NAME>-proxy`, RBAC named `<APP_NAME>-<NAMESPACE>` |
-| v2.0.0 | as v1.0.0 with `TEMPLATE_REVISION=4`; the masthead shows `v2.0.0` |
+| v2.0.0 to v2.3.3 | as v1.0.0 with `TEMPLATE_REVISION=4`; the masthead shows the release, for example `v2.3.3` |
+| v3.0.0 | as v2.x with `TEMPLATE_REVISION=5`; the masthead shows `v3.0.0` |
 
 The template changes of October 3–5 were never published before v1.0.0, so no
 install runs them.
@@ -251,18 +256,182 @@ then `bash install.sh`.
 
 ## 5. Upgrade to v3.0.0
 
-3.0.0 is a MAJOR release: template revision 5 adds RBAC, so the template is
-re-applied (the release's `install.sh`, or `make upgrade` from a v3.0.0
-checkout), as for v2.0.0.
+From v2.x (v2.3.3 is the last). Installs from before v2.0.0 can upgrade
+directly too; what section 4 says about them applies.
 
-The S3 test storage moves from namespace `minio` to namespace `seaweedfs`.
-After the upgrade S3 storage (Environment page, Pipelines tab) shows **Needs attention** until you
-run **Migrate storage** ([RUNBOOK §10.1](../RUNBOOK.md#101-migrate-storage-from-an-earlier-version)):
-it copies the data, moves the pipeline servers this tool created, and
-removes the old storage only when you confirm. Until then the old storage
-keeps serving its pipeline servers unchanged. Anything else that uses
-`minio-service.minio.svc:9000` (a data connection, a workbench) needs the new
-endpoint `http://seaweedfs-s3.seaweedfs.svc:8333`; the keys stay the same.
+3.0.0 is a MAJOR release: template revision 5 adds RBAC, so the template is
+re-applied. The installer upgrades the existing install in place:
+
+```bash
+curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v3.0.0/install.sh
+less install.sh                                     # read it first
+bash install.sh --dry-run --namespace $NS --app-name $APP
+bash install.sh --namespace $NS --app-name $APP
+```
+
+From a clone: `git fetch --tags && git checkout v3.0.0 && make upgrade NAMESPACE=$NS APP_NAME=$APP`,
+then `./scripts/smoke-test.sh $NS $APP`.
+
+As for every release, sessions are kept, a running cluster operation
+finishes first, and the app's own state is not touched. What the earlier
+version set up on the Environment page (the S3 storage, pipeline servers,
+MLflow) keeps running as it is: 3.0.0 changes it only when you click a
+button, as described below.
+
+**With Argo CD (the Helm chart).** The upgrade is the usual commit
+([GITOPS §6](GITOPS.md#6-upgrading-and-rolling-back)): `targetRevision: v3.0.0`
+and `parameters.IMAGE` set to the v3.0.0 image by digest. The chart carries
+both RBAC files, so the commit brings the RBAC with it. With the default `profile: gitops`, `deploy/rbac-gitops.yaml` has no
+rule change in 3.0.0, and that profile has no Environment page, so nothing
+else below applies. With `profile: full`, the chart applies template
+revision 5; its new parameters `INGRESS_NAMESPACE` and
+`INGRESS_OPERATOR_NAMESPACE` accept only their defaults, so leave them
+unset.
+
+### What changes for an existing install
+
+**The Test resources page is now the Environment page.** Its address stays
+`/test-resources`, so bookmarks keep working; links to the old tabs
+(`?tab=cluster`, `?tab=projects`) open Pipelines. It has an **Overview** and
+one tab per feature: **Pipelines**, **MLflow**, **Models**, **Playground**
+and **MaaS** ([README tour](../README.md#environment-s3-storage-pipeline-servers-mlflow-models)).
+Set up now refuses a namespace that is not a data science project instead
+of creating it: create the project in the RHOAI dashboard first.
+
+**RBAC (template revision 5).** Every new rule is audited in
+[SECURITY.md](../SECURITY.md#serviceaccount-rbac). In short:
+
+- Roles in `openshift-ingress` and `openshift-ingress-operator`, for the
+  inference gateway, the MaaS gateway and reading IngressController
+  `default`.
+- ClusterRole rules, limited to fixed names wherever the API allows: the
+  inference GatewayClass, the four catalog models (LLMInferenceServices)
+  and their presets, MaaS objects, the playground's OGXServer and
+  ConfigMaps, and each model's token authentication (ServiceAccounts,
+  Roles, RoleBindings `create`; `get delete` only on the dashboard's names
+  for the four models). The ServiceAccount has no `bind` or `escalate`.
+- Storage: rules for the new names (namespace `seaweedfs`, Secret
+  `seaweedfs-s3-credentials`, the copy Job and its Secret
+  `seaweedfs-migrate-source`, `delete` on namespace `seaweedfs`); the
+  MinIO-era names keep only `get` and `delete`. Secret
+  `rhoai-nightly-updater-s3` for the pipeline server's dashboard Connection.
+- 2.x could already create and patch Deployments in any namespace; 3.0.0
+  adds Jobs, LLMInferenceServices, OGXServers and CloudNativePG Clusters.
+  Together they give a leaked ServiceAccount token cluster-admin reach
+  ([SECURITY.md, Worst case](../SECURITY.md#worst-case-cluster-wide-workload-create)).
+
+If a tab says a call is "not allowed ... run `make upgrade`", the template
+was not re-applied: run the installer again.
+
+**S3 storage: Migrate storage.** 2.x kept the storage in namespace `minio`
+(MinIO, or SeaweedFS behind the MinIO-era names); 3.0.0 keeps it in
+namespace `seaweedfs`. After the upgrade, S3 storage on the Pipelines tab
+reads **Needs attention**, with **Migrate storage**
+([RUNBOOK §10.1](../RUNBOOK.md#101-migrate-storage-from-an-earlier-version)):
+
+1. **Migrate storage** sets up the new storage with **new keys**, copies
+   every bucket and object and checks each byte, then moves the pipeline
+   servers this tool created to the new storage and gives them the new
+   keys. Until it has copied the data, Set up and new pipeline servers
+   wait. Each run resumes where the last stopped.
+2. Before you remove the old storage, update what this tool did not create
+   (data connections, workbenches, other pipeline servers): the endpoint
+   becomes `http://seaweedfs-s3.seaweedfs.svc:8333` and the keys are the
+   new ones (the Pipelines tab shows them); buckets and object paths stay.
+   The old keys give no access to the new storage.
+3. **Delete old storage** (the storage's menu) is a separate, later step:
+   it copies and checks once more, then deletes the old objects.
+   **Also delete namespace minio** is a separate choice, unticked.
+
+Namespace `minio` counts as the earlier version's storage only when the
+namespace shows the tool made it: it carries the label
+`app.kubernetes.io/managed-by=rhoai-nightly-updater` (2.x set it), or the
+earliest versions created it (no `openshift.io/requester` annotation).
+Otherwise the tab says "Namespace minio is not this tool's", nothing in it
+is read, copied or changed, and you set up the storage from scratch. Check
+with `oc get namespace minio --show-labels`.
+
+`MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` and `MINIO_IMAGE` are no longer
+read; the storage's settings are `SEAWEEDFS_IMAGE`,
+`SEAWEEDFS_ACCESS_KEY_ID` and `SEAWEEDFS_SECRET_ACCESS_KEY`
+([README: Configuration](../README.md#configuration)).
+
+**Pipeline servers named `nightly-dspa`.** 2.x named its pipeline server
+`nightly-dspa`. It keeps working (the dashboard's pipelines pages, the KFP
+SDK, Migrate storage, Delete), but workbench pipelines (Elyra) find only a
+pipeline server named `dspa`, the name 3.0.0 and the dashboard use. The
+Pipelines tab says so and offers **Recreate with the standard name**: it
+checks everything first, then deletes `nightly-dspa` with its database (its
+runs, experiments and imported pipelines are lost; the artifacts in the S3
+storage stay, but no run links to them) and sets up `dspa`. Run Migrate
+storage first: the new server waits for it.
+
+**MLflow.** An MLflow set up by 2.x keeps its 2 GiB memory limit, which
+MLflow's agent and prompt demo runs out of. The MLflow tab's sample data
+says so; adding the demo first removes that limit (the operator's defaults
+apply), MLflow restarts, and you add the demo again once it is ready.
+
+**Models, Playground and MaaS** are new: 2.x set up none of them. These
+notes are only for clusters that ran a pre-release 3.0.0 build (`:main` or
+a commit build):
+
+- *Inference gateway.* The gateway this tool creates now accepts models
+  only from namespaces labelled `rhoai-nightly-updater/inference-routes=true`,
+  which only a cluster-admin can set; the tool never sets it. Before that,
+  a route in any project could take over a model's address and receive its
+  callers' tokens (SECURITY.md, "Route takeover on the inference gateway",
+  just before [Which models are the tool's](../SECURITY.md#which-models-are-the-tools)).
+  A gateway an earlier build created
+  open to every project shows as such, with **Restrict to labelled
+  projects**, which waits until every project whose models use the gateway
+  has the label. A cluster-admin labels a project with:
+
+  ```bash
+  oc label namespace <project> rhoai-nightly-updater/inference-routes=true
+  ```
+
+  A gateway someone else made (RHOAI's install, an admin) is not changed.
+- *Which models are the tool's.* A model is the tool's only when its UID
+  is in the tool's record. A model a pre-release build set up has none and
+  shows as not managed by this tool: unpublish it on the MaaS tab if it is
+  published, delete it with `oc delete llminferenceservice <model> -n <project>`,
+  then set it up again ([RUNBOOK §10.2](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models)).
+- *MaaS.* Publish now routes a published model through the MaaS gateway
+  only. While it is published, its direct address
+  (`inference.<apps domain>/<project>/<model>`) answers 404: use it through
+  MaaS with an API key, or in the dashboard's playground; Unpublish brings
+  the direct address back. A publication by an earlier build shows as
+  **Partly published** (its direct address answered 500): Unpublish, then
+  Publish again ([RUNBOOK §10.4](../RUNBOOK.md#104-maas-models-as-a-service)).
+
+### Rolling back from 3.0.0 to 2.3.x
+
+`make rollback TAG=v2.3.3`, or the v2.3.3 `install.sh` (section 6). Before
+you roll back, remove what 2.x cannot see, or it keeps running with no
+button to remove it: **Clean up everything** on the Overview, with the
+playgrounds, MaaS, the models and the inference gateway ticked (or
+**Remove MaaS** and each tab's Clean up). The inference gateway and the
+MaaS gateway each run a cloud load balancer, which costs money while it
+exists. By hand: the Rollback lines of
+[RUNBOOK §10.2 to §10.4](../RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
+
+What a 2.3.x install then sees (read from the v2.3.3 source, not tried on
+a cluster):
+
+- The **Test resources** page of 2.x: no Models, Playground or MaaS tabs.
+- 2.x reads the S3 storage only in namespace `minio`. Before Migrate
+  storage, nothing changed. After it, the moved pipeline servers keep
+  working on `seaweedfs`, which 2.x neither shows nor deletes. After Delete
+  old storage, 2.x shows no storage, and its Set up would create a second,
+  empty one in `minio`.
+- A pipeline server `dspa` that 3.0.0 set up carries the tool label, so
+  2.x shows it as an earlier version's and can delete it, but its Set up
+  refuses the project until it is deleted.
+- The Roles and RoleBindings only template revision 5 has, in
+  `openshift-ingress` and `openshift-ingress-operator`, stay. If you stay
+  on 2.3.x, delete them:
+  `oc delete role,rolebinding -l app.kubernetes.io/instance=$APP-$NS -n openshift-ingress`,
+  then the same with `-n openshift-ingress-operator`.
 
 ## 6. Roll back
 
@@ -279,11 +448,10 @@ sessions. Check it with `./scripts/smoke-test.sh $NS $APP`: it compares the
 template revision with what the running image expects, and only notes that
 your checkout is a newer revision (verified live on a v1.0.0 install with
 the v2 smoke test: all checks pass).
-It does not undo what the newer version did on the cluster: a SeaweedFS
-migration stays (a 2.x updater reads the storage only in namespace
-`minio`: run 2.x's setup again, or keep 3.x until the old storage is
-removed), and RBAC that only the newer template had stays until
-the next upgrade or `make undeploy`. Roll forward with the newer release's
+It does not undo what the newer version did on the cluster: a storage
+migration stays, and so do the Roles that only the newer template had.
+From 3.0.0 to 2.3.x, read
+[Rolling back from 3.0.0 to 2.3.x](#rolling-back-from-300-to-23x) first. Roll forward with the newer release's
 `install.sh` or `make upgrade` from its checkout. `oc rollout undo` does not
 work: old ReplicaSets are pruned on purpose.
 
@@ -308,7 +476,7 @@ you want.
 
 **The notices in the app.**
 "This updater's deployment is out of date": the Deployment was created from
-an older template than the running image expects; upgrade (sections 3–4).
+an older template than the running image expects; upgrade (sections 3–5).
 "vX.Y.Z is available": a newer release exists; "requires a full redeploy"
 means a new major version, so use its `install.sh` (or check it out and run
 `make upgrade`) rather than changing the image.
