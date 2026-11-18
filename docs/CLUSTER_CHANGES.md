@@ -165,7 +165,7 @@ Versions before 3.0.0 set up the storage in namespace `minio`: MinIO (Deployment
 ### Pipeline server (a project you choose)
 | Action | Objects |
 |---|---|
-| Setup | Only in an existing data science project (a namespace labelled `opendatahub.io/dashboard=true`, made in the dashboard); the tool never creates or changes the project. Secret `nightly-dspa-s3` (the S3 credentials from `seaweedfs-s3-credentials`, labelled); DSPA `nightly-dspa` → `seaweedfs-s3.seaweedfs.svc:8333` (http, region `us-east-1`), bucket `pipelines`. It refuses if the project already has a DSPA |
+| Setup | Only in an existing data science project (a namespace labelled `opendatahub.io/dashboard=true`, made in the dashboard); the tool never creates or changes the project. Secret `nightly-dspa-s3` (the S3 credentials from `seaweedfs-s3-credentials`, labelled); DSPA `nightly-dspa` → `seaweedfs-s3.seaweedfs.svc:8333` (http, region `us-east-1`), bucket `pipelines`, caching on, pipeline definitions in the database (the dashboard's default is `kubernetes`), and, as the dashboard's Configure pipeline server sets them, `apiServer.managedPipelines.enabled: true` and `mlflow: {integrationMode: AUTODETECT, injectUserEnvVars: false}` when the installed CRD declares them (otherwise the operator's defaults, the same values, apply). It refuses if the project already has a DSPA |
 | Teardown | DSPA `nightly-dspa`, or legacy `dspa` if this tool created it, then its Secret (legacy `dashboard-dspa-secret`), by UID. The project is kept |
 
 ### MLflow (cluster-scoped CR `mlflow`, workloads in `redhat-ods-applications`)

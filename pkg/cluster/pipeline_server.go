@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -447,6 +448,33 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	// fieldValidation=Strict (and server-side apply, which always validates
 	// strictly) rejects fields the CRD does not declare, so a manifest that
 	// drifts from the CRD fails instead of being silently pruned.
+	apiServer := map[string]interface{}{
+		"enableSamplePipeline": false,
+		"cacheEnabled":         true,
+		// odh-dashboard's default is "kubernetes" (Pipeline and
+		// PipelineVersion objects; ConfigurePipelinesServerModal.tsx
+		// FORM_DEFAULTS storeYamlInKubernetes: true). The tool keeps its
+		// pipeline definitions in the database, DSPO's own default.
+		"pipelineStore": "database",
+	}
+	spec := map[string]interface{}{
+		"dspVersion": "v2",
+		"objectStorage": map[string]interface{}{
+			"externalStorage": map[string]interface{}{
+				"host":   s3Host(),
+				"scheme": "http",
+				"bucket": s3Bucket,
+				"region": s3Region,
+				"s3CredentialsSecret": map[string]interface{}{
+					"accessKey":  s3AccessKeyField,
+					"secretKey":  s3SecretKeyField,
+					"secretName": dspaSecretName,
+				},
+			},
+		},
+		"apiServer": apiServer,
+	}
+	logs = append(logs, addDashboardDSPASettings(c, spec, apiServer)...)
 	dspa := map[string]interface{}{
 		"apiVersion": dspaAPIGroup,
 		"kind":       "DataSciencePipelinesApplication",
@@ -455,27 +483,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			"namespace": project,
 			"labels":    toolLabels(),
 		},
-		"spec": map[string]interface{}{
-			"dspVersion": "v2",
-			"objectStorage": map[string]interface{}{
-				"externalStorage": map[string]interface{}{
-					"host":   s3Host(),
-					"scheme": "http",
-					"bucket": s3Bucket,
-					"region": s3Region,
-					"s3CredentialsSecret": map[string]interface{}{
-						"accessKey":  s3AccessKeyField,
-						"secretKey":  s3SecretKeyField,
-						"secretName": dspaSecretName,
-					},
-				},
-			},
-			"apiServer": map[string]interface{}{
-				"enableSamplePipeline": false,
-				"cacheEnabled":         true,
-				"pipelineStore":        "database",
-			},
-		},
+		"spec": spec,
 	}
 	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
 	readDSPA := func() (objectMeta, bool, error) {
@@ -718,6 +726,90 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 	}
 	*logs = append(*logs, "OK: Secret deleted")
 	return ""
+}
+
+// dspaCRDName is the DataSciencePipelinesApplication CRD.
+const dspaCRDName = "datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io"
+
+// dspaSpecSchema returns the OpenAPI schema of spec in the served v1 of the
+// installed DSPA CRD. It lists CRDs by name (the cluster-wide list the
+// diagnostics already use), so it needs no rule of its own.
+func dspaSpecSchema(c *Client) (map[string]interface{}, error) {
+	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
+		url.Values{"fieldSelector": {"metadata.name=" + dspaCRDName}})
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Items []struct {
+			Spec struct {
+				Versions []struct {
+					Name   string `json:"name"`
+					Served bool   `json:"served"`
+					Schema struct {
+						OpenAPIV3Schema map[string]interface{} `json:"openAPIV3Schema"`
+					} `json:"schema"`
+				} `json:"versions"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, err
+	}
+	version := strings.TrimPrefix(dspaAPIGroup, "datasciencepipelinesapplications.opendatahub.io/")
+	for _, item := range list.Items {
+		for _, v := range item.Spec.Versions {
+			if v.Name != version || !v.Served {
+				continue
+			}
+			props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]interface{})
+			if spec, ok := props["spec"].(map[string]interface{}); ok {
+				return spec, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("the CRD has no served %s schema", version)
+}
+
+// schemaHasField reports whether an OpenAPI object schema declares the
+// field at path (nested properties).
+func schemaHasField(schema map[string]interface{}, path ...string) bool {
+	node := schema
+	for _, key := range path {
+		props, _ := node["properties"].(map[string]interface{})
+		next, ok := props[key].(map[string]interface{})
+		if !ok {
+			return false
+		}
+		node = next
+	}
+	return true
+}
+
+// addDashboardDSPASettings sets the fields odh-dashboard's Configure
+// pipeline server sends that the tool otherwise leaves to the operator
+// (configurePipelinesServer/utils.ts createDSPipelineResourceSpec with
+// ConfigurePipelinesServerModal.tsx FORM_DEFAULTS, rhoai-3.6):
+// apiServer.managedPipelines.enabled true and mlflow {integrationMode
+// AUTODETECT, injectUserEnvVars false}. Each is set only when the installed
+// CRD declares it (managedPipelines.enabled since DSPO rhoai-3.6, mlflow
+// since rhoai-3.5): the strict write rejects an unknown field, and an
+// omitted one gets the operator's default, which is the same value
+// (api/v1 dspipeline_types.go ManagedPipelinesEnabled, MLflowConfig
+// kubebuilder defaults). It returns log lines.
+func addDashboardDSPASettings(c *Client, spec, apiServer map[string]interface{}) []string {
+	schema, err := dspaSpecSchema(c)
+	if err != nil {
+		slog.Info("cannot read the DSPA CRD; leaving managed pipelines and MLflow to the operator's defaults", "error", err)
+		return []string{fmt.Sprintf("Note: cannot read the DataSciencePipelinesApplication CRD (%v); managed pipelines and the MLflow integration keep the operator's defaults", err)}
+	}
+	if schemaHasField(schema, "apiServer", "managedPipelines", "enabled") {
+		apiServer["managedPipelines"] = map[string]interface{}{"enabled": true}
+	}
+	if schemaHasField(schema, "mlflow", "integrationMode") && schemaHasField(schema, "mlflow", "injectUserEnvVars") {
+		spec["mlflow"] = map[string]interface{}{"integrationMode": "AUTODETECT", "injectUserEnvVars": false}
+	}
+	return nil
 }
 
 // pipelineWriteFailure turns an ensureToolObject error into a message and an

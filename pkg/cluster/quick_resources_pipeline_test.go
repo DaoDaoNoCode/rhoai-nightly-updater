@@ -224,6 +224,67 @@ func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T)
 	}
 }
 
+// putDSPACRD stores the DSPA CRD with the apiServer and mlflow fields of a
+// DSPO release: managedPipelines.enabled (rhoai-3.6 api/v1
+// ManagedPipelinesSpec.Enabled), mlflow (rhoai-3.5 and later MLflowConfig).
+func putDSPACRD(f *resourceFake, managedEnabled, mlflow bool) {
+	managed := `{"type":"object","nullable":true,"properties":{"image":{"type":"string"}}}`
+	if managedEnabled {
+		managed = `{"type":"object","nullable":true,"properties":{"enabled":{"type":"boolean"},"image":{"type":"string"}}}`
+	}
+	spec := `"apiServer":{"type":"object","properties":{"cacheEnabled":{"type":"boolean"},"pipelineStore":{"type":"string"},"managedPipelines":` + managed + `}},"dspVersion":{"type":"string"}`
+	if mlflow {
+		spec += `,"mlflow":{"type":"object","properties":{"integrationMode":{"type":"string","enum":["AUTODETECT","DISABLED"]},"injectUserEnvVars":{"type":"boolean"}}}`
+	}
+	f.putJSON(clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", dspaCRDName),
+		`{"spec":{"versions":[{"name":"v1","served":true,"storage":true,"schema":{"openAPIV3Schema":{"type":"object","properties":{"spec":{"type":"object","properties":{`+spec+`}}}}}}]}}`)
+}
+
+// The DSPA carries the settings odh-dashboard's Configure pipeline server
+// sends (configurePipelinesServer/utils.ts createDSPipelineResourceSpec with
+// ConfigurePipelinesServerModal.tsx FORM_DEFAULTS), each only when the
+// installed CRD declares it: an older operator rejects an unknown field
+// (fieldValidation=Strict), and omitting one gives the operator's default,
+// which is the same value.
+func TestSetupPipelineServer_DashboardSettingsWhenTheCRDHasThem(t *testing.T) {
+	cases := []struct {
+		name                  string
+		crd                   func(f *resourceFake)
+		wantManaged, wantFlow bool
+	}{
+		{"rhoai-3.6 CRD", func(f *resourceFake) { putDSPACRD(f, true, true) }, true, true},
+		{"older CRD without managedPipelines.enabled or mlflow", func(f *resourceFake) { putDSPACRD(f, false, false) }, false, false},
+		{"CRD unreadable", func(f *resourceFake) {
+			f.fail["GET /apis/apiextensions.k8s.io/v1/customresourcedefinitions"] = 403
+		}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putManagedDSC(f)
+			putReadyManagedS3(f)
+			putDSProject(f, "proj")
+			tc.crd(f)
+			if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
+				t.Fatalf("setup failed: %+v", resp)
+			}
+			spec := ensureMap(f.get(dspaPath("proj", dspaName)), "spec")
+			api := ensureMap(spec, "apiServer")
+			if api["pipelineStore"] != "database" || api["cacheEnabled"] != true || api["enableSamplePipeline"] != false {
+				t.Errorf("apiServer = %v", api)
+			}
+			managed, hasManaged := api["managedPipelines"].(map[string]interface{})
+			if hasManaged != tc.wantManaged || (hasManaged && (len(managed) != 1 || managed["enabled"] != true)) {
+				t.Errorf("managedPipelines = %v, want set: %v", api["managedPipelines"], tc.wantManaged)
+			}
+			mlflow, hasFlow := spec["mlflow"].(map[string]interface{})
+			if hasFlow != tc.wantFlow || (hasFlow && (len(mlflow) != 2 || mlflow["integrationMode"] != "AUTODETECT" || mlflow["injectUserEnvVars"] != false)) {
+				t.Errorf("mlflow = %v, want set: %v", spec["mlflow"], tc.wantFlow)
+			}
+		})
+	}
+}
+
 func TestSetupPipelineServer_Refusals(t *testing.T) {
 	cases := []struct {
 		name     string

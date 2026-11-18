@@ -273,7 +273,8 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		if isList {
 			items := []interface{}{}
 			for key, obj := range f.objects {
-				if key.gv == k.gv && key.plural == k.plural && (k.ns == "" || key.ns == k.ns) && matchesSelector(obj, r.URL.Query().Get("labelSelector")) {
+				name, byName := strings.CutPrefix(r.URL.Query().Get("fieldSelector"), "metadata.name=")
+				if key.gv == k.gv && key.plural == k.plural && (k.ns == "" || key.ns == k.ns) && matchesSelector(obj, r.URL.Query().Get("labelSelector")) && (!byName || key.name == name) {
 					items = append(items, obj)
 				}
 			}
