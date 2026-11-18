@@ -356,8 +356,9 @@ only accepts a tag whose version is the top dated section. See
   only and a 15-minute token. SECURITY.md has a new section, "Which token
   is used where", which also explains why a MaaS API key is still minted
   with your token through the MaaS gateway (RHOAI's design).
-- Publish refuses a model whose spec someone other than this tool wrote
-  (an editor could change its image before a cluster-admin publishes it);
+- Publish refuses a model whose spec was changed since this tool set it
+  up (image, model URI, preset, command, environment; an editor could do
+  that before a cluster-admin publishes it);
   MaaS setup and publish refuse a `models-as-a-service` or infrastructure
   namespace a user made with a project request (MaaS adopts it); the MLflow
   and dashboard addresses in copied commands are single-quoted and must be

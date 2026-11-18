@@ -356,6 +356,15 @@ func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
 	if err != nil || plan.Kind != "released" || plan.Image != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || plan.Version != "3.5.3" {
 		t.Fatalf("got %+v, %v", plan, err)
 	}
+	// Someone changed the image (and kept the annotation): it is not kept,
+	// so setting the model up again restores what the tool decides.
+	for _, img := range []string{"quay.io/someone/vllm@sha256:5353", "registry.redhat.io/rhaii/vllm-cpu-rhel9:latest"} {
+		existing.Spec.Template.Containers[0].Image = img
+		plan, err = planModelImage(mc.c, testPresetImage, false, &existing, true)
+		if err != nil || plan.Image == img {
+			t.Fatalf("%s: got %+v, %v", img, plan, err)
+		}
+	}
 }
 
 // The preset's image is missing from the registry: the wait stops at once

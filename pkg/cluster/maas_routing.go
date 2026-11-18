@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 )
 
@@ -116,46 +115,17 @@ func maasOnlyRefs() gatewayRefs {
 // readModelGatewayRefs reads the gateway refs of the tool's model name in
 // project and its resourceVersion.
 func readModelGatewayRefs(c *Client, project, name string) (gatewayRefs, string, error) {
-	refs, meta, err := readModelGatewayRefsMeta(c, project, name)
+	refs, meta, _, err := readModelGatewayRefsSpec(c, project, name)
 	return refs, meta.ResourceVersion, err
 }
 
-// foreignSpecWriters names the field managers other than this tool's that
-// own a field of a model's spec (metadata.managedFields; the status
-// subresource aside), sorted, each once. Anyone who may edit the project
-// can change the tool's model (another image, model URI or preset, an
-// extra container) before a cluster-admin publishes it to every signed-in
-// user; publish then refuses. Re-applying the tool's manifest would not
-// undo it: server-side apply keeps the fields another manager added.
-func foreignSpecWriters(m objectMeta) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, e := range m.ManagedFields {
-		if e.Subresource != "" || e.Manager == toolFieldManager || e.Manager == maasModelManager {
-			continue
-		}
-		if _, ok := e.FieldsV1["f:spec"]; ok && !seen[e.Manager] {
-			seen[e.Manager] = true
-			out = append(out, e.Manager)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// specChangedRefusal says why publish stops on a model whose spec someone
-// else wrote.
-func specChangedRefusal(project, name string, writers []string, after string) string {
-	return fmt.Sprintf("%s in '%s' was changed by someone other than this tool (%s wrote parts of its spec), so it may no longer be the catalog's model and is not published. Delete it on the Models tab and set it up again, then publish. %s", name, project, strings.Join(writers, ", "), after)
-}
-
-// readModelGatewayRefsMeta is readModelGatewayRefs with the model's
-// metadata from the same read.
-func readModelGatewayRefsMeta(c *Client, project, name string) (gatewayRefs, objectMeta, error) {
+// readModelGatewayRefsSpec is readModelGatewayRefs with the model's
+// metadata and its whole spec from the same read.
+func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, objectMeta, map[string]interface{}, error) {
 	path, _ := toolModelPath(project, name)
 	body, _, err := c.get(path)
 	if err != nil {
-		return nil, objectMeta{}, err
+		return nil, objectMeta{}, nil, err
 	}
 	var model struct {
 		Metadata objectMeta `json:"metadata"`
@@ -167,10 +137,16 @@ func readModelGatewayRefsMeta(c *Client, project, name string) (gatewayRefs, obj
 			} `json:"router"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &model); err != nil {
-		return nil, objectMeta{}, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+	var raw struct {
+		Spec map[string]interface{} `json:"spec"`
 	}
-	return model.Spec.Router.Gateway.Refs, model.Metadata, nil
+	if err := json.Unmarshal(body, &model); err != nil {
+		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, objectMeta{}, nil, fmt.Errorf("parse %s in '%s': %w", name, project, err)
+	}
+	return model.Spec.Router.Gateway.Refs, model.Metadata, raw.Spec, nil
 }
 
 // writeModelGatewayRefs writes the whole refs list of the tool's model name
@@ -305,17 +281,17 @@ const maasUseWords = "While it is published, the model is used through MaaS (wit
 // the MaaS gateway alone (through original first when a publication by an
 // earlier build left [MaaS, others]), then it waits for the route and the
 // model. It returns a failure message and code, or "".
-func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModelRefs) (string, string) {
+func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModelRefs, expect modelSpecExpectation) (string, string) {
 	c := m.c
 	m.step("model", "running", "Routing the model through the MaaS gateway alone...")
 	// Checked on the read whose resourceVersion guards the write: a spec
 	// someone else writes after it makes the write fail (409).
-	refs, meta, err := readModelGatewayRefsMeta(c, project, name)
+	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
 	if err != nil {
 		return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
 	}
-	if w := foreignSpecWriters(meta); len(w) > 0 {
-		return specChangedRefusal(project, name, w, "Unpublish to undo what was done."), "conflict"
+	if d := expect.differences(spec); len(d) > 0 {
+		return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
 	}
 	rv := meta.ResourceVersion
 	if refs.hasMaaS() && !refs.maasOnly() {
@@ -330,11 +306,11 @@ func (m *maasRun) routeModelThroughMaaS(project, name string, original maasModel
 		if why != "" {
 			return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
 		}
-		if refs, meta, err = readModelGatewayRefsMeta(c, project, name); err != nil {
+		if refs, meta, spec, err = readModelGatewayRefsSpec(c, project, name); err != nil {
 			return fmt.Sprintf("Cannot read %s in '%s': %v. Unpublish to undo.", name, project, err), errorCodeFromK8sErr(err)
 		}
-		if w := foreignSpecWriters(meta); len(w) > 0 {
-			return specChangedRefusal(project, name, w, "Unpublish to undo what was done."), "conflict"
+		if d := expect.differences(spec); len(d) > 0 {
+			return specChangedRefusal(name, project, d, "Unpublish to undo what was done."), "conflict"
 		}
 		rv = meta.ResourceVersion
 	}

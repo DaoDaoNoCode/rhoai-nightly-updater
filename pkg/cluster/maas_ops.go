@@ -888,8 +888,14 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
 		return m.fail("check", fmt.Sprintf("%s in '%s' is not ready yet. Publish it once it is. Nothing was changed.", name, project), "prerequisites", "model not ready")
 	}
-	if w := foreignSpecWriters(model.Metadata); len(w) > 0 {
-		return m.fail("check", specChangedRefusal(project, name, w, "Nothing was changed."), "conflict", "model spec changed")
+	expect, msg := planModelSpecExpectation(c, name)
+	if msg != "" {
+		return m.fail("check", msg+" Nothing was changed.", "prerequisites", "model spec unknown")
+	}
+	if _, _, spec, err := readModelGatewayRefsSpec(c, project, name); err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
+	} else if d := expect.differences(spec); len(d) > 0 {
+		return m.fail("check", specChangedRefusal(name, project, d, "Nothing was changed."), "conflict", "model spec changed")
 	}
 	ref, refFound, err := readMaaSModelRef(c, project, name)
 	if err != nil {
@@ -987,7 +993,7 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	} else {
 		m.step("gateway", "success", "The gateway someone else made admits the project.")
 	}
-	if msg, code := m.routeModelThroughMaaS(project, name, original); msg != "" {
+	if msg, code := m.routeModelThroughMaaS(project, name, original, expect); msg != "" {
 		return m.fail("model", msg, code, "model routing failed")
 	}
 	if err := stripModelGenAI(c, project, name); err != nil {
