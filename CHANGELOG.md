@@ -232,10 +232,12 @@ only accepts a tag whose version is the top dated section. See
   read.
 - **Migrate storage** moves the storage an earlier version set up in
   namespace `minio` (MinIO, or SeaweedFS behind the MinIO-era names) to
-  namespace `seaweedfs`, with its data: it sets up the new storage with the
-  same keys, copies every bucket and object with an rclone Job and checks
+  namespace `seaweedfs`, with its data: it sets up the new storage with new
+  keys, copies every bucket and object with an rclone Job and checks
   each byte (any difference stops it), and moves the pipeline servers this
-  tool created, waiting until each reaches the new storage. The old
+  tool created to the new storage and its keys, waiting until each reaches
+  it. Anything else that used the old keys needs the new ones, which the
+  Pipelines tab shows. The old
   storage is removed only in a separate, confirmed last step, after a
   checklist for references the tool did not create; deleting namespace
   `minio` (and everything in it) is a separate, unticked choice, offered

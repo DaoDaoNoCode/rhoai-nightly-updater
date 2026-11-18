@@ -45,11 +45,11 @@ const MigratePlan: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
           {legacy.server ?? "The storage"} in namespace <code>{legacy.namespace}</code> holds the data of earlier versions of this tool. Migrate storage moves it to namespace <code>{S3_NAMESPACE}</code>:
         </Content>
         <List component="ol">
-          <ListItem>Sets up the storage in <code>{S3_NAMESPACE}</code> with the same access key and secret key.</ListItem>
+          <ListItem>Sets up the storage in <code>{S3_NAMESPACE}</code> with new keys: a new access key and secret key. The old keys do not work on it.</ListItem>
           <ListItem>Copies every bucket (empty ones too) and every object with its metadata with Job <code>seaweedfs-migrate</code>, and checks each object byte for byte and that every bucket is there. The run reports how many objects and bytes it copied; any difference stops it here, with nothing else changed. Bucket policies, versioning and lifecycle rules are not carried over: set them again on the new storage if you used them.</ListItem>
           <ListItem>
             {repoint.length > 0
-              ? <>Moves the pipeline server{repoint.length > 1 ? "s" : ""} this tool created to the new storage, one at a time, and waits until each reaches it: {codes(repoint)}.</>
+              ? <>Moves the pipeline server{repoint.length > 1 ? "s" : ""} this tool created to the new storage and its keys, one at a time, and waits until each reaches it: {codes(repoint)}.</>
               : <>No pipeline server of this tool uses the old storage, so none is moved.</>}
           </ListItem>
         </List>
@@ -69,6 +69,9 @@ const MigratePlan: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
         </StackItem>
       )}
       <StackItem>
+        <Content component="p">Anything else that uses the old keys, such as your own S3 clients, needs the new ones: the S3 storage on the Pipelines tab shows them after the migration.</Content>
+      </StackItem>
+      <StackItem>
         <Content component="p">Each pipeline server it moves restarts on the new storage; the others keep running. How long the copy takes depends on how much data there is. The old storage is kept: you delete it later, from the S3 storage&apos;s menu, once nothing else uses it.</Content>
       </StackItem>
     </Stack>
@@ -87,7 +90,7 @@ const RemovePlan: React.FC<{ legacy: LegacyStorageState; deleteNamespace: boolea
         <Content component="p">Update anything this tool did not create that still uses the old storage, such as data connections, workbenches and other pipeline servers:</Content>
         <List>
           <ListItem>Endpoint: <code>{S3_ENDPOINT}</code> instead of <code>http://{legacy.endpoint}</code>.</ListItem>
-          <ListItem>The access key and the secret key are the same.</ListItem>
+          <ListItem>Access key and secret key: the new ones, shown under S3 storage on the Pipelines tab. The old keys do not work on the new storage.</ListItem>
           <ListItem>Bucket names and object paths are the same (pipeline artifacts stay in <code>pipelines</code>).</ListItem>
           <ListItem>Anything that still uses <code>{legacy.endpoint.split(":")[0]}</code> stops working after this step.</ListItem>
         </List>

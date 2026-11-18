@@ -306,6 +306,30 @@ func TestSetupS3Storage_RefusesNamespaceItDidNotCreate(t *testing.T) {
 	}
 }
 
+// While an earlier version's storage exists, Set up refuses and points to
+// Migrate storage. That gives the new storage new keys (the old ones reach
+// only the copy Job), so the message must say so and where to find them.
+func TestSetupS3Storage_RefusesWhileEarlierStorageExistsAndSaysTheKeysAreNew(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putLegacySeaweedFS(f)
+	resp, _ := SetupS3Storage(c)
+	if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "Use Migrate storage") {
+		t.Fatalf("setup = %+v", resp)
+	}
+	for _, want := range []string{"with new keys", "moves the pipeline servers this tool set up to the new storage and its keys", "Anything else that uses the old keys", "the new keys from the Pipelines tab", "Nothing was changed"} {
+		if !strings.Contains(resp.Message, want) {
+			t.Errorf("message lacks %q: %s", want, resp.Message)
+		}
+	}
+	if strings.Contains(resp.Message, "same keys") || strings.Contains(resp.Message, "then removes the old storage") {
+		t.Errorf("message says the keys stay or that the old storage is removed: %s", resp.Message)
+	}
+	if m := f.mutations(); len(m) != 0 {
+		t.Errorf("refusal wrote %v", m)
+	}
+}
+
 func TestSetupS3Storage_TerminatingNamespace(t *testing.T) {
 	fastS3Timings(t)
 	f, c := newResourceFake(t)

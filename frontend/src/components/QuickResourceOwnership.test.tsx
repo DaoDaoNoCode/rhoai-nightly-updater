@@ -441,6 +441,26 @@ describe("storage from an earlier version", () => {
     expect(within(storage).getByText(/Migrate storage creates it, with new keys/)).toBeInTheDocument();
   });
 
+  it("the Migrate storage and Delete old storage dialogs say the keys are new and where to find them", async () => {
+    setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
+    const { unmount } = renderAt();
+    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    const migrate = await screen.findByRole("dialog", { name: "Migrate storage" });
+    expect(migrate).toHaveTextContent("Sets up the storage in seaweedfs with new keys: a new access key and secret key. The old keys do not work on it.");
+    expect(migrate).toHaveTextContent("to the new storage and its keys");
+    expect(migrate).toHaveTextContent("Anything else that uses the old keys, such as your own S3 clients, needs the new ones: the S3 storage on the Pipelines tab shows them after the migration.");
+    expect(migrate).not.toHaveTextContent(/same (access )?key|keys are the same/);
+    unmount();
+
+    const removable: LegacyStorageState = { ...legacy, stage: "remove", repoint: [], notMoved: [], usedBy: [], namespaceDeletable: true, namespaceKeptReason: undefined };
+    setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: removable, pipelineServers: [] }));
+    renderAt("/test-resources?tab=pipelines&project=fresh");
+    fireEvent.click((await menuItem("S3 storage", /Delete old storage/))!);
+    const remove = await screen.findByRole("dialog", { name: /Delete the old storage\?/ });
+    expect(remove).toHaveTextContent("Access key and secret key: the new ones, shown under S3 storage on the Pipelines tab. The old keys do not work on the new storage.");
+    expect(remove).not.toHaveTextContent(/same (access )?key|keys are the same/);
+  });
+
   it("reads Needs attention with Migrate storage, and names the old objects only in its collapsed section", async () => {
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     renderAt();

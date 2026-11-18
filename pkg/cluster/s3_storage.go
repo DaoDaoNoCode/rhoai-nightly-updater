@@ -1068,7 +1068,7 @@ func legacyStorageSetupBlock(l *legacyStorage) string {
 	if l == nil {
 		return ""
 	}
-	return fmt.Sprintf("Storage from an earlier version of this tool is still in namespace '%s'. Use Migrate storage: it sets up the storage in namespace '%s' with the same keys, copies every object, moves the pipeline servers and then removes the old storage.", legacyNamespace, s3Namespace)
+	return fmt.Sprintf("Storage from an earlier version of this tool is still in namespace '%s'. Use Migrate storage: it sets up the storage in namespace '%s' with new keys, copies every object and moves the pipeline servers this tool set up to the new storage and its keys. Anything else that uses the old keys, such as your own S3 clients, then needs the new keys from the Pipelines tab.", legacyNamespace, s3Namespace)
 }
 
 // SetupS3Storage deploys the S3 storage (SeaweedFS) with a bucket for
