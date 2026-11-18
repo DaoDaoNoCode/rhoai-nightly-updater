@@ -36,6 +36,13 @@ func TestDashboardBaseURL(t *testing.T) {
 			f.putJSON(dashboardsPath+"/default-dashboard", `{"status":{"url":"http://rh-ai.apps.example.com/"}}`)
 		}, ""},
 		{"neither: unknown", func(f *resourceFake) {}, ""},
+		// The address goes into the Playground tab's command (snippetURL).
+		{"a status.url with shell characters is not used", func(f *resourceFake) {
+			f.putJSON(dashboardsPath+"/default-dashboard", `{"status":{"url":"https://rh-ai.apps.example.com/$(id)"}}`)
+		}, ""},
+		{"a Route host with shell characters is not used", func(f *resourceFake) {
+			f.putJSON(dashboardRoutePath, `{"spec":{"host":"x.example.com;id"}}`)
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

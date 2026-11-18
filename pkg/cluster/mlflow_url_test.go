@@ -10,6 +10,10 @@ func TestMLflowUIURL(t *testing.T) {
 		{"no CR URL: the Route (older releases)", "", "mlflow-redhat-ods-applications.apps.example.com", "https://mlflow-redhat-ods-applications.apps.example.com"},
 		{"non-https CR URL is not used", "http://mlflow.redhat-ods-applications.svc:8443", "", ""},
 		{"neither", "", "", ""},
+		// Addresses go into commands users paste into a shell (snippetURL).
+		{"a CR URL with shell characters is not used", "https://rh-ai.apps.example.com/$(id)", "", ""},
+		{"a CR URL with a quote is not used", "https://rh-ai.apps.example.com/a'b", "", ""},
+		{"a Route host with shell characters is not used", "", "x.example.com`id`", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := mlflowUIURL(tc.statusURL, tc.route); got != tc.want {

@@ -25,7 +25,7 @@ func dashboardBaseURL(c *Client) string {
 	if u := dashboardURLFromComponent(c); u != "" {
 		return u
 	}
-	if host := routeHost(c, dashboardNamespace, "rhods-dashboard"); host != "" {
+	if host := routeHost(c, dashboardNamespace, "rhods-dashboard"); host != "" && snippetURL("https://"+host) {
 		return "https://" + host
 	}
 	return ""
@@ -74,5 +74,10 @@ func httpsBaseURL(raw string) string {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
 		return ""
 	}
-	return strings.TrimSuffix(raw, "/")
+	// It goes into the Playground tab's command too: a plain https
+	// address only (snippetURL).
+	if s := strings.TrimSuffix(raw, "/"); snippetURL(s) {
+		return s
+	}
+	return ""
 }

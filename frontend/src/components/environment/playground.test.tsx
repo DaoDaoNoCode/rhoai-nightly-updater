@@ -83,7 +83,9 @@ describe("Playground clean-up and steps", () => {
   it("the chat request uses the user's own token and the plain model name", () => {
     const curl = playgroundCurl("https://rh-ai.apps.example.com/", "dev", "qwen25-05b-instruct", "namespace");
     expect(curl).toContain("TOKEN=$(oc whoami -t)");
-    expect(curl).toContain('"https://rh-ai.apps.example.com/gen-ai/api/v1/lsd/responses?namespace=dev"');
+    // The dashboard's address comes from the cluster: single-quoted.
+    expect(curl).toContain("curl -s -X POST 'https://rh-ai.apps.example.com/gen-ai/api/v1/lsd/responses?namespace=dev' \\\n");
+    expect(playgroundCurl("https://x.example.com/$(id)'", "dev", "m", "namespace")).toContain(`'https://x.example.com/$(id)'\\''/gen-ai/`);
     expect(curl).toContain('"model":"qwen25-05b-instruct","model_source_type":"namespace"');
   });
 });

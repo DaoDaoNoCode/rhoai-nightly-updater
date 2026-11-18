@@ -91,7 +91,7 @@ export function mlflowWorkspaceHref(url: string, project: string | null): string
 /** The environment that points an MLflow client at a project's workspace (MLFLOW_WORKSPACE becomes the X-MLflow-Workspace header). */
 export function mlflowClientEnv(url: string, project: string): string {
   return [
-    `export MLFLOW_TRACKING_URI=${url.replace(/\/+$/, "")}`,
+    `export MLFLOW_TRACKING_URI=${shellQuote(url.replace(/\/+$/, ""))}`,
     "export MLFLOW_TRACKING_TOKEN=$(oc whoami -t)",
     `export MLFLOW_WORKSPACE=${project}`,
   ].join("\n");

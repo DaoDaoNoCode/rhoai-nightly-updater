@@ -77,7 +77,7 @@ export function playgroundCurl(dashboardUrl: string, project: string, model: str
   const body = JSON.stringify({ model, model_source_type: source, input: "Say hello in one sentence.", stream: false });
   return [
     "TOKEN=$(oc whoami -t)",
-    `curl -s -X POST "${base}/gen-ai/api/v1/lsd/responses?namespace=${encodeURIComponent(project)}" \\`,
+    `curl -s -X POST ${shellQuote(`${base}/gen-ai/api/v1/lsd/responses?namespace=${encodeURIComponent(project)}`)} \\`,
     `  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\`,
     `  -d ${shellQuote(body)}`,
   ].join("\n");

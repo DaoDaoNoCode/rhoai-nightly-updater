@@ -180,7 +180,8 @@ describe("health and ownership are separate", () => {
     const use = await screen.findByRole("region", { name: "Use it" });
     expect(use).toHaveTextContent("a project is an MLflow workspace");
     expect(within(use).getByRole("link", { name: /Open juntao-test in MLflow/ })).toHaveAttribute("href", "https://mlflow.apps.example.com/#/experiments?workspace=juntao-test");
-    expect(use).toHaveTextContent("export MLFLOW_TRACKING_URI=https://mlflow.apps.example.com");
+    // The address comes from the cluster: single-quoted for the shell.
+    expect(use).toHaveTextContent("export MLFLOW_TRACKING_URI='https://mlflow.apps.example.com'");
     expect(use).toHaveTextContent("export MLFLOW_TRACKING_TOKEN=$(oc whoami -t)");
     expect(use).toHaveTextContent("export MLFLOW_WORKSPACE=juntao-test");
     // The PR deploy is a developer's tool: in its own collapsed section.

@@ -78,11 +78,17 @@ type mlflowCR struct {
 
 // mlflowUIURL is MLflow's public address: the CR's status.url when it is an
 // https URL, else the Route named "mlflow" (releases before the gateway).
+//
+// The address goes into the client settings users paste into a shell, so
+// only a plain https address (snippetURL) is used.
 func mlflowUIURL(statusURL, routeHost string) string {
 	if u, err := url.Parse(strings.TrimSpace(statusURL)); err == nil && u.Scheme == "https" && u.Host != "" {
-		return strings.TrimRight(u.String(), "/")
+		if s := strings.TrimRight(u.String(), "/"); snippetURL(s) {
+			return s
+		}
+		return ""
 	}
-	if routeHost != "" {
+	if routeHost != "" && snippetURL("https://"+routeHost) {
 		return "https://" + routeHost
 	}
 	return ""
