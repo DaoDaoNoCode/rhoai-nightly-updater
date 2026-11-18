@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   ActionListItem,
   Alert,
@@ -13,31 +13,31 @@ import {
   FormHelperText,
   HelperText,
   HelperTextItem,
+  MenuToggle,
+  type MenuToggleElement,
+  Select,
+  SelectList,
+  SelectOption,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
+import type { CatalogModel, InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
 import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type ModelsPending, type Pending, ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
 import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
-import { notManaged } from "./resourceStatus";
+import { envStatusText, notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
-import { type Busy, type FeatureState, dashboardProjectHref, gatewayStatus, modelIn, modelStatus } from "./featureState";
-
-/** The catalog's model (pkg/cluster modelCatalog), for the words before the status has loaded. */
-export const MODEL_NAME = "qwen25-05b-instruct";
-export const MODEL_DISPLAY = "Qwen2.5 0.5B Instruct";
+import { type Busy, type FeatureState, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, shortModelName } from "./featureState";
 
 /** "6Gi" as "6 GiB". */
 const gib = (q: string) => q.replace(/^(\d+(?:\.\d+)?)Gi$/, "$1 GiB");
 
-/** What the catalog's model needs on a worker, from the status (pkg/cluster modelCatalog). */
-export const modelNeeds = (status: ResourcesStatus | null | undefined): string => {
-  const c = status?.models?.catalog?.[0];
-  return c ? `${c.cpu} CPUs and ${gib(c.memoryRequest)} of memory (up to ${gib(c.memory)})` : "4 CPUs and several GiB of memory";
-};
+/** What a catalog model reserves on a worker. */
+export const modelNeeds = (c: CatalogModel | undefined): string =>
+  c ? `${c.cpu} CPUs and ${gib(c.memoryRequest)} of memory (up to ${gib(c.memory)})` : "several CPUs and GiB of memory";
+
 /** The inference gateway's objects (pkg/cluster inference_gateway.go). */
 const GATEWAY = "openshift-ai-inference";
 const GATEWAY_NS = "openshift-ingress";
@@ -50,7 +50,10 @@ export interface ModelsTabProps {
   onProject: (project: string) => void;
   onClearProject: () => void;
   missingProject: string | null;
-  /** modelsState for the project: the same as the Overview's. */
+  /** The catalog name of the model the tab shows. */
+  model: string;
+  onModel: (model: string) => void;
+  /** modelsState for the project and model. */
   state: FeatureState;
   busy: Busy;
   baseReason: string | null;
@@ -63,14 +66,48 @@ export interface ModelsTabProps {
 
 const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByTool === true;
 
-/** Commands that call the model with the user's own OpenShift token. */
+const TOKEN = "TOKEN=$(oc whoami -t)";
+const auth = `-H "Authorization: Bearer $TOKEN"`;
+
+/** Commands that call a chat model with the user's own OpenShift token. Catalog names need no shell quoting. */
 export function modelCurl(url: string, model: string): string {
   const base = url.replace(/\/+$/, "");
   return [
-    "TOKEN=$(oc whoami -t)",
-    `curl -s -H "Authorization: Bearer $TOKEN" ${base}/v1/models`,
-    `curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
+    TOKEN,
+    `curl -s ${auth} ${base}/v1/models`,
+    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`,
+  ].join("\n");
+}
+
+/** A chat request that turns the model's reasoning (thinking) on for this request only. */
+export function thinkingCurl(url: string, model: string): string {
+  const base = url.replace(/\/+$/, "");
+  return [
+    TOKEN,
+    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
+    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":512,"chat_template_kwargs":{"enable_thinking":true}}'`,
+  ].join("\n");
+}
+
+/** A tool-calling request: the model answers with tool_calls when a tool fits. */
+export function toolCurl(url: string, model: string): string {
+  const base = url.replace(/\/+$/, "");
+  const tool = `{"type":"function","function":{"name":"get_weather","description":"Current weather in a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}`;
+  return [
+    TOKEN,
+    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
+    `  -d '{"model":"${model}","messages":[{"role":"user","content":"What is the weather in Brno?"}],"tools":[${tool}],"max_tokens":256}'`,
+  ].join("\n");
+}
+
+/** Commands that ask an embedding model for a vector. */
+export function embeddingCurl(url: string, model: string): string {
+  const base = url.replace(/\/+$/, "");
+  return [
+    TOKEN,
+    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/embeddings \\`,
+    `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`,
   ].join("\n");
 }
 
@@ -149,33 +186,82 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
   );
 };
 
-/** The model in the selected project, or a placeholder until a project is chosen. */
-const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason, readOnly, setPending }) => {
+/** One line about a catalog model: what it is and what it reserves. */
+export function modelOptionWords(c: CatalogModel): string {
+  return `${modelTypeWords(c)}. For: ${c.useCase}. Reserves ${modelNeeds(c)}. Downloads about ${c.downloadSize}.`;
+}
+
+/**
+ * The model picker: PatternFly's single Select, each option with what the
+ * model is, what it is for, what it reserves and its download, its state
+ * in the project, and, when it cannot be set up now, why.
+ */
+export const ModelPicker: React.FC<{ status: ResourcesStatus; project: string | null; selected: string; onSelect: (name: string) => void; busy: Busy }> = ({ status, project, selected, onSelect, busy }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const catalog = status.models?.catalog ?? [];
+  const current = catalogModel(status, selected);
+  const toggle = (ref: React.Ref<MenuToggleElement>) => (
+    <MenuToggle ref={ref} id="models-model" isExpanded={isOpen} isFullWidth onClick={() => setIsOpen(!isOpen)} aria-label="Model">
+      {current?.displayName ?? selected}
+    </MenuToggle>
+  );
+  return (
+    <Select id="models-model-select" isOpen={isOpen} selected={selected} toggle={toggle} shouldFocusToggleOnSelect
+      onOpenChange={setIsOpen} onSelect={(_e, v) => { if (typeof v === "string") onSelect(v); setIsOpen(false); }}>
+      <SelectList aria-label="Models this tool can set up">
+        {catalog.map((c) => {
+          const reason = modelOptionReason(status, project, c.name);
+          const here = project ? modelIn(status, project, c.name) : undefined;
+          const state = project && here ? ` In ${project}: ${envStatusText(modelStatus(status, project, busy, c.name))}.` : "";
+          return (
+            <SelectOption key={c.name} value={c.name} isDisabled={!!reason}
+              description={reason ? `${modelOptionWords(c)} ${reason}` : `${modelOptionWords(c)}${state}`}>
+              {c.displayName}
+            </SelectOption>
+          );
+        })}
+      </SelectList>
+    </Select>
+  );
+};
+
+/** What the model is, in a sentence for the part. */
+function modelPurpose(c: CatalogModel | undefined): string {
+  if (!c) return "A model served by vLLM on CPU.";
+  if (c.type === "embedding") return `An embedding model: it turns text into vectors of ${c.embeddingDimension ?? "fixed"} numbers, for semantic search and retrieval. It cannot chat.`;
+  if (c.toolCalling) return "A chat model that can call tools you describe in a request. Its reasoning (thinking) is off unless a request turns it on.";
+  return c.useCase.includes("smoke") ? "A very small chat model, to check quickly that model serving works. Its answers are simple." : "A small chat model.";
+}
+
+/** The chosen model in the selected project, or a placeholder until a project is chosen. */
+const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, busy, baseReason, readOnly, setPending }) => {
+  const c = catalogModel(status, name);
+  const title = c?.displayName ?? name;
   if (!project) {
     return (
-      <PartItem id="model" title="Model" scope="In the project you choose" status="not-set-up" unmanaged={false}>
-        <Content component="p">Choose a project above to see its model, or to set one up there.</Content>
+      <PartItem id="model" title={title} scope="In the project you choose" status="not-set-up" unmanaged={false}>
+        <Content component="p">Choose a project above to see this model there, or to set it up.</Content>
       </PartItem>
     );
   }
-  const model = modelIn(status, project);
+  const model = modelIn(status, project, name);
   const unmanaged = notManaged(model);
   const managed = !!model && model.managedByTool !== false;
   const href = dashboardProjectHref(status.dashboardUrl, project);
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(model)
-    ? [{ key: "delete", label: "Delete model...", onClick: () => setPending({ kind: "teardown-model", project }), disabledReason: baseReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete model...", onClick: () => setPending({ kind: "teardown-model", project, model: name }), disabledReason: baseReason ?? null, isDanger: true }]
     : [];
-  const useReleased = () => setPending({ kind: "setup-models", gateway: false, project, releasedImage: true });
-  const s = modelStatus(status, project, busy);
+  const useReleased = () => setPending({ kind: "setup-models", gateway: false, project, model: name, releasedImage: true });
+  const s = modelStatus(status, project, busy, name);
   return (
-    <PartItem id="model" title={model?.displayName || `${MODEL_DISPLAY} (CPU)`} scope={`In project ${project}`} status={s} unmanaged={unmanaged}
+    <PartItem id="model" title={model?.displayName || title} scope={`In project ${project}`} status={s} unmanaged={unmanaged}
       actions={model?.ready && href && !isTerminating(model) ? <ActionListItem><ExternalLink href={href}>Open {project} in the dashboard</ExternalLink></ActionListItem> : undefined}
       menu={menu}>
       {unmanaged
         ? <Content component="p">A model named <code>{model?.name}</code> was created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
         : model
-          ? <Content component="p">A small chat model, served by vLLM on CPU ({modelNeeds(status)}) in {project}. The dashboard lists it with the project&apos;s deployments, and its Gen AI playground can chat with it.</Content>
-          : <Content component="p">Not set up in {project} yet. Set up deploys {MODEL_DISPLAY} on CPU: it needs {modelNeeds(status)} on one worker, and takes 3 to 5 minutes the first time.</Content>}
+          ? <Content component="p">{modelPurpose(c)} Served by vLLM on CPU ({modelNeeds(c)}) in {project}. The dashboard lists it with the project&apos;s deployments{c?.type === "embedding" ? "." : ", and its Gen AI playground can chat with it."}</Content>
+          : <Content component="p">{modelPurpose(c)} Not set up in {project} yet: it needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time.</Content>}
       {model?.presetImageMissing && managed && (
         <Alert variant="danger" isInline component="div" title="The cluster preset's image is not published yet"
           actionLinks={!readOnly && !baseReason ? <AlertActionLink onClick={useReleased}>Use the newest released Red Hat image</AlertActionLink> : undefined}>
@@ -188,59 +274,95 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, busy, baseReason
       )}
       {model && !model.presetImageMissing && <ProblemAlerts kind="model" state={model} />}
       {model && s === "setting-up" && !terminalReason(model) && !isTerminating(model) && <StartingNote state={model} typical="3 to 5 minutes the first time" />}
-      {model && (
-        <DescriptionList isCompact isHorizontal aria-label="Model details">
+      <DescriptionList isCompact isHorizontal aria-label="Model details">
+        <DescriptionListGroup>
+          <DescriptionListTerm>Name</DescriptionListTerm>
+          <DescriptionListDescription><code>{model?.name ?? name}</code></DescriptionListDescription>
+        </DescriptionListGroup>
+        {c && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Model</DescriptionListTerm>
-            <DescriptionListDescription><code>{model.name}</code></DescriptionListDescription>
+            <DescriptionListTerm>Type</DescriptionListTerm>
+            <DescriptionListDescription>{modelTypeWords(c)}</DescriptionListDescription>
           </DescriptionListGroup>
-          {model.url && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>Address</DescriptionListTerm>
-              <DescriptionListDescription>
-                <ImageRef image={model.url} what="model address" isCode={false} />
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
-          {managed && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>Runtime image</DescriptionListTerm>
-              <DescriptionListDescription>
-                <Stack>
-                  <StackItem>{imageWords(model)}</StackItem>
-                  {model.currentImage && <StackItem><ImageRef image={model.currentImage} what="runtime image" /></StackItem>}
-                </Stack>
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
-          {managed && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>Hardware profile</DescriptionListTerm>
-              <DescriptionListDescription>
-                {model.hardwareProfile
-                  ? <><code>{model.hardwareProfile}</code>, as the dashboard shows it</>
-                  : "None: no profile on this cluster allows the model's CPUs and memory, so the dashboard shows \"No hardware profile\""}
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
-          {managed && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>Token authentication</DescriptionListTerm>
-              <DescriptionListDescription>
-                On: every caller uses their own OpenShift token, so the dashboard lists no tokens for this model.
-                If you edit it in the dashboard, add a token there before you save: saving it without one turns authentication off.
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
-        </DescriptionList>
-      )}
+        )}
+        {c && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>For</DescriptionListTerm>
+            <DescriptionListDescription>{c.useCase}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {c && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Reserves</DescriptionListTerm>
+            <DescriptionListDescription>{modelNeeds(c)}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {c && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>From</DescriptionListTerm>
+            <DescriptionListDescription>
+              <Stack>
+                <StackItem><ImageRef image={c.uri} what="model source" isCode /></StackItem>
+                <StackItem><Content component="small">Hugging Face, pinned to one commit; about {c.downloadSize} downloaded</Content></StackItem>
+              </Stack>
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {c && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>vLLM options</DescriptionListTerm>
+            <DescriptionListDescription><code>{c.args}</code></DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {model?.url && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Address</DescriptionListTerm>
+            <DescriptionListDescription>
+              <ImageRef image={model.url} what="model address" isCode={false} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {managed && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Runtime image</DescriptionListTerm>
+            <DescriptionListDescription>
+              <Stack>
+                <StackItem>{imageWords(model)}</StackItem>
+                {model.currentImage && <StackItem><ImageRef image={model.currentImage} what="runtime image" /></StackItem>}
+              </Stack>
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {managed && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Hardware profile</DescriptionListTerm>
+            <DescriptionListDescription>
+              {model.hardwareProfile
+                ? <><code>{model.hardwareProfile}</code>, as the dashboard shows it</>
+                : "None: no profile on this cluster allows the model's CPUs and memory, so the dashboard shows \"No hardware profile\""}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {managed && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Token authentication</DescriptionListTerm>
+            <DescriptionListDescription>
+              On: every caller uses their own OpenShift token, so the dashboard lists no tokens for this model.
+              If you edit it in the dashboard, add a token there before you save: saving it without one turns authentication off.
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+      </DescriptionList>
     </PartItem>
   );
 };
 
-/** How to call a ready model: its address, curl with the user's own token, the dashboard. */
-const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: string }> = ({ model, project, dashboardUrl }) => {
+/** How to call a ready model: its address, curl with the user's own token (by its type), the dashboard. */
+export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; project: string; dashboardUrl?: string }> = ({ model, catalog: c, project, dashboardUrl }) => {
   const href = dashboardProjectHref(dashboardUrl, project);
+  const name = model.name!;
+  const url = model.url!;
+  const embedding = c?.type === "embedding";
   return (
     <TabSection title="Use it" id="models-use">
       <DescriptionList aria-label="How to use the model">
@@ -249,22 +371,54 @@ const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: st
           <DescriptionListDescription>
             <Stack hasGutter>
               <StackItem><Content component="p">The model speaks the OpenAI API. Call it with your own OpenShift token: anyone who can see {project} can, and no extra account or key is made.</Content></StackItem>
-              <StackItem><CopyableCode id="models-curl" label="the commands" code={modelCurl(model.url!, model.name ?? MODEL_NAME)} /></StackItem>
+              <StackItem><CopyableCode id="models-curl" label="the commands" code={embedding ? embeddingCurl(url, name) : modelCurl(url, name)} /></StackItem>
+              {embedding && <StackItem><Content component="p">The answer holds one vector of {c?.embeddingDimension ?? "fixed"} numbers per input text, under <code>data[].embedding</code>. Inputs longer than 512 tokens are refused.</Content></StackItem>}
             </Stack>
           </DescriptionListDescription>
         </DescriptionListGroup>
+        {c?.toolCalling && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Tool calling</DescriptionListTerm>
+            <DescriptionListDescription>
+              <Stack hasGutter>
+                <StackItem><Content component="p">Describe your tools in the request&apos;s <code>tools</code>; when one fits, the answer has <code>tool_calls</code> instead of text. Your program runs the tool and sends the result back in a <code>tool</code> message.</Content></StackItem>
+                <StackItem><CopyableCode id="models-tools-curl" label="the tool-calling command" code={toolCurl(url, name)} /></StackItem>
+              </Stack>
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {c?.toolCalling && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Reasoning</DescriptionListTerm>
+            <DescriptionListDescription>
+              <Stack hasGutter>
+                <StackItem><Content component="p">Thinking is off by default, so answers come quickly. To turn it on for one request, add <code>{`"chat_template_kwargs": {"enable_thinking": true}`}</code>; the reasoning then comes in <code>reasoning_content</code>, apart from the answer.</Content></StackItem>
+                <StackItem><CopyableCode id="models-thinking-curl" label="the command with thinking on" code={thinkingCurl(url, name)} /></StackItem>
+              </Stack>
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
         {href && (
           <DescriptionListGroup>
             <DescriptionListTerm>In the dashboard</DescriptionListTerm>
             <DescriptionListDescription>
-              <Content component="p">Open {project} in the dashboard to see the model with the project&apos;s deployments. In Gen AI studio, the model is listed under AI assets, where you can try it in the playground.</Content>
+              <Content component="p">
+                Open {project} in the dashboard to see the model with the project&apos;s deployments.
+                {embedding
+                  ? " In Gen AI studio it is listed under AI assets; the Playground tab here adds it to the playground as an embedding model."
+                  : " In Gen AI studio, the model is listed under AI assets, where you can try it in the playground."}
+              </Content>
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
       </DescriptionList>
-      <WhatNext id="models-next" items={[
+      <WhatNext id="models-next" items={embedding ? [
+        <>Copy the commands above and run them: they ask the model for the vector of one sentence.</>,
+        <>Point an OpenAI client&apos;s embeddings call at the address, with your token as the API key and <code>{name}</code> as the model.</>,
+        <>Set up the playground on the Playground tab: it adds this model for searching your documents.</>,
+      ] : [
         <>Copy the commands above and run them: the first lists the model, the second asks it to say hello.</>,
-        <>Point an OpenAI client at the address, with your token as the API key and <code>{model.name ?? MODEL_NAME}</code> as the model.</>,
+        <>Point an OpenAI client at the address, with your token as the API key and <code>{name}</code> as the model.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
       ]} />
     </TabSection>
@@ -273,23 +427,23 @@ const UseModel: React.FC<{ model: ModelState; project: string; dashboardUrl?: st
 
 /**
  * The Models tab: what it needs (model serving turned on, a project), the
- * inference gateway (cluster) and the selected project's model, each with
- * its health, actions and details; Set up for what is missing; how to call
- * a ready model; what it creates; and Clean up.
+ * model to show, the inference gateway (cluster) and that model in the
+ * selected project, each with its health, actions and details; Set up for
+ * what is missing; how to call a ready model; what it creates; and Clean
+ * up.
  */
 export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
-  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, baseReason, readOnly, onSetUp, onCleanup } = props;
+  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, model: name, onModel, state, baseReason, readOnly, onSetUp, onCleanup, busy } = props;
   const models = status.models;
-  const model = project ? modelIn(status, project) : undefined;
+  const c = catalogModel(status, name);
+  const model = project ? modelIn(status, project, name) : undefined;
   const next = state.next;
   const noProjects = projectsLoaded && projects.length === 0;
   const toolModels = (models?.items ?? []).filter((m) => m.managedByTool !== false);
   const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
-  // Only before the project has the model: once it does, its own pod holds the room the check counts, and the model's state says why it waits.
-  const capacity = models?.capacityWarning && project && !model?.deployed ? models.capacityWarning : null;
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Models" purpose="Serve a small chat model on CPU in a project, and call it with your OpenShift token or from the dashboard's Gen AI playground." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="Models" purpose="Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with your OpenShift token or from the dashboard's Gen AI playground." state={state} /></StackItem>
       {models?.blocked && <StackItem><ComponentAlert feature="Model serving" block={models.blocked} /></StackItem>}
       {!models?.blocked && models?.presetProblem && (
         <StackItem>
@@ -309,7 +463,13 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
           <FormGroup label="Project" fieldId="models-project">
             <ProjectSelect id="models-project" projects={projects} selected={project} onSelect={onProject} onClear={onClearProject} />
             <FormHelperText>
-              <HelperText><HelperTextItem>Data science projects (made in the RHOAI dashboard). Each can have its own model.</HelperTextItem></HelperText>
+              <HelperText><HelperTextItem>Data science projects (made in the RHOAI dashboard). Each can have several of these models.</HelperTextItem></HelperText>
+            </FormHelperText>
+          </FormGroup>
+          <FormGroup label="Model" fieldId="models-model">
+            <ModelPicker status={status} project={project} selected={name} onSelect={onModel} busy={busy} />
+            <FormHelperText>
+              <HelperText><HelperTextItem>{c ? modelOptionWords(c) : "The models this tool can set up."}</HelperTextItem></HelperText>
             </FormHelperText>
           </FormGroup>
         </Form>
@@ -320,22 +480,17 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
           <ModelPart {...props} />
         </PartList>
       </StackItem>
-      {capacity && (
-        <StackItem>
-          <Alert variant="warning" isInline component="p" title="The model may not fit on a worker">{capacity}</Alert>
-        </StackItem>
-      )}
       {next?.kind === "set-up" && (
         <StackItem>
           <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
         </StackItem>
       )}
-      {project && model?.ready && model.url && !isTerminating(model) && <StackItem><UseModel model={model} project={project} dashboardUrl={status.dashboardUrl} /></StackItem>}
+      {project && model?.ready && model.url && !isTerminating(model) && <StackItem><UseModel model={model} catalog={c} project={project} dashboardUrl={status.dashboardUrl} /></StackItem>}
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
             <>On the cluster, unless one exists: GatewayClass <code>{GATEWAY}</code>, and in namespace <code>{GATEWAY_NS}</code> ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> (hostname <code>inference.&lt;apps domain&gt;</code>). OpenShift adds a cloud load balancer and a DNS record for it; RHOAI adds its AuthPolicy once a model uses it</>,
-            <>In the project: LLMInferenceService <code>{MODEL_NAME}</code> ({MODEL_DISPLAY}, from Hugging Face), on the cluster&apos;s CPU preset{models?.preset ? <> <code>{models.preset}</code></> : null}. KServe adds its Deployment, Service and route</>,
+            <>In the project, for each model you set up: an LLMInferenceService of the model&apos;s name (here <code>{name}</code>), downloaded from Hugging Face, on the cluster&apos;s CPU preset{models?.preset ? <> <code>{models.preset}</code></> : null}. KServe adds its Deployment, Service and route</>,
             <>No ServiceAccount, role or token is made: you call the model with your own OpenShift token</>,
           ]} />
         </FeatureSection>
@@ -343,7 +498,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
       {!readOnly && anythingToClean && (
         <StackItem>
           <CleanupSection id="models-cleanup" label="Clean up Models..." onClick={onCleanup} reason={baseReason}
-            text="Deletes what this tool created for Models: the models in every project, then the inference gateway and its load balancer. You choose what goes, then it runs as one operation." />
+            text="Deletes what this tool created for Models: every model in every project, then the inference gateway and its load balancer. You choose what goes, then it runs as one operation." />
         </StackItem>
       )}
     </Stack>
@@ -357,10 +512,10 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check what every part needs" },
         ...(p.gateway ? [{ id: "gateway", title: "Create the inference gateway" }, { id: "gateway-ready", title: "Wait for the gateway and its load balancer" }] : []),
-        ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch the model in ${p.project} to the released image` : `Create the model in ${p.project}` }, { id: "model-ready", title: "Wait until the model answers" }] : []),
+        ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch ${p.model} in ${p.project} to the released image` : `Create ${p.model} in ${p.project}` }, { id: "model-ready", title: "Wait until the model answers" }] : []),
       ];
     case "teardown-model":
-      return [{ id: "model", title: `Delete the model in ${p.project}` }];
+      return [{ id: "model", title: `Delete ${p.model} in ${p.project}` }];
     case "teardown-gateway":
       return [{ id: "gateway", title: "Delete the inference gateway" }];
   }
@@ -370,23 +525,24 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
 export function modelsConfirm(pending: Pending, status: ResourcesStatus | null): ConfirmSpec | null {
   switch (pending.kind) {
     case "setup-models": {
-      const { gateway, project, releasedImage } = pending;
-      const capacity = status?.models?.capacityWarning;
+      const { gateway, project, releasedImage, model: name } = pending;
+      const c = catalogModel(status, name);
+      const short = shortModelName(status, name);
       const reason = status?.models?.imagePlanReason;
       if (releasedImage && project) {
         return {
-          title: `Use the newest released Red Hat image in ${project}?`, confirm: "Use the released image", runTitle: `Use the released image in ${project}`,
+          title: `Use the newest released Red Hat image for ${short} in ${project}?`, confirm: "Use the released image", runTitle: `Use the released image for ${short} in ${project}`,
           summary: <Content component="p">The model restarts on the newest released Red Hat vLLM CPU image, looked up in Red Hat&apos;s container catalog and pinned by digest. It takes 3 to 5 minutes.</Content>,
-          changes: [<>LLMInferenceService <code>{MODEL_NAME}</code> in <code>{project}</code>: the main container&apos;s image is set to that image, and its version is recorded on the model. Nothing else changes.</>],
+          changes: [<>LLMInferenceService <code>{name}</code> in <code>{project}</code>: the main container&apos;s image is set to that image, and its version is recorded on the model. Nothing else changes.</>],
         };
       }
-      const title = gateway && project ? `Set up Models in ${project}` : gateway ? "Set up the inference gateway" : `Set up the model in ${project}`;
+      const title = gateway && project ? `Set up Models in ${project}` : gateway ? "Set up the inference gateway" : `Set up ${short} in ${project}`;
       return {
         title: `${title}?`, confirm: "Set up", runTitle: title,
         summary: (
           <Stack hasGutter>
             {gateway && <StackItem><Content component="p">On the cluster: the inference gateway, the front door to models. It creates a cloud load balancer, which costs money while it exists.</Content></StackItem>}
-            {project && <StackItem><Content component="p">In {project}: {MODEL_DISPLAY} on CPU. It needs {modelNeeds(status)} on one worker, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
+            {project && <StackItem><Content component="p">In {project}: {c?.displayName ?? name}, {c ? modelTypeWords(c).toLowerCase() : "a model"}. It needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
           </Stack>
         ),
         changes: [
@@ -395,23 +551,24 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
             <>In namespace <code>{GATEWAY_NS}</code>: ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> with two HTTPS listeners: <code>inference.&lt;apps domain&gt;</code> on the cluster&apos;s default certificate, and the gateway&apos;s in-cluster name. OpenShift adds a load balancer and a DNS record.</>,
           ] : []),
           ...(project ? [
-            <>Project <code>{project}</code>: LLMInferenceService <code>{MODEL_NAME}</code> ({MODEL_DISPLAY} from Hugging Face), labelled for the dashboard and its Gen AI studio, on the CPU preset{status?.models?.preset ? <> <code>{status.models.preset}</code></> : null}. KServe adds its Deployment, Service and route.</>,
+            <>Project <code>{project}</code>: LLMInferenceService <code>{name}</code> ({c?.displayName ?? name} from Hugging Face), labelled for the dashboard and its Gen AI studio, on the CPU preset{status?.models?.preset ? <> <code>{status.models.preset}</code></> : null}. KServe adds its Deployment, Service and route. Other models in the project are not changed.</>,
             <>Runtime image: {status?.models?.imagePlan === "released" ? "the newest released Red Hat vLLM CPU image, pinned by digest" : status?.models?.imagePlan === "override" ? "the image VLLM_CPU_IMAGE names" : "the preset's own Red Hat vLLM CPU image"}.{reason ? ` ${reason}` : ""}</>,
           ] : []),
           <>No ServiceAccount, role or token is made.</>,
         ],
-        extra: project && capacity ? <Alert component="p" variant="warning" isInline title="The model may not fit on a worker">{capacity}</Alert> : undefined,
       };
     }
-    case "teardown-model":
+    case "teardown-model": {
+      const short = shortModelName(status, pending.model);
       return {
-        title: `Delete the model in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete the model in ${pending.project}`,
-        summary: <Content component="p">Deletes the model in {pending.project}. The project, the inference gateway and everything else in the project stay. Set up brings it back (it is downloaded again).</Content>,
+        title: `Delete ${short} in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete ${short} in ${pending.project}`,
+        summary: <Content component="p">Deletes {short} in {pending.project}. The project, its other models, the inference gateway and everything else in the project stay. Set up brings it back (it is downloaded again).</Content>,
         changes: [
-          <>Project <code>{pending.project}</code>: LLMInferenceService <code>{MODEL_NAME}</code> is deleted; KServe then removes its Deployment, Service and route.</>,
+          <>Project <code>{pending.project}</code>: LLMInferenceService <code>{pending.model}</code> is deleted; KServe then removes its Deployment, Service and route.</>,
           <>A model of that name this tool did not create is kept.</>,
         ],
       };
+    }
     case "teardown-gateway":
       return {
         title: "Delete the inference gateway?", confirm: "Delete", danger: true, runTitle: "Delete the inference gateway",

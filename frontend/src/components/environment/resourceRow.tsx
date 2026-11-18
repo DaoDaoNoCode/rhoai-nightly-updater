@@ -211,8 +211,9 @@ export type Pending =
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
-  | { kind: "setup-models"; gateway: boolean; project: string | null; releasedImage?: boolean }
-  | { kind: "teardown-model"; project: string }
+  /** model: the catalog name of the model in project. */
+  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean }
+  | { kind: "teardown-model"; project: string; model: string }
   | { kind: "teardown-gateway" }
   /** The Gen AI playground in a project, through the dashboard's API (one streamed operation). */
   | { kind: "setup-playground"; project: string; models?: PlaygroundModelRef[] }
@@ -220,8 +221,8 @@ export type Pending =
   /** Models as a Service: the platform, or this tool's model in a project (one streamed operation). */
   | { kind: "setup-maas" }
   | { kind: "teardown-maas" }
-  | { kind: "publish-maas"; project: string }
-  | { kind: "unpublish-maas"; project: string };
+  | { kind: "publish-maas"; project: string; model: string }
+  | { kind: "unpublish-maas"; project: string; model: string };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;

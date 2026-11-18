@@ -790,13 +790,31 @@ export interface InferenceGatewayState extends ResourceState {
 
 /** A model the Models feature sets up (pkg/cluster modelCatalog). */
 export interface CatalogModel {
+  /** The LLMInferenceService's name, and the model name callers send. */
   name: string;
   displayName: string;
+  /** The Hugging Face repository, pinned to a commit (hf://<org>/<repo>:<commit>). */
   uri: string;
   cpu: string;
   /** What the scheduler reserves; memory is the limit. */
   memoryRequest: string;
   memory: string;
+  type: "chat" | "embedding";
+  /** A chat model served with tool calling turned on. */
+  toolCalling?: boolean;
+  /** An embedding model's vector size. */
+  embeddingDimension?: number;
+  /** What it is for ("Chat, Tool calling, Reasoning"). */
+  useCase: string;
+  description: string;
+  /** The vLLM arguments it is served with. */
+  args: string;
+  /** Roughly what is downloaded ("270 MB"). */
+  downloadSize: string;
+  /** The model a request that names none sets up. */
+  default?: boolean;
+  /** No worker seems to have room for it now. */
+  capacityWarning?: string;
 }
 
 /** One model of the catalog in a project (namespace, name). */
@@ -825,8 +843,6 @@ export interface ModelsStatus {
   /** The image a new model would run; absent: unknown. */
   imagePlan?: "preset" | "released" | "override";
   imagePlanReason?: string;
-  /** No worker seems to have room for a model (a warning, never a block). */
-  capacityWarning?: string;
   catalog: CatalogModel[] | null;
   items?: ModelState[] | null;
 }
@@ -1031,6 +1047,8 @@ export interface PlaygroundModel {
   ready: boolean;
   /** False for an embedding model. */
   chat: boolean;
+  /** Set for this tool's embedding model: Set up adds it as an embedding model of this dimension. */
+  embeddingDimension?: number;
 }
 
 export interface PlaygroundModelRef {
@@ -1087,4 +1105,6 @@ export interface MaaSStatus {
 export interface MaaSRequest {
   action: "setup" | "teardown" | "publish" | "unpublish";
   project?: string;
+  /** The catalog name of the chat model to publish or unpublish; absent: the default. */
+  model?: string;
 }

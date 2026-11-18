@@ -1,4 +1,4 @@
-import type { MaaSPart, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
+import type { CatalogModel, MaaSPart, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 
@@ -29,6 +29,8 @@ export interface Busy {
 export interface MaaSOp {
   action: "setup" | "teardown" | "publish" | "unpublish";
   project: string | null;
+  /** The model a publish or unpublish is about. */
+  model?: string | null;
 }
 
 /** What a running Playground operation changes. */
@@ -42,6 +44,8 @@ export interface ModelsOp {
   action: "setup" | "teardown";
   gateway: boolean;
   project: string | null;
+  /** The catalog name of the model in project. */
+  model?: string | null;
 }
 
 export const IDLE: Busy = { resAction: null, actionProject: null, migrating: false, models: null };
@@ -279,32 +283,87 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
 
 // --- Models: the inference gateway (cluster) and a model (project) --------------------
 
-const modelsBusy = (busy: Busy, part: "gateway" | "model", project?: string): "setting-up" | "deleting" | null => {
+const modelsBusy = (busy: Busy, part: "gateway" | "model", project?: string, model?: string): "setting-up" | "deleting" | null => {
   const op = busy.models;
-  if (!op || (part === "gateway" ? !op.gateway : op.project !== project)) return null;
+  if (!op || (part === "gateway" ? !op.gateway : op.project !== project || (!!model && !!op.model && op.model !== model))) return null;
   return op.action === "setup" ? "setting-up" : "deleting";
 };
+
+/** The default catalog name, before the status has loaded (pkg/cluster modelCatalog). */
+export const DEFAULT_MODEL = "qwen25-05b-instruct";
+
+/** The catalog's model of that name, or undefined. */
+export function catalogModel(status: ResourcesStatus | null | undefined, name: string): CatalogModel | undefined {
+  return (status?.models?.catalog ?? []).find((c) => c.name === name);
+}
+
+/** A display name without its "(CPU, ...)" note, for buttons and titles. */
+export function shortModelName(status: ResourcesStatus | null | undefined, name: string): string {
+  const c = catalogModel(status, name);
+  return c ? c.displayName.replace(/\s*\([^)]*\)\s*$/, "") : name;
+}
+
+/** What a catalog model is, in words: "Chat", "Chat, tool calling", "Embedding (768 dimensions)". */
+export function modelTypeWords(c: CatalogModel): string {
+  if (c.type === "embedding") return c.embeddingDimension ? `Embedding (${c.embeddingDimension} dimensions)` : "Embedding";
+  return c.toolCalling ? "Chat, tool calling" : "Chat";
+}
+
+/**
+ * Why a catalog model cannot be set up in the project now, or null: no
+ * worker has room for it. A model the project already has is never
+ * blocked (setting it up again replaces its own pod).
+ */
+export function modelOptionReason(status: ResourcesStatus | null, project: string | null, name: string): string | null {
+  const c = catalogModel(status, name);
+  if (!c?.capacityWarning) return null;
+  if (project && modelIn(status, project, name)?.deployed) return null;
+  return `No room for it now. ${c.capacityWarning}`;
+}
 
 export function gatewayStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
   return envStatus(status?.inferenceGateway, { busy: modelsBusy(busy, "gateway") });
 }
 
-/** The project's model: this tool's, else one of the same name someone else made. */
-export function modelIn(status: ResourcesStatus | null, project: string): ModelState | undefined {
-  const items = (status?.models?.items ?? []).filter((m) => m.namespace === project);
+/**
+ * The project's catalog model of that name: this tool's, else one of the
+ * same name someone else made. Without a name: any of the project's
+ * catalog models (this tool's first).
+ */
+export function modelIn(status: ResourcesStatus | null, project: string, name?: string): ModelState | undefined {
+  const items = (status?.models?.items ?? []).filter((m) => m.namespace === project && (!name || m.name === name));
   return items.find((m) => m.managedByTool !== false) ?? items[0];
 }
 
-export function modelStatus(status: ResourcesStatus | null, project: string, busy: Busy): EnvStatus {
-  return envStatus(modelIn(status, project), { busy: modelsBusy(busy, "model", project) });
+/** The catalog names of the models in the project, in the catalog's order. */
+export function modelNamesIn(status: ResourcesStatus | null, project: string): string[] {
+  const names = new Set((status?.models?.items ?? []).filter((m) => m.namespace === project).map((m) => m.name!));
+  const order = (status?.models?.catalog ?? []).map((c) => c.name);
+  return [...names].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
 
-/** The parts of Models in a project, in dependency order. */
-export function modelsParts(status: ResourcesStatus | null, project: string, busy: Busy): PartState[] {
+export function modelStatus(status: ResourcesStatus | null, project: string, busy: Busy, name: string = DEFAULT_MODEL): EnvStatus {
+  return envStatus(modelIn(status, project, name), { busy: modelsBusy(busy, "model", project, name) });
+}
+
+/** The parts of Models in a project for one model, in dependency order. */
+export function modelsParts(status: ResourcesStatus | null, project: string, busy: Busy, name: string = DEFAULT_MODEL): PartState[] {
   return [
     { id: "gateway", status: gatewayStatus(status, busy), unmanaged: notManaged(status?.inferenceGateway) },
-    { id: "model", status: modelStatus(status, project, busy), unmanaged: notManaged(modelIn(status, project)) },
+    { id: "model", status: modelStatus(status, project, busy, name), unmanaged: notManaged(modelIn(status, project, name)) },
   ];
+}
+
+/**
+ * The model the Models tab shows: the URL's (a catalog name); else the
+ * project's first model, preferring a ready one; else the catalog's
+ * default.
+ */
+export function defaultModelName(status: ResourcesStatus | null, project: string | null, fromUrl: string | null): string {
+  const catalog = status?.models?.catalog ?? [];
+  if (fromUrl && (catalog.length === 0 || catalog.some((c) => c.name === fromUrl))) return fromUrl;
+  const present = project ? modelNamesIn(status, project) : [];
+  return present.find((n) => modelIn(status, project!, n)?.ready) ?? present[0] ?? catalog.find((c) => c.default)?.name ?? DEFAULT_MODEL;
 }
 
 /** Why no model can be set up on this cluster, or null (unknown is not a reason). */
@@ -326,8 +385,23 @@ export function defaultModelsProject(status: ResourcesStatus | null, projects: s
   return withModels.find((p) => modelIn(status, p)?.ready) ?? withModels[0] ?? null;
 }
 
-function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy): FeatureState {
-  const parts = modelsParts(status, project, busy);
+/**
+ * Models in a project: for one model (the tab), or, without one, the
+ * project's models together (the Overview): a problem first, then ready,
+ * then anything moving.
+ */
+function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, name?: string): FeatureState {
+  if (!name) {
+    const names = modelNamesIn(status, project);
+    const running = busy.models?.project === project && busy.models.model ? busy.models.model : null;
+    if (running && !names.includes(running)) names.push(running);
+    if (names.length === 0) return modelsIn(status, project, busy, defaultModelName(status, project, null));
+    const states = names.map((n) => modelsIn(status, project, busy, n));
+    return states.find((s) => PROBLEM.includes(s.status)) ?? states.find((s) => MOVING.includes(s.status))
+      ?? states.find((s) => s.status === "ready") ?? states[0];
+  }
+  const short = shortModelName(status, name);
+  const parts = modelsParts(status, project, busy, name);
   const [gateway, model] = parts;
   const problem = parts.find((p) => PROBLEM.includes(p.status));
   if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}${problem.unmanaged ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: problem.id }, project };
@@ -342,24 +416,25 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy): 
     return { status: moving.status === "deleting" ? "deleting" : "setting-up", label: moving.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
   }
   const needGateway = gateway.status === "not-set-up";
-  const setup: Pending[] = [{ kind: "setup-models", gateway: needGateway, project }];
+  const setup: Pending[] = [{ kind: "setup-models", gateway: needGateway, project, model: name }];
   let reason: string | null = modelsBlockedReason(status);
   if (!reason && moving) reason = `The ${moving.id === "gateway" ? "inference gateway" : "model"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is done.`;
   if (!reason && needGateway && status?.inferenceGateway?.setupBlockedReason) reason = status.inferenceGateway.setupBlockedReason;
+  if (!reason) reason = modelOptionReason(status, project, name);
   return {
     status: moving ? "setting-up" : "not-set-up",
     label: moving ? `Setting up in ${project}` : `Not set up in ${project}`,
-    next: { kind: "set-up", label: needGateway ? `Set up Models in ${project}` : `Set up the model in ${project}`, setup, reason },
+    next: { kind: "set-up", label: needGateway ? `Set up Models in ${project}` : `Set up ${short} in ${project}`, setup, reason },
     project,
   };
 }
 
 /**
- * Models: in a project (the tab), or summarised across the projects (the
- * Overview), as pipelinesState does.
+ * Models: in a project, for one model when named (the tab), or summarised
+ * across the projects (the Overview), as pipelinesState does.
  */
-export function modelsState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE): FeatureState {
-  if (project) return modelsIn(status, project, busy);
+export function modelsState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE, model?: string): FeatureState {
+  if (project) return modelsIn(status, project, busy, model);
   const gateway = gatewayStatus(status, busy);
   if (PROBLEM.includes(gateway)) {
     return { status: gateway, label: `${envStatusText(gateway)}${notManaged(status?.inferenceGateway) ? NOT_MANAGED : ""}`, next: { kind: "show-issue", part: "gateway" }, project: defaultModelsProject(status, projects, null) };
@@ -384,9 +459,19 @@ export function playgroundChatModels(pg: PlaygroundStatus | null, project: strin
   return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && m.chat) : [];
 }
 
-/** What Set up uses by default, as the dashboard's dialog: the project's own ready chat models (MaaS only when chosen). */
+/** The ready models Set up can add: chat models, and this tool's embedding models (their dimension is known). */
+export function playgroundUsableModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && (m.chat || !!m.embeddingDimension)) : [];
+}
+
+/** Ready embedding models of the project this tool did not set up: Set up cannot add them (their dimension is unknown). */
+export function playgroundOtherEmbeddingModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && !m.chat && !m.embeddingDimension && m.source === "namespace") : [];
+}
+
+/** What Set up uses by default: the project's own ready chat models, and this tool's ready embedding models (MaaS only when chosen). */
 export function defaultPlaygroundModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
-  return playgroundChatModels(pg, project).filter((m) => m.source === "namespace");
+  return playgroundUsableModels(pg, project).filter((m) => m.source === "namespace");
 }
 
 /** Models deployed for Gen AI in the project that are not ready: Set up leaves them out (the dashboard's install checks only the models it is given). */

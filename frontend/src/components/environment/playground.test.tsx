@@ -101,8 +101,8 @@ describe("Playground tab", () => {
       ),
     });
     renderAt("/test-resources?tab=playground&project=dev");
-    const models = await screen.findByRole("listitem", { name: "Chat models" });
-    const table = within(models).getByRole("grid", { name: "Chat models" });
+    const models = await screen.findByRole("listitem", { name: "Models" });
+    const table = within(models).getByRole("grid", { name: "Models the playground can use" });
     expect(within(table).getByText("Qwen2.5 0.5B Instruct (CPU)")).toBeInTheDocument();
     expect(within(table).getByRole("checkbox", { name: "Select row 0" })).toBeChecked();
     expect(within(table).getByRole("checkbox", { name: "Select row 1" })).not.toBeChecked();
@@ -113,6 +113,31 @@ describe("Playground tab", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
     await screen.findByRole("dialog", { name: "Set up the playground in dev" });
     expect(api.bodies["POST /api/resources/playground/stream"]).toEqual([{ action: "setup", project: "dev", models: [{ name: "qwen25-05b-instruct", source: "namespace" }] }]);
+  });
+
+  it("this tool's embedding model is added as one; another embedding model is explained, not added", async () => {
+    const granite: PlaygroundModel = { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", source: "namespace", status: "Running", ready: true, chat: false, embeddingDimension: 768 };
+    const theirs: PlaygroundModel = { name: "bge-small", source: "namespace", status: "Running", ready: true, chat: false };
+    const api = stubApi({
+      "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/playground": pg({ models: [qwen, granite, theirs] }),
+      "POST /api/resources/playground/stream": sse({ step: "operation_complete", status: "success", message: "done" }),
+    });
+    renderAt("/test-resources?tab=playground&project=dev");
+    const table = await screen.findByRole("grid", { name: "Models the playground can use" });
+    expect(within(table).getByText("Embedding (768 dimensions), for searching documents")).toBeInTheDocument();
+    expect(within(table).getByRole("checkbox", { name: "Select row 1" })).toBeChecked();
+    expect(within(table).queryByText("bge-small")).toBeNull();
+    const hint = screen.getByText(/Set up here does not add bge-small/);
+    expect(hint).toHaveTextContent("choose Embedding as its type, and enter its embedding dimension");
+    // A chat model is needed: the embedding model alone is not enough.
+    fireEvent.click(within(table).getByRole("checkbox", { name: "Select row 0" }));
+    expect(screen.getByRole("button", { name: "Set up the playground in dev" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(within(table).getByRole("checkbox", { name: "Select row 0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set up the playground in dev" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: /Set up the playground in dev\?/ })).getByRole("button", { name: "Set up" }));
+    await screen.findByRole("dialog", { name: "Set up the playground in dev" });
+    expect(api.bodies["POST /api/resources/playground/stream"]).toEqual([{ action: "setup", project: "dev", models: [{ name: "qwen25-05b-instruct", source: "namespace" }, { name: "granite-embedding-125m-english", source: "namespace" }] }]);
   });
 
   it("no ready chat model: Set up is disabled and points at the Models tab", async () => {

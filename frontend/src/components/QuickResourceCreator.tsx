@@ -67,6 +67,7 @@ import {
   type FeatureState,
   type NextStep,
   defaultModelsProject,
+  defaultModelName,
   defaultProject,
   mlflowState,
   modelsState,
@@ -346,8 +347,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     if (run.run?.running) return;
     const spec = modelsConfirm(p, resStatus);
     const op: ModelsOp = p.kind === "setup-models"
-      ? { action: "setup", gateway: p.gateway, project: p.project }
-      : p.kind === "teardown-model" ? { action: "teardown", gateway: false, project: p.project } : { action: "teardown", gateway: true, project: null };
+      ? { action: "setup", gateway: p.gateway, project: p.project, model: p.project ? p.model : null }
+      : p.kind === "teardown-model" ? { action: "teardown", gateway: false, project: p.project, model: p.model } : { action: "teardown", gateway: true, project: null, model: null };
     setPending(null);
     setSampleRun(null);
     setRunOpen(true);
@@ -365,6 +366,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       action: op.action,
       ...(op.gateway ? { gateway: true } : {}),
       ...(op.project ? { project: op.project } : {}),
+      ...(op.project && op.model ? { model: op.model } : {}),
       ...(p.kind === "setup-models" && p.releasedImage ? { releasedImage: true } : {}),
     }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
@@ -399,21 +401,22 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     const spec = maasConfirm(p, maas);
     const action = p.kind === "setup-maas" ? "setup" : p.kind === "teardown-maas" ? "teardown" : p.kind === "publish-maas" ? "publish" : "unpublish";
     const project = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.project : null;
+    const model = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.model : null;
     setPending(null);
     setSampleRun(null);
     setModelsRun(null);
     setPlaygroundRun(null);
     setRunOpen(true);
     trackFeature(p.kind);
-    setMaaSOp({ action, project });
-    setMaaSRun({ action, project });
+    setMaaSOp({ action, project, model });
+    setMaaSRun({ action, project, model });
     setRunFeature("maas");
     const end = () => {
       setMaaSOp(null);
       setMaaSRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS({ action, ...(project ? { project } : {}) },
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS({ action, ...(project ? { project } : {}), ...(model ? { model } : {}) },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "setup" || action === "publish" ? "setup" : "delete");
   };
@@ -585,11 +588,22 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   });
   const workspaceOptions: ProjectOption[] = projectNames.map((name) => ({ name }));
   const modelOptions: ProjectOption[] = projectNames.map((name) => {
-    const m = (resStatus?.models?.items ?? []).find((i) => i.namespace === name);
-    return { name, description: m ? `Model: ${m.ready ? "Ready" : m.terminating ? "Deleting" : "Not ready"}${m.managedByTool === false ? " · not managed by this tool" : ""}` : undefined };
+    const here = (resStatus?.models?.items ?? []).filter((i) => i.namespace === name);
+    const ready = here.filter((m) => m.ready).length;
+    const words = here.length === 0 ? undefined : here.length === 1
+      ? `Model: ${here[0].name} ${here[0].ready ? "ready" : here[0].terminating ? "deleting" : "not ready"}${here[0].managedByTool === false ? " · not managed by this tool" : ""}`
+      : `Models: ${here.length}, ${ready} ready`;
+    return { name, description: words };
   });
   // The Models tab's own default: the first project with a model, preferring a ready one.
   const modelsProject = missingProject ? null : searchParams.has("project") ? urlProject : defaultModelsProject(resStatus, projectNames, null);
+  // The Models tab's model: the URL's (model=<catalog name>), else the project's first, else the default.
+  const modelsModel = defaultModelName(resStatus, modelsProject, searchParams.get("model"));
+  const chooseModel = (name: string) => setSearchParams((params) => {
+    const next = new URLSearchParams(params);
+    next.set("model", name);
+    return next;
+  });
 
   // After an explicit clear the tab says so instead of the cross-project
   // summary, which names a project the picker no longer shows.
@@ -601,7 +615,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const mlflowNow = mlflowState(resStatus, busy);
   const models: FeatureState = cleared
     ? { status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null }
-    : modelsState(resStatus, modelsProject, projectNames, busy);
+    : modelsState(resStatus, modelsProject, projectNames, busy, modelsModel);
   const modelsSummary = modelsState(resStatus, null, projectNames, busy);
   const playgroundProject = missingProject ? null : playgroundProjectParam;
   const playgroundNow: FeatureState = cleared
@@ -647,7 +661,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
     ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowWorkspaceHref(mlflow.uiRoute, sampleRun.project) }
     : null;
-  const modelsNext = modelsRun?.project ? modelsState(resStatus, modelsRun.project, projectNames, busy).next : null;
+  const modelsNext = modelsRun?.project ? modelsState(resStatus, modelsRun.project, projectNames, busy, modelsRun.model ?? undefined).next : null;
   const playgroundNext = playgroundRun ? playgroundState(resStatus, pg, playgroundRun.project, busy).next : null;
   const maasNext = runFeature === "maas" && maasNow.next?.kind === "open" ? maasNow.next : null;
   const runNext: NextStep | null = run.run?.kind === "setup"
@@ -655,7 +669,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     : runFeature === "samples" ? sampleNext : null;
   const whatNext = run.run?.kind === "setup" && runFeature === "maas"
     ? <Content component="p">{maasRun?.action === "publish"
-      ? `On the MaaS tab, Use it mints an API key (shown once) and calls ${maasRun.project ? `the model in ${maasRun.project}` : "the model"} with it. The dashboard's Models as a Service pages list it with its subscription.`
+      ? `On the MaaS tab, Use it mints an API key (shown once) and calls ${maasRun.project ? `${maasRun.model ?? "the model"} in ${maasRun.project}` : "the model"} with it. The dashboard's Models as a Service pages list it with its subscription.`
       : "On the MaaS tab, publish a model to offer it through MaaS: callers then use an API key instead of their OpenShift token, within the subscription's token limits."}</Content>
     : run.run?.kind === "setup" && runFeature === "playground"
     ? <Content component="p">{`Open the playground in ${playgroundRun?.project}, choose a model and ask it something. On the Playground tab, Use it also has a chat request to run from a terminal.`}</Content>
@@ -751,6 +765,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                 {tab === "models" && (
                   <ModelsTab status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
                     onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                    model={modelsModel} onModel={chooseModel}
                     state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                     setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")} />
                 )}
