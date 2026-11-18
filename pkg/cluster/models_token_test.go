@@ -62,13 +62,15 @@ func TestModelsSetup_MakesTheDashboardsTokenAuthentication(t *testing.T) {
 	if len(st.Models.Items) != 1 || st.Models.Items[0].TokenSecret != "default-name-qwen25-05b-instruct-sa" || st.Models.Items[0].TokenServiceAccount != "qwen25-05b-instruct-sa" {
 		t.Errorf("status %+v", st.Models.Items)
 	}
-	// The Secret is never read: only a dry-run delete with its UID checks it.
+	// The setup checks the Secret with a dry-run delete carrying its UID;
+	// only "Can it be called?" reads it, by its name, for the model's own
+	// token (models_call.go). No other Secret is read.
 	mc.f.requests = nil
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"}); !res.Success {
 		t.Fatalf("setup again: %+v", res)
 	}
 	for _, r := range mc.f.requests {
-		if strings.HasPrefix(r, "GET ") && strings.Contains(r, "/secrets/") {
+		if strings.HasPrefix(r, "GET ") && strings.Contains(r, "/secrets/") && r != "GET /api/v1/namespaces/proj/secrets/default-name-qwen25-05b-instruct-sa" {
 			t.Errorf("a Secret was read: %s", r)
 		}
 		if strings.HasPrefix(r, "POST ") && strings.Contains(r, "/proj/") && !strings.Contains(r, "llminferenceservices") {

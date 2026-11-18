@@ -16,7 +16,70 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
-## [3.0.1] - unreleased
+## [4.0.0] - unreleased
+
+- **Requires a full redeploy** (template revision 6; 3.0.0 has revision 5):
+  `git checkout v4.0.0 && make upgrade`, or the release's `install.sh`.
+
+### Added
+
+- **Set up what a feature needs on the cluster, from its tab (backend).**
+  `GET /api/resources/prerequisites` reports, per feature, the parts it
+  needs on the cluster, every change Set up would make, and why it cannot;
+  `POST /api/resources/prerequisites/stream` makes them, after a check and
+  a server-side dry run of every write. Pipelines: `aipipelines` Managed.
+  MLflow: `mlflowoperator`. Playground: `ogx` and `dashboard`. Models:
+  `kserve`, then the cert-manager Operator for Red Hat OpenShift as
+  odh-gitops installs it (`cert-manager-operator`, `redhat-operators`,
+  default channel, no AWS role ARN), then a wait until KServe sees it.
+  Connectivity Link, which KServe also checks for, is reported, not
+  installed: whether a model needs it depends on how it is routed. An
+  installed or pending cert-manager is used as it is, wherever it is; a
+  DataScienceCluster that Argo CD manages is refused. Clean up can turn
+  the components back (`components`), last, each only while this tool
+  still owns the field and nothing uses it; operators always stay.
+- Operator installs reuse the namespace's one OperatorGroup when it gives
+  an install mode the package supports (also own-namespace groups), and
+  find a Subscription of the package in any namespace before installing.
+- New RBAC: `list` on Subscriptions cluster-wide (SECURITY.md, "One-click
+  prerequisites").
+
+<!-- Models routing -->
+- **Models: choose how a model is reached.** Through the cluster's default
+  inference gateway (KServe's default route, as the dashboard deploys), through
+  MaaS only (refs `maas-default-gateway`, published at setup; no inference
+  gateway needed), through another gateway that already admits the project
+  (never changed; MaaS's and the operator's `data-science-gateway` are never
+  offered), or only inside the cluster (no route; not authenticated inside the
+  cluster). The tab recommends one from the cluster
+  (`GET /api/resources/models/exposures`) and says why. The inference gateway
+  is its own part with its own Set up and Delete: a model setup never creates
+  it. Connectivity Link and its Kuadrant CR are in the Models prerequisites
+  only when the chosen way goes through a gateway
+  (`GET /api/resources/prerequisites?exposure=`).
+- **"Can it be called?"** After a model is Ready, the tool sends it one
+  minimal request (one-token chat, or one embedding) the way it is reached,
+  with the model's own token, and reports "Answers requests" or the exact
+  problem: 404 from vLLM (the request's `model` is not the served name),
+  404 without a body (the path does not reach the model), 401, 403, 5xx, no
+  answer. A setup succeeds only when it answers; **Check again** runs it on
+  demand (models action `check`).
+- **Stale projects on the inference gateway's list.** A project the tool
+  added is taken off the list when its last model on the gateway is deleted
+  (Models tab, Clean up), fail closed; the tab names listed projects no model
+  uses and projects that no longer exist, with a confirmed **Remove from the
+  list** (models action `disallow`).
+- New RBAC: `get` on the four model token Secrets `default-name-<model>-sa`
+  (SECURITY.md, "Models routing and Can it be called?").
+
+### Fixed (Models routing)
+
+- A model's image pull that fails is waited on (2 minutes, 8 on a node that
+  joined in the last 15 minutes) before the setup fails: live, a new ROSA
+  node got its pull credentials a few minutes after it joined.
+- KServe reporting only Connectivity Link missing no longer blocks every
+  model: a model reached only inside the cluster does not need it.
+<!-- /Models routing -->
 
 ### Fixed
 

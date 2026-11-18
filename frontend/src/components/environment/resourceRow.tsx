@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, PlaygroundModelRef, ResourceState } from "../../types";
+import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, ModelExposureKind, ModelExposureOption, PlaygroundModelRef, PrerequisiteFeature, ResourceState } from "../../types";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
 
@@ -215,11 +215,18 @@ export type Pending =
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
   /** model: the catalog name of the model in project. */
-  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean }
+  /** exposure / gatewayRef: how the model is reached (absent: the recommended way); option: the chosen option, for the confirmation. */
+  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean; exposure?: ModelExposureKind; gatewayRef?: string; option?: ModelExposureOption }
   | { kind: "teardown-model"; project: string; model: string }
   | { kind: "teardown-gateway" }
   /** Add the project to the projects this tool's inference gateway allows (a model someone else deployed there). */
   | { kind: "allow-gateway-project"; project: string }
+  /** Models routing: take a project off this tool's gateway's list; gone: the project no longer exists. */
+  | { kind: "disallow-gateway-project"; project: string; gone: boolean }
+  /** Models routing: "Can it be called?" again. */
+  | { kind: "check-model"; project: string; model: string }
+  /** One-click prerequisites of a feature (Models: for how its model is reached). */
+  | { kind: "setup-prerequisites"; feature: PrerequisiteFeature; exposure?: ModelExposureKind }
   /** The Gen AI playground in a project, through the dashboard's API (one streamed operation). */
   | { kind: "setup-playground"; project: string; models?: PlaygroundModelRef[] }
   | { kind: "teardown-playground"; project: string }
@@ -234,16 +241,19 @@ export type Pending =
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
 /** A Models change: one streamed request (pkg/api HandleModelsStream). */
-export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-model" | "teardown-gateway" | "allow-gateway-project" }>;
+export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-model" | "teardown-gateway" | "allow-gateway-project" | "disallow-gateway-project" | "check-model" }>;
+/** A prerequisites setup: one streamed request (pkg/api HandlePrerequisitesStream). */
+export type PrerequisitesPending = Extract<Pending, { kind: "setup-prerequisites" }>;
+export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending => p.kind === "setup-prerequisites";
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
 export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "maas-action" }>;
 export const isMaaSPending = (p: Pending): p is MaaSPending => p.kind === "setup-maas" || p.kind === "teardown-maas" || p.kind === "publish-maas" || p.kind === "unpublish-maas" || p.kind === "maas-action";
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending>;
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
-export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project";
+export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project" || p.kind === "disallow-gateway-project" || p.kind === "check-model";
 
 /** What the ConfirmActionModal shows for a pending change. */
 export interface ConfirmSpec {

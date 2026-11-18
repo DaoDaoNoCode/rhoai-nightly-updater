@@ -31,6 +31,7 @@ import {
   streamModels,
   streamPlayground,
   streamMaaS,
+  streamPrerequisites,
   toApiError,
   type ApiError,
   type StreamDoneHandler,
@@ -43,7 +44,7 @@ import { ConfirmActionModal } from "./ConfirmActionModal";
 import { TruncatedText } from "./LongText";
 import { PageErrorState } from "./PageStates";
 import { errorResult } from "../outcomes";
-import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { ModelsTab, modelsConfirm, modelsSteps } from "./environment/ModelsTab";
 import { PlaygroundTab, playgroundConfirm, playgroundSteps } from "./environment/PlaygroundTab";
 import { MaaSTab, maasConfirm, maasSteps, useMaaSStatus } from "./environment/MaaSTab";
@@ -87,6 +88,8 @@ import {
   unreadableState,
 } from "./environment/featureState";
 import { FeatureLoading, LoadFailed } from "./environment/Loading";
+import { PrerequisitesSection, prerequisitesConfirm, prerequisitesReason, prerequisitesSteps, usePrerequisites, withPrerequisites } from "./environment/Prerequisites";
+import type { ModelExposureKind, PrerequisiteFeature } from "../types";
 
 export { nextStep, terminalReason } from "./environment/resourceRow";
 
@@ -335,6 +338,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [maasRefresh, setMaaSRefresh] = useState(0);
   const maasRead = useMaaSStatus(maasRefresh, !!maasOp, tab === "overview" || tab === "maas" || !!cleanupScope);
   const maas = maasRead.data;
+  // One-click prerequisites: read for the feature tabs and the Overview;
+  // Models' plan depends on how the model about to be set up is reached.
+  const [prereqRefresh, setPrereqRefresh] = useState(0);
+  const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
+  const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : null, tab !== "maas");
+  const prereq = prereqRead.data;
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
@@ -346,6 +355,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     setPlaygroundRefresh((n) => n + 1);
     setMaaSRefresh((n) => n + 1);
     setSamplesRefresh((n) => n + 1);
+    setPrereqRefresh((n) => n + 1);
     void fetchResources();
   };
 
@@ -364,7 +374,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   /** A confirmed Models change: one streamed request whose steps the run dialog shows. */
   const startModels = (p: ModelsPending) => {
@@ -374,6 +384,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       ? { action: "setup", gateway: p.gateway, project: p.project, model: p.project ? p.model : null }
       : p.kind === "teardown-model" ? { action: "teardown", gateway: false, project: p.project, model: p.model }
       : p.kind === "allow-gateway-project" ? { action: "allow", gateway: true, project: null, model: null, allowProject: p.project }
+      : p.kind === "disallow-gateway-project" ? { action: "disallow", gateway: true, project: null, model: null, allowProject: p.project }
+      : p.kind === "check-model" ? { action: "check", gateway: false, project: p.project, model: p.model }
       : { action: "teardown", gateway: true, project: null, model: null };
     setPending(null);
     setSampleRun(null);
@@ -388,13 +400,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setModelsOp(null);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(op.action === "allow" ? { action: "allow", project: op.allowProject } : {
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(op.action === "allow" || op.action === "disallow" ? { action: op.action, project: op.allowProject } : op.action === "check" ? { action: "check", project: op.project!, model: op.model! } : {
       action: op.action,
       ...(op.gateway ? { gateway: true } : {}),
       ...(op.project ? { project: op.project } : {}),
       ...(op.project && op.model ? { model: op.model } : {}),
       ...(p.kind === "setup-models" && p.releasedImage ? { releasedImage: true } : {}),
-    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "teardown" ? "delete" : "setup");
+      ...(p.kind === "setup-models" && p.exposure ? { exposure: p.exposure } : {}),
+      ...(p.kind === "setup-models" && p.gatewayRef ? { gatewayRef: p.gatewayRef } : {}),
+    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "teardown" || op.action === "disallow" ? "delete" : op.action === "check" ? "change" : "setup");
   };
 
   /** A confirmed Playground change: one streamed request whose steps the run dialog shows. */
@@ -447,6 +461,27 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
 
+  /** A confirmed prerequisites setup: one streamed request whose steps the run dialog shows. */
+  const startPrerequisites = (p: PrerequisitesPending) => {
+    if (run.run?.running) return;
+    const spec = prerequisitesConfirm(p, prereq);
+    setPending(null);
+    setSampleRun(null);
+    setModelsRun(null);
+    setPlaygroundRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setRunFeature("other");
+    setPollGaveUp(false);
+    setPollRound((n) => n + 1);
+    const end = () => {
+      setPrereqRefresh((n) => n + 1);
+      void fetchResources();
+    };
+    run.follow(spec?.runTitle ?? p.kind, prerequisitesSteps(p, prereq), (onStep, onDone, onDetach) => streamPrerequisites({ feature: p.feature, ...(p.exposure ? { exposure: p.exposure } : {}) },
+      onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), "setup");
+  };
+
   /**
    * A confirmed sample change: one streamed request (one rate-limit slot on
    * the server) whose steps the run dialog shows; when it ends, the tab
@@ -492,6 +527,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       startMaaS(p);
       return;
     }
+    if (isPrerequisitesPending(p)) {
+      startPrerequisites(p);
+      return;
+    }
     setSampleRun(null);
     setModelsRun(null);
     setPlaygroundRun(null);
@@ -523,10 +562,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setPending(maasSetup);
       return;
     }
+    const prereqSetup = setup.find(isPrerequisitesPending);
+    if (prereqSetup) {
+      setPending(prereqSetup);
+      return;
+    }
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isMaaSPending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isMaaSPending(p) || isPrerequisitesPending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = request(p);
@@ -662,22 +706,23 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   });
   // Once a feature works, its samples are the natural next step.
   const pipelinesSamples = pipelinesSummary.status === "ready" && !!pipelinesSummary.project;
+  const prereqFor = (feature: PrerequisiteFeature) => prereq?.features?.[feature];
   const overviewRows: OverviewRow[] = [
     {
-      id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: pipelinesSummary,
+      id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: withPrerequisites(pipelinesSummary, prereqFor("pipelines"), "pipelines"),
       href: `?tab=pipelines${pipelinesSummary.project ? `&project=${encodeURIComponent(pipelinesSummary.project)}` : ""}`,
       ...(pipelinesSamples ? { samples: { label: "Run a sample pipeline", focus: PIPELINE_SAMPLE_ID } } : {}),
     },
     {
-      id: "mlflow", name: "MLflow", gives: "Track experiments, runs and models", state: mlflowNow, href: "?tab=mlflow",
+      id: "mlflow", name: "MLflow", gives: "Track experiments, runs and models", state: withPrerequisites(mlflowNow, prereqFor("mlflow"), "mlflow"), href: "?tab=mlflow",
       ...(mlflowNow.status === "ready" ? { samples: { label: "Add sample data", focus: MLFLOW_SAMPLES_ID } } : {}),
     },
     {
-      id: "models", name: "Models", gives: "Serve a small chat model on CPU; call it or use the playground", state: modelsSummary,
+      id: "models", name: "Models", gives: "Serve a small chat model on CPU; call it or use the playground", state: withPrerequisites(modelsSummary, prereqFor("models"), "models"),
       href: `?tab=models${modelsSummary.project ? `&project=${encodeURIComponent(modelsSummary.project)}` : ""}`,
     },
     {
-      id: "playground", name: "Playground", gives: "Chat with a project's models in the dashboard's Gen AI playground", state: playgroundSummary,
+      id: "playground", name: "Playground", gives: "Chat with a project's models in the dashboard's Gen AI playground", state: withPrerequisites(playgroundSummary, prereqFor("playground"), "playground"),
       href: `?tab=playground${playgroundSummary.project ? `&project=${encodeURIComponent(playgroundSummary.project)}` : ""}`,
     },
     {
@@ -742,6 +787,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       },
     });
   };
+
+  // One-click prerequisites on each feature's tab, above its parts.
+  const prereqNode = (feature: PrerequisiteFeature, exposure?: ModelExposureKind | null) => (
+    <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
+      exposure={exposure ?? undefined} readOnly={readOnly} baseReason={baseReason} setPending={setPending} />
+  );
+  const onModelsExposure = useCallback((e: ModelExposureKind | null) => setModelsExposure(e), []);
 
   // Rows still loading (the status, the playground's, MaaS's) show Skeletons.
   const overview = (
@@ -811,7 +863,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
             <StackItem>
               {tab === "overview" && overview}
               {tab === "pipelines" && resStatus && (
-                <PipelinesTab status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
+                <PipelinesTab prerequisites={prereqNode("pipelines")} status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   connectionLoading={!!project && statusProject !== project}
                   state={pipelines} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
@@ -820,14 +872,14 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}
               {tab === "mlflow" && resStatus && (
-                <MLflowTab status={resStatus} state={mlflowNow} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                <MLflowTab prerequisites={prereqNode("mlflow")} status={resStatus} state={mlflowNow} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                   project={project} projects={workspaceOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })}
                   setPending={setPending} onSetUp={(setup) => setUp("MLflow", setup)} onCleanup={() => setCleanupScope("mlflow")}
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}
               {tab === "models" && resStatus && (
-                <ModelsTab status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
+                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   model={modelsModel} onModel={chooseModel}
                   state={models} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
@@ -835,7 +887,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   onMaaS={() => navigate({ tab: "maas" })} />
               )}
               {tab === "playground" && resStatus && (
-                <PlaygroundTab status={resStatus} playground={pg} playgroundError={playgroundRead.error} onRetry={() => void playgroundRead.reload()}
+                <PlaygroundTab prerequisites={prereqNode("playground")} status={resStatus} playground={pg} playgroundError={playgroundRead.error} onRetry={() => void playgroundRead.reload()}
                   project={playgroundProject} projects={playgroundOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   state={playgroundNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
@@ -899,6 +951,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
       {cleanupScope && resStatus && (
         <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} maas={maas} minioLeftovers={minioLeftovers} baseReason={baseReason}
+          restorable={Object.values(prereq?.features ?? {}).flatMap((f) => f?.restorable ?? [])}
           onConfirm={startCleanup} onCancel={() => setCleanupScope(null)} />
       )}
 

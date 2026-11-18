@@ -586,15 +586,53 @@ func gatewayClassController(c *Client) (string, error) {
 }
 
 // authPolicyState reads the AuthPolicy odh-model-controller adds to the
-// gateway: "enforced", "not-enforced", "missing", or "" when unknown.
+// inference gateway: "enforced", "not-enforced", "missing", or "" when
+// unknown.
 func authPolicyState(c *Client) string {
+	return authPolicyStateOf(c, inferenceGatewayNamespace, inferenceGatewayName)
+}
+
+// authPolicyStateOf reads the AuthPolicy odh-model-controller adds to a
+// gateway a model routes through (<gateway>-authn, in the gateway's
+// namespace): "enforced", "not-enforced", "missing", or "" when unknown.
+// The inference gateway's is read by its name; another gateway's only in
+// OpenShift's ingress namespace, where this app may list AuthPolicies
+// (read-only). Elsewhere it is unknown.
+func authPolicyStateOf(c *Client, ns, gateway string) string {
 	versions := servedVersions(c, kuadrantGroup, []string{"v1"})
 	if len(versions.Versions) == 0 {
 		return ""
 	}
-	body, _, err := c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
-	if IsK8sError(err, 404) {
-		return "missing"
+	var body []byte
+	var err error
+	if ns == inferenceGatewayNamespace && gateway == inferenceGatewayName {
+		body, _, err = c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
+		if IsK8sError(err, 404) {
+			return "missing"
+		}
+	} else {
+		if ns != inferenceGatewayNamespace {
+			return ""
+		}
+		var list []byte
+		list, _, err = c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", ""))
+		if err == nil {
+			var items struct {
+				Items []json.RawMessage `json:"items"`
+			}
+			if json.Unmarshal(list, &items) != nil {
+				return ""
+			}
+			for _, raw := range items.Items {
+				meta, perr := parseObjectMeta(raw)
+				if perr == nil && meta.Name == gateway+"-authn" {
+					body = raw
+				}
+			}
+			if body == nil {
+				return "missing"
+			}
+		}
 	}
 	if err != nil {
 		return ""
@@ -708,15 +746,6 @@ func readKServeGateway(c *Client) (kserveGateway, error) {
 		return kserveGateway{Namespace: gwNS, Name: gwName, Known: true}, nil
 	}
 	return kserveGateway{Namespace: ns, Name: name, Known: true}, nil
-}
-
-// defaultGatewayElsewhere says, in words, that KServe's default gateway is
-// not the one this tool manages ("" when it is, or is unknown).
-func defaultGatewayElsewhere(def kserveGateway) string {
-	if def.isInferenceGateway() {
-		return ""
-	}
-	return fmt.Sprintf("KServe's default gateway is %s (ConfigMap %s, ingress.kserveIngressGateway), not %s/%s, which this tool manages: a model on the default route goes through %s.", def, kserveConfigMap, inferenceGatewayNamespace, inferenceGatewayName, def)
 }
 
 // gatewayUsers lists the LLMInferenceServices ("namespace/name") that
@@ -882,10 +911,9 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 			state.DNS = dnsPublished(c, strings.TrimPrefix(state.ExternalURL, "https://"))
 		}
 	}
+	// KServe's default gateway being another one is no problem: models
+	// that choose this gateway name it in their refs (models_exposure.go).
 	var warnings []string
-	if msg := defaultGatewayElsewhere(def); msg != "" {
-		warnings = append(warnings, msg)
-	}
 	if len(state.UsedBy) > 0 && (state.AuthPolicy == "missing" || state.AuthPolicy == "not-enforced") {
 		what := map[string]string{"missing": "is missing", "not-enforced": "is not enforced"}[state.AuthPolicy]
 		warnings = append(warnings, fmt.Sprintf("The gateway's authentication %s (AuthPolicy %s/%s, which odh-model-controller adds once a model uses the gateway). Check that odh-model-controller and Connectivity Link (Kuadrant) run; until then models behind it may answer without checking who calls.", what, inferenceGatewayNamespace, inferenceGatewayAuthPolicy))
@@ -901,6 +929,9 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 	}
 	if modelsErr == nil {
 		state.NotAllowedModels, state.NotAllowedModelProjects = notAllowedModels(c, models, def, gw)
+		if state.ManagedByTool && !state.Terminating {
+			listedProjectsState(c, &state, gw, models, def)
+		}
 	}
 	switch {
 	case !state.ManagedByTool:
@@ -989,6 +1020,10 @@ type gatewayPlan struct {
 	add         []string
 	names       []string
 	listChanges bool
+	// remove are the namespaces this write takes off the list (never the
+	// gateway's own namespace; inference_gateway_projects.go decides
+	// which may go).
+	remove []string
 	// gatewayOnly: write the Gateway alone (a project added to the list).
 	gatewayOnly bool
 }
@@ -1003,6 +1038,12 @@ type gatewayPlan struct {
 // come from the same read. A refusal is returned as a message and an
 // error code; nothing is written.
 func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string) {
+	return planInferenceGatewayList(c, add, nil)
+}
+
+// planInferenceGatewayList is planInferenceGateway that also takes the
+// namespaces in remove off the list (the gateway's own namespace stays).
+func planInferenceGatewayList(c *Client, add, remove []string) (*gatewayPlan, string, string) {
 	gw, found, err := readInferenceGateway(c)
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read Gateway %s/%s; nothing was changed: %v.%s", inferenceGatewayNamespace, inferenceGatewayName, err, templateHint(err)), errorCodeFromK8sErr(err)
@@ -1013,7 +1054,7 @@ func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string
 	if found && gw.Metadata.terminating() {
 		return nil, fmt.Sprintf("Gateway %s/%s is still being deleted. Wait until it is gone, then set it up again.", inferenceGatewayNamespace, inferenceGatewayName), "terminating"
 	}
-	plan := &gatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}, gateway: gw, add: add}
+	plan := &gatewayPlan{current: map[string]objectMeta{}, found: map[string]bool{}, gateway: gw, add: add, remove: remove}
 	listed, shaped := gw.listedNamespaces()
 	var routed []string
 	if found && !shaped {
@@ -1038,10 +1079,19 @@ func planInferenceGateway(c *Client, add []string) (*gatewayPlan, string, string
 		def, _ := readKServeGateway(c)
 		routed = routeNamespaces(ours, def, gw)
 	}
-	plan.names = gatewayNamespaceList(listed, routed, add)
+	all := gatewayNamespaceList(listed, routed, add)
+	plan.names = all[:0:0]
+	for _, n := range all {
+		if n == inferenceGatewayNamespace || !containsString(remove, n) {
+			plan.names = append(plan.names, n)
+		}
+	}
 	plan.listChanges = !found || !shaped
 	for _, n := range plan.names {
 		plan.listChanges = plan.listChanges || !containsString(listed, n)
+	}
+	for _, n := range listed {
+		plan.listChanges = plan.listChanges || !containsString(plan.names, n)
 	}
 	for _, kind := range gatewayKinds {
 		meta, ok, err := gw.Metadata, found, error(nil)
@@ -1116,7 +1166,7 @@ func writeInferenceGateway(c *Client, plan *gatewayPlan, logf func(string)) (*ga
 			return plan, fmt.Sprintf("Gateway %s/%s kept changing while this ran (someone else is editing it), so its list of allowed projects was not written. Try again.", inferenceGatewayNamespace, inferenceGatewayName), "conflict"
 		}
 		logf("The gateway changed while this ran; reading it again.")
-		next, msg, code := planInferenceGateway(c, plan.add)
+		next, msg, code := planInferenceGatewayList(c, plan.add, plan.remove)
 		if msg != "" {
 			return plan, msg, code
 		}
@@ -1362,6 +1412,12 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 			if werr == nil && !gone {
 				logs = append(logs, "The Gateway is still being deleted")
 			}
+		}
+	}
+	// The list went with the Gateway: nothing recorded is on a list any more.
+	if containsString(deleted, gatewayDesc("Gateway")) {
+		if err := writeGatewayProjects(c, nil); err != nil {
+			slog.Warn("cannot clear the gateway projects record", "error", err)
 		}
 	}
 	slog.Info("inference gateway teardown", "user", getUser(c))

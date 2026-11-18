@@ -39,6 +39,9 @@ type modelsCluster struct {
 	readyAfter int
 	// route is KServe's handling of the model's HTTPRoute (newMaaSCluster).
 	route *kserveRouteSim
+	// calls simulates the model's answers to "Can it be called?"
+	// (models_routing_test.go).
+	calls *modelCallSim
 }
 
 func newModelsCluster(t *testing.T) *modelsCluster {
@@ -83,6 +86,7 @@ func newModelsCluster(t *testing.T) *modelsCluster {
 			}
 		}
 	}
+	simulateRouting(t, mc)
 	return mc
 }
 
@@ -119,7 +123,7 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("setup failed: %+v", res)
 	}
-	if got := finalSteps(events); got != "check=success gateway=success gateway-ready=success model=success model-ready=success" {
+	if got := finalSteps(events); got != "check=success gateway=success gateway-ready=success model=success model-ready=success callable=success" {
 		t.Fatalf("steps: %s", got)
 	}
 	if !strings.Contains(res.Message, "Qwen2.5 0.5B Instruct (CPU) is ready in proj.") {
@@ -221,7 +225,7 @@ func TestModelsSetup_RefusesAGatewayThatDoesNotAdmitTheProject(t *testing.T) {
 func TestModelsSetup_ModelNeedsTheGateway(t *testing.T) {
 	mc := newModelsCluster(t)
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
-	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "needs the inference gateway") {
+	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "Set up the inference gateway") {
 		t.Fatalf("got %+v", res)
 	}
 }
@@ -416,7 +420,8 @@ func TestDescribeModelPods(t *testing.T) {
 		{"starting", []modelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}}}]}`)}, nil, "Starting vLLM and loading the model...", ""},
 		{"oom restart", []modelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "Restarted after running out of memory (OOMKilled); starting vLLM again...", ""},
 		{"crash loop", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "", "container main keeps crashing. Last exit: OOMKilled, code 137. It ran out of memory. Its logs say why."},
-		{"pull back-off", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}`)}, nil, "", "the image of container main cannot be pulled (ImagePullBackOff: unauthorized). Check that the cluster's pull secret can read it."},
+		// A failing pull is waited on (modelPullGrace); the wait fails it.
+		{"pull back-off", []modelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}`)}, nil, "Pulling the image of main failed (ImagePullBackOff: unauthorized); the node keeps retrying.", ""},
 	}
 	for _, tc := range cases {
 		got := describeModelPods(tc.pods, tc.event)
@@ -615,8 +620,8 @@ func TestInferenceGatewayStatus_WarnsWithoutItsAuthPolicy(t *testing.T) {
 
 func TestValidateModelsRequest(t *testing.T) {
 	cases := map[string]types.ModelsRequest{
-		"action must be setup, teardown or allow":             {Action: "delete", Gateway: true},
-		"nothing to do: name the gateway, a project, or both": {Action: "setup"},
+		"action must be setup, teardown, allow, disallow or check": {Action: "delete", Gateway: true},
+		"nothing to do: name the gateway, a project, or both":      {Action: "setup"},
 		"unknown model":                     {Action: "setup", Project: "p", Model: "llama"},
 		"releasedImage needs a model setup": {Action: "teardown", Project: "p", ReleasedImage: true},
 		"allow takes a project only":        {Action: "allow", Gateway: true, Project: "p"},
@@ -1172,8 +1177,8 @@ func TestModelsSetup_RefusesWhenKServesDefaultGatewayIsAnother(t *testing.T) {
 }
 
 // A model on KServe's default route does not use this gateway when the
-// default is another one: it does not hold the teardown, and the status
-// says where default routes go.
+// default is another one: it does not hold the teardown. Another default
+// is no warning: models choose the gateway they use (models_exposure.go).
 func TestGatewayTeardown_ADefaultRouteElsewhereDoesNotBlock(t *testing.T) {
 	mc := newModelsCluster(t)
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
@@ -1182,7 +1187,7 @@ func TestGatewayTeardown_ADefaultRouteElsewhereDoesNotBlock(t *testing.T) {
 	mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"istio-system/kserve-gateway\"}"}}`)
 	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"metadata":{"name":"granite","namespace":"team"},"spec":{"router":{"gateway":{}}}}`)
 	st, _ := GetResourcesStatus(mc.c)
-	if len(st.InferenceGateway.UsedBy) != 0 || !strings.Contains(st.InferenceGateway.Warning, "KServe's default gateway is istio-system/kserve-gateway") {
+	if len(st.InferenceGateway.UsedBy) != 0 || strings.Contains(st.InferenceGateway.Warning, "KServe's default gateway") {
 		t.Errorf("status: %+v", st.InferenceGateway)
 	}
 	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success {

@@ -29,6 +29,11 @@ func resetClusterCaches() {
 	staleSeen.Lock()
 	staleSeen.m = map[string]staleObservation{}
 	staleSeen.Unlock()
+	callChecks.Lock()
+	for k := range callChecks.m {
+		delete(callChecks.m, k)
+	}
+	callChecks.Unlock()
 }
 
 // isolateClusterCaches gives a test's fake cluster empty URL-keyed caches.
@@ -47,6 +52,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 		"control_plane.go":   2, // controlPlaneCache
 		"diagnostics_dsc.go": 1, // staleSeen
 		"maas.go":            1, // apiVersionsCache (read)
+		"models_call.go":     1, // callChecks
 		"models_image.go":    2, // capacityCache, planCache
 		"prerequisites.go":   2, // packageIndexCache
 		"status.go":          5, // stableTargetCache, consoleURLCache, dashboardURLCache

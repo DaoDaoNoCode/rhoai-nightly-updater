@@ -32,6 +32,8 @@ import { MLflowSamples } from "./MLflowSamples";
 import type { SampleOp } from "./samples";
 
 export interface MLflowTabProps {
+  /** What MLflow needs on the cluster (one-click prerequisites), above the parts. */
+  prerequisites?: React.ReactNode;
   status: ResourcesStatus;
   /** mlflowState: the same as the Overview's. */
   state: FeatureState;
@@ -168,6 +170,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="MLflow" purpose={FEATURE_PURPOSE.mlflow} state={state} /></StackItem>
+      {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {status.mlflowBlocked && <StackItem><ComponentAlert feature="MLflow" block={status.mlflowBlocked} /></StackItem>}
       <StackItem>
         <PartList aria-label="What MLflow needs">

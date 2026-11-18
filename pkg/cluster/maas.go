@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -221,15 +220,7 @@ func writeMaaSRecord(c *Client, rec maasRecord) error {
 	if err != nil {
 		return err
 	}
-	ns := getActivityNamespace()
-	cm, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]interface{}{"name": snapshotConfigMapName, "namespace": ns},
-		"data":       map[string]interface{}{maasRecordKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {maasRecordManager}, "force": {"true"}}
-	if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if err := writeSnapshotKey(c, maasRecordKey, maasRecordManager, string(data)); err != nil {
 		return fmt.Errorf("record this tool's MaaS changes: %w", err)
 	}
 	return nil
@@ -1072,11 +1063,15 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	// Red Hat Connectivity Link (platform-setup.md "Install Gateway API
 	// Controller", RHOAI tab).
 	csvs, csvErr := listClusterCSVs(c)
+	var subs []*olmSubscription
+	if csvErr == nil {
+		subs, csvErr = listSubscriptions(c, "")
+	}
 	var rhcl, cnpg operatorState
 	rhclErr, cnpgReadErr := csvErr, csvErr
 	if csvErr == nil {
-		rhcl, rhclErr = readOperatorIn(c, rhclOperator, csvs)
-		cnpg, cnpgReadErr = readOperatorIn(c, cnpgOperator, csvs)
+		rhcl, rhclErr = readOperatorIn(c, rhclOperator, csvs, subs)
+		cnpg, cnpgReadErr = readOperatorIn(c, cnpgOperator, csvs, subs)
 	}
 	kVersion, kvErr := kuadrantServedVersion(c)
 	// Kuadrant's API alone is not an installed operator: its CRDs stay
@@ -1132,9 +1127,10 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	case kvErr == nil && kRuns:
 		rhclPart.State, rhclPart.NotManaged = "ready", true
 		rhclPart.Message = "Kuadrant's API is served without an rhcl-operator CSV (an upstream Kuadrant, or another install); MaaS uses it as it is"
-	case rhcl.sub != nil:
+	case rhcl.pending() != nil:
+		p := rhcl.pending()
 		rhclPart.ManagedByTool, rhclPart.NotManaged = rhclByTool, !rhclByTool
-		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name, firstNonEmpty(rhcl.sub.Status.State, "no state yet"))
+		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", p.Metadata.Namespace, p.Metadata.Name, firstNonEmpty(p.Status.State, "no state yet"))
 	default:
 		rhclPart.State = "missing"
 		if p, msg, _ := planOperatorInstall(c, rhclOperator); msg != "" {
@@ -1197,7 +1193,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			}
 		case cnpgReadErr != nil:
 			cnpgPart.State, cnpgPart.Message = "unknown", "Cannot read the installed operators: "+cnpgReadErr.Error()
-		case cnpg.installed() || cnpg.sub != nil:
+		case cnpg.installed() || cnpg.pending() != nil:
 			cnpgPart.ManagedByTool, cnpgPart.NotManaged = cnpgByTool, !cnpgByTool
 			cnpgPart.State, cnpgPart.Message = "waiting", "OLM is installing it"
 		default:

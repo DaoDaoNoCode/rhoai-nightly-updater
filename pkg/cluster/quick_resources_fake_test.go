@@ -35,6 +35,9 @@ type resourceFake struct {
 	// onGet may change an object before a GET returns it (for example to
 	// simulate a controller updating status).
 	onGet func(k fakeKey, obj map[string]interface{})
+	// listOnGet: the items of a list of these resources (by plural) also
+	// go through onGet (a controller's status shows in lists too).
+	listOnGet map[string]bool
 	// groups holds API discovery documents by path ("/apis/kuadrant.io");
 	// a group without one answers 404, as an unserved group.
 	groups map[string]string
@@ -284,6 +287,13 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			for key, obj := range f.objects {
 				name, byName := strings.CutPrefix(r.URL.Query().Get("fieldSelector"), "metadata.name=")
 				if key.gv == k.gv && key.plural == k.plural && (k.ns == "" || key.ns == k.ns) && matchesSelector(obj, r.URL.Query().Get("labelSelector")) && (!byName || key.name == name) {
+					if f.onGet != nil && f.listOnGet[k.plural] {
+						raw, _ := json.Marshal(obj)
+						var cp map[string]interface{}
+						_ = json.Unmarshal(raw, &cp)
+						f.onGet(key, cp)
+						obj = cp
+					}
 					items = append(items, obj)
 				}
 			}

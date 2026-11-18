@@ -1,10 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActionListItem,
   Alert,
   AlertActionLink,
   Button,
   Content,
+  Label,
+  Radio,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -22,7 +24,8 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { CatalogModel, InferenceGatewayState, ModelState, ResourcesStatus } from "../../types";
+import type { CatalogModel, InferenceGatewayState, ModelCallCheck, ModelExposureKind, ModelExposureOption, ModelExposures, ModelState, ResourcesStatus } from "../../types";
+import { getModelExposures, toApiError } from "../../services/api";
 import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type ModelsPending, type Pending, ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
@@ -65,6 +68,13 @@ export interface ModelsTabProps {
   onCleanup: () => void;
   /** Opens the MaaS tab (a published model is used through MaaS). */
   onMaaS: () => void;
+  // --- Models routing ---
+  /** What Models needs on the cluster (the one-click prerequisites), above the parts. */
+  prerequisites?: React.ReactNode;
+  /** Why the model cannot be set up because of the prerequisites, or null. */
+  prerequisitesReason?: string | null;
+  /** The chosen way to reach a new model (the prerequisites' plan depends on it). */
+  onExposure?: (exposure: ModelExposureKind | null) => void;
 }
 
 const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByTool === true;
@@ -133,6 +143,21 @@ export function embeddingCurl(url: string, model: string, token: string): string
   ].join("\n");
 }
 
+/** A request to a model reached only inside the cluster: no token, from a pod on the cluster. */
+export function internalCurl(url: string, model: string, embedding: boolean): string {
+  const base = url.replace(/\/+$/, "");
+  return embedding
+    ? [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`, `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`].join("\n")
+    : [`curl -sk -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`, `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`].join("\n");
+}
+
+/** The two 404s a caller can get, and what each means. */
+export const NotFoundNote: React.FC<{ name: string }> = ({ name }) => (
+  <Content component="p">
+    A 404 means one of two things. With <code>{`{"error":{..."type":"NotFoundError"}}`}</code> the request reached the model but its <code>&quot;model&quot;</code> is not <code>{name}</code> (the display name or the Hugging Face id are not it); with an empty body the request did not reach the model at all (on a gateway the path is <code>/&lt;project&gt;/&lt;model&gt;/v1/...</code>).
+  </Content>
+);
+
 /** Which image a model runs, in words. */
 function imageWords(m: ModelState): string {
   switch (m.imageKind) {
@@ -197,6 +222,40 @@ function allowedWords(gw: InferenceGatewayState): React.ReactNode {
   return gw.allowedProjects.map((p, i) => <React.Fragment key={p}>{i > 0 ? ", " : ""}<code>{p}</code></React.Fragment>);
 }
 
+/**
+ * Projects on this tool's gateway's list that no model uses (their editors
+ * can still attach routes to the shared gateway), first those that no
+ * longer exist (a new project of that name would be admitted at once), each
+ * with Remove from the list.
+ */
+const UnusedProjectsAlert: React.FC<{ gw: InferenceGatewayState; reason: string | null; setPending: (p: Pending) => void }> = ({ gw, reason, setPending }) => {
+  const gone = gw.goneProjects ?? [];
+  const unused = (gw.unusedProjects ?? []).filter((p) => !gone.includes(p));
+  if (gone.length === 0 && unused.length === 0) return null;
+  const row = (p: string, isGone: boolean) => (
+    <StackItem key={p}>
+      <code>{p}</code>{isGone ? " (no longer exists)" : ""}{" "}
+      <Button variant="link" isInline isDanger isAriaDisabled={!!reason} onClick={() => setPending({ kind: "disallow-gateway-project", project: p, gone: isGone })}>Remove from the list</Button>
+    </StackItem>
+  );
+  return (
+    <Alert variant={gone.length > 0 ? "warning" : "info"} isInline component="div"
+      title={gone.length > 0 ? "The gateway still admits projects that no longer exist" : "The gateway admits projects no model uses"}>
+      <Stack hasGutter>
+        <StackItem>
+          <Content component="p">
+            Anyone who can edit a project on the list can attach routes to this shared gateway, and a route there can take another model&apos;s calls and tokens.
+            {gone.length > 0 ? " A project created later with the same name would be admitted at once." : ""} No model routes through the gateway from these projects.
+          </Content>
+        </StackItem>
+        {gone.map((p) => row(p, true))}
+        {unused.map((p) => row(p, false))}
+        {reason && <StackItem><Content component="small">Not available now: {reason}</Content></StackItem>}
+      </Stack>
+    </Alert>
+  );
+};
+
 /** The inference gateway (cluster). */
 const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending }) => {
   const gw = status.inferenceGateway;
@@ -206,18 +265,25 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
     ? [{ key: "delete", label: "Delete inference gateway...", onClick: () => setPending({ kind: "teardown-gateway" }), disabledReason: baseReason ?? gw?.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   const s = gatewayStatus(status, busy);
+  const setUpReason = readOnly ? READ_ONLY_SETUP : baseReason ?? gw?.setupBlockedReason ?? null;
   return (
-    <PartItem id="gateway" title="Inference gateway" scope="Shared by the cluster" status={s} unmanaged={unmanaged} menu={menu}>
+    <PartItem id="gateway" title="Inference gateway" scope="Shared by the cluster" status={s} unmanaged={unmanaged} menu={menu}
+      actions={!deployed && s === "not-set-up" && !readOnly ? (
+        <ActionListItem>
+          <Button variant="secondary" size="sm" isAriaDisabled={!!setUpReason} onClick={() => setPending({ kind: "setup-models", gateway: true, project: null, model: "" })}>Set up the inference gateway</Button>
+        </ActionListItem>
+      ) : undefined}>
       <Content component="p">
-        The front door to every model on the cluster: it answers at <code>{gw?.externalUrl ?? gw?.plannedUrl ?? "https://inference.<apps domain>"}</code>, sends each call to its model, and checks the caller&apos;s OpenShift token.
+        A front door for models from outside the cluster: it answers at <code>{gw?.externalUrl ?? gw?.plannedUrl ?? "https://inference.<apps domain>"}</code>, sends each call to its model, and checks the caller&apos;s OpenShift token.
         {unmanaged
           ? " It was created outside this tool (for example by RHOAI's installation): models use it as it is, and this tool does not change or delete it."
           : <>
-            {gw?.allProjectsAllowed ? null : " It accepts models only from the projects on its list, as RHOAI documents it; setting up a model adds its project."}
-            {deployed ? " It runs on a cloud load balancer, which costs money while it exists." : " Setting it up creates a cloud load balancer, which costs money while it exists."}
+            {gw?.allProjectsAllowed ? null : " It accepts models only from the projects on its list, as RHOAI documents it; a model set up through it adds its project, and deleting a project's last model takes the project off again."}
+            {deployed ? " It runs on a cloud load balancer, which costs money while it exists." : " A model does not need it: MaaS, another gateway or the cluster's inside are other ways. Setting it up creates a cloud load balancer, which costs money while it exists."}
           </>}
       </Content>
       {gw && <ProblemAlerts kind="gateway" state={gw} />}
+      {gw?.deployed && gatewayManaged(gw) && !isTerminating(gw) && <UnusedProjectsAlert gw={gw} reason={readOnly ? READ_ONLY_SETUP : baseReason} setPending={setPending} />}
       {gw?.deployed && !isTerminating(gw) && s !== "setting-up" && notAllowedByProject(gw).map(([ns, models]) => (
         <NotAllowedAlert key={ns} gw={gw} project={ns} models={models} baseReason={baseReason} readOnly={readOnly} setPending={setPending} />
       ))}
@@ -313,6 +379,91 @@ export const ModelPicker: React.FC<{ status: ResourcesStatus; project: string | 
   );
 };
 
+// --- Models routing: how a new model is reached ---------------------------------
+
+/** GET /api/resources/models/exposures for the project and model, read again when refreshKey changes. */
+export function useModelExposures(project: string | null, model: string, refreshKey: string, enabled: boolean) {
+  const [data, setData] = useState<ModelExposures | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled || !project) {
+      setData(null);
+      return;
+    }
+    let live = true;
+    getModelExposures(project, model)
+      .then((d) => { if (live) { setData(d); setError(null); } })
+      .catch((e) => { if (live) setError(toApiError(e, "Cannot read how the model can be reached").message); });
+    return () => { live = false; };
+  }, [project, model, refreshKey, enabled]);
+  return { data, error };
+}
+
+/** How a model is reached, in a few words. */
+export function exposureWords(m: Pick<ModelState, "exposure" | "gateway">): string {
+  switch (m.exposure) {
+    case "maas":
+      return "Through MaaS only";
+    case "gateway":
+      return `Through gateway ${m.gateway ?? ""}`;
+    case "internal":
+      return "Only inside the cluster (no route)";
+    case "default-gateway":
+      return `Through the cluster's default inference gateway (${m.gateway ?? "KServe's default"})`;
+    default:
+      return "Unknown";
+  }
+}
+
+/**
+ * The choice of how a new model is reached: every option with what it
+ * means, the recommended one first chosen and why, and why the others
+ * cannot be used now.
+ */
+export const ExposureChooser: React.FC<{ exposures: ModelExposures | null; error: string | null; selected: string | null; onSelect: (key: string) => void }> = ({ exposures, error, selected, onSelect }) => {
+  if (!exposures) {
+    return error ? <Alert variant="warning" isInline component="p" title="Cannot read how the model can be reached">{error}</Alert> : <Content component="small">Reading the gateways on the cluster...</Content>;
+  }
+  const chosen = exposures.options.find((o) => o.key === selected);
+  return (
+    <Stack hasGutter>
+      {exposures.defaultReason && <StackItem><Content component="small">Recommended: {exposures.defaultReason}</Content></StackItem>}
+      {!exposures.default && exposures.recommendGateway && (
+        <StackItem>
+          <Alert variant="info" isInline component="p" title="No gateway can carry this model yet">{exposures.recommendGatewayReason} Or choose to reach it only inside the cluster.</Alert>
+        </StackItem>
+      )}
+      {exposures.options.map((o) => (
+        <StackItem key={o.key}>
+          <Radio id={`models-exposure-${o.key}`} name="models-exposure" isChecked={selected === o.key} isDisabled={!o.available} onChange={() => onSelect(o.key)}
+            label={<>{o.title}{o.key === exposures.default ? <> <Label isCompact color="green">Recommended</Label></> : null}{o.needsAuth ? <> <Label isCompact color="orange">Needs Connectivity Link</Label></> : null}</>}
+            description={o.available ? o.description : `${o.description} Not available: ${o.reason ?? "unknown"}`} />
+        </StackItem>
+      ))}
+      {chosen?.warning && <StackItem><Alert variant="warning" isInline component="p" title="Before you choose this">{chosen.warning}</Alert></StackItem>}
+    </Stack>
+  );
+};
+
+/** The setup of a model, with the chosen way to reach it. */
+function withExposure(setup: Pending[], option: ModelExposureOption | undefined): Pending[] {
+  if (!option) return setup;
+  return setup.map((p) => (p.kind === "setup-models" && p.project ? { ...p, exposure: option.exposure, ...(option.gatewayRef && option.exposure === "gateway" ? { gatewayRef: option.gatewayRef } : {}), option } : p));
+}
+
+/** "Can it be called?" in words, with its result. */
+const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined }> = ({ check }) => {
+  if (!check) return <>Not checked since this app started. Check again calls the model once.</>;
+  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : "red";
+  const word = check.ok ? (check.result === "maas" ? "Listed by MaaS" : "Answers requests") : check.result === "not-checked" ? "Not checked" : "Cannot be called";
+  return (
+    <Stack>
+      <StackItem><Label isCompact color={color}>{word}</Label> <Content component="small">{new Date(check.at).toLocaleString()}</Content></StackItem>
+      <StackItem>{check.message}</StackItem>
+    </Stack>
+  );
+};
+
 /** What the model is, in a sentence for the part. */
 function modelPurpose(c: CatalogModel | undefined): string {
   if (!c) return "A model served by vLLM on CPU.";
@@ -396,11 +547,48 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListDescription><code>{c.args}</code></DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {model?.url && (
+        {model?.exposure && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Reached</DescriptionListTerm>
+            <DescriptionListDescription>{exposureWords(model)}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {model?.url && model.exposure !== "internal" && (
           <DescriptionListGroup>
             <DescriptionListTerm>Address</DescriptionListTerm>
             <DescriptionListDescription>
               <ImageRef image={model.url} what="model address" isCode={false} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {model?.internalUrl && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>In-cluster address</DescriptionListTerm>
+            <DescriptionListDescription>
+              <ImageRef image={model.internalUrl} what="in-cluster address" isCode={false} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {model?.servedName && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Model name in requests</DescriptionListTerm>
+            <DescriptionListDescription><code>{model.servedName}</code> (send exactly this as <code>&quot;model&quot;</code>; the display name or the Hugging Face id gets 404)</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {model?.gatewayAuth && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Gateway authentication</DescriptionListTerm>
+            <DescriptionListDescription>{model.gatewayAuth === "maas" ? "MaaS checks each call's API key and its subscription" : AUTH_WORDS[model.gatewayAuth]}</DescriptionListDescription>
+          </DescriptionListGroup>
+        )}
+        {managed && model?.ready && !isTerminating(model) && (
+          <DescriptionListGroup>
+            <DescriptionListTerm>Can it be called?</DescriptionListTerm>
+            <DescriptionListDescription>
+              <Stack hasGutter>
+                <StackItem><CallCheckWords check={model.callCheck} /></StackItem>
+                {!readOnly && <StackItem><Button variant="secondary" size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "check-model", project, model: name })}>Check again</Button></StackItem>}
+              </Stack>
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -483,8 +671,10 @@ const NoModelCommands: React.FC<{ model: ModelState; project: string; readOnly: 
  */
 export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; project: string; dashboardUrl?: string; onMaaS: () => void; readOnly: boolean; baseReason: string | null; onSetUpAgain: () => void }> = ({ model, catalog: c, project, dashboardUrl, onMaaS, readOnly, baseReason, onSetUpAgain }) => {
   const href = dashboardProjectHref(dashboardUrl, project);
-  const name = model.name!;
-  const url = model.url!;
+  // The name the model serves: the "model" every request sends.
+  const name = model.servedName ?? model.name!;
+  const internal = model.exposure === "internal";
+  const url = internal ? (model.internalUrl ?? model.url!) : model.url!;
   const embedding = c?.type === "embedding";
   const published = !!model.maasPublished;
   const token = modelTokenLine(project, model);
@@ -504,6 +694,16 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
                 </StackItem>
                 <StackItem><Button variant="link" isInline onClick={onMaaS}>Use the MaaS tab&apos;s commands</Button></StackItem>
               </Stack>
+            ) : internal ? (
+              <Stack hasGutter>
+                <StackItem>
+                  <Content component="p">
+                    The model is reached only inside the cluster, at its in-cluster address, without a token (anyone on the cluster whose network reaches {project} can call it). Run the command from a pod on the cluster; <code>-k</code> because the address uses KServe&apos;s own certificate.
+                  </Content>
+                </StackItem>
+                <StackItem><CopyableCode id="models-curl" label="the command" code={internalCurl(url, name, embedding)} /></StackItem>
+                <StackItem><NotFoundNote name={name} /></StackItem>
+              </Stack>
             ) : !token ? (
               <NoModelCommands model={model} project={project} readOnly={readOnly} baseReason={baseReason} onSetUpAgain={onSetUpAgain} />
             ) : (
@@ -516,11 +716,12 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
                 <StackItem><CopyableCode id="models-curl" label="the commands" code={embedding ? embeddingCurl(url, name, token) : modelCurl(url, name, token)} /></StackItem>
                 {!embedding && <StackItem><Content component="p">Requests that take longer than about a minute must stream (<code>{`"stream": true`}</code>), because the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).</Content></StackItem>}
                 {embedding && <StackItem><Content component="p">The answer holds one vector of {c?.embeddingDimension ?? "fixed"} numbers per input text, under <code>data[].embedding</code>. Inputs longer than 512 tokens are refused.</Content></StackItem>}
+                <StackItem><NotFoundNote name={name} /></StackItem>
               </Stack>
             )}
           </DescriptionListDescription>
         </DescriptionListGroup>
-        {!published && token && c?.toolCalling && (
+        {!published && !internal && token && c?.toolCalling && (
           <DescriptionListGroup>
             <DescriptionListTerm>Tool calling</DescriptionListTerm>
             <DescriptionListDescription>
@@ -531,7 +732,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {!published && token && c?.toolCalling && (
+        {!published && !internal && token && c?.toolCalling && (
           <DescriptionListGroup>
             <DescriptionListTerm>Reasoning</DescriptionListTerm>
             <DescriptionListDescription>
@@ -594,9 +795,24 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const noProjects = projectsLoaded && projects.length === 0;
   const toolModels = (models?.items ?? []).filter((m) => m.managedByTool !== false);
   const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
+  // How a new model is reached: read when it is not set up yet, again when
+  // the gateways change; the recommended one is chosen until the user
+  // chooses.
+  const gw = status.inferenceGateway;
+  const choosing = !!project && !model?.deployed && next?.kind === "set-up";
+  const exposuresRead = useModelExposures(project, name, `${gw?.deployed}|${gw?.ready}|${(gw?.allowedProjects ?? []).join(",")}`, choosing);
+  const [choice, setChoice] = useState<string | null>(null);
+  useEffect(() => { setChoice(null); }, [project, name]);
+  const ex = exposuresRead.data;
+  const selectedKey = choice ?? ex?.default ?? null;
+  const option = ex?.options.find((o) => o.key === selectedKey);
+  const { onExposure } = props;
+  useEffect(() => { onExposure?.(choosing && option ? option.exposure : null); }, [choosing, option, onExposure]);
+  const exposureReason = !choosing ? null : !ex ? "Reading how the model can be reached..." : !option ? "Choose how the model is reached." : !option.available ? option.reason ?? "This way cannot be used now." : option.needsAuth ? "Needs Red Hat Connectivity Link for this choice: Set up what Models needs (above) first." : null;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose={FEATURE_PURPOSE.models} state={state} /></StackItem>
+      {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {models?.blocked && <StackItem><ComponentAlert feature="Model serving" block={models.blocked} /></StackItem>}
       {!models?.blocked && models?.presetProblem && (
         <StackItem>
@@ -625,6 +841,11 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
               <HelperText><HelperTextItem>{c ? modelOptionWords(c) : "The models this tool can set up."}</HelperTextItem></HelperText>
             </FormHelperText>
           </FormGroup>
+          {choosing && (
+            <FormGroup label="How it is reached" fieldId="models-exposure" role="radiogroup" isStack>
+              <ExposureChooser exposures={ex} error={exposuresRead.error} selected={selectedKey} onSelect={setChoice} />
+            </FormGroup>
+          )}
         </Form>
       </StackItem>
       <StackItem>
@@ -635,10 +856,10 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
       </StackItem>
       {next?.kind === "set-up" && (
         <StackItem>
-          <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
+          <PrimaryAction label={next.label} onClick={() => onSetUp(withExposure(next.setup, option))} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? props.prerequisitesReason ?? exposureReason} />
         </StackItem>
       )}
-      {project && model?.ready && model.url && !isTerminating(model) && (
+      {project && model?.ready && (model.url || model.internalUrl) && !isTerminating(model) && (
         <StackItem>
           <UseModel model={model} catalog={c} project={project} dashboardUrl={status.dashboardUrl} onMaaS={onMaaS} readOnly={readOnly} baseReason={baseReason}
             onSetUpAgain={() => props.setPending({ kind: "setup-models", gateway: false, project, model: name })} />
@@ -647,8 +868,9 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>On the cluster, unless one exists: GatewayClass <code>{GATEWAY}</code>, and in namespace <code>{GATEWAY_NS}</code> ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> (hostname <code>inference.&lt;apps domain&gt;</code>), which accepts models only from the projects it lists by name, as RHOAI documents it. OpenShift adds a cloud load balancer and a DNS record for it; RHOAI adds its AuthPolicy once a model uses it</>,
-            <>On this tool&apos;s gateway, each project you set up a model in is added to that list (and stays on it when the model is deleted, since other models there may use it). Allow adds a project whose model was deployed elsewhere, such as in the dashboard</>,
+            <>Only when you set up the inference gateway (its own part): GatewayClass <code>{GATEWAY}</code> unless one exists, and in namespace <code>{GATEWAY_NS}</code> ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> (hostname <code>inference.&lt;apps domain&gt;</code>), which accepts models only from the projects it lists by name, as RHOAI documents it. OpenShift adds a cloud load balancer and a DNS record for it; RHOAI adds its AuthPolicy once a model uses it</>,
+            <>On this tool&apos;s gateway, each project you set up a model in through it is added to that list, and taken off again when the project&apos;s last model on the gateway is deleted. Allow adds a project whose model was deployed elsewhere, such as in the dashboard</>,
+            <>Through MaaS only: the model is published (as on the MaaS tab). Through another gateway: only the model&apos;s route names it; the gateway is not changed. Only inside the cluster: no route at all</>,
             <>In the project, for each model you set up: an LLMInferenceService of the model&apos;s name (here <code>{name}</code>), downloaded from Hugging Face, on the cluster&apos;s CPU preset{models?.preset ? <> <code>{models.preset}</code></> : null}. KServe adds its Deployment, Service and route</>,
             <>For each model, its token authentication as the dashboard&apos;s &quot;Require token authentication&quot; makes it: ServiceAccount <code>{tokenSA(name)}</code>, Role <code>{name}-view-role</code> (get on that model only), RoleBinding <code>{name}-view</code> and token Secret <code>default-name-{tokenSA(name)}</code>, all owned by the model, so they go with it</>,
           ]} />
@@ -671,8 +893,14 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check what every part needs" },
         ...(p.gateway ? [{ id: "gateway", title: "Create the inference gateway" }, { id: "gateway-ready", title: "Wait for the gateway and its load balancer" }] : []),
-        ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch ${p.model} in ${p.project} to the released image` : `Create ${p.model} in ${p.project}` }, { id: "model-ready", title: "Wait until the model answers" }] : []),
+        ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch ${p.model} in ${p.project} to the released image` : `Create ${p.model} in ${p.project}` }, { id: "model-ready", title: "Wait until the model runs" }] : []),
+        ...(p.project && p.exposure === "maas" ? [{ id: "publish", title: "Publish it to MaaS" }] : []),
+        ...(p.project ? [{ id: "callable", title: "Check that it can be called" }] : []),
       ];
+    case "check-model":
+      return [{ id: "callable", title: `Call ${p.model} in ${p.project} once` }];
+    case "disallow-gateway-project":
+      return [{ id: "check", title: "Check that no model there uses the gateway" }, { id: "gateway", title: `Take ${p.project} off the gateway's projects` }];
     case "teardown-model":
       return [{ id: "model", title: `Delete ${p.model} in ${p.project}` }];
     case "teardown-gateway":
@@ -683,9 +911,9 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
 }
 
 /** Whether a model setup in project adds it to this tool's gateway's list. */
-function setupAddsProject(status: ResourcesStatus | null, project: string | null, gateway: boolean): boolean {
+function setupAddsProject(status: ResourcesStatus | null, project: string | null, gateway: boolean, exposure?: ModelExposureKind): boolean {
   const gw = status?.inferenceGateway;
-  if (!project || gateway || !gw?.deployed || gw.managedByTool !== true) return false;
+  if (!project || gateway || !gw?.deployed || gw.managedByTool !== true || (exposure && exposure !== "default-gateway")) return false;
   return !(gw.allowedProjects ?? []).includes(project);
 }
 
@@ -693,7 +921,7 @@ function setupAddsProject(status: ResourcesStatus | null, project: string | null
 export function modelsConfirm(pending: Pending, status: ResourcesStatus | null): ConfirmSpec | null {
   switch (pending.kind) {
     case "setup-models": {
-      const { gateway, project, releasedImage, model: name } = pending;
+      const { gateway, project, releasedImage, model: name, option } = pending;
       const c = catalogModel(status, name);
       const short = shortModelName(status, name);
       const reason = status?.models?.imagePlanReason;
@@ -711,6 +939,9 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
           <Stack hasGutter>
             {gateway && <StackItem><Content component="p">On the cluster: the inference gateway, the front door to models. It creates a cloud load balancer, which costs money while it exists.</Content></StackItem>}
             {project && <StackItem><Content component="p">In {project}: {c?.displayName ?? name}, {c ? modelTypeWords(c).toLowerCase() : "a model"}. It needs {modelNeeds(c)} on one worker, downloads about {c?.downloadSize ?? "1 GB"}, and takes 3 to 5 minutes the first time (the runtime image and the model are downloaded).</Content></StackItem>}
+            {project && option && <StackItem><Content component="p">Reached: {option.title.charAt(0).toLowerCase() + option.title.slice(1)}. {option.description}{option.address ? <> It answers at <code>{option.address}</code>.</> : null}</Content></StackItem>}
+            {project && option?.warning && <StackItem><Alert variant="warning" isInline component="p" title="Before you set it up">{option.warning}</Alert></StackItem>}
+            {project && <StackItem><Content component="p">Once it runs, the tool calls it once, as a user would; the setup succeeds only when it answers.</Content></StackItem>}
           </Stack>
         ),
         changes: [
@@ -718,7 +949,8 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
             <>GatewayClass <code>{GATEWAY}</code> (OpenShift&apos;s gateway controller) is created, unless one exists.</>,
             <>In namespace <code>{GATEWAY_NS}</code>: ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> with two HTTPS listeners: <code>inference.&lt;apps domain&gt;</code> on the cluster&apos;s default certificate, and the gateway&apos;s in-cluster name. Both accept models only from the projects they list by name: <code>{GATEWAY_NS}</code>{project ? <> and <code>{project}</code></> : null}. OpenShift adds a load balancer and a DNS record.</>,
           ] : []),
-          ...(setupAddsProject(status, project, gateway) ? [
+          ...(option?.changes ?? []).map((ch) => <>{ch}</>),
+          ...(!option && setupAddsProject(status, project, gateway, pending.exposure) ? [
             <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: <code>{project}</code> is added to the projects it allows, before the model is created. The projects already on the list stay.</>,
           ] : []),
           ...(project ? [
@@ -729,6 +961,20 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         ],
       };
     }
+    case "check-model": {
+      const short = shortModelName(status, pending.model);
+      return {
+        title: `Check that ${short} in ${pending.project} can be called?`, confirm: "Check", runTitle: `Check ${short} in ${pending.project}`,
+        summary: <Content component="p">The tool sends the model one minimal request the way it is reached, with the model&apos;s own token (never yours), and reports what answered.</Content>,
+        changes: [<>Nothing on the cluster changes.</>],
+      };
+    }
+    case "disallow-gateway-project":
+      return {
+        title: `Remove ${pending.project} from the inference gateway's projects?`, confirm: "Remove from the list", danger: true, runTitle: `Remove ${pending.project} from the gateway's projects`,
+        summary: <Content component="p">{pending.gone ? `Project ${pending.project} no longer exists; a new project of that name would be admitted at once.` : `No model in ${pending.project} uses the gateway.`} Routes from {pending.project} then no longer attach. It is refused while a model there routes through the gateway; routes someone made by hand in {pending.project} are not visible to this tool and stop working too.</Content>,
+        changes: [<>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>: <code>{pending.project}</code> is taken off the projects both listeners allow. The other projects stay; nothing else changes.</>],
+      };
     case "teardown-model": {
       const short = shortModelName(status, pending.model);
       return {

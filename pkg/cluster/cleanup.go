@@ -19,12 +19,13 @@ var (
 	cleanupPlayground     = TeardownPlayground
 	cleanupUnpublish      = UnpublishMaaSModel
 	cleanupMaaSPlatform   = TeardownMaaSPlatform
+	cleanupComponents     = RestoreComponents
 )
 
 // CleanupStepID is the step id of each part of a clean-up, as streamed:
 // "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
-// "model:<project>", "inference-gateway", and "maas-unpublish:<project>"
-// (first) and "maas-platform" (last).
+// "model:<project>", "inference-gateway", "maas-unpublish:<project>"
+// (first), "maas-platform", and "components" (last).
 func CleanupStepID(part, project string) string {
 	if project != "" {
 		return part + ":" + project
@@ -43,7 +44,9 @@ type cleanupPart struct {
 // the playgrounds (which use the models), then the models and, after them, the inference gateway they route through
 // (its teardown refuses while a model uses it). A model published to MaaS
 // is unpublished before anything else (the Models teardown refuses while it
-// is published), and the MaaS platform goes last.
+// is published), and the MaaS platform goes last but for the
+// DataScienceCluster components this tool turned on, which go back to what
+// they were once nothing of the clean-up uses them.
 func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []cleanupPart {
 	var parts []cleanupPart
 	for _, project := range req.MaaSPublished {
@@ -91,6 +94,10 @@ func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []clea
 	}
 	if req.MaaSPlatform {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
+	}
+	if len(req.Components) > 0 {
+		// Last: what used the components is gone by now.
+		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }})
 	}
 	return parts
 }

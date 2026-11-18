@@ -1896,6 +1896,99 @@ var HandleMaaSStream = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 	}
 })
 
+// runPrerequisites sets up a feature's prerequisites; tests replace it.
+var runPrerequisites = cluster.RunPrerequisites
+
+// getPrerequisitesStatus reads every feature's prerequisites; tests replace it.
+var getPrerequisitesStatus = cluster.GetPrerequisitesStatusFor
+
+// getModelExposures reads the ways a model can be reached; tests replace it.
+var getModelExposures = cluster.GetModelExposures
+
+// HandleModelExposures reports the ways a catalog model can be reached from
+// a project (?project=&model=), with the one this tool recommends.
+var HandleModelExposures = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	project, model := r.URL.Query().Get("project"), r.URL.Query().Get("model")
+	if !namespaceRegex.MatchString(project) || !cluster.ValidModelName(model) {
+		writeError(w, "a valid project and a model of the catalog are required", http.StatusBadRequest, "validation")
+		return
+	}
+	ex, msg, code := getModelExposures(c, project, model)
+	if msg != "" {
+		status := http.StatusBadGateway
+		switch code {
+		case "validation":
+			status = http.StatusBadRequest
+		case "forbidden":
+			status = http.StatusForbidden
+		case "terminating":
+			status = http.StatusConflict
+		}
+		writeError(w, msg, status, code)
+		return
+	}
+	writeJSON(w, ex, "model exposures")
+})
+
+// HandlePrerequisitesStatus reports what each Environment feature needs on
+// the cluster (DataScienceCluster components, operators) and what Set up
+// would change.
+var HandlePrerequisitesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	exposure := r.URL.Query().Get("exposure")
+	if !cluster.ValidExposure(exposure) {
+		writeError(w, "exposure must be default-gateway, maas, gateway or internal", http.StatusBadRequest, "validation")
+		return
+	}
+	st, err := getPrerequisitesStatus(c, exposure)
+	if err != nil {
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "Cannot read the prerequisites: "+err.Error(), code, errorCode)
+		return
+	}
+	writeJSON(w, st, "prerequisites")
+})
+
+// HandlePrerequisitesStream sets up what one feature needs on the cluster,
+// as one operation streaming its steps.
+var HandlePrerequisitesStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var req types.PrerequisitesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return
+	}
+	if problem := cluster.ValidatePrerequisitesRequest(req); problem != "" {
+		writeError(w, problem, http.StatusBadRequest, "validation")
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in prerequisites handler", "error", rec)
+		}
+	}()
+	sseWriter, err := NewSSEWriter(w)
+	if err != nil {
+		writeError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	defer sseWriter.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go sseHeartbeat(sseWriter, done)
+
+	beginOperation(w, req.Feature+" prerequisites")
+	slog.Info("mutation", "op", "prerequisites", "feature", req.Feature)
+	result, runErr := runPrerequisites(c, req, forwardSteps(sseWriter))
+	sendOperationResult(sseWriter, result, runErr)
+	if runErr != nil {
+		slog.Error("prerequisites failed", "error", runErr)
+	}
+})
+
 // runCleanUp runs a clean-up; tests replace it.
 var runCleanUp = cluster.CleanUp
 
@@ -1941,7 +2034,15 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		writeError(w, "deleteNamespace needs storage", http.StatusBadRequest, "validation")
 		return
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform {
+	seenComponents := map[string]bool{}
+	for _, k := range req.Components {
+		if !cluster.RestorableComponentKey(k) || seenComponents[k] {
+			writeError(w, "components must be distinct DataScienceCluster components this tool turns on", http.StatusBadRequest, "validation")
+			return
+		}
+		seenComponents[k] = true
+	}
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -1990,8 +2091,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if req.MaaSPlatform {
 		target = append(target, "MaaS platform")
 	}
+	if len(req.Components) > 0 {
+		target = append(target, "DataScienceCluster "+strings.Join(req.Components, ", "))
+	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components)
 
 	token := ""
 	if len(req.Playgrounds) > 0 {

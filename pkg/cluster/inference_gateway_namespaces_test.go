@@ -158,7 +158,7 @@ func TestModelsSetup_AddsTheProjectToTheGatewayBeforeTheModel(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("setup in team: %+v", res)
 	}
-	if got := finalSteps(events); got != "check=success model=success model-ready=success" {
+	if got := finalSteps(events); got != "check=success model=success model-ready=success callable=success" {
 		t.Errorf("steps: %s", got)
 	}
 	wantAllowed(t, mc, "by-hand", "openshift-ingress", "proj", "team")
@@ -347,16 +347,109 @@ func TestInferenceGateway_SomeoneElsesGatewayIsNeverChanged(t *testing.T) {
 	}
 }
 
-// Deleting the tool's model keeps its project on the list: another model
-// there (the dashboard's) may use the gateway, and removing it would
-// detach that model.
-func TestModelsTeardown_KeepsTheProjectOnTheGateway(t *testing.T) {
+// Deleting the last model of a project this tool added to the list takes
+// the project off it (live v3.0.0 E2E: e2e-v300 stayed admitted after its
+// model was deleted, and a new project of that name would be admitted).
+func TestModelsTeardown_TakesARecordedProjectOffTheGateway(t *testing.T) {
 	mc := newModelsCluster(t)
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"}); !res.Success {
+	if rec, _ := readGatewayProjects(mc.c); strings.Join(rec, ",") != "proj" {
+		t.Fatalf("record: %v", rec)
+	}
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"})
+	if !res.Success || !strings.Contains(res.Message, "'proj' was taken off the projects the inference gateway allows") {
+		t.Fatalf("teardown: %+v", res)
+	}
+	wantAllowed(t, mc, "openshift-ingress")
+	if rec, _ := readGatewayProjects(mc.c); len(rec) != 0 {
+		t.Errorf("record after: %v", rec)
+	}
+	// The write was dry-run first.
+	if indexWithPrefix(mc.f.requests, "DRYRUN PUT "+testGatewayPath) < 0 && indexWithPrefix(mc.f.requests, "DRYRUN PATCH "+testGatewayPath) < 0 {
+		t.Errorf("no dry run of the gateway write: %v", mc.f.requests)
+	}
+}
+
+// Another model on the gateway in that project (the dashboard's) keeps the
+// project on the list; so does a name this tool did not add.
+func TestModelsTeardown_KeepsAProjectStillUsedOrNotAdded(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices/granite", `{"spec":{"router":{"route":{},"gateway":{}}}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"}); !res.Success || strings.Contains(res.Message, "taken off") {
 		t.Fatalf("teardown: %+v", res)
 	}
 	wantAllowed(t, mc, "openshift-ingress", "proj")
+
+	// Not recorded (added by hand, or before the record existed): kept.
+	mc2 := newModelsCluster(t)
+	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if err := writeGatewayProjects(mc2.c, nil); err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "teardown", Project: "proj"}); !res.Success || strings.Contains(res.Message, "taken off") {
+		t.Fatalf("teardown: %+v", res)
+	}
+	wantAllowed(t, mc2, "openshift-ingress", "proj")
+}
+
+// Fail closed: when the models cannot be listed, the project stays and the
+// result says why.
+func TestModelsTeardown_ProjectStaysWhenModelsCannotBeListed(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.fail["GET /apis/serving.kserve.io/v1alpha2/llminferenceservices"] = 500
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"})
+	if !res.Success || !strings.Contains(res.Message, "stays on its list") {
+		t.Fatalf("teardown: %+v", res)
+	}
+	wantAllowed(t, mc, "openshift-ingress", "proj")
+}
+
+// The status names listed projects no model uses and those that no longer
+// exist; "Remove from the list" takes one off after confirmation, never
+// the gateway's own namespace, never while a model there uses it.
+func TestInferenceGateway_UnusedAndGoneProjectsAndDisallow(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	setListeners(t, mc, namesList("openshift-ingress", "e2e-v300", "proj", "team"))
+	someoneElsesModel(mc, "team")
+	st, _ := GetResourcesStatus(mc.c)
+	gw := st.InferenceGateway
+	if strings.Join(gw.UnusedProjects, ",") != "e2e-v300,proj" || strings.Join(gw.GoneProjects, ",") != "e2e-v300" {
+		t.Fatalf("unused %v gone %v", gw.UnusedProjects, gw.GoneProjects)
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "disallow", Project: "team"}); res.Success || res.ErrorCode != "in_use" {
+		t.Errorf("disallow team: %+v", res)
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "disallow", Project: "openshift-ingress"}); res.Success {
+		t.Errorf("disallow the gateway's namespace: %+v", res)
+	}
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "disallow", Project: "e2e-v300"})
+	if !res.Success || finalSteps(events) != "check=success gateway=success" {
+		t.Fatalf("disallow: %+v %s", res, finalSteps(events))
+	}
+	wantAllowed(t, mc, "openshift-ingress", "proj", "team")
+}
+
+// Someone else's gateway is never changed by Remove from the list.
+func TestInferenceGateway_DisallowNeverChangesAForeignGateway(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testGatewayPath, `{"spec":{"gatewayClassName":"openshift-ai-inference","listeners":[{"name":"https","hostname":"x.example.com","allowedRoutes":`+namesList("openshift-ingress", "other")+`}]}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "disallow", Project: "other"}); res.Success || res.ErrorCode != "not_managed" {
+		t.Errorf("disallow: %+v", res)
+	}
+	if m := mc.f.mutations(); len(m) != 0 {
+		t.Errorf("wrote %v", m)
+	}
 }

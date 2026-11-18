@@ -56,7 +56,7 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 		}
 	}
 	var rhclPlan *operatorInstallPlan
-	if !rhcl.installed() && !kRuns && rhcl.sub == nil {
+	if !rhcl.installed() && !kRuns && rhcl.pending() == nil {
 		plan, msg, code := planOperatorInstall(c, rhclOperator)
 		if msg != "" {
 			return m.fail("check", msg, code, "rhcl plan failed")
@@ -109,7 +109,7 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 			if cnpg, err = readOperator(c, cnpgOperator); err != nil {
 				return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
 			}
-			if !cnpg.installed() && cnpg.sub == nil {
+			if !cnpg.installed() && cnpg.pending() == nil {
 				plan, msg, code := planOperatorInstall(c, cnpgOperator)
 				if msg != "" {
 					return m.fail("check", msg+" Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).", code, "cnpg plan failed")
@@ -210,10 +210,10 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 			return m.fail("rhcl", fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "rhcl install failed")
 		}
 		fallthrough
-	case !rhcl.installed() && kVersion == "" && rhcl.sub != nil:
+	case !rhcl.installed() && kVersion == "" && rhcl.pending() != nil:
 		ns, name := rhclOperator.namespace, rhclOperator.subName
-		if rhcl.sub != nil {
-			ns, name = rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name
+		if p := rhcl.pending(); p != nil {
+			ns, name = p.Metadata.Namespace, p.Metadata.Name
 		}
 		if r, msg := m.waitOperator("rhcl", ns, name, rhclOperator.title); r != nil {
 			return r, msg
@@ -285,10 +285,10 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 			if err != nil {
 				return m.fail("cnpg", fmt.Sprintf("Failed to %v. Set up again to continue.", err), maasWriteCode(err), "cnpg install failed")
 			}
-		} else if cnpg.sub != nil {
-			ns, name = cnpg.sub.Metadata.Namespace, cnpg.sub.Metadata.Name
+		} else if p := cnpg.pending(); p != nil {
+			ns, name = p.Metadata.Namespace, p.Metadata.Name
 		}
-		if cnpgPlan != nil || cnpg.sub != nil {
+		if cnpgPlan != nil || cnpg.pending() != nil {
 			if r, msg := m.waitOperator("cnpg", ns, name, cnpgOperator.title); r != nil {
 				return r, msg
 			}

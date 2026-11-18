@@ -45,9 +45,10 @@ import (
 // The objects also carry the tool label. Which are the tool's: the
 // ServiceAccount, Role and RoleBinding are owned by the tool's model (an
 // ownerReference to its recorded UID); the Secret is the one whose UID the
-// tool recorded when it created it. The tool never reads these Secrets
-// (it has no get on their names), so their existence is checked with a
-// dry-run delete carrying the recorded UID as a precondition. That does
+// tool recorded when it created it. Its existence is checked with a
+// dry-run delete carrying the recorded UID as a precondition; the tool
+// reads it (get on these names, since 4.0.0) only for "Can it be called?"
+// (models_call.go), which sends the model's own token to it. That does
 // not keep a leaked token of this tool from minting tokens: "create" on
 // Secrets anywhere plus the named "get" on other Secrets lets it create a
 // token Secret of such a name for any ServiceAccount and read it back

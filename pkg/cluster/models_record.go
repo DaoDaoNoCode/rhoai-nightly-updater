@@ -39,7 +39,8 @@ type recordedModel struct {
 	// UID is the LLMInferenceService's, as the create returned it.
 	UID string `json:"uid"`
 	// TokenSecretUID is the UID of the model's token Secret the tool made
-	// (models_token.go), which the tool never reads back.
+	// (models_token.go); the tool reads it only for "Can it be called?"
+	// (models_call.go).
 	TokenSecretUID string `json:"tokenSecretUID,omitempty"`
 	At             string `json:"at,omitempty"`
 	By             string `json:"by,omitempty"`

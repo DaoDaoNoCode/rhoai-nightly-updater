@@ -43,8 +43,8 @@ export interface PlaygroundOp {
 
 /** What a running Models operation changes. */
 export interface ModelsOp {
-  /** allow: adds allowProject to the gateway's list (a gateway change; gateway is true). */
-  action: "setup" | "teardown" | "allow";
+  /** allow / disallow: adds allowProject to (takes it off) the gateway's list (a gateway change; gateway is true); check: calls the model once. */
+  action: "setup" | "teardown" | "allow" | "disallow" | "check";
   gateway: boolean;
   project: string | null;
   /** The catalog name of the model in project. */
@@ -482,6 +482,11 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   const notAllowed = notAllowedState(status, project);
   if (notAllowed) return notAllowed;
   const unmanaged = parts.some((p) => p.unmanaged);
+  // Ready but its last "Can it be called?" failed: a caller would not get an answer.
+  const check = modelIn(status, project, name)?.callCheck;
+  if (model.status === "ready" && check && !check.ok && check.result !== "not-checked") {
+    return { status: "needs-attention", label: `Needs attention in ${project}`, ...owner(unmanaged), next: { kind: "show-issue", part: "model" }, project };
+  }
   if (model.status === "ready") {
     const href = dashboardProjectHref(status?.dashboardUrl, project);
     return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open in dashboard", href } : null, project };
@@ -491,21 +496,17 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   if (moving && parts.every((p) => p.status !== "not-set-up")) {
     return { status: moving.status === "deleting" ? "deleting" : "setting-up", label: moving.status === "deleting" ? `Deleting in ${project}` : `Setting up in ${project}`, next: null, project };
   }
-  const needGateway = gateway.status === "not-set-up";
-  const setup: Pending[] = [{ kind: "setup-models", gateway: needGateway, project, model: name }];
+  // A model setup never sets up the inference gateway: how the model is
+  // reached is chosen on the tab (the gateway is its own part).
+  const setup: Pending[] = [{ kind: "setup-models", gateway: false, project, model: name }];
   let reason: string | null = modelsBlockedReason(status);
-  if (!reason && moving) reason = `The ${moving.id === "gateway" ? "inference gateway" : "model"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is done.`;
-  if (!reason && needGateway && status?.inferenceGateway?.setupBlockedReason) reason = status.inferenceGateway.setupBlockedReason;
-  // This tool's gateway: setup adds the project to its list. Someone else's
-  // is never changed.
-  if (!reason && status?.inferenceGateway?.managedByTool === false && gatewayAllows(status, project) === "no") {
-    reason = `The inference gateway does not allow ${project}. ${foreignGatewayStep(project)}`;
-  }
+  if (!reason && moving && (moving.id === "model" || gateway.status === "deleting")) reason = `The ${moving.id === "gateway" ? "inference gateway" : "model"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is done.`;
   if (!reason) reason = modelOptionReason(status, project, name);
+  const modelMoving = model.status === "setting-up" || model.status === "deleting";
   return {
-    status: moving ? "setting-up" : "not-set-up",
-    label: moving ? `Setting up in ${project}` : `Not set up in ${project}`,
-    next: { kind: "set-up", label: needGateway ? `Set up Models in ${project}` : `Set up ${short} in ${project}`, setup, reason },
+    status: modelMoving ? "setting-up" : "not-set-up",
+    label: modelMoving ? `Setting up in ${project}` : `Not set up in ${project}`,
+    next: { kind: "set-up", label: `Set up ${short} in ${project}`, setup, reason },
     project,
   };
 }

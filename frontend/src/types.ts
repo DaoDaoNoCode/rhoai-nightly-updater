@@ -822,6 +822,11 @@ export interface InferenceGatewayState extends ResourceState {
   notAllowedModelProjects?: string[];
   /** Those models, "namespace/name": their routes are rejected, so they never become Ready. */
   notAllowedModels?: string[];
+  // --- Models routing ---
+  /** Projects on this tool's gateway's list that no model routes through from (their editors can still attach routes). */
+  unusedProjects?: string[];
+  /** Of those, the ones that no longer exist: a new project of that name would be admitted at once. */
+  goneProjects?: string[];
 }
 
 /** A model the Models feature sets up (pkg/cluster modelCatalog). */
@@ -872,6 +877,19 @@ export interface ModelState extends ResourceState {
   tokenServiceAccount?: string;
   /** security.opendatahub.io/enable-auth is "false" on the model (turned off in the dashboard). */
   tokenAuthOff?: boolean;
+  // --- Models routing ---
+  /** How the model is reached, from its spec.router. */
+  exposure?: ModelExposureKind;
+  /** The gateway it routes through ("namespace/name"). */
+  gateway?: string;
+  /** Authentication on that gateway: "maas" means MaaS does it. */
+  gatewayAuth?: "enforced" | "not-enforced" | "missing" | "maas";
+  /** The model's in-cluster address. */
+  internalUrl?: string;
+  /** The name the model answers to: the "model" a request sends. */
+  servedName?: string;
+  /** The last "Can it be called?" check since the app started. */
+  callCheck?: ModelCallCheck;
 }
 
 /** What a model setup needs, and the catalog's models in the projects. */
@@ -892,8 +910,12 @@ export interface ModelsStatus {
 
 /** The body of POST /api/resources/models/stream (pkg/types ModelsRequest). */
 export interface ModelsRequest {
-  /** allow: add project to the projects this tool's inference gateway allows. */
-  action: "setup" | "teardown" | "allow";
+  /** allow / disallow: add project to (take it off) the projects this tool's inference gateway allows; check: call the model once. */
+  action: "setup" | "teardown" | "allow" | "disallow" | "check";
+  /** Setup: how the model is reached (absent: the recommended way). */
+  exposure?: ModelExposureKind;
+  /** The gateway of exposure "gateway": "namespace/name". */
+  gatewayRef?: string;
   /** The inference gateway: set up before the model, deleted after it. */
   gateway?: boolean;
   /** The model's project (absent: no model part), or the project allow adds. */
@@ -1170,4 +1192,86 @@ export interface MaaSRequest {
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;
+}
+
+// --- Models routing (pkg/types ModelExposures, ModelCallCheck) ---------------
+
+/** How a model is reached. */
+export type ModelExposureKind = "default-gateway" | "maas" | "gateway" | "internal";
+
+/** One way to reach a model (pkg/types ModelExposureOption). */
+export interface ModelExposureOption {
+  /** "default-gateway", "maas", "internal" or "gateway:<namespace>/<name>". */
+  key: string;
+  exposure: ModelExposureKind;
+  gatewayRef?: string;
+  title: string;
+  description: string;
+  available: boolean;
+  reason?: string;
+  /** Connectivity Link is not set up yet: Set up installs it first. */
+  needsAuth?: boolean;
+  warning?: string;
+  changes?: string[];
+  address?: string;
+}
+
+/** GET /api/resources/models/exposures (pkg/types ModelExposures). */
+export interface ModelExposures {
+  project: string;
+  model: string;
+  /** The recommended option's key ("" when none fits). */
+  default: string;
+  defaultReason?: string;
+  options: ModelExposureOption[];
+  kserveDefaultGateway?: string;
+  authReady: boolean;
+  recommendGateway?: boolean;
+  recommendGatewayReason?: string;
+}
+
+/** One "Can it be called?" check (pkg/types ModelCallCheck). */
+export interface ModelCallCheck {
+  result: "ok" | "model-name" | "route" | "auth" | "forbidden" | "server-error" | "unreachable" | "maas" | "not-checked" | "unexpected";
+  ok: boolean;
+  status?: number;
+  message: string;
+  url?: string;
+  at: string;
+}
+
+// --- One-click prerequisites (pkg/types PrerequisitesStatus) -----------------
+
+/** A DataScienceCluster component this tool turned on, and what it was. */
+export interface RestorableComponent {
+  component: string;
+  previous?: string;
+  feature: string;
+}
+
+/** A prerequisite part, as a MaaS part (ids "dsc-<component>", operator ids, "kuadrant", "dependencies"). */
+export type PrerequisitePart = Omit<MaaSPart, "id"> & { id: string };
+
+/** One feature's cluster prerequisites. */
+export interface FeaturePrerequisites {
+  ready: boolean;
+  /** The parts in setup order. */
+  parts: PrerequisitePart[];
+  setupPlan?: string[];
+  setupBlockedReason?: string;
+  restorable?: RestorableComponent[];
+}
+
+/** The features the prerequisites cover. */
+export type PrerequisiteFeature = "pipelines" | "mlflow" | "models" | "playground";
+
+/** GET /api/resources/prerequisites. */
+export interface PrerequisitesStatus {
+  features: Partial<Record<PrerequisiteFeature, FeaturePrerequisites>>;
+}
+
+/** The body of POST /api/resources/prerequisites/stream. */
+export interface PrerequisitesRequest {
+  feature: PrerequisiteFeature;
+  exposure?: ModelExposureKind;
 }

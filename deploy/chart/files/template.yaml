@@ -306,6 +306,13 @@ objects:
       - apiGroups: ["operators.coreos.com"]
         resources: ["operatorgroups"]
         verbs: ["list"]
+      # Operators a feature needs (cert-manager, Connectivity Link,
+      # CloudNativePG) are found by package in any namespace, as RHOAI's
+      # KServe finds them, so a second install is never made elsewhere;
+      # read-only. SECURITY.md, "One-click prerequisites".
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions"]
+        verbs: ["list"]
       - apiGroups: ["operators.coreos.com"]
         resources: ["operatorgroups"]
         resourceNames: ["rhods-operator"]
@@ -482,10 +489,12 @@ objects:
       # <model>-view-role (get on that one model), RoleBinding <model>-view
       # and token Secret default-name-<model>-sa, each owned by the model.
       # create cannot be limited by name (Secrets create exists above);
-      # get and delete only the catalog's names. No get on these Secrets
-      # (the named get rules on other Secrets above already let a leaked
-      # token create a token Secret of such a name and read it back;
-      # SECURITY.md). Delete is also what OpenShift's
+      # get and delete only the catalog's names. get on these Secrets is
+      # for "Can it be called?": the model's own token (it may only get that
+      # one model) calls the model once after setup, never the user's or
+      # this app's (the named get rules on other Secrets above already let
+      # a leaked token create a token Secret of such a name and read it
+      # back; SECURITY.md, "Which token is used where"). Delete is also what OpenShift's
       # OwnerReferencesPermissionEnforcement asks of whoever sets
       # ownerReferences. The Role and RoleBinding pass the RBAC escalation
       # check because this ServiceAccount holds get on those
@@ -513,7 +522,7 @@ objects:
       - apiGroups: [""]
         resources: ["secrets"]
         resourceNames: ["default-name-smollm2-135m-instruct-sa", "default-name-qwen25-05b-instruct-sa", "default-name-qwen3-1-7b-sa", "default-name-granite-embedding-125m-english-sa"]
-        verbs: ["delete"]
+        verbs: ["get", "delete"]
       # The dashboard's hardware profiles, to record the one that fits the
       # model as the deploy wizard does (Models). Read-only.
       - apiGroups: ["infrastructure.opendatahub.io"]
@@ -923,7 +932,7 @@ objects:
                 # Must match api.ExpectedTemplateRevision; bump both when a
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
-                  value: "5"
+                  value: "6"
                 # The update check (GET /api/update-check).
                 - name: IMAGE_REPOSITORY
                   value: ${IMAGE_REPOSITORY}

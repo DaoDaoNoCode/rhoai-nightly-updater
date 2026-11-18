@@ -118,7 +118,7 @@ func TestToolModelPath_IsExactlyTheCatalog(t *testing.T) {
 // vLLM does not load.
 func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 	for _, entry := range modelCatalog {
-		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false, false)
+		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false, false, exposurePlan{exposure: exposureDefault})
 		meta := obj["metadata"].(map[string]interface{})
 		if meta["name"] != entry.Name {
 			t.Errorf("%s: name %v", entry.Name, meta["name"])

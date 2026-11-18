@@ -322,6 +322,31 @@ const scenarios = {
       blocked: { component: "kserve", reason: "KServe cannot serve LLMInferenceServices yet: DataScienceCluster default-dsc reports KserveLLMInferenceServiceDependencies=False (LeaderWorkerSet operator is not installed). A cluster-admin installs what it names; the Components page shows the details." } });
   },
   "env-models-reader": (w) => { scenarios["env-models-ready"](w); w.canMutate = false; },
+  // Models routing: how a new model is reached, and whether a ready one can be called.
+  "env-models-choose": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
+    w.routing = { maasReady: true, otherGateway: true };
+  },
+  "env-models-choose-none": (w) => { w.resources.inferenceGateway = F.gatewayStates.none; w.resources.models = F.modelsStatus(); w.routing = {}; },
+  "env-models-routed": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
+  },
+  "env-models-not-callable": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { check: "route" })] });
+  },
+  "env-models-internal": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.none;
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"), { exposure: "internal", check: undefined })] });
+  },
+  "env-models-stale-projects": (w) => {
+    w.resources.inferenceGateway = { ...F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), allowedProjects: ["openshift-ingress", "dev-project", "e2e-v300", "llm-eval"], unusedProjects: ["e2e-v300", "llm-eval"], goneProjects: ["e2e-v300"] };
+    w.resources.models = F.modelsStatus({ items: [F.routed(F.modelStates.released("dev-project"))] });
+  },
+  "env-models-prereq": (w) => { w.resources.inferenceGateway = F.gatewayStates.ready([]); w.resources.models = F.modelsStatus(); w.prereq = { models: "missing" }; w.routing = { authReady: false }; },
+  "env-pipelines-prereq": (w) => { w.prereq = { pipelines: "missing" }; },
   "env-models-gated": (w) => { w.resources.models = F.modelsStatus(); w.gated = true; },
   // Playground: every state in dev-project, on a ready model.
   // With this tool's embedding model, which Set up adds as one.
@@ -601,7 +626,7 @@ function removeModel(project, name) {
 
 /** POST /api/resources/models/stream (pkg/cluster RunModels). */
 async function modelsStream(req, res) {
-  const { action, gateway = false, project, releasedImage = false, model = "qwen25-05b-instruct" } = await body(req);
+  const { action, gateway = false, project, releasedImage = false, model = "qwen25-05b-instruct", exposure = "default-gateway" } = await body(req);
   const display = F.MODEL_CATALOG.find((c) => c.name === model)?.displayName ?? model;
   beginOperation("models", "Models", action === "allow" ? `allow project ${project} on the inference gateway` : `${action} ${[gateway ? "inference gateway" : "", project ? `model ${model} in ${project}` : ""].filter(Boolean).join(", ")}`);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
@@ -609,7 +634,23 @@ async function modelsStream(req, res) {
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
   const m = modelsWorld();
   const done = [];
-  if (action === "allow") {
+  if (action === "check") {
+    send({ step: "callable", status: "running", message: `Calling ${model} in '${project}' once...` });
+    await nextStep();
+    const msg = `Answers requests: a request for model "${model}" got 200.`;
+    m.items = (m.items ?? []).map((i) => (i.namespace === project && i.name === model ? { ...i, callCheck: { result: "ok", ok: true, status: 200, message: msg, at: new Date().toISOString() } } : i));
+    send({ step: "callable", status: "success", message: msg });
+    done.push(msg);
+  } else if (action === "disallow") {
+    send({ step: "check", status: "success", message: "Checked." });
+    send({ step: "gateway", status: "running", message: `Taking '${project}' off the projects the inference gateway allows...` });
+    await nextStep();
+    const gw = world.resources.inferenceGateway;
+    world.resources.inferenceGateway = { ...gw, allowedProjects: gw.allowedProjects.filter((p) => p !== project), unusedProjects: (gw.unusedProjects ?? []).filter((p) => p !== project), goneProjects: (gw.goneProjects ?? []).filter((p) => p !== project) };
+    const msg = `The inference gateway no longer allows '${project}': routes from it no longer attach.`;
+    send({ step: "gateway", status: "success", message: msg });
+    done.push(msg);
+  } else if (action === "allow") {
     send({ step: "check", status: "running", message: `Checking the inference gateway and project '${project}'...` });
     await nextStep();
     send({ step: "check", status: "success", message: "The gateway is this tool's; the project exists." });
@@ -666,7 +707,12 @@ async function modelsStream(req, res) {
       const users = m.items.filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
       if (world.resources.inferenceGateway?.managedByTool) world.resources.inferenceGateway = F.gatewayStates.ready(users);
       send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/${model}.` });
-      done.push(`${display} is ready in ${project}.`);
+      send({ step: "callable", status: "running", message: "Calling the model once, as a user would..." });
+      await nextStep();
+      const msg = `Answers requests: a request for model "${model}" got 200.`;
+      m.items = m.items.map((i) => (i.namespace === project && i.name === model ? F.routed(i, { exposure }) : i));
+      send({ step: "callable", status: "success", message: msg });
+      done.push(`${display} is ready in ${project}. ${msg}`);
     }
   }
   const message = done.join(" ");
@@ -840,6 +886,9 @@ const routes = {
   "GET /api/resources/projects": () => ({ projects: world.projects ?? F.projects }),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => world.maas,
+  // Models routing and one-click prerequisites.
+  "GET /api/resources/models/exposures": (u) => F.modelExposures(u.searchParams.get("project") || "", u.searchParams.get("model") || "qwen25-05b-instruct", world.resources.inferenceGateway ?? F.gatewayStates.none, world.routing ?? {}),
+  "GET /api/resources/prerequisites": (u) => F.prerequisites({ ...(world.prereq ?? {}), ...(world.prereq?.models === "missing" && ["default-gateway", "gateway"].includes(u.searchParams.get("exposure") ?? "") ? { models: "missing-routing" } : {}) }),
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline/spec": () => F.pipelineSampleSpec,
   // Made up, like every value here.
