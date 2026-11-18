@@ -1,11 +1,12 @@
 import React from "react";
-import { Button, Content, Flex, FlexItem, HelperText, HelperTextItem, Popover, Stack, StackItem, Title } from "@patternfly/react-core";
+import { Button, Content, Flex, FlexItem, HelperText, HelperTextItem, Popover, Skeleton, Stack, StackItem, Title } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import { Link } from "react-router-dom";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import { TooltipButton } from "../TooltipButton";
 import { EnvStatusLabel } from "./resourceStatus";
 import { CleanupSection } from "./FeatureLayout";
+import { LabelSkeleton } from "./Loading";
 import type { FeatureState, NextStep } from "./featureState";
 import type { Pending } from "./resourceRow";
 
@@ -89,6 +90,8 @@ export const Overview: React.FC<{
   onCleanup: (() => void) | null;
 }> = ({ rows, baseReason, setUpReason, onSetUp, onShowIssue, onOpenTab, onMigrate, onSamples, onCleanup }) => {
   const ready = rows.filter((r) => r.state.status === "ready").length;
+  // Until every feature's status is read, the count would change under the reader's eyes.
+  const loading = rows.some((r) => r.state.loading);
   // The next step is text in a cell, so it is an inline link, as PatternFly
   // puts links in table cells (Button variant="link" isInline): it sits on
   // the row's text line. A step that opens a dialog ends with an ellipsis.
@@ -125,7 +128,7 @@ export const Overview: React.FC<{
       <StackItem>
         <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsBaseline" }}>
           <FlexItem><Title headingLevel="h2" size="xl">Overview</Title></FlexItem>
-          <FlexItem><Content component="p">{ready} of {rows.length} ready</Content></FlexItem>
+          <FlexItem>{loading ? <Skeleton width="6rem" screenreaderText="Loading how many features are ready" /> : <Content component="p">{ready} of {rows.length} ready</Content>}</FlexItem>
         </Flex>
       </StackItem>
       <StackItem>
@@ -133,7 +136,7 @@ export const Overview: React.FC<{
       </StackItem>
       <StackItem>
         {/* Below lg the rows stack (label: value), so the one-line State and Next step never squeeze the table. */}
-        <Table variant="compact" aria-label="Features" gridBreakPoint="grid-lg">
+        <Table variant="compact" aria-label="Features" gridBreakPoint="grid-lg" aria-busy={loading}>
           <Thead>
             <Tr>
               <Th modifier="fitContent">Feature</Th>
@@ -148,14 +151,16 @@ export const Overview: React.FC<{
                 <Td dataLabel="Feature"><Link to={row.href}>{row.name}</Link></Td>
                 <Td dataLabel="What it gives you">{row.gives}</Td>
                 <Td dataLabel="State">
-                  <Stack>
-                    <StackItem><EnvStatusLabel status={row.state.status} text={row.state.label} /></StackItem>
-                    {row.state.unmanaged && <StackItem><NotManaged /></StackItem>}
-                    {row.state.projects && <StackItem><ProjectsPopover row={row} projects={row.state.projects} /></StackItem>}
-                  </Stack>
+                  {row.state.loading ? <LabelSkeleton what={`the state of ${row.name}`} /> : (
+                    <Stack>
+                      <StackItem><EnvStatusLabel status={row.state.status} text={row.state.label} /></StackItem>
+                      {row.state.unmanaged && <StackItem><NotManaged /></StackItem>}
+                      {row.state.projects && <StackItem><ProjectsPopover row={row} projects={row.state.projects} /></StackItem>}
+                    </Stack>
+                  )}
                 </Td>
                 <Td dataLabel="Next step">
-                  {row.samples ? (
+                  {row.state.loading ? <Skeleton width="7rem" /> : row.samples ? (
                     <Stack>
                       <StackItem>{next(row, row.state.next)}</StackItem>
                       <StackItem><Button variant="link" isInline className={ONE_LINE} onClick={() => onSamples(row, row.samples!.focus)}>{row.samples.label}</Button></StackItem>

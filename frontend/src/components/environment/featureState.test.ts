@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, IDLE, mlflowState, pipelinesState, setUpBlocked } from "./featureState";
+import { defaultProject, IDLE, loadingState, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, unreadableState } from "./featureState";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const storage: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running" };
@@ -22,6 +22,20 @@ const FIXTURES: Record<string, ResourcesStatus> = {
   migrateRemove: { minio: { ...storage, migrationPending: true }, mlflow: none, pipelineServers: [dspa("juntao-test", { name: "dspa" })], legacyStorage: legacy("remove") },
   incomplete: { minio: { ...storage, ready: false, terminalError: true, repairNeeded: "scaled to 0", message: "scaled to 0" }, mlflow: none, pipelineServers: [] },
 };
+
+describe("a status not read yet", () => {
+  it("is loading, never Not set up, with nothing to do", () => {
+    expect(pipelinesState(null, null, projects)).toEqual(loadingState());
+    expect(pipelinesState(null, "zeta", projects)).toEqual(loadingState("zeta"));
+    expect(mlflowState(null)).toEqual(loadingState());
+    expect(modelsState(null, null, projects)).toEqual(loadingState());
+    expect(playgroundState(FIXTURES.none, null, null)).toEqual(loadingState());
+    expect(playgroundState(null, { items: [] }, "zeta")).toEqual(loadingState("zeta"));
+    expect(maasState(null)).toEqual(loadingState());
+    expect(loadingState()).toMatchObject({ loading: true, next: null });
+    expect(unreadableState()).not.toHaveProperty("loading");
+  });
+});
 
 describe("defaultProject", () => {
   it("is the URL's project, else the first with a ready pipeline server, else the first with any, else none", () => {

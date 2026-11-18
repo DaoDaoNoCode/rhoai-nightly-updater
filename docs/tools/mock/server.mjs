@@ -9,6 +9,9 @@
 //   POST /__docs/scenario?name=X  reset the world to scenario X
 //   POST /__docs/advance          release the next held update step (gated mode)
 //   POST /__docs/release          finish the held mutation (gated mode)
+//   POST /__docs/hold?path=P      hold GET requests under path P (repeatable) until
+//                                 POST /__docs/hold without a path (the loading states)
+//   --delay <ms>                  answer every GET /api/resources/* that much later
 //   GET  /__docs/state            scenario name, held work, the fixed "now"
 //   POST /__docs/job?name=X&out=DIR, GET /__docs/job   the capture job to run
 import { createServer } from "node:http";
@@ -403,6 +406,18 @@ let world;
 let job = { name: "", out: "" };
 // steps: resolvers of update steps waiting for /__docs/advance; credits: advances not yet used.
 const held = { steps: [], credits: 0, mutation: null };
+// Reads held for the loading-state images: GET /api/* requests whose path
+// starts with one of these prefixes wait until POST /__docs/hold without a
+// path lets them through (or a scenario reset does).
+const heldReads = { prefixes: [], waiting: [] };
+// --delay <ms> (make docs-mock DELAY=<ms>): every GET /api/resources/* answers
+// that much later, to look at the Environment page's loading states by hand.
+const READ_DELAY_MS = Number(args.delay || process.env.DOCS_MOCK_DELAY || 0);
+
+function releaseReads() {
+  heldReads.prefixes = [];
+  heldReads.waiting.splice(0).forEach((r) => r());
+}
 
 function reset(name) {
   if (!scenarios[name]) throw new Error(`unknown scenario ${name}`);
@@ -414,6 +429,7 @@ function reset(name) {
   held.credits = 0;
   if (held.mutation) held.mutation();
   held.mutation = null;
+  releaseReads();
 }
 reset(scenario);
 
@@ -834,6 +850,12 @@ const GITOPS_PROFILE_ROUTES = new Set([
 
 async function api(req, res, u) {
   const key = `${req.method} ${u.pathname}`;
+  if (req.method === "GET" && heldReads.prefixes.some((p) => u.pathname.startsWith(p))) {
+    await new Promise((r) => heldReads.waiting.push(r));
+  }
+  if (req.method === "GET" && READ_DELAY_MS > 0 && u.pathname.startsWith("/api/resources/")) {
+    await new Promise((r) => setTimeout(r, READ_DELAY_MS));
+  }
   if (world.profile === "gitops") {
     if (!GITOPS_PROFILE_ROUTES.has(key)) {
       return json(res, 403, { error: "This feature is off: this updater runs the gitops profile, where Argo CD or an ACM policy manages RHOAI from Git and the updater only installs the build the managed catalog serves (docs/GITOPS.md).", errorCode: "profile_gitops" });
@@ -905,6 +927,13 @@ function control(req, res, u) {
     case "/__docs/release":
       if (held.mutation) { held.mutation(); held.mutation = null; }
       return json(res, 200, {});
+    case "/__docs/hold": {
+      // ?path=/api/resources/maas (repeatable) holds those reads; no path lets every held read through.
+      const paths = u.searchParams.getAll("path");
+      if (paths.length) heldReads.prefixes = paths;
+      else releaseReads();
+      return json(res, 200, { holding: heldReads.prefixes, waiting: heldReads.waiting.length });
+    }
     case "/__docs/state":
       return json(res, 200, { scenario, now: F.NOW, waitingSteps: held.steps.length, waitingMutation: !!held.mutation, scenarios: Object.keys(scenarios) });
     case "/__docs/job":

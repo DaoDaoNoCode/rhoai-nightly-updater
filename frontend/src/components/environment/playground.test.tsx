@@ -34,7 +34,10 @@ describe("playgroundState", () => {
     expect(playgroundState(status, pg({ models: [qwen, { name: "deepseek", source: "namespace", status: "Failed", ready: false, chat: true }] }), "dev").next).toMatchObject({ reason: null });
     expect(playgroundState(status, pg({ blocked: { component: "ogx", reason: "The Gen AI playground is turned off." } }), "dev").next).toMatchObject({ reason: "The Gen AI playground is turned off." });
     expect(playgroundState(status, pg({ apiProblem: "This RHOAI release's dashboard gen-ai API differs." }), "dev").next).toMatchObject({ reason: expect.stringContaining("differs") });
-    expect(playgroundState(status, null, "dev").next).toMatchObject({ reason: expect.stringContaining("loading") });
+    // Before the playground's status is read, nothing is said about it, and nothing is offered.
+    expect(playgroundState(status, null, "dev")).toMatchObject({ loading: true, next: null, project: "dev" });
+    // Another project's answer: its models are still loading, so Set up waits for them.
+    expect(playgroundState(status, pg({ project: "team" }), "dev").next).toMatchObject({ reason: expect.stringContaining("loading") });
   });
 
   it("ready opens the dashboard's playground page for the project; ownership shows in the label only", () => {

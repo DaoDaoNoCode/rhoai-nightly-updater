@@ -15,6 +15,7 @@ import {
   FormHelperText,
   HelperText,
   HelperTextItem,
+  Skeleton,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
@@ -33,7 +34,7 @@ import {
   pvcsLost,
   terminalReason,
 } from "./resourceRow";
-import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { notManaged } from "./resourceStatus";
@@ -77,6 +78,8 @@ export interface PipelinesTabProps {
   onClearProject: () => void;
   /** A project in the address that no longer exists (deleted elsewhere), or null. */
   missingProject: string | null;
+  /** The status shown was read for another project: the project's Connection is still loading. */
+  connectionLoading?: boolean;
   /** pipelinesState for the project: the same as the Overview's. */
   state: FeatureState;
   busy: Busy;
@@ -297,7 +300,7 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
 };
 
 /** The project's pipeline server, or a placeholder until a project is chosen. */
-const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy, baseReason, readOnly, consoleURL, setPending }) => {
+const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy, baseReason, readOnly, consoleURL, setPending, connectionLoading }) => {
   if (!project) {
     return (
       <PartItem id="pipeline-server" title="Pipeline server" scope="In the project you choose" status="not-set-up" unmanaged={false}>
@@ -342,12 +345,14 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
             <DescriptionListTerm>Name</DescriptionListTerm>
             <DescriptionListDescription>DataSciencePipelinesApplication <code>{server.name ?? DSPA_NAME}</code></DescriptionListDescription>
           </DescriptionListGroup>
-          {server.connectionState && (
+          {(connectionLoading || server.connectionState) && (
             <DescriptionListGroup>
               <DescriptionListTerm>Connection in the dashboard</DescriptionListTerm>
               <DescriptionListDescription>
-                <ConnectionState server={server} project={project} readOnly={readOnly} baseReason={baseReason}
-                  onSetUpAgain={() => setPending({ kind: "setup-pipeline-server", project, again: true })} />
+                {connectionLoading ? <Skeleton width="20rem" screenreaderText={`Loading the Connection in ${project}`} /> : (
+                  <ConnectionState server={server} project={project} readOnly={readOnly} baseReason={baseReason}
+                    onSetUpAgain={() => setPending({ kind: "setup-pipeline-server", project, again: true })} />
+                )}
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}
@@ -410,7 +415,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
   const noProjects = projectsLoaded && projects.length === 0;
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Pipelines" purpose="Run data science pipelines in a project; their artifacts go to the cluster's S3 storage." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="Pipelines" purpose={FEATURE_PURPOSE.pipelines} state={state} /></StackItem>
       {status.pipelinesBlocked && <StackItem><ComponentAlert feature="Data Science Pipelines" block={status.pipelinesBlocked} /></StackItem>}
       {legacy && <StackItem><MigrationAlert legacy={legacy} onMigrate={onMigrate} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} /></StackItem>}

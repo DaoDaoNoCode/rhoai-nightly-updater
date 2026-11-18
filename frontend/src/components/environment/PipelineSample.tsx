@@ -5,13 +5,10 @@ import {
   Button,
   Content,
   ExpandableSection,
-  Flex,
-  FlexItem,
   List,
   ListComponent,
   ListItem,
   OrderType,
-  Spinner,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
@@ -22,6 +19,7 @@ import { getPipelineSampleSpec } from "../../services/api";
 import { ImageRef } from "../ImageRef";
 import { TabSection } from "./FeatureLayout";
 import { CopyableCode, shellQuote } from "./UseIt";
+import { LinesSkeleton } from "./Loading";
 
 /** The id of the section's heading: the Overview's "Run a sample pipeline" moves the focus there. */
 export const PIPELINE_SAMPLE_ID = "pipelines-sample";
@@ -133,12 +131,7 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, dspa, a
           <Content component="p">{error}</Content>
         </Alert>
       )
-      : (
-        <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-          <FlexItem><Spinner size="md" aria-hidden /></FlexItem>
-          <FlexItem><Content component="p">Loading the sample pipeline...</Content></FlexItem>
-        </Flex>
-      ));
+      : <LinesSkeleton what="the sample pipeline" lines={3} />);
   }
   return section(
     <List component={ListComponent.ol} type={OrderType.number} aria-label={`Run a sample pipeline in ${project}`}>

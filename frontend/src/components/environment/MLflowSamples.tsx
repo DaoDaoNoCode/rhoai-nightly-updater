@@ -11,7 +11,6 @@ import {
   FlexItem,
   HelperText,
   HelperTextItem,
-  Spinner,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
@@ -26,6 +25,7 @@ import { TabSection } from "./FeatureLayout";
 import type { FeatureState } from "./featureState";
 import { READ_ONLY_SAMPLES, SAMPLE_INFO, type SampleOp, bulkEmptyReason, sampleLabel, sampleNote, samplesFor } from "./samples";
 import { useSampleStatus } from "./useSampleStatus";
+import { RowsSkeleton } from "./Loading";
 
 /** The id of the section's heading: the Overview's "Add sample data" moves the focus there. */
 export const MLFLOW_SAMPLES_ID = "mlflow-samples";
@@ -148,6 +148,15 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
     setPending({ kind: "mlflow-samples", project, action, samples: ids, ...(repairs.length ? { repairs } : {}) });
   };
   const opHere = op?.feature === "mlflow" && op.project === project ? op : null;
+  const samplesHead = (
+    <Thead>
+      <Tr>
+        <Th width={60}>Sample</Th>
+        <Th width={20}>State</Th>
+        <Th screenReaderText="Actions" />
+      </Tr>
+    </Thead>
+  );
 
   let body: React.ReactNode;
   if (status.error && !data) {
@@ -158,11 +167,12 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
       </Alert>
     );
   } else if (!data) {
+    // The project's samples are read when it is chosen: the table, with a Skeleton row per sample.
     body = (
-      <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
-        <FlexItem><Spinner size="md" aria-hidden /></FlexItem>
-        <FlexItem><Content component="p">Reading the sample data of {project}...</Content></FlexItem>
-      </Flex>
+      <Table aria-label={`Sample data in ${project}`} aria-busy="true">
+        {samplesHead}
+        <RowsSkeleton what={`the sample data of ${project}`} columns={["Sample", "State", "Actions"]} rows={Object.keys(SAMPLE_INFO).length} />
+      </Table>
     );
   } else if (!data.available) {
     body = <Alert variant="info" isInline component="p" title="Sample data is not available">{data.reason}</Alert>;
@@ -202,13 +212,7 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
         )}
         <StackItem>
           <Table aria-label={`Sample data in ${project}`}>
-            <Thead>
-              <Tr>
-                <Th width={60}>Sample</Th>
-                <Th width={20}>State</Th>
-                <Th screenReaderText="Actions" />
-              </Tr>
-            </Thead>
+            {samplesHead}
             <Tbody>
               {samples.map((s) => <SampleRow key={s.id} sample={s} op={opHere} reason={reason} reasonId={reasonId} onAction={(a, id) => run(a, [id])} />)}
             </Tbody>

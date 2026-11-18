@@ -26,21 +26,31 @@ import { CardList, CardListItem } from "../CardList";
 import { TooltipButton } from "../TooltipButton";
 import { EnvStatusLabel, NotManagedLabel, type EnvStatus } from "./resourceStatus";
 import type { FeatureState } from "./featureState";
+import { LabelSkeleton } from "./Loading";
 
 /** The id of a part's title: "Show issue" moves the focus there. */
 export const partTitleId = (part: string) => `environment-part-${part}`;
 
+/** What each feature is for, in one sentence: its tab's header says it, also while the tab loads. */
+export const FEATURE_PURPOSE = {
+  pipelines: "Run data science pipelines in a project; their artifacts go to the cluster's S3 storage.",
+  mlflow: "Track experiments: log runs, metrics and models to an MLflow server on the cluster, with a workspace per data science project.",
+  models: "Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with each model's own token or from the dashboard's Gen AI playground.",
+  playground: "The dashboard's Gen AI playground in a project: a chat page to try the project's models and ask about your documents.",
+  maas: "Models as a Service: offer models to everyone on the cluster through one gateway, with API keys and token limits.",
+} as const;
+
 /**
  * A feature tab's header: its title with the feature's state for the
  * selected project (from the same state function as the Overview), and
- * one sentence on what it is for.
+ * one sentence on what it is for. A state still loading is a Skeleton.
  */
 export const FeatureHeader: React.FC<{ title: string; purpose: string; state: FeatureState }> = ({ title, purpose, state }) => (
   <Stack>
     <StackItem>
       <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
         <FlexItem><Title headingLevel="h2" size="xl">{title}</Title></FlexItem>
-        <FlexItem><EnvStatusLabel status={state.status} text={state.label} /></FlexItem>
+        <FlexItem>{state.loading ? <LabelSkeleton what={`the state of ${title}`} /> : <EnvStatusLabel status={state.status} text={state.label} />}</FlexItem>
         {state.unmanaged && <FlexItem><NotManagedLabel /></FlexItem>}
       </Flex>
     </StackItem>
@@ -105,8 +115,10 @@ export const PartItem: React.FC<{
   actions?: React.ReactNode;
   /** The part's menu entries (Delete, ...). */
   menu?: PartMenuItem[];
+  /** Its status is still loading: a Skeleton instead of the status label. */
+  loading?: boolean;
   children?: React.ReactNode;
-}> = ({ id, title, scope, status, unmanaged, actions, menu, children }) => {
+}> = ({ id, title, scope, status, unmanaged, actions, menu, loading, children }) => {
   const hasMenu = !!menu && menu.length > 0;
   return (
     <CardListItem labelledBy={partTitleId(id)} actionsBesideFrom="lg" actions={actions || hasMenu ? (
@@ -123,7 +135,7 @@ export const PartItem: React.FC<{
         <StackItem>
           <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
             <FlexItem><Title headingLevel="h3" size="md" id={partTitleId(id)} tabIndex={-1}>{title}</Title></FlexItem>
-            <FlexItem><EnvStatusLabel status={status} /></FlexItem>
+            <FlexItem>{loading ? <LabelSkeleton what={`the state of ${title}`} /> : <EnvStatusLabel status={status} />}</FlexItem>
             {unmanaged && <FlexItem><NotManagedLabel /></FlexItem>}
           </Flex>
           <Content component="small">{scope}</Content>

@@ -365,6 +365,60 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the Environment page while its reads are held by the
+    // mock (POST /__docs/hold), light and dark, to check the loading states
+    // by eye (screenshots.sh loading-review, THEMES_DIR).
+    async "loading-review"() {
+      const hold = (paths) => post(`/__docs/hold?${paths.map((p) => `path=${encodeURIComponent(p)}`).join("&")}`);
+      const letGo = () => post("/__docs/hold");
+      /** open(), with the reads under paths held: it waits for the Skeletons instead of their end. */
+      async function openHeld(path, sc, paths, dark) {
+        await scenario(sc);
+        await page.setViewportSize({ width: 1440, height: H });
+        await page.goto(origin + "/__docs/state");
+        await page.evaluate((scheme) => {
+          localStorage.clear();
+          sessionStorage.clear();
+          localStorage.setItem("rhoai-updater.color-scheme", scheme);
+          localStorage.setItem("rhoai-updater.contrast-mode", "default");
+        }, dark ? "dark" : "light");
+        await hold(paths);
+        await page.goto(origin + path);
+        await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
+        await page.mouse.move(0, 0);
+        await page.locator(".pf-v6-c-skeleton").first().waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        await wait(500);
+      }
+      const shot = async (name) => {
+        await fit();
+        await page.screenshot({ path: `${out}/themes/loading-${name}.png` });
+        await letGo();
+      };
+      for (const dark of [false, true]) {
+        const theme = dark ? "dark" : "light";
+        // Nothing read yet: every row's state is a Skeleton.
+        await openHeld("/test-resources", "env-overview-three", ["/api/resources/"], dark);
+        await shot(`overview-${theme}`);
+        // The status is in; the playground's and MaaS's own reads are not.
+        await openHeld("/test-resources", "env-overview-three", ["/api/resources/playground", "/api/resources/maas"], dark);
+        await page.getByRole("button", { name: "Show projects" }).first().waitFor();
+        await shot(`overview-partly-${theme}`);
+        await openHeld("/test-resources?tab=models&project=dev-project", "env-models-ready", ["/api/resources/"], dark);
+        await shot(`models-${theme}`);
+        await openHeld("/test-resources?tab=maas", "env-maas-ready", ["/api/resources/maas"], dark);
+        await shot(`maas-${theme}`);
+        // Another project chosen on the Playground tab: its models load.
+        await open("/test-resources?tab=playground&project=dev-project", "env-overview-three", { dark, width: 1440 });
+        await hold(["/api/resources/playground"]);
+        await page.getByRole("button", { name: "Show projects" }).click();
+        await page.getByRole("option", { name: /^llm-eval/ }).click();
+        await page.locator(".pf-v6-c-skeleton").first().waitFor();
+        await wait(300);
+        await shot(`playground-project-${theme}`);
+      }
+    },
+
     // Not a docs image: every page in every color scheme and contrast mode,
     // to check a theme change by eye (screenshots.sh themes, THEMES_DIR).
     async themes() {

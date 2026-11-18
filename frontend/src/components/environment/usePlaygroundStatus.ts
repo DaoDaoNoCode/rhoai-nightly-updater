@@ -16,11 +16,13 @@ export function playgroundSettling(pg: PlaygroundStatus | null): boolean {
  * project, read again when refreshKey changes and every few seconds while a
  * playground is starting or being deleted (or busy says an operation runs).
  * The last answer is kept while another project's loads: its playgrounds
- * across projects still hold, and its models are only used for its project.
+ * across projects still hold, and its models are only used for its project
+ * (data.project says which; the tab shows the models as loading until the
+ * project's answer is in). error is about the project asked for now only.
  */
 export function usePlaygroundStatus(project: string | null, refreshKey: number, busy: boolean, enabled = true) {
   const [data, setData] = useState<PlaygroundStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ project: string | null; message: string } | null>(null);
   const [pollRound, setPollRound] = useState(0);
   const current = useRef(project);
   current.current = project;
@@ -34,7 +36,7 @@ export function usePlaygroundStatus(project: string | null, refreshKey: number, 
         setError(null);
       }
     } catch (e) {
-      if (current.current === project) setError(toApiError(e, "Cannot read the playground").message);
+      if (current.current === project) setError({ project, message: toApiError(e, "Cannot read the playground").message });
     }
   }, [project, enabled]);
 
@@ -49,5 +51,5 @@ export function usePlaygroundStatus(project: string | null, refreshKey: number, 
     delay: ({ elapsedMs }) => (elapsedMs >= RESOURCE_SETTLE_MAX_MS ? null : PLAYGROUND_POLL_MS),
   });
 
-  return { data, error, reload: fetchNow };
+  return { data, error: error?.project === project ? error.message : null, reload: fetchNow };
 }
