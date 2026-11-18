@@ -30,7 +30,7 @@ func TestMaaSStatus_AuthorinoTLSRefusesAnInvalidSecretName(t *testing.T) {
 				continue
 			}
 			found = true
-			if p.Commands != "" || p.State != "manual" || !strings.Contains(p.Message, "not a valid Kubernetes name") {
+			if p.Commands != "" || len(p.Actions) != 0 || p.State != "problem" || !strings.Contains(p.Message, "not a valid Kubernetes name") {
 				t.Errorf("name %q: part = %+v", name, p)
 			}
 		}

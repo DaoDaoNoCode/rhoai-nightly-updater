@@ -41,7 +41,9 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	// ...and, as the API server does, 404 for Kuadrant at v1, which does not
 	// serve it (the fake would answer an empty list).
 	f.fail["GET /apis/kuadrant.io/v1/kuadrants"] = 404
-	f.groups = map[string]string{"/apis/kuadrant.io": `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"},{"groupVersion":"kuadrant.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`}
+	f.groups = map[string]string{"/apis/kuadrant.io": `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"},{"groupVersion":"kuadrant.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`,
+		// CloudNativePG is installed: its API group is served.
+		"/apis/postgresql.cnpg.io": `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`}
 	f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{"annotations":{"service.beta.openshift.io/serving-cert-secret-name":"authorino-server-cert"}}}`)
 	f.putJSON("/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true}}}}`)
 	f.putJSON("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino", `{"spec":{"template":{"spec":{"containers":[{"name":"authorino","env":[{"name":"SSL_CERT_FILE","value":"/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"}]}]}}}}`)
@@ -77,7 +79,7 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 			f.putJSON("/apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/maas-api", `{"status":{"conditions":[{"type":"Available","status":"True"}]}}`)
 			f.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/ai-tenants/aitenants/models-as-a-service", `{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)
 			f.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maastenantconfigs/default-tenant", `{"status":{"infraNamespace":"redhat-ai-gateway-infra","phase":"Degraded","conditions":[{"type":"Ready","status":"True"}]}}`)
-			f.putJSON("/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/maas-gateway-auth", `{"spec":{"targetRef":{"kind":"Gateway","name":"maas-default-gateway"}},"status":{"conditions":[{"type":"Enforced","status":"True"}]}}`)
+			f.putJSON("/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/maas-gateway-auth", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"maas-controller"}},"spec":{"targetRef":{"kind":"Gateway","name":"maas-default-gateway"}},"status":{"conditions":[{"type":"Enforced","status":"True"}]}}`)
 		}
 	}
 	// The API server gives the fields a merge patch sets to its field
@@ -143,7 +145,7 @@ func TestMaaSSetup_FollowsTheDocumentedOrderAndShapes(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("setup failed: %+v", res)
 	}
-	if got := finalSteps(events); got != "check=success database=success gateway=success authorino-tls=success dsc=success ready=success" {
+	if got := finalSteps(events); got != "check=success rhcl=success kuadrant=success cnpg=success database=success gateway=success authorino-tls=success dsc=success ready=success" {
 		t.Fatalf("steps = %s", got)
 	}
 	muts := mc.f.mutations()
@@ -285,36 +287,58 @@ func TestMaaSSetup_UsesAForeignDatabaseSecretAsIs(t *testing.T) {
 	}
 }
 
-func TestMaaSSetup_RefusesWithoutKuadrantAndWritesNothing(t *testing.T) {
+// With Connectivity Link's API served and no Kuadrant CR, setup creates
+// kuadrant-system/kuadrant as platform-setup.md does, and records it as the
+// tool's.
+func TestMaaSSetup_CreatesTheKuadrantCRWhenMissing(t *testing.T) {
 	mc := newMaaSCluster(t)
 	mc.f.mu.Lock()
 	delete(mc.f.objects, fakeKey{gv: "kuadrant.io/v1beta1", ns: "kuadrant-system", plural: "kuadrants", name: "kuadrant"})
 	mc.f.mu.Unlock()
+	st, _ := GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "kuadrant"); p.State != "missing" || !strings.Contains(strings.Join(st.SetupPlan, "\n"), "Create the Kuadrant CR kuadrant-system/kuadrant") {
+		t.Fatalf("part = %+v plan = %v", p, st.SetupPlan)
+	}
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
-	if res.Success || res.ErrorCode != "prerequisites" {
+	if !res.Success {
 		t.Fatalf("res = %+v", res)
 	}
-	if muts := mc.f.mutations(); len(muts) != 0 {
-		t.Fatalf("wrote %v", muts)
+	k := mc.f.get("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant")
+	if k == nil || k["kind"] != "Kuadrant" || k["spec"] != nil {
+		t.Fatalf("kuadrant = %v", k)
+	}
+	if indexOfPrefix(mc.f.mutations(), "POST /apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants") > indexOfPrefix(mc.f.mutations(), "POST /apis/postgresql.cnpg.io") {
+		t.Fatalf("the Kuadrant CR comes before the database: %v", mc.f.mutations())
+	}
+	st, _ = GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "kuadrant"); !p.ManagedByTool || p.NotManaged {
+		t.Fatalf("part = %+v", p)
 	}
 }
 
-func TestMaaSStatus_AuthorinoTLSIsAManualStepWithTheDocsCommands(t *testing.T) {
+// maasPart is the status part with id.
+func maasPart(t *testing.T, st *types.MaaSStatus, id string) types.MaaSPart {
+	t.Helper()
+	for _, p := range st.Parts {
+		if p.ID == id {
+			return p
+		}
+	}
+	t.Fatalf("no part %s in %+v", id, st.Parts)
+	return types.MaaSPart{}
+}
+
+func TestMaaSStatus_AuthorinoTLSIsOfferedWithTheDocsCommands(t *testing.T) {
 	mc := newMaaSCluster(t)
 	mc.f.putJSON("/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{}}`)
 	st, err := GetMaaSStatus(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range st.Parts {
-		if p.ID == "authorino-tls" {
-			if p.State != "manual" || !strings.Contains(p.Commands, "oc patch authorino authorino -n kuadrant-system") || !p.NotManaged {
-				t.Fatalf("part = %+v", p)
-			}
-			return
-		}
+	p := maasPart(t, st, "authorino-tls")
+	if p.State != "missing" || !strings.Contains(p.Commands, "oc patch authorino authorino -n kuadrant-system") || len(p.Actions) != 1 || p.Actions[0].ID != "authorino-tls" {
+		t.Fatalf("part = %+v", p)
 	}
-	t.Fatal("no authorino-tls part")
 }
 
 func TestMaaSPublishAndUnpublish(t *testing.T) {
@@ -400,12 +424,14 @@ func TestCleanUp_UnpublishesFirstAndRemovesThePlatformLast(t *testing.T) {
 
 func TestValidateMaaSRequest(t *testing.T) {
 	for req, want := range map[types.MaaSRequest]string{
-		{Action: "setup"}:                        "",
-		{Action: "setup", Project: "p"}:          "the platform takes no project",
-		{Action: "publish"}:                      "a valid project is required",
-		{Action: "publish", Project: "Bad_Name"}: "a valid project is required",
-		{Action: "unpublish", Project: "p"}:      "",
-		{Action: "nope"}:                         "action must be setup, teardown, publish or unpublish",
+		{Action: "setup"}:                            "",
+		{Action: "setup", Project: "p"}:              "the platform takes no project",
+		{Action: "publish"}:                          "a valid project is required",
+		{Action: "publish", Project: "Bad_Name"}:     "a valid project is required",
+		{Action: "unpublish", Project: "p"}:          "",
+		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, authorino-tls or remove-tier-policies",
+		{Action: "upgrade-rhcl"}:                     "",
+		{Action: "remove-tier-policies", Model: "m"}: "the platform takes no model",
 	} {
 		if got := ValidateMaaSRequest(req); got != want {
 			t.Errorf("%+v: %q, want %q", req, got, want)
