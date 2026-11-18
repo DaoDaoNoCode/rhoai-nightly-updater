@@ -1094,16 +1094,31 @@ export interface PlaygroundRequest {
 
 /** One part of the MaaS platform (pkg/types MaaSPart). */
 export interface MaaSPart {
-  id: "dsc" | "kuadrant" | "database" | "gateway" | "authorino-tls" | "maas-api" | "tenant";
+  id: "rhcl" | "kuadrant" | "cnpg" | "database" | "gateway" | "authorino-tls" | "tier-policies" | "dsc" | "maas-api" | "tenant";
   title: string;
-  /** "manual": a cluster-admin does it (commands says how). */
+  /** "missing": Set up does it; "manual": a cluster-admin does it (commands says how). */
   state: "ready" | "missing" | "waiting" | "problem" | "manual" | "unknown";
   message?: string;
   managedByTool?: boolean;
   notManaged?: boolean;
   warning?: string;
+  /** The same change from a terminal, for an admin who prefers it. */
   commands?: string;
+  /** Fixes the part offers on its own. */
+  actions?: MaaSAction[];
   docUrl?: string;
+}
+
+/** The fixes a part offers besides Set up. */
+export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "authorino-tls" | "remove-tier-policies";
+
+/** A part's own fix (pkg/types MaaSAction): its confirmation lists changes. */
+export interface MaaSAction {
+  id: MaaSActionId;
+  label: string;
+  summary: string;
+  changes: string[];
+  danger?: boolean;
 }
 
 /** One of this tool's models and its MaaS publication (pkg/types MaaSModel). */
@@ -1127,12 +1142,14 @@ export interface MaaSStatus {
   url?: string;
   subscription: string;
   dashboardUrl?: string;
+  /** Every change Set up would make now, in order; absent when it has nothing to do. */
+  setupPlan?: string[];
   items?: MaaSModel[];
 }
 
 /** The body of POST /api/resources/maas/stream. */
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish";
+  action: "setup" | "teardown" | "publish" | "unpublish" | MaaSActionId;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;

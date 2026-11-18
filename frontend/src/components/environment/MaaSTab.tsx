@@ -92,15 +92,35 @@ export function maasCurl(url: string, subscription: string): string {
   ].join("\n");
 }
 
-/** One platform part. */
-const PlatformPart: React.FC<{ part: MaaSPart }> = ({ part }) => (
-  <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" status={maasPartStatus(part)} unmanaged={!!part.notManaged}
-    actions={part.docUrl ? <ActionListItem><ExternalLink href={part.docUrl}>Docs</ExternalLink></ActionListItem> : undefined}>
-    {part.message && <Content component="p">{part.message}</Content>}
-    {part.warning && <Alert variant="warning" isInline component="p" title="Check the version">{part.warning}</Alert>}
-    {part.commands && <CopyableCode id={`maas-${part.id}-commands`} label="the commands for a cluster-admin" code={part.commands} />}
-  </PartItem>
-);
+/** One platform part, with the fixes it offers on its own and the same change from a terminal. */
+const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string | null; setPending: (p: Pending) => void }> = ({ part, readOnly, reason, setPending }) => {
+  const fixes = readOnly ? [] : part.actions ?? [];
+  // A "manual" part has only the commands; the others can be done here, so the commands are an alternative.
+  const onlyCommands = part.state === "manual" && fixes.length === 0;
+  return (
+    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" status={maasPartStatus(part)} unmanaged={!!part.notManaged}
+      actions={fixes.length > 0 || part.docUrl ? (
+        <>
+          {fixes.map((a) => (
+            <ActionListItem key={a.id}>
+              <Button variant="secondary" size="sm" isDanger={a.danger} isAriaDisabled={!!reason} onClick={() => setPending({ kind: "maas-action", action: a.id })}>{a.label}</Button>
+            </ActionListItem>
+          ))}
+          {part.docUrl && <ActionListItem><ExternalLink href={part.docUrl}>Docs</ExternalLink></ActionListItem>}
+        </>
+      ) : undefined}>
+      {part.message && <Content component="p">{part.message}</Content>}
+      {part.warning && <Alert variant="warning" isInline component="p" title="Needs attention">{part.warning}</Alert>}
+      {part.commands && (onlyCommands
+        ? <CopyableCode id={`maas-${part.id}-commands`} label="the commands for a cluster-admin" code={part.commands} />
+        : (
+          <FeatureSection title="Do it from the CLI instead">
+            <CopyableCode id={`maas-${part.id}-commands`} label="the commands" code={part.commands} />
+          </FeatureSection>
+        ))}
+    </PartItem>
+  );
+};
 
 /** The words for a model's publication. */
 export function maasPublication(i: MaaSModel): string {
@@ -212,6 +232,10 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
   const next = state.next;
   const published = (maas?.items ?? []).some((i) => i.published);
   const attention = (maas?.parts ?? []).filter((p) => ["manual", "waiting", "problem"].includes(p.state));
+  // Set up whenever it has something to do: also to finish a run that stopped, or fix a part it can fix.
+  const setupPlan = maas?.setupPlan ?? [];
+  const setupLabel = maas?.platform.managedByTool || maas?.platform.deployed ? "Finish setting up MaaS" : "Set up MaaS";
+  const partReason = readOnly ? READ_ONLY_SETUP : baseReason;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="MaaS" purpose={FEATURE_PURPOSE.maas} state={state} /></StackItem>
@@ -226,21 +250,22 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       <StackItem>
         {maas ? (
           <PartList aria-label="What MaaS needs">
-            {maas.parts.map((p) => <PlatformPart key={p.id} part={p} />)}
+            {maas.parts.map((p) => <PlatformPart key={p.id} part={p} readOnly={readOnly} reason={partReason} setPending={setPending} />)}
           </PartList>
         ) : maasError ? <LoadFailed title="Cannot read Models as a Service" error={maasError} onRetry={onRetry} />
           : <PartsSkeleton aria-label="What MaaS needs" what="what MaaS needs" count={3} />}
       </StackItem>
-      {next?.kind === "set-up" && attention.length > 0 && (
+      {maas && setupPlan.length > 0 && attention.length > 0 && (
         <StackItem>
-          <Alert variant="warning" isInline component="p" title="Set up runs; these parts are not ready yet">
+          <Alert variant="warning" isInline component="p" title="Set up runs; these parts need attention too">
             {attention.map((p) => p.title).join(", ")}: each shows above what it needs. MaaS works once they are ready.
           </Alert>
         </StackItem>
       )}
-      {next?.kind === "set-up" && (
+      {maas && (setupPlan.length > 0 || next?.kind === "set-up") && (
         <StackItem>
-          <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
+          <PrimaryAction label={next?.kind === "set-up" ? next.label : setupLabel} onClick={() => onSetUp([{ kind: "setup-maas" }])}
+            reason={readOnly ? READ_ONLY_SETUP : baseReason ?? maas.platform.setupBlockedReason ?? null} />
         </StackItem>
       )}
       {(maas || !maasError) && <StackItem><PublishedModels {...props} /></StackItem>}
@@ -248,18 +273,19 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
+            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> and its Kuadrant CR, Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>), and the CloudNativePG operator from <code>certified-operators</code>. These stay after Remove: other RHOAI features use them</>,
+            <>The AI gateway&apos;s namespace (<code>{maas?.platform.namespace ?? "redhat-ai-gateway-infra"}</code>) when it does not exist yet; Remove deletes it when nothing else is in it</>,
             <>A PostgreSQL database for MaaS&apos;s API keys: one CloudNativePG instance with a 1 GiB volume, for development and test, and Secret <code>maas-db-config</code> with its address, in the AI gateway&apos;s namespace</>,
             <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
-            <>MaaS turned on in the DataScienceCluster (<code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
-            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the access policy <code>rhoai-nightly-updater-access</code> list it</>,
-            <>Not done by this tool: Connectivity Link (Kuadrant) and its Authorino TLS, which a cluster-admin sets up (the parts above show how)</>,
+            <>MaaS turned on in the DataScienceCluster (<code>aigateway</code> and <code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
+            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the access policy <code>rhoai-nightly-updater-access</code> list it. The subscription&apos;s priority is below every other subscription&apos;s, so it never takes a key meant for someone else&apos;s</>,
           ]} />
         </FeatureSection>
       </StackItem>
       {!readOnly && maas?.platform.managedByTool && (
         <StackItem>
           <CleanupSection id="maas-cleanup" label="Remove MaaS..." onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
-            text="Unpublishes this tool's models, turns MaaS back off as it was before, then deletes the gateway and the database this tool created. Connectivity Link and what RHOAI's operator made stay." />
+            text="Unpublishes this tool's models, puts the DataScienceCluster back as it was before, then deletes the gateway, the database and the namespace this tool created. Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, also if this tool installed them: other RHOAI features use them." />
         </StackItem>
       )}
     </Stack>
@@ -272,12 +298,41 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
     case "setup-maas":
       return [
         { id: "check", title: "Check what the platform needs" },
+        { id: "rhcl", title: "Red Hat Connectivity Link" },
+        { id: "kuadrant", title: "Kuadrant CR" },
+        { id: "cnpg", title: "CloudNativePG operator" },
         { id: "database", title: "Database and its connection Secret" },
         { id: "gateway", title: "Gateway maas-default-gateway" },
-        { id: "authorino-tls", title: "Check Authorino TLS" },
+        { id: "authorino-tls", title: "Authorino TLS" },
         { id: "dsc", title: "Turn on MaaS in the DataScienceCluster" },
         { id: "ready", title: "Wait for maas-api and the tenant" },
       ];
+    case "maas-action":
+      switch (p.action) {
+        case "upgrade-rhcl":
+          return [
+            { id: "check", title: "Check the upgrade path" },
+            { id: "upgrade", title: "Upgrade Connectivity Link" },
+            { id: "authorino-tls", title: "Authorino TLS" },
+            { id: "ready", title: "Check the operator" },
+          ];
+        case "rhcl-memory":
+          return [
+            { id: "check", title: "Check the operator's memory" },
+            { id: "memory", title: "Raise the memory limit" },
+            { id: "ready", title: "Wait for OLM" },
+          ];
+        case "authorino-tls":
+          return [
+            { id: "check", title: "Check Authorino" },
+            { id: "authorino-tls", title: "Configure Authorino TLS" },
+          ];
+        default:
+          return [
+            { id: "check", title: "Find the old tier policies" },
+            { id: "delete", title: "Delete them" },
+          ];
+      }
     case "teardown-maas":
       return [
         { id: "check", title: "Check what this tool set up" },
@@ -310,23 +365,31 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
     case "setup-maas":
       return {
         title: "Set up Models as a Service?", confirm: "Set up", runTitle: "Set up Models as a Service",
-        summary: <Content component="p">Sets up the MaaS platform in the order the MaaS install docs give. It takes about 5 minutes. The database is a small one for development and test. The gateway creates a cloud load balancer, which costs money while it exists.</Content>,
+        summary: <Content component="p">Does every step the MaaS install docs give that is not done yet, in their order, and nothing else. On a cluster without any of it this takes about 10 minutes. The database is a small one for development and test. The gateway creates a cloud load balancer, which costs money while it exists. If a step fails, Set up again continues from there.</Content>,
         changes: [
-          <>Namespace <code>{m?.platform.namespace ?? "the AI gateway's"}</code>: a one-instance CloudNativePG database <code>maas-db</code> (1 GiB volume) and Secret <code>maas-db-config</code> with its address.</>,
-          <>Namespace <code>openshift-ingress</code>: Gateway <code>maas-default-gateway</code> with an external load balancer (cloud cost) at <code>{m?.url ?? "maas.<apps domain>"}</code>; GatewayClass <code>openshift-default</code> only if the cluster has none.</>,
-          <>DataScienceCluster: <code>aigateway.modelsAsAService</code> set to Managed; its current value is recorded, and Remove puts it back.</>,
-          <>Not changed: Connectivity Link (Kuadrant) and Authorino, and anything that exists already and was not created by this tool.</>,
+          ...(m?.setupPlan ?? []).map((c) => <>{c}.</>),
+          <>Not changed: anything that exists already and was not created by this tool, other than the settings listed above.</>,
         ],
       };
+    case "maas-action": {
+      const action = m?.parts.flatMap((part) => part.actions ?? []).find((a) => a.id === pending.action);
+      if (!action) return null;
+      return {
+        title: `${action.label}?`, confirm: action.label, danger: action.danger, runTitle: action.label,
+        summary: <Content component="p">{action.summary}</Content>,
+        changes: action.changes.map((c) => <>{c}</>),
+      };
+    }
     case "teardown-maas":
       return {
         title: "Remove Models as a Service?", confirm: "Remove", danger: true, runTitle: "Remove Models as a Service",
         summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or access policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
         changes: [
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => `${i.name} in ${i.namespace}`).join(", ") || "none"}).</>,
-          <>DataScienceCluster: <code>aigateway.modelsAsAService</code> back to its value before setup (only if this tool changed it and nobody has set it since).</>,
-          <>Deleted: Gateway <code>maas-default-gateway</code>, the database <code>maas-db</code> with its volume, and Secret <code>maas-db-config</code>.</>,
-          <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: Connectivity Link, Authorino, the CloudNativePG operator, the namespaces RHOAI made, and every object that was not created by this tool.</>,
+          <>DataScienceCluster: <code>aigateway.modelsAsAService</code> and <code>aigateway</code> back to their values before setup (each only if this tool changed it and nobody has set it since).</>,
+          <>Deleted: Gateway <code>maas-default-gateway</code>, the database <code>maas-db</code> with its volume, and Secret <code>maas-db-config</code>; namespace <code>{m?.platform.namespace ?? "redhat-ai-gateway-infra"}</code> only if this tool created it and nothing else is in it.</>,
+          <>Kept, also if this tool installed or set them up: Red Hat Connectivity Link, its Kuadrant CR and Authorino TLS, and the CloudNativePG operator. They are shared platform pieces: RHOAI&apos;s inference gateway authentication uses Kuadrant. Remove them from the OpenShift console if nothing needs them.</>,
+          <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: the namespaces RHOAI made, and every object that was not created by this tool.</>,
         ],
       };
     case "publish-maas":

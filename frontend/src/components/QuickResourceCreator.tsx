@@ -425,7 +425,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const startMaaS = (p: MaaSPending) => {
     if (run.run?.running) return;
     const spec = maasConfirm(p, maas);
-    const action = p.kind === "setup-maas" ? "setup" : p.kind === "teardown-maas" ? "teardown" : p.kind === "publish-maas" ? "publish" : "unpublish";
+    const action = p.kind === "maas-action" ? p.action : p.kind === "setup-maas" ? "setup" : p.kind === "teardown-maas" ? "teardown" : p.kind === "publish-maas" ? "publish" : "unpublish";
     const project = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.project : null;
     const model = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.model : null;
     setPending(null);
@@ -444,7 +444,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     };
     run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS({ action, ...(project ? { project } : {}), ...(model ? { model } : {}) },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
-    action === "setup" || action === "publish" ? "setup" : "delete");
+    action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
 
   /**

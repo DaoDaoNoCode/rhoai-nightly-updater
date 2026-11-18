@@ -75,7 +75,11 @@ describe("MaaS use and steps", () => {
   });
 
   it("the steps match the backend's order", () => {
-    expect(maasSteps({ kind: "setup-maas" }).map((s) => s.id)).toEqual(["check", "database", "gateway", "authorino-tls", "dsc", "ready"]);
+    expect(maasSteps({ kind: "setup-maas" }).map((s) => s.id)).toEqual(["check", "rhcl", "kuadrant", "cnpg", "database", "gateway", "authorino-tls", "dsc", "ready"]);
+    expect(maasSteps({ kind: "maas-action", action: "upgrade-rhcl" }).map((s) => s.id)).toEqual(["check", "upgrade", "authorino-tls", "ready"]);
+    expect(maasSteps({ kind: "maas-action", action: "rhcl-memory" }).map((s) => s.id)).toEqual(["check", "memory", "ready"]);
+    expect(maasSteps({ kind: "maas-action", action: "authorino-tls" }).map((s) => s.id)).toEqual(["check", "authorino-tls"]);
+    expect(maasSteps({ kind: "maas-action", action: "remove-tier-policies" }).map((s) => s.id)).toEqual(["check", "delete"]);
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
     expect(maasSteps({ kind: "publish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);
     expect(maasSteps({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.title)).toContain("Remove qwen3-1-7b from MaaS");
@@ -152,6 +156,41 @@ describe("MaaS run dialog", () => {
     expect(await within(run).findByText(/publish a model to offer it through MaaS/)).toBeInTheDocument();
     expect(within(run).queryByText(/import a pipeline/)).toBeNull();
     expect(within(run).queryByRole("link", { name: /Open pipelines/ })).toBeNull();
+  });
+
+  it("Set up lists every change it will make before it runs", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "rhcl", title: "Red Hat Connectivity Link", state: "missing", commands: "oc apply -f - <<'EOF'" }, { id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }], {
+        setupPlan: ["Install Red Hat Connectivity Link 1.5.0: Namespace kuadrant-system, Subscription kuadrant-system/kuadrant-operator (package rhcl-operator, channel stable-1.5, from redhat-operators)", "DataScienceCluster default-dsc: aigateway.managementState Removed to Managed"],
+      }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    expect(await screen.findByRole("button", { name: "Do it from the CLI instead" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Set up MaaS" }));
+    const confirm = await screen.findByRole("dialog", { name: /Set up Models as a Service\?/ });
+    expect(within(confirm).getByText(/channel stable-1.5, from redhat-operators/)).toBeInTheDocument();
+    expect(within(confirm).getByText(/aigateway.managementState Removed to Managed/)).toBeInTheDocument();
+  });
+
+  it("a part's own fix: Upgrade Connectivity Link confirms its changes, then runs as its own action", async () => {
+    const api = stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "rhcl", title: "Red Hat Connectivity Link", state: "ready", warning: "Red Hat Connectivity Link 1.4.3 is installed",
+        actions: [{ id: "upgrade-rhcl", label: "Upgrade Connectivity Link", summary: "Upgrades it.", changes: ["Subscription kuadrant-system/kuadrant-operator: channel stable to stable-1.5 (version 1.5.0)."] }] }], {
+        platform: { deployed: true, ready: false, managedByTool: true },
+      }),
+      "POST /api/resources/maas/stream": sse({ step: "operation_complete", status: "success", message: "done" }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade Connectivity Link" }));
+    const confirm = await screen.findByRole("dialog", { name: /Upgrade Connectivity Link\?/ });
+    expect(within(confirm).getByText(/channel stable to stable-1.5/)).toBeInTheDocument();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Upgrade Connectivity Link" }));
+    await screen.findByRole("dialog", { name: "Upgrade Connectivity Link" });
+    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "upgrade-rhcl" }]);
   });
 
   it("publishes the row's model by name; the embedding model says why it is not offered", async () => {

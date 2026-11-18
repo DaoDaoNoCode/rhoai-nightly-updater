@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MLflowSampleAction, MLflowSampleId, PlaygroundModelRef, ResourceState } from "../../types";
+import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, PlaygroundModelRef, ResourceState } from "../../types";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
 
@@ -227,7 +227,9 @@ export type Pending =
   | { kind: "setup-maas" }
   | { kind: "teardown-maas" }
   | { kind: "publish-maas"; project: string; model: string }
-  | { kind: "unpublish-maas"; project: string; model: string };
+  | { kind: "unpublish-maas"; project: string; model: string }
+  /** A MaaS platform part's own fix (its action lists the changes). */
+  | { kind: "maas-action"; action: MaaSActionId };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
@@ -236,8 +238,8 @@ export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
-export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" }>;
-export const isMaaSPending = (p: Pending): p is MaaSPending => p.kind === "setup-maas" || p.kind === "teardown-maas" || p.kind === "publish-maas" || p.kind === "unpublish-maas";
+export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "maas-action" }>;
+export const isMaaSPending = (p: Pending): p is MaaSPending => p.kind === "setup-maas" || p.kind === "teardown-maas" || p.kind === "publish-maas" || p.kind === "unpublish-maas" || p.kind === "maas-action";
 export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
