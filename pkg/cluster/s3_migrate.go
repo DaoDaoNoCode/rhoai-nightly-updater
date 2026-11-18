@@ -272,18 +272,18 @@ type copySize struct {
 
 // copyResult is the Job's termination message (migrateScript).
 type copyResult struct {
-	Copy        int       `json:"copy"`
-	Check       int       `json:"check"`
-	Identical   int64     `json:"identical"`
-	Missing     int64     `json:"missing"`
-	Differ      int64     `json:"differ"`
-	Errors      int64     `json:"errors"`
+	Copy      int   `json:"copy"`
+	Check     int   `json:"check"`
+	Identical int64 `json:"identical"`
+	Missing   int64 `json:"missing"`
+	Differ    int64 `json:"differ"`
+	Errors    int64 `json:"errors"`
 	// MissingBuckets counts the old storage's buckets that are not in the
 	// new one (an empty bucket has no object for the check to miss); -1
 	// when a bucket list could not be read.
-	MissingBuckets int64 `json:"missingBuckets"`
-	Source      *copySize `json:"source"`
-	Destination *copySize `json:"destination"`
+	MissingBuckets int64     `json:"missingBuckets"`
+	Source         *copySize `json:"source"`
+	Destination    *copySize `json:"destination"`
 	// DifferSample is the first three paths the check found different,
 	// one per line, base64 encoded (migrateScript).
 	DifferSample string `json:"differSample"`
