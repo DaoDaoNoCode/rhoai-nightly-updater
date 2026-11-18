@@ -1415,7 +1415,13 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 // Uses the SA client to list all DS projects -- this is an internal team tool
 // where all authenticated users see all projects.
 var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	status, err := cluster.GetResourcesStatus(c)
+	// ?project= is the Pipelines tab's selected project: its Connection is
+	// read too. An invalid name reads nothing more.
+	project := r.URL.Query().Get("project")
+	if !namespaceRegex.MatchString(project) {
+		project = ""
+	}
+	status, err := cluster.GetResourcesStatusFor(c, project)
 	if err != nil {
 		slog.Error("resources status error", "error", err)
 		writeError(w, "failed to get resources status", http.StatusInternalServerError)

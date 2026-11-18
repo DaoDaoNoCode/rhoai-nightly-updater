@@ -101,3 +101,70 @@ func TestTeardownPipelineServer_DeletesTheConnection(t *testing.T) {
 		t.Fatalf("got %+v", resp)
 	}
 }
+
+// The selected project's status reads the Connection itself: the DSPA's
+// annotation only says the tool created one, not that it is still there.
+func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
+	annotated := `,"annotations":{"` + dspaConnectionAnnotation + `":"` + connectionSecretName + `"}`
+	cases := []struct {
+		name, want string
+		setup      func(f *resourceFake)
+	}{
+		{"present", ConnectionPresent, func(f *resourceFake) {
+			f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+		}},
+		{"deleted in the dashboard", ConnectionMissing, func(f *resourceFake) {}},
+		{"someone else's", ConnectionForeign, func(f *resourceFake) {
+			f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
+		}},
+		{"unreadable", ConnectionUnreadable, func(f *resourceFake) {
+			f.fail["GET "+secretPath("proj", connectionSecretName)] = 403
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putDSProject(f, "proj")
+			putDSProject(f, "other")
+			putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
+			putDSPA(f, "other", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
+			tc.setup(f)
+			st, err := GetResourcesStatusFor(c, "proj")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ps := range st.PipelineServers {
+				want := ""
+				if ps.Namespace == "proj" {
+					want = tc.want
+				}
+				if ps.ConnectionState != want {
+					t.Errorf("%s connection state = %q, want %q (%+v)", ps.Namespace, ps.ConnectionState, want, ps)
+				}
+			}
+			if hasRequest(f, "GET "+secretPath("other", connectionSecretName)) {
+				t.Error("the Connection of a project that is not selected was read")
+			}
+		})
+	}
+}
+
+// Without a selected project, or for a project without the tool's server,
+// the status reads no Secret.
+func TestGetResourcesStatusFor_NoSecretReadOutsideTheSelectedServer(t *testing.T) {
+	f, c := newResourceFake(t)
+	putDSProject(f, "proj")
+	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	for _, project := range []string{"", "elsewhere"} {
+		if _, err := GetResourcesStatusFor(c, project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ns := range []string{"proj", "elsewhere"} {
+		if hasRequest(f, "GET "+secretPath(ns, connectionSecretName)) {
+			t.Errorf("secret read in %s", ns)
+		}
+	}
+}
+
+func hasRequest(f *resourceFake, req string) bool { return requestIndex(f, req) >= 0 }

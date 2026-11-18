@@ -1044,6 +1044,47 @@ func addDashboardDSPASettings(c *Client, spec, apiServer map[string]interface{})
 	return nil
 }
 
+// What the selected project's Connection Secret says (ResourceState.
+// ConnectionState).
+const (
+	ConnectionPresent    = "present"
+	ConnectionMissing    = "missing"
+	ConnectionForeign    = "foreign"
+	ConnectionUnreadable = "unreadable"
+)
+
+// GetResourcesStatusFor is GetResourcesStatus plus, for the tool's pipeline
+// server in project (the Pipelines tab's selected project), the state of
+// its dashboard Connection read from the Secret itself: the DSPA's
+// annotation only says the tool created one, which the dashboard may since
+// have deleted. One named GET, only when the project has the tool's
+// server (so only in a visible Data Science project); other projects, and
+// an empty project, read no Secret.
+func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, error) {
+	status, err := GetResourcesStatus(c)
+	if err != nil || project == "" {
+		return status, err
+	}
+	for i := range status.PipelineServers {
+		ps := &status.PipelineServers[i]
+		if ps.Namespace != project || ps.Terminating {
+			continue
+		}
+		meta, found, err := readObjectMeta(c, namespacedPath("v1", "secrets", project, connectionSecretName))
+		switch {
+		case err != nil:
+			ps.ConnectionState, ps.ConnectionMessage = ConnectionUnreadable, err.Error()
+		case !found:
+			ps.ConnectionState = ConnectionMissing
+		case !meta.hasToolLabel():
+			ps.ConnectionState = ConnectionForeign
+		default:
+			ps.ConnectionState = ConnectionPresent
+		}
+	}
+	return status, nil
+}
+
 // deleteConnection deletes the dashboard Connection the tool created in
 // project (its label, by UID). The DSPA owns it, so the garbage collector
 // would delete it too; deleting it here also covers one an interrupted

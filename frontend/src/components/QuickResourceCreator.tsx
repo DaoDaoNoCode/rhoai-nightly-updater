@@ -213,13 +213,16 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setProjectList((l) => l ?? []);
     }
   }, []);
+  // The Pipelines tab's selected project (set below, once it is known):
+  // the status also reads its dashboard Connection from the Secret itself.
+  const selectedPipelinesProject = useRef<string | null>(tab === "pipelines" ? urlProject : null);
   // The status and the projects load together, on every refresh and poll:
   // a project deleted elsewhere leaves the picker with the next load.
   const fetchResources = useCallback(async () => {
     setStatusLoading(true);
     const projects = refreshProjects();
     try {
-      const s = await getResourcesStatus();
+      const s = await getResourcesStatus(selectedPipelinesProject.current);
       setResStatus(s);
       setResError(null);
       setLastRefreshed(new Date());
@@ -582,6 +585,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // project= after a clear means none; only without project= at all (a
   // first visit) the default applies.
   const project = missingProject ? null : searchParams.has("project") ? urlProject : defaultProject(resStatus, projectNames, null);
+  const pipelinesProject = tab === "pipelines" ? project : null;
+  useEffect(() => {
+    if (selectedPipelinesProject.current === pipelinesProject) return;
+    selectedPipelinesProject.current = pipelinesProject;
+    if (pipelinesProject) void fetchResources();
+  }, [pipelinesProject, fetchResources]);
   const projectOptions: ProjectOption[] = projectNames.map((name) => {
     const status = pipelineServerStatus(resStatus, name, busy);
     const foreign = pipelineServerUnmanaged(resStatus, name);
@@ -700,7 +709,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       doneMessage: done,
       // Every part's prerequisites on the latest status, before anything changes.
       preflight: async () => {
-        const fresh = await getResourcesStatus();
+        const fresh = await getResourcesStatus(selectedPipelinesProject.current);
         setResStatus(fresh);
         statusRef.current = fresh;
         return setUpBlocked(recheck(fresh, projectNames));

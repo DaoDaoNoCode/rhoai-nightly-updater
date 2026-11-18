@@ -310,8 +310,9 @@ export function revertDashboard(): Promise<OperationResponse> {
   });
 }
 
-export function getResourcesStatus(): Promise<ResourcesStatus> {
-  return request('/api/resources/status');
+/** The Environment status; project (the Pipelines tab's selected one) also reads its dashboard Connection. */
+export function getResourcesStatus(project?: string | null): Promise<ResourcesStatus> {
+  return request(project ? `/api/resources/status?project=${encodeURIComponent(project)}` : '/api/resources/status');
 }
 
 export function getDSProjects(): Promise<{ projects: string[] | null }> {
