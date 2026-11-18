@@ -6,7 +6,7 @@ This document captures every OpenShift-specific behavior that affects the RHOAI 
 
 **What:** OpenShift Routes have a default HAProxy timeout of 30 seconds. Any HTTP response that takes longer is terminated with a 504.
 
-**Impact:** SSE streams from mutation endpoints (Update, Install a different build, Refresh) can run for up to 15 minutes. SSE handlers replace the ordinary 180s response deadline with a short per-write deadline; accepted operations have an independent 15-minute lifetime. The default 30s Route timeout would kill the SSE connection mid-stream. The Route must support long-lived connections for SSE.
+**Impact:** SSE streams from mutation endpoints (Update, Install a different build, Re-deploy) can run for up to 15 minutes. SSE handlers replace the ordinary 180s response deadline with a short per-write deadline; accepted operations have an independent 15-minute lifetime. The default 30s Route timeout would kill the SSE connection mid-stream. The Route must support long-lived connections for SSE.
 
 **Fix:** `haproxy.router.openshift.io/timeout: 960s` annotation on the Route. The oauth-proxy upstream timeout is also 960s, exceeding the operation deadline.
 
@@ -28,7 +28,7 @@ They CANNOT request: `user:full`, `user:list-projects`, `user:list-scoped-projec
 **Impact:** The user's OAuth token CANNOT:
 - List namespaces or projects
 - Create/delete resources
-- Make any K8s API calls except SSAR
+- Make any K8s API calls except reading who the user is (`GET user.openshift.io/v1/users/~`) and access reviews (`authorization.openshift.io` SubjectAccessReview with `scopes: []`), which are all the app sends it for
 
 All cluster operations MUST use the ServiceAccount token.
 
@@ -136,7 +136,7 @@ A refused request gets HTTP 429 with errorCode `user_rate_limited` (not `rate_li
 
 ## 12. SSE Streaming Through Route + OAuth Proxy
 
-**What:** SSE (Server-Sent Events) streams progress from mutation endpoints (Update, Install a different build, Refresh) through the OpenShift Route and oauth-proxy to the browser.
+**What:** SSE (Server-Sent Events) streams progress from mutation endpoints (Update, Install a different build, Re-deploy) through the OpenShift Route and oauth-proxy to the browser.
 
 **How it works:** SSE uses standard HTTP -- not WebSocket. The server sets:
 - `Content-Type: text/event-stream`
@@ -145,13 +145,13 @@ A refused request gets HTTP 429 with errorCode `user_rate_limited` (not `rate_li
 
 These headers are set by the SSEWriter before the first event is flushed. The response is a long-lived HTTP/1.1 connection that the server writes to incrementally.
 
-**oauth-proxy compatibility:** SSE works through oauth-proxy without any special configuration. Unlike WebSocket (which requires an `Upgrade` header and Route annotation `haproxy.router.openshift.io/hsts_header`), SSE is just a normal HTTP response with a streaming body. oauth-proxy passes the response through transparently because:
-1. The initial request is a standard authenticated POST/GET
-2. oauth-proxy validates the token and forwards to the backend
-3. The backend sends `Content-Type: text/event-stream` and starts writing events
-4. oauth-proxy and HAProxy relay the chunked response without buffering
+**oauth-proxy compatibility:** SSE is a normal HTTP response with a streaming body, so it needs no protocol upgrade:
+1. The request is a standard authenticated POST/GET; oauth-proxy validates the session and forwards it to the backend.
+2. The backend sends `Content-Type: text/event-stream` and starts writing events.
+3. oauth-proxy relays them with the template's `--upstream-flush=200ms` (it flushes the relayed response every 200 ms, so each event reaches the browser promptly) and `--upstream-timeout=960s` (Section 4).
+4. HAProxy relays the response as it arrives.
 
-**No special Route annotation needed for SSE protocol** (unlike WebSocket which requires `haproxy.router.openshift.io/haproxy.config: websocket`). The only Route annotation needed is the timeout annotation (Section 1) to prevent HAProxy from killing long-running streams.
+**Route annotation:** the only one SSE needs is the timeout annotation (Section 1), so HAProxy does not close a long-running stream.
 
 **Flushing:** The SSEWriter calls `http.Flusher.Flush()` after each event to ensure it is sent immediately rather than buffered. Go's `http.ResponseWriter` supports `Flusher` when not wrapped in buffering middleware.
 
@@ -166,6 +166,6 @@ These headers are set by the SSEWriter before the first event is flushed. The re
 
 **Test overrides:** Tests set these to minimal values to avoid slow test suites.
 
-**Why `var` not `const`:** Go `const` only supports primitive types and cannot hold `time.Duration` values that need to be overridden. Using package-level `var` is the standard Go pattern for testable timing constants.
+**Why `var` not `const`:** a Go `const` can hold a `time.Duration` (`const d = 5 * time.Second`), but it cannot be reassigned, and the tests reassign these values. Package-level `var` is the usual Go pattern for timings that tests override.
 
 **Note:** Check the source code for current timeout values. Production values are designed for real cluster latencies; test values are designed for speed.

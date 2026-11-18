@@ -187,11 +187,11 @@ If a step fails, the card says which one and why. A failed install restores the 
 
 Open **Components**, then **Diagnostics**.
 
-<img src="images/diag-all-passing.png" alt="Diagnostics: All 15 checks passed, no issues detected" width="760">
+<img src="images/diag-all-passing.png" alt="Diagnostics: All 16 checks passed, no issues detected" width="760">
 
 **What you should see:**
 - **Components:** DataScienceCluster `default-dsc` is **Ready** and every enabled component is ready. Right after step 5, some deployments are still rolling out; refresh after a few minutes.
-- **Diagnostics:** **All 15 checks passed, no issues detected**. If a problem is listed, open it: it shows what was observed and the fix. [RUNBOOK §11.7](../RUNBOOK.md#117-datasciencecluster-not-ready) explains each one.
+- **Diagnostics:** **All 16 checks passed, no issues detected**. If a problem is listed, open it: it shows what was observed and the fix. [RUNBOOK §11.7](../RUNBOOK.md#117-datasciencecluster-not-ready) explains each one.
 
 ## 7. Environment: pipelines and S3 storage
 
@@ -215,7 +215,7 @@ Before **Set up**, each tab says what it still needs, and Set up stays disabled 
 
 <img src="images/environment-mlflow-samples.png" alt="MLflow tab, Sample data for dev-project: Add all and Remove all, and each sample with its state" width="760">
 
-**What you should see:** MLflow **Ready**, with **Open MLflow** and the client settings (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN`, `MLFLOW_WORKSPACE`) under **Use it**. **Remove all** removes the samples the tool added (the agent and prompt demo is removed in the MLflow UI).
+**What you should see:** MLflow **Ready**, with **Open MLflow experiments** (MLflow's pages in the RHOAI dashboard) and the client settings (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN`, `MLFLOW_WORKSPACE`) under **Use it**. **Remove all** removes the samples the tool added (the agent and prompt demo is removed in the MLflow UI).
 
 ## 9. Environment: a model on CPU
 

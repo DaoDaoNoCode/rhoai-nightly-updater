@@ -25,7 +25,7 @@ bash install.sh --dry-run && bash install.sh
 
 The installer prints the app URL when it is done. To check the download, compare `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) with the SHA-256 in the [release notes](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest). For a specific version, download `https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh` instead.
 
-**New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup, your first update and the Environment page, step by step. Upgrading from 2.x to 3.0.0? Read [UPGRADING §5](docs/UPGRADING.md#5-upgrade-to-v300): the S3 storage moves, and models need a project label. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first. Cluster configured from Git by Argo CD? Deploy the Helm chart `deploy/chart` instead: [GITOPS.md](docs/GITOPS.md).
+**New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup, your first update and the Environment page, step by step. Upgrading from 2.x to 3.0.0? Read [UPGRADING §5](docs/UPGRADING.md#5-upgrade-to-v300): the S3 storage moves, and a pipeline server needs the standard name `dspa` for workbench pipelines. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first. Cluster configured from Git by Argo CD? Deploy the Helm chart `deploy/chart` instead: [GITOPS.md](docs/GITOPS.md).
 
 ## A short tour
 
@@ -78,9 +78,9 @@ One tab per feature after an **Overview**, kept in the address so a link opens t
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
-4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (its list of projects), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
+4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
 
-Under the table, **Clean up everything** deletes what this tool created (the pipeline servers, the S3 storage, MLflow, the models, then the inference gateway) in one confirmed operation, with a checkbox per part.
+Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
 
 <img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, S3 storage with endpoint and masked admin password, and the pipeline server with Open pipelines" width="760">
 
@@ -109,9 +109,9 @@ Storage an earlier version set up in namespace `minio` reads **Needs attention**
 <img src="docs/images/environment-mlflow.png" alt="MLflow tab: the MLflow server Ready and Not managed by this tool, with its image, address and Deploy PR" width="760">
 
 1. The **MLflow** tab: the server's health.
-2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow, a PR build, Revert), but the tool does not delete it.
+2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow experiments, a PR build, Revert), but the tool does not delete it.
 
-MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (`<address>/#/experiments?workspace=<project>`), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
+MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (the dashboard's MLflow experiments for the project, `/develop-train/mlflow/experiments?workspace=<project>`; MLflow's own `<address>/#/experiments?workspace=<project>` only when the dashboard's address is not known), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
 
 #### Models: small models on CPU
 
@@ -279,7 +279,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 
 **Recovery on failure.** If the install fails, the previous catalog and Subscription are restored and the half-installed CSV is removed. A timeout while OLM is still installing keeps the new state. Every step is safe to re-run.
 
-**Only the tool's own objects.** Objects the tool creates carry `app.kubernetes.io/managed-by=rhoai-nightly-updater`. Teardown deletes only labelled objects, with UID preconditions, so a look-alike someone else created is never removed. S3 storage teardown keeps the `minio` namespace; delete it yourself with `oc delete project minio` once it's empty. Teardown is refused while a pipeline server still uses the storage.
+**Only the tool's own objects.** Objects the tool creates carry `app.kubernetes.io/managed-by=rhoai-nightly-updater`. Teardown deletes only labelled objects, with UID preconditions, so a look-alike someone else created is never removed. Deleting the S3 storage keeps its namespace `seaweedfs` unless you tick **Also delete namespace seaweedfs (created by this tool)**, offered only when the tool created it; **Delete old storage** does the same for the earlier storage's namespace `minio` (**Also delete namespace minio**). A kept namespace is yours to delete (`oc delete project <name>`) once it is empty. Teardown is refused while a pipeline server still uses the storage.
 
 **Stale webhooks and finalizers.** A webhook configuration is removed only when all three of these hold:
 - its Services are gone, or have had no ready endpoints for 5 minutes;

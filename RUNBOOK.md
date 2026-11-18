@@ -276,7 +276,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PVC `seaweedfs-data`, Service `seaweedfs-s3`, Route `seaweedfs-admin`). Storage an earlier version set up in namespace `minio` is moved with **Migrate storage** (§10.1). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
-The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server), **MLflow**, **Models** (the inference gateway and a project's CPU models, §10.2), **Playground** (§10.3) and **MaaS** (§10.4). The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): the pipeline servers, then the storage, then MLflow, then the models, then the inference gateway, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, a notification brings it back.
+The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server), **MLflow**, **Models** (the inference gateway and a project's CPU models, §10.2), **Playground** (§10.3) and **MaaS** (§10.4). The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): first the MaaS publications (Unpublish), then the pipeline servers, the storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, a notification brings it back.
 
 <img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
 
@@ -403,6 +403,8 @@ curl -s -X POST "https://rh-ai.<apps domain>/gen-ai/api/v1/lsd/responses?namespa
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"model":"qwen25-05b-instruct","model_source_type":"namespace","input":"Say hello","stream":false}'
 ```
+
+For a Models as a Service model, the body names the source and a subscription to the model, `"model_source_type":"maas","subscription":"<name>"` (this tool's is `rhoai-nightly-updater-subscription`): the dashboard mints the MaaS key for that subscription, and without one the playground answers 500. The Playground tab's **Use it** builds the command for the chosen model.
 
 | Symptom | Cause and fix |
 |---|---|
@@ -839,5 +841,5 @@ The entry stays after the policy is removed (with `pruneObjectBehavior: None`), 
 | Cookie secret | Secret `$APP-proxy` (`session_secret`) |
 | Serving cert | Secret `$APP-tls` (service-ca) |
 | ClusterRole / ClusterRoleBinding / ConsoleLink | `$APP-$NS` |
-| Roles | `$APP` in `$NS`; `$APP-$NS` in `kube-system`, `openshift-marketplace` |
+| Roles | `$APP` in `$NS`; `$APP-$NS` in `kube-system`, `openshift-marketplace`, `openshift-ingress`, `openshift-ingress-operator` |
 | State ConfigMaps | `rhoai-nightly-updater-{activity,snapshot,operation}` (`operation` holds the running-operation marker, `lastCompleted` and the cross-pod lease `lock`) |
