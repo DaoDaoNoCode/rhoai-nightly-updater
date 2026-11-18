@@ -1079,6 +1079,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		cnpg, cnpgReadErr = readOperatorIn(c, cnpgOperator, csvs)
 	}
 	kVersion, kvErr := kuadrantServedVersion(c)
+	// Kuadrant's API alone is not an installed operator: its CRDs stay
+	// after an uninstall (controllerDeployed).
+	kRuns, kRunsErr := kVersion != "", error(nil)
+	if kvErr == nil && kRuns && !rhcl.installed() && rhclErr == nil {
+		kRuns, kRunsErr = controllerDeployed(c, kuadrantController)
+	}
 	rhclPart := types.MaaSPart{ID: "rhcl", Title: "Red Hat Connectivity Link", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, rhclByTool := rec.Shared["rhcl"]
 	switch {
@@ -1121,7 +1127,9 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		} else if note != "" {
 			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
 		}
-	case kvErr == nil && kVersion != "":
+	case kRunsErr != nil:
+		rhclPart.State, rhclPart.Message = "unknown", "Cannot tell whether Kuadrant's operator runs: "+kRunsErr.Error()
+	case kvErr == nil && kRuns:
 		rhclPart.State, rhclPart.NotManaged = "ready", true
 		rhclPart.Message = "Kuadrant's API is served without an rhcl-operator CSV (an upstream Kuadrant, or another install); MaaS uses it as it is"
 	case rhcl.sub != nil:
@@ -1170,6 +1178,10 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", dbNS))
 	foreignDB := secErr == nil && secFound && !toolOwned(secMeta)
 	cnpgServed, cnpgErr := groupServed(c, cnpgGroup)
+	if cnpgErr == nil && cnpgServed && !cnpg.installed() {
+		// Its API alone is not an installed operator (controllerDeployed).
+		cnpgServed, cnpgErr = controllerDeployed(c, cnpgController)
+	}
 	if !foreignDB {
 		cnpgPart := types.MaaSPart{ID: "cnpg", Title: "CloudNativePG operator", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 		_, cnpgByTool := rec.Shared["cnpg"]

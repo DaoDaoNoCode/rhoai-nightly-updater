@@ -178,7 +178,8 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	f := mc.f
 	f.mu.Lock()
 	for k := range f.objects {
-		if strings.HasPrefix(k.gv, "kuadrant.io") || k.gv == "operator.authorino.kuadrant.io/v1beta1" || k.ns == "kuadrant-system" || k.name == "redhat-ai-gateway-infra" {
+		if strings.HasPrefix(k.gv, "kuadrant.io") || k.gv == "operator.authorino.kuadrant.io/v1beta1" || k.ns == "kuadrant-system" || k.name == "redhat-ai-gateway-infra" ||
+			k.name == kuadrantController || k.name == cnpgController {
 			delete(f.objects, k)
 		}
 	}
@@ -193,9 +194,11 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	sim.onInstalled = func(pkg, ns, from, to string) {
 		switch pkg {
 		case "rhcl-operator":
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: kuadrantController}] = map[string]interface{}{"metadata": map[string]interface{}{"name": kuadrantController}}
 			f.groups["/apis/kuadrant.io"] = `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`
 			delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
 		case "cloudnative-pg":
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: cnpgController}] = map[string]interface{}{"metadata": map[string]interface{}{"name": cnpgController}}
 			f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
 		}
 	}
@@ -795,5 +798,67 @@ func TestMaaS_ForeignGatewayAdmittingAll(t *testing.T) {
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
 	if res.Success || !strings.Contains(res.Message, "Gateway maas-default-gateway") {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+// After Connectivity Link and CloudNativePG are uninstalled, OLM leaves their
+// CRDs, so both APIs are still served with no operator to reconcile them
+// (seen live 2026-11-18). A served API alone is not an installed operator:
+// both parts read missing, Set up plans and does both installs.
+func TestMaaSSetup_LeftoverCRDsWithoutOperatorsAreInstalled(t *testing.T) {
+	mc, _ := newFreshMaaSCluster(t)
+	f := mc.f
+	f.mu.Lock()
+	f.groups["/apis/kuadrant.io"] = `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`
+	f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
+	delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
+	f.mu.Unlock()
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"rhcl", "cnpg"} {
+		if p := maasPart(t, st, id); p.State != "missing" {
+			t.Errorf("part %s with only its CRDs left = %+v, want missing", id, p)
+		}
+	}
+	plan := strings.Join(st.SetupPlan, "\n")
+	for _, want := range []string{"Install Red Hat Connectivity Link", "Install CloudNativePG"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("the plan lacks %q:\n%s", want, plan)
+		}
+	}
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	if !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if got := finalSteps(events); !strings.Contains(got, "rhcl=success") || !strings.Contains(got, "cnpg=success") {
+		t.Fatalf("steps = %s, want both installs", got)
+	}
+	muts := strings.Join(mc.f.mutations(), "\n")
+	for _, want := range []string{"POST /apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions", "POST /apis/operators.coreos.com/v1alpha1/namespaces/cnpg-system/subscriptions"} {
+		if !strings.Contains(muts, want) {
+			t.Errorf("no %s in %s", want, muts)
+		}
+	}
+}
+
+// A Deployment list that cannot be read stops Set up before any change
+// (fail closed): with only the API to go by, it cannot tell an installed
+// operator from leftover CRDs.
+func TestMaaSSetup_ControllerReadFailureChangesNothing(t *testing.T) {
+	mc, _ := newFreshMaaSCluster(t)
+	f := mc.f
+	f.mu.Lock()
+	f.groups["/apis/kuadrant.io"] = `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`
+	delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
+	f.fail["GET /apis/apps/v1/deployments"] = 403
+	f.mu.Unlock()
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	if res.Success {
+		t.Fatal("setup succeeded without knowing whether Kuadrant's operator runs")
+	}
+	if m := mc.f.mutations(); len(m) != 0 {
+		t.Fatalf("changes after a failed read: %v", m)
 	}
 }

@@ -47,8 +47,16 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the Kuadrant API; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "kuadrant read failed")
 	}
+	// Kuadrant's API served without an rhcl-operator CSV counts as installed
+	// only while its controller runs (CRDs stay after an uninstall).
+	kRuns := kVersion != ""
+	if kRuns && !rhcl.installed() {
+		if kRuns, err = controllerDeployed(c, kuadrantController); err != nil {
+			return m.fail("check", fmt.Sprintf("Cannot tell whether Kuadrant's operator runs; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "controller read failed")
+		}
+	}
 	var rhclPlan *operatorInstallPlan
-	if !rhcl.installed() && kVersion == "" && rhcl.sub == nil {
+	if !rhcl.installed() && !kRuns && rhcl.sub == nil {
 		plan, msg, code := planOperatorInstall(c, rhclOperator)
 		if msg != "" {
 			return m.fail("check", msg, code, "rhcl plan failed")
@@ -89,6 +97,13 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	if !foreignDB {
 		if cnpgServed, err = groupServed(c, cnpgGroup); err != nil {
 			return m.fail("check", fmt.Sprintf("Cannot tell whether CloudNativePG is installed; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "cnpg read failed")
+		}
+		// Its API served counts only while its controller runs (CRDs stay
+		// after an uninstall).
+		if cnpgServed {
+			if cnpgServed, err = controllerDeployed(c, cnpgController); err != nil {
+				return m.fail("check", fmt.Sprintf("Cannot tell whether CloudNativePG's operator runs; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "controller read failed")
+			}
 		}
 		if !cnpgServed {
 			if cnpg, err = readOperator(c, cnpgOperator); err != nil {

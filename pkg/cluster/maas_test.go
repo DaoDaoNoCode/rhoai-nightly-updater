@@ -44,6 +44,10 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	f.groups = map[string]string{"/apis/kuadrant.io": `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"},{"groupVersion":"kuadrant.io/v1alpha1","version":"v1alpha1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`,
 		// CloudNativePG is installed: its API group is served.
 		"/apis/postgresql.cnpg.io": `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`}
+	// The operators' controllers run (a served API alone is not an
+	// installed operator: CRDs stay after an uninstall).
+	f.putJSON("/apis/apps/v1/namespaces/openshift-operators/deployments/kuadrant-operator-controller-manager", `{}`)
+	f.putJSON("/apis/apps/v1/namespaces/cnpg-system/deployments/cnpg-controller-manager", `{}`)
 	f.putJSON("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", `{"metadata":{"annotations":{"service.beta.openshift.io/serving-cert-secret-name":"authorino-server-cert"}}}`)
 	f.putJSON("/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino", `{"spec":{"listener":{"tls":{"enabled":true}}}}`)
 	f.putJSON("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino", `{"spec":{"template":{"spec":{"containers":[{"name":"authorino","env":[{"name":"SSL_CERT_FILE","value":"/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"}]}]}}}}`)

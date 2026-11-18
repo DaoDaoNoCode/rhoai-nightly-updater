@@ -818,3 +818,41 @@ func rhclMemoryResources(containers []operatorContainer) (map[string]interface{}
 	}
 	return out, ""
 }
+
+// The controller Deployments of Connectivity Link (Kuadrant) and
+// CloudNativePG, by the names upstream gives them in OLM and non-OLM installs
+// alike (seen live: openshift-operators/kuadrant-operator-controller-manager,
+// cnpg-system/cnpg-controller-manager).
+const (
+	kuadrantController = "kuadrant-operator-controller-manager"
+	cnpgController     = "cnpg-controller-manager"
+)
+
+// controllerDeployed reports whether a Deployment of that name exists in any
+// namespace. A served API alone does not mean an operator runs: OLM leaves an
+// operator's CRDs behind when it is uninstalled (seen live 2026-11-18 after
+// removing Connectivity Link 1.5.0 and CloudNativePG), and objects made then
+// are never reconciled. The field selector narrows the list on a real API
+// server; the name is checked here too.
+func controllerDeployed(c *Client, name string) (bool, error) {
+	body, _, err := c.get("/apis/apps/v1/deployments?fieldSelector=" + url.QueryEscape("metadata.name="+name))
+	if err != nil {
+		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
+	}
+	for _, d := range list.Items {
+		if d.Metadata.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
