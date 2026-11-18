@@ -108,14 +108,14 @@ Only hosted control planes (ROSA HCP) pass `kube-system/additional-pull-secret` 
 The app reads the cluster's control plane topology (Infrastructure `cluster`, `status.controlPlaneTopology`; `External` is a hosted control plane). It has no access to `openshift-config/pull-secret`, which holds every registry credential of the cluster. So once the token is saved, the **Pull secret** item of a self-managed cluster (or one whose topology it could not read) shows **Nodes not checked** and this command for a cluster-admin (bash or zsh, `jq` 1.6 or later):
 
 ```bash
-printf 'quay.io/rhoai token (base64 user:password from step 1, with its = padding): ' && read -rs QUAY_AUTH && echo
+printf 'quay.io/rhoai token (the one you saved under Pull secret; base64 user:password, with its = padding): ' && read -rs QUAY_AUTH && echo
 [ -n "$QUAY_AUTH" ] && oc get secret pull-secret -n openshift-config -o json \
   | QUAY_AUTH="$QUAY_AUTH" jq '.data[".dockerconfigjson"] |= (@base64d | fromjson | .auths["quay.io/rhoai"] = {auth: $ENV.QUAY_AUTH} | tojson | @base64)' \
   | oc replace -f -
 unset QUAY_AUTH
 ```
 
-- It asks for the token from step 0 (the value you pasted into the app) and does not echo it, so it stays off the screen and out of the shell history. The prompt is printed by `printf` because zsh's `read` has no `-p`.
+- It asks for the token you saved under **Pull secret** (the `quay.io/rhoai` token of step 0, the value you pasted into the app) and does not echo it, so it stays off the screen and out of the shell history. The prompt is printed by `printf` because zsh's `read` has no `-p`.
 - The token reaches `jq` through its environment, not its arguments, which `ps` shows to every user of the machine. Without a token (an empty line, Ctrl-D) nothing runs.
 - `jq` changes only the `quay.io/rhoai` key; every other registry login stays as it is.
 - `oc get -o json` keeps the Secret's `resourceVersion`, so `oc replace` fails with a conflict if someone changed the Secret meanwhile, instead of overwriting their change. A missing or garbled Secret makes `jq` fail, so `oc replace` gets nothing and changes nothing. Nothing is written to disk.
@@ -126,7 +126,7 @@ unset QUAY_AUTH
 
 (1) the command, with its copy button; (2) **Check that the nodes can pull**; (3) its result.
 
-Then click **Check that the nodes can pull**. It runs Update's own catalog check: a temporary CatalogSource with the newest nightly catalog image, which tells whether a node can pull it, and removes it again (about a minute). The item says **Ready** once the check passes, and from then on while the nightly catalog runs its `quay.io/rhoai` image. Until then the setup card stays at the top of the page; **Install latest nightly** is not held back, and its own catalog check says the same if the nodes cannot pull.
+Then click **Check that the nodes can pull**. It runs Update's own catalog check: a temporary CatalogSource with the newest nightly catalog image, which tells whether a node can pull it, and removes it again (up to two minutes). Until the check has passed the item reads **Nodes not checked**; if a node cannot pull the image it reads **Nodes can't pull**, with the reason under the button (run the command again, wait for `oc get mcp`, then check again). The item says **Ready** once the check passes, and from then on while the nightly catalog runs its `quay.io/rhoai` image. Until then the setup card stays at the top of the page; **Install latest nightly** is not held back, and its own catalog check says the same if the nodes cannot pull.
 
 ### The image mirror
 
