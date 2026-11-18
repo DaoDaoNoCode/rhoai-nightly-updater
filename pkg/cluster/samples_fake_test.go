@@ -74,12 +74,36 @@ type fakeMCP struct {
 	versions    map[string]string // version -> status
 	endpoints   int
 	description string
+	createdBy   string
 }
 
 type fakeSkill struct {
 	tags     map[string]string
-	versions int
+	versions int          // the highest version number
+	deleted  map[int]bool // versions deleted since
 	source   map[string]interface{}
+	// createdBy is the parent's creator; versions are the caller's.
+	createdBy string
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// fakeCaller is the user MLflow records as created_by for the tool's token.
+const fakeCaller = "system:serviceaccount:rhoai-nightly-updater:rhoai-nightly-updater"
+
+// orNull is created_by as MLflow answers it: null when unknown.
+func orNull(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // fakeDemo mirrors mlflow/demo: generator versions per feature
@@ -140,7 +164,9 @@ var mlflowFakeRules = []mlflowFakeRule{
 	// A version POST auto-creates a missing parent server
 	// (sqlalchemy_mixin.py:272-330) and is checked as update on it.
 	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1351-1354"},
+	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mcpSampleName}, "rules_base.py:1355-1358"},
 	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mcpSampleName}, "rules_base.py:1359-1362"},
+	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1367-1373"},
 	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1363-1366"},
 	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/endpoints", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1388-1391"},
 	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/tags", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mcpSampleName}, "rules_base.py:1411-1414"},
@@ -150,6 +176,8 @@ var mlflowFakeRules = []mlflowFakeRule{
 	// creates the parent" (rules_skill_registry.py:30-33).
 	{"POST", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "update"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:78-80"},
 	{"POST", "/api/3.0/mlflow/skills/{skill}/tags", []fakeCheck{{"skills", "update"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:105-107"},
+	{"GET", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "get"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:80-82"},
+	{"DELETE", "/api/3.0/mlflow/skills/{skill}/versions/{v}", []fakeCheck{{"skills", "update"}}, "path", []string{skillSampleName}, "rules_skill_registry.py:89-91"},
 }
 
 func (r mlflowFakeRule) key() string { return r.method + " " + r.route }
@@ -670,7 +698,28 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 		for i := 0; i < srv.endpoints; i++ {
 			eps = append(eps, map[string]string{"id": strconv.Itoa(i)})
 		}
-		f.writeJSON(w, map[string]interface{}{"name": name, "status": status, "access_endpoints": eps, "tags": srv.tags, "description": srv.description})
+		f.writeJSON(w, map[string]interface{}{"name": name, "status": status, "access_endpoints": eps, "tags": srv.tags, "description": srv.description, "created_by": orNull(srv.createdBy)})
+	case "GET /api/3.0/mlflow/mcp-servers/{mcp}/versions":
+		if srv == nil {
+			notFound()
+			return
+		}
+		list := []map[string]interface{}{}
+		for _, v := range sortedKeys(srv.versions) {
+			list = append(list, map[string]interface{}{"name": name, "version": v, "status": srv.versions[v], "created_by": fakeCaller})
+		}
+		f.writeJSON(w, map[string]interface{}{"mcp_server_versions": list})
+	case "DELETE /api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}":
+		if srv == nil {
+			notFound()
+			return
+		}
+		if _, ok := srv.versions[params["v"]]; !ok {
+			notFound()
+			return
+		}
+		delete(srv.versions, params["v"])
+		f.writeJSON(w, map[string]string{})
 	case "PATCH /api/3.0/mlflow/mcp-servers/{mcp}":
 		if srv == nil {
 			notFound()
@@ -703,7 +752,7 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			return
 		}
 		if srv == nil {
-			srv = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}}
+			srv = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: fakeCaller}
 			f.mcp[name] = srv
 		}
 		v := fmt.Sprint(sj["version"])
@@ -712,7 +761,7 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			return
 		}
 		srv.versions[v] = firstNonEmpty(str("status"), "draft")
-		f.writeJSON(w, map[string]string{"name": name, "version": v, "status": srv.versions[v]})
+		f.writeJSON(w, map[string]string{"name": name, "version": v, "status": srv.versions[v], "created_by": fakeCaller})
 	case "GET /api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}":
 		if srv == nil {
 			notFound()
@@ -762,10 +811,36 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			return
 		}
 		var latest interface{}
-		if sk.versions > 0 {
-			latest = sk.versions
+		for v := sk.versions; v > 0; v-- {
+			if !sk.deleted[v] {
+				latest = v
+				break
+			}
 		}
-		f.writeJSON(w, map[string]interface{}{"name": name, "latest_version": latest, "tags": sk.tags})
+		f.writeJSON(w, map[string]interface{}{"name": name, "latest_version": latest, "tags": sk.tags, "created_by": orNull(sk.createdBy)})
+	case "GET /api/3.0/mlflow/skills/{skill}/versions":
+		if sk == nil {
+			notFound()
+			return
+		}
+		list := []map[string]interface{}{}
+		for v := 1; v <= sk.versions; v++ {
+			if !sk.deleted[v] {
+				list = append(list, map[string]interface{}{"name": name, "version": v, "created_by": fakeCaller})
+			}
+		}
+		f.writeJSON(w, map[string]interface{}{"skill_versions": list})
+	case "DELETE /api/3.0/mlflow/skills/{skill}/versions/{v}":
+		v, _ := strconv.Atoi(params["v"])
+		if sk == nil || v < 1 || v > sk.versions || sk.deleted[v] {
+			notFound()
+			return
+		}
+		if sk.deleted == nil {
+			sk.deleted = map[int]bool{}
+		}
+		sk.deleted[v] = true
+		f.writeJSON(w, map[string]string{})
 	case "DELETE /api/3.0/mlflow/skills/{skill}":
 		if sk == nil {
 			notFound()
@@ -779,12 +854,12 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 			return
 		}
 		if sk == nil {
-			sk = &fakeSkill{tags: map[string]string{}}
+			sk = &fakeSkill{tags: map[string]string{}, createdBy: fakeCaller}
 			f.skills[name] = sk
 		}
 		sk.versions++
 		sk.source = body
-		f.writeJSON(w, map[string]interface{}{"name": name, "version": sk.versions})
+		f.writeJSON(w, map[string]interface{}{"name": name, "version": sk.versions, "created_by": fakeCaller})
 	case "POST /api/3.0/mlflow/skills/{skill}/tags":
 		if sk == nil {
 			notFound()

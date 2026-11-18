@@ -125,6 +125,25 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 		}
 	}
 	pipelineStatus(t, env)
+	// Registry entries someone creates while the tool adds them: the tool
+	// lists their versions and deletes the one it added.
+	if ok, msg, _ := env.run(t, "remove", SampleMCPServer, SampleSkill); !ok {
+		t.Fatal(msg)
+	}
+	env.mlflow.onRequest = func(method, path string) {
+		if method == "POST" && strings.HasSuffix(path, "/versions") {
+			if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mcpSampleName] == nil {
+				env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: "alice"}
+			}
+			if strings.Contains(path, "/skills/") && env.mlflow.skills[skillSampleName] == nil {
+				env.mlflow.skills[skillSampleName] = &fakeSkill{tags: map[string]string{}, createdBy: "alice"}
+			}
+		}
+	}
+	if ok, msg, _ := env.run(t, "add", SampleMCPServer, SampleSkill); ok {
+		t.Fatalf("claimed a registry entry someone else created: %s", msg)
+	}
+	env.mlflow.onRequest = nil
 
 	var unused []string
 	for _, rule := range mlflowFakeRules {

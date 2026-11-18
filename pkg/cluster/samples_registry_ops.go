@@ -1,8 +1,11 @@
 package cluster
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 )
 
 // Add and Remove of the MCP server and skill samples. Neither needs a
@@ -52,7 +55,21 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 	}
 
 	if !found {
-		if err := t.createMCPVersion("draft"); err != nil {
+		created, err := t.createMCPVersion("draft")
+		if isAlreadyExists(err) {
+			return "", &sampleRefusal{"MCP server '" + mcpSampleName + "' was created by someone else in the meantime, so it is left unchanged."}
+		}
+		if err != nil {
+			return "", err
+		}
+		// Someone may have created the server between the read above and
+		// this version: then the version went into their server, and the tag
+		// below would claim it. Only a server holding just this version, made
+		// by the same caller, is the tool's.
+		if err := t.confirmNewParent("MCP server '"+mcpSampleName+"'", mcpServerPath(""), mcpServerPath("/versions"), "mcp_server_versions", mcpSampleVersion, created.CreatedBy); err != nil {
+			if delErr := t.api.sendJSON("DELETE", mcpServerPath("/versions/"+url.PathEscape(mcpSampleVersion)), nil, nil, nil); delErr != nil {
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%v): delete version %s of MCP server %s in MLflow", err, delErr, mcpSampleVersion, mcpSampleName)
+			}
 			return "", err
 		}
 		if err := t.api.sendJSON("POST", mcpServerPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleMCPServer}, nil); err != nil {
@@ -73,7 +90,7 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 	err = t.api.sendJSON("GET", mcpServerPath("/versions/"+mcpSampleVersion), nil, nil, &ver)
 	switch {
 	case isNotFound(err):
-		if err := t.createMCPVersion("active"); err != nil {
+		if _, err := t.createMCPVersion("active"); err != nil {
 			return "", err
 		}
 	case err != nil:
@@ -96,8 +113,47 @@ func addMCP(t *mlflowTarget, log func(string)) (string, error) {
 	return "added (active, endpoint " + mcpSampleURL + ")", nil
 }
 
-func (t *mlflowTarget) createMCPVersion(status string) error {
-	return t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]interface{}{
+// registryVersion is the part of a created MCP server or skill version the
+// tool reads (MCPServerVersionResponse, SkillVersionResponse): its version
+// (a string for MCP, a number for skills) and who created it.
+type registryVersion struct {
+	Version   json.RawMessage `json:"version"`
+	CreatedBy *string         `json:"created_by"`
+}
+
+func (v registryVersion) id() string { return strings.Trim(string(v.Version), `"`) }
+
+// confirmNewParent checks, after the tool added a version to a parent it did
+// not find, that the parent is the one that version created: it holds only
+// that version (the list route: mcpservers / skills get on the name,
+// rules_base.py:1355-1358, rules_skill_registry.py:80-82), and its
+// created_by is the version's. Otherwise someone created the parent in
+// between, and it is theirs.
+func (t *mlflowTarget) confirmNewParent(what, parentPath, versionsPath, listKey, version string, creator *string) error {
+	var parent struct {
+		CreatedBy *string `json:"created_by"`
+	}
+	if err := t.api.sendJSON("GET", parentPath, nil, nil, &parent); err != nil {
+		return err
+	}
+	var list map[string][]registryVersion
+	if err := t.api.sendJSON("GET", versionsPath, nil, nil, &list); err != nil {
+		return err
+	}
+	versions := list[listKey]
+	foreign := len(versions) != 1 || versions[0].id() != version
+	if creator != nil && parent.CreatedBy != nil && *creator != *parent.CreatedBy {
+		foreign = true
+	}
+	if foreign {
+		return &sampleRefusal{"Someone else created " + what + " while this tool was adding it, so it is left as they made it; only the version this tool added is deleted again."}
+	}
+	return nil
+}
+
+func (t *mlflowTarget) createMCPVersion(status string) (registryVersion, error) {
+	var out registryVersion
+	err := t.api.sendJSON("POST", mcpServerPath("/versions"), nil, map[string]interface{}{
 		"server_json": map[string]interface{}{
 			"name": mcpSampleName, "version": mcpSampleVersion, "title": mcpSampleTitle, "description": mcpSampleDescription,
 			"remotes":    []map[string]string{{"type": mcpSampleTransport, "url": mcpSampleURL}},
@@ -105,7 +161,8 @@ func (t *mlflowTarget) createMCPVersion(status string) error {
 		},
 		"status": status,
 		"tools":  mcpSampleTools,
-	}, nil)
+	}, &out)
+	return out, err
 }
 
 // removeMCP deprecates the active version, then deletes the server (a hard
@@ -160,13 +217,21 @@ func addSkill(t *mlflowTarget, log func(string)) (string, error) {
 	case found && sk.LatestVersion != nil:
 		return "already present", nil
 	}
+	var created registryVersion
 	if err := t.api.sendJSON("POST", skillPath("/versions"), nil, map[string]string{
 		"name": skillSampleName, "source": skillSampleSource, "source_type": "git",
 		"ref": skillSampleRef, "subpath": skillSampleSubpath, "status": "active",
-	}, nil); err != nil {
+	}, &created); err != nil {
 		return "", err
 	}
 	if !found {
+		// As for MCP: a skill someone created since the read is theirs.
+		if err := t.confirmNewParent("skill '"+skillSampleName+"'", skillPath(""), skillPath("/versions"), "skill_versions", created.id(), created.CreatedBy); err != nil {
+			if delErr := t.api.sendJSON("DELETE", skillPath("/versions/"+url.PathEscape(created.id())), nil, nil, nil); delErr != nil {
+				return "", fmt.Errorf("%w; the version this tool added could not be deleted again (%v): delete version %s of skill %s in MLflow", err, delErr, created.id(), skillSampleName)
+			}
+			return "", err
+		}
 		if err := t.api.sendJSON("POST", skillPath("/tags"), nil, map[string]string{"key": sampleMarkerKey, "value": SampleSkill}, nil); err != nil {
 			if delErr := t.api.sendJSON("DELETE", skillPath(""), nil, nil, nil); delErr != nil {
 				return "", fmt.Errorf("%w; the new skill could not be deleted again (%v): delete skill %s in MLflow", err, delErr, skillSampleName)
