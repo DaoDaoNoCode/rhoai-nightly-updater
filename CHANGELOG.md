@@ -47,6 +47,11 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **The S3 admin UI has a password of its own.** It was the S3 secret
+  key, which every pipeline project's copy of the keys holds. Setup and
+  Repair write a random password into `seaweedfs-s3-credentials` only;
+  storage set up earlier asks for Repair, which keeps the S3 keys.
+
 - MLflow set up by this tool uses the MLflow operator's own resource
   defaults (on 3.6: requests 1 CPU / 2 GiB, limits 4 CPU / 3 GiB) instead
   of a 2 GiB limit, which got its 8-worker server OOMKilled while MLflow

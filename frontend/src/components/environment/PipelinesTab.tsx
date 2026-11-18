@@ -222,13 +222,18 @@ const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, re
               <DescriptionListGroup>
                 <DescriptionListTerm>Secret key</DescriptionListTerm>
                 <DescriptionListDescription>
-                  <S3SecretField id="storage-secret-key" field="password" label="S3 secret key" disabledReason={readReason} />
+                  <S3SecretField id="storage-secret-key" field="secretKey" label="S3 secret key" disabledReason={readReason} />
                 </DescriptionListDescription>
               </DescriptionListGroup>
               {minio?.uiUser && (
                 <DescriptionListGroup>
                   <DescriptionListTerm>Admin UI login</DescriptionListTerm>
-                  <DescriptionListDescription>User <code>{minio.uiUser}</code>; the password is the S3 secret key.</DescriptionListDescription>
+                  <DescriptionListDescription>
+                    <Stack>
+                      <StackItem><Content component="p">User <code>{minio.uiUser}</code>, with a password of its own:</Content></StackItem>
+                      <StackItem><S3SecretField id="storage-admin-password" field="password" label="admin UI password" disabledReason={readReason} /></StackItem>
+                    </Stack>
+                  </DescriptionListDescription>
                 </DescriptionListGroup>
               )}
               <DescriptionListGroup>

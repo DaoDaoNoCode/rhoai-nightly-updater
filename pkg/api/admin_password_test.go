@@ -22,13 +22,12 @@ func stubAdminLogin(t *testing.T, user, password string, err error) *int {
 	orig := readS3AdminLogin
 	t.Cleanup(func() { readS3AdminLogin = orig })
 	calls := 0
-	readS3AdminLogin = func(*cluster.Client) (string, string, string, error) {
+	readS3AdminLogin = func(*cluster.Client) (cluster.S3Login, error) {
 		calls++
-		key := ""
-		if password != "" {
-			key = "access-" + password
+		if err != nil {
+			return cluster.S3Login{}, err
 		}
-		return user, key, password, err
+		return cluster.S3Login{User: user, Password: password, AccessKey: "access-" + password, SecretKey: "secret-" + password}, nil
 	}
 	return &calls
 }
@@ -64,13 +63,13 @@ func TestAdminPassword(t *testing.T) {
 			t.Fatalf("status=%d calls=%d body=%s", w.Code, *calls, w.Body.String())
 		}
 		var body map[string]string
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["user"] != "admin" || body["password"] != secret || body["accessKey"] != "access-"+secret {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["user"] != "admin" || body["password"] != secret || body["accessKey"] != "access-"+secret || body["secretKey"] != "secret-"+secret {
 			t.Fatalf("body=%s err=%v", w.Body.String(), err)
 		}
 		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 			t.Errorf("Cache-Control = %q, want no-store", cc)
 		}
-		if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "access-") {
+		if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "access-") || strings.Contains(logs.String(), "secret-") {
 			t.Errorf("the password was logged: %s", logs.String())
 		}
 		if !strings.Contains(logs.String(), "s3-admin-password") || !strings.Contains(logs.String(), "user=admin") {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { stubApi } from "../../test/apiStub";
 import type { ResourceState } from "../../types";
 import { envStatus, notManaged } from "./resourceStatus";
 import { useGoalRun } from "./useGoalRun";
@@ -183,9 +184,25 @@ describe("S3SecretField", () => {
   });
 });
 
+describe("S3SecretField: the admin UI password", () => {
+  it("is the password of its own, not the S3 secret key", async () => {
+    stubApi({ "/api/resources/minio/admin-password": { user: "admin", password: "AP", accessKey: "AK", secretKey: "SK" } });
+    render(<S3SecretField id="p" field="password" label="admin UI password" disabledReason={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show the admin UI password" }));
+    await waitFor(() => expect(screen.getByLabelText("admin UI password")).toHaveValue("AP"));
+  });
+  it("on storage an earlier version set up, says Repair sets one", async () => {
+    stubApi({ "/api/resources/minio/admin-password": { user: "admin", password: "", accessKey: "AK", secretKey: "SK" } });
+    render(<S3SecretField id="p" field="password" label="admin UI password" disabledReason={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show the admin UI password" }));
+    expect(await screen.findByText(/There is no admin UI password yet. Repair the S3 storage/)).toBeInTheDocument();
+    expect(screen.getByLabelText("admin UI password")).toHaveAttribute("type", "password");
+  });
+});
+
 describe("s3EnvText", () => {
   it("is what an S3 client reads, with the endpoint and both keys", () => {
-    expect(s3EnvText("http://seaweedfs-s3.seaweedfs.svc:8333", { accessKey: "AK", password: "SK" })).toBe(
+    expect(s3EnvText("http://seaweedfs-s3.seaweedfs.svc:8333", { accessKey: "AK", secretKey: "SK" })).toBe(
       "AWS_ENDPOINT_URL=http://seaweedfs-s3.seaweedfs.svc:8333\nAWS_ACCESS_KEY_ID=AK\nAWS_SECRET_ACCESS_KEY=SK\nAWS_DEFAULT_REGION=us-east-1\nAWS_S3_BUCKET=pipelines\n");
   });
 });

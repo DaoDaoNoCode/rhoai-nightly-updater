@@ -444,7 +444,7 @@ func (m *migrateRun) newStorageMatches(keys *s3Keys, step string) (bool, *types.
 		resp, _ := m.fail(step, fmt.Sprintf("Cannot read the new storage's keys: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "new keys unreadable")
 		return false, resp
 	}
-	if found && keys != nil && stored != *keys {
+	if found && keys != nil && (stored.AccessKey != keys.AccessKey || stored.SecretKey != keys.SecretKey) {
 		resp, _ := m.fail(step, fmt.Sprintf("The storage in namespace '%s' has other keys than the one in namespace '%s', so clients that keep their keys could not use it. Nothing was changed, and a retry gives the same result: this tool never changes the keys of a storage that may hold data. Two ways forward, both by hand: if namespace '%s' holds nothing you need, delete it (check with `oc get all,pvc,secret -n %s`, then `oc delete project %s`) and run Migrate storage again, which sets the storage up there with the old keys. Or copy the data yourself, for example with rclone, from the old storage (keys in Secret '%s' in '%s') to the new one (keys in Secret '%s' in '%s') and point your clients at the new storage and its keys. (Removing the storage from this page would delete the old storage too.)", s3Namespace, legacyNamespace, s3Namespace, s3Namespace, s3Namespace, legacySecret, legacyNamespace, s3Secret, s3Namespace), "conflict", "keys differ")
 		return false, resp
 	}

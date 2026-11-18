@@ -1550,14 +1550,14 @@ func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Req
 }
 
 // HandleS3AdminPassword returns the S3 storage's credentials: the admin UI
-// user, the S3 access key and the S3 secret key (also the admin UI
-// password), for the Pipelines tab's connection details. They are read from Secret
+// user and its own password, the S3 access key and the S3 secret key, for
+// the Pipelines tab's connection details. They are read from Secret
 // seaweedfs-s3-credentials on each request, answered only to a
 // cluster-admin, never cached (Cache-Control: no-store) and never logged:
 // the log line names the user, not the value.
 var HandleS3AdminPassword = withAdminRead(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	user, accessKey, password, err := readS3AdminLogin(c)
+	login, err := readS3AdminLogin(c)
 	var unavailable *cluster.S3AdminLoginUnavailable
 	switch {
 	case errors.As(err, &unavailable):
@@ -1570,7 +1570,7 @@ var HandleS3AdminPassword = withAdminRead(func(c *cluster.Client, w http.Respons
 		return
 	}
 	slog.Info("credential read", "op", "s3-admin-password", "user", resolveUsername(r))
-	writeJSON(w, map[string]string{"user": user, "accessKey": accessKey, "password": password}, "s3-admin-password")
+	writeJSON(w, login, "s3-admin-password")
 })
 
 // runMigrateStorage runs Migrate storage; tests replace it.

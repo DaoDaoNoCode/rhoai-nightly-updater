@@ -694,7 +694,7 @@ const routes = {
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
   "GET /api/resources/samples/pipeline/spec": () => F.pipelineSampleSpec,
   // Made up, like every value here.
-  "GET /api/resources/minio/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", password: "docs-mock-password" }),
+  "GET /api/resources/minio/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", secretKey: "docs-mock-secret-key", password: "docs-mock-admin-password" }),
   "GET /api/activity": () => world.status.activity ?? [],
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),

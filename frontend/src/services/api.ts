@@ -344,12 +344,13 @@ export function teardownMinIO(deleteNamespace = false): Promise<OperationRespons
 }
 
 /**
- * The S3 storage's credentials: the admin UI user, the S3 access key and
- * the S3 secret key (also the admin UI password). The server reads them from the storage's
+ * The S3 storage's credentials: the admin UI user and its own password
+ * ("" on storage an earlier version set up, until Repair), the S3 access
+ * key and the S3 secret key. The server reads them from the storage's
  * Secret on this request only (cluster-admins only, Cache-Control:
- * no-store); keep the password out of state, logs and the DOM.
+ * no-store); keep them out of state, logs and the DOM.
  */
-export function getS3AdminLogin(): Promise<{ user: string; accessKey: string; password: string }> {
+export function getS3AdminLogin(): Promise<{ user: string; password: string; accessKey: string; secretKey: string }> {
   return request('/api/resources/minio/admin-password', { cache: 'no-store' });
 }
 

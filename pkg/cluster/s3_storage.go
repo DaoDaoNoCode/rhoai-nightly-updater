@@ -43,6 +43,10 @@ const (
 	// can be used as is (envFrom) and pipeline servers copy them unchanged.
 	s3AccessKeyField = "AWS_ACCESS_KEY_ID"
 	s3SecretKeyField = "AWS_SECRET_ACCESS_KEY"
+	// s3AdminPasswordField holds the admin UI password, a random value of
+	// its own. Only Secret seaweedfs/seaweedfs-s3-credentials holds it: the
+	// copies in pipeline projects (nightly-dspa-s3) carry only the S3 keys.
+	s3AdminPasswordField = "WEED_ADMIN_PASSWORD"
 	// s3Port is SeaweedFS's S3 port (weed/command/mini.go "s3.port") and
 	// s3AdminPort its admin UI ("admin.port"). SeaweedFS 4.49 moved the
 	// admin default from 23646 to 12535, because the admin's gRPC port
@@ -139,10 +143,12 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// s3Keys are an S3 access key and secret key.
+// s3Keys are an S3 access key and secret key, and the admin UI password
+// (set only for the storage's own Secret).
 type s3Keys struct {
-	AccessKey string
-	SecretKey string
+	AccessKey     string
+	SecretKey     string
+	AdminPassword string
 }
 
 // readS3Keys reads the keys stored in the storage's Secret. found is false
@@ -161,7 +167,10 @@ func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
 	if err := json.Unmarshal(body, &secret); err != nil {
 		return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
-	return s3Keys{AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField])}, true, nil
+	return s3Keys{
+		AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField]),
+		AdminPassword: decodeBase64Field(secret.Data[s3AdminPasswordField]),
+	}, true, nil
 }
 
 // S3AdminLoginUnavailable is why S3AdminLogin offers no password: the
@@ -170,55 +179,68 @@ type S3AdminLoginUnavailable struct{ Reason string }
 
 func (e *S3AdminLoginUnavailable) Error() string { return e.Reason }
 
+// S3Login is the S3 storage's credentials: the admin UI user and password,
+// and the S3 access key and secret key.
+type S3Login struct {
+	User      string `json:"user"`
+	Password  string `json:"password"`
+	AccessKey string `json:"accessKey"`
+	SecretKey string `json:"secretKey"`
+}
+
 // S3AdminLogin returns the S3 storage's credentials: the admin UI user
-// s3AdminUser, the S3 access key, and the S3 secret key, which setup also
-// passes to the server as the admin UI password (WEED_ADMIN_PASSWORD, see
-// s3Resources). It reads the storage's Secret on
-// each call, so the password is never part of the status. It answers only
-// for storage this tool set up: the namespace carries the tool label and
-// the tool wrote the Secret. The caller must keep the keys out of logs
-// and caches.
-func S3AdminLogin(c *Client) (user, accessKey, password string, err error) {
+// s3AdminUser and its own password (WEED_ADMIN_PASSWORD, see s3Resources),
+// and the S3 keys. It reads the storage's Secret on each call, so they are
+// never part of the status. It answers only for storage this tool set up:
+// the namespace carries the tool label and the tool wrote the Secret. The
+// caller must keep them out of logs and caches.
+func S3AdminLogin(c *Client) (login S3Login, err error) {
+	unavailable := func(reason string) (S3Login, error) { return S3Login{}, &S3AdminLoginUnavailable{reason} }
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return "", "", "", err
+		return S3Login{}, err
 	}
 	switch {
 	case !ns.Exists:
-		return "", "", "", &S3AdminLoginUnavailable{"The S3 storage is not set up."}
+		return unavailable("The S3 storage is not set up.")
 	case !ns.Managed:
-		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Namespace '%s' was not created by this tool, so it does not read the password there.", s3Namespace)}
+		return unavailable(fmt.Sprintf("Namespace '%s' was not created by this tool, so it does not read the password there.", s3Namespace))
 	}
 	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
 	if IsK8sError(err, 404) {
-		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' does not exist in namespace '%s'. Repair re-creates it.", s3Secret, s3Namespace)}
+		return unavailable(fmt.Sprintf("Secret '%s' does not exist in namespace '%s'. Repair re-creates it.", s3Secret, s3Namespace))
 	}
 	if err != nil {
-		return "", "", "", fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		return S3Login{}, fmt.Errorf("read Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	var secret struct {
 		Metadata objectMeta        `json:"metadata"`
 		Data     map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &secret); err != nil {
-		return "", "", "", fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
+		return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
 	}
 	if !storageObjectOwned(secret.Metadata) {
-		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' in namespace '%s' was not created by this tool, so it does not read it.", s3Secret, s3Namespace)}
+		return unavailable(fmt.Sprintf("Secret '%s' in namespace '%s' was not created by this tool, so it does not read it.", s3Secret, s3Namespace))
 	}
-	password = decodeBase64Field(secret.Data[s3SecretKeyField])
-	if password == "" {
-		return "", "", "", &S3AdminLoginUnavailable{fmt.Sprintf("Secret '%s' has no %s. Repair writes it again.", s3Secret, s3SecretKeyField)}
+	login = S3Login{
+		User: s3AdminUser, Password: decodeBase64Field(secret.Data[s3AdminPasswordField]),
+		AccessKey: decodeBase64Field(secret.Data[s3AccessKeyField]), SecretKey: decodeBase64Field(secret.Data[s3SecretKeyField]),
 	}
-	return s3AdminUser, decodeBase64Field(secret.Data[s3AccessKeyField]), password, nil
+	if login.SecretKey == "" {
+		return unavailable(fmt.Sprintf("Secret '%s' has no %s. Repair writes it again.", s3Secret, s3SecretKeyField))
+	}
+	// Password is "" on storage an earlier version set up (its admin UI
+	// used the S3 secret key) until its next Repair; the UI says so.
+	return login, nil
 }
 
 // s3Credentials returns the keys a setup writes to the storage's Secret.
 // Keys already stored there are kept, because pipeline servers hold copies
 // of them. On a first setup, SEAWEEDFS_ACCESS_KEY_ID and
 // SEAWEEDFS_SECRET_ACCESS_KEY set them; otherwise both are random, so no
-// credential is baked into the binary or guessable. The secret key is also
-// the admin UI password.
+// credential is baked into the binary or guessable. The admin UI password
+// is kept too, or generated (withAdminPassword).
 func s3Credentials(c *Client) (s3Keys, error) {
 	stored, found, err := readS3Keys(c)
 	if err != nil {
@@ -228,6 +250,7 @@ func s3Credentials(c *Client) (s3Keys, error) {
 	if found {
 		keys.AccessKey = firstNonEmpty(stored.AccessKey, keys.AccessKey)
 		keys.SecretKey = firstNonEmpty(stored.SecretKey, keys.SecretKey)
+		keys.AdminPassword = stored.AdminPassword
 	}
 	if keys.AccessKey == "" {
 		suffix, err := randomHex(6)
@@ -240,6 +263,28 @@ func s3Credentials(c *Client) (s3Keys, error) {
 		if keys.SecretKey, err = randomHex(16); err != nil {
 			return s3Keys{}, fmt.Errorf("generate S3 secret key: %w", err)
 		}
+	}
+	return withAdminPassword(c, keys)
+}
+
+// withAdminPassword gives keys the admin UI password: the one stored in the
+// storage's Secret, else a new random one. Storage an earlier version set
+// up used the S3 secret key there, which every pipeline project's copy of
+// the keys holds; its next setup or Repair writes a password of its own.
+func withAdminPassword(c *Client, keys s3Keys) (s3Keys, error) {
+	if keys.AdminPassword != "" {
+		return keys, nil
+	}
+	stored, found, err := readS3Keys(c)
+	if err != nil {
+		return s3Keys{}, err
+	}
+	if found && stored.AdminPassword != "" && stored.AdminPassword != keys.SecretKey {
+		keys.AdminPassword = stored.AdminPassword
+		return keys, nil
+	}
+	if keys.AdminPassword, err = randomHex(16); err != nil {
+		return s3Keys{}, fmt.Errorf("generate the admin UI password: %w", err)
 	}
 	return keys, nil
 }
@@ -350,6 +395,14 @@ type s3DeploymentSpec struct {
 				Containers []struct {
 					Name  string `json:"name"`
 					Image string `json:"image"`
+					Env   []struct {
+						Name      string `json:"name"`
+						ValueFrom *struct {
+							SecretKeyRef *struct {
+								Key string `json:"key"`
+							} `json:"secretKeyRef"`
+						} `json:"valueFrom"`
+					} `json:"env"`
 				} `json:"containers"`
 			} `json:"spec"`
 		} `json:"template"`
@@ -366,6 +419,19 @@ type s3DeploymentSpec struct {
 func (d s3DeploymentSpec) rolledOut() bool {
 	return d.Status.ObservedGeneration >= d.Metadata.Generation &&
 		d.Status.UpdatedReplicas >= 1 && d.Status.ReadyReplicas >= 1
+}
+
+// adminPasswordIsS3Key reports whether the server's admin UI password is
+// the S3 secret key, as storage set up by an earlier version has it.
+func (d s3DeploymentSpec) adminPasswordIsS3Key() bool {
+	for _, c := range d.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == "WEED_ADMIN_PASSWORD" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Key == s3SecretKeyField {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // image returns the image of the named container.
@@ -637,6 +703,9 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 				state.Warning = drift
 			}
 		}
+		if deploy.adminPasswordIsS3Key() && state.RepairNeeded == "" {
+			state.RepairNeeded = "The admin UI's password is the S3 secret key, which every pipeline project's copy of the keys holds. Repair gives the admin UI a password of its own; the S3 keys and the data stay."
+		}
 	}
 	switch {
 	case ns.Managed && scaledDown:
@@ -791,8 +860,9 @@ func s3Resources(keys s3Keys) []s3Resource {
 			"apiVersion": "v1", "kind": "Secret",
 			"metadata": meta(s3Secret),
 			"stringData": map[string]interface{}{
-				s3AccessKeyField: keys.AccessKey,
-				s3SecretKeyField: keys.SecretKey,
+				s3AccessKeyField:     keys.AccessKey,
+				s3SecretKeyField:     keys.SecretKey,
+				s3AdminPasswordField: keys.AdminPassword,
 			},
 		}, false},
 		// "weed mini" listens on many ports besides S3 (master 9333/19333,
@@ -882,7 +952,7 @@ func s3Resources(keys s3Keys) []s3Resource {
 								// would bind it to loopback only
 								// (weed/command/mini.go:1915-1928).
 								{"name": "WEED_ADMIN_USER", "value": s3AdminUser},
-								secretEnv("WEED_ADMIN_PASSWORD", s3SecretKeyField),
+								secretEnv("WEED_ADMIN_PASSWORD", s3AdminPasswordField),
 							},
 							"ports": []map[string]interface{}{
 								{"name": "s3", "containerPort": s3Port, "protocol": "TCP"},
@@ -1054,6 +1124,12 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		if strings.TrimSpace(os.Getenv(retired)) != "" {
 			log.add(fmt.Sprintf("Note: %s is set but no longer used (see SEAWEEDFS_IMAGE, SEAWEEDFS_ACCESS_KEY_ID and SEAWEEDFS_SECRET_ACCESS_KEY).", retired))
 		}
+	}
+	// Migrate storage passes the old storage's keys, which have no admin
+	// UI password: keep the stored one, or make one.
+	keys, err := withAdminPassword(c, keys)
+	if err != nil {
+		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "credentials")
 	}
 
 	// Step 1: Namespace. Never adopt a namespace this tool did not create.

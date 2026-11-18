@@ -136,9 +136,9 @@ Setup creates or updates the following, in this order. Updates are guarded by re
 |---|---|
 | Namespace `seaweedfs` | created with the tool label; a namespace of that name the tool did not create refuses |
 | PVC `seaweedfs-data` | 20Gi, RWO |
-| Secret `seaweedfs-s3-credentials` | keys `AWS_ACCESS_KEY_ID` (S3 access key) and `AWS_SECRET_ACCESS_KEY` (S3 secret key and admin UI password), random on first setup (or `SEAWEEDFS_ACCESS_KEY_ID`/`SEAWEEDFS_SECRET_ACCESS_KEY`), reused on re-run; Migrate storage sets the old storage's keys |
+| Secret `seaweedfs-s3-credentials` | keys `AWS_ACCESS_KEY_ID` (S3 access key) and `AWS_SECRET_ACCESS_KEY` (S3 secret key), random on first setup (or `SEAWEEDFS_ACCESS_KEY_ID`/`SEAWEEDFS_SECRET_ACCESS_KEY`), reused on re-run; Migrate storage sets the old storage's keys. Key `WEED_ADMIN_PASSWORD` (admin UI password): random, its own, only in this Secret; setup or Repair adds it to storage an earlier version set up |
 | NetworkPolicy `seaweedfs-ingress` | pods `app=seaweedfs`: 8333 (S3) from pods in all namespaces; 12535 (admin UI) only from the router namespaces; nothing else |
-| Deployment `seaweedfs` | `SEAWEEDFS_IMAGE` or the pinned `ghcr.io/chrislusf/seaweedfs` 4.54 digest; `weed mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0`; env `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`WEED_ADMIN_PASSWORD` from the Secret, `WEED_ADMIN_USER=admin`; probes `GET /status` on 8333; 64m/256Mi requests, 500m/1Gi limits; no fixed UID (restricted-v2) |
+| Deployment `seaweedfs` | `SEAWEEDFS_IMAGE` or the pinned `ghcr.io/chrislusf/seaweedfs` 4.54 digest; `weed mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0`; env `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`WEED_ADMIN_PASSWORD` from the Secret's keys of the same names, `WEED_ADMIN_USER=admin`; probes `GET /status` on 8333; 64m/256Mi requests, 500m/1Gi limits; no fixed UID (restricted-v2) |
 | Service `seaweedfs-s3` | applied once SeaweedFS is ready: selector `app=seaweedfs`, ports `s3` 8333 and `ui` 12535. Pipeline servers use `seaweedfs-s3.seaweedfs.svc:8333` |
 | Route `seaweedfs-admin` | applied once SeaweedFS is ready: edge TLS to the admin UI (port `ui`). There is no S3 API Route |
 | Bucket `pipelines` | created by SeaweedFS on start and again through the S3 API |
