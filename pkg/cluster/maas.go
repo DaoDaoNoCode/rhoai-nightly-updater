@@ -479,11 +479,23 @@ func rhclVersion(c *Client) string {
 
 // rhclWarning: the docs ask for RHCL 1.5 or later (prerequisites.md
 // "RHOAI 3.6 — use RHCL v1.5"; 1.4.x can hang callers, Kuadrant/wasm-shim#425).
+// The path is the RHCL catalog's (rh-api-management/rhcl-file-based-catalog):
+// stable-1.5's 1.5.0 has skipRange ">=1.4.4 <1.5.0" and 1.4.4 is only in
+// stable-1.4, so from an earlier 1.4 a switch straight to stable-1.5 leaves
+// the Subscription at AtLatestKnown. The 1.4.4 step's authorino-operator
+// recreates Authorino's Service, and service-ca deletes the serving
+// certificate with the old one (seen live 2026-11-18): the Authorino TLS
+// part then shows the commands that make it again.
 func rhclWarning(version string) string {
-	if version == "" || compareVersions(strings.SplitN(version, "-", 2)[0], "1.5") >= 0 {
+	v := strings.SplitN(version, "-", 2)[0]
+	if version == "" || compareVersions(v, "1.5") >= 0 {
 		return ""
 	}
-	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for 1.5 or later (OLM channel stable-1.5): on 1.4.x a caller with two or more subscriptions can hang. A cluster-admin upgrades it; MaaS works for a single subscription meanwhile.", version)
+	const why = "the MaaS docs ask for 1.5 or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile."
+	if compareVersions(v, "1.4.4") >= 0 {
+		return fmt.Sprintf("Red Hat Connectivity Link %s is installed; %s A cluster-admin upgrades it by switching the rhcl-operator Subscription's channel to stable-1.5.", version, why)
+	}
+	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; %s OLM upgrades to 1.5 only from 1.4.4, so a cluster-admin switches the rhcl-operator Subscription's channel to stable-1.4 first, then to stable-1.5 once 1.4.4 is installed. After the 1.4.4 step, check Authorino TLS below: that step makes Authorino's Service again, which removes its certificate.", version, why)
 }
 
 // maasObjectPath is the path of a platform object this tool reads or
