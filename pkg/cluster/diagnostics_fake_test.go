@@ -33,6 +33,7 @@ const k8sNotFound = `{"kind":"Status","apiVersion":"v1","status":"Failure","reas
 
 func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
 	t.Helper()
+	isolateClusterCaches(t)
 	f := &fakeAPI{routes: map[string]func(*http.Request, []byte) (int, string){}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

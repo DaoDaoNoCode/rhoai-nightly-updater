@@ -25,6 +25,7 @@ type mockResponse struct {
 // newMockClient creates a test Client backed by an httptest.Server.
 // The handler map keys are request paths; values are the responses to return.
 func newMockClient(responses map[string]mockResponse) (*Client, func()) {
+	resetClusterCaches()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {
 			return
@@ -52,7 +53,7 @@ func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 	// A new server may reuse an earlier test's address, which keys the cache.
 	controlPlaneCache.Purge()
 
-	return client, server.Close
+	return client, func() { server.Close(); resetClusterCaches() }
 }
 
 func TestTestPullSecret_Valid(t *testing.T) {

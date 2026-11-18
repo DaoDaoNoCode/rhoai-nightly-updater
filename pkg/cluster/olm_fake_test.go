@@ -68,6 +68,7 @@ type fakeRequest struct {
 }
 
 func newFakeOLM(t *testing.T) *fakeOLM {
+	isolateClusterCaches(t)
 	return &fakeOLM{
 		t:            t,
 		csvs:         map[string]map[string]interface{}{},

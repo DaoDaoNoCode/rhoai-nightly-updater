@@ -57,6 +57,7 @@ type fakeKey struct {
 
 func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
+	isolateClusterCaches(t)
 	f := &resourceFake{t: t, objects: map[fakeKey]map[string]interface{}{}, fail: map[string]int{}, failDryRun: map[string]int{}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
