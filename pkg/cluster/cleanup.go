@@ -87,7 +87,7 @@ func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []clea
 		})
 	}
 	if req.InferenceGateway {
-		parts = append(parts, cleanupPart{id: CleanupStepID("inference-gateway", ""), title: "the inference gateway", run: func() (*types.OperationResponse, error) { return cleanupGateway(c) }})
+		parts = append(parts, cleanupPart{id: CleanupStepID("inference-gateway", ""), title: "the inference gateway", run: func() (*types.OperationResponse, error) { return cleanupGateway(c, len(req.Models) > 0) }})
 	}
 	if req.MaaSPlatform {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})

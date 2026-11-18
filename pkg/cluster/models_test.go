@@ -457,7 +457,7 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 	}
 	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"spec":{"router":{"route":{},"gateway":{}}}}`)
 	before := len(mc.f.mutations())
-	res, _ := TeardownInferenceGateway(mc.c)
+	res, _ := TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "team/granite") {
 		t.Fatalf("got %+v", res)
 	}
@@ -471,7 +471,7 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 
 	// Models that cannot be listed: fail closed.
 	mc.f.fail["GET /apis/serving.kserve.io/v1alpha2/llminferenceservices"] = 500
-	res, _ = TeardownInferenceGateway(mc.c)
+	res, _ = TeardownInferenceGateway(mc.c, false)
 	if res.Success || !strings.Contains(res.Message, "Cannot check which models use the gateway") {
 		t.Fatalf("got %+v", res)
 	}
@@ -496,7 +496,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 		}
 	}
 	before := len(mc.f.mutations())
-	res, _ := TeardownInferenceGateway(mc.c)
+	res, _ := TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "1 route is attached to the inference gateway") {
 		t.Fatalf("got %+v", res)
 	}
@@ -509,7 +509,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 	}
 
 	attached = 0
-	if res, _ = TeardownInferenceGateway(mc.c); !res.Success || mc.f.has(testGatewayPath) {
+	if res, _ = TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
 	}
 }
@@ -517,7 +517,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 func TestGatewayTeardown_NeverDeletesAForeignGateway(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testGatewayPath, `{"spec":{}}`)
-	res, _ := TeardownInferenceGateway(mc.c)
+	res, _ := TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "not_managed" || !mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
 	}
@@ -1051,5 +1051,69 @@ func TestDescribeModelPods_ChecksEveryPod(t *testing.T) {
 	_ = json.Unmarshal([]byte(`{"metadata":{"name":"b"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}`), &bad)
 	if got := describeModelPods([]modelPod{ok, bad}, nil); !strings.Contains(got.problem, "keeps crashing") {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// One route attached to both listeners is one route, not two.
+func TestAttachedRoutes_CountsARouteOnTwoListenersOnce(t *testing.T) {
+	var g gatewayObject
+	_ = json.Unmarshal([]byte(`{"status":{"listeners":[{"name":"https-external","attachedRoutes":1},{"name":"https","attachedRoutes":1}]}}`), &g)
+	if n := g.attachedRoutes(); n != 1 {
+		t.Fatalf("attached routes %d", n)
+	}
+}
+
+// Another Gateway uses the class: the teardown deletes this tool's Gateway
+// and options, keeps the class, and says so.
+func TestGatewayTeardown_KeepsTheClassWhileAnotherGatewayUsesIt(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/apis/gateway.networking.k8s.io/v1/namespaces/team/gateways/team-gw", `{"metadata":{"name":"team-gw","namespace":"team"},"spec":{"gatewayClassName":"openshift-ai-inference"}}`)
+	res, _ := TeardownInferenceGateway(mc.c, false)
+	if !res.Success || mc.f.has(testGatewayPath) || mc.f.has(testGatewayCM) {
+		t.Fatalf("got %+v", res)
+	}
+	if !mc.f.has(testGatewayClass) {
+		t.Fatal("deleted the class another Gateway uses")
+	}
+	if !strings.Contains(res.Message, "GatewayClass openshift-ai-inference was kept: Gateway team/team-gw uses it") {
+		t.Errorf("message: %s", res.Message)
+	}
+	// Once no other Gateway uses it, the class goes too.
+	mc.f.mu.Lock()
+	delete(mc.f.objects, fakeKey{gv: "gateway.networking.k8s.io/v1", ns: "team", plural: "gateways", name: "team-gw"})
+	mc.f.mu.Unlock()
+	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayClass) {
+		t.Fatalf("second teardown: %+v", res)
+	}
+}
+
+// Deleting the models and the gateway in one operation: the controller
+// updates attachedRoutes after the routes go, so the teardown waits for the
+// count (bounded, on the clock) instead of refusing at once.
+func TestGatewayTeardown_WaitsForRoutesOfModelsJustDeleted(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.finalizeOnGet = true
+	reads := 0
+	next := mc.f.onGet
+	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		next(k, obj)
+		if k.plural == "gateways" {
+			reads++
+			attached := 0
+			if reads <= 3 {
+				attached = 1
+			}
+			ensureMap(obj, "status")["listeners"] = []interface{}{map[string]interface{}{"name": "https-external", "attachedRoutes": attached}}
+		}
+	}
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Gateway: true, Project: "proj"})
+	if !res.Success || mc.f.has(testGatewayPath) {
+		t.Fatalf("got %+v", res)
 	}
 }

@@ -417,7 +417,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         summary: <Content component="p">Deletes the inference gateway and, with it, its load balancer and DNS record. Models can no longer be reached until it is set up again; it is not deleted while a model uses it.</Content>,
         changes: [
           <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>, ConfigMap <code>{GATEWAY_NS}/{GATEWAY}-options</code> and GatewayClass <code>{GATEWAY}</code> are deleted, those of them this tool created.</>,
-          <>Kept: anything of these names this tool did not create, and every other gateway (for example <code>maas-default-gateway</code>).</>,
+          <>Kept: anything of these names this tool did not create, every other gateway (for example <code>maas-default-gateway</code>), and the GatewayClass while another gateway uses it.</>,
         ],
       };
     default:

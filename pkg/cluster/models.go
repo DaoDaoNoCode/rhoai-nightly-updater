@@ -617,7 +617,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 	}
 	if req.Gateway {
 		m.step("gateway", "running", "Deleting the inference gateway...")
-		res, _ := TeardownInferenceGateway(m.c)
+		res, _ := TeardownInferenceGateway(m.c, req.Project != "")
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
 			if m.emit != nil {

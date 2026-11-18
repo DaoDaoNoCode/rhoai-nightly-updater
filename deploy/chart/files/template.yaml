@@ -402,6 +402,11 @@ objects:
         resources: ["gatewayclasses"]
         resourceNames: ["openshift-ai-inference"]
         verbs: ["get", "patch", "delete"]
+      # Teardown keeps that class while another Gateway uses it: Gateways
+      # are listed cluster-wide (read-only; another can be in any namespace)
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        verbs: ["list"]
       # MaaS: read OpenShift's shared class openshift-default (created only
       # when missing, with the create rule above; never changed or deleted)
       - apiGroups: ["gateway.networking.k8s.io"]

@@ -43,7 +43,7 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 	cleanupModels = func(_ *Client, project string) (*types.OperationResponse, error) {
 		return result(CleanupStepID("model", project), "Model deleted from '"+project+"'.")
 	}
-	cleanupGateway = func(*Client) (*types.OperationResponse, error) {
+	cleanupGateway = func(*Client, bool) (*types.OperationResponse, error) {
 		return result("inference-gateway", "Inference gateway deleted.")
 	}
 	return &ran
