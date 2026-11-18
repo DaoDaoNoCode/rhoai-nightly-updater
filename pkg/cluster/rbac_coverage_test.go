@@ -33,6 +33,9 @@ const (
 	appNSMarker = "${NS}" // the updater's own namespace (template NAMESPACE)
 	anyNS       = "*"     // a namespace chosen at run time
 	templateRel = "../../deploy/template.yaml"
+	// rbacResolveDepth bounds how many assignments, parameters and returns
+	// a path is followed through (a MaaSModelRef path goes through five).
+	rbacResolveDepth = 6
 )
 
 // Calls made with a token other than the ServiceAccount's. They are checked
@@ -334,7 +337,7 @@ func (r resolver) resolveIdent(id *ast.Ident) []string {
 	if v, ok := r.p.consts[id.Name]; ok && !r.isLocal(id.Name) {
 		return []string{v}
 	}
-	if r.depth > 4 || r.fn == nil {
+	if r.depth > rbacResolveDepth || r.fn == nil {
 		return []string{unknownPart}
 	}
 	var out []string
@@ -399,7 +402,7 @@ func (r resolver) resolveIdent(id *ast.Ident) []string {
 // that function's return statements (ignoring empty-string error returns).
 func (r resolver) resolveCallResult(call *ast.CallExpr, i int) []string {
 	id, ok := call.Fun.(*ast.Ident)
-	if !ok || r.depth > 4 {
+	if !ok || r.depth > rbacResolveDepth {
 		return []string{unknownPart}
 	}
 	fn, ok := r.p.funcs[id.Name]

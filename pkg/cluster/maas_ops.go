@@ -65,9 +65,19 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 		if req.Project != "" {
 			return "the platform takes no project"
 		}
+		if req.Model != "" {
+			return "the platform takes no model"
+		}
 	case "publish", "unpublish":
 		if !playgroundProjectRegex.MatchString(req.Project) {
 			return "a valid project is required"
+		}
+		entry, ok := catalogEntry(req.Model)
+		if !ok {
+			return "unknown model"
+		}
+		if entry.Type != modelTypeChat {
+			return "only chat models are published to MaaS"
 		}
 	default:
 		return "action must be setup, teardown, publish or unpublish"
@@ -83,8 +93,9 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 // "model", "gateway".
 func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	m := &maasRun{c: c, emit: onStep, activity: req.Action + "-maas", target: "MaaS platform"}
+	entry, _ := catalogEntry(req.Model)
 	if req.Project != "" {
-		m.target = "model in " + req.Project
+		m.target = fmt.Sprintf("model %s in %s", firstNonEmpty(entry.Name, req.Model), req.Project)
 	}
 	if problem := ValidateMaaSRequest(req); problem != "" {
 		return m.fail("check", problem, "validation", "invalid request")
@@ -95,9 +106,9 @@ func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*t
 	case "teardown":
 		return m.teardown()
 	case "publish":
-		return m.publish(req.Project)
+		return m.publish(req.Project, entry.Name)
 	}
-	return m.unpublish(req.Project, true)
+	return m.unpublish(req.Project, entry.Name, true)
 }
 
 // TeardownMaaSPlatform removes the MaaS platform this tool set up (Clean up
@@ -106,10 +117,34 @@ func TeardownMaaSPlatform(c *Client) (*types.OperationResponse, error) {
 	return RunMaaS(c, types.MaaSRequest{Action: "teardown"}, nil)
 }
 
-// UnpublishMaaSModel unpublishes this tool's model in project (Clean up
-// everything).
+// UnpublishMaaSModel unpublishes every model this tool published in
+// project (Clean up everything), one after the other; it stops at the
+// first that fails.
 func UnpublishMaaSModel(c *Client, project string) (*types.OperationResponse, error) {
-	return RunMaaS(c, types.MaaSRequest{Action: "unpublish", Project: project}, nil)
+	var logs, done []string
+	for _, entry := range modelCatalog {
+		if entry.Type != modelTypeChat {
+			continue
+		}
+		published, err := MaaSPublishedIn(c, project, entry.Name)
+		if err != nil {
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check whether %s in '%s' is published: %v.", entry.Name, project, err), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil
+		}
+		if !published {
+			continue
+		}
+		res, _ := RunMaaS(c, types.MaaSRequest{Action: "unpublish", Project: project, Model: entry.Name}, nil)
+		logs = append(logs, res.Logs...)
+		if !res.Success {
+			res.Logs = logs
+			return res, nil
+		}
+		done = append(done, res.Message)
+	}
+	if len(done) == 0 {
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No model of this tool is published in '%s'; nothing to undo.", project), Logs: logs}, nil
+	}
+	return &types.OperationResponse{Success: true, Message: strings.Join(done, " "), Logs: logs}, nil
 }
 
 // --- the gateway ----------------------------------------------------------------
@@ -280,7 +315,7 @@ func (m *maasRun) setup() (*types.OperationResponse, error) {
 	}
 
 	// The gateway: one someone else made is used as it is.
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Published)
+	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
 	foreignGW := code == "foreign"
 	if msg != "" {
 		return m.fail("check", msg, code, "gateway check failed")
@@ -580,14 +615,15 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 
 	// Published models first.
 	m.step("unpublish", "running", "Unpublishing this tool's models...")
-	for _, project := range append([]string(nil), rec.Published...) {
-		res, _ := (&maasRun{c: c, activity: "unpublish-maas", target: "model in " + project}).unpublish(project, false)
+	pubs := rec.pubs()
+	for _, p := range pubs {
+		res, _ := (&maasRun{c: c, activity: "unpublish-maas", target: fmt.Sprintf("model %s in %s", p.model, p.project)}).unpublish(p.project, p.model, false)
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
 			return m.fail("unpublish", res.Message, res.ErrorCode, "unpublish failed")
 		}
 	}
-	m.step("unpublish", "success", fmt.Sprintf("%d %s unpublished.", len(rec.Published), verb(len(rec.Published), "model", "models")))
+	m.step("unpublish", "success", fmt.Sprintf("%d %s unpublished.", len(pubs), verb(len(pubs), "model", "models")))
 	if rec, err = readMaaSRecord(c); err != nil {
 		return m.fail("dsc", err.Error(), errorCodeFromK8sErr(err), "record read failed")
 	}
@@ -681,27 +717,27 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 
 // --- publish ----------------------------------------------------------------------
 
-func maasModelRefObjectFor(c *Client, project, displayName string) map[string]interface{} {
+func maasModelRefObjectFor(c *Client, project, name, displayName string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSModelRef",
 		"metadata": map[string]interface{}{
-			"name": "qwen25-05b-instruct", "namespace": project, "labels": toolLabels(),
+			"name": name, "namespace": project, "labels": toolLabels(),
 			"annotations": map[string]interface{}{"openshift.io/display-name": displayName, "openshift.io/description": "Published by rhoai-nightly-updater"},
 		},
-		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": maasModelRefName}},
+		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": name}},
 	}
 }
 
 // maasAccessObjects are the tool's MaaSSubscription and MaaSAuthPolicy for
-// the published projects (the docs' free sample: system:authenticated, 100
+// the published models (the docs' free sample: system:authenticated, 100
 // tokens a minute, priority 10).
-func maasAccessObjects(c *Client, projects []string) (map[string]interface{}, map[string]interface{}) {
+func maasAccessObjects(c *Client, pubs []maasPub) (map[string]interface{}, map[string]interface{}) {
 	var subRefs, authRefs []interface{}
-	for _, p := range projects {
-		subRefs = append(subRefs, map[string]interface{}{"name": maasModelRefName, "namespace": p,
+	for _, p := range pubs {
+		subRefs = append(subRefs, map[string]interface{}{"name": p.model, "namespace": p.project,
 			"tokenRateLimits": []interface{}{map[string]interface{}{"limit": 100, "window": "1m"}}})
-		authRefs = append(authRefs, map[string]interface{}{"name": maasModelRefName, "namespace": p})
+		authRefs = append(authRefs, map[string]interface{}{"name": p.model, "namespace": p.project})
 	}
 	group := map[string]interface{}{"groups": []interface{}{map[string]interface{}{"name": maasSubjectGroup}}, "users": []interface{}{}}
 	sub := map[string]interface{}{
@@ -786,8 +822,8 @@ func isMaaSGatewayRef(name, namespace string) bool {
 // same default; live, an empty server-side apply instead left gateway
 // with no owner, so the API server nulled it and the CRD refused the
 // result: 422 "spec.router.gateway ... must be of type object: null").
-func setModelGatewayRef(c *Client, project string, on bool) (bool, error) {
-	path, _ := toolModelPath(project, maasModelRefName)
+func setModelGatewayRef(c *Client, project, name string, on bool) (bool, error) {
+	path, _ := toolModelPath(project, name)
 	body, _, err := c.get(path)
 	if err != nil {
 		return false, err
@@ -871,33 +907,33 @@ func modelHasMaaSRef(m llmisvcObject) bool {
 	return false
 }
 
-// maasLiveProjects are the projects whose publication the shared
-// subscription and access policy list: the recorded ones that still have
-// this tool's MaaSModelRef (not being deleted), plus with, minus without.
-// A recorded project whose reference is gone is left out: a modelRef to
-// nothing would make the subscription, and so every publication, not ready.
-func maasLiveProjects(c *Client, rec maasRecord, with, without string) ([]string, error) {
-	var out []string
-	for _, p := range rec.Published {
+// maasLivePubs are the publications the shared subscription and access
+// policy list: the recorded ones that still have this tool's MaaSModelRef
+// (not being deleted), plus with, minus without (zero for none). A
+// recorded one whose reference is gone is left out: a modelRef to nothing
+// would make the subscription, and so every publication, not ready.
+func maasLivePubs(c *Client, rec maasRecord, with, without maasPub) ([]maasPub, error) {
+	var out []maasPub
+	for _, p := range rec.pubs() {
 		if p == with || p == without {
 			continue
 		}
-		ref, found, err := readMaaSModelRef(c, p)
+		ref, found, err := readMaaSModelRef(c, p.project, p.model)
 		if err != nil {
-			return nil, fmt.Errorf("read MaaSModelRef %s/%s: %w", p, maasModelRefName, err)
+			return nil, fmt.Errorf("read MaaSModelRef %s: %w", p.key(), err)
 		}
 		if found && toolOwned(ref.Metadata) && !ref.Metadata.terminating() {
 			out = append(out, p)
 		}
 	}
-	if with != "" {
+	if with.project != "" {
 		out = append(out, with)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
 	return out, nil
 }
 
-func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
+func (m *maasRun) publish(project, name string) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", "Checking the platform and the model...")
 	st, err := GetMaaSStatus(c)
@@ -907,32 +943,33 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 	if !st.Platform.Ready {
 		return m.fail("check", "The MaaS platform is not ready ("+st.Platform.Message+"). Set it up first. Nothing was changed.", "prerequisites", "platform not ready")
 	}
-	model, found, err := readToolModel(c, project, maasModelRefName)
+	refPath, _ := maasModelRefPath(c, project, name)
+	model, found, err := readToolModel(c, project, name)
 	switch {
 	case err != nil:
-		return m.fail("check", fmt.Sprintf("Cannot read the model in '%s': %v. Nothing was changed.", project, err), errorCodeFromK8sErr(err), "model read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	case !found:
-		return m.fail("check", fmt.Sprintf("Project '%s' has no model of this tool. Set one up on the Models tab first. Nothing was changed.", project), "prerequisites", "no model")
+		return m.fail("check", fmt.Sprintf("Project '%s' has no %s of this tool. Set it up on the Models tab first. Nothing was changed.", project, name), "prerequisites", "no model")
 	case !modelOwned(model.Metadata):
-		return m.fail("check", fmt.Sprintf("The model in '%s' was not created by this tool, so it is not published. Nothing was changed.", project), "not_managed", "model foreign")
+		return m.fail("check", fmt.Sprintf("%s in '%s' was not created by this tool, so it is not published. Nothing was changed.", name, project), "not_managed", "model foreign")
 	}
 	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
-		return m.fail("check", fmt.Sprintf("The model in '%s' is not ready yet. Publish it once it is. Nothing was changed.", project), "prerequisites", "model not ready")
+		return m.fail("check", fmt.Sprintf("%s in '%s' is not ready yet. Publish it once it is. Nothing was changed.", name, project), "prerequisites", "model not ready")
 	}
-	ref, refFound, err := readMaaSModelRef(c, project)
+	ref, refFound, err := readMaaSModelRef(c, project, name)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, maasModelRefName, err), errorCodeFromK8sErr(err), "ref read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, name, err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	if refFound && !toolOwned(ref.Metadata) {
-		return m.fail("check", fmt.Sprintf("Project '%s' already has a MaaSModelRef %s that this tool did not create; it is left alone. Nothing was changed.", project, maasModelRefName), "not_managed", "ref foreign")
+		return m.fail("check", fmt.Sprintf("Project '%s' already has a MaaSModelRef %s that this tool did not create; it is left alone. Nothing was changed.", project, name), "not_managed", "ref foreign")
 	}
 	rec, err := readMaaSRecord(c)
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
 	}
-	rec.setPublished(project, true)
+	rec.setPublished(project, name, true)
 	infra := maasInfraNamespace(c)
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Published)
+	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
 	if msg != "" {
 		return m.fail("check", msg, code, "gateway check failed")
 	}
@@ -952,12 +989,12 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		}
 		gwPlan = nil
 	}
-	live, err := maasLiveProjects(c, rec, project, "")
+	live, err := maasLivePubs(c, rec, maasPub{project, name}, maasPub{})
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	sub, auth := maasAccessObjects(c, live)
-	refObj := maasModelRefObjectFor(c, project, firstNonEmpty(model.Metadata.Annotations["openshift.io/display-name"], maasModelRefName))
+	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(model.Metadata.Annotations["openshift.io/display-name"], name))
 	if gwPlan != nil {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
 			return m.fail("check", msg, code, "gateway dry run failed")
@@ -967,7 +1004,7 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		desc, path, create string
 		obj                map[string]interface{}
 	}{
-		{"MaaSModelRef " + project + "/" + maasModelRefName, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
@@ -990,7 +1027,7 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		m.step("gateway", "success", "The gateway someone else made admits the project.")
 	}
 	m.step("model", "running", "Routing the model through the MaaS gateway...")
-	if _, err := setModelGatewayRef(c, project, true); err != nil {
+	if _, err := setModelGatewayRef(c, project, name, true); err != nil {
 		return m.fail("model", fmt.Sprintf("Failed to route the model through the MaaS gateway: %v. Unpublish to undo.", err), maasWriteCode(err), "model patch failed")
 	}
 	m.step("model", "success", "The model routes through "+maasGatewayName+" as well as the inference gateway, so its address and the playground keep working.")
@@ -999,7 +1036,7 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		desc, path, create string
 		obj                map[string]interface{}
 	}{
-		{"MaaSModelRef " + project + "/" + maasModelRefName, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSModelRef " + project + "/" + name, refPath, withToolFieldManager(namespacedPath(maasAPI(c), "maasmodelrefs", project, "")), refObj},
 		{"MaaSSubscription " + maasSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
@@ -1008,11 +1045,11 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 		}
 		m.logs = append(m.logs, "OK: "+w.desc)
 	}
-	m.step("maas", "success", fmt.Sprintf("MaaSModelRef %s/%s, MaaSSubscription %s and MaaSAuthPolicy %s are applied.", project, maasModelRefName, maasSubscriptionName, maasAuthPolicyName))
+	m.step("maas", "success", fmt.Sprintf("MaaSModelRef %s/%s, MaaSSubscription %s and MaaSAuthPolicy %s are applied.", project, name, maasSubscriptionName, maasAuthPolicyName))
 	m.step("ready", "running", "Waiting for MaaS to accept the model...")
 	last := ""
 	ready, err := waitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
-		r, _, err := readMaaSModelRef(cc, project)
+		r, _, err := readMaaSModelRef(cc, project, name)
 		if err != nil {
 			return false, err
 		}
@@ -1030,20 +1067,20 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 	}
 	if !ready {
 		m.step("ready", "success", fmt.Sprintf("Not ready after %s (%s). The MaaS tab shows its state.", clockText(MaaSPublishTimeout), last))
-		return m.done(fmt.Sprintf("The model in '%s' is published and still being accepted.", project))
+		return m.done(fmt.Sprintf("%s in '%s' is published and still being accepted.", name, project))
 	}
 	m.step("ready", "success", "MaaS lists the model.")
-	return m.done(fmt.Sprintf("The model in '%s' is published to MaaS under subscription %s.", project, maasSubscriptionName))
+	return m.done(fmt.Sprintf("%s in '%s' is published to MaaS under subscription %s.", name, project, maasSubscriptionName))
 }
 
 // --- unpublish ---------------------------------------------------------------------
 
-// unpublish removes the publication of the tool's model in project, in
+// unpublish removes the publication of the tool's model name in project, in
 // reverse order: the access policy and subscription entries (the objects
 // when no other project is left), the model reference, the model's gateway
 // ref, and the project from the gateway. stepped is false when it runs as
 // part of a removal.
-func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationResponse, error) {
+func (m *maasRun) unpublish(project, name string, stepped bool) (*types.OperationResponse, error) {
 	c := m.c
 	say := func(id, status, msg string) {
 		if stepped {
@@ -1057,28 +1094,29 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
 	}
-	ref, refFound, err := readMaaSModelRef(c, project)
+	refPath, _ := maasModelRefPath(c, project, name)
+	ref, refFound, err := readMaaSModelRef(c, project, name)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, maasModelRefName, err), errorCodeFromK8sErr(err), "ref read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, name, err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	if refFound && !toolOwned(ref.Metadata) {
-		return m.fail("check", fmt.Sprintf("MaaSModelRef %s/%s was not created by this tool; it is left alone.", project, maasModelRefName), "not_managed", "ref foreign")
+		return m.fail("check", fmt.Sprintf("MaaSModelRef %s/%s was not created by this tool; it is left alone.", project, name), "not_managed", "ref foreign")
 	}
-	model, modelFound, err := readToolModel(c, project, maasModelRefName)
+	model, modelFound, err := readToolModel(c, project, name)
 	if err != nil {
-		return m.fail("check", fmt.Sprintf("Cannot read the model in '%s': %v. Nothing was changed.", project, err), errorCodeFromK8sErr(err), "model read failed")
+		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	}
 	routed := modelFound && modelOwned(model.Metadata) && modelHasMaaSRef(model)
-	if !refFound && !rec.published(project) && !routed {
+	if !refFound && !rec.published(project, name) && !routed {
 		say("check", "success", "Not published.")
-		return m.done(fmt.Sprintf("The model in '%s' is not published; nothing to undo.", project))
+		return m.done(fmt.Sprintf("%s in '%s' is not published; nothing to undo.", name, project))
 	}
 	say("check", "success", "Unpublishing, in reverse order of publishing.")
-	live, err := maasLiveProjects(c, rec, "", project)
+	live, err := maasLivePubs(c, rec, maasPub{}, maasPub{project, name})
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
-	rec.setPublished(project, false)
+	rec.setPublished(project, name, false)
 
 	// The access policy and the subscription.
 	say("maas", "running", "Removing the model from the access policy and the subscription...")
@@ -1108,9 +1146,9 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 		}
 	}
 	if refFound {
-		path := namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct")
+		path := refPath
 		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !IsK8sError(err, 404) {
-			return m.fail("maas", fmt.Sprintf("Failed to delete MaaSModelRef %s/%s: %v.", project, maasModelRefName, err), maasWriteCode(err), "delete failed")
+			return m.fail("maas", fmt.Sprintf("Failed to delete MaaSModelRef %s/%s: %v.", project, name, err), maasWriteCode(err), "delete failed")
 		}
 		// maas-controller removes its finalizer after deleting the policies it
 		// generated for the model. Without maas-controller nothing would:
@@ -1125,13 +1163,13 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 				}
 				patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"resourceVersion": meta.ResourceVersion, "finalizers": rest}})
 				if _, _, err := c.patch(path, patch); err != nil && !IsK8sError(err, 404) {
-					return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, maasModelRefName, why, err), maasWriteCode(err), "finalizer patch failed")
+					return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, name, why, err), maasWriteCode(err), "finalizer patch failed")
 				}
-				m.logs = append(m.logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, maasModelRefName, why, maasModelFinalizer, project, project, maasModelRefName))
+				m.logs = append(m.logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, maasModelFinalizer, project, project, name))
 			}
 		}
 		if gone, err := waitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); err != nil || !gone {
-			return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is still being deleted (maas-controller removes its finalizer; it must be running). Unpublish again to check.", project, maasModelRefName), "in_progress", "ref still deleting")
+			return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is still being deleted (maas-controller removes its finalizer; it must be running). Unpublish again to check.", project, name), "in_progress", "ref still deleting")
 		}
 	}
 	say("maas", "success", "The model reference is deleted, and the access policy and subscription no longer list the model.")
@@ -1144,7 +1182,7 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 	case !modelOwned(model.Metadata):
 		say("model", "success", "The model was not created by this tool; it is left alone.")
 	default:
-		if _, err := setModelGatewayRef(c, project, false); err != nil {
+		if _, err := setModelGatewayRef(c, project, name, false); err != nil {
 			return m.fail("model", fmt.Sprintf("Failed to remove the MaaS gateway from the model: %v. Unpublish again to retry.", err), maasWriteCode(err), "model patch failed")
 		}
 		say("model", "success", "The model routes as before publishing.")
@@ -1155,17 +1193,19 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 	if err := writeMaaSRecord(c, rec); err != nil {
 		return m.fail("gateway", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 	}
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Published)
+	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
 	switch {
 	case msg != "":
 		// The publication is gone; only the gateway's list of projects is
 		// stale, and the next setup or publication rewrites it.
-		say("gateway", "success", fmt.Sprintf("The MaaS gateway was not updated (%s) and may still admit routes from '%s'; nothing routes from there now. Set up MaaS again to update it.", strings.TrimSuffix(msg, "."), project))
-		return m.done(fmt.Sprintf("The model in '%s' is unpublished from MaaS; the MaaS gateway was not updated.", project))
+		say("gateway", "success", fmt.Sprintf("The MaaS gateway was not updated (%s) and may still admit routes from '%s'. Set up MaaS again to update it.", strings.TrimSuffix(msg, "."), project))
+		return m.done(fmt.Sprintf("%s in '%s' is unpublished from MaaS; the MaaS gateway was not updated.", name, project))
 	case code == "foreign":
 		say("gateway", "success", "The gateway someone else made is not changed.")
 	case !gwPlan.found["Gateway"]:
 		say("gateway", "success", "There is no MaaS gateway to update.")
+	case containsString(rec.projects(), project):
+		say("gateway", "success", fmt.Sprintf("The MaaS gateway still admits routes from '%s': another model of this tool is published there.", project))
 	default:
 		gwPlan.classMissing = false // only the gateway changes
 		if msg, code := m.applyGateway(gwPlan, false); msg != "" {
@@ -1173,5 +1213,5 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 		}
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway no longer admits routes from '%s'.", project))
 	}
-	return m.done(fmt.Sprintf("The model in '%s' is unpublished from MaaS.", project))
+	return m.done(fmt.Sprintf("%s in '%s' is unpublished from MaaS.", name, project))
 }

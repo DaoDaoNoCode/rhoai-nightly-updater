@@ -73,7 +73,6 @@ const (
 	maasDBName            = "maas"
 	maasTenantNamespace   = "models-as-a-service"
 	maasAITenantNamespace = "ai-tenants"
-	maasModelRefName      = "qwen25-05b-instruct"
 	maasAuthPolicyName    = "rhoai-nightly-updater-access"
 	maasSubscriptionName  = "rhoai-nightly-updater-subscription"
 	// maasModelManager is the field manager of the gateway ref this tool
@@ -121,7 +120,9 @@ func maasAPI(c *Client) string {
 
 // maasRecord is what this tool did to the platform that the cluster cannot
 // tell by itself: whether it set modelsAsAService and what it was before,
-// and the projects whose model it published.
+// and the models it published ("<project>/<model>"; readMaaSRecord reads
+// an entry of a project only, written before models were named, as the
+// default model's).
 type maasRecord struct {
 	DSCChanged               bool     `json:"dscChanged,omitempty"`
 	PreviousModelsAsAService string   `json:"previousModelsAsAService,omitempty"`
@@ -154,6 +155,11 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 			return rec, fmt.Errorf("parse this tool's MaaS record: %w", err)
 		}
 	}
+	var keys []string
+	for _, p := range rec.pubs() {
+		keys = append(keys, p.key())
+	}
+	rec.Published = keys
 	return rec, nil
 }
 
@@ -179,21 +185,65 @@ func writeMaaSRecord(c *Client, rec maasRecord) error {
 	return nil
 }
 
-func (r maasRecord) published(project string) bool { return containsString(r.Published, project) }
+// maasPub is one publication: a catalog model in a project.
+type maasPub struct{ project, model string }
 
-func (r *maasRecord) setPublished(project string, on bool) {
-	var out []string
-	for _, p := range r.Published {
-		if p != project {
+func (p maasPub) key() string { return p.project + "/" + p.model }
+
+// pubs are the recorded publications; an entry of a project only is the
+// default model's.
+func (r maasRecord) pubs() []maasPub {
+	def, _ := catalogEntry("")
+	var out []maasPub
+	seen := map[string]bool{}
+	for _, e := range r.Published {
+		project, model, found := strings.Cut(e, "/")
+		if !found {
+			model = def.Name
+		}
+		p := maasPub{project, model}
+		if !seen[p.key()] {
+			seen[p.key()] = true
 			out = append(out, p)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
+	return out
+}
+
+func (r maasRecord) published(project, model string) bool {
+	return containsString(r.Published, maasPub{project, model}.key())
+}
+
+func (r *maasRecord) setPublished(project, model string, on bool) {
+	key := maasPub{project, model}.key()
+	var out []string
+	for _, p := range r.pubs() {
+		if p.key() != key {
+			out = append(out, p.key())
+		}
+	}
 	if on {
-		out = append(out, project)
+		out = append(out, key)
 	}
 	sort.Strings(out)
 	r.Published = out
 }
+
+// projects are the projects with a recorded publication: the MaaS gateway
+// admits routes from them.
+func (r maasRecord) projects() []string {
+	var out []string
+	for _, p := range r.pubs() {
+		if !containsString(out, p.project) {
+			out = append(out, p.project)
+		}
+	}
+	return out
+}
+
+// maasEmbeddingReason is why an embedding model is not offered for MaaS.
+const maasEmbeddingReason = "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground."
 
 // --- reads ---------------------------------------------------------------------
 
@@ -1093,7 +1143,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
 	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	for _, m := range models {
-		if !modelOwned(m.Metadata) || m.Metadata.Name != maasModelRefName {
+		entry, _ := catalogEntry(m.Metadata.Name)
+		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok || !modelOwned(m.Metadata) {
 			continue
 		}
 		item := types.MaaSModel{ResourceState: types.ResourceState{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}}
@@ -1101,7 +1152,13 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		if cond, ok := findCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 			item.ModelReady = true
 		}
-		ref, found, _ := readMaaSModelRef(c, m.Metadata.Namespace)
+		if entry.Type != modelTypeChat {
+			item.Message = "Not offered for MaaS"
+			item.SetupBlockedReason = maasEmbeddingReason
+			st.Items = append(st.Items, item)
+			continue
+		}
+		ref, found, _ := readMaaSModelRef(c, m.Metadata.Namespace, m.Metadata.Name)
 		if found && toolOwned(ref.Metadata) {
 			item.Published, item.Deployed = true, true
 			item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
@@ -1113,7 +1170,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			default:
 				item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", firstNonEmpty(item.Phase, "pending"), firstNonEmpty(authPhase, "pending"), firstNonEmpty(subPhase, "pending"))
 			}
-		} else if left := maasLeftovers(m, recErr == nil && rec.published(m.Metadata.Namespace)); !found && len(left) > 0 {
+		} else if left := maasLeftovers(m, recErr == nil && rec.published(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
 			// A publication undone half-way (live: Unpublish deleted the
 			// model reference, then failed on the model): Unpublish again
 			// finishes it, so the tab must still offer it.
@@ -1136,28 +1193,33 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	// A recorded publication whose model is gone (the model or its project
 	// was deleted elsewhere): a row, so Unpublish can clear what is left.
 	if recErr == nil {
-		for _, p := range rec.Published {
+		for _, p := range rec.pubs() {
 			shown := false
 			for _, it := range st.Items {
-				shown = shown || it.Namespace == p
+				shown = shown || (it.Namespace == p.project && it.Name == p.model)
 			}
 			if shown {
 				continue
 			}
 			left := []string{"this tool's record of the publication"}
-			if ref, found, _ := readMaaSModelRef(c, p); found && toolOwned(ref.Metadata) {
-				left = append([]string{"MaaSModelRef " + maasModelRefName}, left...)
+			if ref, found, _ := readMaaSModelRef(c, p.project, p.model); found && toolOwned(ref.Metadata) {
+				left = append([]string{"MaaSModelRef " + p.model}, left...)
 			}
 			st.Items = append(st.Items, types.MaaSModel{
-				ResourceState: types.ResourceState{Namespace: p, Name: maasModelRefName, ManagedByTool: true, Deployed: true,
+				ResourceState: types.ResourceState{Namespace: p.project, Name: p.model, ManagedByTool: true, Deployed: true,
 					Message: "Partly published: the model is gone; " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
-				DisplayName: maasModelRefName,
+				DisplayName: p.model,
 				Published:   true,
 				Partly:      true,
 			})
 		}
 	}
-	sort.Slice(st.Items, func(i, j int) bool { return st.Items[i].Namespace < st.Items[j].Namespace })
+	sort.Slice(st.Items, func(i, j int) bool {
+		if st.Items[i].Namespace != st.Items[j].Namespace {
+			return st.Items[i].Namespace < st.Items[j].Namespace
+		}
+		return st.Items[i].Name < st.Items[j].Name
+	})
 	return st, nil
 }
 
@@ -1202,8 +1264,30 @@ type maasModelRefObject struct {
 	} `json:"status"`
 }
 
-func readMaaSModelRef(c *Client, project string) (maasModelRefObject, bool, error) {
-	return readMaaSObject(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
+// maasModelRefPath is the path of the MaaSModelRef of a chat model of the
+// catalog in project; only those names, written out so the RBAC rules
+// (resourceNames) can be checked against them (rbac_coverage_test.go). An
+// embedding model has none: it is not published.
+func maasModelRefPath(c *Client, project, name string) (string, bool) {
+	switch name {
+	case "smollm2-135m-instruct":
+		return namespacedPath(maasAPI(c), "maasmodelrefs", project, "smollm2-135m-instruct"), true
+	case "qwen25-05b-instruct":
+		return namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"), true
+	case "qwen3-1-7b":
+		return namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen3-1-7b"), true
+	}
+	return "", false
+}
+
+// readMaaSModelRef reads the MaaSModelRef of model name in project (none
+// for a model that is not publishable).
+func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool, error) {
+	path, ok := maasModelRefPath(c, project, name)
+	if !ok {
+		return maasModelRefObject{}, false, nil
+	}
+	return readMaaSObject(c, path)
 }
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
@@ -1231,12 +1315,17 @@ func maasPhase(c *Client, path string) (string, bool) {
 }
 
 // MaaSPublishedIn reports whether anything of a publication of this tool's
-// model in project is left, for the Models teardown: its MaaSModelRef,
+// model name in project is left, for the Models teardown (never for a
+// model that is not publishable): its MaaSModelRef,
 // this tool's record of it, or the model's route through the MaaS gateway.
 // Unpublish removes all three (and the project from the shared
 // subscription, access policy and gateway), so the model goes after it.
 func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
-	_, found, err := readObjectMeta(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
+	refPath, ok := maasModelRefPath(c, project, name)
+	if !ok {
+		return false, nil
+	}
+	_, found, err := readObjectMeta(c, refPath)
 	if err != nil && !IsK8sError(err, 404) {
 		return false, err
 	}
@@ -1247,10 +1336,10 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if rec.published(project) {
+	if rec.published(project, name) {
 		return true, nil
 	}
-	model, found, err := readToolModel(c, project, maasModelRefName)
+	model, found, err := readToolModel(c, project, name)
 	if err != nil {
 		return false, err
 	}
