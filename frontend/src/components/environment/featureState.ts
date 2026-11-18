@@ -513,6 +513,10 @@ export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus 
   if (busy.maas?.action === "teardown") return "deleting";
   const states = m.parts.map(maasPartStatus);
   if (states.every((s) => s === "ready")) return "ready";
+  // Not turned on yet, with something setup makes still missing: setup
+  // runs (only platform.setupBlockedReason stops it); parts that need a
+  // cluster-admin or are still starting show as warnings on the tab.
+  if (!m.platform.deployed && states.includes("not-set-up")) return "not-set-up";
   for (const s of ["error", "needs-attention", "setting-up", "unknown"] as EnvStatus[]) {
     if (states.includes(s) && (s !== "unknown" || m.platform.deployed)) return s;
   }

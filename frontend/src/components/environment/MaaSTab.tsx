@@ -111,7 +111,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
   return (
     <TabSection title="Published models" id="maas-models">
       <Content component="p">
-        Publishing offers this tool&apos;s model to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample). The model stays on the inference gateway too, so its address on the Models tab and the playground keep working; Unpublish takes it off the MaaS gateway.
+        Publishing offers this tool&apos;s model to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample; counted from the token usage a response reports). The model stays on the inference gateway too, so its address on the Models tab and the playground keep working; Unpublish takes it off the MaaS gateway.
       </Content>
       {items.length === 0 ? (
         <Content component="p">
@@ -188,7 +188,7 @@ const UseMaaS: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
         )}
       </DescriptionList>
       <WhatNext id="maas-next" items={[
-        <>Run the commands: the chat answers, a request without a key gets 401, and more than 100 tokens a minute gets 429.</>,
+        <>Run the commands: the chat answers, and a request without a key gets 401. More than 100 tokens a minute gets 429 for calls whose response reports its token usage, as the non-streaming chat above does; streaming responses report it only when the model server runs with <code>--enable-force-include-usage</code> (the MaaS docs&apos; model setup).</>,
         <>Use the model in the dashboard&apos;s playground as a Models as a Service model.</>,
       ]} />
     </TabSection>
@@ -204,6 +204,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
   const { maas, maasError, state, baseReason, readOnly, setPending, onSetUp } = props;
   const next = state.next;
   const published = (maas?.items ?? []).some((i) => i.published);
+  const attention = (maas?.parts ?? []).filter((p) => ["manual", "waiting", "problem"].includes(p.state));
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="MaaS" purpose="Models as a Service: offer models to everyone on the cluster through one gateway, with API keys and token limits." state={state} /></StackItem>
@@ -214,6 +215,13 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
           {(maas?.parts ?? []).map((p) => <PlatformPart key={p.id} part={p} />)}
         </PartList>
       </StackItem>
+      {next?.kind === "set-up" && attention.length > 0 && (
+        <StackItem>
+          <Alert variant="warning" isInline component="p" title="Set up runs; these parts are not ready yet">
+            {attention.map((p) => p.title).join(", ")}: each shows above what it needs. MaaS works once they are ready.
+          </Alert>
+        </StackItem>
+      )}
       {next?.kind === "set-up" && (
         <StackItem>
           <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
@@ -297,10 +305,10 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
     case "teardown-maas":
       return {
         title: "Remove Models as a Service?", confirm: "Remove", danger: true, runTitle: "Remove Models as a Service",
-        summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted.</Content>,
+        summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or access policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
         changes: [
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => i.namespace).join(", ") || "none"}).</>,
-          <>DataScienceCluster: <code>aigateway.modelsAsAService</code> back to its value before setup (only if this tool changed it).</>,
+          <>DataScienceCluster: <code>aigateway.modelsAsAService</code> back to its value before setup (only if this tool changed it and nobody has set it since).</>,
           <>Deleted: Gateway <code>maas-default-gateway</code>, the database <code>maas-db</code> with its volume, and Secret <code>maas-db-config</code>.</>,
           <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: Connectivity Link, Authorino, the CloudNativePG operator, the namespaces RHOAI made, and every object that was not created by this tool.</>,
         ],

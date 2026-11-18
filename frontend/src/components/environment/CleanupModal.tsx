@@ -29,8 +29,10 @@ export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "a
 
 /** What this tool created that a clean-up of the scope can delete, from the status. */
 export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null, maas: MaaSStatus | null = null) {
-  // MaaS (Clean up everything only): this tool's publications first, the platform last.
-  const maasPublished = scope === "all" ? (maas?.items ?? []).filter((i) => i.published && i.namespace).map((i) => i.namespace!) : [];
+  // MaaS: this tool's publications first (with the models, since a published
+  // model cannot go without its publication), the platform last (Clean up
+  // everything only).
+  const maasPublished = scope === "all" || scope === "models" ? (maas?.items ?? []).filter((i) => i.published && i.namespace).map((i) => i.namespace!) : [];
   const maasPlatform = scope === "all" && !!maas?.platform.managedByTool;
   // The playgrounds this tool asked the dashboard for (playground status).
   const playgrounds = scope === "playground" || scope === "all"

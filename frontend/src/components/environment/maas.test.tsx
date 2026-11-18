@@ -21,10 +21,22 @@ describe("maasState", () => {
     expect(s.next).toEqual({ kind: "set-up", label: "Set up MaaS", setup: [{ kind: "setup-maas" }], reason: "No Kuadrant" });
   });
 
-  it("a manual part (Authorino TLS) needs attention and points at it", () => {
-    const s = maasState(base([{ id: "database", title: "Database", state: "ready" }, { id: "authorino-tls", title: "Authorino TLS", state: "manual" }]), IDLE);
+  it("once MaaS is on, a manual part (Authorino TLS) needs attention and points at it", () => {
+    const s = maasState(base([{ id: "database", title: "Database", state: "ready" }, { id: "authorino-tls", title: "Authorino TLS", state: "manual" }], { platform: { deployed: true, ready: false, managedByTool: true } }), IDLE);
     expect(s.status).toBe("needs-attention");
     expect(s.next).toEqual({ kind: "show-issue", part: "maas-authorino-tls" });
+  });
+
+  it("before MaaS is on, manual and waiting parts do not hide Set up: only the platform's block does", () => {
+    const parts: MaaSStatus["parts"] = [
+      { id: "dsc", title: "DSC", state: "missing" },
+      { id: "kuadrant", title: "Kuadrant", state: "waiting" },
+      { id: "authorino-tls", title: "Authorino TLS", state: "manual" },
+      { id: "maas-api", title: "maas-api", state: "missing" },
+    ];
+    const s = maasState(base(parts), IDLE);
+    expect(s.status).toBe("not-set-up");
+    expect(s.next).toEqual({ kind: "set-up", label: "Set up MaaS", setup: [{ kind: "setup-maas" }], reason: null });
   });
 
   it("ready: counts the published models and opens the dashboard's MaaS pages", () => {
@@ -71,6 +83,13 @@ describe("Clean up everything with MaaS", () => {
     expect(c.maasPlatform).toBe(true);
     expect(cleanupSteps({ maasPublished: ["p"], models: ["p"], maasPlatform: true }).map((s) => s.id)).toEqual(["maas-unpublish:p", "model:p", "maas-platform"]);
     expect(cleanupCandidates(status, "models", false, null, maas).maasPlatform).toBe(false);
+  });
+
+  it("Clean up from the Models tab offers the publication and blocks deleting a published model without it", () => {
+    const withModel = { ...status, models: { items: [{ namespace: "p", name: "m", deployed: true, ready: true, managedByTool: true }] } } as unknown as ResourcesStatus;
+    const c = cleanupCandidates(withModel, "models", false, null, maas);
+    expect(c.maasPublished).toEqual(["p"]);
+    expect(cleanupBlocked(withModel, { models: ["p"] }, c.maasPublished)).toContain("published to MaaS");
   });
 
   it("a published model cannot go without its publication", () => {
