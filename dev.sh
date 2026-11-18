@@ -43,34 +43,70 @@ echo -e "${GREEN}Cluster:${NC} $SERVER"
 echo -e "${GREEN}User:${NC}    $(oc whoami)"
 echo ""
 
+# One dev server per checkout: a second one would fight over ports 8080,
+# 9000 and the S3 port-forward. The lock holds this script's PID.
+LOCK_DIR="${TMPDIR:-/tmp}/rhoai-nightly-updater-dev.$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  OTHER=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ -n "$OTHER" ] && kill -0 "$OTHER" 2>/dev/null; then
+    echo -e "${RED}ERROR: dev.sh already runs for this checkout (PID $OTHER). Stop it first: kill $OTHER${NC}"
+    exit 1
+  fi
+  # A stale lock from a dev.sh that was killed hard.
+  rm -rf "$LOCK_DIR" && mkdir "$LOCK_DIR"
+fi
+echo $$ > "$LOCK_DIR/pid"
+
 # Install frontend dependencies if needed
 if [ ! -d frontend/node_modules ]; then
   echo -e "${YELLOW}Installing frontend dependencies...${NC}"
   (cd frontend && npm install)
 fi
 
-# Cleanup on exit
-GO_PID="" NPM_PID="" PF_PID=""
+# Cleanup on exit, Ctrl-C, kill or a closed terminal. Each child is stopped
+# with its own children: `go run` leaves the compiled server running and
+# `npm run dev` leaves webpack running when only the parent is killed.
+GO_PID="" NPM_PID="" PF_PID="" WATCHDOG_PID=""
+kill_tree() {
+  local pid=$1 child
+  [ -n "$pid" ] || return 0
+  for child in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$child"; done
+  kill "$pid" 2>/dev/null || true
+}
+CLEANED=""
 cleanup() {
+  [ -n "$CLEANED" ] && return 0
+  CLEANED=1
   echo ""
   echo -e "${YELLOW}Shutting down...${NC}"
-  kill $GO_PID $NPM_PID 2>/dev/null || true
-  # The port-forward loop and its current oc port-forward child.
-  pkill -P $PF_PID 2>/dev/null || true
-  kill $PF_PID 2>/dev/null || true
+  # The watchdog first: it waits for this script, which waits below.
+  kill_tree "$WATCHDOG_PID"
+  kill_tree "$PF_PID"; kill_tree "$GO_PID"; kill_tree "$NPM_PID"
   rm -f server
   wait 2>/dev/null || true
+  rm -rf "$LOCK_DIR"
   echo -e "${GREEN}Done.${NC}"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # Keep a port-forward to the S3 storage Service open for the backend's
 # bucket request (see the header).
 S3_LOCAL_PORT=${S3_LOCAL_PORT:-18333}
+# The loop and its port-forward end when this script is gone, even if it
+# was killed with -9: the port-forward runs in the background and is
+# stopped as soon as this script's PID disappears.
+DEV_PID=$$
 (
-  while true; do
-    oc port-forward --address 127.0.0.1 -n seaweedfs svc/seaweedfs-s3 "${S3_LOCAL_PORT}:8333" >/dev/null 2>&1 || true
-    sleep 3
+  while kill -0 "$DEV_PID" 2>/dev/null; do
+    oc port-forward --address 127.0.0.1 -n seaweedfs svc/seaweedfs-s3 "${S3_LOCAL_PORT}:8333" >/dev/null 2>&1 &
+    FWD=$!
+    while kill -0 "$DEV_PID" 2>/dev/null && kill -0 "$FWD" 2>/dev/null; do sleep 2; done
+    kill "$FWD" 2>/dev/null || true
+    wait "$FWD" 2>/dev/null || true
+    sleep 1
   done
 ) &
 PF_PID=$!
@@ -97,5 +133,13 @@ echo -e "(requests are proxied to the Go backend on :8080)"
 echo ""
 (cd frontend && npm run dev) &
 NPM_PID=$!
+
+# A watchdog for `kill -9`, which skips the traps: when this script's PID
+# disappears, it stops the backend and the dev server with their children.
+(
+  while kill -0 "$DEV_PID" 2>/dev/null; do sleep 2; done
+  kill_tree "$GO_PID"; kill_tree "$NPM_PID"
+) &
+WATCHDOG_PID=$!
 
 wait
