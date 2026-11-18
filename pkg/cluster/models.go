@@ -21,9 +21,10 @@ import (
 // through the controller's LLM_INFERENCE_SERVICE_CONFIG_PREFIX, its image
 // through the preset, and the released image through Red Hat's catalog.
 //
-// No ServiceAccount, Role, RoleBinding or token is created for access:
-// the gateway's AuthPolicy accepts any token whose user may "get" the
-// model, so the user's own (oc whoami -t) works.
+// The gateway's AuthPolicy accepts any token whose user may "get" the
+// model. Each model also gets the dashboard's token authentication (a
+// ServiceAccount that may get only it, and its token; models_token.go), so
+// the dashboard lists a token and its Edit keeps authentication on.
 const (
 	llmisvcAPIVersion      = "serving.kserve.io/v1alpha2"
 	llmisvcGroup           = "serving.kserve.io"
@@ -297,6 +298,10 @@ func manifestUnknown(msg string) bool {
 func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) types.ModelState {
 	s := types.ModelState{ResourceState: types.ResourceState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}}
 	s.ManagedByTool = rec.owns(m.Metadata)
+	if s.ManagedByTool && rec[modelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
+		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
+	}
+	s.TokenAuthOff = m.Metadata.Annotations[enableAuthAnnot] == "false"
 	s.Terminating = m.Metadata.terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	if m.Status.URL != "" {
@@ -741,6 +746,8 @@ type modelPlan struct {
 	found    bool
 	// rec is the tool's record of its models, as read by the plan.
 	rec modelsRecord
+	// token is which token-authentication objects are missing (models_token.go).
+	token tokenPlan
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -780,6 +787,9 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 	if mp != nil {
 		if msg, code := m.applyModel(mp, true); msg != "" {
 			return m.fail("check", msg, code, "model dry run failed")
+		}
+		if _, msg, code := applyModelToken(c, mp.project, mp.entry.Name, mp.current.UID, mp.token, true); msg != "" {
+			return m.fail("check", msg+" Nothing was changed.", code, "token dry run failed")
 		}
 	}
 	m.step("check", "success", strings.TrimSpace("Everything the parts need is there. "+strings.Join(notes, " ")))
@@ -824,7 +834,10 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if msg, code := m.applyModel(mp, false); msg != "" {
 			return m.fail("model", msg, code, "model apply failed")
 		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.", mp.project, mp.entry.Name, mp.preset, mp.image.describe()))
+		if msg, code := m.applyToken(mp); msg != "" {
+			return m.fail("model", msg, code, "token apply failed")
+		}
+		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), tokenWords(mp.project, mp.entry.Name, mp.token)))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 		timeout := ModelReadyTimeout
 		if dl, ok := c.ctx.Deadline(); ok {
@@ -955,6 +968,14 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if img.Reason != "" {
 		m.step("check", "running", "Image: "+img.Reason)
 	}
+	modelUID := ""
+	if found {
+		modelUID = existing.Metadata.UID
+	}
+	tok, msg, code := planModelToken(c, req.Project, entry.Name, modelUID, rec[modelRecordKey(req.Project, entry.Name)].TokenSecretUID)
+	if msg != "" {
+		return nil, msg, code
+	}
 	hw, why := pickHardwareProfile(c, entry)
 	if hw.Name != "" {
 		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
@@ -962,7 +983,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found, rec: rec}, "", ""
+		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found, rec: rec, token: tok}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
@@ -1004,6 +1025,31 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", desc, err, templateHint(err)), code
 	}
 	return fmt.Sprintf("Failed to apply %s: %v. Set up again to retry.%s", desc, err, templateHint(err)), code
+}
+
+// applyToken makes the model's missing token objects, owned by it, and
+// records the Secret's UID; a Secret that cannot be recorded is deleted
+// again, so the next setup does not find it as someone else's.
+func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
+	c := m.c
+	if p.current.UID == "" {
+		return fmt.Sprintf("The UID of LLMInferenceService %s/%s is not known, so its token authentication was not made. Set up again.", p.project, p.entry.Name), "internal"
+	}
+	secretUID, msg, code := applyModelToken(c, p.project, p.entry.Name, p.current.UID, p.token, false)
+	if msg != "" {
+		return msg + " The model was set up; set up again to finish its token authentication.", code
+	}
+	if secretUID == "" {
+		return "", ""
+	}
+	if err := recordTokenSecret(c, p.project, p.entry.Name, secretUID); err != nil {
+		path := tokenSecretPathOf(p.project, p.entry.Name)
+		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !IsK8sError(delErr, 404) {
+			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
+		}
+		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+	}
+	return "", ""
 }
 
 // TeardownModels deletes the catalog models named (every catalog model
@@ -1062,6 +1108,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		}
 		path, _ := toolModelPath(project, entry.Name)
 		if !model.Metadata.terminating() {
+			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
 			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !IsK8sError(err, 404) {
 				code := errorCodeFromK8sErr(err)

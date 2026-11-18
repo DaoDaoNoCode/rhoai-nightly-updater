@@ -7,7 +7,7 @@ import type { CatalogModel, InferenceGatewayState, ModelState, ModelsStatus, Res
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
-import { embeddingCurl, modelCurl, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
+import { embeddingCurl, modelCurl, modelTokenLine, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const gateway: InferenceGatewayState = {
@@ -146,11 +146,55 @@ describe("Models runs and clean-up", () => {
     expect(modelsState(s, "dev", ["dev"], IDLE, "qwen25-05b-instruct")).toMatchObject({ status: "ready" });
   });
 
-  it("the curl uses the user's own token and the model's resource name", () => {
-    const text = modelCurl("https://inference.apps.example.com/dev/qwen25-05b-instruct/", "qwen25-05b-instruct");
-    expect(text).toContain("TOKEN=$(oc whoami -t)");
+  it("the curl uses the model's own token from its Secret, and the model's resource name", () => {
+    const token = modelTokenLine("dev", model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa" }));
+    expect(token).toBe(`TOKEN=$(oc get secret default-name-qwen25-05b-instruct-sa -n dev -o jsonpath='{.data.token}' | base64 -d)`);
+    const text = modelCurl("https://inference.apps.example.com/dev/qwen25-05b-instruct/", "qwen25-05b-instruct", token);
+    expect(text.split("\n")[0]).toBe(token);
     expect(text).toContain("https://inference.apps.example.com/dev/qwen25-05b-instruct/v1/models");
     expect(text).toContain(`"model":"qwen25-05b-instruct"`);
+    // A model set up before it had a token: the user's own token still works.
+    expect(modelTokenLine("dev", model("dev"))).toBe("TOKEN=$(oc whoami -t)");
+  });
+});
+
+describe("Models tab: token authentication", () => {
+  it("Use it reads the model's token, says what it can do, and the details name its objects", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa", tokenServiceAccount: "qwen25-05b-instruct-sa" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByText(/oc get secret default-name-qwen25-05b-instruct-sa -n dev/)).toBeInTheDocument();
+    expect(screen.getByText(/a token that can only call this model/)).toBeInTheDocument();
+    expect(screen.getByText(/the same one the dashboard shows for the model/)).toBeInTheDocument();
+    expect(screen.queryByText(/oc whoami -t/)).toBeNull();
+    const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText("Token authentication")).toBeInTheDocument();
+    expect(within(part).getByText(/ServiceAccount qwen25-05b-instruct-sa may only get this model/)).toBeInTheDocument();
+  });
+
+  it("a model without its token says to set it up again; one turned off says so", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev"), model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", tokenAuthOff: true, tokenSecret: "default-name-qwen3-1-7b-sa" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    const view = renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText(/Set it up again to add the model's token/)).toBeInTheDocument();
+    view.unmount();
+    renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
+    const off = await screen.findByRole("listitem", { name: "Qwen3 1.7B (CPU, tool calling)" });
+    expect(within(off).getByText(/Off: security.opendatahub.io\/enable-auth is "false"/)).toBeInTheDocument();
+  });
+
+  it("the setup confirmation lists the token objects", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
+    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
+    expect(within(dialog).getByText(/ServiceAccount/)).toHaveTextContent("ServiceAccount qwen25-05b-instruct-sa, Role qwen25-05b-instruct-view-role (get on this model only), RoleBinding qwen25-05b-instruct-view and token Secret default-name-qwen25-05b-instruct-sa");
+    expect(within(dialog).queryByText(/No ServiceAccount, role or token is made/)).toBeNull();
   });
 });
 
@@ -178,7 +222,7 @@ describe("Models tab", () => {
     expect(screen.getByText(/"model":"qwen25-05b-instruct"/)).toBeInTheDocument();
     // What the dashboard shows for it: the hardware profile, and why it lists no tokens.
     expect(within(part).getByText("redhat-ods-applications/default-profile")).toBeInTheDocument();
-    expect(within(part).getByText(/so the dashboard lists no tokens for this model/)).toBeInTheDocument();
+    expect(within(part).getByText(/Set it up again to add the model.s token/)).toBeInTheDocument();
     expect(within(part).getAllByText(/4 CPUs and 6 GiB of memory \(up to 8 GiB\)/)).not.toHaveLength(0);
     // In use: the gateway's Delete says why it is not available.
     fireEvent.click(within(gw).getByRole("button", { name: "Inference gateway actions" }));
@@ -216,7 +260,7 @@ describe("Models tab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Set up Models in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Models in dev\?/ });
     expect(within(dialog).getByText(/costs money while it exists/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/No ServiceAccount, role or token is made/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Token authentication, as the dashboard makes it/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
     const run = await screen.findByRole("dialog", { name: "Set up Models in dev" });
     expect(await within(run).findByText("Qwen2.5 0.5B Instruct (CPU) is ready in dev.")).toBeInTheDocument();

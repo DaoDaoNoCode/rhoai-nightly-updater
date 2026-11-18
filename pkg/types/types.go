@@ -757,6 +757,15 @@ type ModelState struct {
 	// on the MaaS tab), so it is used through MaaS and its direct address
 	// answers 404.
 	MaaSPublished bool `json:"maasPublished,omitempty"`
+	// TokenSecret is the model's token Secret, which this tool made with
+	// ServiceAccount TokenServiceAccount as the dashboard's "Require token
+	// authentication" does; "" when it has none (set up by an earlier
+	// build: setting it up again makes it).
+	TokenSecret         string `json:"tokenSecret,omitempty"`
+	TokenServiceAccount string `json:"tokenServiceAccount,omitempty"`
+	// TokenAuthOff: the model carries security.opendatahub.io/enable-auth
+	// "false" (someone turned token authentication off in the dashboard).
+	TokenAuthOff bool `json:"tokenAuthOff,omitempty"`
 }
 
 // ModelsRequest is the body of POST /api/resources/models/stream.

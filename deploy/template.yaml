@@ -450,6 +450,41 @@ objects:
       - apiGroups: ["serving.kserve.io"]
         resources: ["llminferenceserviceconfigs"]
         verbs: ["get"]
+      # The model's token authentication, as the dashboard's "Require token
+      # authentication" makes it: ServiceAccount <model>-sa, Role
+      # <model>-view-role (get on that one model), RoleBinding <model>-view
+      # and token Secret default-name-<model>-sa, each owned by the model.
+      # create cannot be limited by name (Secrets create exists above);
+      # get and delete only the catalog's names. Never get on the Secrets:
+      # with create on Secrets anywhere, that would let this token mint and
+      # read any ServiceAccount's token. Delete is also what OpenShift's
+      # OwnerReferencesPermissionEnforcement asks of whoever sets
+      # ownerReferences. The Role and RoleBinding pass the RBAC escalation
+      # check only because this ServiceAccount holds get on those
+      # LLMInferenceService names (the rule above); it has no bind or
+      # escalate. SECURITY.md audits each rule.
+      - apiGroups: [""]
+        resources: ["serviceaccounts"]
+        verbs: ["create"]
+      - apiGroups: [""]
+        resources: ["serviceaccounts"]
+        resourceNames: ["smollm2-135m-instruct-sa", "qwen25-05b-instruct-sa", "qwen3-1-7b-sa", "granite-embedding-125m-english-sa"]
+        verbs: ["get", "delete"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings"]
+        verbs: ["create"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles"]
+        resourceNames: ["smollm2-135m-instruct-view-role", "qwen25-05b-instruct-view-role", "qwen3-1-7b-view-role", "granite-embedding-125m-english-view-role"]
+        verbs: ["get", "delete"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["rolebindings"]
+        resourceNames: ["smollm2-135m-instruct-view", "qwen25-05b-instruct-view", "qwen3-1-7b-view", "granite-embedding-125m-english-view"]
+        verbs: ["get", "delete"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["default-name-smollm2-135m-instruct-sa", "default-name-qwen25-05b-instruct-sa", "default-name-qwen3-1-7b-sa", "default-name-granite-embedding-125m-english-sa"]
+        verbs: ["delete"]
       # The dashboard's hardware profiles, to record the one that fits the
       # model as the deploy wizard does (Models). Read-only.
       - apiGroups: ["infrastructure.opendatahub.io"]

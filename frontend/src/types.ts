@@ -845,6 +845,11 @@ export interface ModelState extends ResourceState {
   presetImageMissing?: boolean;
   /** Routes through the MaaS gateway (published on the MaaS tab): used through MaaS, and its direct address answers 404. */
   maasPublished?: boolean;
+  /** The model's token Secret and ServiceAccount, made as the dashboard's "Require token authentication" does; absent for a model set up before (set it up again). */
+  tokenSecret?: string;
+  tokenServiceAccount?: string;
+  /** security.opendatahub.io/enable-auth is "false" on the model (turned off in the dashboard). */
+  tokenAuthOff?: boolean;
 }
 
 /** What a model setup needs, and the catalog's models in the projects. */

@@ -174,10 +174,11 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
 		t.Errorf("labels: %v", labels)
 	}
-	// Nothing grants access: no ServiceAccount, Role, RoleBinding or token.
+	// Access: only the dashboard's token-authentication objects
+	// (models_token_test.go checks them), nothing else.
 	for _, m := range mc.f.mutations() {
-		for _, kind := range []string{"serviceaccounts", "roles", "rolebindings", "token"} {
-			if strings.Contains(m, "/"+kind) {
+		for _, kind := range []string{"serviceaccounts", "roles", "rolebindings", "secrets"} {
+			if strings.Contains(m, "/"+kind) && !strings.HasPrefix(m, "POST ") {
 				t.Errorf("setup wrote %s", m)
 			}
 		}
@@ -439,7 +440,11 @@ func TestModelsTeardown_DeletesTheModelThenTheGateway(t *testing.T) {
 		}
 	}
 	// (mutations leaves ConfigMaps out: the activity log writes them.)
-	if want := []string{testModelPath, testGatewayPath, testGatewayClass}; strings.Join(deletes, " ") != strings.Join(want, " ") {
+	// The model's token objects go first (garbage collection would take
+	// them with it too), then the model, then the gateway.
+	tokens := []string{"/api/v1/namespaces/proj/serviceaccounts/qwen25-05b-instruct-sa", "/apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles/qwen25-05b-instruct-view-role",
+		"/apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings/qwen25-05b-instruct-view", "/api/v1/namespaces/proj/secrets/default-name-qwen25-05b-instruct-sa"}
+	if want := append(tokens, testModelPath, testGatewayPath, testGatewayClass); strings.Join(deletes, " ") != strings.Join(want, " ") {
 		t.Fatalf("deleted %v, want %v", deletes, want)
 	}
 	if mc.f.has(testGatewayCM) {

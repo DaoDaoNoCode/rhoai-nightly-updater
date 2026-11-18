@@ -38,8 +38,11 @@ const (
 type recordedModel struct {
 	// UID is the LLMInferenceService's, as the create returned it.
 	UID string `json:"uid"`
-	At  string `json:"at,omitempty"`
-	By  string `json:"by,omitempty"`
+	// TokenSecretUID is the UID of the model's token Secret the tool made
+	// (models_token.go), which the tool never reads back.
+	TokenSecretUID string `json:"tokenSecretUID,omitempty"`
+	At             string `json:"at,omitempty"`
+	By             string `json:"by,omitempty"`
 }
 
 // modelsRecord is the record, by modelRecordKey.
@@ -115,6 +118,21 @@ func recordModel(c *Client, meta objectMeta) error {
 		return err
 	}
 	rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID, At: time.Now().UTC().Format(time.RFC3339), By: getUser(c)}
+	return writeModelsRecord(c, rec)
+}
+
+// recordTokenSecret records the token Secret the tool made for its model.
+func recordTokenSecret(c *Client, project, name, uid string) error {
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return err
+	}
+	e, ok := rec[modelRecordKey(project, name)]
+	if !ok {
+		return fmt.Errorf("record this tool's models: %s/%s is not recorded", project, name)
+	}
+	e.TokenSecretUID = uid
+	rec[modelRecordKey(project, name)] = e
 	return writeModelsRecord(c, rec)
 }
 

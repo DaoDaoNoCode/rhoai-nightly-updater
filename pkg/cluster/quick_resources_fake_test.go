@@ -465,6 +465,11 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if dryRun {
+			// The preconditions are checked; nothing is deleted.
+			f.write(w, 200, map[string]interface{}{"kind": "Status", "status": "Success"})
+			return
+		}
 		if fin, _ := meta["finalizers"].([]interface{}); len(fin) > 0 || (k.plural == "namespaces" && f.namespacesLinger) {
 			meta["deletionTimestamp"] = time.Now().UTC().Format(time.RFC3339)
 			if k.plural == "namespaces" {
