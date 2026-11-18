@@ -514,7 +514,7 @@ export function migrateSteps(kind) {
     ? [
       ["check", "running", "Checking the storage in namespace 'minio'..."],
       ["check", "success", "OK: SeaweedFS in namespace 'minio' is running"],
-      ["storage", "running", "Setting up the storage in namespace 'seaweedfs' with the same keys..."],
+      ["storage", "running", "Setting up the storage in namespace 'seaweedfs' with new keys..."],
       ["storage", "success", "OK: The new storage is ready"],
       ["copy", "running", "Copying every bucket and object from 'minio' to 'seaweedfs' (Job seaweedfs-migrate)..."],
       ["copy", "success", "OK: 37 objects (18204511 bytes) copied and checked byte for byte"],
