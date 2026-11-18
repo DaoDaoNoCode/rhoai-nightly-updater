@@ -112,7 +112,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
   return (
     <TabSection title="Published models" id="maas-models">
       <Content component="p">
-        Publishing offers this tool&apos;s model to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample; counted from the token usage a response reports). The model stays on the inference gateway too, so its address on the Models tab and the playground keep working; Unpublish takes it off the MaaS gateway.
+        Publishing offers this tool&apos;s model to everyone signed in to the cluster through MaaS, with a limit of 100 tokens a minute each (the docs&apos; sample; counted from the token usage a response reports). While it is published, the model is used through MaaS (with an API key) and the dashboard&apos;s playground; its direct address on the Models tab answers 404 until it is unpublished. Unpublish routes it as before.
       </Content>
       {items.length === 0 ? (
         <Content component="p">
@@ -236,7 +236,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
             <>A PostgreSQL database for MaaS&apos;s API keys: one CloudNativePG instance with a 1 GiB volume, for development and test, and Secret <code>maas-db-config</code> with its address, in the AI gateway&apos;s namespace</>,
             <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
             <>MaaS turned on in the DataScienceCluster (<code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
-            <>Publishing: the model routes through the MaaS gateway, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the access policy <code>rhoai-nightly-updater-access</code> list it</>,
+            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the access policy <code>rhoai-nightly-updater-access</code> list it</>,
             <>Not done by this tool: Connectivity Link (Kuadrant) and its Authorino TLS, which a cluster-admin sets up (the parts above show how)</>,
           ]} />
         </FeatureSection>
@@ -275,7 +275,7 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check the platform and the model" },
         { id: "gateway", title: `Let the MaaS gateway admit ${p.project}` },
-        { id: "model", title: "Route the model through the MaaS gateway" },
+        { id: "model", title: "Route the model through the MaaS gateway only" },
         { id: "maas", title: "Model reference, subscription and access policy" },
         { id: "ready", title: "Wait until MaaS lists the model" },
       ];
@@ -317,10 +317,10 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
     case "publish-maas":
       return {
         title: `Publish the model in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish the model in ${pending.project}`,
-        summary: <Content component="p">Everyone signed in to the cluster can then call the model through MaaS with an API key, up to 100 tokens a minute each. It stays on the inference gateway too, so the Models tab's commands and the playground keep working.</Content>,
+        summary: <Content component="p">Everyone signed in to the cluster can then call the model through MaaS with an API key, up to 100 tokens a minute each. While it is published, the model is used through MaaS and the dashboard's playground; its direct address (the Models tab's commands) answers 404 until it is unpublished.</Content>,
         changes: [
           <>Gateway <code>maas-default-gateway</code>: admits routes from {pending.project}.</>,
-          <>The model in {pending.project}: routes through the MaaS gateway (only that is changed).</>,
+          <>The model in {pending.project}: routes through the MaaS gateway only (only its gateways are changed). The gateways it uses now are recorded, and Unpublish puts them back.</>,
           <>Created: MaaSModelRef <code>qwen25-05b-instruct</code> in {pending.project}; in <code>models-as-a-service</code>, subscription <code>{m?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and access policy <code>rhoai-nightly-updater-access</code> list the model.</>,
         ],
       };
@@ -330,7 +330,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null): ConfirmSpec
         summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.</Content>,
         changes: [
           <>Deleted: MaaSModelRef <code>qwen25-05b-instruct</code> in {pending.project}, and the model&apos;s entries in the subscription and access policy (both are deleted when no model is left).</>,
-          <>The model routes as before publishing; the MaaS gateway stops admitting {pending.project}.</>,
+          <>The model routes through the gateways it used before publishing, so its direct address answers again; the MaaS gateway stops admitting {pending.project}.</>,
         ],
       };
     default:

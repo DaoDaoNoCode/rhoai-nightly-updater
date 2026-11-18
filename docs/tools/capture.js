@@ -249,12 +249,24 @@ async (page) => {
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
-      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "orphan", "foreign", "no-model"]) {
+      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "earlier-build", "orphan", "foreign", "no-model"]) {
         for (const dark of [false, true]) {
           await open("/test-resources?tab=maas", `env-maas-${st}`, { dark, width: 1440 });
           await fit();
           await page.screenshot({ path: `${out}/themes/maas-${st}-${dark ? "dark" : "light"}.png` });
         }
+      }
+      for (const dark of [false, true]) {
+        const theme = dark ? "dark" : "light";
+        // Publish says, before you confirm, that the direct address answers 404.
+        await open("/test-resources?tab=maas", "env-maas-ready", { dark, width: 1440 });
+        await page.getByRole("button", { name: "Publish", exact: true }).click();
+        await page.getByRole("dialog").waitFor();
+        await page.screenshot({ path: `${out}/themes/maas-publish-confirm-${theme}.png` });
+        // The Models tab of a published model: Use it points at the MaaS tab.
+        await open("/test-resources?tab=models&project=dev-project", "env-models-published", { dark, width: 1440 });
+        await fit();
+        await page.screenshot({ path: `${out}/themes/models-published-${theme}.png` });
       }
       await open("/test-resources", "env-maas-published");
       await fit();

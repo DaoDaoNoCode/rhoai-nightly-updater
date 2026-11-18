@@ -1,0 +1,351 @@
+package cluster
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// The model's gateway refs while it is published: the MaaS gateway alone.
+//
+// maas-controller makes TokenRateLimitPolicy maas-trlp-<model> targeting
+// the model's HTTPRoute (models-as-a-service maassubscription_controller.go,
+// identical on main 68b70af1 and red-hat-data-services rhoai-3.6 d8df8ca1),
+// with the predicate auth.identity.selected_subscription_id == "<id>"
+// (ratetier.go). Kuadrant enforces a route-targeted policy on every gateway
+// in the route's parentRefs (kuadrant-operator
+// doc/overviews/rate-limiting.md) and has no way to scope it to one parent.
+// On the inference gateway the identity comes from a Kubernetes TokenReview
+// (AuthPolicy openshift-ai-inference-authn) and has no
+// selected_subscription_id, so the wasm-shim fails closed: live (RHOAI 3.6,
+// 2026-11-18), every direct call answered 500 while the route also named
+// that gateway. So publish writes refs [maas-default-gateway], as the docs
+// intend ("Only models routing through maas-default-gateway appear in the
+// MaaS catalog and have policies applied", model-setup.md). The model is
+// then used through MaaS with an API key and through the dashboard's
+// playground (which reaches it on the MaaS gateway's internal listener),
+// and its direct address answers 404 until Unpublish writes back the refs
+// publish recorded (maasRecord.ModelRefs).
+//
+// spec.router.gateway.refs is an atomic list (KServe rhoai-3.6
+// GatewaySpec.Refs has no list-map markers), so any write replaces the
+// whole list: a server-side apply would take the list over. The list is
+// written whole with a JSON merge patch that carries the read
+// resourceVersion (a model changed in between is a conflict, never
+// overwritten), as field manager rhoai-nightly-updater-maas. No refs is
+// written as refs: null, which removes them, back to gateway {} (live, an
+// empty server-side apply instead left gateway with no owner, so the API
+// server nulled it and the CRD refused the result: 422
+// "spec.router.gateway ... must be of type object: null").
+//
+// KServe rewrites a model's HTTPRoute only when the parentRefs it expects
+// are not a prefix of the route's (router.go semanticHTTPRouteIsEqual:
+// equality.Semantic.DeepDerivative compares a slice element by element up
+// to the expected length; opendatahub kserve rhoai-3.6). A parent dropped
+// from the end of the list therefore stays: live, refs going from
+// [MaaS, inference] (a publication by an earlier build of this tool) to
+// [MaaS] left the route on both gateways and the model not Ready ("bound
+// to 2 parents"). Publish then first writes back the refs that publication
+// replaced, waits for the route to leave the MaaS gateway, and only then
+// writes the MaaS gateway alone; from there, and from the default, KServe
+// rewrites the route (live, in about 6 s). Every change waits for the
+// route (waitForModelRoute).
+
+// gatewayRefs are a model's spec.router.gateway.refs as read (KServe
+// UntypedObjectReference: name, namespace), kept whole.
+type gatewayRefs []map[string]interface{}
+
+func gatewayRefName(r map[string]interface{}) (string, string) {
+	name, _ := r["name"].(string)
+	ns, _ := r["namespace"].(string)
+	return name, ns
+}
+
+func (g gatewayRefs) hasMaaS() bool {
+	for _, r := range g {
+		if isMaaSGatewayRef(gatewayRefName(r)) {
+			return true
+		}
+	}
+	return false
+}
+
+// maasOnly: the refs publish writes, the MaaS gateway alone.
+func (g gatewayRefs) maasOnly() bool {
+	return len(g) == 1 && g.hasMaaS()
+}
+
+// String names the refs; none is KServe's default gateway.
+func (g gatewayRefs) String() string {
+	if len(g) == 0 {
+		return "KServe's default gateway (no refs)"
+	}
+	names := make([]string, 0, len(g))
+	for _, r := range g {
+		name, ns := gatewayRefName(r)
+		names = append(names, ns+"/"+name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// earlierBuildOriginal are the refs a publication by an earlier build of
+// this tool replaced: it wrote [MaaS gateway, the model's refs], with the
+// inference gateway written out when the model had none.
+func (g gatewayRefs) earlierBuildOriginal() gatewayRefs {
+	var others gatewayRefs
+	for _, r := range g {
+		if !isMaaSGatewayRef(gatewayRefName(r)) {
+			others = append(others, r)
+		}
+	}
+	if len(others) == 1 {
+		if name, ns := gatewayRefName(others[0]); name == inferenceGatewayName && ns == inferenceGatewayNamespace {
+			return nil
+		}
+	}
+	return others
+}
+
+func maasOnlyRefs() gatewayRefs {
+	return gatewayRefs{{"name": maasGatewayName, "namespace": inferenceGatewayNamespace}}
+}
+
+// readModelGatewayRefs reads the tool's model's gateway refs and its
+// resourceVersion.
+func readModelGatewayRefs(c *Client, project string) (gatewayRefs, string, error) {
+	path, _ := toolModelPath(project, maasModelRefName)
+	body, _, err := c.get(path)
+	if err != nil {
+		return nil, "", err
+	}
+	var model struct {
+		Metadata objectMeta `json:"metadata"`
+		Spec     struct {
+			Router struct {
+				Gateway struct {
+					Refs gatewayRefs `json:"refs"`
+				} `json:"gateway"`
+			} `json:"router"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &model); err != nil {
+		return nil, "", fmt.Errorf("parse the model in '%s': %w", project, err)
+	}
+	return model.Spec.Router.Gateway.Refs, model.Metadata.ResourceVersion, nil
+}
+
+// writeModelGatewayRefs writes the tool's model's whole refs list (none:
+// removed, KServe's default) if the model is still at resourceVersion rv.
+func writeModelGatewayRefs(c *Client, project, rv string, refs gatewayRefs) error {
+	path, _ := toolModelPath(project, maasModelRefName)
+	var list interface{}
+	if len(refs) > 0 {
+		list = refs
+	}
+	patch, _ := json.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{"resourceVersion": rv},
+		"spec":     map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{"refs": list}}},
+	})
+	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
+	return err
+}
+
+// modelRoutePath is the HTTPRoute KServe makes for a catalog model:
+// kmeta.ChildName(<model>, "-kserve-route") (router.go expectedHTTPRoute),
+// which is the plain concatenation while it fits 63 characters. Only the
+// catalog's names, so the RBAC rule stays limited to them.
+func modelRoutePath(project, name string) (string, bool) {
+	switch name {
+	case "qwen25-05b-instruct":
+		return namespacedPath("gateway.networking.k8s.io/v1", "httproutes", project, "qwen25-05b-instruct-kserve-route"), true
+	}
+	return "", false
+}
+
+// readModelRoute reads the parents ("namespace/name") of the tool's
+// model's HTTPRoute; found is false when KServe has not made it.
+func readModelRoute(c *Client, project string) ([]string, bool, error) {
+	path, _ := modelRoutePath(project, maasModelRefName)
+	body, _, err := c.get(path)
+	if IsK8sError(err, http.StatusNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var route struct {
+		Spec struct {
+			ParentRefs []struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"parentRefs"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &route); err != nil {
+		return nil, false, fmt.Errorf("parse HTTPRoute %s/%s-kserve-route: %w", project, maasModelRefName, err)
+	}
+	parents := make([]string, 0, len(route.Spec.ParentRefs))
+	for _, p := range route.Spec.ParentRefs {
+		parents = append(parents, firstNonEmpty(p.Namespace, project)+"/"+p.Name)
+	}
+	return parents, true, nil
+}
+
+// waitForModelRoute waits, up to MaaSRouteTimeout, until KServe has moved
+// the tool's model's HTTPRoute: onto the MaaS gateway alone with the model
+// Ready at its generation (published), or off the MaaS gateway (not). It
+// returns "" or, in words, what is still not so.
+func waitForModelRoute(c *Client, project string, published bool) (string, error) {
+	maas := inferenceGatewayNamespace + "/" + maasGatewayName
+	route := fmt.Sprintf("HTTPRoute %s/%s-kserve-route", project, maasModelRefName)
+	why, stop := "", false
+	done, err := waitForGone(c, MaaSRouteTimeout, MaaSPoll, func(cc *Client) (bool, error) {
+		parents, found, err := readModelRoute(cc, project)
+		if err != nil {
+			return false, err
+		}
+		if !published {
+			if found && containsString(parents, maas) {
+				why = fmt.Sprintf("the model's route (%s) still goes through %s", route, strings.Join(parents, " and "))
+				return false, nil
+			}
+			return true, nil
+		}
+		switch {
+		case !found:
+			why = fmt.Sprintf("KServe has not made the model's route (%s)", route)
+			return false, nil
+		case len(parents) != 1 || parents[0] != maas:
+			why = fmt.Sprintf("the model's route (%s) goes through %s, not %s alone", route, strings.Join(parents, " and "), maasGatewayName)
+			return false, nil
+		}
+		model, found, err := readToolModel(cc, project, maasModelRefName)
+		switch {
+		case err != nil:
+			return false, err
+		case !found:
+			why, stop = "the model was deleted", true
+			return true, nil
+		case model.Status.ObservedGeneration < model.Metadata.Generation:
+			why = "KServe has not applied the change to the model yet"
+			return false, nil
+		}
+		if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
+			why = "the model is not Ready"
+			if ok {
+				why += " (" + firstNonEmpty(truncateMessage(cond.Message), cond.Reason) + ")"
+			}
+			return false, nil
+		}
+		return true, nil
+	})
+	switch {
+	case err != nil:
+		return "", err
+	case stop:
+		return why, nil
+	case !done:
+		return fmt.Sprintf("%s after %s", why, clockText(MaaSRouteTimeout)), nil
+	}
+	return "", nil
+}
+
+// maasUseWords say how a published model is used.
+const maasUseWords = "While it is published, the model is used through MaaS (with an API key) and the dashboard's playground; its direct address answers 404 until it is unpublished."
+
+// routeModelThroughMaaS is publish's "model" step: the model's refs become
+// the MaaS gateway alone (through original first when a publication by an
+// earlier build left [MaaS, others]), then it waits for the route and the
+// model. It returns a failure message and code, or "".
+func (m *maasRun) routeModelThroughMaaS(project string, original maasModelRefs) (string, string) {
+	c := m.c
+	m.step("model", "running", "Routing the model through the MaaS gateway alone...")
+	refs, rv, err := readModelGatewayRefs(c, project)
+	if err != nil {
+		return fmt.Sprintf("Cannot read the model in '%s': %v. Unpublish to undo.", project, err), errorCodeFromK8sErr(err)
+	}
+	if refs.hasMaaS() && !refs.maasOnly() {
+		m.step("model", "running", fmt.Sprintf("The model routes through %s, as an earlier build of this tool published it. KServe does not take a gateway off the end of a model's route, so the model first goes back to %s...", refs, original.Refs))
+		if err := writeModelGatewayRefs(c, project, rv, original.Refs); err != nil {
+			return fmt.Sprintf("Failed to set the model's gateways back to %s: %v. Unpublish to undo.", original.Refs, err), maasWriteCode(err)
+		}
+		why, err := waitForModelRoute(c, project, false)
+		if err != nil {
+			return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+		}
+		if why != "" {
+			return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
+		}
+		if refs, rv, err = readModelGatewayRefs(c, project); err != nil {
+			return fmt.Sprintf("Cannot read the model in '%s': %v. Unpublish to undo.", project, err), errorCodeFromK8sErr(err)
+		}
+	}
+	if !refs.maasOnly() {
+		if err := writeModelGatewayRefs(c, project, rv, maasOnlyRefs()); err != nil {
+			return fmt.Sprintf("Failed to route the model through the MaaS gateway: %v. Unpublish to undo.", err), maasWriteCode(err)
+		}
+	}
+	m.step("model", "running", "Waiting for KServe to move the model's route to the MaaS gateway...")
+	why, err := waitForModelRoute(c, project, true)
+	if err != nil {
+		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+	}
+	if why != "" {
+		return fmt.Sprintf("Partly published: %s. The model reference, subscription and access policy were not made. Unpublish to undo.", why), "partial_failure"
+	}
+	m.step("model", "success", "The model routes through "+maasGatewayName+" alone. "+maasUseWords)
+	return "", ""
+}
+
+// restoreModelRoute is unpublish's "model" step on the tool's model: the
+// refs publish recorded are written back (KServe's default when none were
+// recorded, or what a publication by an earlier build replaced), unless
+// someone added a gateway meanwhile; then it waits for the route to leave
+// the MaaS gateway. It returns a failure message and code, or "".
+func (m *maasRun) restoreModelRoute(project string, recorded maasModelRefs, hasRecord bool, say func(id, status, msg string)) (string, string) {
+	c := m.c
+	refs, rv, err := readModelGatewayRefs(c, project)
+	if err != nil {
+		return fmt.Sprintf("Cannot read the model in '%s': %v. Unpublish again to retry.", project, err), errorCodeFromK8sErr(err)
+	}
+	target, write := refs, refs.hasMaaS()
+	switch {
+	case !write:
+		// No MaaS gateway on it (taken off by hand, or by an earlier try):
+		// its refs stay as they are.
+	case hasRecord && !refs.maasOnly():
+		return refsChangedRefusal(project, refs, recorded, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict"
+	case hasRecord:
+		target = recorded.Refs
+	case refs.maasOnly():
+		target = nil
+	default:
+		target = refs.earlierBuildOriginal()
+	}
+	if write {
+		if err := writeModelGatewayRefs(c, project, rv, target); err != nil {
+			return fmt.Sprintf("Failed to set the model's gateways back to %s: %v. Unpublish again to retry.", target, err), maasWriteCode(err)
+		}
+	}
+	say("model", "running", "Waiting for KServe to move the model's route off the MaaS gateway...")
+	why, err := waitForModelRoute(c, project, false)
+	if err != nil {
+		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled")
+	}
+	if why != "" {
+		return fmt.Sprintf("Partly published: %s. The model is no longer in MaaS; Unpublish again to check the route.", why), "partial_failure"
+	}
+	say("model", "success", fmt.Sprintf("The model routes as before publishing: %s.", target))
+	return "", ""
+}
+
+// refsChangedRefusal is why Unpublish (or Publish again) does not write
+// back the refs publish recorded: someone added a gateway to the model
+// while it was published, and writing the recorded list would drop it.
+// then says what the operation does once the user has set the refs.
+func refsChangedRefusal(project string, refs gatewayRefs, recorded maasModelRefs, then string) string {
+	return fmt.Sprintf("The model in '%s' routes through %s: someone added a gateway since it was published, which set only %s. Writing back what the model had before, %s, would drop that gateway. Nothing was changed. Set the gateways the model should use yourself, without %s (for KServe's default gateway: oc patch llminferenceservice %s -n %s --type=merge -p '{\"spec\":{\"router\":{\"gateway\":{\"refs\":null}}}}'). %s",
+		project, refs, maasGatewayName, recorded.Refs, maasGatewayName, maasModelRefName, project, then)
+}

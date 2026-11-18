@@ -56,34 +56,9 @@ func deleteFakeObject(mc *modelsCluster, path string) {
 	delete(mc.f.objects, k)
 }
 
-// Finding 10: the refs list is atomic (KServe rhoai-3.6 GatewaySpec.Refs has
-// no list-map markers), so publish and unpublish must write the whole list
-// from what they read: someone else's ref survives both.
-func TestMaaSPublish_KeepsAGatewayRefSomeoneElseAdded(t *testing.T) {
-	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
-		t.Fatalf("setup: %+v", res)
-	}
-	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
-		t.Fatalf("model: %+v", res)
-	}
-	other := map[string]interface{}{"name": "team-gateway", "namespace": "team"}
-	setModelRefs(mc, []interface{}{other})
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
-		t.Fatalf("publish: %+v", res)
-	}
-	refs, _ := json.Marshal(modelGateway(t, mc)["refs"])
-	if want := `[{"name":"maas-default-gateway","namespace":"openshift-ingress"},{"name":"team-gateway","namespace":"team"}]`; string(refs) != want {
-		t.Fatalf("refs after publish = %s, want %s", refs, want)
-	}
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
-		t.Fatalf("unpublish: %+v", res)
-	}
-	refs, _ = json.Marshal(modelGateway(t, mc)["refs"])
-	if want := `[{"name":"team-gateway","namespace":"team"}]`; string(refs) != want {
-		t.Fatalf("refs after unpublish = %s, want %s", refs, want)
-	}
-}
+// Finding 10 (the refs list is atomic, so publish and unpublish write the
+// whole list from what they read) is now TestMaaSUnpublish_RestoresTheRecordedRefs
+// and TestMaaSUnpublish_RefusesWhenSomeoneAddedARefWhilePublished.
 
 // Finding 10: the model changing between the read and the write is a
 // conflict, not a silent overwrite (resourceVersion precondition).

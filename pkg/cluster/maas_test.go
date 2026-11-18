@@ -64,6 +64,11 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 			obj["status"] = map[string]interface{}{"phase": "Ready", "endpoint": "https://maas.apps.example.com/proj/qwen25-05b-instruct"}
 		case "maassubscriptions", "maasauthpolicies":
 			obj["status"] = map[string]interface{}{"phase": "Active"}
+		case "llminferenceservices":
+			// KServe has seen the model's current spec.
+			if st, ok := obj["status"].(map[string]interface{}); ok {
+				st["observedGeneration"] = ensureMap(obj, "metadata")["generation"]
+			}
 		}
 	}
 	f.beforeServe = func(method, path string) {
@@ -103,6 +108,7 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 		}
 		meta["managedFields"] = append(kept, map[string]interface{}{"manager": manager, "operation": "Update", "fieldsV1": map[string]interface{}{"f:spec": fields(patch["spec"])}})
 	}
+	mc.route = simulateKServeRoute(mc)
 	return mc
 }
 
@@ -335,11 +341,10 @@ func TestMaaSPublishAndUnpublish(t *testing.T) {
 		"subscription": {string(sub), `"tokenRateLimits":[{"limit":100,"window":"1m"}]`},
 		"subject":      {string(auth), `"groups":[{"name":"system:authenticated"}]`},
 		"gateway":      {string(gw), `"values":["redhat-ai-gateway-infra","models-as-a-service","proj"]`},
-		// It keeps the inference gateway (live: a lone MaaS ref took the
-		// model off it, and its address and the playground failed).
-		// MaaS gateway first: KServe's route update misses a parent removed
-		// from the end of the list (see setModelGatewayRef).
-		"model": {string(model), `"refs":[{"name":"maas-default-gateway","namespace":"openshift-ingress"},{"name":"openshift-ai-inference","namespace":"openshift-ingress"}]`},
+		// The MaaS gateway only: Kuadrant enforces maas-controller's
+		// TokenRateLimitPolicy on every gateway the model's route names, and
+		// on the inference gateway it fails every call with 500 (live).
+		"model": {string(model), `"refs":` + tMaaSOnly},
 	} {
 		if !strings.Contains(pair[0], pair[1]) {
 			t.Fatalf("%s lacks %s: %s", what, pair[1], pair[0])

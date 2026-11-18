@@ -535,6 +535,13 @@ objects:
         resources: ["maasmodelrefs"]
         resourceNames: ["qwen25-05b-instruct"]
         verbs: ["get", "patch", "delete"]
+      # The HTTPRoute KServe makes for the tool's model (in the model's
+      # project), read-only: publishing waits until it names the MaaS gateway
+      # alone, unpublishing until it has left it
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["httproutes"]
+        resourceNames: ["qwen25-05b-instruct-kserve-route"]
+        verbs: ["get"]
       # Removing the platform: whether others use MaaS (their model
       # references, subscriptions and access policies; read-only)
       - apiGroups: ["maas.opendatahub.io"]

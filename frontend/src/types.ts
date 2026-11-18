@@ -811,6 +811,8 @@ export interface ModelState extends ResourceState {
   hardwareProfile?: string;
   /** The preset's image is not in the registry (a nightly build's): setting it up with the newest released image fixes it. */
   presetImageMissing?: boolean;
+  /** Routes through the MaaS gateway (published on the MaaS tab): used through MaaS, and its direct address answers 404. */
+  maasPublished?: boolean;
 }
 
 /** What a model setup needs, and the catalog's models in the projects. */

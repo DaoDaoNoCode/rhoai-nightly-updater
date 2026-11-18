@@ -302,7 +302,11 @@ const scenarios = {
   "env-maas-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { tls: false, items: [F.maasModel(false)] }); },
   "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
   "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
-  "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); },
+  "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); F.setMaaSPublished(w.resources, "dev-project", true); },
+  // The same, on the Models tab: Use it points at the MaaS tab's commands.
+  "env-models-published": (w) => { scenarios["env-maas-published"](w); },
+  // A publication by an earlier build (the model also on the inference gateway): partly published.
+  "env-maas-earlier-build": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasEarlierBuildPublication()] }); F.setMaaSPublished(w.resources, "dev-project", true); },
   "env-maas-foreign": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] }); },
   "env-maas-no-model": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready"); },
   // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
@@ -638,8 +642,9 @@ async function maasStream(req, res) {
     teardown: [["check", "Removing, in reverse order of setup."], ["unpublish", "1 model unpublished."], ["dsc", "modelsAsAService is Removed again, as before setup."],
       ["gateway", "The gateway this tool created is deleted. GatewayClass openshift-default stays."], ["database", "The database and its connection Secret are deleted."]],
     publish: [["check", "The platform is ready and the model can be published."], ["gateway", `The MaaS gateway admits routes from '${project}'.`],
-      ["model", "The model routes through maas-default-gateway."], ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
-    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", "The model routes as before publishing."],
+      ["model", "The model routes through maas-default-gateway alone. While it is published, the model is used through MaaS (with an API key) and the dashboard's playground; its direct address answers 404 until it is unpublished."],
+      ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
+    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", "The model routes as before publishing: KServe's default gateway (no refs)."],
       ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
   }[action] ?? [];
   for (const [step, done] of steps) {
@@ -652,6 +657,8 @@ async function maasStream(req, res) {
   if (action === "teardown") world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map(() => F.maasModel(false)) });
   if (action === "publish") world.maas = { ...world.maas, items: item(true) };
   if (action === "unpublish") world.maas = { ...world.maas, items: item(false) };
+  // The Models tab's model follows: published, it routes through the MaaS gateway alone.
+  if (action === "publish" || action === "unpublish") F.setMaaSPublished(world.resources, project, action === "publish");
   const message = { setup: "The MaaS platform is ready.", teardown: "The MaaS platform this tool set up is removed.", publish: `The model in '${project}' is published to MaaS.`, unpublish: `The model in '${project}' is unpublished from MaaS.` }[action];
   endOperation(true, message);
   send({ step: "operation_complete", status: "success", message });

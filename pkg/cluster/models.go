@@ -233,6 +233,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 	s.Terminating = m.Metadata.terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	s.URL = m.Status.URL
+	s.MaaSPublished = modelHasMaaSRef(m)
 	s.CurrentImage = m.mainImage()
 	s.ImageKind = firstNonEmpty(m.Metadata.Annotations[modelImageSourceAnnotation], "preset")
 	s.ImageVersion = m.Metadata.Annotations[modelImageVersionAnnotation]

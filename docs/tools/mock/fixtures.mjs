@@ -912,6 +912,31 @@ export function maasModel(published, { ready = true } = {}) {
   };
 }
 
+/** A publication by an earlier build: the model on the MaaS and the inference gateway (GetMaaSStatus). */
+export function maasEarlierBuildPublication() {
+  return { ...maasModel(true), ready: false, partly: true,
+    message: "Partly published: the model routes through openshift-ingress/maas-default-gateway and openshift-ingress/openshift-ai-inference, as an earlier build of this tool published it, so calls to its direct address fail with 500. Unpublish, then Publish again." };
+}
+
+/**
+ * Routes the Models tab's model in project through the MaaS gateway alone
+ * (ModelState.maasPublished), or back: the inference gateway then no longer
+ * lists it under Used by (pkg/cluster gatewayUsers).
+ */
+export function setMaaSPublished(resources, project, published) {
+  const ref = `${project}/qwen25-05b-instruct`;
+  for (const m of resources?.models?.items ?? []) {
+    if (m.namespace !== project) continue;
+    if (published) m.maasPublished = true;
+    else delete m.maasPublished;
+  }
+  const gw = resources?.inferenceGateway;
+  if (!gw?.deployed || !gw.managedByTool) return;
+  const others = (gw.usedBy ?? []).filter((u) => u !== ref);
+  const { usedBy: _list, teardownBlockedReason: _reason, ...rest } = gw;
+  resources.inferenceGateway = { ...rest, ...usedBy(published ? others : [...others, ref].sort()) };
+}
+
 /** A recorded publication whose model is gone (GetMaaSStatus's extra row). */
 export function maasOrphanPublication(namespace) {
   return { namespace, name: "qwen25-05b-instruct", displayName: "qwen25-05b-instruct", deployed: true, ready: false, managedByTool: true, published: true, partly: true,

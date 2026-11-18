@@ -147,6 +147,20 @@ describe("Models tab", () => {
     expect(await screen.findByRole("menuitem", { name: /Delete inference gateway/ })).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("a model published to MaaS: Use it points at the MaaS tab's commands, not the direct address, and says why", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { maasPublished: true })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": { platform: { deployed: true, ready: true, managedByTool: true }, parts: [], subscription: "rhoai-nightly-updater-subscription" },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByRole("heading", { name: "Use it" })).toBeInTheDocument();
+    expect(screen.getByText(/its direct address answers 404 until it is unpublished/)).toBeInTheDocument();
+    expect(screen.queryByText(/"model":"qwen25-05b-instruct"/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Use the MaaS tab's commands" }));
+    expect(await screen.findByRole("heading", { name: "MaaS", level: 2 })).toBeInTheDocument();
+  });
+
   it("Set up confirms what it creates, then runs one streamed operation", async () => {
     const api = stubApi({
       "/api/resources/status": status({ models: modelsStatus({ capacityWarning: "No worker seems to have room for the model." }) }),
