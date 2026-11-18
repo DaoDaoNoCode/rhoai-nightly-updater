@@ -29,7 +29,11 @@ the Status verdicts, update and install flows, remote and interrupted
 operations, update notices, Components, Dashboard Dev, the S3 storage states
 and each Diagnostics problem. In the flow scenarios the update steps and the
 S3 setup wait for `POST /__docs/advance` and `POST /__docs/release`, so every
-GIF frame shows a known state. The browser clock is fixed at
+GIF frame shows a known state. `POST /__docs/hold?path=/api/resources/maas`
+holds the reads under a path until `POST /__docs/hold` without one, so a
+loading state can be captured (the `loading-review` job does, into
+`THEMES_DIR`); `make docs-mock DELAY=2000` answers every Environment read two
+seconds late, to look at the loading states by hand. The browser clock is fixed at
 2026-10-06 14:30 UTC, so relative times ("built 11h ago") do not change.
 
 ## Conventions
