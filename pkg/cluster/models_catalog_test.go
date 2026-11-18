@@ -46,7 +46,7 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 		{"qwen25-05b-instruct", "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775", "chat", "4", "6Gi", "8Gi", "4", "2",
 			"--max-model-len 4096", "Chat", false, 0},
 		{"qwen3-1-7b", "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", "chat", "4", "10Gi", "12Gi", "4", "2",
-			`--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'`,
+			`--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
 			"Chat, Tool calling, Reasoning", true, 0},
 		{"granite-embedding-125m-english", "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", "embedding", "2", "4Gi", "6Gi", "2", "1",
 			"--runner pooling --max-model-len 512", "Embeddings, Semantic search", false, 768},
@@ -101,7 +101,7 @@ func TestToolModelPath_IsExactlyTheCatalog(t *testing.T) {
 // vLLM does not load.
 func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 	for _, entry := range modelCatalog {
-		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{})
+		obj := modelManifest("proj", entry, testPresetName, imagePlan{Kind: "preset"}, hardwareProfile{}, false, false)
 		meta := obj["metadata"].(map[string]interface{})
 		if meta["name"] != entry.Name {
 			t.Errorf("%s: name %v", entry.Name, meta["name"])
@@ -147,24 +147,41 @@ func TestModelManifest_UsesTheEntrysSettings(t *testing.T) {
 // starts vLLM with eval "exec vllm serve ... ${VLLM_ADDITIONAL_ARGS} ..."
 // (kserve rhoai-3.6 config/llmisvcconfig/config-llm-template.yaml), so the
 // shell takes the quotes off and vLLM gets the JSON as one argument.
+//
+// The JSON has no space either: the dashboard's Edit splits
+// VLLM_ADDITIONAL_ARGS on spaces into its runtime arguments and joins them
+// back with one space (odh-dashboard rhoai-3.6 a9ea0d86
+// packages/llmd-serving/src/deployments/model.ts extractRuntimeArgs
+// L147-159, applyModelEnvVarsAndArgs L137-141), so '{"enable_thinking":
+// and false}' would be listed as two arguments. Every catalog model's
+// arguments are therefore words without spaces: as many as the eval gives
+// back.
 func TestModelCatalog_Qwen3ArgumentsSurviveThePresetsEval(t *testing.T) {
-	entry, _ := catalogEntry("qwen3-1-7b")
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("no bash to check the preset's eval with")
 	}
-	cmd := exec.Command(bash, "-c", `eval "set -- serve \
+	eval := func(args string) []string {
+		cmd := exec.Command(bash, "-c", `eval "set -- serve \
   ${VLLM_ADDITIONAL_ARGS} \
   --port 8000"; printf '%s\n' "$@"`)
-	cmd.Env = []string{"VLLM_ADDITIONAL_ARGS=" + entry.Args}
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatal(err)
+		cmd.Env = []string{"VLLM_ADDITIONAL_ARGS=" + args}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	}
+	entry, _ := catalogEntry("qwen3-1-7b")
 	want := []string{"serve", "--max-model-len", "4096", "--enable-auto-tool-choice", "--tool-call-parser", "hermes", "--reasoning-parser", "qwen3",
-		"--default-chat-template-kwargs", `{"enable_thinking": false}`, "--port", "8000"}
-	if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); strings.Join(got, "|") != strings.Join(want, "|") {
+		"--default-chat-template-kwargs", `{"enable_thinking":false}`, "--port", "8000"}
+	if got := eval(entry.Args); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("arguments\n got %q\nwant %q", got, want)
+	}
+	for _, m := range modelCatalog {
+		if words, parts := len(eval(m.Args))-3, len(strings.Split(m.Args, " ")); words != parts {
+			t.Errorf("%s: %d shell words but %d space-separated parts, so the dashboard's Edit would split an argument: %s", m.Name, words, parts, m.Args)
+		}
 	}
 }
 
@@ -192,7 +209,7 @@ func TestModelsSetup_TheChosenModel(t *testing.T) {
 		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
 	}
 	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
-	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"12Gi"},"requests":{"cpu":"4","memory":"10Gi"}}` {
+	if r, _ := json.Marshal(main["resources"]); string(r) != `{"limits":{"cpu":"4","memory":"12Gi"},"requests":{"cpu":"4","ephemeral-storage":"6.2G","memory":"10Gi"}}` {
 		t.Errorf("resources %s", r)
 	}
 	// 9 GiB free holds qwen25's 6 GiB, not Qwen3's 10 GiB.

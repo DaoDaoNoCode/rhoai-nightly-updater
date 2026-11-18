@@ -21,9 +21,10 @@ import (
 // through the controller's LLM_INFERENCE_SERVICE_CONFIG_PREFIX, its image
 // through the preset, and the released image through Red Hat's catalog.
 //
-// No ServiceAccount, Role, RoleBinding or token is created for access:
-// the gateway's AuthPolicy accepts any token whose user may "get" the
-// model, so the user's own (oc whoami -t) works.
+// The gateway's AuthPolicy accepts any token whose user may "get" the
+// model. Each model also gets the dashboard's token authentication (a
+// ServiceAccount that may get only it, and its token; models_token.go), so
+// the dashboard lists a token and its Edit keeps authentication on.
 const (
 	llmisvcAPIVersion      = "serving.kserve.io/v1alpha2"
 	llmisvcGroup           = "serving.kserve.io"
@@ -66,6 +67,11 @@ type catalogModel struct {
 	// kvCacheGiB is VLLM_CPU_KVCACHE_SPACE: vLLM on CPU reserves this
 	// much memory for its KV cache when it starts, whatever the load.
 	kvCacheGiB string
+	// ephemeralStorage is the main container's ephemeral-storage request,
+	// about 1.5 times DownloadSize: with KServe's default model volume the
+	// storage-initializer downloads into an emptyDir on the node's disk
+	// (models_storage.go).
+	ephemeralStorage string
 }
 
 // The catalog's model types.
@@ -84,7 +90,11 @@ const (
 // Every model's arguments go to vLLM through VLLM_ADDITIONAL_ARGS, which
 // the CPU preset expands inside eval "exec vllm serve ... ${VLLM_ADDITIONAL_ARGS} ..."
 // (kserve rhoai-3.6 config/llmisvcconfig/config-llm-template.yaml), so
-// shell quoting in them is honoured: Qwen3's JSON is one argument.
+// shell quoting in them is honoured: Qwen3's JSON is one argument. No
+// argument holds a space, quoted or not: the dashboard's Edit splits
+// VLLM_ADDITIONAL_ARGS on spaces and writes the parts back joined by one
+// (odh-dashboard rhoai-3.6 packages/llmd-serving/src/deployments/model.ts
+// extractRuntimeArgs L147-159), and would list a spaced JSON as two.
 //
 // Memory (requests and limits below, in one place). Measured live only
 // for qwen25 (RHOAI 3.6, vLLM CPU): 7.6 GiB with the preset's 4 GiB KV
@@ -105,14 +115,14 @@ var modelCatalog = []catalogModel{
 			CPU: "2", MemoryRequest: "5Gi", Memory: "6Gi", Type: modelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
 			Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--max-model-len 4096"},
-		threads: "2", kvCacheGiB: "1",
+		threads: "2", kvCacheGiB: "1", ephemeralStorage: "400M",
 	},
 	{
 		CatalogModel: types.CatalogModel{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
 			CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: modelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
 			Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--max-model-len 4096"},
-		threads: "4", kvCacheGiB: "2",
+		threads: "4", kvCacheGiB: "2", ephemeralStorage: "1.5G",
 	},
 	{
 		// Thinking is off by default (the user's choice); a request turns
@@ -120,8 +130,8 @@ var modelCatalog = []catalogModel{
 		CatalogModel: types.CatalogModel{Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
 			CPU: "4", MemoryRequest: "10Gi", Memory: "12Gi", Type: modelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
 			Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'`},
-		threads: "4", kvCacheGiB: "2",
+			Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`},
+		threads: "4", kvCacheGiB: "2", ephemeralStorage: "6.2G",
 	},
 	{
 		// A RobertaModel, which vLLM serves as an embedding model with the
@@ -130,7 +140,7 @@ var modelCatalog = []catalogModel{
 			CPU: "2", MemoryRequest: "4Gi", Memory: "6Gi", Type: modelTypeEmbedding, EmbeddingDimension: 768, UseCase: "Embeddings, Semantic search", DownloadSize: "250 MB",
 			Description: "An English embedding model (768 dimensions) for semantic search. From Hugging Face (ibm-granite/granite-embedding-125m-english), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
 			Args:        "--runner pooling --max-model-len 512"},
-		threads: "2", kvCacheGiB: "1",
+		threads: "2", kvCacheGiB: "1", ephemeralStorage: "375M",
 	},
 }
 
@@ -239,11 +249,6 @@ func (m llmisvcObject) mainImage() string {
 	return ""
 }
 
-// modelOwned: this tool created the model (its label, and a write by the tool).
-func modelOwned(meta objectMeta) bool {
-	return meta.hasToolLabel() && meta.hasManager(toolManagers)
-}
-
 func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 	body, _, err := c.get(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
 	if IsK8sError(err, 404) {
@@ -292,10 +297,16 @@ func manifestUnknown(msg string) bool {
 	return strings.Contains(m, "manifest unknown") || strings.Contains(m, "manifest_unknown")
 }
 
-// modelState reports one model. inspect reads its pods when it is not ready.
-func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
+// modelState reports one model. inspect reads its pods when it is not
+// ready. rec is the tool's record of its models (nil: it could not be
+// read, so no model counts as the tool's).
+func modelState(c *Client, m llmisvcObject, inspect bool, rec modelsRecord) types.ModelState {
 	s := types.ModelState{ResourceState: types.ResourceState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}}
-	s.ManagedByTool = modelOwned(m.Metadata)
+	s.ManagedByTool = rec.owns(m.Metadata)
+	if s.ManagedByTool && rec[modelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
+		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
+	}
+	s.TokenAuthOff = m.Metadata.Annotations[enableAuthAnnot] == "false"
 	s.Terminating = m.Metadata.terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
 	if m.Status.URL != "" {
@@ -312,7 +323,10 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 	if name := m.Metadata.Annotations[hardwareProfileNameAnnotation]; name != "" {
 		s.HardwareProfile = m.Metadata.Annotations[hardwareProfileNamespaceAnnotation] + "/" + name
 	}
-	if !s.ManagedByTool {
+	switch {
+	case rec == nil:
+		s.TeardownBlockedReason = "This tool's record of the models it created cannot be read, so it does not change or delete this one."
+	case !s.ManagedByTool:
 		s.TeardownBlockedReason = "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it."
 	}
 	ready, hasReady := findCondition(m.Status.Conditions, "Ready")
@@ -351,7 +365,7 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 }
 
 // modelItems are the catalog's models in the visible projects.
-func modelItems(c *Client, models []llmisvcObject, visible map[string]bool) []types.ModelState {
+func modelItems(c *Client, models []llmisvcObject, visible map[string]bool, rec modelsRecord) []types.ModelState {
 	var out []types.ModelState
 	for _, m := range models {
 		if !visible[m.Metadata.Namespace] {
@@ -360,7 +374,7 @@ func modelItems(c *Client, models []llmisvcObject, visible map[string]bool) []ty
 		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok {
 			continue
 		}
-		out = append(out, modelState(c, m, true))
+		out = append(out, modelState(c, m, true, rec))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Namespace != out[j].Namespace {
@@ -503,7 +517,11 @@ func discoverCPUPreset(c *Client, ns string) cpuPreset {
 }
 
 // modelManifest is the LLMInferenceService setup applies.
-func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile) map[string]interface{} {
+//
+// published: the model is published to MaaS, which took it out of Gen AI
+// studio's AI assets (maas_genai.go), so the genai label and annotation
+// are left out until Unpublish puts them back.
+func modelManifest(project string, entry catalogModel, preset string, img imagePlan, hw hardwareProfile, published, ephemeral bool) map[string]interface{} {
 	annotations := map[string]interface{}{
 		// The dashboard's llmd deploy wizard writes these three
 		// (odh-dashboard rhoai-3.6 packages/llmd-serving deploy.ts
@@ -531,6 +549,12 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			"limits":   map[string]interface{}{"cpu": entry.CPU, "memory": entry.Memory},
 		},
 	}
+	if ephemeral && entry.ephemeralStorage != "" {
+		// The download's emptyDir is on the node's disk (models_storage.go):
+		// a request, no limit, so the scheduler counts it and nothing is
+		// evicted for it.
+		main["resources"].(map[string]interface{})["requests"].(map[string]interface{})["ephemeral-storage"] = entry.ephemeralStorage
+	}
 	if hw.Name != "" {
 		// As the dashboard's deploy wizard records the profile
 		// (applyHardwareProfileConfig): its Deployments page then names it.
@@ -545,17 +569,22 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 			annotations[modelImageVersionAnnotation] = img.Version
 		}
 	}
+	labels := map[string]interface{}{
+		managedByLabelKey:          managedByLabelValue,
+		"opendatahub.io/dashboard": "true",
+		genAIAssetLabel:            "true",
+	}
+	if published {
+		delete(labels, genAIAssetLabel)
+		delete(annotations, genAIUseCaseAnnotation)
+	}
 	return map[string]interface{}{
 		"apiVersion": llmisvcAPIVersion,
 		"kind":       "LLMInferenceService",
 		"metadata": map[string]interface{}{
-			"name":      entry.Name,
-			"namespace": project,
-			"labels": map[string]interface{}{
-				managedByLabelKey:            managedByLabelValue,
-				"opendatahub.io/dashboard":   "true",
-				"opendatahub.io/genai-asset": "true",
-			},
+			"name":        entry.Name,
+			"namespace":   project,
+			"labels":      labels,
 			"annotations": annotations,
 		},
 		"spec": map[string]interface{}{
@@ -735,6 +764,12 @@ type modelPlan struct {
 	obj      map[string]interface{}
 	current  objectMeta
 	found    bool
+	// rec is the tool's record of its models, as read by the plan.
+	rec modelsRecord
+	// token is which token-authentication objects are missing (models_token.go).
+	token tokenPlan
+	// ephemeral: the model requests ephemeral storage for its download.
+	ephemeral bool
 }
 
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
@@ -763,6 +798,9 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
 			notes = append(notes, warning+" It may stay pending until a node is added or other workloads stop; the setup still runs.")
 		}
+		if warning := quotaWarning(c, mp.project, mp.entry, mp.ephemeral); warning != "" {
+			notes = append(notes, warning)
+		}
 	}
 
 	// Every write, as a server-side dry run, before any real one.
@@ -774,6 +812,9 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 	if mp != nil {
 		if msg, code := m.applyModel(mp, true); msg != "" {
 			return m.fail("check", msg, code, "model dry run failed")
+		}
+		if _, msg, code := applyModelToken(c, mp.project, mp.entry.Name, mp.current.UID, mp.token, true); msg != "" {
+			return m.fail("check", msg+" Nothing was changed.", code, "token dry run failed")
 		}
 	}
 	m.step("check", "success", strings.TrimSpace("Everything the parts need is there. "+strings.Join(notes, " ")))
@@ -818,7 +859,10 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if msg, code := m.applyModel(mp, false); msg != "" {
 			return m.fail("model", msg, code, "model apply failed")
 		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.", mp.project, mp.entry.Name, mp.preset, mp.image.describe()))
+		if msg, code := m.applyToken(mp); msg != "" {
+			return m.fail("model", msg, code, "token apply failed")
+		}
+		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s.%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), tokenWords(mp.project, mp.entry.Name, mp.token)))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 		timeout := ModelReadyTimeout
 		if dl, ok := c.ctx.Deadline(); ok {
@@ -928,7 +972,11 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if err != nil {
 		return nil, fmt.Sprintf("Cannot read LLMInferenceService %s/%s: %v. Nothing was changed.%s", req.Project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err)
 	}
-	if found && !modelOwned(existing.Metadata) {
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return nil, err.Error() + " Nothing was changed.", errorCodeFromK8sErr(err)
+	}
+	if found && !rec.owns(existing.Metadata) {
 		return nil, fmt.Sprintf("Project '%s' already has an LLMInferenceService named %s that this tool did not create. It was left unchanged.", req.Project, entry.Name), "not_managed"
 	}
 	if found && existing.Metadata.terminating() {
@@ -945,14 +993,29 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if img.Reason != "" {
 		m.step("check", "running", "Image: "+img.Reason)
 	}
+	modelUID := ""
+	if found {
+		modelUID = existing.Metadata.UID
+	}
+	tok, msg, code := planModelToken(c, req.Project, entry.Name, modelUID, rec[modelRecordKey(req.Project, entry.Name)].TokenSecretUID)
+	if msg != "" {
+		return nil, msg, code
+	}
+	published := false
+	if found {
+		if published, err = MaaSPublishedIn(c, req.Project, entry.Name); err != nil {
+			return nil, fmt.Sprintf("Cannot check whether %s in '%s' is published to MaaS: %v. Nothing was changed.", entry.Name, req.Project, err), errorCodeFromK8sErr(err)
+		}
+	}
+	ephemeral := modelVolumeIsEmptyDir(c)
 	hw, why := pickHardwareProfile(c, entry)
 	if hw.Name != "" {
 		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
 	} else {
-		m.step("check", "running", "Hardware profile: none; the dashboard shows the model without one, because "+why+".")
+		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
-		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found}, "", ""
+		obj: modelManifest(req.Project, entry, preset.name, img, hw, published, ephemeral), current: existing.Metadata, found: found, rec: rec, token: tok, ephemeral: ephemeral}, "", ""
 }
 
 // applyModel writes the model (a server-side dry run when dryRun).
@@ -966,8 +1029,19 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		return obj.Metadata, found, err
 	}
 	desc := fmt.Sprintf("LLMInferenceService %s/%s", p.project, p.entry.Name)
-	_, meta, found, err := ensureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, modelOwned, dryRun)
+	action, meta, found, err := ensureToolObject(c, desc, path, createPath, p.obj, p.current, p.found, read, p.rec.owns, dryRun)
 	p.current, p.found = meta, found
+	if err == nil && action == "created" && !dryRun {
+		// Its UID is what makes it the tool's (models_record.go). A model
+		// that cannot be recorded would be nobody's: it is deleted again.
+		if recErr := recordModel(c, meta); recErr != nil {
+			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
+				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), errorCodeFromK8sErr(recErr)
+			}
+			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), firstNonEmpty(errorCodeFromK8sErr(recErr), "internal")
+		}
+		p.rec[modelRecordKey(meta.Namespace, meta.Name)] = recordedModel{UID: meta.UID}
+	}
 	if err == nil {
 		return "", ""
 	}
@@ -983,6 +1057,31 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", desc, err, templateHint(err)), code
 	}
 	return fmt.Sprintf("Failed to apply %s: %v. Set up again to retry.%s", desc, err, templateHint(err)), code
+}
+
+// applyToken makes the model's missing token objects, owned by it, and
+// records the Secret's UID; a Secret that cannot be recorded is deleted
+// again, so the next setup does not find it as someone else's.
+func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
+	c := m.c
+	if p.current.UID == "" {
+		return fmt.Sprintf("The UID of LLMInferenceService %s/%s is not known, so its token authentication was not made. Set up again.", p.project, p.entry.Name), "internal"
+	}
+	secretUID, msg, code := applyModelToken(c, p.project, p.entry.Name, p.current.UID, p.token, false)
+	if msg != "" {
+		return msg + " The model was set up; set up again to finish its token authentication.", code
+	}
+	if secretUID == "" {
+		return "", ""
+	}
+	if err := recordTokenSecret(c, p.project, p.entry.Name, secretUID); err != nil {
+		path := tokenSecretPathOf(p.project, p.entry.Name)
+		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !IsK8sError(delErr, 404) {
+			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
+		}
+		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
+	}
+	return "", ""
 }
 
 // TeardownModels deletes the catalog models named (every catalog model
@@ -1014,21 +1113,34 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 			return fail(fmt.Sprintf("%s in '%s' is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
 	}
-	var deleted, kept []string
+	rec, err := readModelsRecord(c)
+	if err != nil {
+		return fail(err.Error()+" Nothing was deleted.", errorCodeFromK8sErr(err), "record read failed")
+	}
+	var deleted, kept, forget []string
+	// The record is updated once at the end, also when a step fails: a
+	// model that is gone needs no entry.
+	defer func() {
+		if err := forgetModels(c, forget...); err != nil {
+			slog.Warn("cannot update the models record", "error", err)
+		}
+	}()
 	for _, entry := range entries {
 		model, found, err := readToolModel(c, project, entry.Name)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot read LLMInferenceService %s/%s; nothing was deleted: %v.%s", project, entry.Name, err, templateHint(err)), errorCodeFromK8sErr(err), "read failed")
 		}
 		if !found {
+			forget = append(forget, modelRecordKey(project, entry.Name))
 			continue
 		}
-		if !modelOwned(model.Metadata) {
+		if !rec.owns(model.Metadata) {
 			kept = append(kept, entry.Name)
 			continue
 		}
 		path, _ := toolModelPath(project, entry.Name)
 		if !model.Metadata.terminating() {
+			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
 			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !IsK8sError(err, 404) {
 				code := errorCodeFromK8sErr(err)
@@ -1050,6 +1162,7 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 			return fail(fmt.Sprintf("The model %s/%s is still being deleted after %s.%s Delete again to check.", project, entry.Name, clockText(ModelDeleteTimeout), note), "in_progress", "still deleting")
 		}
 		deleted = append(deleted, entry.Name)
+		forget = append(forget, modelRecordKey(project, entry.Name))
 		logs = append(logs, fmt.Sprintf("OK: LLMInferenceService %s/%s deleted", project, entry.Name))
 	}
 	if len(deleted) == 0 && len(kept) > 0 {

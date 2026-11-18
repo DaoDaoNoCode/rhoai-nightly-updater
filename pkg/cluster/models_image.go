@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -407,7 +408,12 @@ func catalogCapacityWarnings(c *Client) map[string]string {
 }
 
 // nodeRoom is the CPU (cores) and memory (bytes) a node has unrequested.
-type nodeRoom struct{ cpu, mem float64 }
+// eph is its unrequested ephemeral storage (bytes), when the node reports
+// it (ephKnown).
+type nodeRoom struct {
+	cpu, mem, eph float64
+	ephKnown      bool
+}
 
 // freeRoom is what every schedulable, untainted amd64 node has left after
 // the requests of its pods; the pods of model in project are not counted
@@ -449,7 +455,8 @@ func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 		cc, ok1 := parseQuantity(n.Status.Allocatable["cpu"])
 		mm, ok2 := parseQuantity(n.Status.Allocatable["memory"])
 		if ok1 && ok2 {
-			free[n.Metadata.Name] = &nodeRoom{cc, mm}
+			ee, ok3 := parseQuantity(n.Status.Allocatable["ephemeral-storage"])
+			free[n.Metadata.Name] = &nodeRoom{cpu: cc, mem: mm, eph: ee, ephKnown: ok3}
 		}
 	}
 	if len(free) == 0 {
@@ -493,6 +500,9 @@ func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 			if v, ok := parseQuantity(ctr.Resources.Requests["memory"]); ok {
 				r.mem -= v
 			}
+			if v, ok := parseQuantity(ctr.Resources.Requests["ephemeral-storage"]); ok {
+				r.eph -= v
+			}
 		}
 	}
 	return free, nil
@@ -511,15 +521,25 @@ func roomWarning(entry catalogModel, free map[string]*nodeRoom) string {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	best := ""
+	// Ephemeral storage counts where the node reports it (the model's
+	// download, models_storage.go).
+	eph, _ := parseQuantity(entry.ephemeralStorage)
+	best, diskOnly := "", ""
 	for _, n := range names {
 		r := free[n]
 		if r.cpu >= cpu && r.mem >= mem {
-			return ""
+			if !r.ephKnown || r.eph >= eph {
+				return ""
+			}
+			diskOnly = firstNonEmpty(diskOnly, n)
 		}
 		if best == "" || r.cpu > free[best].cpu {
 			best = n
 		}
+	}
+	if diskOnly != "" {
+		return fmt.Sprintf("No worker seems to have room for the model's download: it needs %s of ephemeral storage free for it (the model is downloaded to the node's disk), and %s has %.1f GB.",
+			entry.ephemeralStorage, diskOnly, maxFloat(free[diskOnly].eph, 0)/1e9)
 	}
 	return fmt.Sprintf("No worker seems to have room for the model: it needs %s CPUs and %s of memory free (up to %s), and the most CPU free is %.1f CPUs and %.1f GiB on %s.",
 		entry.CPU, entry.MemoryRequest, entry.Memory, maxFloat(free[best].cpu, 0), maxFloat(free[best].mem, 0)/(1<<30), best)
@@ -552,7 +572,11 @@ func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObjec
 		st.Blocked = &types.ComponentBlock{Component: "kserve", Reason: "Model serving is not installed yet: this cluster has no LLMInferenceService API. If KServe was just turned on, wait for the operator; otherwise check the Components page."}
 	}
 	if modelsErr == nil {
-		st.Items = modelItems(c, models, visible)
+		rec, err := readModelsRecord(c)
+		if err != nil {
+			slog.Warn("cannot read the models record", "error", err)
+		}
+		st.Items = modelItems(c, models, visible, rec)
 	}
 	if st.Blocked != nil {
 		return st

@@ -174,10 +174,11 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/genai-asset"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
 		t.Errorf("labels: %v", labels)
 	}
-	// Nothing grants access: no ServiceAccount, Role, RoleBinding or token.
+	// Access: only the dashboard's token-authentication objects
+	// (models_token_test.go checks them), nothing else.
 	for _, m := range mc.f.mutations() {
-		for _, kind := range []string{"serviceaccounts", "roles", "rolebindings", "token"} {
-			if strings.Contains(m, "/"+kind) {
+		for _, kind := range []string{"serviceaccounts", "roles", "rolebindings", "secrets"} {
+			if strings.Contains(m, "/"+kind) && !strings.HasPrefix(m, "POST ") {
 				t.Errorf("setup wrote %s", m)
 			}
 		}
@@ -439,7 +440,11 @@ func TestModelsTeardown_DeletesTheModelThenTheGateway(t *testing.T) {
 		}
 	}
 	// (mutations leaves ConfigMaps out: the activity log writes them.)
-	if want := []string{testModelPath, testGatewayPath, testGatewayClass}; strings.Join(deletes, " ") != strings.Join(want, " ") {
+	// The model's token objects go first (garbage collection would take
+	// them with it too), then the model, then the gateway.
+	tokens := []string{"/api/v1/namespaces/proj/serviceaccounts/qwen25-05b-instruct-sa", "/apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles/qwen25-05b-instruct-view-role",
+		"/apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings/qwen25-05b-instruct-view", "/api/v1/namespaces/proj/secrets/default-name-qwen25-05b-instruct-sa"}
+	if want := append(tokens, testModelPath, testGatewayPath, testGatewayClass); strings.Join(deletes, " ") != strings.Join(want, " ") {
 		t.Fatalf("deleted %v, want %v", deletes, want)
 	}
 	if mc.f.has(testGatewayCM) {
@@ -529,6 +534,7 @@ func TestTeardownModels_WaitsForTheFinalizerAndNamesIt(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testModelPath, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"finalizers":["serving.kserve.io/llmisvc-finalizer"],
 		"managedFields":[{"manager":"rhoai-nightly-updater","operation":"Apply"}]}}`)
+	recordModelFixture(mc.f, testModelPath)
 	res, _ := TeardownModels(mc.c, "proj")
 	if res.Success || res.ErrorCode != "in_progress" || !strings.Contains(res.Message, "serving.kserve.io/llmisvc-finalizer") {
 		t.Fatalf("got %+v", res)
@@ -823,7 +829,7 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 	}
 	main := model["spec"].(map[string]interface{})["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
 	res2, _ := json.Marshal(main["resources"])
-	if string(res2) != `{"limits":{"cpu":"4","memory":"8Gi"},"requests":{"cpu":"4","memory":"6Gi"}}` {
+	if string(res2) != `{"limits":{"cpu":"4","memory":"8Gi"},"requests":{"cpu":"4","ephemeral-storage":"1.5G","memory":"6Gi"}}` {
 		t.Errorf("resources: %s", res2)
 	}
 	if env, _ := json.Marshal(main["env"]); !strings.Contains(string(env), `{"name":"VLLM_CPU_KVCACHE_SPACE","value":"2"}`) {
@@ -836,7 +842,7 @@ func TestModelsSetup_RecordsAFittingHardwareProfile(t *testing.T) {
 	if !said {
 		t.Error("the run does not name the hardware profile")
 	}
-	st := modelState(mc.c, readModelForTest(t, mc), false)
+	st := modelState(mc.c, readModelForTest(t, mc), false, modelsRecord{})
 	if st.HardwareProfile != "redhat-ods-applications/default-profile" {
 		t.Errorf("status hardware profile = %q", st.HardwareProfile)
 	}
@@ -858,6 +864,10 @@ func TestModelsSetup_NoFittingHardwareProfileSaysWhy(t *testing.T) {
 		if strings.Contains(e.Message, "Hardware profile: none") {
 			if !strings.Contains(e.Message, "default-profile: cpu 4 is outside 1-2") {
 				t.Errorf("reason: %q", e.Message)
+			}
+			// What the dashboard then shows, in its own words.
+			if !strings.Contains(e.Message, `"No hardware profile"`) || !strings.Contains(e.Message, `"Hardware profile: Unknown"`) {
+				t.Errorf("the run does not say what the dashboard shows: %q", e.Message)
 			}
 			return
 		}

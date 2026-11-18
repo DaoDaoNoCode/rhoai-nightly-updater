@@ -350,6 +350,36 @@ func (m *maasRun) restoreModelRoute(project, name string, recorded maasModelRefs
 	return "", ""
 }
 
+// directRouteNote says, after Unpublish put the model's route back, that
+// its direct address will not answer because the inference gateway does
+// not admit routes from the project ("" when it does, or cannot tell). A
+// model published before the gateway was restricted is not counted by
+// Restrict (it routed through MaaS only), so its project may lack the
+// label: the note gives the cluster-admin's command for this tool's
+// gateway, and names the owner's listeners for someone else's.
+func directRouteNote(c *Client, project, name string) string {
+	model, found, err := readToolModel(c, project, name)
+	if err != nil || !found {
+		return ""
+	}
+	def, _ := readKServeGateway(c)
+	if !model.routesThroughInferenceGateway(def) {
+		return ""
+	}
+	gw, found, err := readInferenceGateway(c)
+	if err != nil || !found {
+		return ""
+	}
+	labels, msg, _ := projectNamespace(c, project)
+	if msg != "" || gw.admits(project, labels) != "no" {
+		return ""
+	}
+	if gatewayOwned(gw.Metadata) {
+		return fmt.Sprintf(" Its direct address does not answer yet: the inference gateway accepts models only from projects a cluster-admin has labelled, and '%s' is not. A cluster-admin runs:\n  %s", project, inferenceRoutesCommand(project))
+	}
+	return fmt.Sprintf(" Its direct address does not answer: Gateway %s/%s, which this tool did not create, does not let routes from '%s' attach; its owner changes the listeners' allowedRoutes.", inferenceGatewayNamespace, inferenceGatewayName, project)
+}
+
 // refsChangedRefusal is why Unpublish (or Publish again) does not write
 // back the refs publish recorded: someone added a gateway to the model
 // while it was published, and writing the recorded list would drop it.

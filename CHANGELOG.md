@@ -35,6 +35,21 @@ only accepts a tag whose version is the top dated section. See
   of creating it, and a server is reported stuck after 5 minutes only while
   its API server is not ready, as the dashboard does. New RBAC: Secret
   `rhoai-nightly-updater-s3` (`get patch delete`).
+- **Models and MaaS as the RHOAI 3.6 dashboard makes them.** Each model
+  gets the dashboard's token authentication (ServiceAccount `<model>-sa`
+  that may only get it, Role, RoleBinding, token Secret
+  `default-name-<model>-sa`, all owned by the model), so the dashboard
+  lists its token and its Edit keeps authentication on; Use it reads that
+  token. A model is the tool's only when its UID is in the tool's record
+  (a model a pre-release 3.0.0 build set up is not: delete it with `oc`
+  and set it up again). Publishing takes the model out of Gen AI studio's
+  AI assets (restored on Unpublish), and the MaaSModelRef is owned by the
+  model, with its description and the catalog's name. Qwen3's chat template
+  JSON has no spaces; models request ephemeral storage for their download;
+  setup warns about a full project ResourceQuota; the Models tab says what
+  the dashboard shows for a model no hardware profile fits. RBAC:
+  ServiceAccounts, Roles, RoleBindings `create` and named `get delete`,
+  the token Secrets' names `delete`, ResourceQuotas `list` (SECURITY.md).
 
 - **Models tab: a catalog of four CPU models.** A model picker offers
   SmolLM2 135M Instruct (smoke test), Qwen2.5 0.5B Instruct (the default),

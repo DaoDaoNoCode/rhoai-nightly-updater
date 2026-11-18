@@ -638,7 +638,7 @@ export const MODEL_CATALOG = [
     description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
   { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "10Gi", memory: "12Gi",
     type: "chat", toolCalling: true, useCase: "Chat, Tool calling, Reasoning", downloadSize: "4.1 GB",
-    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'`,
+    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
     description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater." },
   { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "4Gi", memory: "6Gi",
     type: "embedding", embeddingDimension: 768, useCase: "Embeddings, Semantic search", downloadSize: "250 MB", args: "--runner pooling --max-model-len 512",
@@ -648,7 +648,9 @@ const displayOf = (name) => MODEL_CATALOG.find((c) => c.name === name)?.displayN
 
 const MODEL = { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true };
 export const modelStates = {
-  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/${over.name ?? MODEL.name}`, imageKind: "preset", hardwareProfile: "redhat-ods-applications/default-profile", ...over }),
+  ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/${over.name ?? MODEL.name}`, imageKind: "preset", hardwareProfile: "redhat-ods-applications/default-profile",
+    // The dashboard's token authentication the tool makes for each model (pkg/cluster models_token.go).
+    tokenSecret: `default-name-${over.name ?? MODEL.name}-sa`, tokenServiceAccount: `${over.name ?? MODEL.name}-sa`, ...over }),
   /** Another catalog model, ready (on the released image, as the mock cluster is a nightly one). */
   readyAs: (name, ns = "dev-project") => modelStates.ready(ns, { name, displayName: displayOf(name), imageKind: "released", imageVersion: "3.5.3", currentImage: RELEASED_IMAGE,
     hardwareProfile: name === "qwen3-1-7b" ? undefined : "redhat-ods-applications/default-profile" }),
@@ -657,6 +659,7 @@ export const modelStates = {
   starting: (ns = "dev-project") => ({ ...MODEL, namespace: ns, ready: false, managedByTool: true, message: "MainWorkloadReady: Deployment qwen25-05b-instruct-kserve is not ready", imageKind: "preset" }),
   imageMissing: (ns = "dev-project") => ({
     ...MODEL, namespace: ns, ready: false, managedByTool: true, terminalError: true, presetImageMissing: true, imageKind: "preset", currentImage: undefined,
+    hardwareProfile: "redhat-ods-applications/default-profile", tokenSecret: "default-name-qwen25-05b-instruct-sa", tokenServiceAccount: "qwen25-05b-instruct-sa",
     waitingReason: "ErrImagePull", message: `ErrImagePull: reading manifest ${PRESET_IMAGE.split("@")[1]} in registry.redhat.io/rhaii/vllm-cpu-rhel9: manifest unknown`,
   }),
   foreign: (ns = "llm-eval") => ({ ...MODEL, displayName: "Qwen (team copy)", namespace: ns, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Ready condition", teardownBlockedReason: "This model was not created by this tool (for example in the dashboard), so the tool does not change or delete it." }),

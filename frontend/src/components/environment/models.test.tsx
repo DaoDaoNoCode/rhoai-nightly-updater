@@ -7,7 +7,7 @@ import type { CatalogModel, InferenceGatewayState, ModelState, ModelsStatus, Res
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
-import { embeddingCurl, modelCurl, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
+import { embeddingCurl, modelCurl, modelTokenLine, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const gateway: InferenceGatewayState = {
@@ -26,7 +26,7 @@ const catalog: CatalogModel[] = [
     type: "chat", useCase: "Chat", description: "A small chat model.", args: "--max-model-len 4096", downloadSize: "1.0 GB", default: true },
   { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", uri: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", cpu: "4", memoryRequest: "10Gi", memory: "12Gi",
     type: "chat", toolCalling: true, useCase: "Chat, Tool calling, Reasoning", description: "A chat model that can call tools.", downloadSize: "4.1 GB",
-    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'` },
+    args: `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` },
   { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", uri: "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", cpu: "2", memoryRequest: "4Gi", memory: "6Gi",
     type: "embedding", embeddingDimension: 768, useCase: "Embeddings, Semantic search", description: "An English embedding model.", args: "--runner pooling --max-model-len 512", downloadSize: "250 MB" },
 ];
@@ -146,11 +146,55 @@ describe("Models runs and clean-up", () => {
     expect(modelsState(s, "dev", ["dev"], IDLE, "qwen25-05b-instruct")).toMatchObject({ status: "ready" });
   });
 
-  it("the curl uses the user's own token and the model's resource name", () => {
-    const text = modelCurl("https://inference.apps.example.com/dev/qwen25-05b-instruct/", "qwen25-05b-instruct");
-    expect(text).toContain("TOKEN=$(oc whoami -t)");
+  it("the curl uses the model's own token from its Secret, and the model's resource name", () => {
+    const token = modelTokenLine("dev", model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa" }));
+    expect(token).toBe(`TOKEN=$(oc get secret default-name-qwen25-05b-instruct-sa -n dev -o jsonpath='{.data.token}' | base64 -d)`);
+    const text = modelCurl("https://inference.apps.example.com/dev/qwen25-05b-instruct/", "qwen25-05b-instruct", token);
+    expect(text.split("\n")[0]).toBe(token);
     expect(text).toContain("https://inference.apps.example.com/dev/qwen25-05b-instruct/v1/models");
     expect(text).toContain(`"model":"qwen25-05b-instruct"`);
+    // A model set up before it had a token: the user's own token still works.
+    expect(modelTokenLine("dev", model("dev"))).toBe("TOKEN=$(oc whoami -t)");
+  });
+});
+
+describe("Models tab: token authentication", () => {
+  it("Use it reads the model's token, says what it can do, and the details name its objects", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa", tokenServiceAccount: "qwen25-05b-instruct-sa" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByText(/oc get secret default-name-qwen25-05b-instruct-sa -n dev/)).toBeInTheDocument();
+    expect(screen.getByText(/a token that can only call this model/)).toBeInTheDocument();
+    expect(screen.getByText(/the same one the dashboard shows for the model/)).toBeInTheDocument();
+    expect(screen.queryByText(/oc whoami -t/)).toBeNull();
+    const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText("Token authentication")).toBeInTheDocument();
+    expect(within(part).getByText(/ServiceAccount qwen25-05b-instruct-sa may only get this model/)).toBeInTheDocument();
+  });
+
+  it("a model without its token says to set it up again; one turned off says so", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev"), model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", tokenAuthOff: true, tokenSecret: "default-name-qwen3-1-7b-sa" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    const view = renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText(/Set it up again to add the model's token/)).toBeInTheDocument();
+    view.unmount();
+    renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
+    const off = await screen.findByRole("listitem", { name: "Qwen3 1.7B (CPU, tool calling)" });
+    expect(within(off).getByText(/Off: security.opendatahub.io\/enable-auth is "false"/)).toBeInTheDocument();
+  });
+
+  it("the setup confirmation lists the token objects", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Qwen2.5 0.5B Instruct in dev" }));
+    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
+    expect(within(dialog).getByText(/ServiceAccount/)).toHaveTextContent("ServiceAccount qwen25-05b-instruct-sa, Role qwen25-05b-instruct-view-role (get on this model only), RoleBinding qwen25-05b-instruct-view and token Secret default-name-qwen25-05b-instruct-sa");
+    expect(within(dialog).queryByText(/No ServiceAccount, role or token is made/)).toBeNull();
   });
 });
 
@@ -178,7 +222,7 @@ describe("Models tab", () => {
     expect(screen.getByText(/"model":"qwen25-05b-instruct"/)).toBeInTheDocument();
     // What the dashboard shows for it: the hardware profile, and why it lists no tokens.
     expect(within(part).getByText("redhat-ods-applications/default-profile")).toBeInTheDocument();
-    expect(within(part).getByText(/so the dashboard lists no tokens for this model/)).toBeInTheDocument();
+    expect(within(part).getByText(/Set it up again to add the model.s token/)).toBeInTheDocument();
     expect(within(part).getAllByText(/4 CPUs and 6 GiB of memory \(up to 8 GiB\)/)).not.toHaveLength(0);
     // In use: the gateway's Delete says why it is not available.
     fireEvent.click(within(gw).getByRole("button", { name: "Inference gateway actions" }));
@@ -216,7 +260,7 @@ describe("Models tab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Set up Models in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Models in dev\?/ });
     expect(within(dialog).getByText(/costs money while it exists/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/No ServiceAccount, role or token is made/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Token authentication, as the dashboard makes it/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
     const run = await screen.findByRole("dialog", { name: "Set up Models in dev" });
     expect(await within(run).findByText("Qwen2.5 0.5B Instruct (CPU) is ready in dev.")).toBeInTheDocument();
@@ -242,10 +286,13 @@ describe("Models tab", () => {
     renderAt("/test-resources?tab=models&project=dev");
     fireEvent.click(await screen.findByRole("button", { name: "Model" }));
     const smol = await screen.findByRole("option", { name: /SmolLM2 135M Instruct \(CPU\)/ });
-    expect(smol).toHaveTextContent("Chat. For: Chat (smoke test). Reserves 2 CPUs and 5 GiB of memory (up to 6 GiB). Downloads about 270 MB.");
-    expect(screen.getByRole("option", { name: /Granite Embedding/ })).toHaveTextContent("Embedding (768 dimensions)");
+    // What it is for, once: the use case the dashboard shows (no "Chat. For: Chat").
+    expect(smol).toHaveTextContent("Chat (smoke test). Reserves 2 CPUs and 5 GiB of memory (up to 6 GiB). Downloads about 270 MB.");
+    expect(screen.getByRole("option", { name: /Qwen2.5 0.5B/ })).toHaveTextContent(/^Qwen2.5 0.5B Instruct \(CPU\)Chat\. Reserves 4 CPUs/);
+    expect(screen.getByRole("option", { name: /Granite Embedding/ })).toHaveTextContent("Embeddings, Semantic search; vectors of 768 numbers. Reserves");
     const qwen3 = screen.getByRole("option", { name: /Qwen3 1.7B/ });
-    expect(qwen3).toHaveTextContent("Chat, tool calling");
+    expect(qwen3).toHaveTextContent("Chat, Tool calling, Reasoning. Reserves");
+    for (const o of screen.getAllByRole("option")) expect(o).not.toHaveTextContent("For:");
     expect(qwen3).toHaveTextContent("Cannot be set up now. No worker seems to have room for the model: it needs 4 CPUs and 10Gi of memory free.");
     expect(qwen3.closest("li")?.querySelector("button")).toBeDisabled();
   });
@@ -262,6 +309,14 @@ describe("Models tab", () => {
     const part = await screen.findByRole("listitem", { name: "Granite Embedding 125M English (CPU)" });
     expect(within(part).getByText(/An embedding model: it turns text into vectors of 768 numbers/)).toBeInTheDocument();
     expect(within(part).getByText("--runner pooling --max-model-len 512")).toBeInTheDocument();
+    // One "Use case" row, as the dashboard names it; no "Type" and "For" saying the same twice.
+    const details = part.querySelector<HTMLElement>('dl[aria-label="Model details"]')!;
+    expect(within(details).getByText("Use case")).toBeInTheDocument();
+    expect(within(details).getByText("Embeddings, Semantic search; vectors of 768 numbers")).toBeInTheDocument();
+    expect(within(details).queryByText("Type")).toBeNull();
+    expect(within(details).queryByText("For")).toBeNull();
+    // Under the picker, the same single line.
+    expect(screen.getAllByText(/^Embeddings, Semantic search; vectors of 768 numbers\. Reserves 2 CPUs/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Set up Granite Embedding 125M English in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up Granite Embedding 125M English in dev\?/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
@@ -301,6 +356,22 @@ describe("Models tab", () => {
     renderAt("/test-resources?tab=models&project=dev&model=granite-embedding-125m-english");
     expect(await screen.findByText(/\/v1\/embeddings/)).toBeInTheDocument();
     expect(screen.queryByText(/v1\/chat\/completions/)).toBeNull();
+  });
+
+  it("a model no hardware profile fits says plainly what the dashboard shows for it", async () => {
+    const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)" });
+    const qwen25 = model("dev", { hardwareProfile: "redhat-ods-applications/default-profile" });
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen25, qwen3] }) }), "/api/resources/projects": { projects: ["dev"] } });
+    const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
+    const part = await screen.findByRole("listitem", { name: "Qwen3 1.7B (CPU, tool calling)" });
+    expect(within(part).getByText(/None fits: no hardware profile on this cluster allows 4 CPUs and 10 GiB of memory \(up to 12 GiB\), so the dashboard.s Deployments table shows/)).toBeInTheDocument();
+    expect(within(part).getByText(/shows "No hardware profile" and the model.s details "Hardware profile: Unknown"/)).toBeInTheDocument();
+    expect(within(part).getByText(/The model runs as set up/)).toBeInTheDocument();
+    view.unmount();
+    renderAt("/test-resources?tab=models&project=dev&model=qwen25-05b-instruct");
+    const fits = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(fits).getByText("redhat-ods-applications/default-profile")).toBeInTheDocument();
+    expect(within(fits).queryByText(/Unknown/)).toBeNull();
   });
 
   it("a missing preset image offers the newest released image, which re-runs only the model", async () => {

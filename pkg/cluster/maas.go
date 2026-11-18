@@ -140,6 +140,9 @@ type maasRecord struct {
 	// through the MaaS gateway alone; Unpublish writes them back. A
 	// publication by an earlier build has none.
 	ModelRefs map[string]maasModelRefs `json:"modelRefs,omitempty"`
+	// GenAI is, by publication, the genai label and annotation publish
+	// removed from the model (maas_genai.go); Unpublish puts them back.
+	GenAI map[string]maasGenAI `json:"genAI,omitempty"`
 	// DBNamespace is where setup put the database and maas-db-config, so
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
@@ -274,6 +277,10 @@ func (r *maasRecord) setPublished(project, model string, on bool) {
 		out = append(out, key)
 	} else {
 		delete(r.ModelRefs, key)
+		delete(r.GenAI, key)
+		if len(r.GenAI) == 0 {
+			r.GenAI = nil
+		}
 		if len(r.ModelRefs) == 0 {
 			r.ModelRefs = nil
 		}
@@ -1212,13 +1219,18 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	rec, recErr := readMaaSRecord(c)
 	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
 	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	owned, ownedErr := readModelsRecord(c)
+	if ownedErr != nil {
+		slog.Debug("cannot read the models record for MaaS", "error", ownedErr)
+	}
 	for _, m := range models {
 		entry, _ := catalogEntry(m.Metadata.Name)
-		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok || !modelOwned(m.Metadata) {
+		if _, ok := toolModelPath(m.Metadata.Namespace, m.Metadata.Name); !ok || !owned.owns(m.Metadata) {
 			continue
 		}
 		item := types.MaaSModel{ResourceState: types.ResourceState{Namespace: m.Metadata.Namespace, Name: m.Metadata.Name, ManagedByTool: true}}
-		item.DisplayName = firstNonEmpty(m.Metadata.Annotations["openshift.io/display-name"], m.Metadata.Name)
+		// The catalog's name: the object's annotation is the project's to change.
+		item.DisplayName = entry.DisplayName
 		if cond, ok := findCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 			item.ModelReady = true
 		}
@@ -1431,5 +1443,8 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return found && modelOwned(model.Metadata) && modelHasMaaSRef(model), nil
+	if !found || !modelHasMaaSRef(model) {
+		return false, nil
+	}
+	return ownsModel(c, model.Metadata)
 }

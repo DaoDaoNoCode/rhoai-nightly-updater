@@ -26,6 +26,9 @@ func (e *playgroundEnv) putGranite(ours bool) {
 			"managedFields":[{"manager":"` + toolFieldManager + `","operation":"Apply"}]}`
 	}
 	e.k8s.putJSON(testGranitePath, `{"metadata":`+meta+`}`)
+	if ours {
+		recordModelFixture(e.k8s, testGranitePath)
+	}
 }
 
 func installedModels(t *testing.T, e *playgroundEnv) string {

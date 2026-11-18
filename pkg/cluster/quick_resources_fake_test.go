@@ -382,8 +382,11 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 			// ownership (applySSAPorts).
 			next := deepCopyObject(obj)
 			for key, v := range patch {
-				if key == "metadata" {
-					mergePatch(ensureMap(next, "metadata"), v.(map[string]interface{}))
+				// A ConfigMap's data is a map whose keys are owned one by
+				// one: an apply keeps the keys other managers applied (the
+				// tool's records share the snapshot ConfigMap).
+				if key == "metadata" || (k.plural == "configmaps" && key == "data") {
+					mergePatch(ensureMap(next, key), v.(map[string]interface{}))
 				} else {
 					next[key] = v
 				}
@@ -462,6 +465,11 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 				f.status(w, 409, "Precondition failed: UID in precondition does not match")
 				return
 			}
+		}
+		if dryRun {
+			// The preconditions are checked; nothing is deleted.
+			f.write(w, 200, map[string]interface{}{"kind": "Status", "status": "Success"})
+			return
 		}
 		if fin, _ := meta["finalizers"].([]interface{}); len(fin) > 0 || (k.plural == "namespaces" && f.namespacesLinger) {
 			meta["deletionTimestamp"] = time.Now().UTC().Format(time.RFC3339)

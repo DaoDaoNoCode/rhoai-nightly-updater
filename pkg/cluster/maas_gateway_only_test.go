@@ -226,7 +226,8 @@ func TestMaaSPublish_FromAnEarlierBuildsPublicationGoesThroughTheDefaultFirst(t 
 		if prev != nil {
 			prev(r, k, patch, next)
 		}
-		if k.plural == "llminferenceservices" {
+		// The refs writes (publish also patches the model's metadata).
+		if _, refs := patch["spec"]; k.plural == "llminferenceservices" && refs {
 			spec, _ := patch["spec"].(map[string]interface{})
 			router, _ := spec["router"].(map[string]interface{})
 			gw, _ := router["gateway"].(map[string]interface{})
@@ -456,12 +457,12 @@ func TestMaaSStatus_SomeoneAddedAGatewayToTheSecondModel(t *testing.T) {
 func TestModelState_SaysWhenTheModelRoutesThroughMaaS(t *testing.T) {
 	mc := modelReadyForMaaS(t)
 	model, _, _ := readToolModel(mc.c, "proj", "qwen25-05b-instruct")
-	if raw, _ := json.Marshal(modelState(mc.c, model, false)); strings.Contains(string(raw), "maasPublished") {
+	if raw, _ := json.Marshal(modelState(mc.c, model, false, modelsRecord{})); strings.Contains(string(raw), "maasPublished") {
 		t.Fatalf("unpublished model state = %s", raw)
 	}
 	setModelRefs(mc, []interface{}{tMaaSGatewayRef})
 	model, _, _ = readToolModel(mc.c, "proj", "qwen25-05b-instruct")
-	if raw, _ := json.Marshal(modelState(mc.c, model, false)); !strings.Contains(string(raw), `"maasPublished":true`) {
+	if raw, _ := json.Marshal(modelState(mc.c, model, false, modelsRecord{})); !strings.Contains(string(raw), `"maasPublished":true`) {
 		t.Fatalf("published model state = %s", raw)
 	}
 }

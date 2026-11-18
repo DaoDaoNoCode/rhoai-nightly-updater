@@ -717,13 +717,29 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 
 // --- publish ----------------------------------------------------------------------
 
-func maasModelRefObjectFor(c *Client, project, name, displayName string) map[string]interface{} {
+// maasModelRefObjectFor is the MaaSModelRef of the tool's model as the
+// dashboard's MaaS option makes it (odh-dashboard rhoai-3.6 maas
+// maas-model-ref.ts postDeployMaaSModelRef L161-231, which passes the
+// model's UID and description to the BFF's buildModelRefUnstructured in
+// packages/maas/bff/internal/repositories/maasmodelrefs.go): owned by the
+// model with blockOwnerDeletion false, so garbage collection removes it
+// with the model (the MaaS record then shows the publication as partly
+// done, and Unpublish finishes it), and the model's description. The
+// display name is the catalog's (the caller's), not the object's.
+func maasModelRefObjectFor(c *Client, project, name, displayName, description, modelUID string) map[string]interface{} {
+	annotations := map[string]interface{}{"openshift.io/display-name": displayName}
+	if description != "" {
+		annotations["openshift.io/description"] = description
+	}
 	return map[string]interface{}{
 		"apiVersion": maasAPI(c),
 		"kind":       "MaaSModelRef",
 		"metadata": map[string]interface{}{
 			"name": name, "namespace": project, "labels": toolLabels(),
-			"annotations": map[string]interface{}{"openshift.io/display-name": displayName, "openshift.io/description": "Published by rhoai-nightly-updater"},
+			"annotations": annotations,
+			"ownerReferences": []interface{}{map[string]interface{}{
+				"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": name, "uid": modelUID, "blockOwnerDeletion": false,
+			}},
 		},
 		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": name}},
 	}
@@ -850,12 +866,16 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	}
 	refPath, _ := maasModelRefPath(c, project, name)
 	model, found, err := readToolModel(c, project, name)
+	owned := false
+	if err == nil && found {
+		owned, err = ownsModel(c, model.Metadata)
+	}
 	switch {
 	case err != nil:
 		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	case !found:
 		return m.fail("check", fmt.Sprintf("Project '%s' has no %s of this tool. Set it up on the Models tab first. Nothing was changed.", project, name), "prerequisites", "no model")
-	case !modelOwned(model.Metadata):
+	case !owned:
 		return m.fail("check", fmt.Sprintf("%s in '%s' was not created by this tool, so it is not published. Nothing was changed.", name, project), "not_managed", "model foreign")
 	}
 	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
@@ -889,6 +909,11 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		original = maasModelRefs{Refs: refs.earlierBuildOriginal()}
 	}
 	rec.setModelRefs(project, name, original)
+	// What the model had before a first publish; a publish again (after a
+	// failed one) keeps what the first recorded.
+	if _, recordedGenAI := rec.GenAI[maasPub{project, name}.key()]; !recordedGenAI {
+		rec.setGenAI(project, name, genAIOf(model.Metadata))
+	}
 	rec.setPublished(project, name, true)
 	infra := maasInfraNamespace(c)
 	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
@@ -916,7 +941,10 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	sub, auth := maasAccessObjects(c, live)
-	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(model.Metadata.Annotations["openshift.io/display-name"], name))
+	// The catalog's display name, never the object's: MaaS shows it to
+	// every signed-in user, and a project editor can change the annotation.
+	entry, _ := catalogEntry(name)
+	refObj := maasModelRefObjectFor(c, project, name, firstNonEmpty(entry.DisplayName, name), model.Metadata.Annotations["openshift.io/description"], model.Metadata.UID)
 	if gwPlan != nil {
 		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
 			return m.fail("check", msg, code, "gateway dry run failed")
@@ -951,6 +979,10 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	if msg, code := m.routeModelThroughMaaS(project, name, original); msg != "" {
 		return m.fail("model", msg, code, "model routing failed")
 	}
+	if err := stripModelGenAI(c, project, name); err != nil {
+		return m.fail("model", err.Error()+". Publish again to retry, or Unpublish to undo.", maasWriteCode(err), "genai metadata failed")
+	}
+	m.logs = append(m.logs, "OK: the model left Gen AI studio's AI assets (label "+genAIAssetLabel+" and annotation "+genAIUseCaseAnnotation+" removed, as the dashboard's MaaS option does); MaaS lists it")
 	m.step("maas", "running", "Creating the model reference, the subscription and the access policy...")
 	for _, w := range []struct {
 		desc, path, create string
@@ -1026,7 +1058,13 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read %s in '%s': %v. Nothing was changed.", name, project, err), errorCodeFromK8sErr(err), "model read failed")
 	}
-	routed := modelFound && modelOwned(model.Metadata) && modelHasMaaSRef(model)
+	modelOwned := false
+	if modelFound {
+		if modelOwned, err = ownsModel(c, model.Metadata); err != nil {
+			return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+		}
+	}
+	routed := modelOwned && modelHasMaaSRef(model)
 	if !refFound && !rec.published(project, name) && !routed {
 		say("check", "success", "Not published.")
 		return m.done(fmt.Sprintf("%s in '%s' is not published; nothing to undo.", name, project))
@@ -1035,6 +1073,7 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	// gateway someone added since publishing stops Unpublish here, before
 	// anything changes.
 	recordedRefs, hasRecordedRefs := rec.modelRefs(project, name)
+	recordedGenAI, hasRecordedGenAI := rec.GenAI[maasPub{project, name}.key()]
 	if routed && hasRecordedRefs {
 		refs, _, err := readModelGatewayRefs(c, project, name)
 		if err != nil {
@@ -1114,11 +1153,17 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 	switch {
 	case !modelFound:
 		say("model", "success", "The model is gone; nothing to change on it.")
-	case !modelOwned(model.Metadata):
+	case !modelOwned:
 		say("model", "success", "The model was not created by this tool; it is left alone.")
 	default:
 		if msg, code := m.restoreModelRoute(project, name, recordedRefs, hasRecordedRefs, say); msg != "" {
 			return m.fail("model", msg, code, "model routing failed")
+		}
+		if hasRecordedGenAI {
+			if err := restoreModelGenAI(c, project, name, recordedGenAI); err != nil {
+				return m.fail("model", err.Error()+". Unpublish again to retry.", maasWriteCode(err), "genai metadata failed")
+			}
+			m.logs = append(m.logs, "OK: the model is back in Gen AI studio's AI assets (its "+genAIAssetLabel+" label and "+genAIUseCaseAnnotation+" annotation)")
 		}
 	}
 
@@ -1147,5 +1192,11 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		}
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway no longer admits routes from '%s'.", project))
 	}
-	return m.done(fmt.Sprintf("%s in '%s' is unpublished from MaaS.", name, project))
+	note := ""
+	if modelFound && modelOwned {
+		if note = directRouteNote(c, project, name); note != "" {
+			m.logs = append(m.logs, strings.TrimSpace(note))
+		}
+	}
+	return m.done(fmt.Sprintf("%s in '%s' is unpublished from MaaS.%s", name, project, note))
 }

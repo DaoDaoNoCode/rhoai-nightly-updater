@@ -573,8 +573,10 @@ async (page) => {
           { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
           { at: panel().getByRole("button", { name: "Model", exact: true }), n: 2, pos: "r" },
           { at: row(gateway, "External address"), n: 3, pos: "l" },
-          { at: row(qwen, "Type"), n: 4, pos: "l" },
+          { at: row(qwen, "Use case"), n: 4, pos: "l" },
           { at: row(qwen, "Address"), n: 5, pos: "l" },
+          { at: row(qwen, "Hardware profile"), n: 6, pos: "l" },
+          { at: row(qwen, "Token authentication"), n: 7, pos: "l" },
         ],
         pad: 24,
       });

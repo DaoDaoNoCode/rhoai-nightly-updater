@@ -70,13 +70,26 @@ export interface ModelsTabProps {
 const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByTool === true;
 
 const TOKEN = "TOKEN=$(oc whoami -t)";
+
+/** The model's token ServiceAccount, as the dashboard names it (<model>-sa). */
+const tokenSA = (model: string) => `${model}-sa`;
 const auth = `-H "Authorization: Bearer $TOKEN"`;
 
-/** Commands that call a chat model with the user's own OpenShift token. Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
-export function modelCurl(url: string, model: string): string {
+/**
+ * The command that puts the model's own token in $TOKEN: the token Secret
+ * this tool made as the dashboard does (pkg/cluster models_token.go), read
+ * with the user's own oc. A model set up before it had one uses the user's
+ * token. Secret and project names are Kubernetes names (no shell quoting).
+ */
+export function modelTokenLine(project: string, m: ModelState): string {
+  return m.tokenSecret ? `TOKEN=$(oc get secret ${m.tokenSecret} -n ${project} -o jsonpath='{.data.token}' | base64 -d)` : TOKEN;
+}
+
+/** Commands that call a chat model with a token. Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
+export function modelCurl(url: string, model: string, token: string = TOKEN): string {
   const base = url.replace(/\/+$/, "");
   return [
-    TOKEN,
+    token,
     `curl -s ${auth} ${shellQuote(`${base}/v1/models`)}`,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`,
@@ -84,31 +97,31 @@ export function modelCurl(url: string, model: string): string {
 }
 
 /** A chat request that turns the model's reasoning (thinking) on for this request only. */
-export function thinkingCurl(url: string, model: string): string {
+export function thinkingCurl(url: string, model: string, token: string = TOKEN): string {
   const base = url.replace(/\/+$/, "");
   return [
-    TOKEN,
+    token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":512,"chat_template_kwargs":{"enable_thinking":true}}'`,
   ].join("\n");
 }
 
 /** A tool-calling request: the model answers with tool_calls when a tool fits. */
-export function toolCurl(url: string, model: string): string {
+export function toolCurl(url: string, model: string, token: string = TOKEN): string {
   const base = url.replace(/\/+$/, "");
   const tool = `{"type":"function","function":{"name":"get_weather","description":"Current weather in a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}`;
   return [
-    TOKEN,
+    token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"What is the weather in Brno?"}],"tools":[${tool}],"max_tokens":256}'`,
   ].join("\n");
 }
 
 /** Commands that ask an embedding model for a vector. */
-export function embeddingCurl(url: string, model: string): string {
+export function embeddingCurl(url: string, model: string, token: string = TOKEN): string {
   const base = url.replace(/\/+$/, "");
   return [
-    TOKEN,
+    token,
     `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`,
     `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`,
   ].join("\n");
@@ -247,9 +260,17 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
   );
 };
 
-/** One line about a catalog model: what it is and what it reserves. */
+/**
+ * What a catalog model is for, once: its use case as the dashboard shows it
+ * (opendatahub.io/genai-use-case), and an embedding model's vector size.
+ */
+export function modelUseWords(c: CatalogModel): string {
+  return c.type === "embedding" && c.embeddingDimension ? `${c.useCase}; vectors of ${c.embeddingDimension} numbers` : c.useCase;
+}
+
+/** One line about a catalog model: what it is for and what it reserves. */
 export function modelOptionWords(c: CatalogModel): string {
-  return `${modelTypeWords(c)}. For: ${c.useCase}. Reserves ${modelNeeds(c)}. Downloads about ${c.downloadSize}.`;
+  return `${modelUseWords(c)}. Reserves ${modelNeeds(c)}. Downloads about ${c.downloadSize}.`;
 }
 
 /**
@@ -367,14 +388,8 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
         )}
         {c && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Type</DescriptionListTerm>
-            <DescriptionListDescription>{modelTypeWords(c)}</DescriptionListDescription>
-          </DescriptionListGroup>
-        )}
-        {c && (
-          <DescriptionListGroup>
-            <DescriptionListTerm>For</DescriptionListTerm>
-            <DescriptionListDescription>{c.useCase}</DescriptionListDescription>
+            <DescriptionListTerm>Use case</DescriptionListTerm>
+            <DescriptionListDescription>{modelUseWords(c)}</DescriptionListDescription>
           </DescriptionListGroup>
         )}
         {c && (
@@ -425,7 +440,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListDescription>
               {model.hardwareProfile
                 ? <><code>{model.hardwareProfile}</code>, as the dashboard shows it</>
-                : "None: no profile on this cluster allows the model's CPUs and memory, so the dashboard shows \"No hardware profile\""}
+                : <>None fits: no hardware profile on this cluster allows {modelNeeds(c)}, so the dashboard's Deployments table shows &quot;No hardware profile&quot; and the model&apos;s details &quot;Hardware profile: Unknown&quot;. The model runs as set up.</>}
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -433,8 +448,11 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
           <DescriptionListGroup>
             <DescriptionListTerm>Token authentication</DescriptionListTerm>
             <DescriptionListDescription>
-              On: every caller uses their own OpenShift token, so the dashboard lists no tokens for this model.
-              If you edit it in the dashboard, add a token there before you save: saving it without one turns authentication off.
+              {model.tokenAuthOff
+                ? <>Off: security.opendatahub.io/enable-auth is &quot;false&quot; on the model (set in the dashboard), so its address answers without a token. Turn &quot;Require token authentication&quot; back on in the dashboard&apos;s Edit.</>
+                : model.tokenSecret
+                  ? <>On, as the dashboard sets it up: ServiceAccount {model.tokenServiceAccount} may only get this model, and its token is in Secret <code>{model.tokenSecret}</code>, which the dashboard lists as the model&apos;s token &quot;default-name&quot;. Your own OpenShift token works too.</>
+                  : <>On, but the model has no token of its own yet, so the dashboard lists none and its Edit would turn authentication off when saved. Set it up again to add the model&apos;s token.</>}
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
@@ -454,6 +472,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
   const url = model.url!;
   const embedding = c?.type === "embedding";
   const published = !!model.maasPublished;
+  const token = modelTokenLine(project, model);
   return (
     <TabSection title="Use it" id="models-use">
       <DescriptionList aria-label="How to use the model">
@@ -471,8 +490,14 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
               </Stack>
             ) : (
               <Stack hasGutter>
-                <StackItem><Content component="p">The model speaks the OpenAI API. Call it with your own OpenShift token: anyone who can see {project} can, and no extra account or key is made.</Content></StackItem>
-                <StackItem><CopyableCode id="models-curl" label="the commands" code={embedding ? embeddingCurl(url, name) : modelCurl(url, name)} /></StackItem>
+                <StackItem>
+                  <Content component="p">
+                    {model.tokenSecret
+                      ? <>The model speaks the OpenAI API. The first command reads the model&apos;s own token from Secret <code>{model.tokenSecret}</code>: a token that can only call this model, the same one the dashboard shows for the model. Anyone who can read Secrets in {project} can use it.</>
+                      : <>The model speaks the OpenAI API. Call it with your own OpenShift token (anyone who can see {project} can). Set the model up again to give it its own token, as the dashboard does.</>}
+                  </Content>
+                </StackItem>
+                <StackItem><CopyableCode id="models-curl" label="the commands" code={embedding ? embeddingCurl(url, name, token) : modelCurl(url, name, token)} /></StackItem>
                 {embedding && <StackItem><Content component="p">The answer holds one vector of {c?.embeddingDimension ?? "fixed"} numbers per input text, under <code>data[].embedding</code>. Inputs longer than 512 tokens are refused.</Content></StackItem>}
               </Stack>
             )}
@@ -484,7 +509,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
             <DescriptionListDescription>
               <Stack hasGutter>
                 <StackItem><Content component="p">Describe your tools in the request&apos;s <code>tools</code>; when one fits, the answer has <code>tool_calls</code> instead of text. Your program runs the tool and sends the result back in a <code>tool</code> message.</Content></StackItem>
-                <StackItem><CopyableCode id="models-tools-curl" label="the tool-calling command" code={toolCurl(url, name)} /></StackItem>
+                <StackItem><CopyableCode id="models-tools-curl" label="the tool-calling command" code={toolCurl(url, name, token)} /></StackItem>
               </Stack>
             </DescriptionListDescription>
           </DescriptionListGroup>
@@ -495,7 +520,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
             <DescriptionListDescription>
               <Stack hasGutter>
                 <StackItem><Content component="p">Thinking is off by default, so answers come quickly. To turn it on for one request, add <code>{`"chat_template_kwargs": {"enable_thinking": true}`}</code>; the reasoning then comes in <code>reasoning_content</code>, apart from the answer.</Content></StackItem>
-                <StackItem><CopyableCode id="models-thinking-curl" label="the command with thinking on" code={thinkingCurl(url, name)} /></StackItem>
+                <StackItem><CopyableCode id="models-thinking-curl" label="the command with thinking on" code={thinkingCurl(url, name, token)} /></StackItem>
               </Stack>
             </DescriptionListDescription>
           </DescriptionListGroup>
@@ -520,11 +545,11 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
         <>To call its direct address with your OpenShift token again, unpublish it on the MaaS tab.</>,
       ] : embedding ? [
         <>Copy the commands above and run them: they ask the model for the vector of one sentence.</>,
-        <>Point an OpenAI client&apos;s embeddings call at the address, with your token as the API key and <code>{name}</code> as the model.</>,
+        <>Point an OpenAI client&apos;s embeddings call at the address, with the token as the API key and <code>{name}</code> as the model.</>,
         <>Set up the playground on the Playground tab: it adds this model for searching your documents.</>,
       ] : [
-        <>Copy the commands above and run them: the first lists the model, the second asks it to say hello.</>,
-        <>Point an OpenAI client at the address, with your token as the API key and <code>{name}</code> as the model.</>,
+        <>Copy the commands above and run them: they read the token, list the model, then ask it to say hello.</>,
+        <>Point an OpenAI client at the address, with the token as the API key and <code>{name}</code> as the model.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
       ]} />
     </TabSection>
@@ -598,7 +623,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
             <>On the cluster, unless one exists: GatewayClass <code>{GATEWAY}</code>, and in namespace <code>{GATEWAY_NS}</code> ConfigMap <code>{GATEWAY}-options</code> and Gateway <code>{GATEWAY}</code> (hostname <code>inference.&lt;apps domain&gt;</code>), which accepts models only from projects labelled <code>{status.inferenceGateway?.routesLabel ?? "rhoai-nightly-updater/inference-routes"}=true</code>. OpenShift adds a cloud load balancer and a DNS record for it; RHOAI adds its AuthPolicy once a model uses it</>,
             <>No namespace label: a cluster-admin labels each project that may use the gateway; this tool cannot change namespaces</>,
             <>In the project, for each model you set up: an LLMInferenceService of the model&apos;s name (here <code>{name}</code>), downloaded from Hugging Face, on the cluster&apos;s CPU preset{models?.preset ? <> <code>{models.preset}</code></> : null}. KServe adds its Deployment, Service and route</>,
-            <>No ServiceAccount, role or token is made: you call the model with your own OpenShift token</>,
+            <>For each model, its token authentication as the dashboard&apos;s &quot;Require token authentication&quot; makes it: ServiceAccount <code>{tokenSA(name)}</code>, Role <code>{name}-view-role</code> (get on that model only), RoleBinding <code>{name}-view</code> and token Secret <code>default-name-{tokenSA(name)}</code>, all owned by the model, so they go with it</>,
           ]} />
         </FeatureSection>
       </StackItem>
@@ -672,7 +697,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
             <>Project <code>{project}</code>: LLMInferenceService <code>{name}</code> ({c?.displayName ?? name} from Hugging Face), labelled for the dashboard and its Gen AI studio, on the CPU preset{status?.models?.preset ? <> <code>{status.models.preset}</code></> : null}. KServe adds its Deployment, Service and route. Other models in the project are not changed.</>,
             <>Runtime image: {status?.models?.imagePlan === "released" ? "the newest released Red Hat vLLM CPU image, pinned by digest" : status?.models?.imagePlan === "override" ? "the image VLLM_CPU_IMAGE names" : "the preset's own Red Hat vLLM CPU image"}.{reason ? ` ${reason}` : ""}</>,
           ] : []),
-          <>No ServiceAccount, role or token is made.</>,
+          ...(project ? [<>Token authentication, as the dashboard makes it: ServiceAccount {tokenSA(name)}, Role {name}-view-role (get on this model only), RoleBinding {name}-view and token Secret default-name-{tokenSA(name)}, owned by the model. Ones already there for this model are kept.</>] : []),
         ],
       };
     }

