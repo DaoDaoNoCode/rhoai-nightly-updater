@@ -21,7 +21,7 @@ import type { PipelineSampleSpec } from "../../types";
 import { getPipelineSampleSpec } from "../../services/api";
 import { ImageRef } from "../ImageRef";
 import { TabSection } from "./FeatureLayout";
-import { CopyableCode } from "./UseIt";
+import { CopyableCode, shellQuote } from "./UseIt";
 
 /** The id of the section's heading: the Overview's "Run a sample pipeline" moves the focus there. */
 export const PIPELINE_SAMPLE_ID = "pipelines-sample";
@@ -35,7 +35,7 @@ export function samplePipelineCommands(apiUrl: string, project: string, spec: Pi
   const api = apiUrl.replace(/\/+$/, "");
   const auth = '-H "Authorization: Bearer $TOKEN"';
   return [
-    `API=${api}`,
+    `API=${shellQuote(api)}`,
     "TOKEN=$(oc whoami -t)",
     `# Upload ${spec.fileName} (run this in the folder you saved it to)`,
     `PIPELINE_ID=$(curl -fsS ${auth} -F "uploadfile=@${spec.fileName}" \\`,

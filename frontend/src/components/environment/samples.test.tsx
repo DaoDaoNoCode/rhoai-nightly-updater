@@ -396,7 +396,9 @@ describe("Pipelines tab: Run a sample pipeline", () => {
 
   it("the commands upload the file to the project and start a run of its newest version", () => {
     const c = samplePipelineCommands(API + "/", "dev", spec);
-    expect(c).toContain(`API=${API}\n`);
+    expect(c).toContain(`API='${API}'\n`);
+    // An address from the cluster is single-quoted: $() and backticks stay text.
+    expect(samplePipelineCommands("https://x.example.com/$(id)'`id`", "dev", spec)).toContain(`API='https://x.example.com/$(id)'\\''\`id\`'\n`);
     expect(c).toContain("TOKEN=$(oc whoami -t)");
     expect(c).toContain('-F "uploadfile=@rhoai-nightly-sample.yaml"');
     expect(c).toContain('"$API/apis/v2beta1/pipelines/upload?name=rhoai-nightly-sample&namespace=dev"');

@@ -21,7 +21,7 @@ import type { PlaygroundModel, PlaygroundModelRef, PlaygroundStatus, ResourcesSt
 import { type ConfirmSpec, type Pending, type PlaygroundPending, ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
 import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
-import { ComponentAlert, CopyableCode, NoProjectsAlert } from "./UseIt";
+import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import {
   type Busy,
@@ -70,7 +70,6 @@ const BreakableName: React.FC<{ name: string }> = ({ name }) => (
 );
 
 /** s as one single-quoted shell word (a ' inside becomes '\''). */
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** A chat request to the project's playground with the user's own OpenShift token. The model name comes from the dashboard, so the body is built as JSON and quoted for the shell. */
 export function playgroundCurl(dashboardUrl: string, project: string, model: string, source: string): string {

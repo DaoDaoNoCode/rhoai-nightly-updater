@@ -14,6 +14,9 @@ import type { ComponentBlock } from "../../types";
 import { TechnicalDetails } from "./resourceRow";
 
 /** A few lines to copy (environment variables, a Python snippet), PatternFly's code block with a copy button. */
+/** s as one single-quoted POSIX shell word: nothing in it is expanded ($(), backticks, variables). */
+export const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
 export const CopyableCode: React.FC<{ id: string; code: string; label: string }> = ({ id, code, label }) => {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {

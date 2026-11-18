@@ -298,7 +298,13 @@ func modelState(c *Client, m llmisvcObject, inspect bool) types.ModelState {
 	s.ManagedByTool = modelOwned(m.Metadata)
 	s.Terminating = m.Metadata.terminating()
 	s.DisplayName = m.Metadata.Annotations["openshift.io/display-name"]
-	s.URL = m.Status.URL
+	if m.Status.URL != "" {
+		if snippetURL(m.Status.URL) {
+			s.URL = m.Status.URL
+		} else {
+			s.Warning = unsafeAddressWarning("model address")
+		}
+	}
 	s.MaaSPublished = modelHasMaaSRef(m)
 	s.CurrentImage = m.mainImage()
 	s.ImageKind = firstNonEmpty(m.Metadata.Annotations[modelImageSourceAnnotation], "preset")

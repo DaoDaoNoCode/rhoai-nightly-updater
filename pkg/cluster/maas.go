@@ -1009,8 +1009,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	dsc, dscErr := readMaaSDSC(c)
 	infra := maasInfraNamespace(c)
 	domain, _ := clusterAppsDomain(c)
-	if domain != "" {
-		st.URL = "https://" + maasHostPrefix + domain
+	if u := "https://" + maasHostPrefix + domain; domain != "" && snippetURL(u) {
+		st.URL = u
 	}
 	part := func(p types.MaaSPart) { st.Parts = append(st.Parts, p) }
 
@@ -1103,7 +1103,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			gwPart.State, gwPart.Message = "waiting", "Waiting for its load balancer"
 		}
 		if !gw.owned {
-			if h := gw.gw.externalHost(); h != "" {
+			if h := gw.gw.externalHost(); h != "" && snippetURL("https://"+h) {
 				st.URL = "https://" + h
 			}
 		}

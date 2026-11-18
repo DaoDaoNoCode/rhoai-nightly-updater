@@ -19,7 +19,7 @@ import { usePolling } from "../../hooks/usePolling";
 import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink } from "./resourceRow";
 import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
-import { ComponentAlert, CopyableCode } from "./UseIt";
+import { ComponentAlert, CopyableCode, shellQuote } from "./UseIt";
 import { EnvStatusLabel } from "./resourceStatus";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { type Busy, type FeatureState, maasDashboardHref, maasPartStatus } from "./featureState";
@@ -74,7 +74,7 @@ export interface MaaSTabProps {
 /** The key-mint, model list and chat requests of the MaaS docs (validation.md), with the user's own token. */
 export function maasCurl(url: string, subscription: string): string {
   return [
-    `HOST="${url}"`,
+    `HOST=${shellQuote(url)}`,
     "# 1. A MaaS API key for the subscription (shown once: keep it)",
     `API_KEY=$(curl -sS -X POST "$HOST/maas-api/v1/api-keys" \\`,
     `  -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \\`,

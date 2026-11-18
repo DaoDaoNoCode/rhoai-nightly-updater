@@ -69,6 +69,9 @@ describe("MaaS use and steps", () => {
     expect(c).toContain("$(oc whoami -t)");
     expect(c).toContain('"subscription":"rhoai-nightly-updater-subscription"');
     expect(c).toContain("$HOST/v1/chat/completions");
+    // The address is single-quoted: double quotes would still run $().
+    expect(c).toContain("HOST='https://maas.apps.example.com'\n");
+    expect(maasCurl("https://maas.example.com$(id)", "s")).toContain("HOST='https://maas.example.com$(id)'\n");
   });
 
   it("the steps match the backend's order", () => {

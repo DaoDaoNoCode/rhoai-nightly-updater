@@ -125,7 +125,12 @@ describe("Models runs and clean-up", () => {
 
   it("the embedding, tool and thinking commands call the right paths with the user's token", () => {
     const base = "https://inference.apps.example.com/dev/m/";
-    expect(embeddingCurl(base, "granite-embedding-125m-english")).toContain(`https://inference.apps.example.com/dev/m/v1/embeddings \\\n  -d '{"model":"granite-embedding-125m-english","input":`);
+    expect(embeddingCurl(base, "granite-embedding-125m-english")).toContain(`'https://inference.apps.example.com/dev/m/v1/embeddings' \\\n  -d '{"model":"granite-embedding-125m-english","input":`);
+    // The model's address comes from the cluster: single-quoted in every command.
+    for (const c of [modelCurl("https://x.example.com/$(id)", "m"), embeddingCurl("https://x.example.com/$(id)", "m"), toolCurl("https://x.example.com/$(id)", "m"), thinkingCurl("https://x.example.com/$(id)", "m")]) {
+      expect(c).not.toMatch(/[^']https:\/\/x\.example\.com/);
+      expect(c).toContain("'https://x.example.com/$(id)/v1/");
+    }
     expect(toolCurl(base, "qwen3-1-7b")).toContain(`"tools":[{"type":"function"`);
     expect(thinkingCurl(base, "qwen3-1-7b")).toContain(`"chat_template_kwargs":{"enable_thinking":true}`);
     for (const c of [embeddingCurl(base, "x"), toolCurl(base, "x"), thinkingCurl(base, "x")]) {

@@ -305,8 +305,11 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		if dashboardURL != "" {
 			state.UIRoute = dashboardURL + "/develop-train/pipelines/definitions/" + d.Meta.Namespace
 		}
-		if strings.HasPrefix(d.APIURL, "https://") {
+		switch {
+		case snippetURL(d.APIURL):
 			state.APIRoute = d.APIURL
+		case d.APIURL != "":
+			state.Warning = unsafeAddressWarning("pipeline server's API address")
 		}
 	default:
 		// The Ready reason is often a success-sounding word such as

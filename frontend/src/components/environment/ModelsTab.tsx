@@ -28,7 +28,7 @@ import { type ConfirmSpec, type ModelsPending, type Pending, ExternalLink, Probl
 import { CleanupSection, CreatesList, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { envStatusText, notManaged } from "./resourceStatus";
-import { ComponentAlert, CopyableCode, NoProjectsAlert } from "./UseIt";
+import { ComponentAlert, CopyableCode, NoProjectsAlert, shellQuote } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { type Busy, type FeatureState, catalogModel, dashboardProjectHref, gatewayStatus, modelIn, modelOptionReason, modelStatus, modelTypeWords, projectNeedsRoutesLabel, routesLabelCommand, shortModelName } from "./featureState";
 
@@ -72,13 +72,13 @@ const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByT
 const TOKEN = "TOKEN=$(oc whoami -t)";
 const auth = `-H "Authorization: Bearer $TOKEN"`;
 
-/** Commands that call a chat model with the user's own OpenShift token. Catalog names need no shell quoting. */
+/** Commands that call a chat model with the user's own OpenShift token. Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
 export function modelCurl(url: string, model: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     TOKEN,
-    `curl -s ${auth} ${base}/v1/models`,
-    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
+    `curl -s ${auth} ${shellQuote(`${base}/v1/models`)}`,
+    `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":64}'`,
   ].join("\n");
 }
@@ -88,7 +88,7 @@ export function thinkingCurl(url: string, model: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     TOKEN,
-    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
+    `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"Is 1001 a prime number?"}],"max_tokens":512,"chat_template_kwargs":{"enable_thinking":true}}'`,
   ].join("\n");
 }
@@ -99,7 +99,7 @@ export function toolCurl(url: string, model: string): string {
   const tool = `{"type":"function","function":{"name":"get_weather","description":"Current weather in a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}`;
   return [
     TOKEN,
-    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/chat/completions \\`,
+    `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/chat/completions`)} \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"What is the weather in Brno?"}],"tools":[${tool}],"max_tokens":256}'`,
   ].join("\n");
 }
@@ -109,7 +109,7 @@ export function embeddingCurl(url: string, model: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     TOKEN,
-    `curl -s ${auth} -H "Content-Type: application/json" ${base}/v1/embeddings \\`,
+    `curl -s ${auth} -H "Content-Type: application/json" ${shellQuote(`${base}/v1/embeddings`)} \\`,
     `  -d '{"model":"${model}","input":["Red Hat OpenShift AI serves models."]}'`,
   ].join("\n");
 }

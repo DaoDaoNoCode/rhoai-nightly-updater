@@ -323,6 +323,9 @@ only accepts a tag whose version is the top dated section. See
 - MaaS tab, Authorino TLS commands: the certificate Secret's name read from
   Authorino's CR must be a valid Kubernetes name, or no commands are shown
   and the tab says why; every substitution is shell-quoted.
+- Copy-paste commands: addresses from the cluster (a model's address, a
+  pipeline server's API, the MaaS address) are single-quoted, and the server
+  shows only plain https addresses, saying why when it hides one.
 
 ## [2.3.3] - 2026-11-16
 
