@@ -44,19 +44,56 @@ func TestRemoveOldStorage_FinalCopyIsAlwaysANewJob(t *testing.T) {
 	}
 }
 
-// A final copy that does not finish is stopped (the next run starts a new
-// one anyway), and nothing is deleted.
-func TestRemoveOldStorage_FinalCopyTimeoutStopsIt(t *testing.T) {
+// A final copy that does not finish keeps running, and nothing is deleted;
+// the next removal waits for that copy instead of starting over, so a
+// storage too large for one run can still be removed.
+func TestRemoveOldStorage_FinalCopyResumes(t *testing.T) {
 	f, c := migratedForRemoval(t)
-	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True", jobRunning: true})
+	sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
+	simulateMigrate(f, sim)
 	ok, msg, code, _ := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
-	if ok || code != "copy_timeout" || !strings.Contains(msg, "The final copy and check did not finish") || !strings.Contains(msg, "nothing was deleted") || !strings.Contains(msg, "a retry takes about as long") {
+	if ok || code != "in_progress" || !strings.Contains(msg, "still running") || !strings.Contains(msg, "nothing was deleted") || !strings.Contains(msg, "again to keep waiting") {
 		t.Fatalf("got %v %s: %s", ok, code, msg)
 	}
-	if f.has(migrateJobPathT) {
-		t.Error("the unfinished final copy was left running")
+	job := f.get(migrateJobPathT)
+	if job == nil || ensureMap(ensureMap(job, "metadata"), "annotations")[finalCopyAnnotation] != "true" {
+		t.Fatalf("the unfinished final copy was not left running with its mark: %v", job)
 	}
 	noWritesIn(t, f, legacyNamespace)
+
+	before := len(f.mutations())
+	finishJobAfterReads(f, sim, 1)
+	stuck := false
+	releasePVCWhenServerGone(f, &stuck)
+	ok, msg, _, steps := runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
+	if !ok || !hasStep(steps, "copy", "The final copy an earlier removal started is still running: waiting for it") {
+		t.Fatalf("got %v: %s\n%s", ok, msg, stepMessages(steps))
+	}
+	for _, m := range f.mutations()[before:] {
+		if strings.HasPrefix(m, "POST /apis/batch/v1/namespaces/seaweedfs/jobs") {
+			t.Errorf("a new final copy was started instead of waiting for the running one: %s", m)
+		}
+	}
+}
+
+// The removal's final copy never overwrites the new storage, even when no
+// pipeline server uses it: by then the user writes there.
+func TestRemoveOldStorage_FinalCopyNeverOverwrites(t *testing.T) {
+	f, c := migratedForRemoval(t)
+	for _, k := range []fakeKey{
+		{gv: dspaAPIGroup, ns: "juntao-test", plural: "datasciencepipelinesapplications", name: legacyDSPAName},
+		{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: dspaName},
+	} {
+		delete(f.objects, k)
+	}
+	sim := &migrateSim{result: copyOK, objectStore: "True"}
+	simulateMigrate(f, sim)
+	stuck := false
+	releasePVCWhenServerGone(f, &stuck)
+	runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
+	if sim.mode != copyIgnoreExisting {
+		t.Errorf("the final copy ran with COPY_MODE %q", sim.mode)
+	}
 }
 
 // The final copy may use the operation's remaining time, less what the

@@ -1,7 +1,6 @@
 import React from "react";
 import { Content } from "@patternfly/react-core";
-import type { MLflowSampleAction, MLflowSampleId, PipelineSampleRun, SampleStatus } from "../../types";
-import { formatElapsed, formatRelativeTime } from "../../utils";
+import type { MLflowSampleAction, MLflowSampleId, SampleStatus } from "../../types";
 import type { ConfirmSpec, Pending } from "./resourceRow";
 import type { EnvStatus } from "./resourceStatus";
 import type { GoalRunStepInfo } from "./useGoalRun";
@@ -64,9 +63,9 @@ const nameInSentence = (id: MLflowSampleId) => SAMPLE_INFO[id].inSentence;
 
 /** A sample operation this page runs now. */
 export interface SampleOp {
-  feature: "mlflow" | "pipeline";
+  feature: "mlflow";
   project: string;
-  action: MLflowSampleAction | "run";
+  action: MLflowSampleAction;
   /** The MLflow samples it changes. */
   samples: MLflowSampleId[];
 }
@@ -85,7 +84,6 @@ const BUSY_WORD: Record<SampleOp["action"], { status: EnvStatus; text: string }>
   add: { status: "setting-up", text: "Adding" },
   regenerate: { status: "setting-up", text: "Regenerating" },
   remove: { status: "deleting", text: "Removing" },
-  run: { status: "setting-up", text: "Starting a run" },
 };
 
 /**
@@ -132,24 +130,6 @@ export function mlflowSampleSteps(action: MLflowSampleAction, samples: MLflowSam
     { id: "check", title: "Check MLflow" },
     ...order.filter((id) => samples.includes(id)).map((id) => ({ id, title: `${verb} the ${nameInSentence(id)}` })),
   ];
-}
-
-/** The steps a sample pipeline operation streams (pkg/cluster RunPipelineSample); optional ones only when they happen. */
-export function pipelineSampleSteps(action: "run" | "remove"): GoalRunStepInfo[] {
-  return action === "run"
-    ? [
-      { id: "check", title: "Check the pipeline server" },
-      { id: "experiment", title: "Create the sample's experiment", optional: true },
-      { id: "pipeline", title: "Upload the sample pipeline", optional: true },
-      { id: "run", title: "Start a run" },
-    ]
-    : [
-      { id: "check", title: "Check the pipeline server" },
-      { id: "remove", title: "Remove the sample", optional: true },
-      { id: "runs", title: "Delete the sample's runs", optional: true },
-      { id: "pipeline", title: "Delete the sample pipeline", optional: true },
-      { id: "experiment", title: "Delete the sample's experiment", optional: true },
-    ];
 }
 
 /**
@@ -199,52 +179,7 @@ export function samplesConfirm(pending: Pending): ConfirmSpec | null {
         }),
       };
     }
-    case "pipeline-sample": {
-      const { project, action } = pending;
-      if (action === "run") {
-        return {
-          title: `Run the sample pipeline in ${project}?`, confirm: "Run", runTitle: `Run the sample pipeline in ${project}`,
-          summary: <Content component="p">In {project}: a run of a two-step pipeline. The first step writes a small file to the S3 storage, the second reads it back. It usually finishes in 1 to 2 minutes.</Content>,
-          changes: [
-            <>On the pipeline server <code>nightly-dspa</code>: experiment and pipeline <code>rhoai-nightly-sample</code> are created if they are missing.</>,
-            <>A new run starts; both steps run {pending.image ? <code>{pending.image}</code> : "a UBI minimal image"}. Its output stays in the S3 storage.</>,
-          ],
-        };
-      }
-      return {
-        title: `Remove the sample pipeline from ${project}?`, confirm: "Remove", danger: true, runTitle: `Remove the sample pipeline from ${project}`,
-        summary: <Content component="p">Deletes the sample&apos;s {pending.runs === 1 ? "run" : pending.runs ? `${pending.runs} runs` : "runs"}, its pipeline and its experiment from {project}. The files its runs wrote stay in the S3 storage until the storage is deleted.</Content>,
-        changes: [<>On the pipeline server <code>nightly-dspa</code>: every run of pipeline <code>rhoai-nightly-sample</code>, the pipeline and experiment <code>rhoai-nightly-sample</code> are deleted. An experiment that holds runs this tool did not start is kept.</>],
-      };
-    }
     default:
       return null;
   }
-}
-
-/** A sample run's state as one label of the page's vocabulary. */
-export function runLabel(run: PipelineSampleRun | null | undefined): { status: EnvStatus; text: string } {
-  switch (run?.state) {
-    case undefined: return { status: "not-set-up", text: "Not run yet" };
-    case "PENDING": return { status: "setting-up", text: "Pending" };
-    case "RUNNING": return { status: "setting-up", text: "Running" };
-    case "CANCELING": return { status: "deleting", text: "Canceling" };
-    case "SUCCEEDED": return { status: "ready", text: "Succeeded" };
-    case "FAILED": return { status: "error", text: "Failed" };
-    case "CANCELED": return { status: "not-set-up", text: "Canceled" };
-    case "SKIPPED": return { status: "not-set-up", text: "Skipped" };
-    case "PAUSED": return { status: "needs-attention", text: "Paused" };
-    default: return { status: "unknown", text: "Unknown" };
-  }
-}
-
-/** The run has not ended: its state changes on its own, so it is polled. */
-export const runActive = (run: PipelineSampleRun | null | undefined) => !!run && ["PENDING", "RUNNING", "CANCELING"].includes(run.state);
-
-/** When the run started or ended, in words ("running for 1m 20s", "finished 5m ago"). */
-export function runTime(run: PipelineSampleRun, now: number): string | null {
-  const started = run.createdAt ? Date.parse(run.createdAt) : NaN;
-  if (runActive(run)) return Number.isNaN(started) ? null : `for ${formatElapsed(started, now)}`;
-  if (run.finishedAt) return `finished ${formatRelativeTime(run.finishedAt)}`;
-  return Number.isNaN(started) ? null : `started ${formatRelativeTime(run.createdAt!)}`;
 }

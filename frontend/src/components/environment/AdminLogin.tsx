@@ -44,7 +44,7 @@ export async function copyFetchedText(fetchText: () => Promise<string>): Promise
 const HIDDEN = "••••••••••";
 
 /** Which credential a field shows (the fields of GET /api/resources/minio/admin-password). */
-export type S3CredentialField = "accessKey" | "password";
+export type S3CredentialField = "accessKey" | "secretKey" | "password";
 
 /**
  * One of the storage's S3 keys, masked, with PatternFly's password pattern
@@ -57,7 +57,13 @@ export const S3SecretField: React.FC<{ id: string; field: S3CredentialField; lab
   const [value, setValue] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
-  const fetchValue = async () => (await getS3AdminLogin())[field];
+  const fetchValue = async () => {
+    const v = (await getS3AdminLogin())[field];
+    // Only the admin UI password can be missing: storage an earlier version
+    // set up used the S3 secret key there until Repair gives it its own.
+    if (!v) throw new Error(`There is no ${label} yet. Repair the S3 storage to set one; the S3 keys and the data stay.`);
+    return v;
+  };
 
   const toggle = async () => {
     setOutcome(null);
@@ -113,11 +119,11 @@ export const S3SecretField: React.FC<{ id: string; field: S3CredentialField; lab
  * copied, never shown: what an S3 client (boto3, rclone, the AWS CLI)
  * reads, plus AWS_S3_BUCKET as the dashboard's data connections name it.
  */
-export function s3EnvText(endpoint: string, keys: { accessKey: string; password: string }): string {
+export function s3EnvText(endpoint: string, keys: { accessKey: string; secretKey: string }): string {
   return [
     `AWS_ENDPOINT_URL=${endpoint}`,
     `AWS_ACCESS_KEY_ID=${keys.accessKey}`,
-    `AWS_SECRET_ACCESS_KEY=${keys.password}`,
+    `AWS_SECRET_ACCESS_KEY=${keys.secretKey}`,
     "AWS_DEFAULT_REGION=us-east-1",
     "AWS_S3_BUCKET=pipelines",
   ].join("\n") + "\n";

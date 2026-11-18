@@ -1,16 +1,15 @@
 package cluster
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// The samples' MLflow and KFP calls are authorized by those servers with
-// access reviews of the app's token, so the RBAC coverage test cannot derive
-// them from Kubernetes paths. They come from the fakes' rule tables instead
-// (mlflowFakeRules, kfpFakeRoutes), which every samples test runs through:
+// The samples' MLflow calls are authorized by MLflow with access reviews of
+// the app's token, so the RBAC coverage test cannot derive them from
+// Kubernetes paths. They come from the fake's rule table instead
+// (mlflowFakeRules), which every samples test runs through:
 // a call outside the tables fails its test, a name outside a rule's names
 // fails it too, TestSampleFakeRulesAreAllUsed fails for an entry no code
 // path uses, and the fakes decide every review with templateAllow, so each
@@ -40,9 +39,6 @@ func otherServerRequests() []rbacRequest {
 			}
 		}
 	}
-	for _, rt := range kfpFakeRoutes {
-		out = append(out, rbacRequest{Verb: rt.verb, Group: "datasciencepipelinesapplications.opendatahub.io", Resource: "datasciencepipelinesapplications/api", Namespace: anyNS, Name: dspaName, NamedReview: true, Site: "KFP " + rt.method + " " + rt.pattern})
-	}
 	return append(out, playgroundServerRequests()...)
 }
 
@@ -51,11 +47,7 @@ func templateAllow(t *testing.T) func(resource, verb, namespace, name string) bo
 	t.Helper()
 	grants := templateGrants(t)
 	return func(resource, verb, namespace, name string) bool {
-		group := mlflowAuthGroup
-		if strings.HasPrefix(resource, "datasciencepipelinesapplications") {
-			group = "datasciencepipelinesapplications.opendatahub.io"
-		}
-		r := rbacRequest{Verb: verb, Group: group, Resource: resource, Namespace: namespace, Name: name, NamedReview: group != mlflowAuthGroup}
+		r := rbacRequest{Verb: verb, Group: mlflowAuthGroup, Resource: resource, Namespace: namespace, Name: name}
 		for _, g := range grants {
 			if g.allows(r) {
 				return true
@@ -79,12 +71,19 @@ func TestTemplateGrantsTheSamplesNoUnnamedDelete(t *testing.T) {
 			t.Errorf("delete on experiment %q is granted", name)
 		}
 	}
-	if allow("datasciencepipelinesapplications/api", "get", "p", legacyDSPAName) {
-		t.Error("the KFP API of DSPAs the tool did not create (dspa) is granted")
-	}
-	for _, verb := range []string{"update", "patch"} {
-		if allow("datasciencepipelinesapplications/api", verb, "p", dspaName) {
-			t.Errorf("%s on the KFP API is granted but never used", verb)
+}
+
+// The tool never calls a pipeline server's KFP API (its token would reach a
+// Service in a user's project), so no ClusterRole grants that API.
+func TestTemplateGrantsNoPipelineServerAPI(t *testing.T) {
+	for _, g := range templateGrants(t) {
+		for _, verb := range []string{"get", "create", "delete", "update", "patch", "list"} {
+			for _, name := range []string{dspaName, legacyDSPAName, ""} {
+				r := rbacRequest{Verb: verb, Group: "datasciencepipelinesapplications.opendatahub.io", Resource: "datasciencepipelinesapplications/api", Namespace: "p", Name: name, NamedReview: true}
+				if g.allows(r) {
+					t.Errorf("the template grants %s on the KFP API of %q", verb, name)
+				}
+			}
 		}
 	}
 }
@@ -92,7 +91,7 @@ func TestTemplateGrantsTheSamplesNoUnnamedDelete(t *testing.T) {
 // TestSampleFakeRulesAreAllUsed runs every samples path through the fakes,
 // with the template's RBAC, and checks that each rule-table entry is used.
 func TestSampleFakeRulesAreAllUsed(t *testing.T) {
-	env, k := newPipelineEnv(t)
+	env := newSamplesEnv(t)
 	steps := []struct {
 		action  string
 		samples []string
@@ -112,29 +111,11 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 		t.Fatal(msg)
 	}
 	env.status(t)
-	for _, action := range []string{"run", "remove"} {
-		if resp, st := runPipeline(t, env, action); !resp.Success {
-			t.Fatalf("%s: %+v\n%s", action, resp, stepMessages(st))
-		}
-	}
-	pipelineStatus(t, env)
 
 	var unused []string
 	for _, rule := range mlflowFakeRules {
 		if !env.mlflow.used[rule.key()] {
 			unused = append(unused, rule.key())
-		}
-	}
-	for _, rt := range kfpFakeRoutes {
-		used := false
-		for _, r := range k.requests {
-			method, path, _ := strings.Cut(r, " ")
-			if method == rt.method && regexp.MustCompile(rt.pattern).MatchString(path) {
-				used = true
-			}
-		}
-		if !used {
-			unused = append(unused, rt.method+" "+rt.pattern)
 		}
 	}
 	sort.Strings(unused)

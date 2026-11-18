@@ -249,6 +249,8 @@ expect_render_fail "an unknown profile (schema)" "profile" --namespace ns1 "${BA
 expect_render_fail "an unknown profile (template)" "profile must be gitops or full" --skip-schema-validation --namespace ns1 "${BASE[@]}" --set profile=readonly
 expect_render_fail "parameters.PROFILE (template)" "parameters.PROFILE is set by the chart" --namespace ns1 "${BASE[@]}" --set parameters.PROFILE=full
 expect_render_fail "parameters.PROFILE outside the enum (schema)" "PROFILE" --namespace ns1 "${BASE[@]}" --set parameters.PROFILE=x
+expect_render_fail "INGRESS_NAMESPACE other than openshift-ingress (schema: the code uses that name)" "INGRESS_NAMESPACE" --namespace ns1 "${BASE[@]}" --set parameters.INGRESS_NAMESPACE=my-ingress
+expect_render_fail "INGRESS_OPERATOR_NAMESPACE other than openshift-ingress-operator (schema)" "INGRESS_OPERATOR_NAMESPACE" --namespace ns1 "${BASE[@]}" --set parameters.INGRESS_OPERATOR_NAMESPACE=x
 
 # NAMESPACE follows the release namespace (the Argo CD destination);
 # APP_NAME renames every object.

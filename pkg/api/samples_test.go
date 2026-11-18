@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 func TestSamplesStatusNeedsAValidProject(t *testing.T) {
 	setupDevMode(t)
-	for _, h := range []http.HandlerFunc{HandleMLflowSamplesStatus, HandlePipelineSampleStatus} {
+	for _, h := range []http.HandlerFunc{HandleMLflowSamplesStatus} {
 		for _, q := range []string{"", "?project=", "?project=Bad_Name", "?project=a/b"} {
 			req := httptest.NewRequest(http.MethodGet, "/api/resources/samples/x"+q, nil)
 			rec := httptest.NewRecorder()
@@ -31,28 +32,20 @@ func stubMLflowSamples(t *testing.T, fn func(*cluster.Client, types.MLflowSample
 	t.Cleanup(func() { runMLflowSamples = orig })
 }
 
-func TestPipelineSampleStream(t *testing.T) {
+// The sample pipeline is served as a file for the user to run with their
+// own token; there is no route that runs it with the app's.
+func TestPipelineSampleSpecRoute(t *testing.T) {
 	setupDevMode(t)
-	allowMutations(t)
-	orig := runPipelineSample
-	t.Cleanup(func() { runPipelineSample = orig })
-	var got types.PipelineSampleRequest
-	runPipelineSample = func(_ *cluster.Client, req types.PipelineSampleRequest, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
-		got = req
-		emit(cluster.UpdateStepEvent{Step: "run", Status: "success", Message: "Started run r1"})
-		return &types.OperationResponse{Success: true, Message: "started"}, nil
-	}
-	for _, body := range []string{`{`, `{"project":"p","action":"delete"}`, `{"project":"","action":"run"}`} {
-		w := httptest.NewRecorder()
-		HandlePipelineSampleStream(w, postJSON("/api/resources/samples/pipeline/stream", "tok", body))
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
-		}
-	}
 	w := httptest.NewRecorder()
-	HandlePipelineSampleStream(w, postJSON("/api/resources/samples/pipeline/stream", "tok", `{"project":"p","action":"run"}`))
-	if out := w.Body.String(); w.Code != http.StatusOK || !strings.Contains(out, `"step":"run"`) || !strings.Contains(out, `"step":"operation_complete"`) || got.Action != "run" || got.Project != "p" {
-		t.Errorf("%d %s %+v", w.Code, out, got)
+	HandlePipelineSampleSpec(w, httptest.NewRequest(http.MethodGet, "/api/resources/samples/pipeline/spec", nil))
+	var got types.PipelineSampleSpec
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.FileName != "rhoai-nightly-sample.yaml" || !strings.Contains(got.YAML, "schemaVersion: 2.1.0") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	for _, r := range routes {
+		if strings.HasPrefix(r.Pattern, "POST /api/resources/samples/pipeline") || r.Pattern == "GET /api/resources/samples/pipeline" {
+			t.Errorf("route %s runs the sample pipeline with the app's token", r.Pattern)
+		}
 	}
 }
 

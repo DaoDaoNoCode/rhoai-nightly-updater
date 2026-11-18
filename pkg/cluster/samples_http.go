@@ -17,40 +17,30 @@ import (
 	"time"
 )
 
-// The samples call two servers that are not the Kubernetes API: MLflow, at
-// the address its CR reports (the data-science gateway,
-// https://rh-ai.<apps>/mlflow), and a pipeline server's KFP API behind its
-// kube-rbac-proxy. Both authorize the bearer token themselves:
-//
-//   - MLflow runs the kubernetes-auth app of mlflow-kubernetes-plugins
-//     v2.1.1 (the version the RHOAI 3.6/3.7 image pins,
-//     requirements/konflux-pypi-requirements.txt:4) in SelfSubjectAccessReview
-//     mode (mlflow-operator rhoai-3.6 charts/mlflow/templates/
-//     deployment.yaml:201-202). Each request becomes an SSAR with the
-//     caller's token on group mlflow.kubeflow.org in the namespace the
-//     X-MLflow-Workspace header names (auth/authorizer.py:276-343). A request
-//     is checked without a name first; only when that is denied are the
-//     names resolved and checked one by one (auth/core.py:812-851), so RBAC
-//     resourceNames work on these pseudo-resources.
-//   - The KFP API's kube-rbac-proxy runs a SubjectAccessReview for
-//     datasciencepipelinesapplications/api on the DSPA's own name
-//     (data-science-pipelines-operator rhoai-3.6 config/internal/apiserver/
-//     default/kube-rbac-proxy-config.yaml.tmpl:11-17), with the verb taken
-//     from the HTTP method: POST create, GET get, DELETE delete
-//     (opendatahub-io/kube-rbac-proxy pkg/proxy/proxy.go:73-89).
+// The MLflow samples call a server that is not the Kubernetes API: MLflow,
+// at the address its CR reports (the data-science gateway,
+// https://rh-ai.<apps>/mlflow). It authorizes the bearer token itself: it
+// runs the kubernetes-auth app of mlflow-kubernetes-plugins v2.1.1 (the
+// version the RHOAI 3.6/3.7 image pins,
+// requirements/konflux-pypi-requirements.txt:4) in SelfSubjectAccessReview
+// mode (mlflow-operator rhoai-3.6 charts/mlflow/templates/
+// deployment.yaml:201-202). Each request becomes an SSAR with the caller's
+// token on group mlflow.kubeflow.org in the namespace the
+// X-MLflow-Workspace header names (auth/authorizer.py:276-343). A request is
+// checked without a name first; only when that is denied are the names
+// resolved and checked one by one (auth/core.py:812-851), so RBAC
+// resourceNames work on these pseudo-resources.
 //
 // The app sends its own token: the ServiceAccount's in the cluster, the
-// developer's (DEV_TOKEN) in DEV_MODE. Both were checked live on RHOAI 3.6:
-// a ServiceAccount token reaches MLflow through the gateway and the DSPA
-// proxy, and each answers 403 without the rights.
-
-// inClusterServiceCAFile is the service-serving CA OpenShift projects into
-// every pod's ServiceAccount volume; it signs the DSPA Service's certificate
-// (apiserver/default/service.yaml.tmpl, serving-cert-secret-name).
-const inClusterServiceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+// developer's (DEV_TOKEN) in DEV_MODE. MLflow is reached through the
+// cluster's gateway, never through a Service or Route in a user's project:
+// a token sent there could be captured by whoever can run a pod behind it.
+// The sample pipeline is therefore run by the user with their own token
+// (samples_pipeline.go). Checked live on RHOAI 3.6: a ServiceAccount token
+// reaches MLflow through the gateway, which answers 403 without the rights.
 
 // samplesTLSConfig trusts the system roots (publicly signed gateway
-// certificates, as on ROSA), the pod's ca.crt and service-ca.crt, and
+// certificates, as on ROSA), the pod's ca.crt, and
 // KUBE_CA_FILE when set. On OpenShift ca.crt also holds the default ingress
 // CA: kube-controller-manager's root-ca-file is the serviceaccount-ca bundle
 // (cluster-kube-controller-manager-operator bindata/assets/config/
@@ -64,7 +54,7 @@ func samplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte,
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
-	for _, f := range []string{getenv("KUBE_CA_FILE"), inClusterCAFile, inClusterServiceCAFile} {
+	for _, f := range []string{getenv("KUBE_CA_FILE"), inClusterCAFile} {
 		if f == "" {
 			continue
 		}
@@ -79,7 +69,7 @@ func samplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte,
 	return cfg
 }
 
-// samplesHTTPClient sends the MLflow and KFP requests. The demo generator
+// samplesHTTPClient sends the MLflow requests. The demo generator
 // took 27 s live, so a request may take up to two minutes; the operation's
 // own deadline still applies through the request context. Tests replace it.
 var samplesHTTPClient = &http.Client{
@@ -102,7 +92,7 @@ type sampleAPI struct {
 	base    string
 	token   string
 	headers map[string]string
-	server  string // "MLflow" or "the pipeline server", for messages
+	server  string // "MLflow", for messages
 }
 
 // sampleAPIError is a non-2xx answer. Code is MLflow's error_code
@@ -175,7 +165,7 @@ func sampleErrorCode(err error) string {
 	return "network"
 }
 
-// deniedHint explains a 401/403 from MLflow or the pipeline server.
+// deniedHint explains a 401/403 from MLflow.
 func deniedHint(err error) string {
 	if !isDenied(err) {
 		return ""

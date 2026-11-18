@@ -287,7 +287,8 @@ describe("S3 storage (names, login, kept namespace)", () => {
     expect(storage).toHaveTextContent("SeaweedFS runs mirror.example.com/seaweedfs:4.54, not the image this version deploys.");
     expect(storage).toHaveTextContent("Re-run setup to update it; the data PVC is kept.");
     expect(storage).toHaveTextContent("http://seaweedfs-s3.seaweedfs.svc:8333");
-    expect(storage).toHaveTextContent("Admin UI loginUser admin; the password is the S3 secret key.");
+    expect(storage).toHaveTextContent("Admin UI loginUser admin, with a password of its own:");
+    expect(within(storage).getByLabelText("admin UI password")).toHaveAttribute("type", "password");
     expect(within(storage).getByLabelText("S3 secret key")).toHaveAttribute("type", "password");
     expect(within(storage).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", "https://seaweedfs-admin.apps.example.com");
     expect(document.body).not.toHaveTextContent(/oc extract|minio/i);
@@ -298,7 +299,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     vi.stubGlobal("ClipboardItem", undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async (t: string) => { writes.push(t); }) }, configurable: true });
     const api = setup(live({ minio: running, pipelineServers: [] }), {
-      "GET /api/resources/minio/admin-password": { user: "admin", password: "s3cret-value" },
+      "GET /api/resources/minio/admin-password": { user: "admin", password: "admin-value", secretKey: "s3cret-value" },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
@@ -328,12 +329,12 @@ describe("S3 storage (names, login, kept namespace)", () => {
     vi.stubGlobal("ClipboardItem", undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async (t: string) => { writes.push(t); }) }, configurable: true });
     const api = setup(live({ minio: running, pipelineServers: [] }), {
-      "GET /api/resources/minio/admin-password": { user: "admin", accessKey: "AKEY", password: "s3cret-value" },
+      "GET /api/resources/minio/admin-password": { user: "admin", accessKey: "AKEY", password: "admin-value", secretKey: "s3cret-value" },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
     expect(storage).toHaveTextContent("us-east-1, path-style addressing");
-    expect(storage).toHaveTextContent("the password is the S3 secret key");
+    expect(storage).toHaveTextContent("with a password of its own");
     const key = within(storage).getByLabelText("S3 access key") as HTMLInputElement;
     expect(key.value).not.toBe("AKEY");
     await act(async () => { fireEvent.click(within(storage).getByRole("button", { name: "Show the S3 access key" })); });

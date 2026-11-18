@@ -46,7 +46,7 @@ const MigratePlan: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
         </Content>
         <List component="ol">
           <ListItem>Sets up the storage in <code>{S3_NAMESPACE}</code> with the same access key and secret key.</ListItem>
-          <ListItem>Copies every bucket and object with Job <code>seaweedfs-migrate</code> and checks each one byte for byte. The run reports how many objects and bytes it copied; any difference stops it here, with nothing else changed.</ListItem>
+          <ListItem>Copies every bucket (empty ones too) and every object with its metadata with Job <code>seaweedfs-migrate</code>, and checks each object byte for byte and that every bucket is there. The run reports how many objects and bytes it copied; any difference stops it here, with nothing else changed. Bucket policies, versioning and lifecycle rules are not carried over: set them again on the new storage if you used them.</ListItem>
           <ListItem>
             {repoint.length > 0
               ? <>Moves the pipeline server{repoint.length > 1 ? "s" : ""} this tool created to the new storage, one at a time, and waits until each reaches it: {codes(repoint)}.</>
@@ -116,7 +116,7 @@ const RemovePlan: React.FC<{ legacy: LegacyStorageState; deleteNamespace: boolea
       </StackItem>
       <StackItem>
         <Alert component="p" variant="danger" isInline title="Data is deleted and cannot be recovered">
-          First the run copies and checks any object written to the old storage since the migration. Then it deletes what this tool created in namespace <code>{legacy.namespace}</code>: {codes(legacy.objects)}.
+          First the run copies and checks any object written to the old storage since the migration; it never overwrites an object in the new storage, so data written there since is kept, and an object that differs stops the run for you to decide. A large storage may need more than one run: each waits for the copy the first one started. Then it deletes what this tool created in namespace <code>{legacy.namespace}</code>: {codes(legacy.objects)}.
           {pvcs.length > 0 && <> Deleted with {pvcs.length > 1 ? "them" : "it"}: the data in {codes(pvcs)}.</>}
           {uncopied.length > 0 && <> {codes(uncopied)} (MinIO&apos;s files from before SeaweedFS) cannot be copied and is deleted.</>}
         </Alert>

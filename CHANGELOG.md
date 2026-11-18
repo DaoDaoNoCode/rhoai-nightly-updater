@@ -47,6 +47,11 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- **The S3 admin UI has a password of its own.** It was the S3 secret
+  key, which every pipeline project's copy of the keys holds. Setup and
+  Repair write a random password into `seaweedfs-s3-credentials` only;
+  storage set up earlier asks for Repair, which keeps the S3 keys.
+
 - MLflow set up by this tool uses the MLflow operator's own resource
   defaults (on 3.6: requests 1 CPU / 2 GiB, limits 4 CPU / 3 GiB) instead
   of a 2 GiB limit, which got its 8-worker server OOMKilled while MLflow
@@ -86,10 +91,11 @@ only accepts a tag whose version is the top dated section. See
   never Remove), a training experiment with a registered model, an MCP
   server entry and an agent skill, each with its state and where it
   shows in the dashboard; Add all and Remove all are one operation. The
-  Pipelines tab's Sample pipeline runs a two-step write-and-read run on
-  the tool's pipeline server, follows it until it ends, links to it in
-  the dashboard and removes it. The Overview and What next point to
-  them once a feature works.
+  Pipelines tab's Run a sample pipeline offers a two-step write-and-read
+  pipeline as a file, the dashboard's import, and curl commands that
+  upload it and start a run with your own token: the updater never calls
+  a pipeline server's API, so its token never reaches a user's project.
+  The Overview and What next point to them once a feature works.
 - **Migrate storage** says why at the top of the Pipelines tab, and a
   successful migration ends with its outcome: Delete old storage is a
   separate, later action in the storage's menu.

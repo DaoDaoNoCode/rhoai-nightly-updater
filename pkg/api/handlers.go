@@ -1449,69 +1449,10 @@ var HandleMLflowSamplesStatus = withAuth(func(c *cluster.Client, w http.Response
 	writeJSON(w, st, "mlflow-samples")
 })
 
-// HandlePipelineSampleStatus reports the sample pipeline of one project
-// (cluster.GetPipelineSampleStatus: cached briefly, for polling a run).
-var HandlePipelineSampleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	project, ok := sampleProject(w, r)
-	if !ok {
-		return
-	}
-	st, err := cluster.GetPipelineSampleStatus(c, project)
-	if err != nil {
-		code, errorCode := cluster.HTTPStatusForError(err)
-		writeError(w, "Cannot read the sample pipeline: "+err.Error(), code, errorCode)
-		return
-	}
-	writeJSON(w, st, "pipeline-sample")
-})
-
-// runPipelineSample runs a sample pipeline operation; tests replace it.
-var runPipelineSample = cluster.RunPipelineSample
-
-// HandlePipelineSampleStream starts a run of the sample pipeline, or removes
-// the sample (its runs, pipeline and experiment), streaming each step. These
-// are KFP API calls, not Kubernetes writes, so there is no dry run.
-var HandlePipelineSampleStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !lockCluster(w) {
-		return
-	}
-	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	var req types.PipelineSampleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
-		return
-	}
-	if !namespaceRegex.MatchString(req.Project) {
-		writeError(w, "a valid project is required", http.StatusBadRequest, "validation")
-		return
-	}
-	if problem := cluster.ValidatePipelineSampleRequest(req); problem != "" {
-		writeError(w, problem, http.StatusBadRequest, "validation")
-		return
-	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic in pipeline-sample handler", "error", rec)
-		}
-	}()
-	sseWriter, err := NewSSEWriter(w)
-	if err != nil {
-		writeError(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	defer sseWriter.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go sseHeartbeat(sseWriter, done)
-
-	beginOperation(w, req.Action+" in "+req.Project)
-	slog.Info("mutation", "op", "pipeline-sample", "action", req.Action, "project", req.Project)
-	result, runErr := runPipelineSample(c, req, forwardSteps(sseWriter))
-	sendOperationResult(sseWriter, result, runErr)
-	if runErr != nil {
-		slog.Error("pipeline-sample failed", "error", runErr)
-	}
+// HandlePipelineSampleSpec serves the sample pipeline's file. It makes no
+// cluster request: the user uploads and runs it with their own token.
+var HandlePipelineSampleSpec = withAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, cluster.PipelineSampleSpec(), "pipeline-sample")
 })
 
 // runMLflowSamples runs a samples operation; tests replace it.
@@ -1609,14 +1550,14 @@ func withAdminRead(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Req
 }
 
 // HandleS3AdminPassword returns the S3 storage's credentials: the admin UI
-// user, the S3 access key and the S3 secret key (also the admin UI
-// password), for the Pipelines tab's connection details. They are read from Secret
+// user and its own password, the S3 access key and the S3 secret key, for
+// the Pipelines tab's connection details. They are read from Secret
 // seaweedfs-s3-credentials on each request, answered only to a
 // cluster-admin, never cached (Cache-Control: no-store) and never logged:
 // the log line names the user, not the value.
 var HandleS3AdminPassword = withAdminRead(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	user, accessKey, password, err := readS3AdminLogin(c)
+	login, err := readS3AdminLogin(c)
 	var unavailable *cluster.S3AdminLoginUnavailable
 	switch {
 	case errors.As(err, &unavailable):
@@ -1629,7 +1570,7 @@ var HandleS3AdminPassword = withAdminRead(func(c *cluster.Client, w http.Respons
 		return
 	}
 	slog.Info("credential read", "op", "s3-admin-password", "user", resolveUsername(r))
-	writeJSON(w, map[string]string{"user": user, "accessKey": accessKey, "password": password}, "s3-admin-password")
+	writeJSON(w, login, "s3-admin-password")
 })
 
 // runMigrateStorage runs Migrate storage; tests replace it.

@@ -87,7 +87,7 @@ Under the table, **Clean up everything** deletes what this tool created (the pip
 1. The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
 2. The project picker (type to filter; each project says what it has).
 3. Each part shows its health, its actions and its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket and the admin UI user.
-4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket). The secret key is also the admin UI password (user `admin`). It is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
+4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket). The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
 5. **Open pipelines** (and **Open admin UI**). Each part's menu (⋮) has **Delete** (and **Repair** when it applies), only for what this tool created; a disabled entry says why.
 
 Before **Set up**, the tab shows what it needs: a DataScienceCluster component that is not Managed (with **Open Components**), no data science project (with a link to the dashboard's Projects page), or a namespace `seaweedfs` that is someone else's. Set up stays disabled, with the reason under it. Once the pipeline server is ready, **Use it** shows where its runs are, its API endpoint and a KFP SDK snippet, followed by **What next**. Problems read in plain words, with the fix (Repair, Revert, View logs) on the alert and the pod's reasons under **Technical details**. Every change runs in one dialog with its steps and outcome; if you close it, a notification brings the outcome back.
@@ -160,11 +160,13 @@ Once MLflow or a pipeline server works, one click shows it working, with no code
 
 The other samples are a training experiment with three runs and a registered model (`champion` alias), an MCP server entry (DeepWiki's public server; the Gen AI playground needs internet access to call it) and an agent skill. Everything the tool adds is tagged `rhoai-nightly-updater.sample`, and Remove deletes only that. Readers see every action disabled with the reason; without a working MLflow the section links to Set up.
 
-<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Sample pipeline in dev-project: the latest run Running for 1m 20s with View run in dashboard, 1 run of the sample, the image, Run sample pipeline and Remove sample" width="760">
+<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Run a sample pipeline in dev-project: Download rhoai-nightly-sample.yaml, Open pipelines in dev-project, and the curl commands that upload it and start a run with your own token" width="760">
 
-1. The latest run's state, read again every 5 seconds while it runs.
-2. **View run in dashboard** (and **View runs in dashboard** for all of them).
-3. **Run sample pipeline** starts a new two-step run (write a small file to the S3 storage, read it back) on the pipeline server this tool set up; **Remove sample** deletes its runs, pipeline and experiment, and the files stay in the S3 storage. The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. A pipeline server someone else created is not offered the sample.
+1. **Download rhoai-nightly-sample.yaml**: a two-step pipeline (write a small file to the S3 storage, read it back). The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. **Show the pipeline YAML** shows it with a copy button.
+2. **Open pipelines in dev-project**: choose Import pipeline and the file, then Create run.
+3. Or copy the commands: `curl` against the pipeline server's API (upload, then start a run), with your own token from `oc whoami -t`. They need `jq`.
+
+You run the sample yourself: the updater never calls a pipeline server's API, because that API is a Service in your project and the updater's token must not reach it ([SECURITY.md](SECURITY.md#serviceaccount-rbac)). It works on any ready pipeline server, the dashboard's too.
 
 Every setup has its removal on the same tab: **Delete** in the part's menu for the storage, the pipeline server and MLflow, each confirmed with the outcome first and the objects under Details; **Revert** for a deployed PR image; **Delete old storage** after Migrate storage; and **Clean up** at the bottom of each tab. What this tool did not create has no Delete.
 
@@ -288,7 +290,7 @@ Environment variables of the `app` container. The template sets the first group;
 | `VLLM_CPU_IMAGE` | unset | the Models tab's runtime image, for example a mirror on a disconnected cluster. Unset: the CPU preset's own image, or on a nightly cluster without a mirror for it the newest released `registry.redhat.io/rhaii/vllm-cpu-rhel9` found in Red Hat's public container catalog |
 | `SEAWEEDFS_IMAGE` | pinned `ghcr.io/chrislusf/seaweedfs@sha256:...` (4.54) | the S3 storage image, for example a mirror; must be a SeaweedFS 4.x whose `weed mini` reads `WEED_ADMIN_*`. `MINIO_IMAGE` is no longer read |
 | `RCLONE_IMAGE` | pinned `docker.io/rclone/rclone@sha256:...` (1.76.0) | the image of Migrate storage's copy Job, for example a mirror; must be an rclone 1.x image with `/bin/sh` |
-| `SEAWEEDFS_ACCESS_KEY_ID`, `SEAWEEDFS_SECRET_ACCESS_KEY` | random per install, kept in `seaweedfs/seaweedfs-s3-credentials` | S3 access key and secret key on a first setup (the secret key is also the admin UI password); keys already stored are kept. `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are no longer read |
+| `SEAWEEDFS_ACCESS_KEY_ID`, `SEAWEEDFS_SECRET_ACCESS_KEY` | random per install, kept in `seaweedfs/seaweedfs-s3-credentials` | S3 access key and secret key on a first setup; keys already stored are kept. The admin UI password is always random, its own, and kept in the same Secret only. `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are no longer read |
 | `STABLE_SOURCE`, `STABLE_CHANNEL` | `redhat-operators`, detected | the catalog and channel used for "stable" |
 | `DSC_SAMPLE_REF` | unset | take DSC defaults from this rhods-operator git ref instead of the installed CSV's `alm-examples` |
 | `LOG_LEVEL` | `info` | `debug`, `warn`, `error` |

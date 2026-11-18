@@ -762,7 +762,7 @@ func (f *mlflowFake) handleRegistry(w http.ResponseWriter, rule mlflowFakeRule, 
 }
 
 // samplesEnv is a fake cluster with a ready MLflow and project fakeProject,
-// and the fake MLflow (and, for pipeline tests, KFP) behind one TLS server.
+// and the fake MLflow behind one TLS server.
 type samplesEnv struct {
 	k8s    *resourceFake
 	c      *Client

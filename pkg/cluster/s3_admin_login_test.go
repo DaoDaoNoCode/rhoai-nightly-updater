@@ -7,15 +7,16 @@ import (
 	"testing"
 )
 
-// The admin UI password is the S3 secret key, read from the tool's Secret
-// only when asked for.
+// The admin UI has its own password, not the S3 secret key that every
+// pipeline project's copy holds; both are read from the tool's Secret only
+// when asked for.
 func TestS3AdminLogin(t *testing.T) {
 	t.Run("storage the tool set up", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
-		user, accessKey, password, err := S3AdminLogin(c)
-		if err != nil || user != "admin" || accessKey != "seaweedfs-key" || password != "pass" {
-			t.Fatalf("S3AdminLogin = %q, %q, %v", user, password, err)
+		login, err := S3AdminLogin(c)
+		if err != nil || login != (S3Login{User: "admin", Password: "admin-pass", AccessKey: "seaweedfs-key", SecretKey: "pass"}) {
+			t.Fatalf("S3AdminLogin = %+v, %v", login, err)
 		}
 		if n := len(f.mutations()); n != 0 {
 			t.Errorf("reading the password changed %d objects: %v", n, f.mutations())
@@ -24,10 +25,10 @@ func TestS3AdminLogin(t *testing.T) {
 
 	unavailable := func(t *testing.T, c *Client, want string) {
 		t.Helper()
-		_, _, password, err := S3AdminLogin(c)
+		login, err := S3AdminLogin(c)
 		var u *S3AdminLoginUnavailable
-		if !errors.As(err, &u) || !strings.Contains(u.Reason, want) || password != "" {
-			t.Fatalf("S3AdminLogin = %q, %v; want unavailable with %q", password, err, want)
+		if !errors.As(err, &u) || !strings.Contains(u.Reason, want) || login != (S3Login{}) {
+			t.Fatalf("S3AdminLogin = %+v, %v; want unavailable with %q", login, err, want)
 		}
 	}
 	t.Run("not set up", func(t *testing.T) {
@@ -67,11 +68,20 @@ func TestS3AdminLogin(t *testing.T) {
 		f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{}}`)
 		unavailable(t, c, "has no AWS_SECRET_ACCESS_KEY")
 	})
+	t.Run("storage of an earlier version: the keys, no admin password until Repair", func(t *testing.T) {
+		f, c := newResourceFake(t)
+		putReadyManagedS3(f)
+		f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`"}}`)
+		login, err := S3AdminLogin(c)
+		if err != nil || login.Password != "" || login.SecretKey != "pass" {
+			t.Fatalf("S3AdminLogin = %+v, %v", login, err)
+		}
+	})
 	t.Run("read error", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		f.fail["GET "+s3SecretPath] = 403
-		_, _, _, err := S3AdminLogin(c)
+		_, err := S3AdminLogin(c)
 		var u *S3AdminLoginUnavailable
 		if err == nil || errors.As(err, &u) || !IsK8sError(err, 403) {
 			t.Fatalf("err = %v; want the API error", err)

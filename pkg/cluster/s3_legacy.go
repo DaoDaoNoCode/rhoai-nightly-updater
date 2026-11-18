@@ -357,6 +357,33 @@ func (l *legacyStorage) pvcsNotDeleting() []string {
 	return names
 }
 
+// copiablePVCsNotDeleting is pvcsNotDeleting without the uncopiable PVCs:
+// their objects were never reachable by a copy, and the removal plan says
+// they are deleted, so they do not stop a removal that got past the copy.
+func (l *legacyStorage) copiablePVCsNotDeleting() []string {
+	skip := map[string]bool{}
+	for _, n := range l.uncopiable() {
+		skip[n] = true
+	}
+	var names []string
+	for _, n := range l.pvcsNotDeleting() {
+		if !skip[n] {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// anyPVCTerminating reports whether a data PVC is being deleted.
+func (l *legacyStorage) anyPVCTerminating() bool {
+	for _, p := range l.pvcs {
+		if p.Meta.terminating() {
+			return true
+		}
+	}
+	return false
+}
+
 // uncopiable returns the data PVCs whose objects no server of the earlier
 // storage serves, so a copy through its Service cannot reach them: MinIO's
 // volume once SeaweedFS replaced MinIO (2.1 to 2.3 kept it, unused).
@@ -370,7 +397,13 @@ func (l *legacyStorage) uncopiable() []string {
 // legacyStorageState converts the earlier storage into its status entry;
 // dspas are the pipeline servers, to name those that still use it, and
 // newReady tells whether the new storage is ready (see MigrateS3Storage).
-func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady bool) *types.LegacyStorageState {
+//
+// The stage is "remove" only on proof that the data moved: Migrate storage
+// recorded a verified copy (copied, migrationCopiedAnnotation), nothing is
+// left to move, and every pipeline server of this tool on the new storage
+// reaches it (DSPO's ObjectStoreAvailable). Until then it stays "migrate",
+// so Migrate storage finishes the job.
+func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady, copied bool) *types.LegacyStorageState {
 	if l == nil {
 		return nil
 	}
@@ -405,8 +438,14 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady bool) *type
 	sort.Strings(state.UsedBy)
 	sort.Strings(state.Repoint)
 	sort.Strings(state.NotMoved)
+	movedReady := true
+	for _, d := range dspas {
+		if d.managedByTool() && !d.Meta.terminating() && !l.address.usedBy(d.Meta.Namespace, d.Host) && !d.objectStoreReady() {
+			movedReady = false
+		}
+	}
 	state.Stage = "migrate"
-	if newReady && len(state.Repoint) == 0 {
+	if newReady && copied && movedReady && len(state.Repoint) == 0 {
 		state.Stage = "remove"
 		state.RemoveBlockedReason = s3TeardownBlocker(dspas, l.address)
 	}

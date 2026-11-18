@@ -86,7 +86,7 @@ func putReadyManagedS3(f *resourceFake) {
 	putS3Namespace(f, toolLabelJSON)
 	putS3Deployment(f, 1)
 	putS3Serving(f)
-	f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`"}}`)
+	f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`","WEED_ADMIN_PASSWORD":"`+exampleAuth("admin-pass")+`"}}`)
 }
 
 // readyAfterApply makes the SeaweedFS deployment report a ready rollout of
@@ -201,7 +201,7 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 	for _, e := range ctr.Env {
 		envs[e.Name] = e.Value + string(e.ValueFrom)
 	}
-	for name, key := range map[string]string{"AWS_ACCESS_KEY_ID": "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY", "WEED_ADMIN_PASSWORD": "AWS_SECRET_ACCESS_KEY"} {
+	for name, key := range map[string]string{"AWS_ACCESS_KEY_ID": "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY", "WEED_ADMIN_PASSWORD": "WEED_ADMIN_PASSWORD"} {
 		if !strings.Contains(envs[name], `"name":"seaweedfs-s3-credentials"`) || !strings.Contains(envs[name], `"key":"`+key+`"`) {
 			t.Errorf("env %s = %s, want Secret seaweedfs-s3-credentials key %s", name, envs[name], key)
 		}
@@ -483,7 +483,8 @@ func TestS3Credentials(t *testing.T) {
 		if err1 != nil || err2 != nil || k1 == k2 {
 			t.Fatalf("keys %v %v (%v %v)", k1, k2, err1, err2)
 		}
-		if !strings.HasPrefix(k1.AccessKey, "seaweedfs-") || len(k1.SecretKey) != 32 || strings.Trim(k1.SecretKey, "0123456789abcdef") != "" {
+		if !strings.HasPrefix(k1.AccessKey, "seaweedfs-") || len(k1.SecretKey) != 32 || strings.Trim(k1.SecretKey, "0123456789abcdef") != "" ||
+			len(k1.AdminPassword) != 32 || k1.AdminPassword == k1.SecretKey || k1.AdminPassword == k2.AdminPassword {
 			t.Errorf("keys = %+v", k1)
 		}
 	})
@@ -493,7 +494,17 @@ func TestS3Credentials(t *testing.T) {
 		f, c := newResourceFake(t)
 		putReadyManagedS3(f)
 		k, err := s3Credentials(c)
-		if err != nil || k.AccessKey != "seaweedfs-key" || k.SecretKey != "pass" {
+		if err != nil || k.AccessKey != "seaweedfs-key" || k.SecretKey != "pass" || k.AdminPassword != "admin-pass" {
+			t.Fatalf("keys = %+v (%v)", k, err)
+		}
+	})
+	t.Run("storage of an earlier version gets an admin password of its own; the S3 keys stay", func(t *testing.T) {
+		fastS3Timings(t)
+		f, c := newResourceFake(t)
+		putReadyManagedS3(f)
+		f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`"}}`)
+		k, err := s3Credentials(c)
+		if err != nil || k.AccessKey != "seaweedfs-key" || k.SecretKey != "pass" || len(k.AdminPassword) != 32 || k.AdminPassword == k.SecretKey {
 			t.Fatalf("keys = %+v (%v)", k, err)
 		}
 	})
@@ -895,5 +906,71 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 	}
 	if d := clk.Since(start); d != 200*time.Millisecond {
 		t.Errorf("waited %s, want the 200ms deadline", d)
+	}
+}
+
+// The admin UI reads its own password from the storage's Secret, never the
+// S3 secret key; the pipeline projects' copies carry only the S3 keys.
+func TestS3AdminPasswordIsItsOwn(t *testing.T) {
+	keys := s3Keys{AccessKey: "ak", SecretKey: "sk", AdminPassword: "ap"}
+	for _, r := range s3Resources(keys) {
+		b, _ := json.Marshal(r.obj)
+		switch r.kind {
+		case "Secret":
+			if !strings.Contains(string(b), `"WEED_ADMIN_PASSWORD":"ap"`) {
+				t.Errorf("the Secret does not hold the admin password: %s", b)
+			}
+		case "Deployment":
+			if !strings.Contains(string(b), `{"name":"WEED_ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"key":"WEED_ADMIN_PASSWORD","name":"seaweedfs-s3-credentials"}}}`) {
+				t.Errorf("WEED_ADMIN_PASSWORD does not come from its own key: %s", b)
+			}
+		}
+	}
+	var old s3DeploymentSpec
+	_ = json.Unmarshal([]byte(`{"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","env":[{"name":"WEED_ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"name":"seaweedfs-s3-credentials","key":"AWS_SECRET_ACCESS_KEY"}}}]}]}}}}`), &old)
+	if !old.adminPasswordIsS3Key() {
+		t.Error("a Deployment whose admin password is the S3 secret key is not noticed")
+	}
+}
+
+// Tear down stops Migrate storage's copy Job (by UID, only the tool's): it
+// must not keep copying into a storage being deleted.
+func TestTeardownS3Storage_DeletesTheCopyJob(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putDeployedS3(f)
+	f.putJSON(migrateJobPathT, `{"metadata":{"uid":"copy-job","labels":`+toolLabelJSON+`}}`)
+	if resp, _ := TeardownS3Storage(c, types.S3TeardownRequest{}); !resp.Success || f.has(migrateJobPathT) {
+		t.Fatalf("teardown = %+v; job left: %v", resp, f.has(migrateJobPathT))
+	}
+	f2, c2 := newResourceFake(t)
+	putDeployedS3(f2)
+	f2.putJSON(migrateJobPathT, `{"metadata":{"uid":"theirs"}}`)
+	TeardownS3Storage(c2, types.S3TeardownRequest{})
+	if !f2.has(migrateJobPathT) {
+		t.Error("a Job of that name the tool did not create was deleted")
+	}
+}
+
+// A removal past the copy is not stopped by MinIO's uncopiable volume, and
+// a server whose data volume is being deleted is not offered as "start it
+// again" (it cannot start).
+func TestSourceGone_UncopiableAndTerminatingPVCs(t *testing.T) {
+	pvc := func(name string, terminating bool) storagePVC {
+		p := storagePVC{Meta: objectMeta{Name: name}}
+		if terminating {
+			now := "2026-11-17T12:00:00Z"
+			p.Meta.DeletionTimestamp = now
+		}
+		return p
+	}
+	l := &legacyStorage{server: "SeaweedFS", pvcs: []storagePVC{pvc(legacyMinIOPVC, false), pvc("seaweedfs-pvc", true)}}
+	if got := l.copiablePVCsNotDeleting(); len(got) != 0 {
+		t.Errorf("pending = %v, want none (minio-pvc cannot be copied)", got)
+	}
+	l = &legacyStorage{server: "SeaweedFS", pvcs: []storagePVC{pvc("seaweedfs-pvc", true), pvc("other-data", false)}}
+	msg := sourceGoneMessage(l, "SeaweedFS there is not running", l.copiablePVCsNotDeleting())
+	if strings.Contains(msg, "Start the server again") || !strings.Contains(msg, "oc delete pvc other-data -n minio") {
+		t.Errorf("message = %s", msg)
 	}
 }

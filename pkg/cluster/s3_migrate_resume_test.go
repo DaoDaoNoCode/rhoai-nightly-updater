@@ -269,7 +269,7 @@ func TestRemoveOldStorage_ServerGoneWithoutRemovalDeletesNothing(t *testing.T) {
 		if ok || code != "prerequisites" || len(f.mutations()) != before {
 			t.Fatalf("got %v %s: %s; writes %v", ok, code, msg, f.mutations()[before:])
 		}
-		for _, want := range []string{"no server runs there any more", "seaweedfs-pvc, minio-pvc are not being deleted", "Nothing was deleted", "A retry gives the same result", "`oc delete pvc seaweedfs-pvc -n minio`"} {
+		for _, want := range []string{"no server runs there any more", "seaweedfs-pvc is not being deleted", "Nothing was deleted", "A retry gives the same result", "`oc delete pvc seaweedfs-pvc -n minio`"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("message lacks %q: %s", want, msg)
 			}

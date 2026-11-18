@@ -756,7 +756,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		status.MinIO.Warning = strings.TrimSpace(fmt.Sprintf("Cannot check namespace '%s' for storage from an earlier version: %v. %s", legacyNamespace, legacyErr, status.MinIO.Warning))
 	case legacy != nil:
 		newReady := status.MinIO.Ready && status.MinIO.ManagedByTool && status.MinIO.RepairNeeded == ""
-		status.LegacyStorage = legacyStorageState(legacy, dspas, newReady)
+		// Unreadable counts as not copied: the stage stays "migrate".
+		copied, _ := migrationCopied(c)
+		status.LegacyStorage = legacyStorageState(legacy, dspas, newReady, copied)
 		status.MinIO.MigrationPending = true
 	}
 

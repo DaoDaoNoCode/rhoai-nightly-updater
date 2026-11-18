@@ -268,7 +268,7 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 
 func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 	t.Setenv("RCLONE_IMAGE", "")
-	job := migrateJob("SeaweedFS", copyOverwrite)
+	job := migrateJob("SeaweedFS", copyOverwrite, false)
 	raw, _ := json.Marshal(job)
 	if strings.Contains(string(raw), legacyKey) || strings.Contains(string(raw), "seaweedfs-key") {
 		t.Fatal("a key value is in the Job")
@@ -343,11 +343,12 @@ func TestMigrateJob_RestrictedAndCredentialsOnlyFromSecretRefs(t *testing.T) {
 		env["RCLONE_CONFIG_OLD_PROVIDER"] != "SeaweedFS" || env["RCLONE_CONFIG_NEW_REGION"] != s3Region || env["COPY_MODE"] != copyOverwrite {
 		t.Errorf("env = %v (secret refs %d)", env, refs)
 	}
-	if got := migrateJob("MinIO", copyIgnoreExisting); !strings.Contains(mustJSON(got), `"RCLONE_CONFIG_OLD_PROVIDER","value":"Minio"`) || !strings.Contains(mustJSON(got), `"COPY_MODE","value":"ignore-existing"`) {
+	if got := migrateJob("MinIO", copyIgnoreExisting, false); !strings.Contains(mustJSON(got), `"RCLONE_CONFIG_OLD_PROVIDER","value":"Minio"`) || !strings.Contains(mustJSON(got), `"COPY_MODE","value":"ignore-existing"`) {
 		t.Error("a MinIO source does not use rclone's Minio provider, or the copy mode is not set")
 	}
 	script := strings.Join(ctr.Command, " ")
-	for _, want := range []string{"overwrite) rclone copy old: new: ||", "ignore-existing) rclone copy old: new: --ignore-existing ||", "rclone check old: new: --one-way --download", "rclone size old: --json", "/dev/termination-log"} {
+	for _, want := range []string{"overwrite) rclone copy old: new: --create-empty-src-dirs --metadata ||", "ignore-existing) rclone copy old: new: --create-empty-src-dirs --metadata --ignore-existing ||",
+		"rclone lsf old: --dirs-only", "rclone lsf new: --dirs-only", `"missingBuckets":%s`, "rclone check old: new: --one-way --download", "rclone size old: --json", "/dev/termination-log"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q", want)
 		}
@@ -504,6 +505,30 @@ func TestMigrate_CopyModeFollowsThePipelineServers(t *testing.T) {
 		simulateMigrate(f, sim)
 		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok || sim.mode != copyOverwrite {
 			t.Fatalf("got %v %s, copy mode %q", ok, msg, sim.mode)
+		}
+	})
+	t.Run("once a copy was verified, never again overwrite", func(t *testing.T) {
+		fastMigrateTimings(t)
+		f, c := newResourceFake(t)
+		putMigrationCase(f)
+		sim := &migrateSim{result: copyOK, objectStore: "True"}
+		simulateMigrate(f, sim)
+		if ok, msg, _, _ := runMigrate(t, c, MigrateOptions{}); !ok {
+			t.Fatal(msg)
+		}
+		if ensureMap(ensureMap(f.get(s3SecretPath), "metadata"), "annotations")[migrationCopiedAnnotation] == nil {
+			t.Fatal("the verified copy is not recorded on the new storage's Secret")
+		}
+		for _, k := range []fakeKey{
+			{gv: dspaAPIGroup, ns: "juntao-test", plural: "datasciencepipelinesapplications", name: legacyDSPAName},
+			{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: dspaName},
+		} {
+			delete(f.objects, k)
+		}
+		sim.mode = ""
+		runMigrate(t, c, MigrateOptions{})
+		if sim.mode != copyIgnoreExisting {
+			t.Errorf("a copy after a verified migration ran with COPY_MODE %q", sim.mode)
 		}
 	})
 	t.Run("a moved pipeline server writes there", func(t *testing.T) {
@@ -1091,5 +1116,49 @@ func TestGetResourcesStatus_MigrationPlan(t *testing.T) {
 	l = status.LegacyStorage
 	if l.Stage != "remove" || len(l.Repoint) != 0 || !strings.Contains(l.RemoveBlockedReason, "hand-made/dspa") {
 		t.Fatalf("legacy = %+v", l)
+	}
+}
+
+// An empty bucket has no object for the check to miss: the bucket lists
+// are compared, and a missing bucket is a copy problem.
+func TestCopyResult_MissingBuckets(t *testing.T) {
+	ok := copyResult{Identical: 4}
+	if p := ok.problem(copyOverwrite); p != nil {
+		t.Fatalf("problem = %+v", p)
+	}
+	for _, tc := range []struct {
+		n    int64
+		want string
+	}{{1, "1 bucket of the old storage is missing in the new storage"}, {-1, "the bucket lists of the two storages could not be read"}} {
+		r := copyResult{Identical: 4, MissingBuckets: tc.n}
+		if p := r.problem(copyIgnoreExisting); p == nil || p.what != tc.want || !p.retry {
+			t.Errorf("%d: problem = %+v", tc.n, p)
+		}
+	}
+}
+
+// The removal is offered only on proof: a recorded verified copy, and every
+// pipeline server of this tool on the new storage reaching it.
+func TestLegacyStorageState_RemoveNeedsProof(t *testing.T) {
+	l := &legacyStorage{address: storageAddress{service: legacyService, namespace: legacyNamespace}}
+	moved := func(storeReady string) dspaInfo {
+		return dspaInfo{
+			Meta: objectMeta{Name: dspaName, Namespace: "team-a", Labels: map[string]string{managedByLabelKey: managedByLabelValue}, Generation: 2},
+			Host: s3Host(), ObjectStore: &dspaCondition{Status: storeReady, ObservedGeneration: 2},
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		copied bool
+		dspas  []dspaInfo
+		want   string
+	}{
+		{"verified, moved server reaches it", true, []dspaInfo{moved("True")}, "remove"},
+		{"no verified copy recorded", false, []dspaInfo{moved("True")}, "migrate"},
+		{"a moved server does not reach the new storage", true, []dspaInfo{moved("False")}, "migrate"},
+	} {
+		if got := legacyStorageState(l, tc.dspas, true, tc.copied).Stage; got != tc.want {
+			t.Errorf("%s: stage %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

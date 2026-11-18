@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleStatus, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSRequest, MaaSStatus } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSRequest, MaaSStatus } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -344,12 +344,13 @@ export function teardownMinIO(deleteNamespace = false): Promise<OperationRespons
 }
 
 /**
- * The S3 storage's credentials: the admin UI user, the S3 access key and
- * the S3 secret key (also the admin UI password). The server reads them from the storage's
+ * The S3 storage's credentials: the admin UI user and its own password
+ * ("" on storage an earlier version set up, until Repair), the S3 access
+ * key and the S3 secret key. The server reads them from the storage's
  * Secret on this request only (cluster-admins only, Cache-Control:
- * no-store); keep the password out of state, logs and the DOM.
+ * no-store); keep them out of state, logs and the DOM.
  */
-export function getS3AdminLogin(): Promise<{ user: string; accessKey: string; password: string }> {
+export function getS3AdminLogin(): Promise<{ user: string; password: string; accessKey: string; secretKey: string }> {
   return request('/api/resources/minio/admin-password', { cache: 'no-store' });
 }
 
@@ -759,30 +760,9 @@ export function streamMLflowSamples(
   return streamSSE('/api/resources/samples/mlflow/stream', req, onStep, onDone, onConnectionDrop);
 }
 
-/** The sample pipeline of one project (cached on the server for 5 s, for polling a run). */
-export function getPipelineSample(project: string): Promise<PipelineSampleStatus> {
-  return request(`/api/resources/samples/pipeline?project=${encodeURIComponent(project)}`);
-}
-
-/** The body of POST /api/resources/samples/pipeline/stream (pkg/types PipelineSampleRequest). */
-export interface PipelineSampleRequest {
-  project: string;
-  action: 'run' | 'remove';
-}
-
-/**
- * Starts a run of the sample pipeline, or removes the sample, streaming
- * "check", then "experiment", "pipeline" and "run" (the first two only
- * when they are created), or for remove "runs", "pipeline", "experiment"
- * (or "remove" when nothing is there).
- */
-export function streamPipelineSample(
-  req: PipelineSampleRequest,
-  onStep: (step: UpdateStep) => void,
-  onDone: StreamDoneHandler,
-  onConnectionDrop?: StreamDetachHandler,
-): AbortController {
-  return streamSSE('/api/resources/samples/pipeline/stream', req, onStep, onDone, onConnectionDrop);
+/** The sample pipeline's file, for the user to run with their own token (no cluster request). */
+export function getPipelineSampleSpec(): Promise<PipelineSampleSpec> {
+  return request('/api/resources/samples/pipeline/spec');
 }
 
 /**

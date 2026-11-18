@@ -222,13 +222,18 @@ const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, re
               <DescriptionListGroup>
                 <DescriptionListTerm>Secret key</DescriptionListTerm>
                 <DescriptionListDescription>
-                  <S3SecretField id="storage-secret-key" field="password" label="S3 secret key" disabledReason={readReason} />
+                  <S3SecretField id="storage-secret-key" field="secretKey" label="S3 secret key" disabledReason={readReason} />
                 </DescriptionListDescription>
               </DescriptionListGroup>
               {minio?.uiUser && (
                 <DescriptionListGroup>
                   <DescriptionListTerm>Admin UI login</DescriptionListTerm>
-                  <DescriptionListDescription>User <code>{minio.uiUser}</code>; the password is the S3 secret key.</DescriptionListDescription>
+                  <DescriptionListDescription>
+                    <Stack>
+                      <StackItem><Content component="p">User <code>{minio.uiUser}</code>, with a password of its own:</Content></StackItem>
+                      <StackItem><S3SecretField id="storage-admin-password" field="password" label="admin UI password" disabledReason={readReason} /></StackItem>
+                    </Stack>
+                  </DescriptionListDescription>
                 </DescriptionListGroup>
               )}
               <DescriptionListGroup>
@@ -370,12 +375,11 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
         <>
           <StackItem><UsePipelines server={server} project={project} /></StackItem>
           <StackItem>
-            <PipelineSample project={project} unmanaged={server.managedByTool === false} readOnly={readOnly} baseReason={baseReason}
-              op={props.sampleOp} refreshKey={props.samplesRefresh} setPending={props.setPending} />
+            <PipelineSample project={project} apiRoute={server.apiRoute} uiRoute={server.uiRoute} />
           </StackItem>
           <StackItem>
             <WhatNext id="pipelines-next" items={[
-              ...(server.managedByTool === false ? [] : [<>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>]),
+              <>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>,
               <>Open pipelines in {project}, then choose Import pipeline to upload a compiled pipeline.</>,
               <>Create a run; its steps write their artifacts to the S3 storage.</>,
               <>Follow the run and open its artifacts from the run&apos;s page.</>,

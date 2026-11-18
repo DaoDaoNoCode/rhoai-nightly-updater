@@ -4,8 +4,9 @@ import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { jsonResponse, stubApi } from "../../test/apiStub";
 import { sseEvent, sseResponse } from "../../test/utils";
-import type { MLflowSamplesStatus, PipelineSampleStatus, ResourceState, ResourcesStatus, SampleStatus } from "../../types";
-import { listWords, mlflowSampleSteps, pipelineSampleSteps, runLabel, runTime, sampleLabel, sampleNote, samplesFor } from "./samples";
+import type { MLflowSamplesStatus, PipelineSampleSpec, ResourceState, ResourcesStatus, SampleStatus } from "../../types";
+import { listWords, mlflowSampleSteps, sampleLabel, sampleNote, samplesFor } from "./samples";
+import { pipelineFileHref, samplePipelineCommands } from "./PipelineSample";
 
 // No real waits: every test runs on fake timers and moves them inside act().
 const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
@@ -76,20 +77,9 @@ describe("sample words (samples.tsx)", () => {
     expect(samplesFor(list, "remove")).toEqual(["training"]);
   });
 
-  it("names the steps the server streams: removal in reverse; the pipeline's optional steps only once reported", () => {
+  it("names the steps the server streams: removal in reverse", () => {
     expect(mlflowSampleSteps("remove", ["skill", "training"]).map((s) => s.id)).toEqual(["check", "skill", "training"]);
     expect(mlflowSampleSteps("add", ["skill", "genai-demo"]).map((s) => s.title)).toEqual(["Check MLflow", "Add the agent and prompt demo", "Add the agent skill"]);
-    expect(pipelineSampleSteps("run").filter((s) => s.optional).map((s) => s.id)).toEqual(["experiment", "pipeline"]);
-  });
-
-  it("reads a run's state and time in words", () => {
-    expect(runLabel(undefined)).toEqual({ status: "not-set-up", text: "Not run yet" });
-    expect(runLabel({ id: "r", state: "RUNNING" }).text).toBe("Running");
-    expect(runLabel({ id: "r", state: "FAILED" }).status).toBe("error");
-    expect(runLabel({ id: "r", state: "SUCCEEDED" }).status).toBe("ready");
-    const now = Date.parse("2026-11-17T12:00:00Z");
-    expect(runTime({ id: "r", state: "RUNNING", createdAt: "2026-11-17T11:58:40Z" }, now)).toBe("for 1m 20s");
-    expect(runTime({ id: "r", state: "SUCCEEDED", createdAt: "2026-11-17T11:50:00Z", finishedAt: "2026-11-17T11:55:00Z" }, now)).toBe("finished 5m ago");
   });
 });
 
@@ -323,166 +313,73 @@ function cleanupAndRender(path: string) {
   renderAt(path);
 }
 
-describe("Pipelines tab: Sample pipeline", () => {
-  const pipelineStatus = (over: Partial<PipelineSampleStatus> = {}): PipelineSampleStatus => ({
-    project: "dev", available: true, server: "nightly-dspa", image: "registry.access.redhat.com/ubi9/ubi-minimal@sha256:" + "a".repeat(64),
-    state: "absent", runs: 0, runsLink: "https://rh-ai.apps.example.com/develop-train/pipelines/runs/dev/runs", ...over,
-  });
-  const section = () => screen.getByRole("region", { name: "Sample pipeline" });
-  const runLink = "https://rh-ai.apps.example.com/develop-train/pipelines/runs/dev/runs/r1";
+describe("Pipelines tab: Run a sample pipeline", () => {
+  const API = "https://ds-pipeline-nightly-dspa-dev.apps.example.com";
+  const UI = "https://rh-ai.apps.example.com/develop-train/pipelines/definitions/dev";
+  const spec: PipelineSampleSpec = {
+    name: "rhoai-nightly-sample", fileName: "rhoai-nightly-sample.yaml", description: "Sample created by rhoai-nightly-updater: a two-step pipeline",
+    image: "registry.access.redhat.com/ubi9/ubi-minimal@sha256:" + "a".repeat(64), yaml: "pipelineInfo:\n  name: rhoai-nightly-sample\nschemaVersion: 2.1.0\n",
+  };
+  const section = () => screen.getByRole("region", { name: "Run a sample pipeline" });
 
-  it("Run is one confirmed request; the steps created only when missing show only when reported", async () => {
+  it("offers the file, the dashboard import and commands with the user's own token; the tool sends nothing to the pipeline server", async () => {
     const api = stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus(),
-      "POST /api/resources/samples/pipeline/stream": sse(
-        { step: "check", status: "success", message: "The pipeline server is ready.", elapsedMs: 1 },
-        { step: "experiment", status: "success", message: "Created experiment 'rhoai-nightly-sample'", elapsedMs: 2 },
-        { step: "run", status: "success", message: "Started run r1: " + runLink, elapsedMs: 3 },
-        { step: "operation_complete", status: "success", message: "Sample pipeline run started. It usually finishes in 1-2 minutes.", elapsedMs: 4 },
-      ),
+      "/api/resources/status": status({ pipelineServers: [dspa("dev", { apiRoute: API, uiRoute: UI })] }), "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/samples/pipeline/spec": spec,
     });
     renderAt("/test-resources?tab=pipelines&project=dev");
     await tick();
-    expect(within(section()).getByText("Not run yet")).toBeInTheDocument();
-    expect(within(section()).queryByRole("button", { name: "Remove sample" })).not.toBeInTheDocument();
-    fireEvent.click(within(section()).getByRole("button", { name: "Run sample pipeline" }));
-    await tick();
-    const confirm = screen.getByRole("dialog", { name: /Run the sample pipeline in dev\?/ });
-    expect(confirm).toHaveTextContent("The first step writes a small file to the S3 storage, the second reads it back.");
-    fireEvent.click(within(confirm).getByRole("button", { name: "Run" }));
-    await tick();
-    expect(api.bodies["POST /api/resources/samples/pipeline/stream"]).toEqual([{ project: "dev", action: "run" }]);
-    const run = screen.getByRole("dialog", { name: "Run the sample pipeline in dev" });
-    expect(within(run).getByText("Create the sample's experiment")).toBeInTheDocument();
-    expect(within(run).queryByText("Upload the sample pipeline")).not.toBeInTheDocument();
-    expect(within(run).getByText("Sample pipeline run started. It usually finishes in 1-2 minutes.")).toBeInTheDocument();
-    expect(calls(api, "GET /api/resources/samples/pipeline?project=dev")).toBe(2);
+    expect(section()).toHaveTextContent("They use your own OpenShift token");
+    const download = within(section()).getByRole("link", { name: "Download rhoai-nightly-sample.yaml" });
+    expect(download).toHaveAttribute("download", "rhoai-nightly-sample.yaml");
+    expect(download).toHaveAttribute("href", pipelineFileHref(spec.yaml));
+    expect(decodeURIComponent(download.getAttribute("href")!.split(",")[1])).toBe(spec.yaml);
+    expect(within(section()).getByRole("link", { name: "Open pipelines in dev" })).toHaveAttribute("href", UI);
+    expect(within(section()).getByText(/TOKEN=\$\(oc whoami -t\)/)).toBeInTheDocument();
+    expect(within(section()).getByRole("button", { name: "Copy the commands" })).toBeInTheDocument();
+    fireEvent.click(within(section()).getByRole("button", { name: "Show the pipeline YAML" }));
+    expect(within(section()).getByText(/schemaVersion: 2.1.0/)).toBeInTheDocument();
+    expect(within(section()).queryByRole("button", { name: /Run sample pipeline|Remove sample/ })).not.toBeInTheDocument();
+    expect(api.calls.filter((c) => c.includes("/samples/pipeline") && c !== "GET /api/resources/samples/pipeline/spec")).toEqual([]);
+    expect(Object.keys(api.bodies).filter((k) => k.includes("pipeline"))).toEqual([]);
   });
 
-  it("polls every 5 seconds while the run is active, with its elapsed time, and stops once it ends", async () => {
-    let state = "RUNNING";
-    const api = stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": () => jsonResponse(pipelineStatus({ state: "present", runs: 1, latestRun: { id: "r1", state, createdAt: "2026-11-17T11:59:00Z", link: runLink, ...(state === "SUCCEEDED" ? { finishedAt: "2026-11-17T12:00:05Z" } : {}) } })),
-    });
-    renderAt("/test-resources?tab=pipelines&project=dev");
-    await tick();
-    expect(within(section()).getByText("Running")).toBeInTheDocument();
-    expect(within(section()).getByText("for 1m 0s")).toBeInTheDocument();
-    expect(within(section()).getByRole("link", { name: /View run in dashboard/ })).toHaveAttribute("href", runLink);
-    expect(within(section()).getByText("1 run of the sample in dev")).toBeInTheDocument();
-    await tick(5_000);
-    expect(calls(api, "GET /api/resources/samples/pipeline")).toBe(2);
-    expect(within(section()).getByText("for 1m 5s")).toBeInTheDocument();
-    state = "SUCCEEDED";
-    await tick(5_000);
-    expect(within(section()).getByText("Succeeded")).toBeInTheDocument();
-    await tick(60_000);
-    expect(calls(api, "GET /api/resources/samples/pipeline")).toBe(3);
-  });
-
-  it("stops polling a run that does not end after 10 minutes, with Check again", async () => {
-    const api = stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus({ state: "present", runs: 1, latestRun: { id: "r1", state: "PENDING", createdAt: "2026-11-17T12:00:00Z" } }),
-    });
-    renderAt("/test-resources?tab=pipelines&project=dev");
-    await tick();
-    await tick(11 * 60_000);
-    const n = calls(api, "GET /api/resources/samples/pipeline");
-    await tick(60_000);
-    expect(calls(api, "GET /api/resources/samples/pipeline")).toBe(n);
-    fireEvent.click(within(section()).getByRole("button", { name: "Check again" }));
-    await tick();
-    expect(calls(api, "GET /api/resources/samples/pipeline")).toBe(n + 1);
-  });
-
-  it("a failed run shows the reason and its link", async () => {
+  it("is offered on a pipeline server this tool did not create too", async () => {
     stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus({ state: "present", runs: 2, latestRun: { id: "r1", state: "FAILED", error: "task read-artifact failed", link: runLink, createdAt: "2026-11-17T11:50:00Z", finishedAt: "2026-11-17T11:52:00Z" } }),
-    });
-    renderAt("/test-resources?tab=pipelines&project=dev");
-    await tick();
-    expect(within(section()).getByText("Failed")).toBeInTheDocument();
-    const alert = within(section()).getByText("The sample run failed").closest(".pf-v6-c-alert") as HTMLElement;
-    expect(alert).toHaveTextContent("task read-artifact failed");
-    expect(within(section()).getByRole("link", { name: /View run in dashboard/ })).toHaveAttribute("href", runLink);
-  });
-
-  it("Remove says how many runs go and that the files stay, then sends one request", async () => {
-    const api = stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus({ state: "present", runs: 3, latestRun: { id: "r1", state: "SUCCEEDED" } }),
-      "POST /api/resources/samples/pipeline/stream": sse(
-        { step: "check", status: "success", message: "ok", elapsedMs: 1 },
-        { step: "runs", status: "success", message: "Deleted 3 runs", elapsedMs: 2 },
-        { step: "pipeline", status: "success", message: "Deleted pipeline", elapsedMs: 3 },
-        { step: "experiment", status: "skipped", message: "Kept experiment 'rhoai-nightly-sample': it holds 1 run this tool did not start.", elapsedMs: 4 },
-        { step: "operation_complete", status: "success", message: "Sample pipeline removed.", elapsedMs: 5 },
-      ),
-    });
-    renderAt("/test-resources?tab=pipelines&project=dev");
-    await tick();
-    fireEvent.click(within(section()).getByRole("button", { name: "Remove sample" }));
-    await tick();
-    const confirm = screen.getByRole("dialog", { name: /Remove the sample pipeline from dev\?/ });
-    expect(confirm).toHaveTextContent("Deletes the sample's 3 runs, its pipeline and its experiment from dev. The files its runs wrote stay in the S3 storage");
-    fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
-    await tick();
-    expect(api.bodies["POST /api/resources/samples/pipeline/stream"]).toEqual([{ project: "dev", action: "remove" }]);
-    const run = screen.getByRole("dialog", { name: "Remove the sample pipeline from dev" });
-    expect(within(run).getByText("Delete the sample's experiment")).toBeInTheDocument();
-    expect(within(run).queryByText("Remove the sample")).not.toBeInTheDocument();
-  });
-
-  it("a pipeline server this tool did not create: explained, not offered, nothing read", async () => {
-    const api = stubApi({
-      "/api/resources/status": status({ pipelineServers: [], unmanagedPipelineProjects: ["team"], unmanagedPipelineServers: [dspa("team", { managedByTool: false, name: "dspa" })] }),
+      "/api/resources/status": status({ pipelineServers: [], unmanagedPipelineProjects: ["team"], unmanagedPipelineServers: [dspa("team", { managedByTool: false, name: "dspa", apiRoute: API })] }),
       "/api/resources/projects": { projects: ["team"] },
+      "/api/resources/samples/pipeline/spec": spec,
     });
     renderAt("/test-resources?tab=pipelines&project=team");
     await tick();
-    expect(section()).toHaveTextContent("The one in team was created outside this tool");
-    expect(within(section()).queryByRole("button")).not.toBeInTheDocument();
-    expect(calls(api, "GET /api/resources/samples/pipeline")).toBe(0);
+    expect(within(section()).getByText(/namespace=team/)).toBeInTheDocument();
   });
 
-  it("someone else's experiment or pipeline of the sample's name: explained, no Run", async () => {
+  it("a failed read says so, with Try again", async () => {
+    let fail = true;
     stubApi({
       "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus({ state: "foreign", message: "Experiment 'rhoai-nightly-sample' was not created by this tool." }),
+      "/api/resources/samples/pipeline/spec": () => (fail ? jsonResponse({ error: "boom" }, 500) : jsonResponse(spec)),
     });
     renderAt("/test-resources?tab=pipelines&project=dev");
     await tick();
-    expect(section()).toHaveTextContent("Experiment 'rhoai-nightly-sample' was not created by this tool. The sample cannot run here.");
-    expect(within(section()).queryByRole("button", { name: "Run sample pipeline" })).not.toBeInTheDocument();
+    expect(within(section()).getByText("Cannot load the sample pipeline")).toBeInTheDocument();
+    fail = false;
+    fireEvent.click(within(section()).getByRole("button", { name: "Try again" }));
+    await tick();
+    expect(within(section()).getByRole("link", { name: "Download rhoai-nightly-sample.yaml" })).toBeInTheDocument();
   });
 
-  it("the server's reason when the sample is not available", async () => {
-    stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus({ available: false, reason: "The pipeline server reports no https API address (status.components.apiServer); its authenticated endpoint may be turned off." }),
-    });
-    renderAt("/test-resources?tab=pipelines&project=dev");
-    await tick();
-    expect(section()).toHaveTextContent("its authenticated endpoint may be turned off");
-  });
-
-  it("read-only: Run and Remove are disabled with the reason shown", async () => {
-    stubApi({
-      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
-      "/api/resources/samples/pipeline": pipelineStatus({ state: "present", runs: 1, latestRun: { id: "r1", state: "SUCCEEDED" } }),
-    });
-    renderAt("/test-resources?tab=pipelines&project=dev", { readBlocker: "You are not a cluster-admin." });
-    await tick();
-    const reason = "Read-only access: adding or removing sample data needs a cluster-admin. Ask one to do it for you.";
-    for (const name of ["Run sample pipeline", "Remove sample"]) {
-      const b = within(section()).getByRole("button", { name });
-      expect(b).toHaveAttribute("aria-disabled", "true");
-      expect(b).toHaveAccessibleDescription(reason);
-    }
+  it("the commands upload the file to the project and start a run of its newest version", () => {
+    const c = samplePipelineCommands(API + "/", "dev", spec);
+    expect(c).toContain(`API=${API}\n`);
+    expect(c).toContain("TOKEN=$(oc whoami -t)");
+    expect(c).toContain('-F "uploadfile=@rhoai-nightly-sample.yaml"');
+    expect(c).toContain('"$API/apis/v2beta1/pipelines/upload?name=rhoai-nightly-sample&namespace=dev"');
+    expect(c).toContain('"$API/apis/v2beta1/pipelines/$PIPELINE_ID/versions?page_size=1&sort_by=created_at%20desc"');
+    expect(c).toContain('"$API/apis/v2beta1/runs"');
+    expect(c).toContain('\\"pipeline_version_id\\":\\"$VERSION_ID\\"');
+    expect(c).not.toMatch(/sha256~|Bearer [^$]/);
   });
 });
 
@@ -491,7 +388,6 @@ describe("Overview: samples as the next step", () => {
     stubApi({
       "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/samples/mlflow": mlflowSamples([sample("training", "absent")]),
-      "/api/resources/samples/pipeline": { project: "dev", available: true, image: "x", state: "absent", runs: 0 },
     });
     renderAt("/test-resources");
     await tick();
@@ -502,9 +398,9 @@ describe("Overview: samples as the next step", () => {
     expect(screen.getByRole("heading", { name: "Sample data" })).toHaveFocus();
   });
 
-  it("no samples link while a feature is not ready, or on someone else's pipeline server", async () => {
+  it("no samples link while a feature is not ready", async () => {
     stubApi({
-      "/api/resources/status": status({ mlflow: none, pipelineServers: [], unmanagedPipelineProjects: ["team"], unmanagedPipelineServers: [dspa("team", { managedByTool: false, name: "dspa" })] }),
+      "/api/resources/status": status({ mlflow: none, pipelineServers: [dspa("team", { ready: false, message: "Starting" })] }),
       "/api/resources/projects": { projects: ["team"] },
     });
     renderAt("/test-resources");
