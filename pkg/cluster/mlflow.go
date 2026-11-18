@@ -111,12 +111,22 @@ func prNumberFromImage(image string) int {
 }
 
 // prOverride reports whether a PR image is active and what Revert restores
-// ("" means removing spec.image.image so the operator default applies).
+// ("" means removing spec.image.image so the operator default applies). A
+// PR image is active only while spec.image.image is one: an image someone
+// set by hand after a PR deploy is theirs, and the saved annotation is then
+// stale (staleOriginal), so Revert must not undo their change.
 func (m mlflowCR) prOverride() (active bool, revertImage string) {
-	if orig, ok := m.Metadata.Annotations[mlflowOriginalImageAnnotation]; ok {
-		return true, orig
+	if prNumberFromImage(m.image()) == 0 {
+		return false, ""
 	}
-	return prNumberFromImage(m.image()) > 0, ""
+	return true, m.Metadata.Annotations[mlflowOriginalImageAnnotation]
+}
+
+// staleOriginal: the image saved before a PR deploy is still on the CR,
+// but no PR image runs any more.
+func (m mlflowCR) staleOriginal() bool {
+	_, saved := m.Metadata.Annotations[mlflowOriginalImageAnnotation]
+	return saved && prNumberFromImage(m.image()) == 0
 }
 
 func getMLflowCR(c *Client) (mlflowCR, error) {
@@ -391,18 +401,25 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 }
 
 // patchMLflowCR merge-patches the CR, guarded by resourceVersion so a
-// concurrent change is reported instead of overwritten.
-func patchMLflowCR(c *Client, cr mlflowCR, annotations map[string]interface{}, image interface{}) error {
+// concurrent change is reported instead of overwritten. spec nil leaves the
+// spec alone.
+func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]interface{}) error {
 	meta := map[string]interface{}{"resourceVersion": cr.Metadata.ResourceVersion}
 	if len(annotations) > 0 {
 		meta["annotations"] = annotations
 	}
-	patch, _ := json.Marshal(map[string]interface{}{
-		"metadata": meta,
-		"spec":     map[string]interface{}{"image": map[string]interface{}{"image": image}},
-	})
+	body := map[string]interface{}{"metadata": meta}
+	if spec != nil {
+		body["spec"] = spec
+	}
+	patch, _ := json.Marshal(body)
 	_, _, err := c.patch(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), patch)
 	return err
+}
+
+// imageSpec is the spec patch that sets spec.image.image (nil removes it).
+func imageSpec(image interface{}) map[string]interface{} {
+	return map[string]interface{}{"image": map[string]interface{}{"image": image}}
 }
 
 // DeployMLflowPR points the MLflow CR at the PR image, pinned by digest. The
@@ -450,7 +467,9 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}
 
 	annotations := map[string]interface{}{}
-	if _, saved := cr.Metadata.Annotations[mlflowOriginalImageAnnotation]; !saved {
+	// A saved image is replaced when no PR image runs now: someone set the
+	// current image after the last PR deploy, and Revert restores that one.
+	if _, saved := cr.Metadata.Annotations[mlflowOriginalImageAnnotation]; !saved || cr.staleOriginal() {
 		original := cr.image()
 		if prNumberFromImage(original) > 0 {
 			// A PR image set by an older version: the original is unknown,
@@ -459,7 +478,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 		}
 		annotations[mlflowOriginalImageAnnotation] = original
 	}
-	if err := patchMLflowCR(c, cr, annotations, image); err != nil {
+	if err := patchMLflowCR(c, cr, annotations, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to patch MLflow CR: %v", err)
 		if IsK8sError(err, 409) {
@@ -497,7 +516,20 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	}
 	active, revertImage := cr.prOverride()
 	if !active {
-		return fail("No PR image is active, so there is nothing to revert.", "validation", "no override")
+		msg := "No PR image is active, so there is nothing to revert."
+		if cr.staleOriginal() {
+			// The image was set by hand after the PR deploy: keep it, and drop
+			// the saved image so nothing restores it later.
+			if err := patchMLflowCR(c, cr, map[string]interface{}{mlflowOriginalImageAnnotation: nil}, nil); err != nil {
+				return fail(fmt.Sprintf("No PR image is active; the image saved before the PR deploy could not be dropped: %v", err), errorCodeFromK8sErr(err), "no override, stale annotation kept")
+			}
+			current := cr.image()
+			if current == "" {
+				current = "the operator default"
+			}
+			msg = fmt.Sprintf("No PR image is active: MLflow runs %s, set after the PR deploy, so nothing was reverted. The image saved before the PR deploy no longer applies and was dropped.", current)
+		}
+		return fail(msg, "validation", "no override")
 	}
 
 	var image interface{} // nil removes spec.image.image
@@ -506,7 +538,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 		image = revertImage
 		target = revertImage
 	}
-	if err := patchMLflowCR(c, cr, map[string]interface{}{mlflowOriginalImageAnnotation: nil}, image); err != nil {
+	if err := patchMLflowCR(c, cr, map[string]interface{}{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to revert MLflow image: %v", err)
 		if IsK8sError(err, 409) {

@@ -286,6 +286,37 @@ func TestDeployAndRevertMLflowPR(t *testing.T) {
 		})
 	}
 
+	// Someone set an image by hand after a PR deploy: the saved original is
+	// stale. Revert must not undo their change; a later PR deploy saves
+	// their image instead.
+	t.Run("image changed by hand after a PR deploy", func(t *testing.T) {
+		f, c := newResourceFake(t)
+		saved := `,"annotations":{"` + mlflowOriginalImageAnnotation + `":"registry.example.com/old:1"}`
+		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", saved, `{"image":{"image":"registry.example.com/manual:2"}}`, `{}`)
+		if st := getMLflowStatus(c); st.PROverride || st.RevertImage != "" {
+			t.Errorf("status offers Revert for a hand-set image: %+v", st)
+		}
+		resp, _ := RevertMLflowImage(c)
+		if resp.Success || resp.ErrorCode != "validation" || !strings.Contains(resp.Message, "No PR image is active") || !strings.Contains(resp.Message, "registry.example.com/manual:2") {
+			t.Fatalf("revert: %+v", resp)
+		}
+		if img, _ := mlflowImageOf(f); img != "registry.example.com/manual:2" {
+			t.Errorf("revert changed the hand-set image to %q", img)
+		}
+		if _, ok := mlflowAnnotations(f)[mlflowOriginalImageAnnotation]; ok {
+			t.Error("the stale saved image must be dropped")
+		}
+
+		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", saved, `{"image":{"image":"registry.example.com/manual:2"}}`, `{}`)
+		current = digestA
+		if resp, _ := DeployMLflowPR(c, 7); !resp.Success {
+			t.Fatalf("deploy: %+v", resp)
+		}
+		if got := mlflowAnnotations(f)[mlflowOriginalImageAnnotation]; got != "registry.example.com/manual:2" {
+			t.Errorf("deploy kept the stale original %v; Revert would skip the hand-set image", got)
+		}
+	})
+
 	t.Run("revert without override", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{}`)
