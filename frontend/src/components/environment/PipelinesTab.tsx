@@ -370,12 +370,11 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
         <>
           <StackItem><UsePipelines server={server} project={project} /></StackItem>
           <StackItem>
-            <PipelineSample project={project} unmanaged={server.managedByTool === false} readOnly={readOnly} baseReason={baseReason}
-              op={props.sampleOp} refreshKey={props.samplesRefresh} setPending={props.setPending} />
+            <PipelineSample project={project} apiRoute={server.apiRoute} uiRoute={server.uiRoute} />
           </StackItem>
           <StackItem>
             <WhatNext id="pipelines-next" items={[
-              ...(server.managedByTool === false ? [] : [<>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>]),
+              <>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>,
               <>Open pipelines in {project}, then choose Import pipeline to upload a compiled pipeline.</>,
               <>Create a run; its steps write their artifacts to the S3 storage.</>,
               <>Follow the run and open its artifacts from the run&apos;s page.</>,

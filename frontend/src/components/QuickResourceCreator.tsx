@@ -28,7 +28,6 @@ import {
   revertMLflow,
   streamCleanup,
   streamMLflowSamples,
-  streamPipelineSample,
   streamModels,
   streamPlayground,
   streamMaaS,
@@ -57,7 +56,7 @@ import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
 import { RunModal, runOutcome } from "./environment/SetupRun";
-import { type SampleOp, mlflowSampleSteps, pipelineSampleSteps, samplesConfirm } from "./environment/samples";
+import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./environment/samples";
 import { MLFLOW_SAMPLES_ID } from "./environment/MLflowSamples";
 import { PIPELINE_SAMPLE_ID } from "./environment/PipelineSample";
 import { mlflowWorkspaceHref } from "./environment/UseIt";
@@ -427,9 +426,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const startSample = (p: SamplePending) => {
     if (run.run?.running) return;
     const spec = samplesConfirm(p);
-    const op: SampleOp = p.kind === "mlflow-samples"
-      ? { feature: "mlflow", project: p.project, action: p.action, samples: p.samples }
-      : { feature: "pipeline", project: p.project, action: p.action, samples: [] };
+    const op: SampleOp = { feature: "mlflow", project: p.project, action: p.action, samples: p.samples };
     setPending(null);
     setRunOpen(true);
     trackFeature(p.kind);
@@ -440,13 +437,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setSampleOp(null);
       setSamplesRefresh((n) => n + 1);
     };
-    const steps = p.kind === "mlflow-samples" ? mlflowSampleSteps(p.action, p.samples) : pipelineSampleSteps(p.action);
+    const steps = mlflowSampleSteps(p.action, p.samples);
     run.follow(spec?.runTitle ?? spec?.title ?? p.kind, steps, (onStep, onDone, onDetach) => {
       const done: StreamDoneHandler = (success, error, apiError) => { end(); onDone(success, error, apiError); };
       const detach: StreamDetachHandler = (reason) => { end(); onDetach(reason); };
-      return p.kind === "mlflow-samples"
-        ? streamMLflowSamples({ project: p.project, action: p.action, samples: p.samples }, onStep, done, detach)
-        : streamPipelineSample({ project: p.project, action: p.action }, onStep, done, detach);
+      return streamMLflowSamples({ project: p.project, action: p.action, samples: p.samples }, onStep, done, detach);
     }, p.action === "remove" ? "delete" : "change");
   };
 
@@ -618,10 +613,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     const i = playgroundIn(pg, name);
     return { name, description: i?.deployed ? `Playground: ${i.ready ? "Ready" : i.terminating ? "Deleting" : "Not ready"}${i.managedByTool ? "" : " · not managed by this tool"}` : undefined };
   });
-  // Once a feature works, its samples are the natural next step: the
-  // sample pipeline only on a pipeline server this tool set up.
-  const summaryServer = pipelinesSummary.project ? pipelineServerIn(resStatus, pipelinesSummary.project) : undefined;
-  const pipelinesSamples = pipelinesSummary.status === "ready" && !!summaryServer && summaryServer.managedByTool !== false;
+  // Once a feature works, its samples are the natural next step.
+  const pipelinesSamples = pipelinesSummary.status === "ready" && !!pipelinesSummary.project;
   const overviewRows: OverviewRow[] = [
     {
       id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: pipelinesSummary,
@@ -673,11 +666,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     : run.run?.kind === "setup" && (runFeature === "mlflow" || runFeature === "pipelines")
     ? <Content component="p">{runFeature === "mlflow"
       ? "Open MLflow workspaces to choose a project and see its experiments. On the MLflow tab, Sample data adds example experiments, traces and a model to a project in one click."
-      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run, or run the sample pipeline on the Pipelines tab to check that runs work.`}</Content>
+      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run. The Pipelines tab has a sample pipeline to check that runs work, with the commands that run it with your own token.`}</Content>
     : runFeature === "samples" && sampleRun && sampleRun.action !== "remove"
-      ? <Content component="p">{sampleRun.feature === "mlflow"
-        ? `Open ${sampleRun.project} in MLflow to see the sample data; the dashboard shows it on the pages each sample names.`
-        : "The Pipelines tab shows the run's state until it ends, with a link to the run in the dashboard."}</Content>
+      ? <Content component="p">{`Open ${sampleRun.project} in MLflow to see the sample data; the dashboard shows it on the pages each sample names.`}</Content>
       : undefined;
   const outcome = run.run ? runOutcome(run.run) : null;
 

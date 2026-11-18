@@ -1240,40 +1240,18 @@ type MLflowSamplesStatus struct {
 	Samples   []SampleStatus `json:"samples"`
 }
 
-// PipelineSampleRun is a run of the sample pipeline.
-type PipelineSampleRun struct {
-	ID string `json:"id"`
-	// State is KFP's RuntimeState: PENDING, RUNNING, SUCCEEDED, SKIPPED,
-	// FAILED, CANCELING, CANCELED or PAUSED.
-	State      string `json:"state"`
-	CreatedAt  string `json:"createdAt,omitempty"`
-	FinishedAt string `json:"finishedAt,omitempty"`
-	Error      string `json:"error,omitempty"`
-	// Link is the run in the RHOAI dashboard ("" when its address is
-	// unknown).
-	Link string `json:"link,omitempty"`
-}
-
-// PipelineSampleStatus is GET /api/resources/samples/pipeline?project=.
-type PipelineSampleStatus struct {
-	Project string `json:"project"`
-	// Available is true when the project has a ready pipeline server that
-	// this tool created (nightly-dspa); Reason says why not otherwise.
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
-	Server    string `json:"server,omitempty"`
+// PipelineSampleSpec is GET /api/resources/samples/pipeline/spec: the
+// sample pipeline, for the user to upload and run with their own token.
+type PipelineSampleSpec struct {
+	// Name is the pipeline's name; FileName the name to save YAML as.
+	Name        string `json:"name"`
+	FileName    string `json:"fileName"`
+	Description string `json:"description"`
 	// Image is the image both steps run (SAMPLE_PIPELINE_IMAGE overrides
 	// the default).
 	Image string `json:"image"`
-	// State is "absent" (nothing of the sample exists), "present" or
-	// "foreign" (a KFP experiment or pipeline of the sample's name that
-	// the tool did not create; Run and Remove are refused).
-	State     string             `json:"state,omitempty"`
-	Message   string             `json:"message,omitempty"`
-	Runs      int                `json:"runs"`
-	LatestRun *PipelineSampleRun `json:"latestRun,omitempty"`
-	// RunsLink is the project's run list in the RHOAI dashboard.
-	RunsLink string `json:"runsLink,omitempty"`
+	// YAML is the compiled pipeline (KFP IR).
+	YAML string `json:"yaml"`
 }
 
 // MLflowSamplesRequest is the body of POST /api/resources/samples/mlflow/stream.
@@ -1284,12 +1262,4 @@ type MLflowSamplesRequest struct {
 	// Samples are SampleStatus IDs, in any order; they run in the order
 	// genai-demo, training, mcp-server, skill (remove: the reverse).
 	Samples []string `json:"samples"`
-}
-
-// PipelineSampleRequest is the body of POST /api/resources/samples/pipeline/stream.
-type PipelineSampleRequest struct {
-	Project string `json:"project"`
-	// Action is "run" (start a new run) or "remove" (delete every run of
-	// the sample, its pipeline and its experiment).
-	Action string `json:"action"`
 }

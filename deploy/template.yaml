@@ -346,8 +346,8 @@ objects:
         verbs: ["create"]
       # Samples (Environment page). Not Kubernetes objects: MLflow checks
       # mlflow.kubeflow.org with SelfSubjectAccessReviews of the app's token
-      # in the sample's project, and a pipeline server's kube-rbac-proxy
-      # checks datasciencepipelinesapplications/api on its own name.
+      # in the sample's project. The sample pipeline is run by the user with
+      # their own token: no pipeline server (KFP) API rule (SECURITY.md).
       # Everything but create is limited to the samples' own names; create
       # cannot be limited by name. No unnamed delete (SECURITY.md).
       - apiGroups: ["mlflow.kubeflow.org"]
@@ -373,10 +373,6 @@ objects:
         resources: ["skills"]
         resourceNames: ["nightly-sample-mcp-builder"]
         verbs: ["get", "update", "delete"]
-      - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
-        resources: ["datasciencepipelinesapplications/api"]
-        resourceNames: ["nightly-dspa"]
-        verbs: ["get", "create", "delete"]
       # Diagnostics, prerequisite operators: whether an installed operator's
       # singleton operand (<Kind>/cluster, e.g. JobSetOperator/cluster) exists.
       # The kind comes from the operator's CSV, so the resource is "*";

@@ -86,10 +86,11 @@ only accepts a tag whose version is the top dated section. See
   never Remove), a training experiment with a registered model, an MCP
   server entry and an agent skill, each with its state and where it
   shows in the dashboard; Add all and Remove all are one operation. The
-  Pipelines tab's Sample pipeline runs a two-step write-and-read run on
-  the tool's pipeline server, follows it until it ends, links to it in
-  the dashboard and removes it. The Overview and What next point to
-  them once a feature works.
+  Pipelines tab's Run a sample pipeline offers a two-step write-and-read
+  pipeline as a file, the dashboard's import, and curl commands that
+  upload it and start a run with your own token: the updater never calls
+  a pipeline server's API, so its token never reaches a user's project.
+  The Overview and What next point to them once a feature works.
 - **Migrate storage** says why at the top of the Pipelines tab, and a
   successful migration ends with its outcome: Delete old storage is a
   separate, later action in the storage's menu.

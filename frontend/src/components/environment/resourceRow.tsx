@@ -210,8 +210,6 @@ export type Pending =
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string }
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[] }
-  /** The sample pipeline: a new run, or its removal; runs and image for the confirmation. */
-  | { kind: "pipeline-sample"; project: string; action: "run" | "remove"; runs?: number; image?: string }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
   | { kind: "setup-models"; gateway: boolean; project: string | null; releasedImage?: boolean }
   | { kind: "teardown-model"; project: string }
@@ -226,7 +224,7 @@ export type Pending =
   | { kind: "unpublish-maas"; project: string };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
-export type SamplePending = Extract<Pending, { kind: "mlflow-samples" | "pipeline-sample" }>;
+export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
 /** A Models change: one streamed request (pkg/api HandleModelsStream). */
 export type ModelsPending = Extract<Pending, { kind: "setup-models" | "teardown-model" | "teardown-gateway" }>;
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
@@ -236,7 +234,7 @@ export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas
 export const isMaaSPending = (p: Pending): p is MaaSPending => p.kind === "setup-maas" || p.kind === "teardown-maas" || p.kind === "publish-maas" || p.kind === "unpublish-maas";
 export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
-export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples" || p.kind === "pipeline-sample";
+export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway";
 
 /** What the ConfirmActionModal shows for a pending change. */

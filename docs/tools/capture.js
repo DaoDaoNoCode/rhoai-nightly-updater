@@ -518,7 +518,7 @@ async (page) => {
         pad: 24,
       });
 
-      // Samples: the MLflow tab's Sample data and the Pipelines tab's sample run.
+      // Samples: the MLflow tab's Sample data and the Pipelines tab's sample pipeline.
       const section = (name) => page.getByRole("region", { name });
       await open("/test-resources?tab=mlflow&project=dev-project", "env-samples");
       const samples = section("Sample data");
@@ -531,13 +531,13 @@ async (page) => {
         ],
         pad: 24,
       });
-      await open("/test-resources?tab=pipelines&project=dev-project", "env-samples-busy");
-      const sample = section("Sample pipeline");
+      await open("/test-resources?tab=pipelines&project=dev-project", "env-samples");
+      const sample = section("Run a sample pipeline");
       await crop("environment-pipeline-sample", sample, {
         notes: [
-          { at: label(sample, "Running"), n: 1, pos: "l" },
-          { at: sample.getByRole("link", { name: /View run in dashboard/ }), n: 2, pos: "r" },
-          { at: sample.getByRole("button", { name: "Run sample pipeline" }), n: 3, pos: "l" },
+          { at: sample.getByRole("link", { name: "Download rhoai-nightly-sample.yaml" }), n: 1, pos: "r" },
+          { at: sample.getByRole("link", { name: "Open pipelines in dev-project" }), n: 2, pos: "r" },
+          { at: sample.getByRole("button", { name: "Copy the commands" }), n: 3, pos: "l" },
         ],
         pad: 24,
       });

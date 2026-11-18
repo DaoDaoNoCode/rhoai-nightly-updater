@@ -160,11 +160,13 @@ Once MLflow or a pipeline server works, one click shows it working, with no code
 
 The other samples are a training experiment with three runs and a registered model (`champion` alias), an MCP server entry (DeepWiki's public server; the Gen AI playground needs internet access to call it) and an agent skill. Everything the tool adds is tagged `rhoai-nightly-updater.sample`, and Remove deletes only that. Readers see every action disabled with the reason; without a working MLflow the section links to Set up.
 
-<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Sample pipeline in dev-project: the latest run Running for 1m 20s with View run in dashboard, 1 run of the sample, the image, Run sample pipeline and Remove sample" width="760">
+<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Run a sample pipeline in dev-project: Download rhoai-nightly-sample.yaml, Open pipelines in dev-project, and the curl commands that upload it and start a run with your own token" width="760">
 
-1. The latest run's state, read again every 5 seconds while it runs.
-2. **View run in dashboard** (and **View runs in dashboard** for all of them).
-3. **Run sample pipeline** starts a new two-step run (write a small file to the S3 storage, read it back) on the pipeline server this tool set up; **Remove sample** deletes its runs, pipeline and experiment, and the files stay in the S3 storage. The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. A pipeline server someone else created is not offered the sample.
+1. **Download rhoai-nightly-sample.yaml**: a two-step pipeline (write a small file to the S3 storage, read it back). The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. **Show the pipeline YAML** shows it with a copy button.
+2. **Open pipelines in dev-project**: choose Import pipeline and the file, then Create run.
+3. Or copy the commands: `curl` against the pipeline server's API (upload, then start a run), with your own token from `oc whoami -t`. They need `jq`.
+
+You run the sample yourself: the updater never calls a pipeline server's API, because that API is a Service in your project and the updater's token must not reach it ([SECURITY.md](SECURITY.md#serviceaccount-rbac)). It works on any ready pipeline server, the dashboard's too.
 
 Every setup has its removal on the same tab: **Delete** in the part's menu for the storage, the pipeline server and MLflow, each confirmed with the outcome first and the objects under Details; **Revert** for a deployed PR image; **Delete old storage** after Migrate storage; and **Clean up** at the bottom of each tab. What this tool did not create has no Delete.
 

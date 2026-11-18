@@ -45,7 +45,7 @@ function baseWorld() {
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
     // Sample states by project; a project not named has none of the samples.
-    samples: { mlflow: {}, pipeline: {} },
+    samples: { mlflow: {} },
     // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
     gated: false,
   };
@@ -230,7 +230,6 @@ const scenarios = {
   "env-samples": (w) => {
     w.resources.mlflow = F.mlflowStates.running;
     w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "partial", "mcp-server": "foreign", skill: "unsupported" });
-    w.samples.pipeline["dev-project"] = F.pipelineSample("dev-project", { state: "present", runs: 3, latestRun: F.sampleRun("dev-project", "SUCCEEDED", 12) });
   },
   "env-samples-new": (w) => {
     w.resources.mlflow = F.mlflowStates.running;
@@ -239,20 +238,14 @@ const scenarios = {
   "env-samples-busy": (w) => {
     w.resources.mlflow = F.mlflowStates.running;
     w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "partial", training: "present", "mcp-server": "present", skill: "unknown" });
-    w.samples.pipeline["dev-project"] = F.pipelineSample("dev-project", { state: "present", runs: 1, latestRun: F.sampleRun("dev-project", "RUNNING", 80 / 60) });
   },
   "env-samples-failed": (w) => {
     w.resources.mlflow = F.mlflowStates.running;
     w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "present", "mcp-server": "present", skill: "present" });
-    w.samples.pipeline["dev-project"] = F.pipelineSample("dev-project", {
-      state: "present", runs: 2,
-      latestRun: F.sampleRun("dev-project", "FAILED", 6, { error: "task 'read-artifact' failed: the step's container could not start: Back-off pulling image \"" + F.SAMPLE_PIPELINE_IMAGE + "\"" }),
-    });
   },
   "env-samples-foreign": (w) => {
     w.resources.mlflow = F.mlflowStates.running;
     w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { training: "foreign", "mcp-server": "foreign", skill: "foreign" });
-    w.samples.pipeline["dev-project"] = F.pipelineSample("dev-project", { state: "foreign", message: "Experiment 'rhoai-nightly-sample' exists but was not created by this tool (no pipeline of that name is), so it is left unchanged." });
   },
   "env-samples-reader": (w) => { scenarios["env-samples"](w); w.canMutate = false; },
   // Models: every state of the gateway and the model, one scenario each.
@@ -639,14 +632,6 @@ function mlflowSamplesOf(project) {
   return world.samples.mlflow[project] ?? F.mlflowSamples(project);
 }
 
-/** The sample pipeline of a project (pkg/cluster GetPipelineSampleStatus). */
-function pipelineSampleOf(project) {
-  const ps = (world.resources.pipelineServers ?? []).find((p) => p.namespace === project && p.managedByTool !== false);
-  if (!ps) return { project, available: false, reason: "This project has no pipeline server created by this tool. Set one up first.", image: F.SAMPLE_PIPELINE_IMAGE, runs: 0 };
-  if (!ps.ready) return { project, available: false, reason: "The pipeline server is not ready yet.", image: F.SAMPLE_PIPELINE_IMAGE, runs: 0 };
-  return world.samples.pipeline[project] ?? F.pipelineSample(project);
-}
-
 /** Streams events, each after /__docs/advance in gated mode, then the result. */
 async function sampleStream(req, res, type, label, events, apply, done) {
   beginOperation(type, label);
@@ -687,40 +672,6 @@ async function mlflowSamplesStream(req, res) {
   return sampleStream(req, res, "mlflow-samples", "MLflow samples", events, apply, `Samples ${verb} in project '${project}'.`);
 }
 
-/** POST /api/resources/samples/pipeline/stream: start a sample run, or remove the sample. */
-async function pipelineSampleStream(req, res) {
-  const { project = "dev-project", action = "run" } = await body(req);
-  const current = pipelineSampleOf(project);
-  const check = [
-    { step: "check", status: "running", message: `Checking the pipeline server in '${project}'...` },
-    { step: "check", status: "success", message: "The pipeline server is ready." },
-  ];
-  if (action === "run") {
-    const run = F.sampleRun(project, "PENDING", 0);
-    const events = [
-      ...check,
-      ...(current.state === "absent" ? [
-        { step: "experiment", status: "running", message: "Creating KFP experiment 'rhoai-nightly-sample'..." },
-        { step: "experiment", status: "success", message: "Created experiment 'rhoai-nightly-sample'" },
-        { step: "pipeline", status: "running", message: `Uploading pipeline 'rhoai-nightly-sample' (image ${F.SAMPLE_PIPELINE_IMAGE})...` },
-        { step: "pipeline", status: "success", message: "Uploaded pipeline 'rhoai-nightly-sample'" },
-      ] : []),
-      { step: "run", status: "running", message: "Starting a run..." },
-      { step: "run", status: "success", message: `Started run ${run.id}: ${run.link}` },
-    ];
-    const apply = () => { world.samples.pipeline[project] = { ...current, state: "present", runs: current.runs + 1, latestRun: run }; };
-    return sampleStream(req, res, "pipeline-sample", "Sample pipeline", events, apply, "Sample pipeline run started. It usually finishes in 1-2 minutes.");
-  }
-  const events = [
-    ...check,
-    { step: "runs", status: "success", message: `Deleted ${current.runs} ${current.runs === 1 ? "run" : "runs"}` },
-    { step: "pipeline", status: "success", message: "Deleted pipeline 'rhoai-nightly-sample'" },
-    { step: "experiment", status: "success", message: "Deleted experiment 'rhoai-nightly-sample'" },
-  ];
-  const apply = () => { world.samples.pipeline[project] = F.pipelineSample(project); };
-  return sampleStream(req, res, "pipeline-sample", "Sample pipeline", events, apply, "Sample pipeline removed. Its artifacts stay in the S3 storage until the storage is torn down.");
-}
-
 const routes = {
   "GET /api/status": () => world.status,
   "GET /api/operation": () => world.operation,
@@ -741,7 +692,7 @@ const routes = {
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => world.maas,
   "GET /api/resources/samples/mlflow": (u) => mlflowSamplesOf(u.searchParams.get("project") || ""),
-  "GET /api/resources/samples/pipeline": (u) => pipelineSampleOf(u.searchParams.get("project") || ""),
+  "GET /api/resources/samples/pipeline/spec": () => F.pipelineSampleSpec,
   // Made up, like every value here.
   "GET /api/resources/minio/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", password: "docs-mock-password" }),
   "GET /api/activity": () => world.status.activity ?? [],
@@ -787,7 +738,6 @@ async function api(req, res, u) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });
   }
   if (key === "POST /api/resources/samples/mlflow/stream") return mlflowSamplesStream(req, res);
-  if (key === "POST /api/resources/samples/pipeline/stream") return pipelineSampleStream(req, res);
   if (key === "POST /api/resources/pipeline-server/setup") {
     const { project = "dev-project" } = await body(req);
     return mutation(res, "setup-pipeline-server", "Set up pipeline server", () => {

@@ -619,7 +619,7 @@ export const modelsStatus = (over = {}) => ({
 
 export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 6Gi of memory free (up to 8Gi), and the most CPU free is 2.3 CPUs and 41.2 GiB on ip-10-0-1-23.ec2.internal. It may stay pending until a node is added or other workloads stop; the setup still runs.";
 
-// --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleStatus) ---
+// --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleSpec) ---
 // The names, messages and actions are the backend's (pkg/cluster samples_*.go).
 
 const SAMPLE_MARKER = "rhoai-nightly-updater.sample";
@@ -678,22 +678,78 @@ export const mlflowSamples = (project, states = {}) => ({
 });
 
 export const SAMPLE_PIPELINE_IMAGE = `registry.access.redhat.com/ubi9/ubi-minimal@${digest("ubi9-minimal")}`;
-const runsLink = (project) => `${DASHBOARD_URL}/develop-train/pipelines/runs/${project}/runs`;
-
-/** A run of the sample pipeline, started `minutes` before NOW. */
-export function sampleRun(project, state, minutes, extra = {}) {
-  const id = hex(`${project}-${state}-${minutes}`, 8) + "-" + hex(state, 4) + "-4" + hex(project, 3) + "-8" + hex(String(minutes), 3) + "-" + hex(project + state, 12);
-  return {
-    id, state, createdAt: ago(minutes), link: `${runsLink(project)}/${id}`,
-    ...(["SUCCEEDED", "FAILED", "CANCELED", "SKIPPED"].includes(state) ? { finishedAt: ago(Math.max(0, minutes - 2)) } : {}),
-    ...extra,
-  };
-}
-
-/** The sample pipeline of a project with this tool's pipeline server. */
-export const pipelineSample = (project, over = {}) => ({
-  project, available: true, server: "nightly-dspa", image: SAMPLE_PIPELINE_IMAGE, state: "absent", runs: 0, runsLink: runsLink(project), ...over,
-});
+/** GET /api/resources/samples/pipeline/spec (pkg/cluster PipelineSampleSpec: the same YAML). */
+export const pipelineSampleSpec = {
+  name: "rhoai-nightly-sample", fileName: "rhoai-nightly-sample.yaml",
+  description: "Sample created by rhoai-nightly-updater: a two-step pipeline that writes an artifact and reads it back.",
+  image: SAMPLE_PIPELINE_IMAGE,
+  yaml: `components:
+    comp-read-artifact:
+        executorLabel: exec-read-artifact
+        inputDefinitions:
+            artifacts:
+                greeting:
+                    artifactType:
+                        schemaTitle: system.Artifact
+                        schemaVersion: 0.0.1
+    comp-write-artifact:
+        executorLabel: exec-write-artifact
+        outputDefinitions:
+            artifacts:
+                greeting:
+                    artifactType:
+                        schemaTitle: system.Artifact
+                        schemaVersion: 0.0.1
+deploymentSpec:
+    executors:
+        exec-read-artifact:
+            container:
+                args:
+                    - echo "Read $0:" && cat "$0"
+                    - '{{$.inputs.artifacts[''greeting''].path}}'
+                command:
+                    - sh
+                    - -c
+                image: ${SAMPLE_PIPELINE_IMAGE}
+        exec-write-artifact:
+            container:
+                args:
+                    - mkdir -p "$(dirname "$0")" && echo "Hello from the rhoai-nightly-updater sample pipeline" > "$0" && echo "Wrote $0"
+                    - '{{$.outputs.artifacts[''greeting''].path}}'
+                command:
+                    - sh
+                    - -c
+                image: ${SAMPLE_PIPELINE_IMAGE}
+pipelineInfo:
+    description: 'Sample created by rhoai-nightly-updater: a two-step pipeline that writes an artifact and reads it back.'
+    name: rhoai-nightly-sample
+root:
+    dag:
+        tasks:
+            read-artifact:
+                cachingOptions: {}
+                componentRef:
+                    name: comp-read-artifact
+                dependentTasks:
+                    - write-artifact
+                inputs:
+                    artifacts:
+                        greeting:
+                            taskOutputArtifact:
+                                outputArtifactKey: greeting
+                                producerTask: write-artifact
+                taskInfo:
+                    name: read-artifact
+            write-artifact:
+                cachingOptions: {}
+                componentRef:
+                    name: comp-write-artifact
+                taskInfo:
+                    name: write-artifact
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.13.0
+`,
+};
 
 // --- Versions and the update check ---------------------------------------------
 

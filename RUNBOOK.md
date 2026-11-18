@@ -325,14 +325,14 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 | DSPA or project stuck Terminating | §11.4 |
 | MLflow teardown hangs / DSC change waits on MLflow | §11.4 |
 | Sample data: "Too many requests. Please wait 30 seconds" | One samples operation per user and route every 30 seconds. Use **Add all** / **Remove all** (one request) instead of one row after another |
-| Sample data or the sample pipeline: "lacks the rights for this call" | The updater's ServiceAccount misses the samples rules: re-apply the template (`make upgrade`). MLflow caches access decisions for up to 5 minutes, so retry after that |
+| Sample data: "lacks the rights for this call" | The updater's ServiceAccount misses the samples rules: re-apply the template (`make upgrade`). MLflow caches access decisions for up to 5 minutes, so retry after that |
 | Sample **Partly added** | An earlier Add stopped part-way; the row names what is missing. **Add** (or **Regenerate** for the agent and prompt demo) completes it |
 | Sample **Not managed by this tool** | Something of the sample's name exists without the `rhoai-nightly-updater.sample` tag; the tool never changes or deletes it. Rename or delete it in MLflow if it is yours to remove |
 | Agent and prompt demo has no Remove | By design: the updater holds no right to delete MLflow data it did not name. Remove it in the MLflow UI; Clean up leaves it |
 | Agent skill **Not available** | This MLflow has no Skill Registry (older RHOAI releases). The dashboard's AI hub > Skills also needs the `skillRegistry` flag |
-| Sample run Failed: an image cannot be pulled | Disconnected or mirrored cluster: mirror the image the section shows, or set `SAMPLE_PIPELINE_IMAGE` on the updater to a pullable copy, then **Run sample pipeline** again |
-| Sample pipeline not offered | It runs only on a ready pipeline server this tool set up (`nightly-dspa`); the section says which condition is missing. A KFP experiment or pipeline `rhoai-nightly-sample` someone else created blocks it |
-| Sample run stays Pending | The section stops checking after 10 minutes (**Check again**). Open the run in the dashboard for its step's state |
+| Sample pipeline run Failed: an image cannot be pulled | Disconnected or mirrored cluster: mirror the image the section shows, or set `SAMPLE_PIPELINE_IMAGE` on the updater to a pullable copy, download the file again and import it as a new pipeline (or a new version) |
+| Sample pipeline commands: `curl: (22) ... 401` or `403` | The commands use your own token (`oc whoami -t`): log in again with `oc login`, and check you can edit the project. The updater does not run the sample for you |
+| Sample pipeline commands: upload fails with "already exists" | A pipeline `rhoai-nightly-sample` is in the project already. Start another run with the last command (in the same shell), or delete the pipeline in the dashboard first |
 
 ### 10.2 Models: the inference gateway and a CPU model
 
