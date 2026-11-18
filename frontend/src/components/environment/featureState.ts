@@ -537,7 +537,7 @@ export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState
   const status = maasPlatformStatus(m, busy);
   const unmanaged = m.platform.deployed && !m.platform.managedByTool;
   const suffix = unmanaged ? NOT_MANAGED : "";
-  const published = (m.items ?? []).filter((i) => i.published);
+  const published = (m.items ?? []).filter((i) => i.published && !i.partly);
   if (status === "ready") {
     const what = published.length === 0 ? "no model of this tool published" : `${published.length} ${published.length === 1 ? "model" : "models"} published`;
     const href = maasDashboardHref(m.dashboardUrl);

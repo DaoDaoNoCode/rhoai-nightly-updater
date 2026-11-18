@@ -180,7 +180,7 @@ func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := GetMaaSStatus(mc.c)
-	if err != nil || len(st.Items) != 1 || st.Items[0].Namespace != "gone" || !st.Items[0].Published {
+	if err != nil || len(st.Items) != 1 || st.Items[0].Namespace != "gone" || !st.Items[0].Published || !st.Items[0].Partly {
 		t.Fatalf("status items = %+v, %v", st.Items, err)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "gone"}); !res.Success {

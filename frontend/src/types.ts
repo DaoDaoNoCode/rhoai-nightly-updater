@@ -1081,6 +1081,8 @@ export interface MaaSModel extends ResourceState {
   displayName?: string;
   modelReady: boolean;
   published: boolean;
+  /** What is left of a publication undone half-way (message says what); Unpublish finishes it. */
+  partly?: boolean;
   phase?: string;
   endpoint?: string;
   access?: string;

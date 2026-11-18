@@ -28,7 +28,7 @@ export const MAAS_POLL_MS = 5_000;
 
 /** Something about MaaS may still change on its own: a part or a publication on its way. */
 export function maasSettling(m: MaaSStatus | null): boolean {
-  return !!m && (m.parts.some((p) => p.state === "waiting") || (m.items ?? []).some((i) => i.published && !i.ready));
+  return !!m && (m.parts.some((p) => p.state === "waiting") || (m.items ?? []).some((i) => i.published && !i.ready && !i.partly));
 }
 
 /** GET /api/resources/maas, read again when refreshKey changes and every few seconds while something settles. */
@@ -98,8 +98,9 @@ const PlatformPart: React.FC<{ part: MaaSPart }> = ({ part }) => (
 );
 
 /** The words for a model's publication. */
-function publication(i: MaaSModel): string {
+export function maasPublication(i: MaaSModel): string {
   if (!i.published) return "Not published";
+  if (i.partly) return i.message ?? "Partly published. Unpublish to finish removing it.";
   if (i.ready) return "Published";
   return `Published, waiting (reference ${i.phase || "pending"}, access ${i.access || "pending"}, subscription ${i.subscription || "pending"})`;
 }
@@ -137,8 +138,8 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                   <Td dataLabel="Project" modifier="wrap">{project}</Td>
                   <Td dataLabel="In MaaS" modifier="wrap">
                     <Stack>
-                      <StackItem><EnvStatusLabel status={running(project) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem>
-                      <StackItem><Content component="small">{publication(i)}</Content></StackItem>
+                      <StackItem><EnvStatusLabel status={running(project) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem>
+                      <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>

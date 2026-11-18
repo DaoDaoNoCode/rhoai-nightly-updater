@@ -5,7 +5,7 @@ import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
 import type { MaaSStatus } from "../../types";
 import { IDLE, maasState } from "./featureState";
-import { maasCurl, maasSteps } from "./MaaSTab";
+import { maasCurl, maasPublication, maasSettling, maasSteps } from "./MaaSTab";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import type { ResourcesStatus } from "../../types";
 
@@ -46,6 +46,15 @@ describe("maasState", () => {
     }), IDLE);
     expect(s.label).toBe("Ready, 1 model published");
     expect(s.next).toEqual({ kind: "open", label: "Open MaaS in the dashboard", href: "https://rh-ai.apps.example.com/maas" });
+  });
+
+  it("a publication left half-way says what is left, is not counted, and does not keep the tab polling", () => {
+    const partly = { namespace: "old", deployed: true, ready: false, managedByTool: true, modelReady: false, published: true, partly: true,
+      message: "Partly published: the model is gone; this tool's record of the publication still in place. Unpublish to finish removing it." };
+    const m = base([{ id: "dsc", title: "DSC", state: "ready" }], { platform: { deployed: true, ready: true, managedByTool: true }, items: [partly] });
+    expect(maasState(m, IDLE).label).toBe("Ready, no model of this tool published");
+    expect(maasSettling(m)).toBe(false);
+    expect(maasPublication(partly)).toBe(partly.message);
   });
 
   it("someone else's MaaS is labelled not managed", () => {

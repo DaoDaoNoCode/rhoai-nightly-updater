@@ -1117,7 +1117,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			// A publication undone half-way (live: Unpublish deleted the
 			// model reference, then failed on the model): Unpublish again
 			// finishes it, so the tab must still offer it.
-			item.Published, item.Deployed = true, true
+			item.Published, item.Deployed, item.Partly = true, true, true
 			item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
 		} else {
 			item.Message = "Not published"
@@ -1153,6 +1153,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 					Message: "Partly published: the model is gone; " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
 				DisplayName: maasModelRefName,
 				Published:   true,
+				Partly:      true,
 			})
 		}
 	}
