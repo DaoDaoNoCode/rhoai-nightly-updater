@@ -249,7 +249,7 @@ async (page) => {
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
-      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "ready", "publishing", "published", "foreign", "no-model"]) {
+      for (const st of ["none", "blocked", "no-cnpg", "starting", "tls", "new-tls", "ready", "publishing", "published", "orphan", "foreign", "no-model"]) {
         for (const dark of [false, true]) {
           await open("/test-resources?tab=maas", `env-maas-${st}`, { dark, width: 1440 });
           await fit();
@@ -259,6 +259,20 @@ async (page) => {
       await open("/test-resources", "env-maas-published");
       await fit();
       await page.screenshot({ path: `${out}/themes/maas-overview-light.png` });
+    },
+
+    // Not a docs image: Remove MaaS refused because others use MaaS, the
+    // confirmation and then the run, light and dark (screenshots.sh
+    // maas-remove-review, THEMES_DIR).
+    async "maas-remove-review"() {
+      for (const dark of [false, true]) {
+        await open("/test-resources?tab=maas", "env-maas-in-use", { dark, width: 1440 });
+        await page.getByRole("button", { name: "Remove MaaS..." }).click();
+        await page.screenshot({ path: `${out}/themes/maas-remove-confirm-${dark ? "dark" : "light"}.png` });
+        await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
+        await page.getByText("Others use this MaaS platform").first().waitFor();
+        await page.screenshot({ path: `${out}/themes/maas-in-use-${dark ? "dark" : "light"}.png` });
+      }
     },
 
     // Not a docs image: the Playground tab in every state, light and dark,

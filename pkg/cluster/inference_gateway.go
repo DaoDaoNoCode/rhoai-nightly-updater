@@ -188,16 +188,57 @@ func (g gatewayObject) admits(namespace string, labels map[string]string) string
 					match = false
 				}
 			}
-			if match && len(sel.MatchExpressions) > 0 {
-				result = "unknown"
-				continue
-			}
 			if match {
-				return "yes"
+				switch matchExpressions(sel.MatchExpressions, namespace, labels) {
+				case "yes":
+					return "yes"
+				case "unknown":
+					result = "unknown"
+				}
 			}
 		}
 	}
 	return result
+}
+
+// matchExpressions evaluates a label selector's expressions (In, NotIn,
+// Exists, DoesNotExist, as metav1.LabelSelectorRequirement) against a
+// namespace's labels, with kubernetes.io/metadata.name, which the API
+// server sets on every namespace: "yes", "no", or "unknown" for an
+// expression it cannot read.
+func matchExpressions(exprs []json.RawMessage, namespace string, labels map[string]string) string {
+	all := map[string]string{"kubernetes.io/metadata.name": namespace}
+	for k, v := range labels {
+		all[k] = v
+	}
+	for _, raw := range exprs {
+		var e struct {
+			Key      string   `json:"key"`
+			Operator string   `json:"operator"`
+			Values   []string `json:"values"`
+		}
+		if json.Unmarshal(raw, &e) != nil {
+			return "unknown"
+		}
+		v, has := all[e.Key]
+		var ok bool
+		switch e.Operator {
+		case "In":
+			ok = has && containsString(e.Values, v)
+		case "NotIn":
+			ok = !has || !containsString(e.Values, v)
+		case "Exists":
+			ok = has
+		case "DoesNotExist":
+			ok = !has
+		default:
+			return "unknown"
+		}
+		if !ok {
+			return "no"
+		}
+	}
+	return "yes"
 }
 
 // gatewayOwned: this tool created the object. It carries the tool label

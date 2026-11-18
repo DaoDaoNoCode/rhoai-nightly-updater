@@ -5,7 +5,7 @@ import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
 import type { MaaSStatus } from "../../types";
 import { IDLE, maasState } from "./featureState";
-import { maasCurl, maasSteps } from "./MaaSTab";
+import { maasCurl, maasPublication, maasSettling, maasSteps } from "./MaaSTab";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import type { ResourcesStatus } from "../../types";
 
@@ -21,10 +21,22 @@ describe("maasState", () => {
     expect(s.next).toEqual({ kind: "set-up", label: "Set up MaaS", setup: [{ kind: "setup-maas" }], reason: "No Kuadrant" });
   });
 
-  it("a manual part (Authorino TLS) needs attention and points at it", () => {
-    const s = maasState(base([{ id: "database", title: "Database", state: "ready" }, { id: "authorino-tls", title: "Authorino TLS", state: "manual" }]), IDLE);
+  it("once MaaS is on, a manual part (Authorino TLS) needs attention and points at it", () => {
+    const s = maasState(base([{ id: "database", title: "Database", state: "ready" }, { id: "authorino-tls", title: "Authorino TLS", state: "manual" }], { platform: { deployed: true, ready: false, managedByTool: true } }), IDLE);
     expect(s.status).toBe("needs-attention");
     expect(s.next).toEqual({ kind: "show-issue", part: "maas-authorino-tls" });
+  });
+
+  it("before MaaS is on, manual and waiting parts do not hide Set up: only the platform's block does", () => {
+    const parts: MaaSStatus["parts"] = [
+      { id: "dsc", title: "DSC", state: "missing" },
+      { id: "kuadrant", title: "Kuadrant", state: "waiting" },
+      { id: "authorino-tls", title: "Authorino TLS", state: "manual" },
+      { id: "maas-api", title: "maas-api", state: "missing" },
+    ];
+    const s = maasState(base(parts), IDLE);
+    expect(s.status).toBe("not-set-up");
+    expect(s.next).toEqual({ kind: "set-up", label: "Set up MaaS", setup: [{ kind: "setup-maas" }], reason: null });
   });
 
   it("ready: counts the published models and opens the dashboard's MaaS pages", () => {
@@ -34,6 +46,15 @@ describe("maasState", () => {
     }), IDLE);
     expect(s.label).toBe("Ready, 1 model published");
     expect(s.next).toEqual({ kind: "open", label: "Open MaaS in the dashboard", href: "https://rh-ai.apps.example.com/maas" });
+  });
+
+  it("a publication left half-way says what is left, is not counted, and does not keep the tab polling", () => {
+    const partly = { namespace: "old", deployed: true, ready: false, managedByTool: true, modelReady: false, published: true, partly: true,
+      message: "Partly published: the model is gone; this tool's record of the publication still in place. Unpublish to finish removing it." };
+    const m = base([{ id: "dsc", title: "DSC", state: "ready" }], { platform: { deployed: true, ready: true, managedByTool: true }, items: [partly] });
+    expect(maasState(m, IDLE).label).toBe("Ready, no model of this tool published");
+    expect(maasSettling(m)).toBe(false);
+    expect(maasPublication(partly)).toBe(partly.message);
   });
 
   it("someone else's MaaS is labelled not managed", () => {
@@ -71,6 +92,13 @@ describe("Clean up everything with MaaS", () => {
     expect(c.maasPlatform).toBe(true);
     expect(cleanupSteps({ maasPublished: ["p"], models: ["p"], maasPlatform: true }).map((s) => s.id)).toEqual(["maas-unpublish:p", "model:p", "maas-platform"]);
     expect(cleanupCandidates(status, "models", false, null, maas).maasPlatform).toBe(false);
+  });
+
+  it("Clean up from the Models tab offers the publication and blocks deleting a published model without it", () => {
+    const withModel = { ...status, models: { items: [{ namespace: "p", name: "m", deployed: true, ready: true, managedByTool: true }] } } as unknown as ResourcesStatus;
+    const c = cleanupCandidates(withModel, "models", false, null, maas);
+    expect(c.maasPublished).toEqual(["p"]);
+    expect(cleanupBlocked(withModel, { models: ["p"] }, c.maasPublished)).toContain("published to MaaS");
   });
 
   it("a published model cannot go without its publication", () => {

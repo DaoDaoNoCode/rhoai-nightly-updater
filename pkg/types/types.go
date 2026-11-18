@@ -865,6 +865,9 @@ type MaaSModel struct {
 	ModelReady bool `json:"modelReady"`
 	// Published: this tool published it (its MaaSModelRef exists).
 	Published bool `json:"published"`
+	// Partly: what is left of a publication undone half-way (Message says
+	// what); Unpublish finishes it. Nothing about it settles on its own.
+	Partly bool `json:"partly,omitempty"`
 	// Phase is the MaaSModelRef's phase ("Ready", ...).
 	Phase string `json:"phase,omitempty"`
 	// Endpoint is the MaaSModelRef's status.endpoint.

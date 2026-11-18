@@ -287,6 +287,12 @@ const scenarios = {
   "env-maas-published": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true)] }); },
   "env-maas-foreign": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("foreign", { items: [F.maasModel(false)] }); },
   "env-maas-no-model": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready"); },
+  // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
+  "env-maas-new-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { tls: false, items: [F.maasModel(false)] }); },
+  // A recorded publication whose model was deleted elsewhere: a row with Unpublish.
+  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true), F.maasOrphanPublication("old-project")] }); },
+  // Others publish through the platform: Remove refuses before changing anything.
+  "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
   "env-playground-model-not-ready": (w) => {
     scenarios["env-models-ready"](w);
@@ -597,6 +603,16 @@ async function maasStream(req, res) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  if (action === "teardown" && world.maasRefusal) {
+    // A refusal at "check": nothing changed (pkg/cluster teardown).
+    send({ step: "check", status: "running", message: "Checking what this tool set up..." });
+    await nextStep();
+    send({ step: "check", status: "failed", message: world.maasRefusal, errorCode: "in_use" });
+    endOperation(false, world.maasRefusal);
+    send({ step: "operation_complete", status: "failed", message: world.maasRefusal, errorCode: "in_use" });
+    res.end();
+    return;
+  }
   const steps = {
     setup: [["check", "Everything the platform needs is there."], ["database", `The database runs, and Secret ${F.MAAS_INFRA}/maas-db-config holds its connection URL (sslmode=require).`],
       ["gateway", "Programmed; https://maas.apps.example.com is published in DNS."], ["authorino-tls", "Authorino serves TLS and trusts the service CA."],

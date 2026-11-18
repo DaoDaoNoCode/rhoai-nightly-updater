@@ -15,7 +15,7 @@ shopt -s nullglob
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 IMAGES="$ROOT/docs/images"
 PORT=${PORT:-18181}
-SESSION=docs-screenshots
+SESSION=${SESSION:-docs-screenshots}
 ALL_JOBS=(pages status banners components builds dashdev resources diagnostics
   gif-update gif-install gif-migrate gif-repair gif-diagnostics gif-pr-search)
 if [ $# -gt 0 ]; then JOBS=("$@"); else JOBS=("${ALL_JOBS[@]}"); fi

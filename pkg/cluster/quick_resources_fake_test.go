@@ -45,7 +45,10 @@ type resourceFake struct {
 	// failDryRun maps "METHOD /path" to an HTTP status to return for a
 	// server-side dry run (?dryRun=All) of that request.
 	failDryRun map[string]int
-	requests   []string
+	// onMergePatch, when set, sees each merge patch and the object it
+	// produces (under the lock), for example to record managedFields.
+	onMergePatch func(r *http.Request, k fakeKey, patch, next map[string]interface{})
+	requests     []string
 }
 
 type fakeKey struct {
@@ -423,6 +426,17 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		if _, ok := patch["spec"]; ok {
 			n, _ := strconv.Atoi(fmt.Sprint(nextMeta["generation"]))
 			nextMeta["generation"] = n + 1
+		}
+		if f.onMergePatch != nil {
+			f.onMergePatch(r, k, patch, next)
+		}
+		// A terminating object whose last finalizer is removed is deleted.
+		if fin, _ := nextMeta["finalizers"].([]interface{}); nextMeta["deletionTimestamp"] != nil && len(fin) == 0 {
+			if !dryRun {
+				delete(f.objects, k)
+			}
+			f.write(w, 200, next)
+			return
 		}
 		if !dryRun {
 			f.objects[k] = next

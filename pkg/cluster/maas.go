@@ -57,7 +57,7 @@ import (
 // models-as-a-service (docs/samples/maas-system/free/maas).
 
 const (
-	maasAPIGroup     = "maas.opendatahub.io/v1alpha1"
+	maasGroup        = "maas.opendatahub.io"
 	maasGatewayName  = "maas-default-gateway"
 	maasGatewayClass = "openshift-default"
 	maasHostPrefix   = "maas."
@@ -78,9 +78,15 @@ const (
 	maasSubscriptionName  = "rhoai-nightly-updater-subscription"
 	// maasModelManager is the field manager of the gateway ref this tool
 	// adds to its model: removing it reverts exactly that change.
-	maasModelManager  = "rhoai-nightly-updater-maas"
-	maasRecordKey     = "maas"
-	maasRecordManager = "rhoai-nightly-updater-maas-record"
+	maasModelManager = "rhoai-nightly-updater-maas"
+	// maasDSCManager is the field manager of modelsAsAService, so removal
+	// restores it only while nobody has set it since.
+	maasDSCManager = "rhoai-nightly-updater-maas-dsc"
+	// maasModelFinalizer is maas-controller's on a MaaSModelRef
+	// (maasmodelref_controller.go).
+	maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
+	maasRecordKey      = "maas"
+	maasRecordManager  = "rhoai-nightly-updater-maas-record"
 	// The group a published model is offered to, as the docs' sample.
 	maasSubjectGroup = "system:authenticated"
 	cnpgGroup        = "postgresql.cnpg.io"
@@ -101,6 +107,16 @@ var (
 	MaaSPoll           = 5 * time.Second
 )
 
+// authorinoGroup is the Authorino operator's API group (the Authorino CR).
+const authorinoGroup = "operator.authorino.kuadrant.io"
+
+// maasAPI is maas.opendatahub.io at the version the cluster serves (its
+// preferred one; v1alpha1, RHOAI 3.6's, when discovery cannot tell), for
+// the MaaS objects' paths and apiVersion.
+func maasAPI(c *Client) string {
+	return maasGroup + "/" + servedVersions(c, maasGroup, []string{"v1alpha1"}).Versions[0]
+}
+
 // --- record (this tool's namespace, snapshot ConfigMap key "maas") ---------------
 
 // maasRecord is what this tool did to the platform that the cluster cannot
@@ -110,8 +126,12 @@ type maasRecord struct {
 	DSCChanged               bool     `json:"dscChanged,omitempty"`
 	PreviousModelsAsAService string   `json:"previousModelsAsAService,omitempty"`
 	Published                []string `json:"published,omitempty"`
-	At                       string   `json:"at,omitempty"`
-	By                       string   `json:"by,omitempty"`
+	// DBNamespace is where setup put the database and maas-db-config, so
+	// removal and the status look there even when the infrastructure
+	// namespace reads differently later.
+	DBNamespace string `json:"dbNamespace,omitempty"`
+	At          string `json:"at,omitempty"`
+	By          string `json:"by,omitempty"`
 }
 
 func readMaaSRecord(c *Client) (maasRecord, error) {
@@ -183,7 +203,7 @@ func (r *maasRecord) setPublished(project string, on bool) {
 // scripts/setup-database.sh: redhat-ods-applications ->
 // redhat-ai-gateway-infra, opendatahub -> odh-ai-gateway-infra).
 func maasInfraNamespace(c *Client) string {
-	body, _, err := c.get(namespacedPath(maasAPIGroup, "maastenantconfigs", "models-as-a-service", "default-tenant"))
+	body, _, err := c.get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 	if err == nil {
 		var tc struct {
 			Status struct {
@@ -719,36 +739,59 @@ func maasGatewayAuth(c *Client) string {
 // CA (authorinoTrustsServiceCA). It
 // returns "" when all are set (or cannot be read: unknown is not a
 // failure), else what is missing.
-func authorinoTLS(c *Client, ns string) (string, bool) {
+//
+// The certificate Secret is the one the Authorino CR's listener names
+// (spec.listener.tls.certSecretRef.name; RHOAI's AI gateway may use
+// another than the script's authorino-server-cert), returned for the
+// commands; the Service must ask service-ca for that one.
+func authorinoTLS(c *Client, ns string) (string, bool, string) {
 	var missing []string
 	known := true
-	if meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization")); err != nil {
-		known = false
-	} else if !found || meta.Annotations[servingCertAnnotation] != "authorino-server-cert" {
-		missing = append(missing, "the Service's serving certificate")
-	}
-	if body, _, err := c.get(namespacedPath("operator.authorino.kuadrant.io/v1beta1", "authorinos", ns, "authorino")); err != nil {
+	secret := "authorino-server-cert"
+	tlsOK := false
+	// The CR at the version its group serves (v1beta1 when discovery cannot
+	// tell).
+	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
+	if body := read.Body; err != nil || body == nil {
 		known = false
 	} else {
 		var a struct {
 			Spec struct {
 				Listener struct {
 					TLS struct {
-						Enabled bool `json:"enabled"`
+						Enabled       bool `json:"enabled"`
+						CertSecretRef struct {
+							Name string `json:"name"`
+						} `json:"certSecretRef"`
 					} `json:"tls"`
 				} `json:"listener"`
 			} `json:"spec"`
 		}
-		if json.Unmarshal(body, &a) != nil || !a.Spec.Listener.TLS.Enabled {
-			missing = append(missing, "TLS on Authorino's listener")
+		if json.Unmarshal(body, &a) == nil {
+			secret = firstNonEmpty(a.Spec.Listener.TLS.CertSecretRef.Name, secret)
+			tlsOK = a.Spec.Listener.TLS.Enabled
 		}
+	}
+	// Which Secret the Service must name is the CR's: without the CR it is
+	// unknown, not missing.
+	if known {
+		meta, found, err := readObjectMeta(c, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", ns, "authorino-authorino-authorization"))
+		switch {
+		case err != nil:
+			known = false
+		case !found || meta.Annotations[servingCertAnnotation] != secret:
+			missing = append(missing, "the Service's serving certificate")
+		}
+	}
+	if known && !tlsOK {
+		missing = append(missing, "TLS on Authorino's listener")
 	}
 	if body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "authorino")); err != nil {
 		known = false
 	} else if !authorinoTrustsServiceCA(body) {
 		missing = append(missing, "trust of the service CA (SSL_CERT_FILE)")
 	}
-	return strings.Join(missing, ", "), known
+	return strings.Join(missing, ", "), known, secret
 }
 
 // authorinoTrustsServiceCA says whether Authorino's Deployment trusts an
@@ -827,15 +870,15 @@ func authorinoTrustsServiceCA(deployment []byte) bool {
 
 // authorinoTLSCommands are scripts/setup-authorino-tls.sh's commands for ns,
 // and deploy.sh's restart of Authorino after them.
-func authorinoTLSCommands(ns string) string {
+func authorinoTLSCommands(ns, secret string) string {
 	return fmt.Sprintf(`oc annotate service authorino-authorino-authorization -n %[1]s \
-  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite
+  service.beta.openshift.io/serving-cert-secret-name=%[2]s --overwrite
 oc patch authorino authorino -n %[1]s --type=merge \
-  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}'
+  -p '{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"%[2]s"}}}}}'
 oc -n %[1]s set env deployment/authorino \
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
-oc rollout restart deployment/authorino -n %[1]s`, ns)
+oc rollout restart deployment/authorino -n %[1]s`, ns, secret)
 }
 
 // --- status --------------------------------------------------------------------
@@ -897,21 +940,22 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	kPart.Warning = rhclWarning(rhclVersion(c))
 	part(kPart)
 
-	// The database and its connection Secret.
+	// The database and its connection Secret, where setup put them.
+	dbNS := firstNonEmpty(rec.DBNamespace, infra)
 	dbPart := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
-	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", infra))
-	clMeta, clFound, clReady, clPhase, clErr := readMaaSDBCluster(c, infra)
+	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", dbNS))
+	clMeta, clFound, clReady, clPhase, clErr := readMaaSDBCluster(c, dbNS)
 	switch {
 	case secErr != nil:
-		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read Secret %s/%s: %v", infra, maasDBConfigSecret, secErr)
+		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read Secret %s/%s: %v", dbNS, maasDBConfigSecret, secErr)
 	case secFound && !toolOwned(secMeta):
 		dbPart.State, dbPart.NotManaged = "ready", true
-		dbPart.Message = fmt.Sprintf("Secret %s/%s exists: maas-api uses the database it names", infra, maasDBConfigSecret)
+		dbPart.Message = fmt.Sprintf("Secret %s/%s exists: maas-api uses the database it names", dbNS, maasDBConfigSecret)
 	case clErr == nil && clFound && toolOwned(clMeta):
 		dbPart.ManagedByTool = true
 		switch {
 		case clReady && secFound:
-			dbPart.State, dbPart.Message = "ready", fmt.Sprintf("CloudNativePG %s/%s runs (1 instance, development and test use); Secret %s set", infra, maasDBCluster, maasDBConfigSecret)
+			dbPart.State, dbPart.Message = "ready", fmt.Sprintf("CloudNativePG %s/%s runs (1 instance, development and test use); Secret %s set", dbNS, maasDBCluster, maasDBConfigSecret)
 		case clReady:
 			dbPart.State, dbPart.Message = "missing", "The database runs; its connection Secret is not written yet"
 		default:
@@ -921,7 +965,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		dbPart.State = "manual"
 		dbPart.Message = "The CloudNativePG operator is not installed. A cluster-admin installs it from OperatorHub (certified operators), or creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)."
 	default:
-		dbPart.State, dbPart.Message = "missing", "Setup runs a one-instance CloudNativePG database (development and test use) in "+infra
+		dbPart.State, dbPart.Message = "missing", "Setup runs a one-instance CloudNativePG database (development and test use) in "+dbNS
 	}
 	part(dbPart)
 
@@ -954,12 +998,12 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	// Authorino TLS: checked only.
 	tlsPart := types.MaaSPart{ID: "authorino-tls", Title: "Authorino TLS", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway", NotManaged: true}
 	if kq.found {
-		missing, known := authorinoTLS(c, kq.namespace)
+		missing, known, secret := authorinoTLS(c, kq.namespace)
 		switch {
 		case missing != "":
 			tlsPart.State = "manual"
 			tlsPart.Message = "Not configured: " + missing + ". A cluster-admin runs the docs' setup-authorino-tls.sh commands below (this tool does not change Connectivity Link's Authorino). Without it, API keys are refused."
-			tlsPart.Commands = authorinoTLSCommands(kq.namespace)
+			tlsPart.Commands = authorinoTLSCommands(kq.namespace, secret)
 		case known:
 			tlsPart.State, tlsPart.Message = "ready", "Authorino in "+kq.namespace+" serves TLS and trusts the service CA"
 		default:
@@ -984,8 +1028,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		default:
 			apiPart.State, apiPart.Message = "unknown", "Cannot read Deployment maas-api"
 		}
-		ai, aiMsg := readyCondition(c, namespacedPath(maasAPIGroup, "aitenants", "ai-tenants", "models-as-a-service"))
-		tc, tcMsg := readyCondition(c, namespacedPath(maasAPIGroup, "maastenantconfigs", "models-as-a-service", "default-tenant"))
+		ai, aiMsg := readyCondition(c, namespacedPath(maasAPI(c), "aitenants", "ai-tenants", "models-as-a-service"))
+		tc, tcMsg := readyCondition(c, namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 		auth := maasGatewayAuth(c)
 		switch {
 		case ai == "True" && tc == "True" && auth == "enforced":
@@ -1014,7 +1058,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		if pt.ManagedByTool {
 			p.ManagedByTool = true
 		}
-		if pt.State != "ready" {
+		if pt.State != "ready" && (pt.ID != "authorino-tls" || pt.State != "unknown") {
 			p.Ready = false
 			if pt.State != "missing" {
 				waiting = append(waiting, pt.Title)
@@ -1046,8 +1090,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
 	rec, recErr := readMaaSRecord(c)
-	authPhase, _ := maasPhase(c, namespacedPath(maasAPIGroup, "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
-	subPhase, _ := maasPhase(c, namespacedPath(maasAPIGroup, "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
+	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	for _, m := range models {
 		if !modelOwned(m.Metadata) || m.Metadata.Name != maasModelRefName {
 			continue
@@ -1073,7 +1117,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			// A publication undone half-way (live: Unpublish deleted the
 			// model reference, then failed on the model): Unpublish again
 			// finishes it, so the tab must still offer it.
-			item.Published, item.Deployed = true, true
+			item.Published, item.Deployed, item.Partly = true, true, true
 			item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
 		} else {
 			item.Message = "Not published"
@@ -1089,6 +1133,30 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		}
 		st.Items = append(st.Items, item)
 	}
+	// A recorded publication whose model is gone (the model or its project
+	// was deleted elsewhere): a row, so Unpublish can clear what is left.
+	if recErr == nil {
+		for _, p := range rec.Published {
+			shown := false
+			for _, it := range st.Items {
+				shown = shown || it.Namespace == p
+			}
+			if shown {
+				continue
+			}
+			left := []string{"this tool's record of the publication"}
+			if ref, found, _ := readMaaSModelRef(c, p); found && toolOwned(ref.Metadata) {
+				left = append([]string{"MaaSModelRef " + maasModelRefName}, left...)
+			}
+			st.Items = append(st.Items, types.MaaSModel{
+				ResourceState: types.ResourceState{Namespace: p, Name: maasModelRefName, ManagedByTool: true, Deployed: true,
+					Message: "Partly published: the model is gone; " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."},
+				DisplayName: maasModelRefName,
+				Published:   true,
+				Partly:      true,
+			})
+		}
+	}
 	sort.Slice(st.Items, func(i, j int) bool { return st.Items[i].Namespace < st.Items[j].Namespace })
 	return st, nil
 }
@@ -1098,13 +1166,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 // gateway, and this tool's record of the publication.
 func maasLeftovers(m llmisvcObject, recorded bool) []string {
 	var left []string
-	if m.Spec.Router != nil && m.Spec.Router.Gateway != nil {
-		for _, ref := range m.Spec.Router.Gateway.Refs {
-			if ref.Name == maasGatewayName {
-				left = append(left, "the model's route through "+maasGatewayName)
-				break
-			}
-		}
+	if modelHasMaaSRef(m) {
+		left = append(left, "the model's route through "+maasGatewayName)
 	}
 	if recorded {
 		left = append(left, "this tool's record of the publication")
@@ -1140,7 +1203,7 @@ type maasModelRefObject struct {
 }
 
 func readMaaSModelRef(c *Client, project string) (maasModelRefObject, bool, error) {
-	return readMaaSObject(c, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"))
+	return readMaaSObject(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
 }
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
@@ -1167,12 +1230,29 @@ func maasPhase(c *Client, path string) (string, bool) {
 	return obj.Status.Phase, true
 }
 
-// MaaSPublishedIn reports whether this tool's model in project is
-// published to MaaS (its MaaSModelRef exists), for the Models teardown.
+// MaaSPublishedIn reports whether anything of a publication of this tool's
+// model in project is left, for the Models teardown: its MaaSModelRef,
+// this tool's record of it, or the model's route through the MaaS gateway.
+// Unpublish removes all three (and the project from the shared
+// subscription, access policy and gateway), so the model goes after it.
 func MaaSPublishedIn(c *Client, project string) (bool, error) {
-	_, found, err := readObjectMeta(c, namespacedPath(maasAPIGroup, "maasmodelrefs", project, "qwen25-05b-instruct"))
-	if IsK8sError(err, 404) {
-		return false, nil
+	_, found, err := readObjectMeta(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
+	if err != nil && !IsK8sError(err, 404) {
+		return false, err
 	}
-	return found, err
+	if found {
+		return true, nil
+	}
+	rec, err := readMaaSRecord(c)
+	if err != nil {
+		return false, err
+	}
+	if rec.published(project) {
+		return true, nil
+	}
+	model, found, err := readToolModel(c, project, maasModelRefName)
+	if err != nil {
+		return false, err
+	}
+	return found && modelOwned(model.Metadata) && modelHasMaaSRef(model), nil
 }
