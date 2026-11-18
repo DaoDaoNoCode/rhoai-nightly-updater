@@ -101,30 +101,52 @@ Storage an earlier version set up in namespace `minio` reads **Needs attention**
 
 MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (`<address>/#/experiments?workspace=<project>`), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
 
-#### Models: a small chat model on CPU
+#### Models: small models on CPU
 
-<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the inference gateway Ready with its external address, DNS and authentication; Qwen2.5 0.5B Instruct (CPU) Ready with its address and the released runtime image" width="760">
+The Models tab serves small models from Hugging Face on CPU in a data science project, each pinned to one commit. A project can have several of them:
 
-1. The feature's state in the selected project.
-2. The **inference gateway**, shared by the cluster: every model is reached through it at `https://inference.<apps domain>`, and it checks each caller's OpenShift token. It runs on a cloud load balancer, which costs money while it exists. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
-3. The **model** in the project: Qwen2.5 0.5B Instruct, served by vLLM on CPU (4 CPUs, up to 16 GiB). Its address copies with one click; **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
-4. Which runtime image it runs. On a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
+| Model | Type, for | Reserves (request, limit) | Download | vLLM options |
+|---|---|---|---|---|
+| `smollm2-135m-instruct`, SmolLM2 135M Instruct | Chat (smoke test) | 2 CPUs, 5 / 6 GiB | about 270 MB | `--max-model-len 4096` |
+| `qwen25-05b-instruct`, Qwen2.5 0.5B Instruct (the default) | Chat | 4 CPUs, 6 / 8 GiB | about 1.0 GB | `--max-model-len 4096` |
+| `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 10 / 12 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking": false}'` |
+| `granite-embedding-125m-english`, Granite Embedding 125M English | Embeddings (768 dimensions), semantic search | 2 CPUs, 4 / 6 GiB | about 250 MB | `--runner pooling --max-model-len 512` |
 
-**Set up** creates whatever is missing (the gateway, then the model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. Once ready, **Use it** has commands that call the model with your own `oc whoami -t` token (no account or key is made). Each part's menu has **Delete**; the gateway stays while a model uses it. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-a-cpu-model).
+<img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS and authentication; Qwen3 Ready with its type, use, resources, source, vLLM options, address and runtime image" width="760">
+
+1. The feature's state in the selected project, for the chosen model.
+2. The **model picker**: which catalog model the tab shows, sets up and deletes (the address keeps it as `model=<name>`).
+3. The **inference gateway**, shared by the cluster: every model is reached through it at `https://inference.<apps domain>`, and it checks each caller's OpenShift token. It runs on a cloud load balancer, which costs money while it exists. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
+4. The chosen **model** in the project: what it is, what it is for, what it reserves, where it comes from and its vLLM options. **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
+5. Its address, which copies with one click. The runtime image below it: on a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
+
+<img src="docs/images/environment-models-picker.png" alt="The model picker open: each model with its type, use, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
+
+1. Each option says what the model is and what it is for, what it reserves, how much is downloaded, and its state in the project.
+2. A model no worker has room for now is disabled, and says why. One the project already has stays selectable.
+
+**Set up** creates whatever is missing (the gateway, then the chosen model) in one operation and waits until the model answers, typically 3 to 5 minutes the first time. Once ready, **Use it** has commands that call the model with your own `oc whoami -t` token (no account or key is made): `/v1/chat/completions` for a chat model, `/v1/embeddings` for the embedding model.
+
+<img src="docs/images/environment-models-use-qwen3.png" alt="Use it for Qwen3: a chat request, a tool-calling request with a tools list, and a request that turns thinking on with chat_template_kwargs enable_thinking true" width="760">
+
+1. Qwen3 calls tools: describe them in the request's `tools`, and the answer has `tool_calls` when one fits.
+2. Its thinking is off by default; `"chat_template_kwargs": {"enable_thinking": true}` turns it on for one request.
+
+Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 
 #### Playground: the dashboard's Gen AI playground
 
 The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page where you try a project's models and ask about your documents, in a project you choose.
 
-<img src="docs/images/environment-playground.png" alt="Playground tab: Ready in dev-project; the project's chat models in a table, with where each runs and whether the playground uses it; the playground Ready with Open the playground" width="760">
+<img src="docs/images/environment-playground.png" alt="Playground tab: Ready in dev-project; the project's models in a table, with their type, where each runs and whether the playground uses it; the playground Ready with Open the playground" width="760">
 
 1. The feature's state in the selected project.
-2. **Chat models**: the project's ready chat models, with where each runs and whether the playground uses it. The playground needs one: when there is none, **Set up a model on the Models tab**.
+2. **Models**: the project's ready chat models, and this tool's embedding model, with their type, where each runs and whether the playground uses it. The playground needs a chat model: when there is none, **Set up a model on the Models tab**.
 3. **Playground**: its state as the dashboard reports it, and **Open the playground** (Gen AI studio, then Playground, then the project). One someone set up in the dashboard reads **Not managed by this tool**: open it, but this tool does not delete it.
 
-<img src="docs/images/environment-playground-setup.png" alt="Before Set up: the project's own model is chosen, Models as a Service models are not used unless chosen, and Set up the playground in dev-project" width="760">
+<img src="docs/images/environment-playground-setup.png" alt="Before Set up: the project's own chat model and this tool's embedding model (768 dimensions) are chosen, Models as a Service models are not used unless chosen, and Set up the playground in dev-project" width="760">
 
-1. Before Set up, the models are rows you choose: the project's own ready models are chosen, as in the dashboard.
+1. Before Set up, the models are rows you choose: the project's own ready models are chosen, as in the dashboard. This tool's Granite embedding model goes in as an embedding model of 768 dimensions, for searching your documents. An embedding model this tool did not set up is not added (its dimension is not known): the tab says to add it in the dashboard's Gen AI studio, choosing **Embedding** and entering its dimension.
 2. A Models as a Service model is not used unless you choose it; it works only with a subscription to it.
 3. **Set up** runs it.
 
@@ -137,7 +159,7 @@ The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page 
 
 #### MaaS: Models as a Service
 
-The MaaS tab sets up the cluster's Models as a Service platform the way the [MaaS install docs](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/content/install) do, and publishes this tool's model to it: everyone signed in to the cluster can then call the model with a MaaS API key, up to 100 tokens a minute.
+The MaaS tab sets up the cluster's Models as a Service platform the way the [MaaS install docs](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/content/install) do, and publishes this tool's chat models to it, one at a time: everyone signed in to the cluster can then call a published model with a MaaS API key, up to 100 tokens a minute. The embedding model is not offered; the tab says why.
 
 <img src="docs/images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts with their health, Connectivity Link not managed by this tool with a version warning, and the published model with Unpublish" width="760">
 

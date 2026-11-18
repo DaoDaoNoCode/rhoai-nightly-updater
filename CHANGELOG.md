@@ -20,6 +20,20 @@ only accepts a tag whose version is the top dated section. See
 
 ### Added
 
+- **Models tab: a catalog of four CPU models.** A model picker offers
+  SmolLM2 135M Instruct (smoke test), Qwen2.5 0.5B Instruct (the default),
+  Qwen3 1.7B (tool calling; thinking off by default) and Granite Embedding
+  125M English (768 dimensions), each pinned to a Hugging Face commit, with
+  what it is for, what it reserves and its download; a model no worker has
+  room for is disabled with the reason. A project can hold several; Set up,
+  Delete and Use it act on the chosen one (embeddings get a
+  `/v1/embeddings` command, Qwen3 tool-calling and thinking commands). The
+  storage-initializer skips ONNX and PyTorch files. The Playground adds
+  this tool's embedding model as an embedding model (768 dimensions); MaaS
+  publishes the chosen chat model (`MaaSRequest.model`). RBAC: the
+  LLMInferenceService rule names the four models and the MaaSModelRef rule
+  the three chat models (SECURITY.md).
+
 - **Environment page, Playground tab.** One Set up asks the installed RHOAI
   dashboard's own gen-ai API to create its Gen AI playground in a project,
   with the project's ready chat models, as a click in its Gen AI studio does

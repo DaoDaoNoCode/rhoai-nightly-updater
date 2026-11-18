@@ -246,6 +246,32 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the Models tab in its states (each catalog model,
+    // the picker with a model that has no room), light and dark, to check
+    // it by eye (screenshots.sh models-review, THEMES_DIR).
+    async "models-review"() {
+      const shots = [
+        ["env-models-several", "qwen25-05b-instruct", "qwen25"], ["env-models-several", "qwen3-1-7b", "qwen3"],
+        ["env-models-several", "granite-embedding-125m-english", "granite"], ["env-models-several", "smollm2-135m-instruct", "smollm2-not-set-up"],
+        ["env-models-capacity", "qwen3-1-7b", "qwen3-no-room"], ["env-models-starting", "qwen25-05b-instruct", "starting"],
+        ["env-models-image-missing", "qwen25-05b-instruct", "image-missing"], ["env-maas-published", null, "maas"],
+      ];
+      for (const [sc, model, name] of shots) {
+        for (const dark of [false, true]) {
+          const path = model ? `/test-resources?tab=models&project=dev-project&model=${model}` : "/test-resources?tab=maas";
+          await open(path, sc, { dark, width: 1440 });
+          await fit();
+          await page.screenshot({ path: `${out}/themes/models-${name}-${dark ? "dark" : "light"}.png` });
+        }
+      }
+      for (const dark of [false, true]) {
+        await open("/test-resources?tab=models&project=dev-project", "env-models-capacity", { dark, width: 1440 });
+        await page.getByRole("button", { name: "Model", exact: true }).click();
+        await settle();
+        await page.screenshot({ path: `${out}/themes/models-picker-${dark ? "dark" : "light"}.png` });
+      }
+    },
+
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
@@ -476,16 +502,40 @@ async (page) => {
         pad: 24,
       });
 
-      // Models: the gateway and a ready model; a nightly preset image that is missing.
-      await open("/test-resources?tab=models&project=dev-project", "env-models-ready");
+      // Models: the gateway and the chosen model (Qwen3, one of three in the
+      // project); the picker with a model that has no room; a nightly preset
+      // image that is missing.
+      await open("/test-resources?tab=models&project=dev-project&model=qwen3-1-7b", "env-models-several");
       const gateway = part("Inference gateway");
-      const qwen = part("Qwen2.5 0.5B Instruct (CPU)");
+      const qwen = part("Qwen3 1.7B (CPU, tool calling)");
       await crop("environment-models", [panel().getByRole("heading", { name: "Models", level: 2 }), qwen], {
         notes: [
           { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
-          { at: row(gateway, "External address"), n: 2, pos: "l" },
-          { at: row(qwen, "Address"), n: 3, pos: "l" },
-          { at: row(qwen, "Runtime image"), n: 4, pos: "l" },
+          { at: panel().getByRole("button", { name: "Model", exact: true }), n: 2, pos: "r" },
+          { at: row(gateway, "External address"), n: 3, pos: "l" },
+          { at: row(qwen, "Type"), n: 4, pos: "l" },
+          { at: row(qwen, "Address"), n: 5, pos: "l" },
+        ],
+        pad: 24,
+      });
+      await open("/test-resources?tab=models&project=dev-project", "env-models-capacity");
+      const picker = panel().getByRole("button", { name: "Model", exact: true });
+      await picker.click();
+      const options = page.getByRole("listbox", { name: "Models this tool can set up" });
+      await crop("environment-models-picker", [picker, options], {
+        notes: [
+          { at: options.getByRole("option", { name: /Granite Embedding/ }), n: 1, pos: "r" },
+          { at: options.getByRole("option", { name: /Qwen3 1.7B/ }), n: 2, pos: "r" },
+        ],
+        pad: 24,
+      });
+      await page.keyboard.press("Escape");
+      await open("/test-resources?tab=models&project=dev-project&model=qwen3-1-7b", "env-models-several");
+      const use = page.getByRole("region", { name: "Use it" });
+      await crop("environment-models-use-qwen3", use, {
+        notes: [
+          { at: row(use, "Tool calling"), n: 1, pos: "l" },
+          { at: row(use, "Reasoning"), n: 2, pos: "l" },
         ],
         pad: 24,
       });
@@ -516,14 +566,14 @@ async (page) => {
       await crop("environment-playground", [panel().getByRole("heading", { name: "Playground", level: 2 }), playground], {
         notes: [
           { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
-          { at: part("Chat models").getByText("Qwen2.5 0.5B Instruct (CPU)"), n: 2, pos: "l" },
+          { at: part("Models").getByText("Qwen2.5 0.5B Instruct (CPU)"), n: 2, pos: "l" },
           { at: playground.getByRole("link", { name: /Open the playground/ }), n: 3, pos: "r" },
         ],
         pad: 24,
       });
       await open("/test-resources?tab=playground&project=dev-project", "env-playground-none");
       const setUp = panel().getByRole("button", { name: "Set up the playground in dev-project" });
-      await crop("environment-playground-setup", [part("Chat models"), setUp], {
+      await crop("environment-playground-setup", [part("Models"), setUp], {
         notes: [
           { at: panel().getByRole("checkbox", { name: "Select row 0" }), n: 1, pos: "l" },
           { at: panel().getByText("Not used unless you choose it (needs a Models as a Service subscription)").first(), n: 2, pos: "l" },
