@@ -184,17 +184,49 @@ describe("Pipelines: the earlier name", () => {
     await waitFor(() => expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev", recreate: true }]));
   });
 
-  it("shows the dashboard Connection set up with the server", async () => {
-    stubApi({
-      "/api/resources/status": { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev", { name: "dspa", connection: "rhoai-nightly-updater-s3" })] },
-      "/api/resources/projects": { projects: ["dev"] },
-    });
+  // The Connection is shown from the Secret itself (connectionState, read
+  // for the selected project), never from the DSPA's annotation alone.
+  const withConnection = (over: Partial<ResourceState>) => ({
+    "/api/resources/status": { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev", { name: "dspa", dataPVCs: ["mariadb-dspa"], connection: "rhoai-nightly-updater-s3", ...over })] },
+    "/api/resources/projects": { projects: ["dev"] },
+  });
+
+  it("asks for the selected project's Connection and shows it when it is there", async () => {
+    const api = stubApi(withConnection({ connectionState: "present" }));
     renderAt("/test-resources?tab=pipelines&project=dev");
     const details = await screen.findByLabelText("Pipeline server details");
     expect(details).toHaveTextContent("Connection in the dashboard");
     expect(details).toHaveTextContent("rhoai-nightly-updater-s3");
     expect(details).toHaveTextContent(/workbenches and model deployments/);
     expect(details).toHaveTextContent(/in-cluster address only/);
+    expect(api.calls).toContain("GET /api/resources/status?project=dev");
+  });
+
+  it("does not claim a Connection the status did not read", async () => {
+    stubApi(withConnection({}));
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    const details = await screen.findByLabelText("Pipeline server details");
+    expect(details).not.toHaveTextContent("rhoai-nightly-updater-s3");
+  });
+
+  it("says when the Connection was deleted, and Set up again recreates it", async () => {
+    const api = stubApi({ ...withConnection({ connectionState: "missing" }), "POST /api/resources/pipeline-server/setup": { success: true, message: "Pipeline server created." } });
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    const details = await screen.findByLabelText("Pipeline server details");
+    expect(details).toHaveTextContent(/Missing: rhoai-nightly-updater-s3 was deleted, for example in the dashboard/);
+    fireEvent.click(within(details).getByRole("button", { name: "Set up again" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/runs and data are kept/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set up again" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev" }]));
+  });
+
+  it("says when a Secret of that name is someone else's", async () => {
+    stubApi(withConnection({ connectionState: "foreign" }));
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    const details = await screen.findByLabelText("Pipeline server details");
+    expect(details).toHaveTextContent(/not created by this tool/);
+    expect(within(details).queryByRole("button", { name: "Set up again" })).not.toBeInTheDocument();
   });
 
   it("a server named dspa shows no such notice", async () => {

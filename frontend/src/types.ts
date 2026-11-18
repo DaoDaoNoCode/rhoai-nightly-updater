@@ -776,6 +776,9 @@ export interface ResourceState {
   nonStandardName?: boolean;
   /** The dashboard S3 Connection (a Secret in the project) set up with this pipeline server (pkg/cluster connectionSecretName), when there is one. */
   connection?: string;
+  /** What the Connection Secret itself says, read only for the selected project (GET /api/resources/status?project=): present, missing, foreign or unreadable; absent when not read. */
+  connectionState?: "present" | "missing" | "foreign" | "unreadable";
+  connectionMessage?: string;
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---

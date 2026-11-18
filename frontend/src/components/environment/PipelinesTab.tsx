@@ -269,6 +269,33 @@ const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, re
   );
 };
 
+/**
+ * The dashboard Connection as the Secret itself says (connectionState, read
+ * for the selected project), never from the DSPA's annotation alone: it may
+ * have been deleted in the dashboard since.
+ */
+const ConnectionState: React.FC<{ server: ResourceState; project: string; readOnly: boolean; baseReason: string | null; onSetUpAgain: () => void }> = ({ server, project, readOnly, baseReason, onSetUpAgain }) => {
+  const name = <code>{CONNECTION_NAME}</code>;
+  switch (server.connectionState) {
+    case "present":
+      return <>{name}, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.</>;
+    case "foreign":
+      return <>A Secret {name} is in {project}, but it was not created by this tool, so it is not this storage&apos;s connection and the tool leaves it alone.</>;
+    case "unreadable":
+      return <>Cannot check {name}: {server.connectionMessage || "the Secret cannot be read"}.</>;
+    default: {
+      const why = server.connection ? <>Missing: {name} was deleted, for example in the dashboard.</> : <>None: {name} was not set up with this pipeline server.</>;
+      if (server.nonStandardName) return <>{why} Recreate with the standard name creates it.</>;
+      return (
+        <Stack hasGutter>
+          <StackItem>{why} Set up again creates it; runs and data are kept.</StackItem>
+          {!readOnly && <StackItem><TooltipButton variant="secondary" onClick={onSetUpAgain} disabledReason={baseReason}>Set up again</TooltipButton></StackItem>}
+        </Stack>
+      );
+    }
+  }
+};
+
 /** The project's pipeline server, or a placeholder until a project is chosen. */
 const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy, baseReason, readOnly, consoleURL, setPending }) => {
   if (!project) {
@@ -315,11 +342,12 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
             <DescriptionListTerm>Name</DescriptionListTerm>
             <DescriptionListDescription>DataSciencePipelinesApplication <code>{server.name ?? DSPA_NAME}</code></DescriptionListDescription>
           </DescriptionListGroup>
-          {server.connection && (
+          {server.connectionState && (
             <DescriptionListGroup>
               <DescriptionListTerm>Connection in the dashboard</DescriptionListTerm>
               <DescriptionListDescription>
-                <code>{server.connection}</code>, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.
+                <ConnectionState server={server} project={project} readOnly={readOnly} baseReason={baseReason}
+                  onSetUpAgain={() => setPending({ kind: "setup-pipeline-server", project, again: true })} />
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}
@@ -515,6 +543,16 @@ export function storageConfirm(pending: Pending, minio: ResourceState | undefine
 export function pipelineServerConfirm(pending: Pending, pipelineServers: ResourceState[]): ConfirmSpec | null {
   switch (pending.kind) {
     case "setup-pipeline-server":
+      if (pending.again) {
+        return {
+          title: `Set up the pipeline server in ${pending.project} again?`, confirm: "Set up again", runTitle: `Set up the pipeline server in ${pending.project} again`,
+          summary: <Content component="p">Applies this tool&apos;s settings to the pipeline server in {pending.project} again and creates what is missing; runs and data are kept.</Content>,
+          changes: [
+            <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are applied again.</>,
+            <>The dashboard S3 Connection <code>{CONNECTION_NAME}</code> ({CONNECTION_DISPLAY_NAME}) is created again, owned by the pipeline server.</>,
+          ],
+        };
+      }
       return {
         title: `Set up the pipeline server in ${pending.project}?`, confirm: "Set up", runTitle: `Set up the pipeline server in ${pending.project}`,
         summary: <Content component="p">In {pending.project}: a pipeline server that keeps its artifacts in the S3 storage. Takes 1 to 3 minutes.</Content>,

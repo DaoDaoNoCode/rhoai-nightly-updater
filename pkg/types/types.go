@@ -1147,6 +1147,13 @@ type ResourceState struct {
 	// Connection is the dashboard S3 Connection (a Secret in the project)
 	// the tool created with this pipeline server, or "".
 	Connection string `json:"connection,omitempty"`
+	// ConnectionState is what the Secret itself says, read only for the
+	// selected project (GET /api/resources/status?project=): "present"
+	// (the tool's), "missing" (none; deleted, for example in the
+	// dashboard), "foreign" (a Secret of that name someone else made) or
+	// "unreadable" (ConnectionMessage says why). "" means not read.
+	ConnectionState   string `json:"connectionState,omitempty"`
+	ConnectionMessage string `json:"connectionMessage,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.

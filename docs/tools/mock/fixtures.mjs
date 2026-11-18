@@ -537,12 +537,12 @@ export function migrateSteps(kind) {
 export const pipelineServer = {
   deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "dspa", managedByTool: true,
   apiRoute: `https://ds-pipeline-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-dspa"],
-  connection: "rhoai-nightly-updater-s3",
+  connection: "rhoai-nightly-updater-s3", connectionState: "present",
 };
 
 /** A pipeline server an earlier version set up as nightly-dspa (pkg/types NonStandardName): Recreate is offered. */
 export const pipelineServerOldName = {
-  ...pipelineServer, name: "nightly-dspa", nonStandardName: true, connection: undefined,
+  ...pipelineServer, name: "nightly-dspa", nonStandardName: true, connection: undefined, connectionState: "missing",
   apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, dataPVCs: ["mariadb-nightly-dspa"],
 };
 
