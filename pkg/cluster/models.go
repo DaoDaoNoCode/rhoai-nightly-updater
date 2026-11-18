@@ -141,16 +141,16 @@ type llmisvcObject struct {
 	} `json:"status"`
 }
 
-// routesThroughInferenceGateway: spec.router.gateway is {} (KServe's
-// default gateway, openshift-ingress/openshift-ai-inference) or refers to
-// the inference gateway. A model whose default is configured elsewhere is
-// counted too: teardown then refuses, which is the safe side.
-func (m llmisvcObject) routesThroughInferenceGateway() bool {
+// routesThroughInferenceGateway: spec.router.gateway is {} and KServe's
+// default gateway (def) is the inference gateway, or it refers to the
+// inference gateway. With the default unknown, {} counts: teardown then
+// refuses, which is the safe side.
+func (m llmisvcObject) routesThroughInferenceGateway(def kserveGateway) bool {
 	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
 		return false
 	}
 	if len(m.Spec.Router.Gateway.Refs) == 0 {
-		return true
+		return def.isInferenceGateway()
 	}
 	for _, ref := range m.Spec.Router.Gateway.Refs {
 		ns := firstNonEmpty(ref.Namespace, m.Metadata.Namespace)
@@ -617,7 +617,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 	}
 	if req.Gateway {
 		m.step("gateway", "running", "Deleting the inference gateway...")
-		res, _ := TeardownInferenceGateway(m.c)
+		res, _ := TeardownInferenceGateway(m.c, req.Project != "")
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
 			if m.emit != nil {
@@ -670,7 +670,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 			return m.fail("check", msg, code, "model check failed")
 		}
 		mp = plan
-		if warning := modelCapacityWarning(c, mp.entry); warning != "" {
+		if warning := modelCapacityWarning(c, mp.entry, mp.project); warning != "" {
 			notes = append(notes, warning)
 		}
 	}
@@ -783,6 +783,16 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	preset := discoverCPUPreset(c, ns)
 	if preset.problem != "" {
 		return nil, preset.problem + " Nothing was changed.", "prerequisites"
+	}
+
+	// The model's route is KServe's default gateway (spec.router.gateway
+	// {}), read at run time: it must be the gateway this tool manages.
+	def, err := readKServeGateway(c)
+	if err != nil {
+		m.step("check", "running", fmt.Sprintf("Cannot read KServe's default gateway (%v); assuming %s/%s, as on RHOAI 3.x.", err, inferenceGatewayNamespace, inferenceGatewayName))
+	}
+	if msg := defaultGatewayElsewhere(def); msg != "" {
+		return nil, msg + " This tool sets up models only behind its own gateway. Nothing was changed.", "prerequisites"
 	}
 
 	// The gateway the model will route through.
@@ -948,11 +958,20 @@ func clockText(d time.Duration) string {
 // modelPod is the part of a pod the model wait reads.
 type modelPod struct {
 	Metadata objectMeta `json:"metadata"`
-	Status   struct {
+	Spec     struct {
+		Containers []modelContainerSpec `json:"containers"`
+	} `json:"spec"`
+	Status struct {
 		Conditions            []k8sCondition       `json:"conditions"`
 		InitContainerStatuses []modelContainerStat `json:"initContainerStatuses"`
 		ContainerStatuses     []modelContainerStat `json:"containerStatuses"`
 	} `json:"status"`
+}
+
+// modelContainerSpec is a container as a pod or pod template declares it.
+type modelContainerSpec struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
 }
 
 type modelContainerStat struct {
@@ -999,7 +1018,10 @@ type modelProgress struct {
 	imageMissing     bool
 }
 
-func readModelProgress(c *Client, project, name string) (modelProgress, error) {
+// readModelProgress reads the progress of the model's pods of the current
+// revision (w.current): a pod of the previous one, still failing or still
+// serving during a change, says nothing about the change.
+func readModelProgress(c *Client, project, name string, w modelWorkload) (modelProgress, error) {
 	body, _, err := c.get(namespacedPath("v1", "pods", project, "") + "?labelSelector=" + url.QueryEscape(modelPodSelector(name)))
 	if err != nil {
 		return modelProgress{}, err
@@ -1010,9 +1032,13 @@ func readModelProgress(c *Client, project, name string) (modelProgress, error) {
 	if err := json.Unmarshal(body, &pods); err != nil {
 		return modelProgress{}, fmt.Errorf("parse pod list: %w", err)
 	}
+	var current []modelPod
 	names := map[string]bool{}
 	for _, p := range pods.Items {
-		names[p.Metadata.Name] = true
+		if w.current(p) {
+			current = append(current, p)
+			names[p.Metadata.Name] = true
+		}
 	}
 	var newest *modelEvent
 	if len(names) > 0 {
@@ -1029,25 +1055,38 @@ func readModelProgress(c *Client, project, name string) (modelProgress, error) {
 			}
 		}
 	}
-	return describeModelPods(pods.Items, newest), nil
+	return describeModelPods(current, newest), nil
 }
 
-// describeModelPods turns pods and their newest event into progress.
+// describeModelPods turns pods and their newest event into progress. Every
+// live pod is judged: the first problem found is the result, else the
+// first pod's progress.
 func describeModelPods(pods []modelPod, newest *modelEvent) modelProgress {
 	event := ""
 	if newest != nil && newest.Reason != "" {
 		event = fmt.Sprintf(" (%s: %s)", newest.Reason, truncateMessage(newest.Message))
 	}
-	var live []modelPod
+	var first *modelProgress
 	for _, p := range pods {
-		if !p.Metadata.terminating() {
-			live = append(live, p)
+		if p.Metadata.terminating() {
+			continue
+		}
+		pr := describeModelPod(p, event)
+		if pr.problem != "" {
+			return pr
+		}
+		if first == nil {
+			first = &pr
 		}
 	}
-	if len(live) == 0 {
+	if first == nil {
 		return modelProgress{message: "Waiting for KServe to create the model's pod..." + event}
 	}
-	p := live[0]
+	return *first
+}
+
+// describeModelPod is one live pod's progress; event is its newest event, in words.
+func describeModelPod(p modelPod, event string) modelProgress {
 	if cond, ok := findCondition(p.Status.Conditions, "PodScheduled"); ok && cond.Status == "False" {
 		return modelProgress{message: fmt.Sprintf("Waiting for a worker with room for the model: %s", firstNonEmpty(truncateMessage(cond.Message), cond.Reason))}
 	}
@@ -1115,21 +1154,55 @@ type modelWait struct {
 	err          error
 }
 
-// modelRolledOut says whether the model's workload Deployments (found by
-// the labels its pods carry) have rolled out, as "oc rollout status" decides:
-// the controller saw the latest spec, and every replica is updated and
-// available, with no old one left. A model without one is not rolled out.
-func modelRolledOut(c *Client, project, name string) (bool, string, error) {
+// modelWorkload is the model's workload Deployments (found by the labels
+// its pods carry) as the model wait reads them.
+type modelWorkload struct {
+	// observed: there is one, and each one's controller saw its latest
+	// spec, so its pod template is the current revision's.
+	observed bool
+	// images are the main container images of the current pod templates.
+	images map[string]bool
+	// rolledOut, as "oc rollout status" decides: observed, and every
+	// replica is updated and available, with no old one left.
+	rolledOut bool
+	// message says, in words, what is awaited when not rolled out.
+	message string
+}
+
+// current says whether a pod is of the current revision: its main image
+// is a current template's. Before the change is observed, no pod is.
+func (w modelWorkload) current(p modelPod) bool {
+	if !w.observed {
+		return false
+	}
+	if len(w.images) == 0 {
+		return true
+	}
+	for _, c := range p.Spec.Containers {
+		if c.Name == "main" {
+			return w.images[c.Image]
+		}
+	}
+	return false
+}
+
+// readModelWorkload reads the model's workload Deployments.
+func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 	q := url.Values{"labelSelector": {modelPodSelector(name)}}
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", project, "") + "?" + q.Encode())
 	if err != nil {
-		return false, "", err
+		return modelWorkload{}, err
 	}
 	var list struct {
 		Items []struct {
 			Metadata objectMeta `json:"metadata"`
 			Spec     struct {
 				Replicas *int32 `json:"replicas"`
+				Template struct {
+					Spec struct {
+						Containers []modelContainerSpec `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
 			} `json:"spec"`
 			Status struct {
 				ObservedGeneration int64 `json:"observedGeneration"`
@@ -1140,22 +1213,32 @@ func modelRolledOut(c *Client, project, name string) (bool, string, error) {
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return false, "", fmt.Errorf("parse the model's Deployments: %w", err)
+		return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
 	}
 	if len(list.Items) == 0 {
-		return false, "Waiting for KServe to create the model's Deployment...", nil
+		return modelWorkload{message: "Waiting for KServe to create the model's Deployment..."}, nil
 	}
+	w := modelWorkload{observed: true, rolledOut: true, images: map[string]bool{}}
 	for _, d := range list.Items {
 		want := int32(1)
 		if d.Spec.Replicas != nil {
 			want = *d.Spec.Replicas
 		}
 		st := d.Status
-		if st.ObservedGeneration < d.Metadata.Generation || st.UpdatedReplicas < want || st.Replicas > st.UpdatedReplicas || st.AvailableReplicas < st.UpdatedReplicas {
-			return false, "Rolling out the change: the new pod is starting, and the previous one serves until it is ready...", nil
+		if st.ObservedGeneration < d.Metadata.Generation {
+			return modelWorkload{message: "Waiting for KServe to apply the change to the model's Deployment..."}, nil
+		}
+		for _, c := range d.Spec.Template.Spec.Containers {
+			if c.Name == "main" && c.Image != "" {
+				w.images[c.Image] = true
+			}
+		}
+		if st.UpdatedReplicas < want || st.Replicas > st.UpdatedReplicas || st.AvailableReplicas < st.UpdatedReplicas {
+			w.rolledOut = false
+			w.message = "Rolling out the change: the new pod is starting, and the previous one serves until it is ready..."
 		}
 	}
-	return true, "", nil
+	return w, nil
 }
 
 // waitModelReady waits (bounded) until the model reports Ready, reporting
@@ -1180,26 +1263,39 @@ func waitModelReady(c *Client, project, name string, presetImage bool, timeout t
 			res.problem = "the model was deleted while it was starting."
 			return true, nil
 		}
-		// Ready counts only for the spec just applied, and only once the
-		// workload has rolled out: after a change, KServe reports Ready
-		// while the old pod still serves and the new one starts (seen live).
-		if cond, ok := findCondition(model.Status.Conditions, "Ready"); ok && cond.Status == "True" && model.Status.ObservedGeneration >= model.Metadata.Generation {
-			done, msg, err := modelRolledOut(cc, project, name)
-			if err != nil {
-				return false, err
-			}
-			if done {
-				res.url = model.Status.URL
-				return true, nil
-			}
-			say(msg)
+		// Until KServe has seen the spec just applied, its conditions and
+		// the pods are the previous revision's.
+		if model.Status.ObservedGeneration < model.Metadata.Generation {
+			say("Waiting for KServe to apply the change...")
 			return false, nil
 		}
 		if cond, ok := findCondition(model.Status.Conditions, "PresetsCombined"); ok && cond.Status == "False" {
 			res.problem = fmt.Sprintf("KServe cannot resolve its preset: %s.", firstNonEmpty(cond.Message, cond.Reason))
 			return true, nil
 		}
-		pr, err := readModelProgress(cc, project, name)
+		w, err := readModelWorkload(cc, project, name)
+		if err != nil {
+			return false, err
+		}
+		// Ready counts only once the workload has rolled out: after a
+		// change, KServe reports Ready while the old pod still serves and
+		// the new one starts (seen live).
+		cond, ok := findCondition(model.Status.Conditions, "Ready")
+		ready := ok && cond.Status == "True"
+		if ready && w.rolledOut {
+			res.url = model.Status.URL
+			return true, nil
+		}
+		if !w.observed {
+			// Every pod is the previous revision's: their problems are not
+			// this change's.
+			say(w.message)
+			return false, nil
+		}
+		// Only the current revision's pods count, in both cases: an old pod
+		// still failing does not fail the change, and a new pod failing
+		// while the old one keeps the model Ready does.
+		pr, err := readModelProgress(cc, project, name, w)
 		if err != nil {
 			return false, err
 		}
@@ -1208,7 +1304,11 @@ func waitModelReady(c *Client, project, name string, presetImage bool, timeout t
 			res.imageMissing = pr.imageMissing && presetImage
 			return true, nil
 		}
-		say(pr.message)
+		if ready {
+			say(w.message)
+		} else {
+			say(pr.message)
+		}
 		return false, nil
 	})
 	res.err = err

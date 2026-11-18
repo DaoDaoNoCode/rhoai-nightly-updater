@@ -2,12 +2,14 @@ package cluster
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -36,10 +38,17 @@ type genAIFake struct {
 	installFail    int
 	installMessage string
 	// missing answers 404 to every path (an API that differs).
-	missing  bool
-	installs []map[string]interface{}
-	deletes  []string
-	auth     []string
+	missing bool
+	// onInstall runs when an install creates a server (the env puts its
+	// OGXServer in the fake cluster).
+	onInstall func(ns string)
+	// existingOnInstall answers an install with 200 and the server already
+	// there (the BFF's zero-restart path) instead of creating one.
+	existingOnInstall bool
+	paths             []string
+	installs          []map[string]interface{}
+	deletes           []string
+	auth              []string
 }
 
 func newGenAIFake(t *testing.T) *genAIFake {
@@ -50,6 +59,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.auth = append(g.auth, r.Header.Get("Authorization"))
+	g.paths = append(g.paths, r.Method+" "+r.URL.Path+" "+r.URL.Query().Get("namespace"))
 	ns := r.URL.Query().Get("namespace")
 	fail := func(status int, msg string) {
 		w.WriteHeader(status)
@@ -98,7 +108,14 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 			fail(g.installFail, g.installMessage)
 			return
 		}
+		if g.existingOnInstall && g.servers[ns] != nil {
+			_, _ = io.WriteString(w, `{"data":{"name":"lsd-genai-playground","httpStatus":"200"}}`)
+			return
+		}
 		g.servers[ns] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
+		if g.onInstall != nil {
+			g.onInstall(ns)
+		}
 		_, _ = io.WriteString(w, `{"data":{"name":"lsd-genai-playground","httpStatus":"200"}}`)
 	case "DELETE /gen-ai/api/v1/lsd/delete":
 		var body struct {
@@ -149,7 +166,20 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	k8s.putJSON("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/gen-ai-ui", `{"status":{"conditions":[{"type":"Available","status":"True"}]}}`)
 	k8s.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 	k8s.putJSON("/api/v1/namespaces/other", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
-	return &playgroundEnv{k8s: k8s, c: c, g: g}
+	e := &playgroundEnv{k8s: k8s, c: c, g: g}
+	installs := 0
+	g.onInstall = func(ns string) {
+		installs++
+		e.putServer(ns, fmt.Sprintf("uid-installed-%d", installs), clk.Now())
+	}
+	return e
+}
+
+// putServer stores the playground's OGXServer in project ns, as the
+// dashboard creates it.
+func (e *playgroundEnv) putServer(ns, uid string, created time.Time) {
+	e.k8s.putJSON("/apis/ogx.io/v1beta1/namespaces/"+ns+"/ogxservers/lsd-genai-playground",
+		fmt.Sprintf(`{"metadata":{"name":"lsd-genai-playground","namespace":%q,"uid":%q,"creationTimestamp":%q}}`, ns, uid, created.UTC().Format(time.RFC3339)))
 }
 
 func (e *playgroundEnv) run(t *testing.T, req types.PlaygroundRequest) (*types.OperationResponse, []UpdateStepEvent) {
@@ -295,14 +325,127 @@ func TestPlayground_SetupExplainsLeftovers(t *testing.T) {
 	}
 }
 
-// The dashboard's install checks every model deployed for Gen AI in the
-// project: one that is not ready stops the setup before it.
-func TestPlayground_SetupNeedsEveryProjectModelReady(t *testing.T) {
+// The dashboard's install checks only the models it is asked to use
+// (rhoai-3.6 generateLlamaStackConfig): another model of the project that
+// is not ready is left out, not a reason to refuse.
+func TestPlayground_SetupUsesTheReadyModelsOnly(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = `{"data":[` + strings.TrimSuffix(strings.TrimPrefix(testQwenModels, `{"data":[`), `]}`) + `,{"model_name":"deepseek","status":"Failed"}]}`
-	res, _ := e.run(t, setup("proj"))
-	if res.Success || res.ErrorCode != "model_not_ready" || !strings.Contains(res.Message, "deepseek (Failed)") || len(e.g.installs) != 0 {
+	res, steps := e.run(t, setup("proj"))
+	if !res.Success || len(e.g.installs) != 1 {
 		t.Fatalf("got %+v", res)
+	}
+	models, _ := e.g.installs[0]["models"].([]interface{})
+	if m, _ := models[0].(map[string]interface{}); len(models) != 1 || m["model_name"] != "qwen25-05b-instruct" {
+		t.Errorf("models %v", models)
+	}
+	if !strings.Contains(steps[0].Message, "deepseek") {
+		t.Errorf("the check does not name the model left out: %s", steps[0].Message)
+	}
+	// A chosen model that is not ready is still refused.
+	PurgePlaygroundStatus()
+	delete(e.g.servers, "proj")
+	req := setup("proj")
+	req.Models = []types.PlaygroundModelRef{{Name: "deepseek", Source: "namespace"}}
+	if res, _ := e.run(t, req); res.Success || res.ErrorCode != "model_not_ready" {
+		t.Fatalf("chosen model not ready: %+v", res)
+	}
+}
+
+// The record holds the playground's OGXServer UID once the dashboard made it.
+func TestPlayground_SetupRecordsTheServerUID(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup("proj")); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if got := e.records(t)["proj"].UID; got != "uid-installed-1" {
+		t.Errorf("recorded UID %q", got)
+	}
+}
+
+// The playground this tool made was deleted in Gen AI studio and someone
+// made a new one there: the record is stale. The new one is not this
+// tool's: shown as not managed, never deleted, and the record is dropped.
+func TestPlayground_AStaleRecordDoesNotOwnANewPlayground(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup("proj")); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+	e.putServer("proj", "uid-made-in-the-dashboard", clk.Now())
+	PurgePlaygroundStatus()
+	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	if err != nil || len(st.Items) != 1 || st.Items[0].ManagedByTool {
+		t.Fatalf("status %+v, %v", st, err)
+	}
+	if res, _ := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"}); res.Success || res.ErrorCode != "not_managed" {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if len(e.g.deletes) != 0 {
+		t.Errorf("deleted %v", e.g.deletes)
+	}
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("the stale record was kept")
+	}
+}
+
+// Between the check and the install someone else made a playground; the
+// dashboard answers the install 200 with it. It is not this tool's.
+func TestPlayground_AnInstallAnsweredWithAnExistingServerIsNotOwned(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.existingOnInstall = true
+	e.k8s.beforeServe = func(method, path string) {
+		if method == http.MethodPatch && path == testRecordPath {
+			e.g.mu.Lock()
+			if e.g.servers["proj"] == nil {
+				e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+				e.putServer("proj", "uid-someone-else", clk.Now().Add(-time.Minute))
+			}
+			e.g.mu.Unlock()
+		}
+	}
+	res, _ := e.run(t, setup("proj"))
+	if res.Success || res.ErrorCode != "not_managed" {
+		t.Fatalf("got %+v", res)
+	}
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("someone else's playground is recorded as this tool's")
+	}
+}
+
+// The gen-ai API reports no playground as 200 {"data":null}; a 404 is a
+// missing route or object, not absence: teardown fails and keeps the record.
+func TestPlayground_A404IsNotAbsence(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup("proj")); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	e.g.missing = true
+	res, _ := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"})
+	if res.Success || res.ErrorCode != "api_missing" {
+		t.Fatalf("got %+v", res)
+	}
+	if _, ok := e.records(t)["proj"]; !ok {
+		t.Error("the record was dropped on a 404")
+	}
+}
+
+// Changing the selected project reads its models only: the playgrounds of
+// every project are cached apart from it.
+func TestPlayground_StatusFanOutIsSharedAcrossProjects(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if _, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(e.g.paths)
+	if _, err := GetPlaygroundStatus(e.c, testGenAIToken, "other"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range e.g.paths[before:] {
+		if strings.Contains(p, "/lsd/status") {
+			t.Errorf("the playgrounds were read again: %v", e.g.paths[before:])
+			break
+		}
 	}
 }
 

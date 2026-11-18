@@ -200,16 +200,15 @@ type genAIServer struct {
 }
 
 // playgroundStatus returns the project's playground, or nil when it has
-// none ({"data":null}, or 404 for a server that is not found).
+// none. The dashboard reports none as 200 {"data":null} (rhoai-3.6
+// GetOGXServerStatus); a 404 is a route or API that is not there
+// (LlamaStackDistributionStatusHandler answers it for NotFound), so it is
+// an error, never absence.
 func (a genAIAPI) playgroundStatus(ns string) (*genAIServer, error) {
 	var out struct {
 		Data *genAIServer `json:"data"`
 	}
-	err := a.call(http.MethodGet, "/lsd/status", ns, nil, &out)
-	if genAIStatus(err) == http.StatusNotFound {
-		return nil, nil
-	}
-	if err != nil {
+	if err := a.call(http.MethodGet, "/lsd/status", ns, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Data, nil
@@ -306,10 +305,67 @@ const (
 	playgroundRecordManager = "rhoai-nightly-updater-playgrounds"
 )
 
-// playgroundRecord is one project's entry.
+// playgroundRecord is one project's entry. UID is the OGXServer the
+// dashboard made for the request; until it is known (an install in
+// flight), a server created at or after RequestedAt is taken as the one
+// requested.
 type playgroundRecord struct {
 	RequestedAt string `json:"requestedAt"`
 	By          string `json:"by,omitempty"`
+	UID         string `json:"uid,omitempty"`
+}
+
+// playgroundServerName is the OGXServer the dashboard's install makes
+// (the BFF's lsdName); the ServiceAccount may read only that name, so a
+// server named otherwise is never taken as this tool's.
+const playgroundServerName = "lsd-genai-playground"
+
+// readPlaygroundServer reads the playground's OGXServer (the
+// ServiceAccount's own read, at a served version of ogx.io).
+func readPlaygroundServer(c *Client, project, name string) (objectMeta, bool, error) {
+	if name != playgroundServerName {
+		return objectMeta{}, false, nil
+	}
+	r, err := getServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
+	if IsK8sError(err, http.StatusNotFound) {
+		return objectMeta{}, false, nil
+	}
+	if err != nil {
+		return objectMeta{}, false, fmt.Errorf("read OGXServer %s/%s: %w", project, name, err)
+	}
+	var obj struct {
+		Metadata objectMeta `json:"metadata"`
+	}
+	if err := json.Unmarshal(r.Body, &obj); err != nil {
+		return objectMeta{}, false, fmt.Errorf("parse OGXServer %s/%s: %w", project, name, err)
+	}
+	return obj.Metadata, true, nil
+}
+
+// playgroundOwnership says whether the live playground srv in project is
+// the one this tool requested (rec, when has): its OGXServer's UID is the
+// recorded one, or, with none recorded yet, it was created at or after the
+// request. uid is the live server's UID when owned. A record of something
+// else (the playground was deleted and made again in Gen AI studio, the
+// project was recreated, or the install found someone else's server) is
+// stale: owned is false.
+func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bool, srv *genAIServer) (owned bool, uid string, err error) {
+	if !has || srv == nil {
+		return false, "", nil
+	}
+	meta, found, err := readPlaygroundServer(c, project, srv.Name)
+	if err != nil || !found || meta.UID == "" {
+		return false, "", err
+	}
+	if rec.UID != "" {
+		return rec.UID == meta.UID, meta.UID, nil
+	}
+	requested, err1 := time.Parse(time.RFC3339, rec.RequestedAt)
+	created, err2 := time.Parse(time.RFC3339, meta.CreationTimestamp)
+	if err1 != nil || err2 != nil || created.Before(requested) {
+		return false, "", nil
+	}
+	return true, meta.UID, nil
 }
 
 // readPlaygroundRecords returns the recorded projects (none when nothing is
@@ -358,20 +414,29 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 	return nil
 }
 
-func setPlaygroundRecord(c *Client, project string, requested bool) error {
+// setPlaygroundRecord records project's entry (nil drops it).
+func setPlaygroundRecord(c *Client, project string, rec *playgroundRecord) error {
 	records, err := readPlaygroundRecords(c)
 	if err != nil {
 		return err
 	}
-	if _, has := records[project]; has == requested {
+	old, has := records[project]
+	switch {
+	case rec == nil && !has, rec != nil && has && old == *rec:
 		return nil
-	}
-	if requested {
-		records[project] = playgroundRecord{RequestedAt: time.Now().UTC().Format(time.RFC3339), By: getUser(c)}
-	} else {
+	case rec == nil:
 		delete(records, project)
+	default:
+		records[project] = *rec
 	}
 	return writePlaygroundRecords(c, records)
+}
+
+// newPlaygroundRecord is the entry of a request made now.
+func newPlaygroundRecord(c *Client) *playgroundRecord {
+	// Seconds, as creationTimestamp: a server made in the same second as
+	// the request counts as made after it.
+	return &playgroundRecord{RequestedAt: clk.Now().UTC().Format(time.RFC3339), By: getUser(c)}
 }
 
 // --- cluster parts (ServiceAccount reads) -------------------------------------------
@@ -556,38 +621,8 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 		sortPlaygrounds(st.Items)
 		return st, nil
 	}
-	// The selected project first: its answer says whether the API works.
-	sort.SliceStable(projects, func(i, j int) bool { return projects[i] == project && projects[j] != project })
-	if len(projects) > playgroundStatusMaxProjects {
-		projects, st.Truncated = projects[:playgroundStatusMaxProjects], true
-	}
 	var mu sync.Mutex
-	servers := map[string]*genAIServer{}
-	var firstErr error
-	sem := make(chan struct{}, playgroundStatusParallel)
 	var pwg sync.WaitGroup
-	for _, p := range projects {
-		pwg.Add(1)
-		go func() {
-			defer pwg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			srv, err := api.playgroundStatus(p)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				// A project the caller may not see answers 403: no
-				// playground to show there.
-				if s := genAIStatus(err); (s != http.StatusForbidden && s != http.StatusUnauthorized) || p == project {
-					if firstErr == nil {
-						firstErr = err
-					}
-				}
-				return
-			}
-			servers[p] = srv
-		}()
-	}
 	if project != "" {
 		pwg.Add(1)
 		go func() {
@@ -605,22 +640,36 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 			st.Models = models
 		}()
 	}
+	fo := readPlaygroundFanOut(c, api, token, projects, records)
+	if project != "" && !containsString(fo.projects, project) {
+		// Past the bound: the selected project is read on its own.
+		fo = fo.with(c, api, project, records)
+	}
 	pwg.Wait()
 	wg.Wait()
-	if firstErr != nil && st.APIProblem == "" {
-		st.APIProblem, st.APICode = apiProblem(firstErr)
+	st.Truncated = fo.truncated
+	for _, p := range fo.projects {
+		err := fo.errs[p]
+		// A project the caller may not see answers 403: no playground to
+		// show there.
+		if s := genAIStatus(err); err != nil && st.APIProblem == "" && ((s != http.StatusForbidden && s != http.StatusUnauthorized) || p == project) {
+			st.APIProblem, st.APICode = apiProblem(err)
+		}
 	}
 	seen := map[string]bool{}
-	for p, srv := range servers {
-		_, requested := records[p]
-		if srv != nil || requested {
-			st.Items = append(st.Items, playgroundItem(p, srv, requested))
+	for p, srv := range fo.servers {
+		_, recorded := records[p]
+		if srv != nil {
+			st.Items = append(st.Items, playgroundItem(p, srv, fo.owned[p]))
+			seen[p] = true
+		} else if recorded {
+			st.Items = append(st.Items, playgroundItem(p, nil, true))
 			seen[p] = true
 		}
 	}
 	for p := range records {
-		if !seen[p] && containsString(projects, p) {
-			if _, read := servers[p]; !read {
+		if !seen[p] && containsString(fo.projects, p) {
+			if _, read := fo.servers[p]; !read {
 				// Its state could not be read: unknown, not absent.
 				item := playgroundItem(p, &genAIServer{}, true)
 				item.Message = "Its state could not be read from the dashboard"
@@ -631,6 +680,91 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 	sortPlaygrounds(st.Items)
 	playgroundStatusCache.Add(key, st, playgroundStatusTTL)
 	return st, nil
+}
+
+// playgroundFanOut is the playgrounds of the data science projects as the
+// gen-ai API reports them (one call per project), and whether each is this
+// tool's. It is read once for every selected project: changing the
+// selection reads only that project's models.
+type playgroundFanOut struct {
+	projects  []string                // the projects read
+	servers   map[string]*genAIServer // read without error (nil: none)
+	owned     map[string]bool
+	errs      map[string]error
+	truncated bool
+}
+
+var playgroundFanOutCache = newLRU[string, *playgroundFanOut](16)
+
+func readPlaygroundFanOut(c *Client, api genAIAPI, token string, projects []string, records map[string]playgroundRecord) *playgroundFanOut {
+	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), tokenKey(token))
+	if fo, ok := playgroundFanOutCache.Get(key); ok {
+		return fo
+	}
+	fo := &playgroundFanOut{servers: map[string]*genAIServer{}, owned: map[string]bool{}, errs: map[string]error{}}
+	fo.projects = projects
+	if len(projects) > playgroundStatusMaxProjects {
+		fo.projects, fo.truncated = projects[:playgroundStatusMaxProjects], true
+	}
+	var mu sync.Mutex
+	sem := make(chan struct{}, playgroundStatusParallel)
+	var wg sync.WaitGroup
+	for _, p := range fo.projects {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			srv, owned, err := readProjectPlayground(c, api, p, records)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				fo.errs[p] = err
+				return
+			}
+			fo.servers[p], fo.owned[p] = srv, owned
+		}()
+	}
+	wg.Wait()
+	playgroundFanOutCache.Add(key, fo, playgroundStatusTTL)
+	return fo
+}
+
+// with is a copy of fo that also has project.
+func (fo *playgroundFanOut) with(c *Client, api genAIAPI, project string, records map[string]playgroundRecord) *playgroundFanOut {
+	cp := &playgroundFanOut{projects: append(append([]string{}, fo.projects...), project), servers: map[string]*genAIServer{}, owned: map[string]bool{}, errs: map[string]error{}, truncated: fo.truncated}
+	for p, s := range fo.servers {
+		cp.servers[p] = s
+	}
+	for p, o := range fo.owned {
+		cp.owned[p] = o
+	}
+	for p, e := range fo.errs {
+		cp.errs[p] = e
+	}
+	srv, owned, err := readProjectPlayground(c, api, project, records)
+	if err != nil {
+		cp.errs[project] = err
+	} else {
+		cp.servers[project], cp.owned[project] = srv, owned
+	}
+	return cp
+}
+
+// readProjectPlayground reads a project's playground and whether it is
+// this tool's (read only: the record is brought up to date by the next
+// operation, which holds the lock).
+func readProjectPlayground(c *Client, api genAIAPI, project string, records map[string]playgroundRecord) (*genAIServer, bool, error) {
+	srv, err := api.playgroundStatus(project)
+	if err != nil {
+		return nil, false, err
+	}
+	rec, has := records[project]
+	owned, _, err := playgroundOwnership(c, project, rec, has, srv)
+	if err != nil {
+		slog.Debug("cannot tell whether the playground is this tool's", "project", project, "error", err)
+	}
+	return srv, owned, nil
 }
 
 func sortPlaygrounds(items []types.PlaygroundState) {
@@ -788,11 +922,11 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(msg, code, "status")
 	}
 	if srv != nil {
-		records, err := readPlaygroundRecords(p.c)
+		owned, err := p.owned(srv)
 		if err != nil {
-			return stop(fmt.Sprintf("Cannot read this tool's records: %v.", err), errorCodeFromK8sErr(err), "records")
+			return stop(fmt.Sprintf("Cannot tell whether the playground in %s is this tool's: %v.", p.project, err), errorCodeFromK8sErr(err), "ownership")
 		}
-		if _, ours := records[p.project]; !ours {
+		if !owned {
 			return stop(fmt.Sprintf("Project %s already has a playground (%s), which this tool did not set up. Use it from the dashboard's Gen AI studio; this tool does not change it.", p.project, firstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
 		}
 		if srv.Phase == "Terminating" {
@@ -804,21 +938,21 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		msg, code := apiProblem(err)
 		return stop(msg, code, "models")
 	}
-	var notReady []string
-	for _, m := range models {
-		if m.Source == "namespace" && !m.Ready {
-			notReady = append(notReady, fmt.Sprintf("%s (%s)", m.Name, m.Status))
-		}
-	}
-	if len(notReady) > 0 {
-		return stop(fmt.Sprintf("Not every model deployed for Gen AI in %s is ready: %s. The dashboard's install checks each of them and fails while one is not ready. Wait until they are ready, or delete the ones you do not need; then set up again.", p.project, strings.Join(notReady, ", ")), "model_not_ready", "model not ready")
-	}
+	// The dashboard's install checks only the models it is asked to use
+	// (rhoai-3.6 generateLlamaStackConfig), so only those must be ready.
 	var chosen []types.PlaygroundModelRef
 	if len(wanted) == 0 {
+		var left []string
 		for _, m := range models {
-			if m.Source == "namespace" && m.Ready && m.Chat {
+			switch {
+			case m.Source == "namespace" && m.Ready && m.Chat:
 				chosen = append(chosen, types.PlaygroundModelRef{Name: m.Name, Source: m.Source})
+			case m.Source == "namespace" && m.Chat:
+				left = append(left, fmt.Sprintf("%s (%s)", m.Name, firstNonEmpty(m.Status, "not ready")))
 			}
+		}
+		if len(left) > 0 {
+			notes = append(notes, "not ready, so left out: "+strings.Join(left, ", "))
 		}
 	} else {
 		for _, w := range wanted {
@@ -854,6 +988,34 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 	return chosen, srv, nil
 }
 
+// owned says whether the live playground srv is the one this tool
+// requested in the project. Operations hold the cluster lock, so it also
+// brings the record up to date: a stale one is dropped, and the server's
+// UID is filled in when it was not known yet.
+func (p *playgroundRun) owned(srv *genAIServer) (bool, error) {
+	records, err := readPlaygroundRecords(p.c)
+	if err != nil {
+		return false, err
+	}
+	rec, has := records[p.project]
+	owned, uid, err := playgroundOwnership(p.c, p.project, rec, has, srv)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case has && !owned:
+		p.logs = append(p.logs, fmt.Sprintf("This tool's record of a playground in %s is of one that no longer exists; dropped.", p.project))
+		err = setPlaygroundRecord(p.c, p.project, nil)
+	case owned && rec.UID == "":
+		rec.UID = uid
+		err = setPlaygroundRecord(p.c, p.project, &rec)
+	}
+	if err != nil {
+		slog.Warn("cannot update the playground record", "project", p.project, "error", err)
+	}
+	return owned, nil
+}
+
 // alreadyExists finds `"<name>" already exists` in a dashboard message.
 var alreadyExistsName = regexp.MustCompile(`"([a-z0-9][-a-z0-9.]*)" already exists`)
 
@@ -880,7 +1042,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	if existing == nil {
 		// Recorded before the install, so a playground whose install
 		// outlives this process is still known as this tool's.
-		if err := setPlaygroundRecord(p.c, p.project, true); err != nil {
+		if err := setPlaygroundRecord(p.c, p.project, newPlaygroundRecord(p.c)); err != nil {
 			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "record")
 		}
 		body := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}}
@@ -915,6 +1077,22 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			}
 			p.forgetIfAbsent()
 			return p.installError(installErr)
+		}
+		// The dashboard answers 200 with a server that already exists too
+		// (its zero-restart path): one made by someone else since the check
+		// is not this tool's.
+		srv, err := p.api.playgroundStatus(p.project)
+		if err != nil {
+			return p.failAPI("install", err, "status")
+		}
+		if srv != nil {
+			owned, err := p.owned(srv)
+			if err != nil {
+				return p.fail("install", fmt.Sprintf("The dashboard set up a playground in %s, but this tool cannot tell whether it is the one it requested: %v.", p.project, err), errorCodeFromK8sErr(err), "ownership")
+			}
+			if !owned {
+				return p.fail("install", fmt.Sprintf("Someone else set up a playground in %s at the same time (%s), and the dashboard kept theirs. It is not this tool's, so this tool does not change it; use it from the dashboard's Gen AI studio.", p.project, firstNonEmpty(srv.Name, "unnamed")), "not_managed", "exists")
+			}
 		}
 		p.step("install", "success", fmt.Sprintf("The dashboard is setting up the playground in %s.", p.project))
 	} else {
@@ -969,7 +1147,7 @@ func srvPhase(s *genAIServer) string {
 // playground.
 func (p *playgroundRun) forgetIfAbsent() {
 	if srv, err := p.api.playgroundStatus(p.project); err == nil && srv == nil {
-		if err := setPlaygroundRecord(p.c, p.project, false); err != nil {
+		if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
 			slog.Warn("cannot clear the playground record", "project", p.project, "error", err)
 		}
 	}
@@ -980,19 +1158,23 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	if err != nil {
 		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), errorCodeFromK8sErr(err), "records")
 	}
-	_, ours := records[p.project]
+	_, recorded := records[p.project]
 	srv, err := p.api.playgroundStatus(p.project)
 	if err != nil {
 		return p.failAPI("delete", err, "status")
 	}
 	if srv == nil {
-		if ours {
-			if err := setPlaygroundRecord(p.c, p.project, false); err != nil {
+		if recorded {
+			if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
 				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %v.", p.project, err), errorCodeFromK8sErr(err), "record")
 			}
 		}
 		p.record("project="+p.project+" (none)", true)
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No playground in %s; nothing to delete.", p.project), Logs: p.logs}, nil
+	}
+	ours, err := p.owned(srv)
+	if err != nil {
+		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %v.", p.project, err), errorCodeFromK8sErr(err), "ownership")
 	}
 	if !ours {
 		return p.fail("delete", fmt.Sprintf("The playground in %s was not set up by this tool, so it was not deleted. Delete it in the dashboard's Gen AI studio if you no longer need it.", p.project), "not_managed", "not managed")
@@ -1018,7 +1200,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	if !gone {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, clockText(PlaygroundDeleteTimeout)), "in_progress", "still deleting")
 	}
-	if err := setPlaygroundRecord(p.c, p.project, false); err != nil {
+	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, templateHint(err)), errorCodeFromK8sErr(err), "record")
 	}
 	p.step("gone", "success", fmt.Sprintf("The playground in %s is gone.", p.project))

@@ -381,7 +381,7 @@ curl -s -X POST "https://rh-ai.<apps domain>/gen-ai/api/v1/lsd/responses?namespa
 | Symptom | Cause and fix |
 |---|---|
 | Set up unavailable: "Needs: Models" | The project has no ready chat model. Set one up on the Models tab, or wait until it is ready |
-| Set up unavailable: "Not every model in <project> is ready" | The dashboard's install checks every model deployed for Gen AI in the project. Wait, or delete the model that cannot start (`oc get llminferenceservice,inferenceservice -n <project>`) |
+| A playground this tool set up now reads "not managed by this tool" | Its OGXServer has another UID than the one recorded: it was deleted and made again in Gen AI studio, or the project was recreated. The new one is someone else's; the next Set up or Delete in the project drops the old record. Delete it in Gen AI studio if you no longer need it |
 | "This RHOAI release's dashboard gen-ai API differs" | A gen-ai path answered 404 on this release. Use the playground from the dashboard's Gen AI studio; report the call the message names |
 | "The dashboard's gen-ai API refused the request (HTTP 403)" | The updater's ServiceAccount lacks a rule the dashboard needs: re-apply the template (`deploy/template.yaml`). `oc auth can-i list ogxservers.ogx.io -n <project> --as=system:serviceaccount:<ns>:<sa>` must say yes |
 | Install fails: "An earlier playground ... left objects behind" | ConfigMaps of a playground whose server is gone (400 "already exists"). Someone with edit rights deletes the one named, for example `oc delete configmap -n <project> llama-stack-config` (check `oc get configmap -n <project> -l opendatahub.io/dashboard=true`), then Set up again |

@@ -30,7 +30,8 @@ describe("playgroundState", () => {
     expect(playgroundState(status, pg(), "dev")).toMatchObject({ status: "not-set-up", next: { kind: "set-up", label: "Set up the playground in dev", setup: [{ kind: "setup-playground", project: "dev" }], reason: null } });
     expect(playgroundState(status, pg({ models: [maas] }), "dev").next).toMatchObject({ reason: null });
     expect(playgroundState(status, pg({ models: [] }), "dev").next).toMatchObject({ reason: expect.stringContaining("Needs: Models") });
-    expect(playgroundState(status, pg({ models: [qwen, { name: "deepseek", source: "namespace", status: "Failed", ready: false, chat: true }] }), "dev").next).toMatchObject({ reason: expect.stringContaining("deepseek") });
+    // The dashboard's install checks only the models it is given: another one that is not ready does not block.
+    expect(playgroundState(status, pg({ models: [qwen, { name: "deepseek", source: "namespace", status: "Failed", ready: false, chat: true }] }), "dev").next).toMatchObject({ reason: null });
     expect(playgroundState(status, pg({ blocked: { component: "ogx", reason: "The Gen AI playground is turned off." } }), "dev").next).toMatchObject({ reason: "The Gen AI playground is turned off." });
     expect(playgroundState(status, pg({ apiProblem: "This RHOAI release's dashboard gen-ai API differs." }), "dev").next).toMatchObject({ reason: expect.stringContaining("differs") });
     expect(playgroundState(status, null, "dev").next).toMatchObject({ reason: expect.stringContaining("loading") });
@@ -71,6 +72,11 @@ describe("Playground clean-up and steps", () => {
     expect(cleanupCandidates(status, "mlflow", false, st).playgrounds).toEqual([]);
     expect(cleanupSteps({ models: ["dev"], playgrounds: ["dev"] }).map((s) => s.id)).toEqual(["playground:dev", "model:dev"]);
     expect(playgroundSteps({ kind: "teardown-playground", project: "dev" }).map((s) => s.id)).toEqual(["delete", "gone"]);
+  });
+
+  it("the chat request quotes a model name for the shell and JSON", () => {
+    const curl = playgroundCurl("https://rh-ai.apps.example.com", "dev", `it's "x" $(id)`, "maas");
+    expect(curl).toContain(`-d '{"model":"it'\\''s \\"x\\" $(id)","model_source_type":"maas",`);
   });
 
   it("the chat request uses the user's own token and the plain model name", () => {
@@ -114,6 +120,15 @@ describe("Playground tab", () => {
     renderAt("/test-resources?tab=playground&project=dev");
     expect(await screen.findByRole("button", { name: "Set up a model on the Models tab" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set up the playground in dev" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("a model that is not ready is left out, and Set up stays available", async () => {
+    const failed: PlaygroundModel = { name: "deepseek", source: "namespace", status: "Failed", ready: false, chat: true };
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/playground": pg({ models: [qwen, failed] }) });
+    renderAt("/test-resources?tab=playground&project=dev");
+    expect(await screen.findByText(/not ready, so Set up leaves them out: deepseek \(Failed\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/every model/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up the playground in dev" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("a playground someone else set up: open it, no Delete", async () => {

@@ -173,6 +173,16 @@ describe("Models tab", () => {
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", gateway: true, project: "dev" }]);
   });
 
+  it("no capacity warning once the project has the model: its own pod holds the room, and its state says why it waits", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ capacityWarning: "No worker seems to have room for the model.", items: [model("dev", { ready: false, message: "Starting vLLM" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findAllByText(/Starting vLLM/)).not.toHaveLength(0);
+    expect(screen.queryByText("No worker seems to have room for the model.")).not.toBeInTheDocument();
+  });
+
   it("a missing preset image offers the newest released image, which re-runs only the model", async () => {
     const api = stubApi({
       "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { ready: false, terminalError: true, presetImageMissing: true, waitingReason: "ErrImagePull", message: "ErrImagePull: manifest unknown" })] }) }),

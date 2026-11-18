@@ -164,6 +164,13 @@ objects:
         resources: ["configmaps"]
         resourceNames: ["odh-upgrade-acks"]
         verbs: ["get"]
+      # Models: KServe's default gateway (ConfigMap inferenceservice-config,
+      # key ingress) in the applications namespace, which is found at run
+      # time, so cluster-wide but only this name; read-only
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        resourceNames: ["inferenceservice-config"]
+        verbs: ["get"]
       # Webhook and CRD-conversion backing Services and their endpoints
       # (stale-webhook check), and the S3 storage's Service; minio-service
       # is the earlier storage's, only deleted
@@ -400,6 +407,11 @@ objects:
         resources: ["gatewayclasses"]
         resourceNames: ["openshift-ai-inference"]
         verbs: ["get", "patch", "delete"]
+      # Teardown keeps that class while another Gateway uses it: Gateways
+      # are listed cluster-wide (read-only; another can be in any namespace)
+      - apiGroups: ["gateway.networking.k8s.io"]
+        resources: ["gateways"]
+        verbs: ["list"]
       # MaaS: read OpenShift's shared class openshift-default (created only
       # when missing, with the create rule above; never changed or deleted)
       - apiGroups: ["gateway.networking.k8s.io"]
@@ -443,7 +455,8 @@ objects:
       # OGXServer lsd-genai-playground and its ConfigMaps (create cannot be
       # limited by name), sets ownerReferences on them (which needs delete),
       # labels odh-trusted-ca-bundle ogx.io/watch=true (update), reads the
-      # optional custom-endpoints ConfigMap, and deletes the server. The
+      # optional custom-endpoints ConfigMap, and deletes the server (this tool
+      # also reads the server itself: its UID marks the one it requested). The
       # pgvector database and the router CA are the dashboard's own
       # ServiceAccount's. SECURITY.md audits each rule.
       - apiGroups: ["ogx.io"]

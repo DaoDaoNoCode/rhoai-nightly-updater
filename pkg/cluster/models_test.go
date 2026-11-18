@@ -457,7 +457,7 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 	}
 	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"spec":{"router":{"route":{},"gateway":{}}}}`)
 	before := len(mc.f.mutations())
-	res, _ := TeardownInferenceGateway(mc.c)
+	res, _ := TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "team/granite") {
 		t.Fatalf("got %+v", res)
 	}
@@ -471,7 +471,7 @@ func TestGatewayTeardown_RefusesWhileAModelUsesIt(t *testing.T) {
 
 	// Models that cannot be listed: fail closed.
 	mc.f.fail["GET /apis/serving.kserve.io/v1alpha2/llminferenceservices"] = 500
-	res, _ = TeardownInferenceGateway(mc.c)
+	res, _ = TeardownInferenceGateway(mc.c, false)
 	if res.Success || !strings.Contains(res.Message, "Cannot check which models use the gateway") {
 		t.Fatalf("got %+v", res)
 	}
@@ -496,7 +496,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 		}
 	}
 	before := len(mc.f.mutations())
-	res, _ := TeardownInferenceGateway(mc.c)
+	res, _ := TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "1 route is attached to the inference gateway") {
 		t.Fatalf("got %+v", res)
 	}
@@ -509,7 +509,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 	}
 
 	attached = 0
-	if res, _ = TeardownInferenceGateway(mc.c); !res.Success || mc.f.has(testGatewayPath) {
+	if res, _ = TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
 	}
 }
@@ -517,7 +517,7 @@ func TestGatewayTeardown_RefusesWhileRoutesAreAttached(t *testing.T) {
 func TestGatewayTeardown_NeverDeletesAForeignGateway(t *testing.T) {
 	mc := newModelsCluster(t)
 	mc.f.putJSON(testGatewayPath, `{"spec":{}}`)
-	res, _ := TeardownInferenceGateway(mc.c)
+	res, _ := TeardownInferenceGateway(mc.c, false)
 	if res.Success || res.ErrorCode != "not_managed" || !mc.f.has(testGatewayPath) {
 		t.Fatalf("got %+v", res)
 	}
@@ -696,13 +696,13 @@ func TestModelCapacityWarning(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
 	mc.f.putJSON("/api/v1/nodes/m1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"spec":{"taints":[{"effect":"NoSchedule"}]},"status":{"allocatable":{"cpu":"64","memory":"256Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"14","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	w := modelCapacityWarning(mc.c, modelCatalog[0])
+	w := modelCapacityWarning(mc.c, modelCatalog[0], "")
 	if !strings.Contains(w, "the most CPU free is 1.5 CPUs and 53.0 GiB on w1") {
 		t.Fatalf("warning: %q", w)
 	}
 	capacityCache.Purge()
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"2","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	if w := modelCapacityWarning(mc.c, modelCatalog[0]); w != "" {
+	if w := modelCapacityWarning(mc.c, modelCatalog[0], ""); w != "" {
 		t.Fatalf("warning: %q", w)
 	}
 }
@@ -899,18 +899,12 @@ func putModelDeployment(mc *modelsCluster, replicas, updated, available int) {
 func TestModelsSetup_WaitsForTheRollout(t *testing.T) {
 	mc := newModelsCluster(t)
 	putModelDeployment(mc, 2, 1, 1) // the new pod starts, the old one serves
-	reads := 0
-	mc.f.beforeServe = func(method, path string) {
-		if method == "GET" && strings.HasSuffix(path, "/namespaces/proj/deployments") {
-			mc.mu.Lock()
-			reads++
-			n := reads
-			mc.mu.Unlock()
-			if n == 3 {
-				putModelDeployment(mc, 1, 1, 1)
-			}
+	// The model reports Ready from its third read; the rollout ends later.
+	onModelRead(mc, func(n int) {
+		if n == 6 {
+			putModelDeployment(mc, 1, 1, 1)
 		}
-	}
+	})
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
 	if !res.Success || !strings.Contains(res.Message, "is ready in proj") {
 		t.Fatalf("setup: %+v", res)
@@ -919,8 +913,8 @@ func TestModelsSetup_WaitsForTheRollout(t *testing.T) {
 	for _, e := range events {
 		said = said || strings.Contains(e.Message, "Rolling out the change")
 	}
-	if !said || reads < 3 {
-		t.Errorf("did not wait for the rollout (said=%v, deployment reads=%d)", said, reads)
+	if !said || mc.modelReads < 6 {
+		t.Errorf("did not wait for the rollout (said=%v, model reads=%d)", said, mc.modelReads)
 	}
 }
 
@@ -955,5 +949,281 @@ func TestModelsSetup_ReadyMustBeForTheAppliedGeneration(t *testing.T) {
 	}
 	if stale <= 4 {
 		t.Errorf("Ready for an older generation counted: %d reads", stale)
+	}
+}
+
+// putModelPod stores a pod of the model, its main container on image, with
+// the given status.
+func putModelPod(mc *modelsCluster, name, image, status string) {
+	mc.f.putJSON("/api/v1/namespaces/proj/pods/"+name, `{"metadata":{"name":"`+name+`","labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"spec":{"containers":[{"name":"main","image":"`+image+`"}]},"status":`+status+`}`)
+}
+
+// putModelDeploymentImage stores the model's Deployment with its pod
+// template's main image, its generation and observed generation, and the
+// given replica counts.
+func putModelDeploymentImage(mc *modelsCluster, image string, generation, observed, replicas, updated, available int) {
+	mc.f.putJSON(testModelDeployment, fmt.Sprintf(`{"metadata":{"name":"qwen25-05b-instruct-kserve","generation":%d,
+		"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
+		"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":"main","image":%q}]}}},
+		"status":{"observedGeneration":%d,"replicas":%d,"updatedReplicas":%d,"availableReplicas":%d}}`, generation, image, observed, replicas, updated, available))
+}
+
+const testOldPullFailure = `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"reading manifest sha256:978a: manifest unknown"}}}]}`
+
+// onModelRead runs fn(n) before the n-th GET of the model.
+func onModelRead(mc *modelsCluster, fn func(n int)) {
+	mc.f.beforeServe = func(method, path string) {
+		if method == "GET" && strings.HasSuffix(path, "/llminferenceservices/qwen25-05b-instruct") {
+			mc.mu.Lock()
+			n := mc.modelReads + 1
+			mc.mu.Unlock()
+			fn(n)
+		}
+	}
+}
+
+// Switching a failing model to another image: the old pod still fails to
+// pull while the new one starts. Only the new revision's pods count.
+func TestModelsSetup_OldRevisionPodDoesNotFailTheChange(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 8
+	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 2, 1, 0)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-old", testPresetImage, testOldPullFailure)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-new", "quay.io/new/vllm:1", `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)
+	onModelRead(mc, func(n int) {
+		if n == 8 {
+			putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 1, 1, 1)
+		}
+	})
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success || !strings.Contains(res.Message, "is ready in proj") {
+		t.Fatalf("the old pod failed the change: %+v", res)
+	}
+}
+
+// While the Deployment's controller has not seen the change, every pod is
+// the previous revision's: their problems are not the change's.
+func TestModelsSetup_PodProblemsWaitForTheObservedGeneration(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 8
+	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 4, 3, 1, 1, 0)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-old", "quay.io/new/vllm:1", testOldPullFailure)
+	onModelRead(mc, func(n int) {
+		if n == 8 {
+			mc.f.mu.Lock()
+			delete(mc.f.objects, fakeKey{gv: "v1", ns: "proj", plural: "pods", name: "qwen25-05b-instruct-kserve-old"})
+			mc.f.mu.Unlock()
+			putModelDeploymentImage(mc, "quay.io/new/vllm:1", 4, 4, 1, 1, 1)
+		}
+	})
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if !res.Success {
+		t.Fatalf("a pod of the previous revision failed the change: %+v", res)
+	}
+	said := false
+	for _, e := range events {
+		said = said || strings.Contains(e.Message, "Waiting for KServe to apply the change")
+	}
+	if !said {
+		t.Error("the wait did not say it waits for the change to be applied")
+	}
+}
+
+// KServe reports Ready while the old pod serves; the new pod crash-loops:
+// the rollout wait stops with the new pod's problem.
+func TestModelsSetup_RolloutStopsOnAFailingNewPod(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.readyAfter = 1
+	putModelDeploymentImage(mc, "quay.io/new/vllm:1", 3, 3, 2, 1, 1)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-old", testPresetImage, `{"containerStatuses":[{"name":"main","ready":true,"state":{"running":{}}}]}`)
+	putModelPod(mc, "qwen25-05b-instruct-kserve-new", "quay.io/new/vllm:1", `{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}`)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "keeps crashing") {
+		t.Fatalf("the rollout did not stop on the new pod's crash loop: %+v", res)
+	}
+}
+
+// Every pod is judged: a problem on the second pod is not hidden by the first.
+func TestDescribeModelPods_ChecksEveryPod(t *testing.T) {
+	var ok, bad modelPod
+	_ = json.Unmarshal([]byte(`{"metadata":{"name":"a"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}}`), &ok)
+	_ = json.Unmarshal([]byte(`{"metadata":{"name":"b"},"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}`), &bad)
+	if got := describeModelPods([]modelPod{ok, bad}, nil); !strings.Contains(got.problem, "keeps crashing") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// One route attached to both listeners is one route, not two.
+func TestAttachedRoutes_CountsARouteOnTwoListenersOnce(t *testing.T) {
+	var g gatewayObject
+	_ = json.Unmarshal([]byte(`{"status":{"listeners":[{"name":"https-external","attachedRoutes":1},{"name":"https","attachedRoutes":1}]}}`), &g)
+	if n := g.attachedRoutes(); n != 1 {
+		t.Fatalf("attached routes %d", n)
+	}
+}
+
+// Another Gateway uses the class: the teardown deletes this tool's Gateway
+// and options, keeps the class, and says so.
+func TestGatewayTeardown_KeepsTheClassWhileAnotherGatewayUsesIt(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/apis/gateway.networking.k8s.io/v1/namespaces/team/gateways/team-gw", `{"metadata":{"name":"team-gw","namespace":"team"},"spec":{"gatewayClassName":"openshift-ai-inference"}}`)
+	res, _ := TeardownInferenceGateway(mc.c, false)
+	if !res.Success || mc.f.has(testGatewayPath) || mc.f.has(testGatewayCM) {
+		t.Fatalf("got %+v", res)
+	}
+	if !mc.f.has(testGatewayClass) {
+		t.Fatal("deleted the class another Gateway uses")
+	}
+	if !strings.Contains(res.Message, "GatewayClass openshift-ai-inference was kept: Gateway team/team-gw uses it") {
+		t.Errorf("message: %s", res.Message)
+	}
+	// Once no other Gateway uses it, the class goes too.
+	mc.f.mu.Lock()
+	delete(mc.f.objects, fakeKey{gv: "gateway.networking.k8s.io/v1", ns: "team", plural: "gateways", name: "team-gw"})
+	mc.f.mu.Unlock()
+	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success || mc.f.has(testGatewayClass) {
+		t.Fatalf("second teardown: %+v", res)
+	}
+}
+
+// Deleting the models and the gateway in one operation: the controller
+// updates attachedRoutes after the routes go, so the teardown waits for the
+// count (bounded, on the clock) instead of refusing at once.
+func TestGatewayTeardown_WaitsForRoutesOfModelsJustDeleted(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.finalizeOnGet = true
+	reads := 0
+	next := mc.f.onGet
+	mc.f.onGet = func(k fakeKey, obj map[string]interface{}) {
+		next(k, obj)
+		if k.plural == "gateways" {
+			reads++
+			attached := 0
+			if reads <= 3 {
+				attached = 1
+			}
+			ensureMap(obj, "status")["listeners"] = []interface{}{map[string]interface{}{"name": "https-external", "attachedRoutes": attached}}
+		}
+	}
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Gateway: true, Project: "proj"})
+	if !res.Success || mc.f.has(testGatewayPath) {
+		t.Fatalf("got %+v", res)
+	}
+}
+
+const testISVCConfig = "/api/v1/namespaces/redhat-ods-applications/configmaps/inferenceservice-config"
+
+// KServe's default gateway (inferenceservice-config, ingress
+// kserveIngressGateway) is read at run time. When it is not the gateway
+// this tool manages, a model whose route is the default would not use it:
+// setup refuses before writing anything.
+func TestModelsSetup_RefusesWhenKServesDefaultGatewayIsAnother(t *testing.T) {
+	for _, gw := range []string{"istio-system/kserve-gateway", "kserve-gateway"} {
+		mc := newModelsCluster(t)
+		mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"`+gw+`\"}"}}`)
+		before := len(mc.f.mutations())
+		res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+		want := gw
+		if !strings.Contains(gw, "/") {
+			want = "redhat-ods-applications/" + gw
+		}
+		if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "KServe's default gateway is "+want) {
+			t.Fatalf("%s: got %+v", gw, res)
+		}
+		if m := mc.f.mutations()[before:]; len(m) != 0 {
+			t.Errorf("%s: wrote %v", gw, m)
+		}
+	}
+	// The default named as this tool's gateway: setup runs.
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"openshift-ingress/openshift-ai-inference\"}"}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("matching default: %+v", res)
+	}
+}
+
+// A model on KServe's default route does not use this gateway when the
+// default is another one: it does not hold the teardown, and the status
+// says where default routes go.
+func TestGatewayTeardown_ADefaultRouteElsewhereDoesNotBlock(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON(testISVCConfig, `{"data":{"ingress":"{\"kserveIngressGateway\":\"istio-system/kserve-gateway\"}"}}`)
+	mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/team/llminferenceservices/granite", `{"metadata":{"name":"granite","namespace":"team"},"spec":{"router":{"gateway":{}}}}`)
+	st, _ := GetResourcesStatus(mc.c)
+	if len(st.InferenceGateway.UsedBy) != 0 || !strings.Contains(st.InferenceGateway.Warning, "KServe's default gateway is istio-system/kserve-gateway") {
+		t.Errorf("status: %+v", st.InferenceGateway)
+	}
+	if res, _ := TeardownInferenceGateway(mc.c, false); !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+}
+
+// Setting the model up again in its project: the room its own pod holds
+// is the room the new pod gets, so that pod is not counted against it.
+func TestModelCapacityWarning_IgnoresTheModelsOwnPod(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
+	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"metadata":{"namespace":"a"},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"10","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
+	mc.f.putJSON("/api/v1/namespaces/proj/pods/qwen", `{"metadata":{"namespace":"proj","labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"4","memory":"6Gi"}}}]},"status":{"phase":"Running"}}`)
+	if w := modelCapacityWarning(mc.c, modelCatalog[0], "proj"); w != "" {
+		t.Fatalf("its own pod was counted: %q", w)
+	}
+	// In another project the running copy is a real occupant.
+	if w := modelCapacityWarning(mc.c, modelCatalog[0], "other"); w == "" {
+		t.Fatal("a copy in another project was not counted")
+	}
+}
+
+// A profile the dashboard shows only for workbenches is not recorded on a
+// model (rhoai-3.6 isHardwareProfileVisibleIn: a list without
+// "model-serving" hides it from model serving).
+func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
+	mc := newModelsCluster(t)
+	putProfiles(mc,
+		hwProfile("a-workbench", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"[\"workbench\"]"}`),
+		hwProfile("b-serving", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"[\"workbench\",\"model-serving\"]"}`))
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup failed: %+v", res)
+	}
+	model := mc.f.get(testModelPath)
+	ann := model["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if ann[hardwareProfileNameAnnotation] != "b-serving" {
+		t.Errorf("hardware profile %v", ann[hardwareProfileNameAnnotation])
+	}
+	var p hardwareProfileObject
+	_ = json.Unmarshal([]byte(hwProfile("x", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"not json"}`)), &p)
+	if why := p.fits(modelCatalog[0]); why != "" {
+		t.Errorf("an unreadable visibility hides the profile (the dashboard shows it): %s", why)
+	}
+}
+
+// The confirmation promised the newest released image: when the catalog
+// cannot be read, setup refuses and names the catalog's error instead of
+// quietly using the preset's image.
+func TestModelsSetup_ReleasedImageLookupFailureRefuses(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+CatalogName+`"}}`)
+	prev := lookupReleasedImage
+	t.Cleanup(func() { lookupReleasedImage = prev })
+	lookupReleasedImage = func(context.Context, string) (releasedImage, error) {
+		return releasedImage{}, fmt.Errorf("catalog.redhat.com answered 503")
+	}
+	before := len(mc.f.mutations())
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || !strings.Contains(res.Message, "catalog.redhat.com answered 503") || !strings.Contains(res.Message, "Nothing was changed") {
+		t.Fatalf("got %+v", res)
+	}
+	if m := mc.f.mutations()[before:]; len(m) != 0 {
+		t.Errorf("wrote %v", m)
 	}
 }

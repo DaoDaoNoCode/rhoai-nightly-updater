@@ -285,7 +285,8 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const noProjects = projectsLoaded && projects.length === 0;
   const toolModels = (models?.items ?? []).filter((m) => m.managedByTool !== false);
   const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
-  const capacity = models?.capacityWarning && project && (!model || !model.ready) ? models.capacityWarning : null;
+  // Only before the project has the model: once it does, its own pod holds the room the check counts, and the model's state says why it waits.
+  const capacity = models?.capacityWarning && project && !model?.deployed ? models.capacityWarning : null;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose="Serve a small chat model on CPU in a project, and call it with your OpenShift token or from the dashboard's Gen AI playground." state={state} /></StackItem>
@@ -417,7 +418,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
         summary: <Content component="p">Deletes the inference gateway and, with it, its load balancer and DNS record. Models can no longer be reached until it is set up again; it is not deleted while a model uses it.</Content>,
         changes: [
           <>Gateway <code>{GATEWAY_NS}/{GATEWAY}</code>, ConfigMap <code>{GATEWAY_NS}/{GATEWAY}-options</code> and GatewayClass <code>{GATEWAY}</code> are deleted, those of them this tool created.</>,
-          <>Kept: anything of these names this tool did not create, and every other gateway (for example <code>maas-default-gateway</code>).</>,
+          <>Kept: anything of these names this tool did not create, every other gateway (for example <code>maas-default-gateway</code>), and the GatewayClass while another gateway uses it.</>,
         ],
       };
     default:
