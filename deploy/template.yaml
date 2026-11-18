@@ -306,6 +306,13 @@ objects:
       - apiGroups: ["operators.coreos.com"]
         resources: ["operatorgroups"]
         verbs: ["list"]
+      # Operators a feature needs (cert-manager, Connectivity Link,
+      # CloudNativePG) are found by package in any namespace, as RHOAI's
+      # KServe finds them, so a second install is never made elsewhere;
+      # read-only. SECURITY.md, "One-click prerequisites".
+      - apiGroups: ["operators.coreos.com"]
+        resources: ["subscriptions"]
+        verbs: ["list"]
       - apiGroups: ["operators.coreos.com"]
         resources: ["operatorgroups"]
         resourceNames: ["rhods-operator"]
