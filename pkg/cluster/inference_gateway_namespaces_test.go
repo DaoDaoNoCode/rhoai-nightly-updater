@@ -265,7 +265,8 @@ func TestModelsAllow_AddsAProjectWhoseModelTheGatewayDoesNotList(t *testing.T) {
 		t.Fatal(err)
 	}
 	gw := st.InferenceGateway
-	if strings.Join(gw.AllowedProjects, ",") != "openshift-ingress,proj" || strings.Join(gw.NotAllowedModelProjects, ",") != "team" || gw.AllProjectsAllowed {
+	if strings.Join(gw.AllowedProjects, ",") != "openshift-ingress,proj" || strings.Join(gw.NotAllowedModelProjects, ",") != "team" || gw.AllProjectsAllowed ||
+		strings.Join(gw.NotAllowedModels, ",") != "team/granite" {
 		t.Fatalf("status: %+v", gw)
 	}
 
@@ -284,7 +285,7 @@ func TestModelsAllow_AddsAProjectWhoseModelTheGatewayDoesNotList(t *testing.T) {
 		}
 	}
 	st, _ = GetResourcesStatus(mc.c)
-	if len(st.InferenceGateway.NotAllowedModelProjects) != 0 || strings.Join(st.InferenceGateway.AllowedProjects, ",") != "openshift-ingress,proj,team" {
+	if len(st.InferenceGateway.NotAllowedModelProjects) != 0 || len(st.InferenceGateway.NotAllowedModels) != 0 || strings.Join(st.InferenceGateway.AllowedProjects, ",") != "openshift-ingress,proj,team" {
 		t.Fatalf("status after: %+v", st.InferenceGateway)
 	}
 

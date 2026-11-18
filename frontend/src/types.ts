@@ -805,6 +805,8 @@ export interface InferenceGatewayState extends ResourceState {
   allProjectsAllowed?: boolean;
   /** Projects whose models (anyone's, such as the dashboard's) route through the gateway but are not allowed: they do not attach. */
   notAllowedModelProjects?: string[];
+  /** Those models, "namespace/name": their routes are rejected, so they never become Ready. */
+  notAllowedModels?: string[];
 }
 
 /** A model the Models feature sets up (pkg/cluster modelCatalog). */

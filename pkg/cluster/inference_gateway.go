@@ -733,14 +733,13 @@ func gatewayUsers(models []llmisvcObject, def kserveGateway) []string {
 	return users
 }
 
-// routeNamespaces lists the namespaces of the models that route through the
-// gateway: those gatewayUsers finds, and those whose address is on one of
-// its hostnames (a model that inherits its route from a preset has no
-// spec.router.gateway). Sorted, without repeats.
-func routeNamespaces(models []llmisvcObject, def kserveGateway, gw gatewayObject) []string {
+// routedModels lists the models that route through the gateway: those
+// gatewayUsers finds, and those whose address is on one of its hostnames
+// (a model that inherits its route from a preset has no
+// spec.router.gateway).
+func routedModels(models []llmisvcObject, def kserveGateway, gw gatewayObject) []llmisvcObject {
 	hosts := gw.hosts()
-	seen := map[string]bool{}
-	var out []string
+	var out []llmisvcObject
 	for _, m := range models {
 		uses := m.routesThroughInferenceGateway(def)
 		if !uses && m.Status.URL != "" {
@@ -748,7 +747,20 @@ func routeNamespaces(models []llmisvcObject, def kserveGateway, gw gatewayObject
 				uses = true
 			}
 		}
-		if uses && !seen[m.Metadata.Namespace] {
+		if uses {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// routeNamespaces lists the namespaces of routedModels, sorted, without
+// repeats.
+func routeNamespaces(models []llmisvcObject, def kserveGateway, gw gatewayObject) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range routedModels(models, def, gw) {
+		if !seen[m.Metadata.Namespace] {
 			seen[m.Metadata.Namespace] = true
 			out = append(out, m.Metadata.Namespace)
 		}
@@ -757,28 +769,39 @@ func routeNamespaces(models []llmisvcObject, def kserveGateway, gw gatewayObject
 	return out
 }
 
-// notAllowedModelProjects lists the namespaces of the models that route
-// through gw (routeNamespaces: the tool's or anyone's, such as a model
-// deployed from the dashboard) whose routes its listeners do not admit.
-// A namespace is read only when the listeners select by labels; one that
-// cannot be read is left out (unknown is not "no").
-func notAllowedModelProjects(c *Client, models []llmisvcObject, def kserveGateway, gw gatewayObject) []string {
+// notAllowedModels lists the models that route through gw (routedModels:
+// the tool's or anyone's, such as a model deployed from the dashboard)
+// whose routes its listeners do not admit, as "namespace/name", and their
+// namespaces. A namespace is read only when the listeners select by
+// labels; one that cannot be read is left out (unknown is not "no").
+func notAllowedModels(c *Client, models []llmisvcObject, def kserveGateway, gw gatewayObject) (refs, namespaces []string) {
 	_, _, byName := gw.allowedProjects()
-	var out []string
-	for _, ns := range routeNamespaces(models, def, gw) {
-		var labels map[string]string
-		if !byName {
-			meta, ok, err := readObjectMeta(c, clusterPath("v1", "namespaces", ns))
-			if err != nil || !ok {
-				continue
+	verdict := map[string]string{}
+	for _, m := range routedModels(models, def, gw) {
+		ns := m.Metadata.Namespace
+		if _, done := verdict[ns]; !done {
+			verdict[ns] = "unknown"
+			var labels map[string]string
+			readable := true
+			if !byName {
+				meta, ok, err := readObjectMeta(c, clusterPath("v1", "namespaces", ns))
+				readable = err == nil && ok
+				labels = meta.Labels
 			}
-			labels = meta.Labels
+			if readable {
+				verdict[ns] = gw.admits(ns, labels)
+				if verdict[ns] == "no" {
+					namespaces = append(namespaces, ns)
+				}
+			}
 		}
-		if gw.admits(ns, labels) == "no" {
-			out = append(out, ns)
+		if verdict[ns] == "no" {
+			refs = append(refs, ns+"/"+m.Metadata.Name)
 		}
 	}
-	return out
+	sort.Strings(refs)
+	sort.Strings(namespaces)
+	return refs, namespaces
 }
 
 // foreignGatewayRefusal says that someone else's gateway does not let
@@ -877,7 +900,7 @@ func getInferenceGatewayStatus(c *Client, models []llmisvcObject, modelsErr erro
 		state.AllowedProjects, state.AllProjectsAllowed = names, all
 	}
 	if modelsErr == nil {
-		state.NotAllowedModelProjects = notAllowedModelProjects(c, models, def, gw)
+		state.NotAllowedModels, state.NotAllowedModelProjects = notAllowedModels(c, models, def, gw)
 	}
 	switch {
 	case !state.ManagedByTool:

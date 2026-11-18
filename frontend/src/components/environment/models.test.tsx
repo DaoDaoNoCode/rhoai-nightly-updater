@@ -7,7 +7,7 @@ import type { CatalogModel, InferenceGatewayState, ModelState, ModelsStatus, Res
 import { IDLE, modelsState } from "./featureState";
 import { cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { envStatus } from "./resourceStatus";
-import { embeddingCurl, modelCurl, modelTokenLine, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
+import { embeddingCurl, modelCurl, modelTokenLine, modelsConfirm, modelsSteps, thinkingCurl, toolCurl } from "./ModelsTab";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const gateway: InferenceGatewayState = {
@@ -406,6 +406,66 @@ describe("Models tab", () => {
     const row = within(table).getByRole("link", { name: "Models" }).closest("tr")!;
     expect(within(row).getByText("Ready in dev")).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "Open in dashboard" })).toBeInTheDocument();
+  });
+});
+
+describe("The projects the inference gateway allows (RHOAI's names list)", () => {
+  const listed = (gw: InferenceGatewayState, projects: string[]): InferenceGatewayState => ({ ...gw, allowedProjects: ["openshift-ingress", ...projects] });
+  // A model deployed from the dashboard in team, which the gateway does not list.
+  const blocked = (gw: InferenceGatewayState): InferenceGatewayState => ({ ...listed(gw, ["dev"]), notAllowedModels: ["team/granite"], notAllowedModelProjects: ["team"] });
+
+  it("this tool's gateway: Set up in an unlisted project proceeds (setup adds it); someone else's says RHOAI's step", () => {
+    expect(modelsState(status({ inferenceGateway: listed(gateway, []) }), "dev", ["dev"]).next).toMatchObject({ kind: "set-up", reason: null });
+    const foreign = modelsState(status({ inferenceGateway: listed({ ...gateway, managedByTool: false }, ["other"]) }), "dev", ["dev"]);
+    expect(foreign.next).toMatchObject({ kind: "set-up", reason: expect.stringMatching(/cluster admin adds dev .*values array/) });
+    expect(modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false, allProjectsAllowed: true } }), "dev", ["dev"]).next).toMatchObject({ reason: null });
+  });
+
+  it("the Overview's Models row: a model the gateway does not allow needs attention, with Allow as the next step", () => {
+    const s = modelsState(status({ inferenceGateway: blocked(gateway), models: modelsStatus({ items: [model("dev")] }) }), null, ["dev", "team"]);
+    expect(s).toMatchObject({ status: "needs-attention", label: "team/granite can't be reached", project: "team",
+      next: { kind: "set-up", label: "Allow team", setup: [{ kind: "allow-gateway-project", project: "team" }], reason: null } });
+    // Someone else's gateway: not this tool's to change.
+    expect(modelsState(status({ inferenceGateway: blocked({ ...gateway, managedByTool: false }) }), null, ["team"]).next).not.toMatchObject({ label: "Allow team" });
+  });
+
+  it("the Models tab lists the allowed projects, says which model cannot be reached, and Allow adds its project", async () => {
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: blocked(gateway), models: modelsStatus({ items: [model("dev")] }) }),
+      "/api/resources/projects": { projects: ["dev", "team"] },
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    const row = within(gw).getByText("Projects allowed on the gateway").closest("div")!.parentElement!;
+    expect(within(row).getByText("dev")).toBeInTheDocument();
+    expect(within(row).getByText("openshift-ingress")).toBeInTheDocument();
+    expect(within(gw).getByText("team/granite can't be reached: its project isn't allowed on the inference gateway")).toBeInTheDocument();
+    fireEvent.click(within(gw).getByRole("button", { name: "Allow team" }));
+    const dialog = await screen.findByRole("dialog", { name: /Allow team on the inference gateway\?/ });
+    expect(within(dialog).getByText(/is added to the projects both listeners allow/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Allow" }));
+    await screen.findByRole("dialog", { name: "Allow team on the inference gateway" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "allow", project: "team" }]);
+  });
+
+  it("someone else's gateway: the same model is named with RHOAI's documented step, and nothing is offered", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: blocked({ ...gateway, managedByTool: false }) }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    expect(within(gw).getByText("team/granite can't be reached: its project isn't allowed on the inference gateway")).toBeInTheDocument();
+    expect(within(gw).getByText(/A cluster admin adds team to the projects the Gateway's listeners allow/)).toBeInTheDocument();
+    expect(within(gw).queryByRole("button", { name: "Allow team" })).toBeNull();
+  });
+
+  it("a model setup behind this tool's gateway says that it adds the project to the list", () => {
+    const spec = modelsConfirm({ kind: "setup-models", gateway: false, project: "team", model: "qwen25-05b-instruct" }, status({ inferenceGateway: listed(gateway, ["dev"]) }));
+    render(<>{spec?.changes}</>);
+    expect(screen.getByText(/is added to the projects it allows, before the model is created/)).toBeInTheDocument();
+  });
+
+  it("Allow runs as a gateway change with its own steps", () => {
+    expect(modelsSteps({ kind: "allow-gateway-project", project: "team" }).map((s) => s.id)).toEqual(["check", "gateway"]);
   });
 });
 

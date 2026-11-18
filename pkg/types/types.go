@@ -662,6 +662,9 @@ type InferenceGatewayState struct {
 	// model deployed from the dashboard) that the gateway does not allow:
 	// their routes do not attach. For this tool's gateway, Allow adds them.
 	NotAllowedModelProjects []string `json:"notAllowedModelProjects,omitempty"`
+	// NotAllowedModels are those models, "namespace/name": their routes are
+	// rejected (NotAllowedByListeners), so they never become Ready.
+	NotAllowedModels []string `json:"notAllowedModels,omitempty"`
 }
 
 // ModelsStatus is what setting up a model needs, and the models of the

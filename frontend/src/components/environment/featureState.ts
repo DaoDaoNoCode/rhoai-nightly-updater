@@ -352,6 +352,26 @@ export function gatewayAllows(status: ResourcesStatus | null | undefined, projec
   return gw.allowedProjects.includes(project) ? "yes" : "no";
 }
 
+/**
+ * A model (anyone's, such as one deployed from the dashboard) that routes
+ * through this tool's gateway from a project the gateway does not list
+ * (in project, when given): its route is rejected, so it never becomes
+ * Ready. Allow, which adds the project to the list, is the next step.
+ */
+function notAllowedState(status: ResourcesStatus | null, project?: string): FeatureState | null {
+  const gw = status?.inferenceGateway;
+  if (!gw?.deployed || gw.managedByTool !== true) return null;
+  const refs = (gw.notAllowedModels ?? []).filter((r) => !project || r.startsWith(`${project}/`));
+  if (refs.length === 0) return null;
+  const first = refs[0].split("/")[0];
+  return {
+    status: "needs-attention",
+    label: `${refs[0]} can't be reached${refs.length > 1 ? `, and ${refs.length - 1} more` : ""}`,
+    next: { kind: "set-up", label: `Allow ${first}`, setup: [{ kind: "allow-gateway-project", project: first }], reason: null },
+    project: first,
+  };
+}
+
 /** RHOAI's documented step for a gateway this tool did not create, in words. */
 export const foreignGatewayStep = (project: string) =>
   `A cluster admin adds ${project} to the projects the Gateway's listeners allow (the values array of allowedRoutes, as RHOAI documents it); this tool does not change a gateway it did not create.`;
@@ -440,6 +460,8 @@ function modelsIn(status: ResourcesStatus | null, project: string, busy: Busy, n
   const [gateway, model] = parts;
   const problem = parts.find((p) => PROBLEM.includes(p.status));
   if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: { kind: "show-issue", part: problem.id }, project };
+  const notAllowed = notAllowedState(status, project);
+  if (notAllowed) return notAllowed;
   const unmanaged = parts.some((p) => p.unmanaged);
   if (model.status === "ready") {
     const href = dashboardProjectHref(status?.dashboardUrl, project);
@@ -479,6 +501,8 @@ export function modelsState(status: ResourcesStatus | null, project: string | nu
   if (PROBLEM.includes(gateway)) {
     return { status: gateway, label: envStatusText(gateway), ...owner(notManaged(status?.inferenceGateway)), next: { kind: "show-issue", part: "gateway" }, project: defaultModelsProject(status, projects, null) };
   }
+  const notAllowed = notAllowedState(status);
+  if (notAllowed) return notAllowed;
   const states = projectsWithModels(status, projects).map((p) => modelsIn(status, p, busy));
   const running = busy.models?.project ? modelsIn(status, busy.models.project, busy) : null;
   const summary = acrossProjects(states, running);

@@ -151,18 +151,20 @@ const AUTH_WORDS: Record<string, string> = {
 };
 
 /**
- * Models in the chosen project route through the gateway, but it does not
- * allow the project (a model deployed there from the dashboard, for
- * example): their routes do not attach. For this tool's gateway, Allow
+ * Models (anyone's, such as one deployed from the dashboard) that route
+ * through the gateway from a project it does not list: their routes are
+ * rejected, so they never become Ready. For this tool's gateway, Allow
  * adds the project to its list; for someone else's, RHOAI's documented
  * step for a cluster admin.
  */
-const NotAllowedAlert: React.FC<{ gw: InferenceGatewayState; project: string; baseReason: string | null; readOnly: boolean; setPending: (p: Pending) => void }> = ({ gw, project, baseReason, readOnly, setPending }) => {
-  const title = `The gateway does not allow ${project}`;
+const NotAllowedAlert: React.FC<{ gw: InferenceGatewayState; project: string; models: string[]; baseReason: string | null; readOnly: boolean; setPending: (p: Pending) => void }> = ({ gw, project, models, baseReason, readOnly, setPending }) => {
+  const one = models.length === 1;
+  const title = `${models.join(", ")} can't be reached: ${one ? "its" : "their"} project isn't allowed on the inference gateway`;
+  const why = `${one ? "Its route is" : "Their routes are"} rejected because ${project} is not on the gateway's list of projects, so the dashboard shows ${one ? "it" : "them"} as not ready.`;
   if (!gatewayManaged(gw)) {
     return (
       <Alert variant="warning" isInline component="div" title={title}>
-        <Content component="p">Models in {project} route through this gateway, but their routes do not attach, so they cannot be reached. {foreignGatewayStep(project)}</Content>
+        <Content component="p">{why} {foreignGatewayStep(project)}</Content>
       </Alert>
     );
   }
@@ -170,13 +172,21 @@ const NotAllowedAlert: React.FC<{ gw: InferenceGatewayState; project: string; ba
   return (
     <Alert variant="warning" isInline component="div" title={title}
       actionLinks={!reason ? <AlertActionLink onClick={() => setPending({ kind: "allow-gateway-project", project })}>Allow {project}</AlertActionLink> : undefined}>
-      <Content component="p">
-        Models in {project} (for example one deployed from the dashboard) route through this gateway, but {project} is not on its list of projects, so they cannot be reached. Allow adds {project} to the list.
-      </Content>
+      <Content component="p">{why} Allow adds {project} to the list.</Content>
       {reason && <Content component="p">{readOnly ? reason : `Not available now: ${reason}`}</Content>}
     </Alert>
   );
 };
+
+/** The models the gateway does not allow, by project, in the projects' order. */
+function notAllowedByProject(gw: InferenceGatewayState): [string, string[]][] {
+  const out = new Map<string, string[]>();
+  for (const ref of gw.notAllowedModels ?? []) {
+    const ns = ref.split("/")[0];
+    out.set(ns, [...(out.get(ns) ?? []), ref]);
+  }
+  return [...out.entries()];
+}
 
 /** The projects the gateway allows, in words. */
 function allowedWords(gw: InferenceGatewayState): React.ReactNode {
@@ -187,7 +197,7 @@ function allowedWords(gw: InferenceGatewayState): React.ReactNode {
 }
 
 /** The inference gateway (cluster). */
-const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending, project }) => {
+const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending }) => {
   const gw = status.inferenceGateway;
   const unmanaged = notManaged(gw);
   const deployed = !!gw?.deployed;
@@ -207,9 +217,9 @@ const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readO
           </>}
       </Content>
       {gw && <ProblemAlerts kind="gateway" state={gw} />}
-      {gw?.deployed && project && (gw.notAllowedModelProjects ?? []).includes(project) && !isTerminating(gw) && s !== "setting-up" && (
-        <NotAllowedAlert gw={gw} project={project} baseReason={baseReason} readOnly={readOnly} setPending={setPending} />
-      )}
+      {gw?.deployed && !isTerminating(gw) && s !== "setting-up" && notAllowedByProject(gw).map(([ns, models]) => (
+        <NotAllowedAlert key={ns} gw={gw} project={ns} models={models} baseReason={baseReason} readOnly={readOnly} setPending={setPending} />
+      ))}
       {deployed && s === "setting-up" && !terminalReason(gw) && !isTerminating(gw) && <StartingNote state={gw!} typical="under a minute" />}
       {deployed && (
         <DescriptionList isCompact isHorizontal aria-label="Inference gateway details">
