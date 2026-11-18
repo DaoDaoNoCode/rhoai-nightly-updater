@@ -882,6 +882,9 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	if cond, ok := findCondition(model.Status.Conditions, "Ready"); !ok || cond.Status != "True" {
 		return m.fail("check", fmt.Sprintf("%s in '%s' is not ready yet. Publish it once it is. Nothing was changed.", name, project), "prerequisites", "model not ready")
 	}
+	if w := foreignSpecWriters(model.Metadata); len(w) > 0 {
+		return m.fail("check", specChangedRefusal(project, name, w, "Nothing was changed."), "conflict", "model spec changed")
+	}
 	ref, refFound, err := readMaaSModelRef(c, project, name)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, name, err), errorCodeFromK8sErr(err), "ref read failed")
