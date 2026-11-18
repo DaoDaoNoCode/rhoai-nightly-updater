@@ -313,6 +313,9 @@ func pipelineServerState(d dspaInfo, dashboardURL string) types.ResourceState {
 		// Workbench pipelines need the name dspa (see dspaName).
 		NonStandardName: d.Meta.Name != dspaName,
 	}
+	if d.Meta.Annotations[dspaConnectionAnnotation] == connectionSecretName {
+		state.Connection = connectionSecretName
+	}
 	if !d.ExternalDB {
 		// DSPO's MariaDB PVC is named mariadb-<dspa> and owned by the DSPA
 		// (config/internal/mariadb/default/pvc.yaml.tmpl), so it is
@@ -458,34 +461,26 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	logs = append(logs, "OK: S3 storage credentials read")
 
-	// Step 2: Create the DSPA credentials secret, without taking over a
-	// secret of the same name that someone else created.
-	logs = append(logs, "Creating pipeline server secret...")
-	dspaSecretPath := namespacedPath("v1", "secrets", project, dspaSecretName)
-	readSecret := func() (objectMeta, bool, error) {
-		body, _, getErr := c.get(dspaSecretPath)
-		if IsK8sError(getErr, 404) {
-			return objectMeta{}, false, nil
+	// Step 2: The DSPA credentials secret and the dashboard Connection,
+	// without taking over a secret of the same name someone else created.
+	logs = append(logs, "Creating pipeline server secret and dashboard connection...")
+	secrets := []*projectSecret{
+		{c: c, project: project, name: dspaSecretName, what: "secret", obj: dspaS3Secret(project, keys)},
+		{c: c, project: project, name: connectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
+	}
+	for _, s := range secrets {
+		if err := readProjectSecret(s, projectSecretPath(project, s.name)); err != nil {
+			return fail(fmt.Sprintf("Cannot read secret '%s': %v", s.name, err), errorCodeFromK8sErr(err), s.what+" read failed")
 		}
-		if getErr != nil {
-			return objectMeta{}, false, getErr
+		if s.found && !s.meta.hasToolLabel() {
+			return fail(fmt.Sprintf("Secret '%s' already exists in '%s' and was not created by this tool. It was left unchanged.", s.name, project), "not_managed", s.what+" exists")
 		}
-		meta, perr := parseObjectMeta(body)
-		return meta, true, perr
+		// Owned by the DSPA once it exists (below, or now on a re-run).
+		if dspaFound {
+			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
+		}
 	}
-	secretMeta, secretFound, err := readSecret()
-	if err != nil {
-		return fail(fmt.Sprintf("Cannot read secret '%s': %v", dspaSecretName, err), errorCodeFromK8sErr(err), "secret read failed")
-	}
-	if secretFound && !secretMeta.hasToolLabel() {
-		return fail(fmt.Sprintf("Secret '%s' already exists in '%s' and was not created by this tool. It was left unchanged.", dspaSecretName, project), "not_managed", "secret exists")
-	}
-	dspaSecret := dspaS3Secret(project, keys)
-	// Owned by the DSPA once it exists (below, or now on a re-run).
-	secretOwned := dspaFound
-	if dspaFound {
-		setDSPAOwner(dspaSecret, dspaName, dspaMeta.UID)
-	}
+	secretsOwned := dspaFound
 	// Step 3 prepares the DSPA; both writes are dry-run first (below).
 	// fieldValidation=Strict (and server-side apply, which always validates
 	// strictly) rejects fields the CRD does not declare, so a manifest that
@@ -524,6 +519,9 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 			"name":      dspaName,
 			"namespace": project,
 			"labels":    toolLabels(),
+			// Which Connection goes with it, for the status: the status
+			// reads only the DSPA list, so it costs no request per project.
+			"annotations": map[string]interface{}{dspaConnectionAnnotation: connectionSecretName},
 		},
 		"spec": spec,
 	}
@@ -541,14 +539,8 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	// POST when absent, resourceVersion-guarded apply when owned, so an
 	// object someone creates after the checks above is never overwritten.
-	// Both writes are sent as server-side dry runs first, so a pipeline
+	// Every write is sent as a server-side dry run first, so a pipeline
 	// server the API server rejects leaves no secret behind.
-	writeSecret := func(dryRun bool) (string, error) {
-		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("Secret %s/%s", project, dspaSecretName), dspaSecretPath,
-			withToolFieldManager(namespacedPath("v1", "secrets", project, "")), dspaSecret, secretMeta, secretFound, readSecret, objectMeta.hasToolLabel, dryRun)
-		secretMeta, secretFound = meta, found
-		return action, err
-	}
 	writeDSPA := func(dryRun bool) (string, error) {
 		action, meta, found, err := ensureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, dspaName), dspaPath,
 			withToolFieldManager(namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
@@ -556,10 +548,12 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		dspaMeta, dspaFound = meta, found
 		return action, err
 	}
-	logs = append(logs, "Checking the secret and the pipeline server with the API server (dry run)...")
-	if _, err := writeSecret(true); err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
-		return fail(msg+" Nothing was changed.", code, "secret dry run failed")
+	logs = append(logs, "Checking the secrets and the pipeline server with the API server (dry run)...")
+	for _, s := range secrets {
+		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), true); err != nil {
+			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", s.name), project, err)
+			return fail(msg+" Nothing was changed.", code, s.what+" dry run failed")
+		}
 	}
 	if _, err := writeDSPA(true); err != nil {
 		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
@@ -568,35 +562,39 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	if old != nil {
 		return replacePipelineServer(c, project, old, logs)
 	}
-	secretAction, err := writeSecret(false)
-	if err != nil {
-		msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), project, err)
-		return fail(msg, code, "secret write failed")
+	for _, s := range secrets {
+		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false)
+		if err != nil {
+			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", s.name), project, err)
+			return fail(msg, code, s.what+" write failed")
+		}
+		logs = append(logs, fmt.Sprintf("OK: Secret %s %s", s.name, action))
 	}
-	logs = append(logs, "OK: Secret "+secretAction)
 
 	logs = append(logs, "Creating pipeline server (DSPA)...")
 	dspaAction, err := writeDSPA(false)
 	if err != nil {
 		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server '%s'", dspaName), project, err)
-		return fail(fmt.Sprintf("%s The credentials secret '%s' is in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName), code, "DSPA write failed")
+		return fail(fmt.Sprintf("%s Secrets '%s' and '%s' are in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName, connectionSecretName), code, "DSPA write failed")
 	}
 	logs = append(logs, "OK: Pipeline server "+dspaAction)
 
-	// The secret is created before the DSPA, which reads it; once the DSPA
-	// exists it becomes the secret's owner, so the garbage collector
-	// deletes the secret with the DSPA, also when the dashboard deletes it.
-	if !secretOwned {
-		logs = append(logs, fmt.Sprintf("Making pipeline server '%s' the owner of secret '%s'...", dspaName, dspaSecretName))
-		setDSPAOwner(dspaSecret, dspaName, dspaMeta.UID)
-		if _, err := writeSecret(false); err != nil {
-			recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (secret owner not set: %v)", project, err), false)
-			return &types.OperationResponse{
-				Success: false, ErrorCode: "partial_failure", Logs: logs,
-				Message: fmt.Sprintf("Pipeline server created, but secret '%s' could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes both.", dspaSecretName, err),
-			}, nil
+	// The secrets are created before the DSPA, which reads the first; once
+	// the DSPA exists it becomes their owner, so the garbage collector
+	// deletes them with the DSPA, also when the dashboard deletes it.
+	if !secretsOwned {
+		for _, s := range secrets {
+			logs = append(logs, fmt.Sprintf("Making pipeline server '%s' the owner of secret '%s'...", dspaName, s.name))
+			setDSPAOwner(s.obj, dspaName, dspaMeta.UID)
+			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), withToolFieldManager(namespacedPath("v1", "secrets", project, "")), false); err != nil {
+				recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
+				return &types.OperationResponse{
+					Success: false, ErrorCode: "partial_failure", Logs: logs,
+					Message: fmt.Sprintf("Pipeline server created, but secret '%s' could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes it too.", s.name, err),
+				}, nil
+			}
+			logs = append(logs, "OK: Owned by the pipeline server")
 		}
-		logs = append(logs, "OK: Secret owned by the pipeline server")
 	}
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
@@ -704,7 +702,8 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
 		orphan := &dspaInfo{Meta: objectMeta{UID: "none"}, SecretName: dspaSecretName}
-		if note := deleteDSPASecret(c, project, orphan, all, &logs); note != "" {
+		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
+		if note != "" {
 			return fail(fmt.Sprintf("No pipeline server created by this tool remains in '%s'.%s", project, note), "partial_failure", "orphan secret")
 		}
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in '%s'.", project), Logs: logs}, nil
@@ -742,7 +741,7 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 	// The DSPA finalizer does not read the credentials secret, so it can go
 	// now; doing it before waiting keeps a timed-out teardown from leaving the
 	// secret behind with no pipeline server left to show a Tear down button.
-	secretNote := deleteDSPASecret(c, project, target, all, &logs)
+	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, &logs)
 
 	gone, waitErr := waitForDeletion(c, dspaPath, PipelineServerDeleteTimeout, PipelineServerDeletePoll)
 	if waitErr != nil {
@@ -851,6 +850,94 @@ func dspaS3Secret(project string, keys s3Keys) map[string]interface{} {
 // DASHBOARD_RESOURCE).
 const dashboardLabelKey = "opendatahub.io/dashboard"
 
+const (
+	// connectionSecretName is the dashboard S3 Connection the tool creates
+	// next to each pipeline server: the shared S3 storage, usable from the
+	// project's workbenches and model deployments.
+	connectionSecretName = "rhoai-nightly-updater-s3"
+	// connectionDisplayName is how the dashboard lists it.
+	connectionDisplayName = "Shared S3 storage (RHOAI Nightly Updater)"
+	// dspaConnectionAnnotation on the DSPA names the Connection that goes
+	// with it (set when the tool wrote both).
+	dspaConnectionAnnotation = "rhoai-nightly-updater/connection"
+)
+
+// dashboardS3Connection is a dashboard Connection of type s3 to the shared
+// S3 storage, in the shape odh-dashboard's assembleConnectionSecret gives
+// one (packages/k8s-core/src/connectionTypeUtils.ts L343-391, rhoai-3.6):
+// an Opaque Secret labelled opendatahub.io/dashboard=true and, because its
+// keys make it S3 model-serving compatible (S3ConnectionTypeKeys),
+// opendatahub.io/managed=true; annotations openshift.io/display-name,
+// openshift.io/description, opendatahub.io/connection-type-ref s3 (the
+// ConfigMap manifests/base/connection-types/s3.yaml) and
+// opendatahub.io/connection-type s3; the s3 type's fields as data. The
+// endpoint is the in-cluster Service: it works from pods, not from outside
+// the cluster.
+func dashboardS3Connection(project string, keys s3Keys) map[string]interface{} {
+	labels := toolLabels()
+	labels[dashboardLabelKey] = "true"
+	labels["opendatahub.io/managed"] = "true"
+	return map[string]interface{}{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]interface{}{
+			"name":      connectionSecretName,
+			"namespace": project,
+			"labels":    labels,
+			"annotations": map[string]interface{}{
+				"openshift.io/display-name":          connectionDisplayName,
+				"openshift.io/description":           "The cluster's S3 storage, which this project's pipeline server also uses (set up by RHOAI Nightly Updater). In-cluster address: reachable from workbenches and model deployments, not from outside the cluster.",
+				"opendatahub.io/connection-type-ref": "s3",
+				"opendatahub.io/connection-type":     "s3",
+			},
+		},
+		"stringData": map[string]interface{}{
+			s3AccessKeyField:     keys.AccessKey,
+			s3SecretKeyField:     keys.SecretKey,
+			"AWS_S3_ENDPOINT":    s3Endpoint(),
+			"AWS_DEFAULT_REGION": s3Region,
+			"AWS_S3_BUCKET":      s3Bucket,
+		},
+	}
+}
+
+// projectSecret is one Secret the tool writes in a pipeline project: read
+// its current metadata, then write it with ensureToolObject.
+type projectSecret struct {
+	c             *Client
+	project, name string
+	what          string // "secret" or "connection", for the activity log
+	obj           map[string]interface{}
+	meta          objectMeta
+	found         bool
+}
+
+// projectSecretPath is the path of one of the two Secrets the tool writes in
+// a pipeline project; any other name gets the S3 secret's, so no other name
+// reaches the API (and the RBAC coverage test resolves the paths
+// statically). The read and write helpers take it as an argument.
+func projectSecretPath(project, name string) string {
+	if name == connectionSecretName {
+		return namespacedPath("v1", "secrets", project, connectionSecretName)
+	}
+	return namespacedPath("v1", "secrets", project, dspaSecretName)
+}
+
+func readProjectSecret(s *projectSecret, path string) error {
+	meta, found, err := readObjectMeta(s.c, path)
+	if err == nil {
+		s.meta, s.found = meta, found
+	}
+	return err
+}
+
+func writeProjectSecret(s *projectSecret, path, createPath string, dryRun bool) (string, error) {
+	reader := func() (objectMeta, bool, error) { return readObjectMeta(s.c, path) }
+	action, meta, found, err := ensureToolObject(s.c, fmt.Sprintf("Secret %s/%s", s.project, s.name), path,
+		createPath, s.obj, s.meta, s.found, reader, objectMeta.hasToolLabel, dryRun)
+	s.meta, s.found = meta, found
+	return action, err
+}
+
 // setDSPAOwner makes the DSPA name (uid) the owner of obj, a manifest in the
 // DSPA's namespace. odh-dashboard's Delete pipeline server deletes the DSPA
 // and only the secret names it generates itself (concepts/pipelines/utils.ts
@@ -955,6 +1042,33 @@ func addDashboardDSPASettings(c *Client, spec, apiServer map[string]interface{})
 		spec["mlflow"] = map[string]interface{}{"integrationMode": "AUTODETECT", "injectUserEnvVars": false}
 	}
 	return nil
+}
+
+// deleteConnection deletes the dashboard Connection the tool created in
+// project (its label, by UID). The DSPA owns it, so the garbage collector
+// would delete it too; deleting it here also covers one an interrupted
+// setup left without an owner. It returns a note for the response when it
+// had to be left behind on an error.
+func deleteConnection(c *Client, project string, logs *[]string) string {
+	path := namespacedPath("v1", "secrets", project, connectionSecretName)
+	meta, found, err := readObjectMeta(c, path)
+	switch {
+	case err != nil:
+		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection '%s': %v", connectionSecretName, err))
+		return fmt.Sprintf(" The dashboard connection '%s' could not be checked and was left in place: %v.", connectionSecretName, err)
+	case !found:
+		return ""
+	case !meta.hasToolLabel():
+		*logs = append(*logs, fmt.Sprintf("Kept secret '%s': it was not created by this tool", connectionSecretName))
+		return ""
+	}
+	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection '%s'...", connectionSecretName))
+	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
+		return fmt.Sprintf(" The dashboard connection '%s' could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
+	}
+	*logs = append(*logs, "OK: Connection deleted")
+	return ""
 }
 
 // pipelineWriteFailure turns an ensureToolObject error into a message and an

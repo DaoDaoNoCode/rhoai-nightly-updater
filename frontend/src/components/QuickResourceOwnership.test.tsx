@@ -580,7 +580,7 @@ describe("every setup has its removal on the same tab", () => {
     let dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("The project and the S3 storage stay.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
-    expect(dialog).toHaveTextContent("DataSciencePipelinesApplication nightly-dspa and its S3 credentials Secret are deleted. The project stays.");
+    expect(dialog).toHaveTextContent("DataSciencePipelinesApplication nightly-dspa and its S3 credentials Secret are deleted, with the dashboard S3 Connection rhoai-nightly-updater-s3 this tool created (workbenches or model deployments that use it lose it). The project stays.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     dialog = await screen.findByRole("dialog");

@@ -774,6 +774,8 @@ export interface ResourceState {
   healthUnknown?: boolean;
   /** A pipeline server set up under the earlier name nightly-dspa: workbench pipelines need "dspa" (pkg/cluster dspaName), so Recreate is offered. */
   nonStandardName?: boolean;
+  /** The dashboard S3 Connection (a Secret in the project) set up with this pipeline server (pkg/cluster connectionSecretName), when there is one. */
+  connection?: string;
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---

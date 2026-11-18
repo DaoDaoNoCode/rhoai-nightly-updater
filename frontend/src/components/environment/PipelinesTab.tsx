@@ -56,6 +56,9 @@ export const S3_ENDPOINT = "http://seaweedfs-s3.seaweedfs.svc:8333";
 export const DSPA_NAME = "dspa";
 export const PREVIOUS_DSPA_NAME = "nightly-dspa";
 export const DSPA_SECRET_NAME = "nightly-dspa-s3";
+/** The dashboard S3 Connection set up with each pipeline server (pkg/cluster connectionSecretName, connectionDisplayName). */
+export const CONNECTION_NAME = "rhoai-nightly-updater-s3";
+export const CONNECTION_DISPLAY_NAME = "Shared S3 storage (RHOAI Nightly Updater)";
 
 const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size})` : ""}</>;
 
@@ -306,6 +309,22 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
       )}
       {server && <ProblemAlerts kind="pipeline" state={server} minioReady={storageReady} logsHref={consolePodsHref(consoleURL, server.namespace, `ds-pipeline-${server.name ?? DSPA_NAME}`)} />}
       {server && server.deployed && !server.ready && !terminalReason(server) && !isTerminating(server) && <StartingNote state={server} typical="1 to 3 minutes" />}
+      {server && managed && !isTerminating(server) && (
+        <DescriptionList isCompact isHorizontal aria-label="Pipeline server details">
+          <DescriptionListGroup>
+            <DescriptionListTerm>Name</DescriptionListTerm>
+            <DescriptionListDescription>DataSciencePipelinesApplication <code>{server.name ?? DSPA_NAME}</code></DescriptionListDescription>
+          </DescriptionListGroup>
+          {server.connection && (
+            <DescriptionListGroup>
+              <DescriptionListTerm>Connection in the dashboard</DescriptionListTerm>
+              <DescriptionListDescription>
+                <code>{server.connection}</code> ({CONNECTION_DISPLAY_NAME}), type S3: the S3 storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Attach it to workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          )}
+        </DescriptionList>
+      )}
     </PartItem>
   );
 };
@@ -413,7 +432,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
         <FeatureSection title="What this creates">
           <CreatesList items={[
             <>On the cluster: namespace <code>{S3_NAMESPACE}</code>, labelled as managed by this tool, with Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-data</code> (20Gi), Secret <code>seaweedfs-s3-credentials</code> (the S3 keys), Service <code>seaweedfs-s3</code>, Route <code>seaweedfs-admin</code> (admin UI), NetworkPolicy <code>seaweedfs-ingress</code> and bucket <code>pipelines</code></>,
-            <>In the project: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> (the pipeline server) and Secret <code>{DSPA_SECRET_NAME}</code> (a copy of the S3 keys, owned by the pipeline server)</>,
+            <>In the project: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> (the pipeline server) and Secret <code>{DSPA_SECRET_NAME}</code> (a copy of the S3 keys), and the dashboard S3 Connection <code>{CONNECTION_NAME}</code> (the same keys, for workbenches and model deployments), both owned by the pipeline server</>,
           ]} />
         </FeatureSection>
       </StackItem>
@@ -501,6 +520,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         summary: <Content component="p">In {pending.project}: a pipeline server that keeps its artifacts in the S3 storage. Takes 1 to 3 minutes.</Content>,
         changes: [
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> (the name workbench pipelines use) and Secret <code>{DSPA_SECRET_NAME}</code> (owned by it) are created, storing artifacts in the S3 storage (Service <code>seaweedfs-s3</code> in namespace <code>seaweedfs</code>).</>,
+          <>Also the dashboard S3 Connection <code>{CONNECTION_NAME}</code> ({CONNECTION_DISPLAY_NAME}), owned by the pipeline server: the same keys, usable from workbenches and model deployments in {pending.project}.</>,
         ],
       };
     case "recreate-pipeline-server": {
@@ -511,7 +531,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         summary: <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>,
         changes: [
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
-          <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> and Secret <code>{DSPA_SECRET_NAME}</code> (owned by it) are created, storing artifacts in the same S3 storage.</>,
+          <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> and Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code> (both owned by it) are created, storing artifacts in the same S3 storage.</>,
         ],
         dataLoss: <>
           The run history of <code>{pending.name}</code>: its runs, experiments and imported pipelines{pvcList(ps).length > 0 ? <> (volume {pvcList(ps).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)})</> : null}.
@@ -524,7 +544,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
       return {
         title: `Delete the pipeline server in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete the pipeline server in ${pending.project}`,
         summary: <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>,
-        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted. The project stays.</>],
+        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
       };
     }

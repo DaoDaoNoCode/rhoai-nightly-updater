@@ -1049,25 +1049,32 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 	}
 
 	type plan struct {
-		d           dspaInfo
-		secret      map[string]interface{}
-		secretMeta  objectMeta
-		secretFound bool
-		patch       []byte
+		d       dspaInfo
+		secrets []*projectSecret
+		patch   []byte
 	}
 	plans := make([]*plan, 0, len(todo))
 	for _, d := range todo {
 		project := d.Meta.Namespace
-		secretPath := namespacedPath("v1", "secrets", project, dspaSecretName)
-		secretMeta, secretFound, err := readObjectMeta(c, secretPath)
-		if err != nil {
-			return failed(fmt.Sprintf("Cannot read Secret %s/%s; no pipeline server was moved: %v.%s", project, dspaSecretName, err, templateHint(err)), errorCodeFromK8sErr(err), "secret read failed")
+		// The same Secrets setup writes (the S3 secret, and the dashboard
+		// Connection with the new keys), owned by the DSPA they are for (it
+		// exists here), so they go with the DSPA whoever deletes it.
+		secrets := []*projectSecret{
+			{c: c, project: project, name: dspaSecretName, what: "secret", obj: dspaS3Secret(project, keys)},
+			{c: c, project: project, name: connectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
 		}
-		if secretFound && !secretMeta.hasToolLabel() {
-			return failed(fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s was not moved and nothing was changed.", project, dspaSecretName, project, d.Meta.Name), "not_managed", "foreign secret")
+		for _, s := range secrets {
+			setDSPAOwner(s.obj, d.Meta.Name, d.Meta.UID)
+			if err := readProjectSecret(s, projectSecretPath(project, s.name)); err != nil {
+				return failed(fmt.Sprintf("Cannot read Secret %s/%s; no pipeline server was moved: %v.%s", project, s.name, err, templateHint(err)), errorCodeFromK8sErr(err), s.what+" read failed")
+			}
+			if s.found && !s.meta.hasToolLabel() {
+				return failed(fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s was not moved and nothing was changed.", project, s.name, project, d.Meta.Name), "not_managed", "foreign "+s.what)
+			}
 		}
 		patch, _ := json.Marshal(map[string]interface{}{
-			"metadata": map[string]interface{}{"resourceVersion": d.Meta.ResourceVersion, "labels": toolLabels()},
+			"metadata": map[string]interface{}{"resourceVersion": d.Meta.ResourceVersion, "labels": toolLabels(),
+				"annotations": map[string]interface{}{dspaConnectionAnnotation: connectionSecretName}},
 			"spec": map[string]interface{}{"objectStorage": map[string]interface{}{"externalStorage": map[string]interface{}{
 				"host": s3Host(),
 				"s3CredentialsSecret": map[string]interface{}{
@@ -1077,20 +1084,18 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 				},
 			}}},
 		})
-		// The same Secret setup writes, owned by the DSPA it is for (the DSPA
-		// exists here), so it goes with the DSPA whoever deletes it.
-		secret := dspaS3Secret(project, keys)
-		setDSPAOwner(secret, d.Meta.Name, d.Meta.UID)
-		plans = append(plans, &plan{d: d, patch: patch, secretMeta: secretMeta, secretFound: secretFound, secret: secret})
+		plans = append(plans, &plan{d: d, patch: patch, secrets: secrets})
 	}
-	writeSecret := func(p *plan, dryRun bool) error {
-		project := p.d.Meta.Namespace
-		secretPath := namespacedPath("v1", "secrets", project, dspaSecretName)
-		read := func() (objectMeta, bool, error) { return readObjectMeta(c, secretPath) }
-		_, meta, found, err := ensureToolObject(c, fmt.Sprintf("Secret %s/%s", project, dspaSecretName), secretPath,
-			withToolFieldManager(namespacedPath("v1", "secrets", project, "")), p.secret, p.secretMeta, p.secretFound, read, objectMeta.hasToolLabel, dryRun)
-		p.secretMeta, p.secretFound = meta, found
-		return err
+	// writeSecrets writes the plan's Secrets; on failure it returns the
+	// message and code for the one that failed.
+	writeSecrets := func(p *plan, dryRun bool) (string, string, error) {
+		for _, s := range p.secrets {
+			if _, err := writeProjectSecret(s, projectSecretPath(p.d.Meta.Namespace, s.name), withToolFieldManager(namespacedPath("v1", "secrets", p.d.Meta.Namespace, "")), dryRun); err != nil {
+				msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", s.name), p.d.Meta.Namespace, err)
+				return msg, code, err
+			}
+		}
+		return "", "", nil
 	}
 	patchDSPA := func(p *plan, dryRun bool) ([]byte, error) {
 		q := url.Values{"fieldManager": {toolFieldManager}}
@@ -1108,8 +1113,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 	m.step("repoint", "running", "Checking every change with the API server (dry run)...")
 	for _, p := range plans {
 		name := p.d.Meta.Namespace + "/" + p.d.Meta.Name
-		if err := writeSecret(p, true); err != nil {
-			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), p.d.Meta.Namespace, err)
+		if msg, code, err := writeSecrets(p, true); err != nil {
 			return failed(msg+" No pipeline server was moved.", code, "secret dry run failed")
 		}
 		if _, err := patchDSPA(p, true); err != nil {
@@ -1137,8 +1141,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, MigrateRepointTimeout, done), "in_progress", "out of time")
 		}
 		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
-		if err := writeSecret(p, false); err != nil {
-			msg, code := pipelineWriteFailure(fmt.Sprintf("secret '%s'", dspaSecretName), p.d.Meta.Namespace, err)
+		if msg, code, err := writeSecrets(p, false); err != nil {
 			return failed(fmt.Sprintf("%s Already moved: %s. The old storage is kept; run Migrate storage again.", msg, done), code, "secret write failed")
 		}
 		body, err := patchDSPA(p, false)

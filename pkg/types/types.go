@@ -1135,6 +1135,9 @@ type ResourceState struct {
 	// its earlier name (nightly-dspa): workbench pipelines (Elyra) need the
 	// DSPA named dspa, so the Pipelines tab offers to recreate it.
 	NonStandardName bool `json:"nonStandardName,omitempty"`
+	// Connection is the dashboard S3 Connection (a Secret in the project)
+	// the tool created with this pipeline server, or "".
+	Connection string `json:"connection,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.

@@ -184,6 +184,19 @@ describe("Pipelines: the earlier name", () => {
     await waitFor(() => expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev", recreate: true }]));
   });
 
+  it("shows the dashboard Connection set up with the server", async () => {
+    stubApi({
+      "/api/resources/status": { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev", { name: "dspa", connection: "rhoai-nightly-updater-s3" })] },
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    const details = await screen.findByLabelText("Pipeline server details");
+    expect(details).toHaveTextContent("Connection in the dashboard");
+    expect(details).toHaveTextContent("rhoai-nightly-updater-s3");
+    expect(details).toHaveTextContent(/workbenches and model deployments/);
+    expect(details).toHaveTextContent(/in-cluster address only/);
+  });
+
   it("a server named dspa shows no such notice", async () => {
     stubApi({
       "/api/resources/status": { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev", { name: "dspa", dataPVCs: ["mariadb-dspa"] })] },

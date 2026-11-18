@@ -171,6 +171,13 @@ objects:
         resources: ["secrets"]
         resourceNames: ["nightly-dspa-s3"]
         verbs: ["patch"]
+      # The dashboard S3 Connection set up with each pipeline server (the
+      # same keys as nightly-dspa-s3), owned by the DSPA like it: written
+      # by setup and Migrate storage, deleted by teardown
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["rhoai-nightly-updater-s3"]
+        verbs: ["get", "patch", "delete"]
       # Upgrade gates the operator waits on (redhat-ods-operator)
       - apiGroups: [""]
         resources: ["configmaps"]

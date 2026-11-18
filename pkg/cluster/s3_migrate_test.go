@@ -253,6 +253,9 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		// Owned by its pipeline server, so whoever deletes the server (the
 		// dashboard too) deletes it.
 		assertOwnedByDSPA(t, f, secretPath(ps[0], dspaSecretName), ps[0], ps[1])
+		// The dashboard Connection to the new storage, with its keys.
+		assertConnection(t, f, ps[0], newID, newKey)
+		assertOwnedByDSPA(t, f, secretPath(ps[0], connectionSecretName), ps[0], ps[1])
 	}
 	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]interface{})
 	if labels[managedByLabelKey] != managedByLabelValue {
