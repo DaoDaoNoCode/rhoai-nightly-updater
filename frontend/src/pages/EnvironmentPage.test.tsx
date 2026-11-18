@@ -63,7 +63,7 @@ describe("Environment page", () => {
     // Ownership under the status label, in its own words.
     expect(mlflow.querySelector(".pf-v6-c-label")).toHaveTextContent(/^Ready$/);
     expect(within(mlflow).getByText("Not managed by this tool")).toBeInTheDocument();
-    expect(within(mlflow).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    expect(within(mlflow).getByRole("link", { name: /Open MLflow experiments/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
     // One ready project: the State names it, the link does not repeat it; an inline link in the cell.
     expect(within(await row("Pipelines")).getByRole("link", { name: "Open pipelines" })).toHaveClass("pf-m-inline");
     const pipelines = await row("Pipelines");

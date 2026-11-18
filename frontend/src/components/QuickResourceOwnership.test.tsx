@@ -164,7 +164,7 @@ describe("health and ownership are separate", () => {
     expect(within(server).getByText(status as string)).toBeInTheDocument();
     if (foreign) expect(within(server).getByText("Not managed by this tool")).toBeInTheDocument();
     else expect(within(server).queryByText("Not managed by this tool")).not.toBeInTheDocument();
-    if (open) expect(within(server).getByRole("link", { name: /Open MLflow workspaces/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
+    if (open) expect(within(server).getByRole("link", { name: /Open MLflow experiments/ })).toHaveAttribute("href", "https://mlflow.apps.example.com");
     else expect(within(server).queryByRole("link", { name: /Open MLflow/ })).not.toBeInTheDocument();
     if (foreign) {
       expect(await menuItem("MLflow server", /Delete MLflow/)).toBeNull();

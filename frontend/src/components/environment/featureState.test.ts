@@ -52,7 +52,7 @@ describe("defaultProject", () => {
 describe("pipelinesState and mlflowState", () => {
   it("readiness is health: someone else's running MLflow is Ready, with ownership apart from the label", () => {
     // MLflow's root is its list of workspaces: the label says so.
-    expect(mlflowState(FIXTURES.live)).toEqual({ status: "ready", label: "Ready", unmanaged: true, next: { kind: "open", label: "Open MLflow workspaces", href: "https://mlflow" }, project: null });
+    expect(mlflowState(FIXTURES.live)).toEqual({ status: "ready", label: "Ready", unmanaged: true, next: { kind: "open", label: "Open MLflow experiments", href: "https://mlflow" }, project: null });
     const broken = { ...FIXTURES.live, mlflow: { ...FIXTURES.live.mlflow, ready: false, terminalError: true, waitingReason: "CrashLoopBackOff" } };
     expect(mlflowState(broken)).toMatchObject({ status: "error", label: "Error", unmanaged: true, next: { kind: "show-issue", part: "mlflow" } });
     // This tool's own: nothing to say about ownership.

@@ -36,6 +36,12 @@ only accepts a tag whose version is the top dated section. See
   (`/ai-hub/models/deployments/internal/<project>`), and MaaS opens MaaS
   governance (`/maas/maas-governance`). Pipelines (`/develop-train/pipelines/definitions/<project>`)
   and the playground (`/gen-ai-studio/playground/<project>`) already did.
+- MLflow links open MLflow in the dashboard too: **Open MLflow experiments**
+  goes to `/develop-train/mlflow/experiments`, a project's link adds
+  `?workspace=<project>`, and a sample's link opens its experiment's runs
+  (`/develop-train/mlflow/experiments/<id>/runs`), as the dashboard's own
+  links do. Without the dashboard's address they open MLflow's own UI as
+  before.
 
 ## [3.0.0] - 2026-11-18
 

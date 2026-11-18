@@ -88,6 +88,19 @@ export function mlflowWorkspaceHref(url: string, project: string | null): string
   return project ? `${base}/#/experiments?workspace=${encodeURIComponent(project)}` : base;
 }
 
+/**
+ * MLflow's experiments in the RHOAI dashboard, which keeps its navigation and project picker
+ * (odh-dashboard rhoai-3.6 frontend/src/routes/pipelines/mlflow.ts mlflowExperimentsBaseRoute:
+ * /develop-train/mlflow/experiments?workspace=<project>); MLflow's own UI when the dashboard's address is not known.
+ */
+export function mlflowOpenHref(dashboardUrl: string | undefined, uiRoute: string, project: string | null): string {
+  if (dashboardUrl?.startsWith("https://")) {
+    const base = `${dashboardUrl.replace(/\/+$/, "")}/develop-train/mlflow/experiments`;
+    return project ? `${base}?workspace=${encodeURIComponent(project)}` : base;
+  }
+  return mlflowWorkspaceHref(uiRoute, project);
+}
+
 /** The environment that points an MLflow client at a project's workspace (MLFLOW_WORKSPACE becomes the X-MLflow-Workspace header). */
 export function mlflowClientEnv(url: string, project: string): string {
   return [

@@ -85,7 +85,7 @@ func trainingStatus(t *mlflowTarget) types.SampleStatus {
 		return s
 	}
 	if exp != nil && exp.active() {
-		s.Link = t.link("/experiments/" + exp.ExperimentID)
+		s.Link = t.experimentLink(exp.ExperimentID)
 	}
 	switch {
 	case exp == nil && model == nil:

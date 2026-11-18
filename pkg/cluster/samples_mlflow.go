@@ -49,9 +49,12 @@ var mlflowSamplesCache = newLRU[string, types.MLflowSamplesStatus](64)
 
 // mlflowTarget is MLflow in one project's workspace.
 type mlflowTarget struct {
-	api     *sampleAPI
-	ui      string // MLflow's public address, no trailing slash
-	project string
+	api *sampleAPI
+	ui  string // MLflow's public address, no trailing slash
+	// dashboard is the RHOAI dashboard's https address, when known: links
+	// open its MLflow pages, which keep the dashboard's navigation.
+	dashboard string
+	project   string
 	// c and cr are the cluster and the MLflow CR the target was read from;
 	// the demo checks the CR's memory limit (oldToolResources).
 	c  *Client
@@ -61,6 +64,18 @@ type mlflowTarget struct {
 // link is a page of the MLflow UI in the target's workspace.
 func (t *mlflowTarget) link(route string) string {
 	return t.ui + "/#" + route + "?workspace=" + url.QueryEscape(t.project)
+}
+
+// experimentLink is an experiment's page: the dashboard's
+// (odh-dashboard rhoai-3.6 frontend/src/routes/pipelines/mlflow.ts
+// mlflowExperimentRoute), or MLflow's own UI when the dashboard's address
+// is not known.
+func (t *mlflowTarget) experimentLink(id string) string {
+	if t.dashboard == "" {
+		return t.link("/experiments/" + id)
+	}
+	q := url.Values{"workspace": {t.project}, "searchFilter": {""}}
+	return t.dashboard + "/develop-train/mlflow/experiments/" + url.PathEscape(id) + "/runs?" + q.Encode()
 }
 
 // mlflowCRReady mirrors getMLflowStatus: the Ready or Available condition.
@@ -105,7 +120,7 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 			ctx: c.ctx, base: base, token: c.token, server: "MLflow",
 			headers: map[string]string{mlflowWorkspaceHeader: project},
 		},
-		ui: base, project: project, c: c, cr: cr,
+		ui: base, project: project, c: c, cr: cr, dashboard: httpsBase(cachedDashboardURL(c)),
 	}, "", nil
 }
 
@@ -439,4 +454,12 @@ func recordSamplesActivity(c *Client, action, detail string, success bool) {
 		Detail:    detail,
 		Success:   success,
 	})
+}
+
+// httpsBase is u without a trailing slash when it is an https address, else "".
+func httpsBase(u string) string {
+	if !strings.HasPrefix(u, "https://") {
+		return ""
+	}
+	return strings.TrimRight(u, "/")
 }

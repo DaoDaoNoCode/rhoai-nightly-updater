@@ -145,7 +145,7 @@ func demoStatusOfExperiment(t *mlflowTarget) types.SampleStatus {
 		s.Message = "Removed in MLflow: Add restores the experiment and generates every feature again."
 		return s
 	}
-	s.Link = t.link("/experiments/" + exp.ExperimentID)
+	s.Link = t.experimentLink(exp.ExperimentID)
 	s.Actions = []string{"regenerate"}
 	tags := demoVersionTags(exp)
 	reset := demoResetFeatures(tags)

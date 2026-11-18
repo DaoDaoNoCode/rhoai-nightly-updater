@@ -27,7 +27,7 @@ import { notManaged } from "./resourceStatus";
 import { MLFLOW_WORKSPACES, type Busy, type FeatureState, mlflowStatus } from "./featureState";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
-import { ComponentAlert, CopyableCode, NoProjectsAlert, mlflowClientEnv, mlflowWorkspaceHref } from "./UseIt";
+import { ComponentAlert, CopyableCode, NoProjectsAlert, mlflowClientEnv, mlflowOpenHref } from "./UseIt";
 import { MLflowSamples } from "./MLflowSamples";
 import type { SampleOp } from "./samples";
 
@@ -118,7 +118,7 @@ const UseMLflow: React.FC<{ url: string } & Pick<MLflowTabProps, "project" | "pr
           <DescriptionListDescription>
             <ActionList>
               <ActionListGroup>
-                <ActionListItem><ExternalLink href={mlflowWorkspaceHref(url, project)} variant="secondary">Open {project} in MLflow</ExternalLink></ActionListItem>
+                <ActionListItem><ExternalLink href={mlflowOpenHref(status.dashboardUrl, url, project)} variant="secondary">Open {project} in MLflow</ExternalLink></ActionListItem>
               </ActionListGroup>
             </ActionList>
           </DescriptionListDescription>
@@ -161,7 +161,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
   if (mlflow?.prOverride && !readOnly) {
     actions.push(<ActionListItem key="revert"><TooltipButton variant="secondary" onClick={revert} isLoading={busy.resAction === "revert-mlflow"} disabledReason={baseReason}>Revert the PR image</TooltipButton></ActionListItem>);
   }
-  if (mlflow?.ready && mlflow.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={mlflow.uiRoute}>{MLFLOW_WORKSPACES}</ExternalLink></ActionListItem>);
+  if (mlflow?.ready && mlflow.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={mlflowOpenHref(status?.dashboardUrl, mlflow.uiRoute, null)}>{MLFLOW_WORKSPACES}</ExternalLink></ActionListItem>);
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(mlflow)
     ? [{ key: "delete", label: "Delete MLflow…", onClick: () => setPending({ kind: "teardown-mlflow" }), disabledReason: baseReason ?? mlflow?.teardownBlockedReason ?? null, isDanger: true }]
     : [];

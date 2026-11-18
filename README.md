@@ -73,12 +73,12 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`, `?tab=models&project=<name>`).
 
-<img src="docs/images/environment-overview.png" alt="Overview: 2 of 3 ready; Pipelines Ready in dev-project with Open pipelines; MLflow Ready, Not managed by this tool under the label, with Open MLflow workspaces; Models Not set up in any project, with Choose a project" width="760">
+<img src="docs/images/environment-overview.png" alt="Overview: 2 of 3 ready; Pipelines Ready in dev-project with Open pipelines; MLflow Ready, Not managed by this tool under the label, with Open MLflow experiments; Models Not set up in any project, with Choose a project" width="760">
 
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
-4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow workspaces** (its list of projects), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
+4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (its list of projects), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
 
 Under the table, **Clean up everything** deletes what this tool created (the pipeline servers, the S3 storage, MLflow, the models, then the inference gateway) in one confirmed operation, with a checkbox per part.
 

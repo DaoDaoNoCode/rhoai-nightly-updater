@@ -1,6 +1,7 @@
 import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
+import { mlflowOpenHref } from "./UseIt";
 
 /**
  * The state of each Environment feature, computed in one place: the
@@ -289,7 +290,7 @@ export function mlflowStatus(status: ResourcesStatus | null, busy: Busy): EnvSta
  * list of workspaces, one per project (opendatahub-io/mlflow server/js
  * MlflowRouter: "/" is a global route, WorkspacesHomeView).
  */
-export const MLFLOW_WORKSPACES = "Open MLflow workspaces";
+export const MLFLOW_WORKSPACES = "Open MLflow experiments";
 
 export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): FeatureState {
   if (!status) return loadingState();
@@ -298,7 +299,7 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
   const unmanaged = notManaged(mlflow);
   switch (s) {
     case "ready":
-      return { status: s, label: "Ready", ...owner(unmanaged), next: mlflow?.uiRoute ? { kind: "open", label: MLFLOW_WORKSPACES, href: mlflow.uiRoute } : null, project: null };
+      return { status: s, label: "Ready", ...owner(unmanaged), next: mlflow?.uiRoute ? { kind: "open", label: MLFLOW_WORKSPACES, href: mlflowOpenHref(status.dashboardUrl, mlflow.uiRoute, null) } : null, project: null };
     case "error":
     case "needs-attention":
       return { status: s, label: s === "error" ? "Error" : "Needs attention", ...owner(unmanaged), next: { kind: "show-issue", part: "mlflow" }, project: null };

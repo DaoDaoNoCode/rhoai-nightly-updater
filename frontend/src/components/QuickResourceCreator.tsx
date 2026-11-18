@@ -60,7 +60,7 @@ import { RunModal, runOutcome } from "./environment/SetupRun";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./environment/samples";
 import { MLFLOW_SAMPLES_ID } from "./environment/MLflowSamples";
 import { PIPELINE_SAMPLE_ID } from "./environment/PipelineSample";
-import { mlflowWorkspaceHref } from "./environment/UseIt";
+import { mlflowOpenHref } from "./environment/UseIt";
 import { useGoalRun, type GoalRunStep, type ReadyCheck } from "./environment/useGoalRun";
 import { CleanupModal, type CleanupScope, cleanupCandidates, cleanupSteps } from "./environment/CleanupModal";
 import {
@@ -692,7 +692,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // The run's "what next" and main action, from the feature it set up.
   // A sample run: after adding MLflow samples, open the project's workspace.
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
-    ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowWorkspaceHref(mlflow.uiRoute, sampleRun.project) }
+    ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowOpenHref(resStatus?.dashboardUrl, mlflow.uiRoute, sampleRun.project) }
     : null;
   const modelsNext = modelsRun?.project ? modelsState(resStatus, modelsRun.project, projectNames, busy, modelsRun.model ?? undefined).next : null;
   const playgroundNext = playgroundRun ? playgroundState(resStatus, pg, playgroundRun.project, busy).next : null;
