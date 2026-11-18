@@ -153,7 +153,60 @@ type sourcePkg struct {
 	// only, when set, limits the scan to these functions (funcPos keys):
 	// their API calls, and the call sites a parameter is resolved from.
 	only map[string]bool
+
+	// Memos of the resolver, valid for this scan (only is fixed): the
+	// resolver re-walked the whole package for every parameter and call
+	// result it met, which made the RBAC tests time out under -race.
+	identMemo  map[identKey][]string
+	resultMemo map[resultKey][]string
+	callers    map[string][]callSite // by callee name; built on first use
 }
+
+// identKey and resultKey keep the depth, so a memo answers exactly what the
+// depth-bounded walk would.
+type identKey struct {
+	fn    *ast.FuncDecl
+	name  string
+	depth int
+}
+
+type resultKey struct {
+	callee string
+	i      int
+	depth  int
+}
+
+// callSite is a call by plain name (f(...)) in a scanned function.
+type callSite struct {
+	caller *ast.FuncDecl
+	call   *ast.CallExpr
+}
+
+// callSitesOf returns the calls of the package function name in the
+// scanned functions, indexing every function body once.
+func (p *sourcePkg) callSitesOf(name string) []callSite {
+	if p.callers == nil {
+		p.callers = map[string][]callSite{}
+		for caller := range p.fileOf {
+			if caller.Body == nil || !p.scans(caller) {
+				continue
+			}
+			ast.Inspect(caller.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if f, ok := call.Fun.(*ast.Ident); ok {
+						p.callers[f.Name] = append(p.callers[f.Name], callSite{caller, call})
+					}
+				}
+				return true
+			})
+		}
+	}
+	return p.callers[name]
+}
+
+// frozen returns s with its capacity cut to its length, so a caller that
+// appends to a memoized result gets a copy instead of writing into it.
+func frozen(s []string) []string { return s[:len(s):len(s)] }
 
 // funcPos identifies a function declaration of the package: "file:line".
 func (p *sourcePkg) funcPos(fn *ast.FuncDecl) string {
@@ -167,7 +220,8 @@ func (p *sourcePkg) scans(fn *ast.FuncDecl) bool {
 
 func loadClusterSource(t *testing.T) *sourcePkg {
 	t.Helper()
-	p := &sourcePkg{fset: token.NewFileSet(), files: map[string]*ast.File{}, consts: map[string]string{}, lits: map[string]*ast.CompositeLit{}, funcs: map[string]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{}}
+	p := &sourcePkg{fset: token.NewFileSet(), files: map[string]*ast.File{}, consts: map[string]string{}, lits: map[string]*ast.CompositeLit{}, funcs: map[string]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
+		identMemo: map[identKey][]string{}, resultMemo: map[resultKey][]string{}}
 	matches, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -340,6 +394,16 @@ func (r resolver) resolveIdent(id *ast.Ident) []string {
 	if r.depth > rbacResolveDepth || r.fn == nil {
 		return []string{unknownPart}
 	}
+	key := identKey{r.fn, id.Name, r.depth}
+	if v, ok := r.p.identMemo[key]; ok {
+		return v
+	}
+	v := frozen(r.resolveIdentUncached(id))
+	r.p.identMemo[key] = v
+	return v
+}
+
+func (r resolver) resolveIdentUncached(id *ast.Ident) []string {
 	var out []string
 	ast.Inspect(r.fn.Body, func(n ast.Node) bool {
 		switch s := n.(type) {
@@ -375,21 +439,11 @@ func (r resolver) resolveIdent(id *ast.Ident) []string {
 		return out
 	}
 	// A function parameter: resolve the argument at every call site.
-	if idx := paramIndex(r.fn, id.Name); idx >= 0 {
-		for caller := range r.p.fileOf {
-			if caller.Body == nil || !r.p.scans(caller) {
-				continue
+	if idx := paramIndex(r.fn, id.Name); idx >= 0 && r.fn.Recv == nil {
+		for _, cs := range r.p.callSitesOf(r.fn.Name.Name) {
+			if idx < len(cs.call.Args) {
+				out = append(out, resolver{r.p, cs.caller, r.depth + 1}.resolve(cs.call.Args[idx])...)
 			}
-			ast.Inspect(caller.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if f, ok := call.Fun.(*ast.Ident); ok && f.Name == r.fn.Name.Name && r.fn.Recv == nil && idx < len(call.Args) {
-					out = append(out, resolver{r.p, caller, r.depth + 1}.resolve(call.Args[idx])...)
-				}
-				return true
-			})
 		}
 		if len(out) > 0 {
 			return out
@@ -409,6 +463,17 @@ func (r resolver) resolveCallResult(call *ast.CallExpr, i int) []string {
 	if !ok || fn.Body == nil {
 		return []string{unknownPart}
 	}
+	key := resultKey{id.Name, i, r.depth}
+	if v, ok := r.p.resultMemo[key]; ok {
+		return v
+	}
+	v := frozen(r.resolveResultOf(fn, i))
+	r.p.resultMemo[key] = v
+	return v
+}
+
+// resolveResultOf resolves result i of fn from its return statements.
+func (r resolver) resolveResultOf(fn *ast.FuncDecl, i int) []string {
 	var out []string
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if _, isLit := n.(*ast.FuncLit); isLit {
@@ -699,10 +764,26 @@ func manifestNames(r resolver) map[string][]string {
 	return out
 }
 
+// fullScan is the scan of every function, done once per test binary: the
+// source does not change while the tests run. Each caller gets copies.
+var fullScan struct {
+	done     bool
+	reqs     []rbacRequest
+	excluded map[string]bool
+}
+
 // serviceAccountRequests scans the package for Client calls.
 func serviceAccountRequests(t *testing.T) ([]rbacRequest, map[string]bool) {
 	t.Helper()
-	return serviceAccountRequestsIn(t, nil)
+	if !fullScan.done {
+		fullScan.reqs, fullScan.excluded = serviceAccountRequestsIn(t, nil)
+		fullScan.done = true
+	}
+	excluded := make(map[string]bool, len(fullScan.excluded))
+	for k, v := range fullScan.excluded {
+		excluded[k] = v
+	}
+	return append([]rbacRequest(nil), fullScan.reqs...), excluded
 }
 
 // serviceAccountRequestsIn scans the functions in only (funcPos keys; nil
