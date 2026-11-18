@@ -416,6 +416,12 @@ spec:
   name: rhcl-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
+  config:
+    env:
+    - name: RATELIMIT_CHECK_SERVICE_FAILURE_MODE
+      value: deny
+    - name: RATELIMIT_REPORT_SERVICE_FAILURE_MODE
+      value: deny
 EOF
 oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`, channel)
 }
@@ -434,11 +440,22 @@ EOF`, ns)
 // cnpgInstallCommands install CloudNativePG as this tool does.
 func cnpgInstallCommands(channel string) string {
 	return fmt.Sprintf(`oc apply -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cloudnative-pg
+  namespace: cnpg-system
+---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: cloudnative-pg
-  namespace: openshift-operators
+  namespace: cnpg-system
 spec:
   channel: %s
   installPlanApproval: Automatic
@@ -446,6 +463,33 @@ spec:
   source: certified-operators
   sourceNamespace: openshift-marketplace
 EOF`, channel)
+}
+
+// rhclDenyEnvCommand is platform-setup.md's patch that adds the
+// deny-on-failure env to a Subscription, in the form that fits its shape
+// (the docs give one with spec.config, and one without).
+func rhclDenyEnvCommand(sub *olmSubscription) string {
+	ref := fmt.Sprintf("oc patch subscription %s -n %s --type='json' -p=", shellQuote(sub.Metadata.Name), shellQuote(sub.Metadata.Namespace))
+	if _, hasEnv := sub.Spec.Config["env"]; hasEnv {
+		return ref + `'[
+  {"op":"add","path":"/spec/config/env/-","value":{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"}},
+  {"op":"add","path":"/spec/config/env/-","value":{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}}
+]'`
+	}
+	if sub.Spec.Config != nil {
+		return ref + `'[
+  {"op":"add","path":"/spec/config/env","value":[
+    {"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},
+    {"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}
+  ]}
+]'`
+	}
+	return ref + `'[
+  {"op":"add","path":"/spec/config","value":{"env":[
+    {"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},
+    {"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}
+  ]}}
+]'`
 }
 
 // rhclChannelCommand switches a Subscription's channel.

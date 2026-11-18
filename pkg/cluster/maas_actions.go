@@ -122,6 +122,30 @@ func rhclMemoryOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 	}, note
 }
 
+// rhclDenyOffer is the Apply action for an installed Connectivity Link
+// whose Subscription does not deny traffic when Limitador is unavailable
+// (platform-setup.md "Rate limiting when Limitador is unavailable"), the
+// note for the part, and the docs' patch. Nothing when both are set.
+func rhclDenyOffer(st operatorState) (*types.MaaSAction, string, string) {
+	if !st.installed() || st.sub == nil {
+		return nil, "", ""
+	}
+	missing := rhclMissingDenyEnv(st.sub)
+	if len(missing) == 0 {
+		return nil, "", ""
+	}
+	note := fmt.Sprintf("Recommended by the MaaS docs: rate limits \"may not be enforced unless the Kuadrant operator is configured to deny traffic on failure\" when Limitador is unavailable, and Subscription %s/%s does not set %s to deny.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, strings.Join(missing, " and "))
+	cmd := "# The MaaS docs' patch (platform-setup.md, Rate limiting when Limitador is unavailable):\n" + rhclDenyEnvCommand(st.sub)
+	if why := rhclUpgradeRefusal(st); why != "" {
+		return nil, note + " " + why, cmd
+	}
+	return &types.MaaSAction{
+		ID: "rhcl-deny-on-failure", Label: "Deny traffic when rate limiting fails",
+		Summary: "Sets the two variables the MaaS docs give on the Connectivity Link Subscription, so that requests are refused rather than let through without rate limits while Limitador cannot be reached. OLM rolls the operator out again; its other settings stay.",
+		Changes: []string{fmt.Sprintf("Subscription %s/%s: spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny (other entries kept); it stays after Remove.", st.sub.Metadata.Namespace, st.sub.Metadata.Name)},
+	}, note, cmd
+}
+
 func resourcesText(res map[string]interface{}) string {
 	var parts []string
 	for _, kind := range []string{"limits", "requests"} {

@@ -967,6 +967,12 @@ spec:
   name: rhcl-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
+  config:
+    env:
+    - name: RATELIMIT_CHECK_SERVICE_FAILURE_MODE
+      value: deny
+    - name: RATELIMIT_REPORT_SERVICE_FAILURE_MODE
+      value: deny
 EOF
 oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`;
 const AUTHORINO_ACTION = {
@@ -1010,8 +1016,8 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
       : { id: "kuadrant", title: "Kuadrant CR", docUrl: `${MAAS_DOCS}install/platform-setup.md#install-gateway-api-controller`, state: "ready", message: "Kuadrant kuadrant-system/kuadrant is Ready", notManaged: true },
     !cnpg || fresh ? { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "missing",
       message: "Not installed. Set up installs version 1.27.1 from certified-operators (channel stable-v1) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).",
-      commands: "oc apply -f - <<'EOF'\napiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: cloudnative-pg\n  namespace: openshift-operators\nspec:\n  channel: stable-v1\n  installPlanApproval: Automatic\n  name: cloudnative-pg\n  source: certified-operators\n  sourceNamespace: openshift-marketplace\nEOF" }
-      : { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "ready", message: "Version 1.27.1 runs in openshift-operators", notManaged: true },
+      commands: "oc apply -f - <<'EOF'\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cnpg-system\n---\napiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\n---\napiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\nspec:\n  channel: stable-v1\n  installPlanApproval: Automatic\n  name: cloudnative-pg\n  source: certified-operators\n  sourceNamespace: openshift-marketplace\nEOF" }
+      : { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "ready", message: "Version 1.27.1 runs in cnpg-system", notManaged: true },
     { id: "database", title: "Database (PostgreSQL) and maas-db-config", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
       ...(!on ? (fresh ? { state: "missing", message: `Set up creates namespace ${MAAS_INFRA}, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does (RHOAI makes it only once MaaS is on, and the database must come first), then runs a one-instance CloudNativePG database there (development and test use).` }
         : { state: "missing", message: `Set up runs a one-instance CloudNativePG database (development and test use) in ${MAAS_INFRA}` })
@@ -1043,9 +1049,9 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
 function maasSetupPlan(parts, { fresh }) {
   const plan = [];
   const missing = (id) => parts.find((p) => p.id === id)?.state === "missing";
-  if (missing("rhcl")) plan.push("Install Red Hat Connectivity Link 1.5.0: Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator (package rhcl-operator, channel stable-1.5, from redhat-operators)");
+  if (missing("rhcl")) plan.push("Install Red Hat Connectivity Link 1.5.0: Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator (package rhcl-operator, channel stable-1.5, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)");
   if (missing("kuadrant")) plan.push("Create the Kuadrant CR kuadrant-system/kuadrant");
-  if (missing("cnpg")) plan.push("Install CloudNativePG 1.27.1: Subscription openshift-operators/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators)");
+  if (missing("cnpg")) plan.push("Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway)");
   if (missing("database")) {
     if (fresh) plan.push(`Create namespace ${MAAS_INFRA} (the AI gateway's infrastructure namespace; recorded, and deleted by Remove when nothing else is in it)`);
     plan.push(`Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, for development and test) and write Secret ${MAAS_INFRA}/maas-db-config with its address`);

@@ -1067,6 +1067,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	part := func(p types.MaaSPart) { st.Parts = append(st.Parts, p) }
 	plan := func(s string) { st.SetupPlan = append(st.SetupPlan, s) }
 	var blockers []string
+	denyNote := ""
 
 	// Red Hat Connectivity Link (platform-setup.md "Install Gateway API
 	// Controller", RHOAI tab).
@@ -1106,6 +1107,14 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			}
 			rhclPart.Commands = cmds
 		}
+		if action, note, cmd := rhclDenyOffer(rhcl); note != "" {
+			if action != nil {
+				rhclPart.Actions = append(rhclPart.Actions, *action)
+			}
+			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
+			rhclPart.Commands = strings.TrimSpace(rhclPart.Commands + "\n" + cmd)
+			denyNote = fmt.Sprintf("Not changed: Subscription %s/%s, which this tool did not create, does not deny traffic when rate limiting fails (the MaaS docs recommend it); the Connectivity Link part offers that change on its own", rhcl.sub.Metadata.Namespace, rhcl.sub.Metadata.Name)
+		}
 		if action, note := rhclMemoryOffer(c, rhcl); action != nil {
 			rhclPart.Actions = append(rhclPart.Actions, *action)
 			rhclPart.Warning = strings.TrimSpace(rhclPart.Warning + " " + note)
@@ -1126,7 +1135,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		} else {
 			rhclPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from redhat-operators (channel %s), as the MaaS docs' platform setup does.", p.head, p.channel)
 			rhclPart.Commands = rhclInstallCommands(p.channel)
-			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators)", p.head, operatorPlanPrefix(p), rhclOperator.namespace, rhclOperator.subName, rhclOperator.pkg, p.channel))
+			plan(fmt.Sprintf("Install Red Hat Connectivity Link %s: %sSubscription %s/%s (package %s, channel %s, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)", p.head, operatorPlanPrefix(p), rhclOperator.namespace, rhclOperator.subName, rhclOperator.pkg, p.channel))
 		}
 	}
 	part(rhclPart)
@@ -1187,7 +1196,7 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			} else {
 				cnpgPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from certified-operators (channel %s) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).", p.head, p.channel)
 				cnpgPart.Commands = cnpgInstallCommands(p.channel)
-				plan(fmt.Sprintf("Install CloudNativePG %s: Subscription %s/%s (package %s, channel %s, from certified-operators)", p.head, cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel))
+				plan(fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel))
 			}
 		}
 		part(cnpgPart)
@@ -1410,6 +1419,10 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	part(dscPart)
 	part(apiPart)
 	part(tenantPart)
+
+	if denyNote != "" && len(st.SetupPlan) > 0 {
+		plan(denyNote)
+	}
 
 	// The platform as a whole. The shared pieces (Connectivity Link, its
 	// Kuadrant CR and Authorino TLS, CloudNativePG) do not make the

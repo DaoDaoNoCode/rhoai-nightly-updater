@@ -24,8 +24,11 @@ only accepts a tag whose version is the top dated section. See
   MaaS install docs that is missing, in their order, after one
   confirmation that lists each change: Red Hat Connectivity Link
   (`redhat-operators`, the channel whose release meets the docs' minimum
-  for RHOAI 3.6, read from the catalog) with its Kuadrant CR, the
-  CloudNativePG operator (`certified-operators`), the AI gateway's
+  for RHOAI 3.6, read from the catalog, set to deny traffic when rate
+  limiting fails as the docs recommend) with its Kuadrant CR, the
+  CloudNativePG operator (`certified-operators`, in `cnpg-system`, not
+  `openshift-operators`, where an install can pull an OSSM upgrade that
+  breaks the gateway), the AI gateway's
   infrastructure namespace, the database, the gateway, Authorino TLS (the
   docs' `setup-authorino-tls.sh`), and `aigateway` with
   `modelsAsAService` in the DataScienceCluster. What exists is used as it
@@ -33,8 +36,9 @@ only accepts a tag whose version is the top dated section. See
   each part says what Set up will do, offers its own fix where it has one
   (**Upgrade Connectivity Link**, along OLM's path one channel at a time
   and with Authorino TLS restored afterwards; **Raise the memory limit**,
-  only after the Kuadrant operator was OOMKilled; **Configure Authorino
-  TLS**; **Remove the old tier policies**), and keeps the commands under
+  only after the Kuadrant operator was OOMKilled; **Deny traffic when
+  rate limiting fails**, for a Connectivity Link installed without it;
+  **Configure Authorino TLS**; **Remove the old tier policies**), and keeps the commands under
   **Do it from the CLI instead**. Remove keeps the shared pieces
   (Connectivity Link, Kuadrant, Authorino TLS, CloudNativePG), restores
   `aigateway`, and deletes the infrastructure namespace it created only

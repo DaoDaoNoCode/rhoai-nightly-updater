@@ -79,6 +79,7 @@ describe("MaaS use and steps", () => {
     expect(maasSteps({ kind: "maas-action", action: "upgrade-rhcl" }).map((s) => s.id)).toEqual(["check", "upgrade", "authorino-tls", "ready"]);
     expect(maasSteps({ kind: "maas-action", action: "rhcl-memory" }).map((s) => s.id)).toEqual(["check", "memory", "ready"]);
     expect(maasSteps({ kind: "maas-action", action: "authorino-tls" }).map((s) => s.id)).toEqual(["check", "authorino-tls"]);
+    expect(maasSteps({ kind: "maas-action", action: "rhcl-deny-on-failure" }).map((s) => s.id)).toEqual(["check", "env", "ready"]);
     expect(maasSteps({ kind: "maas-action", action: "remove-tier-policies" }).map((s) => s.id)).toEqual(["check", "delete"]);
     expect(maasSteps({ kind: "teardown-maas" }).map((s) => s.id)).toEqual(["check", "unpublish", "dsc", "gateway", "database"]);
     expect(maasSteps({ kind: "publish-maas", project: "p", model: "qwen3-1-7b" }).map((s) => s.id)).toEqual(["check", "gateway", "model", "maas", "ready"]);

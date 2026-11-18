@@ -273,7 +273,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> and its Kuadrant CR, Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>), and the CloudNativePG operator from <code>certified-operators</code>. These stay after Remove: other RHOAI features use them</>,
+            <>Only what is missing, as the MaaS docs install it: Red Hat Connectivity Link from <code>redhat-operators</code> in <code>kuadrant-system</code>, set to deny traffic when rate limiting fails (the docs&apos; recommendation), and its Kuadrant CR; Authorino TLS (the docs&apos; <code>setup-authorino-tls.sh</code>); and the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (not <code>openshift-operators</code>, where an install can pull an OpenShift Service Mesh upgrade that breaks the gateway). These stay after Remove: other RHOAI features use them</>,
             <>The AI gateway&apos;s namespace (<code>{maas?.platform.namespace ?? "redhat-ai-gateway-infra"}</code>) when it does not exist yet; Remove deletes it when nothing else is in it</>,
             <>A PostgreSQL database for MaaS&apos;s API keys: one CloudNativePG instance with a 1 GiB volume, for development and test, and Secret <code>maas-db-config</code> with its address, in the AI gateway&apos;s namespace</>,
             <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Remove, as OpenShift&apos;s shared class)</>,
@@ -320,6 +320,12 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
           return [
             { id: "check", title: "Check the operator's memory" },
             { id: "memory", title: "Raise the memory limit" },
+            { id: "ready", title: "Wait for OLM" },
+          ];
+        case "rhcl-deny-on-failure":
+          return [
+            { id: "check", title: "Check the Subscription" },
+            { id: "env", title: "Deny traffic when rate limiting fails" },
             { id: "ready", title: "Wait for OLM" },
           ];
         case "authorino-tls":

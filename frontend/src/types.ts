@@ -1110,7 +1110,7 @@ export interface MaaSPart {
 }
 
 /** The fixes a part offers besides Set up. */
-export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "authorino-tls" | "remove-tier-policies";
+export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "rhcl-deny-on-failure" | "authorino-tls" | "remove-tier-policies";
 
 /** A part's own fix (pkg/types MaaSAction): its confirmation lists changes. */
 export interface MaaSAction {

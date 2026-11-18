@@ -18,10 +18,13 @@ import (
 //   - Red Hat Connectivity Link: Namespace kuadrant-system, OperatorGroup
 //     kuadrant-operator-group (no spec: all namespaces), and Subscription
 //     kuadrant-operator for package rhcl-operator from redhat-operators
-//     (installPlanApproval Automatic). The docs' Subscription has no
-//     spec.config: the env they mention (RATELIMIT_*_FAILURE_MODE,
-//     AUTH_SERVICE_TIMEOUT) are optional tuning notes, so none is set.
-//     The channel is not the docs' "stable" (1.4.3, which
+//     (installPlanApproval Automatic), with the env the same tab gives under
+//     "Rate limiting when Limitador is unavailable" (rate limits "may not be
+//     enforced unless the Kuadrant operator is configured to deny traffic
+//     on failure"): RATELIMIT_CHECK_SERVICE_FAILURE_MODE and
+//     RATELIMIT_REPORT_SERVICE_FAILURE_MODE deny, so rate limits fail
+//     closed (rhclDenyOnFailureEnv). AUTH_SERVICE_TIMEOUT, a load tuning
+//     note, is not set. The channel is not the docs' "stable" (1.4.3, which
 //     prerequisites.md warns about) but the one whose head meets the docs'
 //     minimum for RHOAI 3.6 (rhclDocsMinimum), read from the PackageManifest.
 //     The same page says RHOAI-managed clusters commonly name it
@@ -29,11 +32,15 @@ import (
 //     found by either name, in the namespace of its CSV.
 //   - CloudNativePG, for this tool's database (the MaaS docs leave
 //     PostgreSQL to the customer, maas-setup.md "Database Setup"): package
-//     cloudnative-pg from certified-operators, its default channel, as
-//     Subscription cloudnative-pg in openshift-operators (OpenShift's
-//     namespace for operators of all namespaces, with its global
-//     OperatorGroup), the names CloudNativePG's own OpenShift tests use
-//     (cloudnative-pg tests/utils/openshift/openshift.go CreateSubscription).
+//     cloudnative-pg from certified-operators, its default channel, laid
+//     out as Connectivity Link is: its own Namespace cnpg-system,
+//     OperatorGroup cloudnative-pg for all namespaces, Subscription
+//     cloudnative-pg (the package's name, as CloudNativePG's own OpenShift
+//     tests name it). Not openshift-operators: platform-setup.md (Install
+//     Gateway API Controller) warns that "any operator installed into the
+//     openshift-operators namespace can pull an OSSM upgrade into its
+//     InstallPlan (OLM v0 limitation), re-breaking the gateway". An
+//     existing install is found by its CSV, in any namespace.
 //
 // What this tool installs it records (maasRecord.Operators), and never
 // removes: both are shared platform pieces (RHOAI's inference gateway
@@ -81,8 +88,64 @@ var (
 	rhclOperator = maasOperator{title: "Red Hat Connectivity Link", pkg: "rhcl-operator", subName: "kuadrant-operator", subNames: []string{"kuadrant-operator", "rhcl-operator"},
 		namespace: "kuadrant-system", source: "redhat-operators", group: "kuadrant-operator-group"}
 	cnpgOperator = maasOperator{title: "CloudNativePG", pkg: "cloudnative-pg", subName: "cloudnative-pg", subNames: []string{"cloudnative-pg"},
-		namespace: "openshift-operators", source: "certified-operators"}
+		namespace: "cnpg-system", source: "certified-operators", group: "cloudnative-pg"}
 )
+
+// rhclDenyOnFailureEnv is the Subscription env platform-setup.md gives so
+// that rate limits are enforced (traffic denied) when Limitador cannot be
+// reached: "Set RATELIMIT_CHECK_SERVICE_FAILURE_MODE and
+// RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny on the operator
+// Subscription (spec.config.env)".
+var rhclDenyOnFailureEnv = []map[string]interface{}{
+	{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "deny"},
+	{"name": "RATELIMIT_REPORT_SERVICE_FAILURE_MODE", "value": "deny"},
+}
+
+// rhclMissingDenyEnv names the deny-on-failure variables a Subscription
+// does not set to deny.
+func rhclMissingDenyEnv(sub *olmSubscription) []string {
+	have := map[string]string{}
+	env, _ := sub.Spec.Config["env"].([]interface{})
+	for _, e := range env {
+		m, _ := e.(map[string]interface{})
+		name, _ := m["name"].(string)
+		value, _ := m["value"].(string)
+		have[name] = value
+	}
+	var out []string
+	for _, want := range rhclDenyOnFailureEnv {
+		if have[want["name"].(string)] != "deny" {
+			out = append(out, want["name"].(string))
+		}
+	}
+	return out
+}
+
+// rhclDenyEnvPatch is the Subscription's spec.config.env with the
+// deny-on-failure variables set and every other entry kept (a merge patch
+// replaces a list whole).
+func rhclDenyEnvPatch(sub *olmSubscription) []interface{} {
+	var out []interface{}
+	set := map[string]bool{}
+	env, _ := sub.Spec.Config["env"].([]interface{})
+	for _, e := range env {
+		m, _ := e.(map[string]interface{})
+		name, _ := m["name"].(string)
+		for _, want := range rhclDenyOnFailureEnv {
+			if want["name"] == name {
+				m = want
+				set[name] = true
+			}
+		}
+		out = append(out, m)
+	}
+	for _, want := range rhclDenyOnFailureEnv {
+		if !set[want["name"].(string)] {
+			out = append(out, want)
+		}
+	}
+	return out
+}
 
 // maasSubscriptionPath is the path of an operator Subscription this tool
 // reads or changes; only these names, written out so the RBAC rules
@@ -446,6 +509,13 @@ func operatorObjects(op maasOperator, channel string) (ns, group, sub map[string
 			"channel": channel, "installPlanApproval": "Automatic", "name": op.pkg,
 			"source": op.source, "sourceNamespace": CatalogNS,
 		},
+	}
+	if op.pkg == rhclOperator.pkg {
+		env := make([]interface{}, len(rhclDenyOnFailureEnv))
+		for i, e := range rhclDenyOnFailureEnv {
+			env[i] = e
+		}
+		sub["spec"].(map[string]interface{})["config"] = map[string]interface{}{"env": env}
 	}
 	return ns, group, sub
 }

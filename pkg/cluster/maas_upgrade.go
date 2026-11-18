@@ -243,6 +243,52 @@ func (m *maasRun) rhclMemory() (*types.OperationResponse, error) {
 	return m.done("The Connectivity Link operator's memory limit is " + rhclMemoryLimit + ".")
 }
 
+// rhclDenyOnFailure sets the docs' deny-on-failure env on an adopted
+// Connectivity Link Subscription (one this tool creates has it already),
+// keeping its other env entries; the merge patch carries the read
+// resourceVersion. Steps: "check", "env", "ready".
+func (m *maasRun) rhclDenyOnFailure() (*types.OperationResponse, error) {
+	c := m.c
+	m.step("check", "running", "Checking Connectivity Link's Subscription...")
+	rec, err := readMaaSRecord(c)
+	if err != nil {
+		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
+	}
+	st, err := readOperator(c, rhclOperator)
+	if err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot read the installed operators; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "csv read failed")
+	}
+	if why := rhclUpgradeRefusal(st); why != "" {
+		return m.fail("check", why+" Nothing was changed.", "prerequisites", "env refused")
+	}
+	if len(rhclMissingDenyEnv(st.sub)) == 0 {
+		m.step("check", "success", "The Subscription already denies traffic when rate limiting fails.")
+		return m.done("Nothing to change: both variables are set to deny.")
+	}
+	spec := map[string]interface{}{"config": map[string]interface{}{"env": rhclDenyEnvPatch(st.sub)}}
+	if err := patchSubscription(c, st.sub, spec, true); err != nil {
+		return m.fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "dry run failed")
+	}
+	m.step("check", "success", fmt.Sprintf("Subscription %s/%s can be changed.", st.sub.Metadata.Namespace, st.sub.Metadata.Name))
+	m.step("env", "running", "Setting RATELIMIT_CHECK_SERVICE_FAILURE_MODE and RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny...")
+	rec.setShared("rhcl-deny-on-failure", fmt.Sprintf("Subscription %s/%s spec.config.env deny on failure", st.sub.Metadata.Namespace, st.sub.Metadata.Name))
+	if err := writeMaaSRecord(c, rec); err != nil {
+		return m.fail("env", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+	}
+	if err := patchSubscription(c, st.sub, spec, false); err != nil {
+		return m.fail("env", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.sub.Metadata.Namespace, st.sub.Metadata.Name, err), maasWriteCode(err), "subscription patch failed")
+	}
+	m.step("env", "success", "The Subscription denies traffic when rate limiting fails.")
+	m.step("ready", "running", "Waiting for OLM...")
+	p, err := waitForSubscription(c, st.sub.Metadata.Namespace, st.sub.Metadata.Name, func(s string) { m.step("ready", "running", s) })
+	if err != nil || !p.done {
+		m.step("ready", "success", "OLM has not reported the operator ready yet; the MaaS tab shows its state.")
+		return m.done("Connectivity Link denies traffic when rate limiting fails; OLM is still rolling it out.")
+	}
+	m.step("ready", "success", "The operator runs with the new setting.")
+	return m.done("Connectivity Link denies traffic when rate limiting fails.")
+}
+
 // authorinoTLSOnly configures Authorino TLS on its own (after a Connectivity
 // Link upgrade outside this tool, for example). Steps: "check",
 // "authorino-tls".

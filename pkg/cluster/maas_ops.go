@@ -61,7 +61,7 @@ func maasWriteCode(err error) string {
 // ValidateMaaSRequest returns why req cannot run, or "".
 func ValidateMaaSRequest(req types.MaaSRequest) string {
 	switch req.Action {
-	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "authorino-tls", "remove-tier-policies":
+	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies":
 		if req.Project != "" {
 			return "the platform takes no project"
 		}
@@ -80,7 +80,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 			return "only chat models are published to MaaS"
 		}
 	default:
-		return "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, authorino-tls or remove-tier-policies"
+		return "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
 	}
 	return ""
 }
@@ -111,6 +111,9 @@ func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*t
 	case "rhcl-memory":
 		m.target = "Connectivity Link's memory limit"
 		return m.rhclMemory()
+	case "rhcl-deny-on-failure":
+		m.target = "Connectivity Link's rate-limit failure mode"
+		return m.rhclDenyOnFailure()
 	case "authorino-tls":
 		m.target = "Authorino TLS"
 		return m.authorinoTLSOnly()

@@ -109,9 +109,17 @@ func (s *fakeOLMSim) installed(pkg, ns, subName, channel, version string) {
 	defer s.f.mu.Unlock()
 	s.csvLocked(pkg, ns, version)
 	p := s.packages[pkg]
+	spec := map[string]interface{}{"channel": channel, "name": pkg, "source": p.source, "sourceNamespace": "openshift-marketplace", "installPlanApproval": "Automatic"}
+	if pkg == "rhcl-operator" {
+		// Installed as the docs recommend: rate limits fail closed.
+		spec["config"] = map[string]interface{}{"env": []interface{}{
+			map[string]interface{}{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "deny"},
+			map[string]interface{}{"name": "RATELIMIT_REPORT_SERVICE_FAILURE_MODE", "value": "deny"},
+		}}
+	}
 	s.f.objects[fakeKey{gv: "operators.coreos.com/v1alpha1", ns: ns, plural: "subscriptions", name: subName}] = map[string]interface{}{
 		"metadata": map[string]interface{}{"name": subName, "namespace": ns, "uid": "sub-" + subName, "resourceVersion": "1"},
-		"spec":     map[string]interface{}{"channel": channel, "name": pkg, "source": p.source, "sourceNamespace": "openshift-marketplace", "installPlanApproval": "Automatic"},
+		"spec":     spec,
 		"status":   map[string]interface{}{"state": "AtLatestKnown", "installedCSV": pkg + ".v" + version, "currentCSV": pkg + ".v" + version},
 	}
 }
@@ -281,7 +289,7 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	}
 	plan := strings.Join(st.SetupPlan, "\n")
 	for _, want := range []string{"Install Red Hat Connectivity Link 1.5.0", "channel stable-1.5", "Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator",
-		"Create the Kuadrant CR kuadrant-system/kuadrant", "Install CloudNativePG 1.27.1: Subscription openshift-operators/cloudnative-pg", "Create namespace redhat-ai-gateway-infra",
+		"Create the Kuadrant CR kuadrant-system/kuadrant", "Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg", "RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny", "Create namespace redhat-ai-gateway-infra",
 		"maas-db", "Create Gateway openshift-ingress/maas-default-gateway", "Configure Authorino TLS", "aigateway.managementState Removed to Managed", "aigateway.modelsAsAService.managementState Removed to Managed"} {
 		if !strings.Contains(plan, want) {
 			t.Errorf("the plan lacks %q:\n%s", want, plan)
@@ -303,7 +311,8 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	last := -1
 	for _, want := range []string{
 		"POST /api/v1/namespaces", "POST /apis/operators.coreos.com/v1/namespaces/kuadrant-system/operatorgroups", "POST /apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions",
-		"POST /apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants", "POST /apis/operators.coreos.com/v1alpha1/namespaces/openshift-operators/subscriptions",
+		"POST /apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants", "POST /api/v1/namespaces", "POST /apis/operators.coreos.com/v1/namespaces/cnpg-system/operatorgroups",
+		"POST /apis/operators.coreos.com/v1alpha1/namespaces/cnpg-system/subscriptions",
 		"POST /apis/postgresql.cnpg.io/v1/namespaces/redhat-ai-gateway-infra/clusters", "POST /apis/gateway.networking.k8s.io/v1/namespaces/openshift-ingress/gateways",
 		"PATCH /api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization", "PATCH /apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino",
 		"PATCH /apis/apps/v1/namespaces/kuadrant-system/deployments/authorino", "PATCH " + tMaaSDSC,
@@ -322,8 +331,26 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	}
 	// The docs' objects.
 	sub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator")
-	if spec := sub["spec"].(map[string]interface{}); spec["name"] != "rhcl-operator" || spec["channel"] != "stable-1.5" || spec["source"] != "redhat-operators" || spec["installPlanApproval"] != "Automatic" || spec["config"] != nil {
+	if spec := sub["spec"].(map[string]interface{}); spec["name"] != "rhcl-operator" || spec["channel"] != "stable-1.5" || spec["source"] != "redhat-operators" || spec["installPlanApproval"] != "Automatic" {
 		t.Fatalf("subscription spec = %v", spec)
+	}
+	// The docs' fail-closed rate limiting, and nothing else in config.
+	if raw, _ := json.Marshal(sub["spec"].(map[string]interface{})["config"]); string(raw) != `{"env":[{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}]}` {
+		t.Fatalf("subscription config = %s", raw)
+	}
+	// CloudNativePG in its own namespace, never openshift-operators (an
+	// install there can pull an OSSM upgrade that breaks the gateway).
+	cnpgSub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/cnpg-system/subscriptions/cloudnative-pg")
+	if spec := cnpgSub["spec"].(map[string]interface{}); spec["name"] != "cloudnative-pg" || spec["source"] != "certified-operators" || spec["channel"] != "stable-v1" || spec["config"] != nil {
+		t.Fatalf("cnpg subscription = %v", cnpgSub)
+	}
+	if og := mc.f.get("/apis/operators.coreos.com/v1/namespaces/cnpg-system/operatorgroups/cloudnative-pg"); og == nil || og["spec"] != nil {
+		t.Fatalf("cnpg operator group = %v", og)
+	}
+	for _, m := range muts {
+		if strings.Contains(m, "/namespaces/openshift-operators/") {
+			t.Fatalf("wrote into openshift-operators: %s", m)
+		}
 	}
 	if og := mc.f.get("/apis/operators.coreos.com/v1/namespaces/kuadrant-system/operatorgroups/kuadrant-operator-group"); og == nil || og["spec"] != nil {
 		t.Fatalf("operator group = %v", og)
@@ -376,7 +403,7 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 		t.Fatalf("the infrastructure namespace this tool created stays: %s", res.Message)
 	}
 	for _, keep := range []string{"/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator", "/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant",
-		"/apis/operators.coreos.com/v1alpha1/namespaces/openshift-operators/subscriptions/cloudnative-pg"} {
+		"/apis/operators.coreos.com/v1alpha1/namespaces/cnpg-system/subscriptions/cloudnative-pg"} {
 		if !mc.f.has(keep) {
 			t.Errorf("removal deleted the shared %s", keep)
 		}
@@ -411,6 +438,76 @@ func TestMaaSSetup_AdoptsAnInstalledConnectivityLink(t *testing.T) {
 	}
 	if rec := readRecord(t, mc.c); len(rec.Shared) != 0 {
 		t.Fatalf("recorded someone else's pieces: %+v", rec.Shared)
+	}
+}
+
+// CloudNativePG installed as on the user's cluster (Subscription
+// cnpg-system/cloudnative-pg, OperatorGroup cloudnative-pg for all
+// namespaces) but its API not served yet: found by its CSV, waited for,
+// never installed again.
+func TestMaaSSetup_AdoptsCloudNativePGInItsOwnNamespace(t *testing.T) {
+	mc, sim := newFreshMaaSCluster(t)
+	sim.installed("cloudnative-pg", "cnpg-system", "cloudnative-pg", "stable-v1", "1.27.1")
+	mc.f.putJSON("/apis/operators.coreos.com/v1/namespaces/cnpg-system/operatorgroups/cloudnative-pg", `{"spec":{}}`)
+	st, _ := GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "cnpg"); p.State != "waiting" || p.ManagedByTool || strings.Contains(strings.Join(st.SetupPlan, "\n"), "Install CloudNativePG") {
+		t.Fatalf("cnpg = %+v plan = %v", p, st.SetupPlan)
+	}
+	mc.f.mu.Lock()
+	mc.f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
+	mc.f.mu.Unlock()
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	if !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	for _, m := range mc.f.mutations() {
+		if strings.Contains(m, "/cnpg-system/") || strings.Contains(m, "/openshift-operators/") {
+			t.Fatalf("changed CloudNativePG's install: %s", m)
+		}
+	}
+	st, _ = GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "cnpg"); p.State != "ready" || !p.NotManaged || !strings.Contains(p.Message, "cnpg-system") {
+		t.Fatalf("cnpg = %+v", p)
+	}
+}
+
+// An adopted Connectivity Link without the docs' deny-on-failure env: Set
+// up leaves it alone and says so; the part offers Apply, which sets both
+// and keeps the Subscription's other env entries.
+func TestMaaSRHCLDenyOnFailure(t *testing.T) {
+	mc := newMaaSCluster(t)
+	sim := newFakeOLMSim(mc.f)
+	sim.installed("rhcl-operator", "kuadrant-system", "kuadrant-operator", "stable-1.5", "1.5.0")
+	subPath := "/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator"
+	ensureMap(mc.f.get(subPath), "spec")["config"] = map[string]interface{}{"env": []interface{}{
+		map[string]interface{}{"name": "AUTH_SERVICE_TIMEOUT", "value": "2s"},
+		map[string]interface{}{"name": "RATELIMIT_CHECK_SERVICE_FAILURE_MODE", "value": "allow"},
+	}}
+	st, _ := GetMaaSStatus(mc.c)
+	p := maasPart(t, st, "rhcl")
+	if len(p.Actions) != 1 || p.Actions[0].ID != "rhcl-deny-on-failure" || !strings.Contains(p.Warning, "deny traffic on failure") || !strings.Contains(p.Commands, `"path":"/spec/config/env/-"`) {
+		t.Fatalf("part = %+v", p)
+	}
+	if !strings.Contains(strings.Join(st.SetupPlan, "\n"), "Not changed: Subscription kuadrant-system/kuadrant-operator") {
+		t.Fatalf("plan = %v", st.SetupPlan)
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if indexOfPrefix(mc.f.mutations(), "PATCH "+subPath) >= 0 {
+		t.Fatal("Set up changed a Subscription it did not create")
+	}
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "rhcl-deny-on-failure"})
+	if !res.Success || finalSteps(events) != "check=success env=success ready=success" {
+		t.Fatalf("res = %+v", res)
+	}
+	raw, _ := json.Marshal(mc.f.get(subPath)["spec"].(map[string]interface{})["config"])
+	if string(raw) != `{"env":[{"name":"AUTH_SERVICE_TIMEOUT","value":"2s"},{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}]}` {
+		t.Fatalf("config = %s", raw)
+	}
+	st, _ = GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "rhcl"); len(p.Actions) != 0 || p.Warning != "" {
+		t.Fatalf("after Apply: %+v", p)
 	}
 }
 
@@ -544,7 +641,8 @@ func TestMaaSRHCLMemory_OnlyWhenOOMKilled(t *testing.T) {
 	}
 	sub := mc.f.get("/apis/operators.coreos.com/v1alpha1/namespaces/kuadrant-system/subscriptions/kuadrant-operator")
 	raw, _ := json.Marshal(sub["spec"].(map[string]interface{})["config"])
-	if string(raw) != `{"resources":{"limits":{"cpu":"200m","memory":"1Gi"},"requests":{"cpu":"200m","memory":"350Mi"}}}` {
+	// The env stays: the merge patch sets resources only.
+	if string(raw) != `{"env":[{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}],"resources":{"limits":{"cpu":"200m","memory":"1Gi"},"requests":{"cpu":"200m","memory":"350Mi"}}}` {
 		t.Fatalf("config = %s", raw)
 	}
 }

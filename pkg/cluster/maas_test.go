@@ -429,7 +429,7 @@ func TestValidateMaaSRequest(t *testing.T) {
 		{Action: "publish"}:                          "a valid project is required",
 		{Action: "publish", Project: "Bad_Name"}:     "a valid project is required",
 		{Action: "unpublish", Project: "p"}:          "",
-		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, authorino-tls or remove-tier-policies",
+		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
 		{Action: "upgrade-rhcl"}:                     "",
 		{Action: "remove-tier-policies", Model: "m"}: "the platform takes no model",
 	} {

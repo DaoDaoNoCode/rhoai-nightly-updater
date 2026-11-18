@@ -592,8 +592,9 @@ objects:
       # (Subscription create is the RHOAI rule above): only the
       # Subscriptions of Connectivity Link (kuadrant-operator, the docs'
       # name, or rhcl-operator, RHOAI-managed clusters') and CloudNativePG
-      # are read and patched (channel for an upgrade, spec.config.resources
-      # after an OOM kill), never deleted
+      # (cloudnative-pg, in cnpg-system when this tool installs it) are read
+      # and patched (channel for an upgrade, spec.config.resources after an
+      # OOM kill, the docs' deny-on-failure env), never deleted
       - apiGroups: ["operators.coreos.com"]
         resources: ["subscriptions"]
         resourceNames: ["kuadrant-operator", "rhcl-operator", "cloudnative-pg"]
