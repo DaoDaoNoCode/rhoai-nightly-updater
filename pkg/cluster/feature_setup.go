@@ -559,7 +559,7 @@ func yamlish(v interface{}, indent string) string {
 			case map[string]interface{}, []interface{}:
 				b.WriteString(indent + k + ":\n" + yamlish(child, indent+"  "))
 			default:
-				b.WriteString(fmt.Sprintf("%s%s: %v\n", indent, k, child))
+				fmt.Fprintf(&b, "%s%s: %v\n", indent, k, child)
 			}
 		}
 	case []interface{}:
@@ -568,7 +568,7 @@ func yamlish(v interface{}, indent string) string {
 			b.WriteString(indent + "- " + strings.TrimPrefix(inner, indent+"  "))
 		}
 	default:
-		b.WriteString(fmt.Sprintf("%s%v\n", indent, t))
+		fmt.Fprintf(&b, "%s%v\n", indent, t)
 	}
 	return b.String()
 }
@@ -580,7 +580,7 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 		// What KServe still lacks that this plan does not set up belongs
 		// to a routing choice (dependencyPart): it does not make the
 		// feature's own prerequisites unready.
-		if pt.State != "ready" && !(pt.ID == "dependencies" && pt.State == "manual") {
+		if pt.State != "ready" && (pt.ID != "dependencies" || pt.State != "manual") {
 			out.Ready = false
 		}
 	}

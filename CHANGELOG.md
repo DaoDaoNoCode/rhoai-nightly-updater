@@ -16,7 +16,33 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
-## [3.0.1] - unreleased
+## [4.0.0] - unreleased
+
+- **Requires a full redeploy** (template revision 6; 3.0.0 has revision 5):
+  `git checkout v4.0.0 && make upgrade`, or the release's `install.sh`.
+
+### Added
+
+- **Set up what a feature needs on the cluster, from its tab (backend).**
+  `GET /api/resources/prerequisites` reports, per feature, the parts it
+  needs on the cluster, every change Set up would make, and why it cannot;
+  `POST /api/resources/prerequisites/stream` makes them, after a check and
+  a server-side dry run of every write. Pipelines: `aipipelines` Managed.
+  MLflow: `mlflowoperator`. Playground: `ogx` and `dashboard`. Models:
+  `kserve`, then the cert-manager Operator for Red Hat OpenShift as
+  odh-gitops installs it (`cert-manager-operator`, `redhat-operators`,
+  default channel, no AWS role ARN), then a wait until KServe sees it.
+  Connectivity Link, which KServe also checks for, is reported, not
+  installed: whether a model needs it depends on how it is routed. An
+  installed or pending cert-manager is used as it is, wherever it is; a
+  DataScienceCluster that Argo CD manages is refused. Clean up can turn
+  the components back (`components`), last, each only while this tool
+  still owns the field and nothing uses it; operators always stay.
+- Operator installs reuse the namespace's one OperatorGroup when it gives
+  an install mode the package supports (also own-namespace groups), and
+  find a Subscription of the package in any namespace before installing.
+- New RBAC: `list` on Subscriptions cluster-wide (SECURITY.md, "One-click
+  prerequisites").
 
 ### Changed
 

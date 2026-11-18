@@ -447,12 +447,6 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	return plan, "", ""
 }
 
-// allNamespaces: the group targets every namespace (no target list, no
-// selector), as OpenShift's global-operators and the docs' group do.
-func (og operatorGroup) allNamespaces() bool {
-	return len(og.Spec.TargetNamespaces) == 0 && len(og.Spec.Selector) == 0
-}
-
 type operatorGroups []operatorGroup
 
 func (gs operatorGroups) names() []string {

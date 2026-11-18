@@ -930,7 +930,7 @@ objects:
                 # Must match api.ExpectedTemplateRevision; bump both when a
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
-                  value: "5"
+                  value: "6"
                 # The update check (GET /api/update-check).
                 - name: IMAGE_REPOSITORY
                   value: ${IMAGE_REPOSITORY}

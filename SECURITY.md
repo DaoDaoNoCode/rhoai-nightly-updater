@@ -409,6 +409,20 @@ oc auth can-i delete authpolicies.kuadrant.io/maas-gateway-auth -n openshift-ing
 oc auth can-i delete tokenratelimitpolicies.kuadrant.io/gateway-default-deny -n openshift-ingress --as=$SA # no
 ```
 
+**Audit: One-click prerequisites (4.0.0).** The Pipelines, MLflow, Models and Playground tabs set up what they need on the cluster after one confirmation that lists every change (`FeaturePrerequisites.setupPlan`), with every read made and every write dry-run on the server before the first write; a read that fails changes nothing (`TestPrerequisites_ReadFailuresChangeNothing`). The changes: DataScienceCluster components set to `Managed` (`aipipelines`, `mlflowoperator`, `kserve`, `ogx`, `dashboard`), each under its own field manager (`rhoai-nightly-updater-dsc-<component>`) and recorded with its value before (snapshot ConfigMap key `prerequisites`); for Models, the cert-manager Operator for Red Hat OpenShift exactly as odh-gitops installs it (Namespace and OperatorGroup `cert-manager-operator`, Subscription `openshift-cert-manager-operator` from `redhat-operators`, default channel, automatic approval, no `spec.config`: no AWS role ARN, RHOAI's issuers need none). A DataScienceCluster that Argo CD manages is refused; an installed or pending cert-manager is used as it is, wherever it is; one running without OLM is refused (two cert-managers would fight). Clean up turns a component back only while the tool's manager still owns the field, Argo CD does not manage the DataScienceCluster and nothing on the cluster uses the component (pipeline servers, MLflow, InferenceServices and LLMInferenceServices, playground servers; a list that fails keeps it `Managed`). Operators are never removed.
+
+| Rule | What it allows | Worst case if the SA token leaks | Why nothing narrower works |
+|---|---|---|---|
+| Subscriptions `list` (cluster-wide) | find a Subscription of an operator's package in any namespace, as RHOAI's KServe does (odh-platform-utilities `OperatorPackageRequested`), so a pending install elsewhere is waited for instead of installed a second time; follow an adopted Subscription whose name is not one the tool may `get` | read every Subscription: package, channel, catalog and `spec.config` (env, resources, node selectors). No new information class: the SA already lists every Deployment, which carries the env OLM copies from `spec.config`, and every CSV | the package's Subscription can be in any namespace under any name; read-only, no `watch` |
+
+Changes with no new rule: the components are written with the existing DataScienceCluster `patch`; cert-manager's Namespace, OperatorGroup and Subscription with the existing `create` rules (the SA could already install any operator from any catalog); its CSV, the served `cert-manager.io` group and a `cert-manager` Deployment are read with the existing CSV `list`, discovery and Deployment `list`; the in-use checks use the existing `list` on DataSciencePipelinesApplications, InferenceServices, LLMInferenceServices and OGXServers and `get` on MLflow `mlflow`.
+
+```bash
+oc auth can-i list subscriptions.operators.coreos.com --all-namespaces --as=$SA                             # yes
+oc auth can-i patch subscriptions.operators.coreos.com/openshift-cert-manager-operator -n cert-manager-operator --as=$SA # no
+oc auth can-i delete subscriptions.operators.coreos.com/openshift-cert-manager-operator -n cert-manager-operator --as=$SA # no
+```
+
 **Residual risk.** The SA can still create Secrets anywhere, create Subscriptions (OLM then installs whatever the CSV requests), delete CSVs and webhook configurations, and patch any Deployment (the module-operator restart uses this existing grant; the API cannot limit `patch` to Deployments it discovers at run time without listing every module operator by name). Treat its token like an administrator credential: anyone who can read it (or `exec` into the pod) can act as the SA. Namespace `admin` on the app's namespace is therefore effectively privileged.
 
 ## Network exposure
