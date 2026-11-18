@@ -435,10 +435,11 @@ func readCatalogServing(c *Client, image string, target catalogTarget) catalogSe
 // reports READY and its old channels until OLM has replaced the pod, so READY
 // alone proves nothing. It returns false on timeout; the error is the context
 // error, a *catalogImagePullError, or an *errCatalogImageChanged (by
-// changedBy) when the image changed meanwhile.
-func waitForCatalogServing(c *Client, image string, target catalogTarget, changedBy string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
+// changedBy) when the image changed meanwhile. pullAdvice words the pull
+// error (pullFailureWatch.advice).
+func waitForCatalogServing(c *Client, image string, target catalogTarget, changedBy string, emit func(UpdateStepEvent), logs *[]string, pullAdvice func(*Client) string) (bool, error) {
 	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
-	var pull pullFailureWatch
+	pull := pullFailureWatch{advice: pullAdvice}
 	last := ""
 	for clk.Now().Before(deadline) {
 		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {

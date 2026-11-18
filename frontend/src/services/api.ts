@@ -234,6 +234,14 @@ export function verifyNodes(signal?: AbortSignal): Promise<OperationResponse> {
   return request('/api/verify-nodes', { signal });
 }
 
+/** Runs a temporary catalog pod with image to see whether the nodes can pull it (about a minute). */
+export function checkNodePull(image: string): Promise<OperationResponse> {
+  return request('/api/setup/node-pull-check', {
+    method: 'POST',
+    body: JSON.stringify({ image }),
+  });
+}
+
 export function createPullSecret(auth: string): Promise<OperationResponse> {
   return request('/api/setup/pull-secret', {
     method: 'POST',

@@ -181,7 +181,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if note := captured.recordedNote(); note != "" {
 		logs = append(logs, note)
 	}
-	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c))
+	return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, gitOpsWriteProblem(c), gitOpsProfilePullAdvice)
 }
 
 // gitOpsWriteProblem is Update's check before each deletion in the gitops
@@ -350,7 +350,7 @@ func checkOperatorNamespaceAndGroup(c *Client) (ok, problem, errorCode string) {
 // the installed CSV's build annotations differ.
 func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(UpdateStepEvent), logs *[]string) (catalogTarget, error) {
 	deadline := clk.Now().Add(CatalogReadyTimeout + PackageManifestPropagationWait)
-	var pull pullFailureWatch
+	pull := pullFailureWatch{advice: gitOpsProfilePullAdvice}
 	last := ""
 	for {
 		target, problem, changedTo := liveCatalogTargetOnce(c, image, override)

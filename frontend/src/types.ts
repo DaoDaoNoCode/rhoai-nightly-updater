@@ -95,6 +95,8 @@ export interface ClusterInfo {
   server: string;
   version: string;
   user: string;
+  /** "hosted" (ROSA HCP, HyperShift) or "self-managed"; absent when it could not be read, and in the gitops profile. */
+  controlPlane?: "hosted" | "self-managed";
 }
 
 export interface SubscriptionInfo {
@@ -127,6 +129,19 @@ export interface PullSecretInfo {
   exists: boolean;
   valid: boolean;
   detail?: string;
+  /**
+   * Set when the nodes may not pull with additional-pull-secret: a
+   * self-managed cluster, or one whose control plane could not be read.
+   */
+  nodes?: NodePullSecretInfo;
+}
+
+/** The nodes' side of the quay.io/rhoai credentials: openshift-config/pull-secret, which the updater cannot read. */
+export interface NodePullSecretInfo {
+  /** Adds the quay.io/rhoai entry to openshift-config/pull-secret (a cluster-admin runs it; it prompts for the token). */
+  command: string;
+  /** The nightly catalog is READY on its quay.io/rhoai image: the nodes have pulled from quay.io/rhoai. */
+  pulled: boolean;
 }
 
 export interface ImageMirrorInfo {

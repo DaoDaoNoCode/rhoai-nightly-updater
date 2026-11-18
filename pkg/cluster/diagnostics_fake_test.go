@@ -63,6 +63,8 @@ func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
 		}
 	}))
 	t.Cleanup(srv.Close)
+	// A new server may reuse an earlier test's address, which keys the cache.
+	controlPlaneCache.Purge()
 	return f, &Client{baseURL: srv.URL, token: "test", httpClient: srv.Client(), ctx: context.Background()}
 }
 

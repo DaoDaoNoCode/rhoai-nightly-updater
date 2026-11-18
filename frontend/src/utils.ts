@@ -21,6 +21,19 @@ export function pullSecretReady(status: StatusResponse | null, gitOpsProfile = f
   return !!(status?.pullSecret.exists && status.pullSecret.valid) || pullSecretNotUsed(status, gitOpsProfile);
 }
 
+/**
+ * The nodes may not have the quay.io/rhoai credentials and nothing shows
+ * that they do: a self-managed (or unknown) cluster whose nodes pull with
+ * openshift-config/pull-secret, which the updater cannot read, and no
+ * nightly catalog runs its quay.io/rhoai image yet. Once additional-pull-secret
+ * is saved, the setup card stays open at the top with the command for it.
+ * Update is not held back: its own catalog check is the real test.
+ */
+export function nodePullUnverified(status: StatusResponse | null, gitOpsProfile = false): boolean {
+  const nodes = status?.pullSecret.nodes;
+  return !gitOpsProfile && !!nodes && !nodes.pulled && pullSecretReady(status);
+}
+
 export function prerequisitesMet(status: StatusResponse | null, gitOpsProfile = false): boolean {
   return pullSecretReady(status, gitOpsProfile) && !!status?.imageMirror.exists;
 }

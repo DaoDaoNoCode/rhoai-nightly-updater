@@ -91,6 +91,8 @@ release-scripts:
   script:
     - sh scripts/test-release.sh
     - bash scripts/test-install.sh
+    # Skipped without jq (this image has none); GitHub CI runs it with jq.
+    - bash scripts/test-node-pull-secret.sh
 
 # The Helm chart for Argo CD (deploy/chart): its copy of the template is
 # deploy/template.yaml, and it lints and renders (scripts/test-chart.sh).

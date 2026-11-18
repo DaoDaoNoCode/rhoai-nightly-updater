@@ -264,7 +264,7 @@ type UpdateStepEvent struct {
 // *catalogImagePullError when the catalog pod cannot pull image.
 func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEvent), logs *[]string) (bool, error) {
 	deadline := clk.Now().Add(CatalogReadyTimeout)
-	var pull pullFailureWatch
+	pull := pullFailureWatch{advice: nodePullAdvice}
 	for clk.Now().Before(deadline) {
 		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
 			return false, err
@@ -605,7 +605,7 @@ func UpdateStreamWithOptions(c *Client, image string, opts OperationOptions, emi
 	}
 
 	if gitOps.active() {
-		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil)
+		return updateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil, nodePullAdvice)
 	}
 
 	// --- Step 3: apply_catalog_source ---

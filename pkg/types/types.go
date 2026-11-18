@@ -109,6 +109,10 @@ type ClusterInfo struct {
 	Server  string `json:"server"`
 	Version string `json:"version"`
 	User    string `json:"user"`
+	// ControlPlane is "hosted" (a hosted control plane: ROSA HCP,
+	// HyperShift) or "self-managed"; absent when it could not be read, and
+	// in the gitops profile, which does not read it.
+	ControlPlane string `json:"controlPlane,omitempty"`
 }
 
 // SubscriptionInfo describes the OLM Subscription resource for the RHOAI operator.
@@ -146,6 +150,28 @@ type PullSecretInfo struct {
 	Exists bool   `json:"exists"`
 	Valid  bool   `json:"valid"`            // has correct format with quay.io/rhoai entry
 	Detail string `json:"detail,omitempty"` // human-readable detail if invalid
+	// Nodes is set when the nodes may not pull with additional-pull-secret:
+	// a self-managed cluster, or one whose control plane could not be read
+	// (cluster.controlPlane absent). Absent on a hosted control plane and in
+	// the gitops profile.
+	Nodes *NodePullSecretInfo `json:"nodes,omitempty"`
+}
+
+// NodePullSecretInfo is the nodes' side of the quay.io/rhoai credentials on
+// a cluster whose nodes pull with the cluster pull secret,
+// openshift-config/pull-secret, which the updater cannot read.
+type NodePullSecretInfo struct {
+	// Command adds the quay.io/rhoai entry to openshift-config/pull-secret,
+	// for a cluster-admin to run (it prompts for the token).
+	Command string `json:"command"`
+	// Pulled: the nightly CatalogSource is READY on its quay.io/rhoai image,
+	// so the nodes have pulled from quay.io/rhoai.
+	Pulled bool `json:"pulled"`
+}
+
+// NodePullCheckRequest is the JSON body of POST /api/setup/node-pull-check.
+type NodePullCheckRequest struct {
+	Image string `json:"image"`
 }
 
 // ImageMirrorInfo reports whether an ImageDigestMirrorSet exists for RHOAI images.

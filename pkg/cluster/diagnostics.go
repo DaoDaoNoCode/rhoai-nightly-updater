@@ -918,8 +918,57 @@ func checkPullSecretHealth(c *Client) checkOutput {
 		}
 	}
 
+	return nodePullSecretHealth(c, cachedControlPlane(c))
+}
+
+// nodePullSecretHealth is the "Pull secret" check once additional-pull-secret
+// is valid. On a hosted control plane the nodes use it, so it passes. A
+// self-managed cluster's nodes pull with openshift-config/pull-secret, which
+// the updater cannot read; a READY nightly catalog on its quay.io/rhoai image
+// shows that they can pull, otherwise the check says what to run
+// (NodePullSecretCommand). An unknown topology is treated as possibly
+// self-managed.
+func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
+	if controlPlane == ControlPlaneHosted {
+		return checkOutput{
+			check: CheckResult{Name: "Pull secret", Status: "pass", Detail: "Pull secret is configured and valid"},
+		}
+	}
+	cs, csErr := getCatalogSource(c)
+	if csErr == nil && catalogPulledFromQuay(cs) {
+		return checkOutput{
+			check: CheckResult{Name: "Pull secret", Status: "pass", Detail: "additional-pull-secret is valid, and the nodes can pull from quay.io/rhoai: the nightly catalog runs its quay.io/rhoai image"},
+		}
+	}
+	catalog := "no nightly catalog runs yet that would show it"
+	switch {
+	case csErr != nil:
+		catalog = "the nightly catalog could not be read: " + csErr.Error()
+	case cs.Exists:
+		catalog = fmt.Sprintf("CatalogSource %s is %s on %s", CatalogName, cs.State, cs.Image)
+	}
+	topology := "Infrastructure cluster: controlPlaneTopology is not External (self-managed)"
+	title := "The nodes may not have the quay.io/rhoai credentials"
+	description := "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with kube-system/additional-pull-secret, which the updater uses for its own Quay lookups. "
+	if controlPlane != ControlPlaneSelfManaged {
+		topology = "Infrastructure cluster could not be read, so the control plane topology is unknown"
+		title = "The nodes may not have the quay.io/rhoai credentials (if this cluster is self-managed)"
+		description = "The updater could not read whether this cluster has a hosted control plane. On a self-managed cluster the nodes pull with the cluster pull secret, openshift-config/pull-secret, not with kube-system/additional-pull-secret, which the updater uses for its own Quay lookups. "
+	}
 	return checkOutput{
-		check: CheckResult{Name: "Pull secret", Status: "pass", Detail: "Pull secret is configured and valid"},
+		check: CheckResult{Name: "Pull secret", Status: "warn", Detail: "additional-pull-secret is valid; whether the nodes can pull from quay.io/rhoai is not known"},
+		problems: []Problem{{
+			ID:       "node-pull-secret-unchecked",
+			Severity: "warning",
+			Title:    title,
+			Description: description + "The updater has no access to openshift-config/pull-secret, which holds every registry credential of the cluster, so it cannot tell whether the quay.io/rhoai entry is there. " +
+				"Without it, Update stops at the catalog check with ErrImagePull and changes nothing.",
+			Evidence: []string{topology, catalog},
+			Fix: "A cluster-admin runs the command below in bash or zsh (jq 1.6 or later): it asks for the quay.io/rhoai token from the setup and adds only that entry. " +
+				"Then click Check that the nodes can pull under Pull secret in the cluster setup on the Status page.",
+			LearnMore:    "The nodes pick up the change within a few minutes, without a reboot; `oc get mcp` shows UPDATED True for every pool when they all have it.",
+			TechnicalCmd: NodePullSecretCommand,
+		}},
 	}
 }
 

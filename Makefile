@@ -139,6 +139,7 @@ frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image
 test-scripts:  ## Test the release and install scripts (offline)
 	sh scripts/test-release.sh
 	bash scripts/test-install.sh
+	bash scripts/test-node-pull-secret.sh
 
 test-chart:  ## Lint and render the Helm chart (offline; skipped without helm)
 	bash scripts/test-chart.sh
