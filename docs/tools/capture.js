@@ -255,6 +255,7 @@ async (page) => {
         ["env-models-several", "granite-embedding-125m-english", "granite"], ["env-models-several", "smollm2-135m-instruct", "smollm2-not-set-up"],
         ["env-models-capacity", "qwen3-1-7b", "qwen3-no-room"], ["env-models-starting", "qwen25-05b-instruct", "starting"],
         ["env-models-image-missing", "qwen25-05b-instruct", "image-missing"], ["env-maas-published", null, "maas"],
+        ["env-models-not-allowed", "qwen25-05b-instruct", "not-allowed"], ["env-models-foreign", "qwen25-05b-instruct", "foreign"],
       ];
       for (const [sc, model, name] of shots) {
         for (const dark of [false, true]) {
@@ -601,6 +602,18 @@ async (page) => {
         notes: [
           { at: row(use, "Tool calling"), n: 1, pos: "l" },
           { at: row(use, "Reasoning"), n: 2, pos: "l" },
+        ],
+        pad: 24,
+      });
+      // A model deployed from the dashboard in a project the gateway does
+      // not list: named, with Allow.
+      await open("/test-resources?tab=models&project=dev-project", "env-models-not-allowed");
+      const listed = part("Inference gateway");
+      await crop("environment-models-not-allowed", listed, {
+        notes: [
+          { at: listed.getByText(/can't be reached: its project isn't allowed/), n: 1, pos: "r" },
+          { at: listed.getByRole("button", { name: "Allow fraud-detection" }), n: 2, pos: "r" },
+          { at: row(listed, "Projects allowed on the gateway"), n: 3, pos: "l" },
         ],
         pad: 24,
       });

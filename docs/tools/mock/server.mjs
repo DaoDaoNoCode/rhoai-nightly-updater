@@ -293,20 +293,11 @@ const scenarios = {
     w.resources.inferenceGateway = F.gatewayStates.foreign(["llm-eval/qwen25-05b-instruct"]);
     w.resources.models = F.modelsStatus({ imagePlan: "preset", imagePlanReason: undefined, items: [F.modelStates.foreign("llm-eval")] });
   },
-  // A project without the routes label: Set up waits for a cluster-admin.
-  "env-models-unlabelled": (w) => {
-    w.resources.inferenceGateway = { ...F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), labelledProjects: ["a-test-project", "dev-project", "llm-eval"] };
+  // A model deployed from the dashboard in a project the gateway does not
+  // list: its route is rejected; Allow adds the project.
+  "env-models-not-allowed": (w) => {
+    w.resources.inferenceGateway = F.gatewayStates.notAllowed(F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]), ["fraud-detection/fraud-assistant"]);
     w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
-  },
-  // An earlier version's gateway open to every namespace: Restrict, or the
-  // labels it waits for.
-  "env-models-open-gateway": (w) => {
-    w.resources.inferenceGateway = F.gatewayStates.open(["dev-project/qwen25-05b-instruct"]);
-    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")] });
-  },
-  "env-models-open-gateway-waiting": (w) => {
-    w.resources.inferenceGateway = F.gatewayStates.open(["dev-project/qwen25-05b-instruct", "llm-eval/qwen25-05b-instruct"], ["llm-eval"]);
-    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project"), F.modelStates.released("llm-eval")] });
   },
   "env-models-unknown": (w) => { w.resources.inferenceGateway = F.gatewayStates.unknown; },
   "env-models-gateway-starting": (w) => { w.resources.inferenceGateway = F.gatewayStates.starting; },
@@ -582,13 +573,26 @@ function removeModel(project, name) {
 async function modelsStream(req, res) {
   const { action, gateway = false, project, releasedImage = false, model = "qwen25-05b-instruct" } = await body(req);
   const display = F.MODEL_CATALOG.find((c) => c.name === model)?.displayName ?? model;
-  beginOperation("models", "Models", `${action} ${[gateway ? "inference gateway" : "", project ? `model ${model} in ${project}` : ""].filter(Boolean).join(", ")}`);
+  beginOperation("models", "Models", action === "allow" ? `allow project ${project} on the inference gateway` : `${action} ${[gateway ? "inference gateway" : "", project ? `model ${model} in ${project}` : ""].filter(Boolean).join(", ")}`);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
   const m = modelsWorld();
   const done = [];
-  if (action === "teardown") {
+  if (action === "allow") {
+    send({ step: "check", status: "running", message: `Checking the inference gateway and project '${project}'...` });
+    await nextStep();
+    send({ step: "check", status: "success", message: "The gateway is this tool's; the project exists." });
+    send({ step: "gateway", status: "running", message: `Adding '${project}' to the projects the inference gateway allows...` });
+    await nextStep();
+    const gw = world.resources.inferenceGateway;
+    const allowed = [gw.allowedProjects[0], ...[...gw.allowedProjects.slice(1), project].sort()];
+    const models = (gw.notAllowedModels ?? []).filter((r) => !r.startsWith(`${project}/`));
+    world.resources.inferenceGateway = { ...gw, allowedProjects: allowed, notAllowedModels: models, notAllowedModelProjects: [...new Set(models.map((r) => r.split("/")[0]))] };
+    const msg = `The inference gateway now allows '${project}'; models there attach to it. Projects it allows: ${allowed.join(", ")}.`;
+    send({ step: "gateway", status: "success", message: msg });
+    done.push(msg);
+  } else if (action === "teardown") {
     if (project) {
       send({ step: "model", status: "running", message: `Deleting ${model} in '${project}'...` });
       await nextStep();
