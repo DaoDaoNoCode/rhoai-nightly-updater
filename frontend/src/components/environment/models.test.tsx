@@ -123,23 +123,27 @@ describe("Models runs and clean-up", () => {
     expect(cleanupBlocked(own, { inferenceGateway: true })).toMatch(/Select that model too/);
   });
 
-  it("the embedding, tool and thinking commands call the right paths with the user's token", () => {
+  it("the embedding, tool and thinking commands call the right paths with the model's token", () => {
     const base = "https://inference.apps.example.com/dev/m/";
-    expect(embeddingCurl(base, "granite-embedding-125m-english")).toContain(`'https://inference.apps.example.com/dev/m/v1/embeddings' \\\n  -d '{"model":"granite-embedding-125m-english","input":`);
+    const tok = "TOKEN=$(oc get secret default-name-x-sa -n dev -o jsonpath='{.data.token}' | base64 -d)";
+    expect(embeddingCurl(base, "granite-embedding-125m-english", tok)).toContain(`'https://inference.apps.example.com/dev/m/v1/embeddings' \\\n  -d '{"model":"granite-embedding-125m-english","input":`);
     // The model's address comes from the cluster: single-quoted in every command.
-    for (const c of [modelCurl("https://x.example.com/$(id)", "m"), embeddingCurl("https://x.example.com/$(id)", "m"), toolCurl("https://x.example.com/$(id)", "m"), thinkingCurl("https://x.example.com/$(id)", "m")]) {
+    for (const c of [modelCurl("https://x.example.com/$(id)", "m", tok), embeddingCurl("https://x.example.com/$(id)", "m", tok), toolCurl("https://x.example.com/$(id)", "m", tok), thinkingCurl("https://x.example.com/$(id)", "m", tok)]) {
       expect(c).not.toMatch(/[^']https:\/\/x\.example\.com/);
       expect(c).toContain("'https://x.example.com/$(id)/v1/");
     }
-    expect(toolCurl(base, "qwen3-1-7b")).toContain(`"tools":[{"type":"function"`);
-    expect(thinkingCurl(base, "qwen3-1-7b")).toContain(`"chat_template_kwargs":{"enable_thinking":true}`);
+    expect(toolCurl(base, "qwen3-1-7b", tok)).toContain(`"tools":[{"type":"function"`);
+    expect(thinkingCurl(base, "qwen3-1-7b", tok)).toContain(`"chat_template_kwargs":{"enable_thinking":true}`);
     // Thinking on CPU can take over a minute: the command streams (curl -N
     // prints each event as it comes), so the load balancer's 60 s idle
     // timeout never sees a silent connection.
-    expect(thinkingCurl(base, "qwen3-1-7b")).toContain("\ncurl -N -s ");
-    expect(thinkingCurl(base, "qwen3-1-7b")).toContain(`"max_tokens":1024,"stream":true,`);
-    for (const c of [embeddingCurl(base, "x"), toolCurl(base, "x"), thinkingCurl(base, "x")]) {
-      expect(c).toContain("TOKEN=$(oc whoami -t)");
+    expect(thinkingCurl(base, "qwen3-1-7b", tok)).toContain("\ncurl -N -s ");
+    expect(thinkingCurl(base, "qwen3-1-7b", tok)).toContain(`"max_tokens":1024,"stream":true,`);
+    for (const c of [modelCurl(base, "x", tok), embeddingCurl(base, "x", tok), toolCurl(base, "x", tok), thinkingCurl(base, "x", tok)]) {
+      // The model's own token, never the user's: a model's pod is in a
+      // project its editors control (SECURITY.md, Which token is used where).
+      expect(c.split("\n")[0]).toBe(tok);
+      expect(c).not.toContain("whoami");
       // One single-quoted body: no single quote inside it.
       expect(c.split("-d '")[1].slice(0, -1)).not.toContain("'");
     }
@@ -154,12 +158,16 @@ describe("Models runs and clean-up", () => {
   it("the curl uses the model's own token from its Secret, and the model's resource name", () => {
     const token = modelTokenLine("dev", model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa" }));
     expect(token).toBe(`TOKEN=$(oc get secret default-name-qwen25-05b-instruct-sa -n dev -o jsonpath='{.data.token}' | base64 -d)`);
-    const text = modelCurl("https://inference.apps.example.com/dev/qwen25-05b-instruct/", "qwen25-05b-instruct", token);
+    const text = modelCurl("https://inference.apps.example.com/dev/qwen25-05b-instruct/", "qwen25-05b-instruct", token!);
     expect(text.split("\n")[0]).toBe(token);
     expect(text).toContain("https://inference.apps.example.com/dev/qwen25-05b-instruct/v1/models");
     expect(text).toContain(`"model":"qwen25-05b-instruct"`);
-    // A model set up before it had a token: the user's own token still works.
-    expect(modelTokenLine("dev", model("dev"))).toBe("TOKEN=$(oc whoami -t)");
+    // A model set up before it had a token: no command (the user's own
+    // token would go to a pod the project's editors control).
+    expect(modelTokenLine("dev", model("dev"))).toBeNull();
+    // A model of a catalog name this tool did not set up: never, even if
+    // a Secret of the dashboard's name is reported.
+    expect(modelTokenLine("dev", model("dev", { managedByTool: false, tokenSecret: "default-name-qwen25-05b-instruct-sa" }))).toBeNull();
   });
 });
 
@@ -177,6 +185,52 @@ describe("Models tab: token authentication", () => {
     const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
     expect(within(part).getByText("Token authentication")).toBeInTheDocument();
     expect(within(part).getByText(/ServiceAccount qwen25-05b-instruct-sa may only get this model/)).toBeInTheDocument();
+    // The user's own token is not offered for a model: its pod is in a
+    // project its editors control.
+    expect(screen.queryByText(/Your own OpenShift token works too/)).toBeNull();
+  });
+
+  it("this tool's model without its token: no commands, and Set up again creates the token", async () => {
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev")] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const use = await screen.findByRole("region", { name: "Use it" });
+    expect(within(use).getByText(/has no token of its own yet, so there are no commands to call it/)).toBeInTheDocument();
+    expect(within(use).queryByRole("button", { name: "Copy the commands" })).toBeNull();
+    expect(screen.queryByText(/whoami/)).toBeNull();
+    expect(screen.queryByText(/"model":"qwen25-05b-instruct"/)).toBeNull();
+    fireEvent.click(within(use).getByRole("button", { name: "Set up again to create its token" }));
+    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
+    await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct" }]);
+  });
+
+  it("read-only: a model without its token says a cluster-admin sets it up again", async () => {
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=models&project=dev"]}><QuickResourceCreator mutateBlocker={null} readBlocker="Read-only access" /></MemoryRouter>);
+    const use = await screen.findByRole("region", { name: "Use it" });
+    expect(within(use).queryByRole("button", { name: "Set up again to create its token" })).toBeNull();
+    expect(within(use).getByText(/A cluster-admin sets it up again to create its token/)).toBeInTheDocument();
+  });
+
+  it("a model of a catalog name this tool did not set up: no commands; the dashboard's token for that deployment", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { managedByTool: false, tokenSecret: "default-name-qwen25-05b-instruct-sa", tokenServiceAccount: "qwen25-05b-instruct-sa" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const use = await screen.findByRole("region", { name: "Use it" });
+    expect(within(use).getByText(/was not set up by this tool/)).toBeInTheDocument();
+    expect(within(use).getByText(/the token the dashboard shows under Token authentication for that deployment/)).toBeInTheDocument();
+    expect(within(use).queryByRole("button", { name: /Copy/ })).toBeNull();
+    expect(within(use).queryByRole("button", { name: /Set up again/ })).toBeNull();
+    expect(screen.queryByText(/whoami/)).toBeNull();
+    expect(screen.queryByText(/oc get secret/)).toBeNull();
+    expect(screen.queryByText(/"model":"qwen25-05b-instruct"/)).toBeNull();
   });
 
   it("a model without its token says to set it up again; one turned off says so", async () => {
@@ -224,7 +278,8 @@ describe("Models tab", () => {
     const part = screen.getByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
     expect(within(part).getByRole("link", { name: /Open dev in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/projects/dev?section=model-server");
     expect(screen.getByRole("heading", { name: "Use it" })).toBeInTheDocument();
-    expect(screen.getByText(/"model":"qwen25-05b-instruct"/)).toBeInTheDocument();
+    // No token of its own yet: no commands (Set up again creates it).
+    expect(screen.queryByText(/"model":"qwen25-05b-instruct"/)).toBeNull();
     // What the dashboard shows for it: the hardware profile, and why it lists no tokens.
     expect(within(part).getByText("redhat-ods-applications/default-profile")).toBeInTheDocument();
     expect(within(part).getByText(/Set it up again to add the model.s token/)).toBeInTheDocument();
@@ -331,7 +386,7 @@ describe("Models tab", () => {
 
   it("a project with a published and an unpublished model: the MaaS pointer is only for the published one", async () => {
     const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", url: "https://inference.apps.example.com/dev/qwen3-1-7b", maasPublished: true });
-    const qwen25 = model("dev");
+    const qwen25 = model("dev", { tokenSecret: "default-name-qwen25-05b-instruct-sa" });
     stubApi({
       "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen25, qwen3] }) }),
       "/api/resources/projects": { projects: ["dev"] },
@@ -350,8 +405,8 @@ describe("Models tab", () => {
   });
 
   it("Use it fits the model: embeddings, and Qwen3's tool calling and thinking", async () => {
-    const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", url: "https://inference.apps.example.com/dev/qwen3-1-7b" });
-    const granite = model("dev", { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", url: "https://inference.apps.example.com/dev/granite-embedding-125m-english" });
+    const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", url: "https://inference.apps.example.com/dev/qwen3-1-7b", tokenSecret: "default-name-qwen3-1-7b-sa" });
+    const granite = model("dev", { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", url: "https://inference.apps.example.com/dev/granite-embedding-125m-english", tokenSecret: "default-name-granite-embedding-125m-english-sa" });
     stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen3, granite] }) }), "/api/resources/projects": { projects: ["dev"] } });
     const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
     expect(await screen.findByText(/"chat_template_kwargs":\{"enable_thinking":true\}/)).toBeInTheDocument();

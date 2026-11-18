@@ -69,8 +69,6 @@ export interface ModelsTabProps {
 
 const gatewayManaged = (gw: InferenceGatewayState | undefined) => gw?.managedByTool === true;
 
-const TOKEN = "TOKEN=$(oc whoami -t)";
-
 /** The model's token ServiceAccount, as the dashboard names it (<model>-sa). */
 const tokenSA = (model: string) => `${model}-sa`;
 const auth = `-H "Authorization: Bearer $TOKEN"`;
@@ -78,15 +76,18 @@ const auth = `-H "Authorization: Bearer $TOKEN"`;
 /**
  * The command that puts the model's own token in $TOKEN: the token Secret
  * this tool made as the dashboard does (pkg/cluster models_token.go), read
- * with the user's own oc. A model set up before it had one uses the user's
- * token. Secret and project names are Kubernetes names (no shell quoting).
+ * with the user's own oc. Only for this tool's model with that Secret;
+ * otherwise null, and no command calls the model: the user's own token
+ * never goes to a model, whose pod is in a project its editors control
+ * (SECURITY.md, "Which token is used where"). Secret and project names are
+ * Kubernetes names (no shell quoting).
  */
-export function modelTokenLine(project: string, m: ModelState): string {
-  return m.tokenSecret ? `TOKEN=$(oc get secret ${m.tokenSecret} -n ${project} -o jsonpath='{.data.token}' | base64 -d)` : TOKEN;
+export function modelTokenLine(project: string, m: ModelState): string | null {
+  return m.managedByTool === true && m.tokenSecret ? `TOKEN=$(oc get secret ${m.tokenSecret} -n ${project} -o jsonpath='{.data.token}' | base64 -d)` : null;
 }
 
-/** Commands that call a chat model with a token. Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
-export function modelCurl(url: string, model: string, token: string = TOKEN): string {
+/** Commands that call a chat model with its token (modelTokenLine). Catalog names need no shell quoting; the address comes from the cluster, so it is single-quoted. */
+export function modelCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     token,
@@ -102,7 +103,7 @@ export function modelCurl(url: string, model: string, token: string = TOKEN): st
  * thinking on CPU can take over a minute, and the cloud load balancer in
  * front of the gateway closes a connection that sends nothing for 60 s.
  */
-export function thinkingCurl(url: string, model: string, token: string = TOKEN): string {
+export function thinkingCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     token,
@@ -112,7 +113,7 @@ export function thinkingCurl(url: string, model: string, token: string = TOKEN):
 }
 
 /** A tool-calling request: the model answers with tool_calls when a tool fits. */
-export function toolCurl(url: string, model: string, token: string = TOKEN): string {
+export function toolCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
   const tool = `{"type":"function","function":{"name":"get_weather","description":"Current weather in a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}`;
   return [
@@ -123,7 +124,7 @@ export function toolCurl(url: string, model: string, token: string = TOKEN): str
 }
 
 /** Commands that ask an embedding model for a vector. */
-export function embeddingCurl(url: string, model: string, token: string = TOKEN): string {
+export function embeddingCurl(url: string, model: string, token: string): string {
   const base = url.replace(/\/+$/, "");
   return [
     token,
@@ -431,7 +432,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
               {model.tokenAuthOff
                 ? <>Off: security.opendatahub.io/enable-auth is &quot;false&quot; on the model (set in the dashboard), so its address answers without a token. Turn &quot;Require token authentication&quot; back on in the dashboard&apos;s Edit.</>
                 : model.tokenSecret
-                  ? <>On, as the dashboard sets it up: ServiceAccount {model.tokenServiceAccount} may only get this model, and its token is in Secret <code>{model.tokenSecret}</code>, which the dashboard lists as the model&apos;s token &quot;default-name&quot;. Your own OpenShift token works too.</>
+                  ? <>On, as the dashboard sets it up: ServiceAccount {model.tokenServiceAccount} may only get this model, and its token is in Secret <code>{model.tokenSecret}</code>, which the dashboard lists as the model&apos;s token &quot;default-name&quot;.</>
                   : <>On, but the model has no token of its own yet, so the dashboard lists none and its Edit would turn authentication off when saved. Set it up again to add the model&apos;s token.</>}
             </DescriptionListDescription>
           </DescriptionListGroup>
@@ -442,17 +443,52 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
 };
 
 /**
- * How to call a ready model: its address, curl with the user's own token
+ * A ready model without commands: this tool's model with no token of its
+ * own yet (Set up again creates it), or a model of a catalog name this
+ * tool did not set up (its token is the dashboard's). Never the user's
+ * own token: a model's pod is in a project its editors control.
+ */
+const NoModelCommands: React.FC<{ model: ModelState; project: string; readOnly: boolean; baseReason: string | null; onSetUpAgain: () => void }> = ({ model, project, readOnly, baseReason, onSetUpAgain }) => {
+  const name = model.name!;
+  if (model.managedByTool !== true) {
+    return (
+      <Content component="p">
+        This model was not set up by this tool (for example, it was deployed in the dashboard), so there are no commands for it here. Call it with the token the dashboard shows under Token authentication for that deployment: open {project} in the dashboard, then the model&apos;s details. Use that token rather than your own OpenShift token: whoever can edit {project} controls what answers at the model&apos;s address.
+      </Content>
+    );
+  }
+  return (
+    <Stack hasGutter>
+      <StackItem>
+        <Content component="p">
+          The model has no token of its own yet, so there are no commands to call it: it was set up before this tool made the dashboard&apos;s token for each model. Setting it up again creates ServiceAccount <code>{tokenSA(name)}</code>, which may only call this model, and its token Secret <code>default-name-{tokenSA(name)}</code>; nothing else changes.
+        </Content>
+      </StackItem>
+      <StackItem>
+        {readOnly
+          ? <Content component="p">A cluster-admin sets it up again to create its token.</Content>
+          : <>
+            <Button variant="secondary" onClick={onSetUpAgain} isAriaDisabled={!!baseReason}>Set up again to create its token</Button>
+            {baseReason && <Content component="p">Not available now: {baseReason}</Content>}
+          </>}
+      </StackItem>
+    </Stack>
+  );
+};
+
+/**
+ * How to call a ready model: its address, curl with the model's own token
  * (by its type), the dashboard. A model published to MaaS answers only
  * through MaaS, so then it points at the MaaS tab's commands instead.
  */
-export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; project: string; dashboardUrl?: string; onMaaS: () => void }> = ({ model, catalog: c, project, dashboardUrl, onMaaS }) => {
+export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; project: string; dashboardUrl?: string; onMaaS: () => void; readOnly: boolean; baseReason: string | null; onSetUpAgain: () => void }> = ({ model, catalog: c, project, dashboardUrl, onMaaS, readOnly, baseReason, onSetUpAgain }) => {
   const href = dashboardProjectHref(dashboardUrl, project);
   const name = model.name!;
   const url = model.url!;
   const embedding = c?.type === "embedding";
   const published = !!model.maasPublished;
   const token = modelTokenLine(project, model);
+  const ours = model.managedByTool === true;
   return (
     <TabSection title="Use it" id="models-use">
       <DescriptionList aria-label="How to use the model">
@@ -468,13 +504,13 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
                 </StackItem>
                 <StackItem><Button variant="link" isInline onClick={onMaaS}>Use the MaaS tab&apos;s commands</Button></StackItem>
               </Stack>
+            ) : !token ? (
+              <NoModelCommands model={model} project={project} readOnly={readOnly} baseReason={baseReason} onSetUpAgain={onSetUpAgain} />
             ) : (
               <Stack hasGutter>
                 <StackItem>
                   <Content component="p">
-                    {model.tokenSecret
-                      ? <>The model speaks the OpenAI API. The first command reads the model&apos;s own token from Secret <code>{model.tokenSecret}</code>: a token that can only call this model, the same one the dashboard shows for the model. Anyone who can read Secrets in {project} can use it.</>
-                      : <>The model speaks the OpenAI API. Call it with your own OpenShift token (anyone who can see {project} can). Set the model up again to give it its own token, as the dashboard does.</>}
+                    The model speaks the OpenAI API. The first command reads the model&apos;s own token from Secret <code>{model.tokenSecret}</code>: a token that can only call this model, the same one the dashboard shows for the model. Anyone who can read Secrets in {project} can use it.
                   </Content>
                 </StackItem>
                 <StackItem><CopyableCode id="models-curl" label="the commands" code={embedding ? embeddingCurl(url, name, token) : modelCurl(url, name, token)} /></StackItem>
@@ -484,7 +520,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
             )}
           </DescriptionListDescription>
         </DescriptionListGroup>
-        {!published && c?.toolCalling && (
+        {!published && token && c?.toolCalling && (
           <DescriptionListGroup>
             <DescriptionListTerm>Tool calling</DescriptionListTerm>
             <DescriptionListDescription>
@@ -495,7 +531,7 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {!published && c?.toolCalling && (
+        {!published && token && c?.toolCalling && (
           <DescriptionListGroup>
             <DescriptionListTerm>Reasoning</DescriptionListTerm>
             <DescriptionListDescription>
@@ -523,7 +559,12 @@ export const UseModel: React.FC<{ model: ModelState; catalog?: CatalogModel; pro
       <WhatNext id="models-next" items={published ? [
         <>Run the MaaS tab&apos;s commands: they get an API key and ask the model to say hello.</>,
         <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
-        <>To call its direct address with your OpenShift token again, unpublish it on the MaaS tab.</>,
+        <>To call its direct address again, unpublish it on the MaaS tab.</>,
+      ] : !token ? [
+        ours
+          ? <>Set it up again to create its token; this tab then shows the commands that call it.</>
+          : <>Open {project} in the dashboard and copy the deployment&apos;s token under Token authentication.</>,
+        <>Try it in the dashboard&apos;s Gen AI studio: AI assets, then the playground.</>,
       ] : embedding ? [
         <>Copy the commands above and run them: they ask the model for the vector of one sentence.</>,
         <>Point an OpenAI client&apos;s embeddings call at the address, with the token as the API key and <code>{name}</code> as the model.</>,
@@ -555,7 +596,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Models" purpose="Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with your OpenShift token or from the dashboard's Gen AI playground." state={state} /></StackItem>
+      <StackItem><FeatureHeader title="Models" purpose="Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with each model's own token or from the dashboard's Gen AI playground." state={state} /></StackItem>
       {models?.blocked && <StackItem><ComponentAlert feature="Model serving" block={models.blocked} /></StackItem>}
       {!models?.blocked && models?.presetProblem && (
         <StackItem>
@@ -597,7 +638,12 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
           <PrimaryAction label={next.label} onClick={() => onSetUp(next.setup)} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason} />
         </StackItem>
       )}
-      {project && model?.ready && model.url && !isTerminating(model) && <StackItem><UseModel model={model} catalog={c} project={project} dashboardUrl={status.dashboardUrl} onMaaS={onMaaS} /></StackItem>}
+      {project && model?.ready && model.url && !isTerminating(model) && (
+        <StackItem>
+          <UseModel model={model} catalog={c} project={project} dashboardUrl={status.dashboardUrl} onMaaS={onMaaS} readOnly={readOnly} baseReason={baseReason}
+            onSetUpAgain={() => props.setPending({ kind: "setup-models", gateway: false, project, model: name })} />
+        </StackItem>
+      )}
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
