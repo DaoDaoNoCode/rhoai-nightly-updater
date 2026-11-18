@@ -54,6 +54,8 @@ Open **http://127.0.0.1:9000** in your browser.
 
 ### Frontend Development
 
+**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync.
+
 The frontend uses:
 
 - **React 18.3.0** with TypeScript 5.6.x
