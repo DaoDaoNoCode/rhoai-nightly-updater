@@ -847,6 +847,15 @@ export function maasModel(published, { ready = true } = {}) {
   };
 }
 
+/** A recorded publication whose model is gone (GetMaaSStatus's extra row). */
+export function maasOrphanPublication(namespace) {
+  return { namespace, name: "qwen25-05b-instruct", displayName: "qwen25-05b-instruct", deployed: true, ready: false, managedByTool: true, published: true, partly: true,
+    message: "Partly published: the model is gone; this tool's record of the publication still in place. Unpublish to finish removing it." };
+}
+
+/** Removal refused because others use MaaS (pkg/cluster teardown, foreignMaaSObjects). */
+export const MAAS_IN_USE = "Others use this MaaS platform: MaaSModelRef team-a/granite-3-8b, MaaSSubscription models-as-a-service/team-a-subscription. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.";
+
 /** The MaaS status by state. */
 export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false } = {}) {
   const parts = maasParts(state, { tls });
