@@ -52,6 +52,10 @@ type mlflowTarget struct {
 	api     *sampleAPI
 	ui      string // MLflow's public address, no trailing slash
 	project string
+	// c and cr are the cluster and the MLflow CR the target was read from;
+	// the demo checks the CR's memory limit (oldToolResources).
+	c  *Client
+	cr mlflowCR
 }
 
 // link is a page of the MLflow UI in the target's workspace.
@@ -69,6 +73,9 @@ func mlflowCRReady(cr mlflowCR) bool {
 	return false
 }
 
+// mlflowNoStatusURLReason: the CR reports no https address in status.url.
+const mlflowNoStatusURLReason = "This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work."
+
 // mlflowSampleTarget returns MLflow for project, or why the samples are
 // unavailable. The address is the CR's status.url, the address the operator
 // reports and odh-dashboard links to (see mlflowCR).
@@ -82,18 +89,23 @@ func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error
 	case cr.Metadata.terminating():
 		return nil, "MLflow is being deleted.", nil
 	case !mlflowCRReady(cr):
-		return nil, "MLflow is not ready yet.", nil
+		return nil, "MLflow is not ready.", nil
 	}
+	// The samples call MLflow only at status.url, never at the Route the
+	// tab falls back to for its link (getMLflowStatus): releases before the
+	// data-science gateway report no status.url, and their MLflow was not
+	// checked against these calls. This is the one rule; the page shows its
+	// reason as is.
 	base := mlflowUIURL(cr.Status.URL, "")
 	if base == "" {
-		return nil, "MLflow reports no https address (status.url) yet.", nil
+		return nil, mlflowNoStatusURLReason, nil
 	}
 	return &mlflowTarget{
 		api: &sampleAPI{
 			ctx: c.ctx, base: base, token: c.token, server: "MLflow",
 			headers: map[string]string{mlflowWorkspaceHeader: project},
 		},
-		ui: base, project: project,
+		ui: base, project: project, c: c, cr: cr,
 	}, "", nil
 }
 
@@ -182,10 +194,23 @@ func mlflowSamples() map[string]mlflowSample {
 // GetMLflowSamplesStatus reports the MLflow samples of project. It makes
 // only named reads (one per sample, a few for the training sample) and is
 // cached for mlflowStatusCacheTTL, so it stays out of the main status poll.
+//
+// project must be a Data Science project, checked before the cache, like
+// the playground's status and every samples operation: the reads go to
+// MLflow with the ServiceAccount's token, so a request must not choose any
+// namespace.
 func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStatus, error) {
+	ok, err := isDSProject(c, project)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: '%s'", ErrNotDSProject, project)
+	}
 	if cached, ok := mlflowSamplesCache.Get(project); ok {
 		return &cached, nil
 	}
+	gen := mlflowSamplesGen.current(project)
 	t, reason, err := mlflowSampleTarget(c, project)
 	if err != nil {
 		return nil, err
@@ -212,12 +237,40 @@ func GetMLflowSamplesStatus(c *Client, project string) (*types.MLflowSamplesStat
 		}
 		wg.Wait()
 	}
-	mlflowSamplesCache.Add(project, st, mlflowStatusCacheTTL)
+	// A samples operation that ended during this read invalidated the
+	// project: what was read may predate it, so it is returned but not kept.
+	if mlflowSamplesGen.current(project) == gen {
+		mlflowSamplesCache.Add(project, st, mlflowStatusCacheTTL)
+	}
 	return &st, nil
 }
 
-// InvalidateSamplesStatus drops the cached samples status of project.
+// samplesGenerations counts the invalidations of each project's samples
+// status. A status read caches its result only when the count did not
+// change while it read.
+type samplesGenerations struct {
+	mu  sync.Mutex
+	gen map[string]uint64
+}
+
+var mlflowSamplesGen = &samplesGenerations{gen: map[string]uint64{}}
+
+func (g *samplesGenerations) current(project string) uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gen[project]
+}
+
+func (g *samplesGenerations) bump(project string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.gen[project]++
+}
+
+// InvalidateSamplesStatus drops the cached samples status of project, and
+// keeps a read that is under way from caching what it read before.
 func InvalidateSamplesStatus(project string) {
+	mlflowSamplesGen.bump(project)
 	mlflowSamplesCache.Remove(project)
 }
 
@@ -250,6 +303,10 @@ func ValidateMLflowSamplesRequest(req types.MLflowSamplesRequest) string {
 	}
 	return ""
 }
+
+// ErrNotDSProject: the project named in a request is not a Data Science
+// project.
+var ErrNotDSProject = errors.New("not a Data Science project")
 
 // isDSProject reports whether project is a Data Science project (the
 // projects the Environment page lists).
@@ -337,8 +394,13 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 			failed = append(failed, name)
 			stepCode := sampleErrorCode(err)
 			var refusal *sampleRefusal
-			if errors.As(err, &refusal) {
+			switch {
+			case errors.As(err, &refusal):
 				stepCode = "not_managed"
+			case errors.Is(err, errNoDemoGenerator), errors.Is(err, errNoMCPRegistry), errors.Is(err, errNoSkillRegistry):
+				stepCode = "unsupported"
+			case errors.Is(err, errMLflowRestarting):
+				stepCode = "in_progress"
 			}
 			code = firstNonEmpty(code, stepCode)
 			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err)), ErrorCode: stepCode})

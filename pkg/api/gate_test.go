@@ -454,6 +454,34 @@ func TestRateLimitSlotReturnedOnFailure(t *testing.T) {
 	}
 }
 
+// The tool's own one-change-per-30-seconds limit has its own errorCode (the
+// UI showed it as the OpenShift API throttling) and says the real wait in
+// Retry-After.
+func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
+	setupDevMode(t)
+	allowMutations(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	orig := mutationLimiter
+	mutationLimiter = newRateLimiter(30 * time.Second)
+	mutationLimiter.now = func() time.Time { return now }
+	t.Cleanup(func() { mutationLimiter = orig })
+	h := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	w := httptest.NewRecorder()
+	h(w, postJSON("/api/once", "tok", "{}"))
+	if w.Code != 200 {
+		t.Fatalf("first: %d", w.Code)
+	}
+	now = now.Add(12*time.Second + 300*time.Millisecond)
+	w = httptest.NewRecorder()
+	h(w, postJSON("/api/once", "tok", "{}"))
+	var body struct{ Error, ErrorCode string }
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusTooManyRequests || body.ErrorCode != "user_rate_limited" || w.Header().Get("Retry-After") != "18" ||
+		!strings.Contains(body.Error, "one change per user every 30 seconds on this action") || !strings.Contains(body.Error, "try again in 18 seconds") {
+		t.Errorf("got %d Retry-After=%q %+v", w.Code, w.Header().Get("Retry-After"), body)
+	}
+}
+
 func TestRateLimiterWindow(t *testing.T) {
 	rl := newRateLimiter(20 * time.Millisecond)
 	slot, ok := rl.tryAcquire("a")

@@ -248,6 +248,24 @@ const scenarios = {
     w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { training: "foreign", "mcp-server": "foreign", skill: "foreign" });
   },
   "env-samples-reader": (w) => { scenarios["env-samples"](w); w.canMutate = false; },
+  // The demo: an MLflow UI demo (foreign), the old 2Gi limit on this tool's
+  // MLflow and on someone else's, and the per-user limit on a change.
+  "env-samples-demo-foreign": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "foreign", training: "present" });
+  },
+  "env-samples-demo-lowmem": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    const st = F.mlflowSamples("dev-project", { training: "present" });
+    st.samples[0] = { ...st.samples[0], ...F.DEMO_LOW_MEMORY };
+    w.samples.mlflow["dev-project"] = st;
+  },
+  "env-samples-demo-lowmem-foreign": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { training: "present" });
+    w.samples.mlflow["dev-project"].samples[0] = F.sampleStatus("dev-project", "genai-demo", "unsupported", { message: F.DEMO_LOW_MEMORY_FOREIGN });
+  },
+  "env-samples-rate-limited": (w) => { scenarios["env-samples-new"](w); w.samplesRateLimited = true; },
   // Models: every state of the gateway and the model, one scenario each.
   "env-models-ready": (w) => {
     w.resources.inferenceGateway = F.gatewayStates.ready(["dev-project/qwen25-05b-instruct"]);
@@ -644,7 +662,7 @@ async function maasStream(req, res) {
 function mlflowSamplesOf(project) {
   const m = world.resources.mlflow;
   if (!m?.deployed) return { project, available: false, reason: "MLflow is not deployed. Set it up first.", samples: [] };
-  if (!m.ready) return { project, available: false, reason: "MLflow is not ready yet.", samples: [] };
+  if (!m.ready) return { project, available: false, reason: "MLflow is not ready.", samples: [] };
   return world.samples.mlflow[project] ?? F.mlflowSamples(project);
 }
 
@@ -752,6 +770,11 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });
+  }
+  if (key === "POST /api/resources/samples/mlflow/stream" && world.samplesRateLimited) {
+    // pkg/api withMutationAuth: the tool's own per-user limit.
+    res.setHeader("Retry-After", "18");
+    return json(res, 429, { error: "This tool allows one change per user every 30 seconds on this action. Nothing was changed; try again in 18 seconds.", errorCode: "user_rate_limited" });
   }
   if (key === "POST /api/resources/samples/mlflow/stream") return mlflowSamplesStream(req, res);
   if (key === "POST /api/resources/pipeline-server/setup") {

@@ -106,11 +106,37 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 			t.Fatalf("%s %v: %s\n%s", s.action, s.samples, msg, stepMessages(st))
 		}
 	}
+	// A model without its alias: Add reads its versions (model-versions/get).
+	env.mlflow.models[trainingModel].aliases = map[string]string{}
+	if ok, msg, _ := env.run(t, "add", SampleTraining); !ok {
+		t.Fatal(msg)
+	}
+	// A feature this generator lacks: its tag is dropped (delete-experiment-tag).
+	env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"] = "0"
 	env.mlflow.mlflowDeleteDemo()
 	if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok { // restore + reset
 		t.Fatal(msg)
 	}
 	env.status(t)
+	// Registry entries someone creates while the tool adds them: the tool
+	// lists their versions and deletes the one it added.
+	if ok, msg, _ := env.run(t, "remove", SampleMCPServer, SampleSkill); !ok {
+		t.Fatal(msg)
+	}
+	env.mlflow.onRequest = func(method, path string) {
+		if method == "POST" && strings.HasSuffix(path, "/versions") {
+			if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mcpSampleName] == nil {
+				env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: "alice"}
+			}
+			if strings.Contains(path, "/skills/") && env.mlflow.skills[skillSampleName] == nil {
+				env.mlflow.skills[skillSampleName] = &fakeSkill{tags: map[string]string{}, createdBy: "alice"}
+			}
+		}
+	}
+	if ok, msg, _ := env.run(t, "add", SampleMCPServer, SampleSkill); ok {
+		t.Fatalf("claimed a registry entry someone else created: %s", msg)
+	}
+	env.mlflow.onRequest = nil
 
 	var unused []string
 	for _, rule := range mlflowFakeRules {

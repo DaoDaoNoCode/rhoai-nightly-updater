@@ -659,7 +659,9 @@ export function sampleStatus(project, id, state, extra = {}) {
       else { s.actions = ["add", "remove"]; s.missing = ["version"]; }
       break;
     case "foreign":
-      s.message = `${foreign} exists but was not created by this tool (it lacks the ${SAMPLE_MARKER} tag), so it is left unchanged.`;
+      s.message = id === "genai-demo"
+        ? "Experiment 'MLflow Demo' holds MLflow's demo, made in the MLflow UI or by someone else, not by this tool. Regenerating it deletes traces and evaluations in that experiment, whoever logged them, so this tool leaves it alone: regenerate or delete it in the MLflow UI."
+        : `${foreign} exists but was not created by this tool (it lacks the ${SAMPLE_MARKER} tag), so it is left unchanged.`;
       break;
     case "unsupported":
       s.message = id === "skill" ? "This MLflow has no Skill Registry." : "This MLflow has no MCP Server Registry.";
@@ -670,6 +672,13 @@ export function sampleStatus(project, id, state, extra = {}) {
   }
   return { ...s, ...extra };
 }
+
+/** The demo on an MLflow CR with the 2Gi limit earlier versions set (pkg/cluster demoStatus). */
+export const DEMO_LOW_MEMORY = {
+  message: "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR mlflow, so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready.",
+  repair: "MLflow CR mlflow: spec.resources (requests 500m/1Gi, limits 2/2Gi, set by an earlier version of this tool) is removed, so the operator's defaults (limits 4 CPU / 3Gi) apply. MLflow restarts, and the demo is not generated in this run: add it again once MLflow is ready.",
+};
+export const DEMO_LOW_MEMORY_FOREIGN = "MLflow's memory limit is 2Gi (spec.resources of MLflow CR mlflow), and generating the demo runs MLflow out of memory. This tool did not create that MLflow, so it does not change the limit: raise it, or remove spec.resources so the operator's defaults (3Gi) apply.";
 
 /** The MLflow samples of a project: states maps a sample id to its state (absent when not named). */
 export const mlflowSamples = (project, states = {}) => ({

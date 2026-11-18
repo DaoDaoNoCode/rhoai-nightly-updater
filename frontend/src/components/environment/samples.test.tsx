@@ -203,6 +203,25 @@ describe("MLflow tab: Sample data", () => {
     expect(api.bodies["POST /api/resources/samples/mlflow/stream"]).toEqual([{ project: "dev", action: "regenerate", samples: ["genai-demo"] }]);
   });
 
+  it("on an MLflow with the old 2Gi limit, the demo's confirmation says the limit is removed first and the demo waits", async () => {
+    const REPAIR = "MLflow CR mlflow: spec.resources (requests 500m/1Gi, limits 2/2Gi, set by an earlier version of this tool) is removed, so the operator's defaults (limits 4 CPU / 3Gi) apply. MLflow restarts, and the demo is not generated in this run: add it again once MLflow is ready.";
+    const api = stubApi({
+      "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/samples/mlflow": mlflowSamples([sample("genai-demo", "absent", { message: "MLflow still has the 2Gi memory limit an earlier version of this tool set.", repair: REPAIR })]),
+      "POST /api/resources/samples/mlflow/stream": sse({ step: "operation_complete", status: "success", message: "ok", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=mlflow&project=dev");
+    await tick();
+    fireEvent.click(within(row("Agent and prompt demo")).getByRole("button", { name: "Add the agent and prompt demo" }));
+    await tick();
+    const dialog = screen.getByRole("dialog", { name: /Add the agent and prompt demo to dev\?/ });
+    expect(dialog).toHaveTextContent("MLflow's 2Gi memory limit, which an earlier version of this tool set, is removed: MLflow restarts and the demo is not generated in this run");
+    expect(dialog).toHaveTextContent(REPAIR);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    await tick();
+    expect(api.bodies["POST /api/resources/samples/mlflow/stream"]).toEqual([{ project: "dev", action: "add", samples: ["genai-demo"] }]);
+  });
+
   it("a row shows its operation while it runs, and every action says why it waits", async () => {
     const stream = sseResponse();
     stubApi({
@@ -235,7 +254,7 @@ describe("MLflow tab: Sample data", () => {
     stubApi({
       "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/samples/mlflow": mlflowSamples([sample("training", "absent")]),
-      "POST /api/resources/samples/mlflow/stream": () => jsonResponse({ error: "Too many requests. Please wait 30 seconds before retrying.", errorCode: "rate_limited" }, 429),
+      "POST /api/resources/samples/mlflow/stream": () => jsonResponse({ error: "This tool allows one change per user every 30 seconds on this action. Nothing was changed; try again in 18 seconds.", errorCode: "user_rate_limited" }, 429),
     });
     renderAt("/test-resources?tab=mlflow&project=dev");
     await tick();
@@ -243,7 +262,12 @@ describe("MLflow tab: Sample data", () => {
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: /Add the training experiment and registered model to dev\?/ })).getByRole("button", { name: "Add" }));
     await tick();
-    expect(screen.getByRole("dialog", { name: "Add the training experiment and registered model to dev" })).toHaveTextContent("Too many requests. Please wait 30 seconds before retrying.");
+    const runDialog = screen.getByRole("dialog", { name: "Add the training experiment and registered model to dev" });
+    expect(runDialog).toHaveTextContent("This tool allows one change per user every 30 seconds on this action. Nothing was changed; try again in 18 seconds.");
+    // A warning that nothing ran, not a failure of the change.
+    expect(runDialog).toHaveTextContent("Not started: wait before repeating this change");
+    expect(runDialog).not.toHaveTextContent(": stopped");
+    expect(runDialog.querySelector(".pf-m-warning")).not.toBeNull();
   });
 
   it("read-only: every action is disabled with the reason shown", async () => {
@@ -284,7 +308,7 @@ describe("MLflow tab: Sample data", () => {
     stubApi({
       "/api/resources/status": status(), "/api/resources/projects": { projects: ["dev", "other"] },
       "/api/resources/samples/mlflow": (url: string) => url.includes("project=other")
-        ? jsonResponse(mlflowSamples([], { project: "other", available: false, reason: "MLflow reports no https address (status.url) yet." }))
+        ? jsonResponse(mlflowSamples([], { project: "other", available: false, reason: "This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work." }))
         : fail ? jsonResponse({ error: "Cannot read the MLflow samples: timeout", errorCode: "network" }, 503) : jsonResponse(mlflowSamples([sample("training", "absent")])),
     });
     renderAt("/test-resources?tab=mlflow&project=dev");
@@ -297,7 +321,7 @@ describe("MLflow tab: Sample data", () => {
     expect(within(row("Training experiment and registered model")).getByText("Not added")).toBeInTheDocument();
     cleanupAndRender("/test-resources?tab=mlflow&project=other");
     await tick();
-    expect(within(samplesSection()).getByText("MLflow reports no https address (status.url) yet.")).toBeInTheDocument();
+    expect(within(samplesSection()).getByText("This MLflow reports no https address in its CR (status.url), which sample data needs: it is not supported on this MLflow release. The MLflow link above may still work.")).toBeInTheDocument();
   });
 
   it("without a project, asks for one", async () => {

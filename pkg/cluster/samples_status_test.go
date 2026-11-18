@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -17,11 +18,13 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 	}{
 		{"not deployed", "", "not deployed", false},
 		{"not ready", `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`, "not ready", true},
-		{"no url", `{"conditions":[{"type":"Available","status":"True"}]}`, "no https address", true},
-		{"http url", `{"url":"http://x/mlflow","conditions":[{"type":"Available","status":"True"}]}`, "no https address", true},
+		// Plain words: a release without status.url never gets one, so no "yet".
+		{"no url", `{"conditions":[{"type":"Available","status":"True"}]}`, "not supported on this MLflow release", true},
+		{"http url", `{"url":"http://x/mlflow","conditions":[{"type":"Available","status":"True"}]}`, "not supported on this MLflow release", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
+			f.putJSON("/api/v1/namespaces/"+fakeProject, `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
 			mlflowSamplesCache.Remove(fakeProject)
 			if tc.deploy {
 				putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, tc.status)
@@ -30,7 +33,7 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st.Available || !strings.Contains(st.Reason, tc.want) || len(st.Samples) != 0 {
+			if st.Available || !strings.Contains(st.Reason, tc.want) || strings.Contains(st.Reason, "yet") || len(st.Samples) != 0 {
 				t.Errorf("got %+v", st)
 			}
 			mlflowSamplesCache.Remove(fakeProject)
@@ -55,6 +58,21 @@ func TestMLflowSamplesStatus_AllAbsentAndHeaders(t *testing.T) {
 	}
 }
 
+// The status reads MLflow with the ServiceAccount's token, so it serves
+// only Data Science projects, like the samples operations.
+func TestMLflowSamplesStatus_OnlyDSProjects(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.k8s.putJSON("/api/v1/namespaces/openshift-config", `{"metadata":{},"status":{"phase":"Active"}}`)
+	mlflowSamplesCache.Remove("openshift-config")
+	st, err := GetMLflowSamplesStatus(env.c, "openshift-config")
+	if !errors.Is(err, ErrNotDSProject) || st != nil {
+		t.Errorf("got %+v, %v; want ErrNotDSProject", st, err)
+	}
+	if len(env.mlflow.requests) != 0 {
+		t.Errorf("MLflow was called: %v", env.mlflow.requests)
+	}
+}
+
 func TestMLflowSamplesStatus_IsCached(t *testing.T) {
 	env := newSamplesEnv(t)
 	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
@@ -73,6 +91,33 @@ func TestMLflowSamplesStatus_IsCached(t *testing.T) {
 	}
 	if len(env.mlflow.requests) == n {
 		t.Error("InvalidateSamplesStatus did not drop the cache")
+	}
+}
+
+// A samples operation that ends while a status read is under way drops the
+// cache; the read must not put its older answer back for the TTL.
+func TestMLflowSamplesStatus_ReadDuringInvalidationIsNotCached(t *testing.T) {
+	env := newSamplesEnv(t)
+	var once sync.Once
+	env.mlflow.onRequest = func(string, string) { once.Do(func() { InvalidateSamplesStatus(fakeProject) }) }
+	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+		t.Fatal(err)
+	}
+	env.mlflow.mu.Lock()
+	n := len(env.mlflow.requests)
+	env.mlflow.mu.Unlock()
+	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.mlflow.requests) == n {
+		t.Error("the read that overlapped an invalidation was cached")
+	}
+	n = len(env.mlflow.requests)
+	if _, err := GetMLflowSamplesStatus(env.c, fakeProject); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.mlflow.requests) != n {
+		t.Error("a read without an invalidation was not cached")
 	}
 }
 
@@ -100,6 +145,7 @@ func TestMLflowSamplesStatus_Foreign(t *testing.T) {
 func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	env := newSamplesEnv(t)
 	demo := &fakeExperiment{id: "1", name: demoExperiment, stage: "active", tags: map[string]string{
+		sampleMarkerKey:                  SampleGenAIDemo,
 		demoVersionTagPrefix + "prompts": "1", demoVersionTagPrefix + "evaluation": "0", demoVersionTagPrefix + "issues": "0",
 	}}
 	env.mlflow.experiments["1"] = demo
@@ -114,10 +160,21 @@ func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "present" || !strings.Contains(s.Message, "delete it in the MLflow UI") {
 		t.Errorf("complete: %+v", s)
 	}
-	demo.tags = map[string]string{}
+	demo.tags = map[string]string{sampleMarkerKey: SampleGenAIDemo}
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "partial" {
 		t.Errorf("no tags: %+v", s)
 	}
+	// Without the marker the experiment is someone else's: the generator
+	// would delete traces in it, so no action is offered.
+	demo.tags = map[string]string{}
+	if s := env.status(t)[SampleGenAIDemo]; s.State != "foreign" || len(s.Actions) != 0 || !strings.Contains(s.Message, "not created by this tool") {
+		t.Errorf("unmarked, no versions: %+v", s)
+	}
+	demo.tags = map[string]string{demoVersionTagPrefix + "traces": "1"}
+	if s := env.status(t)[SampleGenAIDemo]; s.State != "foreign" || len(s.Actions) != 0 || !strings.Contains(s.Message, "deletes traces and evaluations in that experiment, whoever logged them") {
+		t.Errorf("MLflow UI demo: %+v", s)
+	}
+	demo.tags[sampleMarkerKey] = SampleGenAIDemo
 	demo.stage = "deleted"
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "removed" || !reflect.DeepEqual(s.Actions, []string{"add"}) {
 		t.Errorf("deleted: %+v", s)
@@ -204,8 +261,14 @@ func TestParseSampleAPIError(t *testing.T) {
 		{`{"error_code":"RESOURCE_DOES_NOT_EXIST","message":"no"}`, "RESOURCE_DOES_NOT_EXIST", "no", false, true, false},
 		{`{"error_code":"ENDPOINT_NOT_FOUND","message":"Endpoint not found."}`, "ENDPOINT_NOT_FOUND", "Endpoint not found.", true, false, false},
 		{`{"detail":"Not Found"}`, "", "Not Found", true, false, false},
-		{`{"error":"x","code":5,"message":"run not found"}`, "", "run not found", true, false, false},
-		{"Forbidden (user=system:serviceaccount:a:b, verb=get)", "", "Forbidden (user=system:serviceaccount:a:b, verb=get)", true, false, false},
+		// Neither: a 404 without MLflow's code or FastAPI's exact body says
+		// nothing about the route or the object (the gateway's empty 404
+		// while MLflow restarts).
+		{`{"error":"x","code":5,"message":"run not found"}`, "", "run not found", false, false, false},
+		{"Forbidden (user=system:serviceaccount:a:b, verb=get)", "", "Forbidden (user=system:serviceaccount:a:b, verb=get)", false, false, false},
+		{"", "", "", false, false, false},
+		{`{"detail":"Item missing"}`, "", "Item missing", false, false, false},
+		{`{"error_code":"INVALID_PARAMETER_VALUE","message":"Not Found"}`, "INVALID_PARAMETER_VALUE", "Not Found", false, false, false},
 	} {
 		e := parseSampleAPIError("MLflow", 404, []byte(tc.body))
 		if e.Code != tc.code || e.Message != tc.msg || isEndpointMissing(e) != tc.missing || isNotFound(e) != tc.notFound {

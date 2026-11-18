@@ -209,7 +209,7 @@ export type Pending =
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string }
   /** MLflow samples in a project's workspace (one request for all of them). */
-  | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[] }
+  | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
   | { kind: "setup-models"; gateway: boolean; project: string | null; releasedImage?: boolean }
   | { kind: "teardown-model"; project: string }

@@ -25,12 +25,14 @@ const RUNNING_NOTE: Record<GoalRunKind, string> = {
 const STILL: Record<GoalRunKind, string> = { setup: "Still starting", delete: "Still deleting", change: "Still in progress" };
 
 /** The outcome's variant and title, the same in the dialog and in the toast. */
-export function runOutcome(run: GoalRun): { variant: "success" | "info" | "danger"; title: string } | null {
+export function runOutcome(run: GoalRun): { variant: "success" | "info" | "warning" | "danger"; title: string } | null {
   const r = run.result;
   if (!r) return null;
   if (r.success) return { variant: "success", title: r.message };
   if (r.errorCode === "in_progress") return { variant: "info", title: STILL[run.kind] };
   if (r.errorCode === "detached") return { variant: "info", title: "Still running" };
+  // pkg/api: the tool's own one-change-per-30-seconds limit; nothing ran.
+  if (r.errorCode === "user_rate_limited") return { variant: "warning", title: "Not started: wait before repeating this change" };
   return { variant: "danger", title: `${run.title}: stopped` };
 }
 

@@ -39,6 +39,79 @@ func TestMCPSample_AddRemove(t *testing.T) {
 	}
 }
 
+// A 404 without MLflow's error body (the gateway's while MLflow restarts)
+// is not "no registry": the status cannot tell, and Remove fails instead of
+// reporting success with the entry still there.
+func TestRegistrySamples_BareNotFoundIsAnError(t *testing.T) {
+	env := newSamplesEnv(t)
+	if ok, msg, _ := env.run(t, "add", SampleMCPServer, SampleSkill); !ok {
+		t.Fatal(msg)
+	}
+	mcpGet := "GET /api/3.0/mlflow/mcp-servers/" + mcpSampleName
+	skillGet := "GET /api/3.0/mlflow/skills/" + skillSampleName
+	env.mlflow.bareNext[mcpGet], env.mlflow.bareNext[skillGet] = 404, 404
+	got := env.status(t)
+	for _, id := range []string{SampleMCPServer, SampleSkill} {
+		if got[id].State != "unknown" {
+			t.Errorf("%s status = %+v, want unknown", id, got[id])
+		}
+	}
+	env.mlflow.bareNext[mcpGet], env.mlflow.bareNext[skillGet] = 404, 404
+	ok, msg, steps := env.run(t, "remove", SampleMCPServer, SampleSkill)
+	if ok || strings.Contains(stepMessages(steps), "nothing to remove") {
+		t.Errorf("remove succeeded on a bare 404: %s\n%s", msg, stepMessages(steps))
+	}
+	if env.mlflow.mcp[mcpSampleName] == nil || env.mlflow.skills[skillSampleName] == nil {
+		t.Error("an entry was deleted")
+	}
+}
+
+// Someone creates the MCP server or skill between the tool's read and its
+// version POST: the version goes into their parent. The tool must not tag
+// (claim) it; it deletes only the version it added.
+func TestRegistrySamples_ParentCreatedMeanwhileIsNotClaimed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// theirs is what someone else creates just before the version POST.
+		mcp   *fakeMCP
+		skill *fakeSkill
+	}{
+		{"with their own version", &fakeMCP{tags: map[string]string{}, versions: map[string]string{"0.9.0": "active"}, createdBy: "alice"}, &fakeSkill{tags: map[string]string{}, versions: 1, createdBy: "alice"}},
+		{"empty, created by someone else", &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: "alice"}, &fakeSkill{tags: map[string]string{}, createdBy: "alice"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newSamplesEnv(t)
+			env.mlflow.onRequest = func(method, path string) {
+				if method != "POST" || !strings.HasSuffix(path, "/versions") {
+					return
+				}
+				if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mcpSampleName] == nil {
+					env.mlflow.mcp[mcpSampleName] = tc.mcp
+				}
+				if strings.Contains(path, "/skills/") && env.mlflow.skills[skillSampleName] == nil {
+					env.mlflow.skills[skillSampleName] = tc.skill
+				}
+			}
+			theirMCP := len(tc.mcp.versions)
+			theirSkill := tc.skill.versions
+			ok, msg, steps := env.run(t, "add", SampleMCPServer, SampleSkill)
+			if ok || !strings.Contains(msg, "not_managed") || !strings.Contains(stepMessages(steps), "Someone else created") {
+				t.Fatalf("%s\n%s", msg, stepMessages(steps))
+			}
+			srv, sk := env.mlflow.mcp[mcpSampleName], env.mlflow.skills[skillSampleName]
+			if srv == nil || srv.tags[sampleMarkerKey] != "" || len(srv.versions) != theirMCP {
+				t.Errorf("their MCP server was changed: %+v", srv)
+			}
+			if _, left := srv.versions[mcpSampleVersion]; left {
+				t.Error("the tool's MCP version was left in their server")
+			}
+			if sk == nil || sk.tags[sampleMarkerKey] != "" || sk.versions-len(sk.deleted) != theirSkill {
+				t.Errorf("their skill was changed: %+v", sk)
+			}
+		})
+	}
+}
+
 func TestMCPSample_PartialIsCompleted(t *testing.T) {
 	env := newSamplesEnv(t)
 	env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{sampleMarkerKey: SampleMCPServer}, versions: map[string]string{mcpSampleVersion: "deprecated"}}

@@ -142,7 +142,11 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
   const reason = readOnly ? READ_ONLY_SAMPLES : baseReason;
   const addReason = reason ?? (addAll.length === 0 ? bulkEmptyReason("add") : null);
   const removeReason = reason ?? (removeAll.length === 0 ? bulkEmptyReason("remove") : null);
-  const run = (action: MLflowSampleAction, ids: MLflowSampleId[]) => setPending({ kind: "mlflow-samples", project, action, samples: ids });
+  const run = (action: MLflowSampleAction, ids: MLflowSampleId[]) => {
+    // What Add or Regenerate changes first (the demo's MLflow memory limit): the confirmation names it.
+    const repairs = action === "remove" ? [] : samples.filter((s) => ids.includes(s.id) && s.repair).map((s) => s.repair!);
+    setPending({ kind: "mlflow-samples", project, action, samples: ids, ...(repairs.length ? { repairs } : {}) });
+  };
   const opHere = op?.feature === "mlflow" && op.project === project ? op : null;
 
   let body: React.ReactNode;
@@ -161,7 +165,7 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
       </Flex>
     );
   } else if (!data.available) {
-    body = <Alert variant="info" isInline component="p" title="Sample data is not available now">{data.reason}</Alert>;
+    body = <Alert variant="info" isInline component="p" title="Sample data is not available">{data.reason}</Alert>;
   } else {
     body = (
       <Stack hasGutter>

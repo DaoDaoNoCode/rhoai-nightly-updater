@@ -21,6 +21,7 @@ export function outcomeVariant(res: Pick<OperationResponse, "success" | "errorCo
     case "partial_failure":
     case "cluster_busy":
     case "lock_unavailable":
+    case "user_rate_limited":
     case "terminating":
       return "warning";
     default:
@@ -41,6 +42,7 @@ export function outcomeTitle(res: Pick<OperationResponse, "success" | "errorCode
     case "cluster_busy": return "Cluster busy";
     case "lock_lost": return "Stopped: another updater pod took over";
     case "lock_unavailable": return "Not started: try again in a few seconds";
+    case "user_rate_limited": return "Not started: wait before repeating this change";
     case "terminating": return "Still being deleted";
     case "delete_failed": return "Nothing could be deleted";
     default: return failedTitle;

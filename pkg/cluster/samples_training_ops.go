@@ -3,7 +3,9 @@ package cluster
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,16 +30,28 @@ const (
 	trainingChampionLR = "0.01"
 )
 
-// trainingRuns returns the sample's finished runs by learning rate.
-// SearchRuns is authorized as experiments list, else as a named get of each
-// requested experiment id (rules_base.py:653-656; collection_filters.py
-// 123-139, 161-174), so the named get on the sample experiment suffices.
-func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]string, error) {
+// trainingRun is one of the sample's runs: finished, or left RUNNING by an
+// Add that stopped part way (logged: its params and metrics were written,
+// which runs/log-batch does in one request).
+type trainingRun struct {
+	id       string
+	finished bool
+	logged   bool
+}
+
+// trainingRuns returns the sample's active runs by learning rate, a
+// finished run over a running one. A run without params is known by its
+// name, "lr-<rate>". SearchRuns is authorized as experiments list, else as
+// a named get of each requested experiment id (rules_base.py:653-656;
+// collection_filters.py 123-139, 161-174), so the named get on the sample
+// experiment suffices.
+func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]trainingRun, error) {
 	var out struct {
 		Runs []struct {
 			Info struct {
-				RunID  string `json:"run_id"`
-				Status string `json:"status"`
+				RunID   string `json:"run_id"`
+				RunName string `json:"run_name"`
+				Status  string `json:"status"`
 			} `json:"info"`
 			Data struct {
 				Params []mlflowTag `json:"params"`
@@ -53,16 +67,25 @@ func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]string, err
 	if err := t.api.sendJSON("POST", "/api/2.0/mlflow/runs/search", nil, req, &out); err != nil {
 		return nil, err
 	}
-	runs := map[string]string{}
+	runs := map[string]trainingRun{}
 	for _, r := range out.Runs {
-		if r.Info.Status != "FINISHED" {
+		if r.Info.Status != "FINISHED" && r.Info.Status != "RUNNING" {
 			continue
 		}
+		lr, logged := "", false
 		for _, p := range r.Data.Params {
 			if p.Key == "learning_rate" {
-				runs[p.Value] = r.Info.RunID
+				lr, logged = p.Value, true
 			}
 		}
+		if lr == "" {
+			lr, _ = strings.CutPrefix(r.Info.RunName, "lr-")
+		}
+		run := trainingRun{id: r.Info.RunID, finished: r.Info.Status == "FINISHED", logged: logged}
+		if prev, ok := runs[lr]; lr == "" || (ok && prev.finished) {
+			continue
+		}
+		runs[lr] = run
 	}
 	return runs, nil
 }
@@ -72,7 +95,6 @@ func (t *mlflowTarget) trainingRuns(experimentID string) (map[string]string, err
 // per batch), runs/update FINISHED. All three are experiments update on the
 // sample experiment (rules_base.py:403-431).
 func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor float64) (string, error) {
-	start := time.Now().UnixMilli()
 	var created struct {
 		Run struct {
 			Info struct {
@@ -83,13 +105,33 @@ func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor f
 	err := t.api.sendJSON("POST", "/api/2.0/mlflow/runs/create", nil, map[string]interface{}{
 		"experiment_id": experimentID,
 		"run_name":      "lr-" + lr,
-		"start_time":    start,
+		"start_time":    time.Now().UnixMilli(),
 		"tags":          []mlflowTag{{Key: sampleMarkerKey, Value: SampleTraining}},
 	}, &created)
 	if err != nil {
 		return "", err
 	}
 	runID := created.Run.Info.RunID
+	return runID, t.finishTrainingRun(trainingRun{id: runID}, lr, decay, floor)
+}
+
+// finishTrainingRun logs the run's params and metrics unless they are
+// logged already, then marks it FINISHED. It completes a run an earlier Add
+// left RUNNING, so a retry adds no second run for the same rate.
+func (t *mlflowTarget) finishTrainingRun(run trainingRun, lr string, decay, floor float64) error {
+	start := time.Now().UnixMilli()
+	runID := run.id
+	if !run.logged {
+		if err := t.logTrainingRun(runID, lr, decay, floor, start); err != nil {
+			return err
+		}
+	}
+	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/update", nil, map[string]interface{}{
+		"run_id": runID, "status": "FINISHED", "end_time": start + trainingEpochs*1000,
+	}, nil)
+}
+
+func (t *mlflowTarget) logTrainingRun(runID, lr string, decay, floor float64, start int64) error {
 	var metrics []map[string]interface{}
 	for step := 0; step < trainingEpochs; step++ {
 		loss := floor + (trainingStartLoss-floor)*math.Exp(-decay*float64(step))
@@ -99,19 +141,44 @@ func (t *mlflowTarget) createTrainingRun(experimentID, lr string, decay, floor f
 			map[string]interface{}{"key": "loss", "value": math.Round(loss*1e4) / 1e4, "timestamp": ts, "step": step},
 			map[string]interface{}{"key": "accuracy", "value": math.Round(accuracy*1e4) / 1e4, "timestamp": ts, "step": step})
 	}
-	err = t.api.sendJSON("POST", "/api/2.0/mlflow/runs/log-batch", nil, map[string]interface{}{
+	return t.api.sendJSON("POST", "/api/2.0/mlflow/runs/log-batch", nil, map[string]interface{}{
 		"run_id":  runID,
 		"params":  []mlflowTag{{Key: "learning_rate", Value: lr}, {Key: "epochs", Value: strconv.Itoa(trainingEpochs)}},
 		"metrics": metrics,
 	}, nil)
-	if err != nil {
-		return "", err
-	}
-	err = t.api.sendJSON("POST", "/api/2.0/mlflow/runs/update", nil, map[string]interface{}{
-		"run_id": runID, "status": "FINISHED", "end_time": start + trainingEpochs*1000,
-	}, nil)
-	return runID, err
 }
+
+// modelVersionRuns maps the run ids of the sample model's versions to the
+// version, read one by one with model-versions/get (registeredmodels get
+// on the model's name, rules_base.py:738-741) until MLflow answers
+// RESOURCE_DOES_NOT_EXIST. Versions are numbered from 1 per model; a gap
+// left by a deleted version ends the scan early, which only costs a new
+// version.
+func (t *mlflowTarget) modelVersionRuns() (map[string]string, error) {
+	out := map[string]string{}
+	for v := 1; v <= maxSampleModelVersions; v++ {
+		var mv struct {
+			ModelVersion struct {
+				Version string `json:"version"`
+				RunID   string `json:"run_id"`
+			} `json:"model_version"`
+		}
+		err := t.api.sendJSON("GET", "/api/2.0/mlflow/model-versions/get", url.Values{"name": {trainingModel}, "version": {strconv.Itoa(v)}}, nil, &mv)
+		if isNotFound(err) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if _, seen := out[mv.ModelVersion.RunID]; !seen {
+			out[mv.ModelVersion.RunID] = mv.ModelVersion.Version
+		}
+	}
+	return out, nil
+}
+
+// maxSampleModelVersions bounds the scan: the sample makes two versions.
+const maxSampleModelVersions = 20
 
 // createModelVersion registers runID's (absent) model as a new version. The
 // server only checks that the runs:/ URI names run_id (handlers.py:
@@ -183,15 +250,28 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	runIDs := map[string]string{}
 	for _, spec := range trainingRunSpecs {
-		if _, ok := runs[spec.lr]; ok {
+		run, ok := runs[spec.lr]
+		switch {
+		case ok && run.finished:
+			runIDs[spec.lr] = run.id
+			continue
+		case ok:
+			// Left RUNNING by an earlier Add that stopped: complete it rather
+			// than log a second run for the same rate.
+			if err := t.finishTrainingRun(run, spec.lr, spec.decay, spec.floor); err != nil {
+				return "", fmt.Errorf("run lr-%s: %w", spec.lr, err)
+			}
+			runIDs[spec.lr] = run.id
+			log("Completed run lr-" + spec.lr + ", left running by an earlier Add")
 			continue
 		}
 		id, err := t.createTrainingRun(expID, spec.lr, spec.decay, spec.floor)
 		if err != nil {
 			return "", fmt.Errorf("run lr-%s: %w", spec.lr, err)
 		}
-		runs[spec.lr] = id
+		runIDs[spec.lr] = id
 		log("Logged run lr-" + spec.lr + " (" + strconv.Itoa(trainingEpochs) + " steps of loss and accuracy)")
 	}
 
@@ -217,10 +297,25 @@ func addTraining(t *mlflowTarget, log func(string)) (string, error) {
 		}
 	}
 	if model == nil || !model.hasAlias(trainingAlias) {
-		if _, err := t.createModelVersion(runs[trainingV1LR], trainingV1LR); err != nil {
+		// A model that existed before this Add may hold the versions an
+		// earlier Add registered before it stopped: reuse those whose run
+		// matches, so a retry adds no extra versions.
+		versions := map[string]string{}
+		if model != nil {
+			if versions, err = t.modelVersionRuns(); err != nil {
+				return "", err
+			}
+		}
+		version := func(lr string) (string, error) {
+			if v, ok := versions[runIDs[lr]]; ok {
+				return v, nil
+			}
+			return t.createModelVersion(runIDs[lr], lr)
+		}
+		if _, err := version(trainingV1LR); err != nil {
 			return "", err
 		}
-		v, err := t.createModelVersion(runs[trainingChampionLR], trainingChampionLR)
+		v, err := version(trainingChampionLR)
 		if err != nil {
 			return "", err
 		}

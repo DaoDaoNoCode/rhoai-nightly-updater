@@ -51,6 +51,9 @@ function describeErrorRaw(e: unknown, genericTitle: string): ErrorDescription {
       return { title: "Cluster busy", body: clusterBusyBody(err), hint: "Nothing was changed. Wait for it to finish, then try again.", variant: "warning" };
     case "rate_limited":
       return { title: "The OpenShift API is throttling requests", body: err.message, hint: "Wait a minute, then retry.", variant: "warning" };
+    case "user_rate_limited":
+      // pkg/api: the tool's own limit; the message says the wait (its Retry-After).
+      return { title: "Wait before repeating this change", body: err.message, variant: "warning" };
     case "shutting_down":
       return { title: "The updater is restarting", body: err.message, hint: "Retry in a minute.", variant: "warning" };
     case "lock_unavailable":

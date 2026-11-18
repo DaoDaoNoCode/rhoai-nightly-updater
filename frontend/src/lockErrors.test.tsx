@@ -10,6 +10,17 @@ import { jsonResponse } from "./test/utils";
 
 const MESSAGE = "Cannot verify that no other updater pod is running an operation (the operation lock could not be read or written). Nothing was changed; try again.";
 
+describe("user_rate_limited (the tool's own one-change-per-30-seconds limit)", () => {
+  const LIMIT = "This tool allows one change per user every 30 seconds on this action. Nothing was changed; try again in 18 seconds.";
+  it("names the tool's limit and the wait, not the OpenShift API", () => {
+    const d = describeError(new ApiError({ status: 429, errorCode: "user_rate_limited", message: LIMIT }));
+    expect(d).toMatchObject({ title: "Wait before repeating this change", body: LIMIT, variant: "warning" });
+    expect(d.title).not.toMatch(/OpenShift|throttl/);
+    expect(outcomeVariant({ success: false, errorCode: "user_rate_limited" })).toBe("warning");
+    expect(outcomeTitle({ success: false, errorCode: "user_rate_limited", message: LIMIT })).toBe("Not started: wait before repeating this change");
+  });
+});
+
 describe("lock_unavailable (the backend fails closed on the cross-pod lock)", () => {
   it("is a retryable warning, never a success", () => {
     const d = describeError(new ApiError({ status: 503, errorCode: "lock_unavailable", message: MESSAGE }));

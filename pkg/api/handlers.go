@@ -119,10 +119,21 @@ type rateLimiter struct {
 	mu     sync.Mutex
 	users  map[string]time.Time // key -> time the slot was taken
 	window time.Duration
+	now    func() time.Time // tests replace it
 }
 
 func newRateLimiter(window time.Duration) *rateLimiter {
-	return &rateLimiter{users: map[string]time.Time{}, window: window}
+	return &rateLimiter{users: map[string]time.Time{}, window: window, now: time.Now}
+}
+
+// retryAfter is how long until key's slot frees, rounded up to whole
+// seconds (at least 1) for the Retry-After header.
+func (rl *rateLimiter) retryAfter(key string) int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	wait := rl.window - rl.now().Sub(rl.users[key])
+	secs := int((wait + time.Second - 1) / time.Second)
+	return max(1, min(secs, int(rl.window/time.Second)))
 }
 
 // mutationLimiter is the package-level rate limiter for mutation endpoints.
@@ -133,7 +144,7 @@ var mutationLimiter = newRateLimiter(30 * time.Second)
 func (rl *rateLimiter) tryAcquire(key string) (time.Time, bool) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	now := time.Now()
+	now := rl.now()
 	if last, ok := rl.users[key]; ok && now.Sub(last) < rl.window {
 		return time.Time{}, false
 	}
@@ -187,9 +198,12 @@ func withMutationAuth(fn func(c *cluster.Client, w http.ResponseWriter, r *http.
 		rateLimitKey := username + ":" + r.URL.Path
 		slot, acquired := mutationLimiter.tryAcquire(rateLimitKey)
 		if !acquired {
-			slog.Warn("rate limited", "user", username, "path", r.URL.Path)
-			w.Header().Set("Retry-After", "30")
-			writeError(w, "Too many requests. Please wait 30 seconds before retrying.", http.StatusTooManyRequests, "rate_limited")
+			// The tool's own limit, not the OpenShift API's throttling
+			// ("rate_limited"): its own errorCode and the real wait.
+			wait := mutationLimiter.retryAfter(rateLimitKey)
+			slog.Warn("rate limited", "user", username, "path", r.URL.Path, "retryAfter", wait)
+			w.Header().Set("Retry-After", strconv.Itoa(wait))
+			writeError(w, fmt.Sprintf("This tool allows one change per user every %d seconds on this action. Nothing was changed; try again in %d %s.", int(mutationLimiter.window/time.Second), wait, map[bool]string{true: "second", false: "seconds"}[wait == 1]), http.StatusTooManyRequests, "user_rate_limited")
 			return
 		}
 
@@ -1441,6 +1455,10 @@ var HandleMLflowSamplesStatus = withAuth(func(c *cluster.Client, w http.Response
 		return
 	}
 	st, err := cluster.GetMLflowSamplesStatus(c, project)
+	if errors.Is(err, cluster.ErrNotDSProject) {
+		writeError(w, "Cannot read the MLflow samples: "+err.Error(), http.StatusBadRequest, "validation")
+		return
+	}
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
 		writeError(w, "Cannot read the MLflow samples: "+err.Error(), code, errorCode)
