@@ -250,6 +250,9 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		if secretValue(t, f, secretPath(ps[0], dspaSecretName), s3AccessKeyField) != newID || secretValue(t, f, secretPath(ps[0], dspaSecretName), s3SecretKeyField) != newKey {
 			t.Errorf("%s has no credentials secret with the new storage's keys", ps[0])
 		}
+		// Owned by its pipeline server, so whoever deletes the server (the
+		// dashboard too) deletes it.
+		assertOwnedByDSPA(t, f, secretPath(ps[0], dspaSecretName), ps[0], ps[1])
 	}
 	labels, _ := ensureMap(f.get(dspaPath("juntao-test", legacyDSPAName)), "metadata")["labels"].(map[string]interface{})
 	if labels[managedByLabelKey] != managedByLabelValue {

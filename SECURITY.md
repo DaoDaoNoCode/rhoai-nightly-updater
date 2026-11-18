@@ -44,7 +44,7 @@ Token rules (pkg/api/identity.go, handlers.go):
 | What | Verbs | Limited to names? |
 |---|---|---|
 | Secrets | `create` | no (pipeline projects are user-chosen) |
-| Secrets | `get patch delete` | `seaweedfs-s3-credentials`; `seaweedfs-migrate-source` (Migrate storage's copy Job, owned by it); `nightly-dspa-s3` (`get delete patch`); the earlier storage's `minio-secret` and legacy `dashboard-dspa-secret` (`get delete`) |
+| Secrets | `get patch delete` | `seaweedfs-s3-credentials`; `seaweedfs-migrate-source` (Migrate storage's copy Job, owned by it); `nightly-dspa-s3` (`get delete patch`; `delete` is also what lets setup and Migrate storage make the pipeline server its owner: OwnerReferencesPermissionEnforcement allows changing `ownerReferences` only to who may delete the object); the earlier storage's `minio-secret` and legacy `dashboard-dspa-secret` (`get delete`) |
 | Namespaces | `get list create`; `patch`; `delete` | `patch` only `redhat-ods-operator`; `delete` only `minio` (the earlier storage's namespace, at the end of Migrate storage) and `seaweedfs` (at the end of the storage's Tear down), each only when the user ticks it, offered only when it carries the tool label and the tool's managers wrote it (UID precondition) |
 | Deployments | `get list patch create`; `delete` | `delete` only `seaweedfs` (the S3 storage, and the SeaweedFS earlier versions ran in namespace `minio`) and `minio` (MinIO of earlier versions) |
 | Services | `get create`; `patch delete` | `patch delete` only `seaweedfs-s3`; `delete` only `minio-service` (the earlier storage's) |

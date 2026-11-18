@@ -1077,14 +1077,11 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 				},
 			}}},
 		})
-		plans = append(plans, &plan{
-			d: d, patch: patch, secretMeta: secretMeta, secretFound: secretFound,
-			secret: map[string]interface{}{
-				"apiVersion": "v1", "kind": "Secret",
-				"metadata":   map[string]interface{}{"name": dspaSecretName, "namespace": project, "labels": toolLabels()},
-				"stringData": map[string]interface{}{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
-			},
-		})
+		// The same Secret setup writes, owned by the DSPA it is for (the DSPA
+		// exists here), so it goes with the DSPA whoever deletes it.
+		secret := dspaS3Secret(project, keys)
+		setDSPAOwner(secret, d.Meta.Name, d.Meta.UID)
+		plans = append(plans, &plan{d: d, patch: patch, secretMeta: secretMeta, secretFound: secretFound, secret: secret})
 	}
 	writeSecret := func(p *plan, dryRun bool) error {
 		project := p.d.Meta.Namespace

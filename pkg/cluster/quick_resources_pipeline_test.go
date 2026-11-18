@@ -285,6 +285,73 @@ func TestSetupPipelineServer_DashboardSettingsWhenTheCRDHasThem(t *testing.T) {
 	}
 }
 
+// assertOwnedByDSPA checks that the object at path has exactly one owner
+// reference, to the DSPA ns/name by its current UID, without
+// blockOwnerDeletion or controller: the garbage collector deletes it with
+// the DSPA, and setting it needs no rights on the DSPA
+// (OwnerReferencesPermissionEnforcement checks blockOwnerDeletion only).
+func assertOwnedByDSPA(t *testing.T, f *resourceFake, path, ns, name string) {
+	t.Helper()
+	obj := f.get(path)
+	if obj == nil {
+		t.Fatalf("%s missing", path)
+	}
+	uid := ensureMap(f.get(dspaPath(ns, name)), "metadata")["uid"]
+	refs, _ := ensureMap(obj, "metadata")["ownerReferences"].([]interface{})
+	if len(refs) != 1 {
+		t.Fatalf("%s ownerReferences = %v", path, refs)
+	}
+	ref := refs[0].(map[string]interface{})
+	if ref["apiVersion"] != dspaAPIGroup || ref["kind"] != "DataSciencePipelinesApplication" || ref["name"] != name || ref["uid"] != uid || uid == nil {
+		t.Errorf("%s owner = %v, want DSPA %s/%s uid %v", path, ref, ns, name, uid)
+	}
+	if _, ok := ref["blockOwnerDeletion"]; ok {
+		t.Errorf("%s sets blockOwnerDeletion", path)
+	}
+	if _, ok := ref["controller"]; ok {
+		t.Errorf("%s sets controller", path)
+	}
+}
+
+// The S3 secret is owned by the DSPA, and labelled as the dashboard labels
+// its own (configurePipelinesServer/utils.ts createObjectStorageSecret with
+// assembleSecret: opendatahub.io/dashboard=true). The dashboard's Delete
+// pipeline server deletes only the secret names it generates
+// (concepts/pipelines/utils.ts deleteServer), so the owner reference is
+// what removes this one.
+func TestSetupPipelineServer_SecretOwnedByTheDSPA(t *testing.T) {
+	f, c := newResourceFake(t)
+	putManagedDSC(f)
+	putReadyManagedS3(f)
+	putDSProject(f, "proj")
+	for run := 0; run < 2; run++ {
+		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
+			t.Fatalf("run %d: %+v", run, resp)
+		}
+		assertOwnedByDSPA(t, f, secretPath("proj", dspaSecretName), "proj", dspaName)
+		labels, _ := ensureMap(f.get(secretPath("proj", dspaSecretName)), "metadata")["labels"].(map[string]interface{})
+		if labels["opendatahub.io/dashboard"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+			t.Errorf("run %d: secret labels = %v", run, labels)
+		}
+	}
+}
+
+// A failed owner write leaves a working server and says what is left to do.
+func TestSetupPipelineServer_OwnerWriteFailure(t *testing.T) {
+	f, c := newResourceFake(t)
+	putManagedDSC(f)
+	putReadyManagedS3(f)
+	putDSProject(f, "proj")
+	f.fail["PATCH "+secretPath("proj", dspaSecretName)] = 500
+	resp, _ := SetupPipelineServer(c, "proj")
+	if resp.Success || resp.ErrorCode != "partial_failure" || !strings.Contains(resp.Message, "Pipeline server created") || !strings.Contains(resp.Message, dspaSecretName) {
+		t.Fatalf("got %+v", resp)
+	}
+	if !f.has(dspaPath("proj", dspaName)) {
+		t.Error("the pipeline server must stay")
+	}
+}
+
 func TestSetupPipelineServer_Refusals(t *testing.T) {
 	cases := []struct {
 		name     string

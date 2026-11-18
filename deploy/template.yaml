@@ -159,7 +159,10 @@ objects:
         resourceNames: ["seaweedfs-migrate-source"]
         verbs: ["get", "patch", "delete"]
       # The pipeline-server S3 secret; dashboard-dspa-secret is the name
-      # older versions used, kept so their teardown still works.
+      # older versions used, kept so their teardown still works. Setup and
+      # Migrate storage make the DSPA its owner (no blockOwnerDeletion),
+      # which OwnerReferencesPermissionEnforcement allows only with delete
+      # on the Secret.
       - apiGroups: [""]
         resources: ["secrets"]
         resourceNames: ["nightly-dspa-s3", "dashboard-dspa-secret"]

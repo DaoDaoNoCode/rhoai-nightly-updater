@@ -432,17 +432,11 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	if secretFound && !secretMeta.hasToolLabel() {
 		return fail(fmt.Sprintf("Secret '%s' already exists in '%s' and was not created by this tool. It was left unchanged.", dspaSecretName, project), "not_managed", "secret exists")
 	}
-	dspaSecret := map[string]interface{}{
-		"apiVersion": "v1", "kind": "Secret",
-		"metadata": map[string]interface{}{
-			"name":      dspaSecretName,
-			"namespace": project,
-			"labels":    toolLabels(),
-		},
-		"stringData": map[string]interface{}{
-			s3AccessKeyField: keys.AccessKey,
-			s3SecretKeyField: keys.SecretKey,
-		},
+	dspaSecret := dspaS3Secret(project, keys)
+	// Owned by the DSPA once it exists (below, or now on a re-run).
+	secretOwned := dspaFound
+	if dspaFound {
+		setDSPAOwner(dspaSecret, dspaName, dspaMeta.UID)
 	}
 	// Step 3 prepares the DSPA; both writes are dry-run first (below).
 	// fieldValidation=Strict (and server-side apply, which always validates
@@ -537,6 +531,22 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		return fail(fmt.Sprintf("%s The credentials secret '%s' is in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName), code, "DSPA write failed")
 	}
 	logs = append(logs, "OK: Pipeline server "+dspaAction)
+
+	// The secret is created before the DSPA, which reads it; once the DSPA
+	// exists it becomes the secret's owner, so the garbage collector
+	// deletes the secret with the DSPA, also when the dashboard deletes it.
+	if !secretOwned {
+		logs = append(logs, fmt.Sprintf("Making pipeline server '%s' the owner of secret '%s'...", dspaName, dspaSecretName))
+		setDSPAOwner(dspaSecret, dspaName, dspaMeta.UID)
+		if _, err := writeSecret(false); err != nil {
+			recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s (secret owner not set: %v)", project, err), false)
+			return &types.OperationResponse{
+				Success: false, ErrorCode: "partial_failure", Logs: logs,
+				Message: fmt.Sprintf("Pipeline server created, but secret '%s' could not be linked to it: %v. Deleting the pipeline server in the RHOAI dashboard would leave the secret behind; Delete pipeline server in this tool removes both.", dspaSecretName, err),
+			}, nil
+		}
+		logs = append(logs, "OK: Secret owned by the pipeline server")
+	}
 	logs = append(logs, "The pipeline server will take 1-3 minutes to become ready.")
 
 	slog.Info("pipeline server setup", "project", project, "user", getUser(c))
@@ -726,6 +736,55 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 	}
 	*logs = append(*logs, "OK: Secret deleted")
 	return ""
+}
+
+// dspaS3Secret is the pipeline server's copy of the S3 keys. Besides the
+// tool's label it carries opendatahub.io/dashboard=true, as odh-dashboard's
+// own pipeline-server secret does (configurePipelinesServer/utils.ts
+// createObjectStorageSecret, assembleSecret in api/k8s/secrets.ts,
+// rhoai-3.6); without a connection-type annotation the dashboard does not
+// list it as a Connection (connectionTypeUtils.ts isConnection).
+func dspaS3Secret(project string, keys s3Keys) map[string]interface{} {
+	labels := toolLabels()
+	labels[dashboardLabelKey] = "true"
+	return map[string]interface{}{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]interface{}{
+			"name":      dspaSecretName,
+			"namespace": project,
+			"labels":    labels,
+		},
+		"stringData": map[string]interface{}{
+			s3AccessKeyField: keys.AccessKey,
+			s3SecretKeyField: keys.SecretKey,
+		},
+	}
+}
+
+// dashboardLabelKey marks objects odh-dashboard shows (KnownLabels.
+// DASHBOARD_RESOURCE).
+const dashboardLabelKey = "opendatahub.io/dashboard"
+
+// setDSPAOwner makes the DSPA name (uid) the owner of obj, a manifest in the
+// DSPA's namespace. odh-dashboard's Delete pipeline server deletes the DSPA
+// and only the secret names it generates itself (concepts/pipelines/utils.ts
+// deleteServer, rhoai-3.6); with the owner reference the garbage collector
+// deletes the tool's objects with the DSPA, whoever deletes it.
+//
+// Neither controller nor blockOwnerDeletion is set: the operator does not
+// manage these objects, and blockOwnerDeletion would need update on the
+// DSPA's finalizers. OwnerReferencesPermissionEnforcement lets a create set
+// owner references freely and an update change them only with delete on the
+// object being written (kubernetes plugin/pkg/admission/gc/gc_admission.go
+// Validate), which the tool has for these Secrets by name.
+func setDSPAOwner(obj map[string]interface{}, name, uid string) {
+	meta, _ := obj["metadata"].(map[string]interface{})
+	meta["ownerReferences"] = []interface{}{map[string]interface{}{
+		"apiVersion": dspaAPIGroup,
+		"kind":       "DataSciencePipelinesApplication",
+		"name":       name,
+		"uid":        uid,
+	}}
 }
 
 // dspaCRDName is the DataSciencePipelinesApplication CRD.
