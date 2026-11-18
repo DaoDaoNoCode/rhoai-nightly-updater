@@ -255,12 +255,13 @@ Requires prior `docker login` or `podman login` to the registry. To test your bu
 GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`; other tags run nothing):
 
 - **test** stage, all must pass, no lint exceptions:
-  - `go`: gofmt, `go vet`, `go test -race`, govulncheck;
+  - `go`: gofmt, `go mod verify`, `go vet`, `go test -race`, govulncheck;
   - `golangci-lint`;
   - `frontend`: `npm ci`, typecheck, ESLint, tests, `npm audit`, production build;
   - `release-scripts`: `scripts/test-release.sh` and `scripts/test-install.sh`;
   - `chart`: `scripts/test-chart.sh` with Helm `HELM_VERSION`, downloaded from get.helm.sh and checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together);
-  - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases).
+  - `release-guard` (tags only): `scripts/release.sh check`, see [Releases](#releases);
+  - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters; an existing tag is kept when it is a build of the same commit, and refused from another commit) and moves `:main` only while the commit is still the tip of `main`. It never touches `:latest`.
 - **Other branches**: a manual job publishes `:$CI_COMMIT_REF_SLUG`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
