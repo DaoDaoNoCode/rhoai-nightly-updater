@@ -1042,9 +1042,9 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
       commands: "oc apply -f - <<'EOF'\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cnpg-system\n---\napiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\n---\napiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: cloudnative-pg\n  namespace: cnpg-system\nspec:\n  channel: stable-v1\n  installPlanApproval: Automatic\n  name: cloudnative-pg\n  source: certified-operators\n  sourceNamespace: openshift-marketplace\nEOF" }
       : { id: "cnpg", title: "CloudNativePG operator", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`, state: "ready", message: "Version 1.27.1 runs in cnpg-system", notManaged: true },
     { id: "database", title: "Database (PostgreSQL) and maas-db-config", docUrl: `${MAAS_DOCS}install/maas-setup.md#database-setup`,
-      ...(!on ? (fresh ? { state: "missing", message: `Set up creates namespace ${MAAS_INFRA}, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does (RHOAI makes it only once MaaS is on, and the database must come first), then runs a one-instance CloudNativePG database there (development and test use).` }
-        : { state: "missing", message: `Set up runs a one-instance CloudNativePG database (development and test use) in ${MAAS_INFRA}` })
-        : tool ? { state: "ready", managedByTool: true, message: `CloudNativePG ${MAAS_INFRA}/maas-db runs (1 instance, development and test use); Secret maas-db-config set` }
+      ...(!on ? { state: "missing", message: "Not set up yet. Set up asks where MaaS keeps its API keys: your PostgreSQL, the MaaS docs' development database (one pod, ephemeral), or a persistent development database on CloudNativePG (this tool's own option, not in the MaaS docs)." }
+        : tool ? { state: "ready", managedByTool: true, message: `CloudNativePG ${MAAS_INFRA}/maas-db runs (1 instance, development and test use; not in the MaaS docs: this tool's option); Secret maas-db-config set`,
+          actions: [{ id: "change-database", label: "Change database", danger: true, summary: "Switches maas-api to another database. Every API key is lost: the new database starts empty.", changes: ["The Change database dialog lists what is created and deleted."] }] }
           : { state: "ready", notManaged: true, message: `Secret ${MAAS_INFRA}/maas-db-config exists: maas-api uses the database it names` }) },
     { id: "gateway", title: "Gateway maas-default-gateway", docUrl: `${MAAS_DOCS}install/maas-setup.md#create-gateway`,
       ...(on ? { state: "ready", message: "Programmed at a1b2c3.elb.us-east-1.amazonaws.com", managedByTool: tool, notManaged: !tool }
@@ -1065,8 +1065,31 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
     { id: "tenant", title: "Default tenant and gateway authentication", docUrl: `${MAAS_DOCS}install/maas-setup.md#maastenantconfig-cr`,
       ...(!on ? { state: "missing", message: "The operator creates it once MaaS is turned on" } : ready ? { state: "ready", message: "Tenant models-as-a-service is Ready; the gateway's authentication is enforced" } : { state: "waiting", message: "Waiting for the operator (tenant missing, configuration missing, authentication missing)" }) },
   ];
-  return parts;
+  // CloudNativePG is a part only once it is the database (pkg/cluster
+  // maasDatabaseStatus); before Set up it is one of the database choices.
+  return on ? parts : parts.filter((p) => p.id !== "cnpg");
 }
+
+/** The database choice (pkg/cluster maasDatabaseStatus): none yet, or this tool's CloudNativePG one, or someone else's. */
+export function maasDatabase(state, { fresh = false } = {}) {
+  const choices = [
+    { id: "external", plan: [`Write Secret ${MAAS_INFRA}/maas-db-config (label app=maas-api) with the connection URL you enter; nothing else is created, and your database is never changed`] },
+    { id: "development", plan: [`Run the MaaS docs' development PostgreSQL (scripts/setup-database.sh) in ${MAAS_INFRA}: Secret postgres-creds (a generated password), Deployment postgres (one pod, image registry.redhat.io/rhel9/postgresql-16@sha256:${"5".repeat(64)}, from the RHOAI operator's CSV (postgresql_16_image); no volume, so its data is lost when the pod restarts) and Service postgres, then Secret maas-db-config with its address (sslmode=disable, as the script does)`] },
+    { id: "cnpg", plan: [
+      ...(fresh ? ["Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Remove)"] : []),
+      `Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, so keys survive restarts) and write Secret ${MAAS_INFRA}/maas-db-config with its address (sslmode=require)`] },
+  ];
+  const current = state === "none" ? "" : state === "foreign" ? "adopted" : "cnpg";
+  return { current, namespace: MAAS_INFRA, default: "development", ...(current === "" ? { needed: true } : {}), ...(current === "adopted" ? {} : { choices }), ...(current === "adopted" ? { choices: [] } : {}) };
+}
+
+/** A published model's limit (pkg/types MaaSLimit), by preset. */
+export const maasLimit = (preset = "free") => ({
+  free: { preset: "free", rates: [{ limit: 100, window: "1m" }] },
+  premium: { preset: "premium", rates: [{ limit: 100000, window: "24h" }] },
+  unlimited: { preset: "unlimited", unlimited: true },
+  custom: { preset: "custom", rates: [{ limit: 500, window: "1m" }, { limit: 20000, window: "1h" }] },
+})[preset];
 
 /** What Set up would change, for the parts that are missing (pkg/cluster GetMaaSStatus setupPlan). */
 function maasSetupPlan(parts, { fresh }) {
@@ -1074,11 +1097,8 @@ function maasSetupPlan(parts, { fresh }) {
   const missing = (id) => parts.find((p) => p.id === id)?.state === "missing";
   if (missing("rhcl")) plan.push("Install Red Hat Connectivity Link 1.5.0: Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator (package rhcl-operator, channel stable-1.5, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)");
   if (missing("kuadrant")) plan.push("Create the Kuadrant CR kuadrant-system/kuadrant");
-  if (missing("cnpg")) plan.push("Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway)");
-  if (missing("database")) {
-    if (fresh) plan.push(`Create namespace ${MAAS_INFRA} (the AI gateway's infrastructure namespace; recorded, and deleted by Remove when nothing else is in it)`);
-    plan.push(`Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, for development and test) and write Secret ${MAAS_INFRA}/maas-db-config with its address`);
-  }
+  // The database's own plan is its chosen option's (maasDatabase); only the namespace is Set up's.
+  if (missing("database") && fresh) plan.push(`Create namespace ${MAAS_INFRA} (the AI gateway's infrastructure namespace, where the docs' setup-database.sh puts the database; recorded, and deleted by Remove when nothing else is in it)`);
   if (missing("gateway")) plan.push(`Create Gateway openshift-ingress/maas-default-gateway with an external load balancer at maas.${APPS} (a cloud cost while it exists), and GatewayClass openshift-default if the cluster has none`);
   if (missing("authorino-tls")) plan.push("Configure Authorino TLS as the docs' setup-authorino-tls.sh does: the serving-certificate annotation on Service authorino-authorino-authorization, TLS on the Authorino CR's listener, SSL_CERT_FILE on Deployment authorino, then restart it");
   if (missing("dsc")) plan.push(`DataScienceCluster default-dsc: ${fresh ? "aigateway.managementState Removed to Managed, " : ""}aigateway.modelsAsAService.managementState Removed to Managed (the values before are recorded, and Remove restores them)`);
@@ -1151,7 +1171,7 @@ export function maasOrphanPublication(namespace) {
 export const MAAS_IN_USE = "Others use this MaaS platform: MaaSModelRef team-a/granite-3-8b, MaaSSubscription models-as-a-service/team-a-subscription. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.";
 
 /** The MaaS status by state. */
-export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false, rhcl = state === "none" ? "1.4.3" : "1.5.0", tierPolicies = false } = {}) {
+export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false, rhcl = state === "none" ? "1.4.3" : "1.5.0", tierPolicies = false, access = { everyone: true } } = {}) {
   const parts = maasParts(state, { tls, rhcl, tierPolicies, cnpg: !noCNPG });
   const shared = ["rhcl", "kuadrant", "cnpg", "authorino-tls", "tier-policies"];
   const allReady = parts.every((p) => p.state === "ready");
@@ -1169,7 +1189,10 @@ export function maasWorld(state = "none", { tls = true, items = [], blocked = nu
     },
     parts, url: `https://maas.${APPS}`, subscription: "rhoai-nightly-updater-subscription", dashboardUrl: DASHBOARD_URL,
     ...(setupPlan.length ? { setupPlan } : {}),
-    items: items.map((i) => (i.published || allReady || !notReady ? i : { ...i, setupBlockedReason: state === "none" && !tool ? "Set up the MaaS platform first." : `The MaaS platform is not ready: ${notReady.title} (see above).` })),
+    items: items.map((i) => (i.published || allReady || !notReady ? i : { ...i, setupBlockedReason: state === "none" && !tool ? "Set up the MaaS platform first." : `The MaaS platform is not ready: ${notReady.title} (see above).` }))
+      .map((i) => (i.published && !i.partly && !i.limit ? { ...i, limit: maasLimit("free") } : i)),
+    database: maasDatabase(state, { fresh: rhcl === "missing" || noCNPG }),
+    ...(items.some((i) => i.published) ? { access } : {}),
   };
 }
 

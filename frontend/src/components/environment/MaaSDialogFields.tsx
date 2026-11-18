@@ -3,6 +3,8 @@ import {
   Alert,
   Button,
   Checkbox,
+  Flex,
+  FlexItem,
   Form,
   FormGroup,
   FormHelperText,
@@ -12,6 +14,8 @@ import {
   HelperTextItem,
   InputGroup,
   InputGroupItem,
+  Stack,
+  StackItem,
   Label,
   Radio,
   TextArea,
@@ -99,26 +103,26 @@ export const LimitFields: React.FC<{ value: LimitForm; onChange: (f: LimitForm) 
           body={value.preset === "custom" ? (
             <>
               {value.rows.map((r, i) => (
-                <InputGroup key={i} className="pf-v6-u-mb-sm">
-                  <InputGroupItem isFill>
-                    <TextInput id={`${idPrefix}-rate-${i}-limit`} aria-label={`Rate ${i + 1}: tokens`} type="number" min={1} value={r.limit} onChange={(_e, v) => setRow(i, { limit: v })} />
-                  </InputGroupItem>
-                  <InputGroupItem isPlain>tokens every</InputGroupItem>
-                  <InputGroupItem>
-                    <TextInput id={`${idPrefix}-rate-${i}-amount`} aria-label={`Rate ${i + 1}: window length`} type="number" min={1} max={9999} value={r.amount} onChange={(_e, v) => setRow(i, { amount: v })} />
-                  </InputGroupItem>
-                  <InputGroupItem>
+                <Flex key={i} className="pf-v6-u-mb-sm" gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
+                  <FlexItem>
+                    <TextInput id={`${idPrefix}-rate-${i}-limit`} aria-label={`Rate ${i + 1}: tokens`} type="number" min={1} value={r.limit} style={{ width: "14ch" }} onChange={(_e, v) => setRow(i, { limit: v })} />
+                  </FlexItem>
+                  <FlexItem>tokens every</FlexItem>
+                  <FlexItem>
+                    <TextInput id={`${idPrefix}-rate-${i}-amount`} aria-label={`Rate ${i + 1}: window length`} type="number" min={1} max={9999} value={r.amount} style={{ width: "9ch" }} onChange={(_e, v) => setRow(i, { amount: v })} />
+                  </FlexItem>
+                  <FlexItem>
                     <FormSelect id={`${idPrefix}-rate-${i}-unit`} aria-label={`Rate ${i + 1}: window unit`} value={r.unit} onChange={(_e, v) => setRow(i, { unit: v as WindowUnit })}>
                       <FormSelectOption value="s" label="seconds" />
                       <FormSelectOption value="m" label="minutes" />
                       <FormSelectOption value="h" label="hours" />
                     </FormSelect>
-                  </InputGroupItem>
-                  <InputGroupItem>
+                  </FlexItem>
+                  <FlexItem>
                     <Button variant="plain" aria-label={`Remove rate ${i + 1}`} icon={<MinusCircleIcon />} isDisabled={value.rows.length === 1}
                       onClick={() => onChange({ ...value, rows: value.rows.filter((_r, j) => j !== i) })} />
-                  </InputGroupItem>
-                </InputGroup>
+                  </FlexItem>
+                </Flex>
               ))}
               <Button variant="link" icon={<PlusCircleIcon />} isDisabled={value.rows.length >= MAX_RATES}
                 onClick={() => onChange({ ...value, rows: [...value.rows, { limit: "10000", amount: "1", unit: "h" }] })}>Add a rate</Button>
@@ -160,8 +164,8 @@ export const AudienceFields: React.FC<{ value: AudienceForm; onChange: (f: Audie
 
 /** Change database's acknowledgement: every API key is lost. */
 export const KeysLostCheck: React.FC<{ checked: boolean; onChange: (v: boolean) => void }> = ({ checked, onChange }) => (
-  <>
-    <Alert variant="danger" isInline component="p" title="Every API key is lost">The new database starts empty: everyone creates their API keys again. The models, the subscription and the access policy stay.</Alert>
-    <Checkbox id="maas-keys-lost" label="I understand that every API key stops working" isChecked={checked} onChange={(_e, v) => onChange(v)} />
-  </>
+  <Stack hasGutter>
+    <StackItem><Alert variant="danger" isInline component="p" title="Every API key is lost">The new database starts empty: everyone creates their API keys again. The models, the subscription and the access policy stay.</Alert></StackItem>
+    <StackItem><Checkbox id="maas-keys-lost" label="I understand that every API key stops working" isChecked={checked} onChange={(_e, v) => onChange(v)} /></StackItem>
+  </Stack>
 );

@@ -12,6 +12,8 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
+  HelperText,
+  HelperTextItem,
   Label,
   Stack,
   StackItem,
@@ -156,7 +158,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
               {!readOnly && <FlexItem><Button variant="link" isInline isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "maas-access" })}>Change who can use them</Button></FlexItem>}
             </Flex>
           </StackItem>
-          {(maas.access.warnings ?? []).map((w) => <StackItem key={w}><Alert variant="warning" isInline isPlain component="p" title={w} /></StackItem>)}
+          {(maas.access.warnings ?? []).map((w) => <StackItem key={w}><HelperText><HelperTextItem variant="warning">{w}</HelperTextItem></HelperText></StackItem>)}
         </Stack>
       )}
       {maas && items.length === 0 ? (
@@ -471,10 +473,10 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         title: "Change the MaaS database?", confirm: "Change database", danger: true, runTitle: "Change the MaaS database",
         summary: <Content component="p">Creates the new database, points Secret <code>maas-db-config</code> at it and restarts maas-api, then deletes the database before. Now: {databaseLabel(db.current)}.</Content>,
         choice: (
-          <>
+          <Stack hasGutter>
             <DatabaseChoice db={db} value={form} except={db.current} idPrefix="change" onChange={(f) => setPending?.({ ...pending, database: f })} />
             <KeysLostCheck checked={!!pending.confirmKeysLost} onChange={(v) => setPending?.({ ...pending, database: form, confirmKeysLost: v })} />
-          </>
+          </Stack>
         ),
         confirmDisabled: !!problem || !pending.confirmKeysLost,
         changes: [
@@ -534,11 +536,11 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         title: `Publish ${pending.model} in ${pending.project} to MaaS?`, confirm: "Publish", runTitle: `Publish ${pending.model} in ${pending.project}`,
         summary: <Content component="p">Who you choose can then call the model through MaaS with an API key, each up to the limit you choose. While it is published, the model is used through MaaS and the dashboard&apos;s playground; its direct address (the Models tab&apos;s commands) answers 404 until it is unpublished.</Content>,
         choice: (
-          <>
+          <Stack hasGutter>
             {first ? <AudienceFields value={access} idPrefix="publish" onChange={(f) => setPending?.({ ...pending, access: f, limit })} />
               : <Content component="p">Who can use it: {audienceText(m?.access)}, as for the other published models (Change who can use them changes it for all).</Content>}
             <LimitFields value={limit} idPrefix="publish" onChange={(f) => setPending?.({ ...pending, limit: f, access: first ? access : undefined })} />
-          </>
+          </Stack>
         ),
         confirmDisabled: !!limitProblem(limit) || (first && !!audienceProblem(access)),
         changes: [
