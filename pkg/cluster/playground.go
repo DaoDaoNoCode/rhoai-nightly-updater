@@ -246,6 +246,23 @@ func chatModel(capabilities []string, usecase, modelType string) bool {
 	return true
 }
 
+// markToolEmbeddingModels sets EmbeddingDimension on the project's
+// embedding models that are this tool's catalog models (its label and a
+// write by it): the playground can then use them as embedding models of
+// that dimension. Any other embedding model is left as it is; its
+// dimension is not known.
+func markToolEmbeddingModels(c *Client, project string, models []types.PlaygroundModel) {
+	for i, m := range models {
+		entry, ok := catalogEntry(m.Name)
+		if m.Name == "" || !ok || m.Source != "namespace" || m.Chat || entry.Type != modelTypeEmbedding {
+			continue
+		}
+		if obj, found, err := readToolModel(c, project, m.Name); err == nil && found && modelOwned(obj.Metadata) {
+			models[i].EmbeddingDimension = entry.EmbeddingDimension
+		}
+	}
+}
+
 // listPlaygroundModels lists the project's models (an error means the API
 // cannot be used) and its Models as a Service (any error is none: MaaS is
 // optional and may be off).
@@ -628,6 +645,9 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 		go func() {
 			defer pwg.Done()
 			models, err := api.listPlaygroundModels(project)
+			if err == nil {
+				markToolEmbeddingModels(c, project, models)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -887,8 +907,8 @@ func (p *playgroundRun) failAPI(id string, err error, activity string) (*types.O
 // checkPlayground is the setup's first step: everything the dashboard's
 // install needs, checked before anything is written. It returns the
 // models to install.
-func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]types.PlaygroundModelRef, *genAIServer, *types.OperationResponse) {
-	stop := func(msg, code, activity string) ([]types.PlaygroundModelRef, *genAIServer, *types.OperationResponse) {
+func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]types.PlaygroundModel, *genAIServer, *types.OperationResponse) {
+	stop := func(msg, code, activity string) ([]types.PlaygroundModel, *genAIServer, *types.OperationResponse) {
 		res, _ := p.fail("check", msg, code, activity)
 		return nil, nil, res
 	}
@@ -938,15 +958,16 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		msg, code := apiProblem(err)
 		return stop(msg, code, "models")
 	}
+	markToolEmbeddingModels(p.c, p.project, models)
 	// The dashboard's install checks only the models it is asked to use
 	// (rhoai-3.6 generateLlamaStackConfig), so only those must be ready.
-	var chosen []types.PlaygroundModelRef
+	var chosen []types.PlaygroundModel
 	if len(wanted) == 0 {
 		var left []string
 		for _, m := range models {
 			switch {
-			case m.Source == "namespace" && m.Ready && m.Chat:
-				chosen = append(chosen, types.PlaygroundModelRef{Name: m.Name, Source: m.Source})
+			case m.Source == "namespace" && m.Ready && (m.Chat || m.EmbeddingDimension > 0):
+				chosen = append(chosen, m)
 			case m.Source == "namespace" && m.Chat:
 				left = append(left, fmt.Sprintf("%s (%s)", m.Name, firstNonEmpty(m.Status, "not ready")))
 			}
@@ -967,18 +988,27 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 				return stop(fmt.Sprintf("The dashboard does not offer model %s in %s. Reload the page and choose again.", w.Name, p.project), "validation", "unknown model")
 			case !found.Ready:
 				return stop(fmt.Sprintf("Model %s is not ready (%s). Choose a ready model.", w.Name, found.Status), "model_not_ready", "model not ready")
-			case !found.Chat:
-				return stop(fmt.Sprintf("Model %s is an embedding model; the playground chats with chat models only.", w.Name), "validation", "embedding model")
+			case !found.Chat && found.EmbeddingDimension == 0:
+				return stop(fmt.Sprintf("Model %s is an embedding model this tool did not set up, so its dimension is not known. Add it in the dashboard's Gen AI studio, where you choose Embedding and its dimension.", w.Name), "validation", "embedding model")
 			}
-			chosen = append(chosen, w)
+			chosen = append(chosen, *found)
 		}
 	}
-	if len(chosen) == 0 {
+	chat := 0
+	for _, m := range chosen {
+		if m.Chat {
+			chat++
+		}
+	}
+	if chat == 0 {
 		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first (or choose a Models as a Service model, if you have a subscription).", p.project), "no_model", "no model")
 	}
 	names := make([]string, len(chosen))
 	for i, m := range chosen {
 		names[i] = m.Name
+		if !m.Chat {
+			names[i] += fmt.Sprintf(" (embedding, %d dimensions)", m.EmbeddingDimension)
+		}
 	}
 	msg := fmt.Sprintf("Ready to set up: %s with %s.", p.project, strings.Join(names, ", "))
 	if len(notes) > 0 {
@@ -1046,9 +1076,22 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "record")
 		}
 		body := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}}
-		list := make([]map[string]string, len(models))
+		// model_type and embedding_dimension per model: odh-dashboard
+		// rhoai-3.6 packages/gen-ai/bff internal/models/llamastack_distribution.go
+		// InstallModel ("llm" or "embedding"; embedding_dimension 128 to
+		// 3072000, checked in api/lsd_install_handler.go), and
+		// generateLlamaStackConfig (integrations/kubernetes/token_k8s_client.go)
+		// registers a namespace embedding model with
+		// AddVLLMProviderAndModel, which falls back to 128 dimensions without
+		// one (llamastack_config.go); the dashboard's own dialog asks for it
+		// (ChatbotConfigurationTableRow.tsx: "Embedding", "Embedding dimension").
+		list := make([]map[string]interface{}, len(models))
 		for i, m := range models {
-			list[i] = map[string]string{"model_name": m.Name, "model_source_type": m.Source, "model_type": "llm"}
+			list[i] = map[string]interface{}{"model_name": m.Name, "model_source_type": m.Source, "model_type": "llm"}
+			if !m.Chat {
+				list[i]["model_type"] = "embedding"
+				list[i]["embedding_dimension"] = m.EmbeddingDimension
+			}
 		}
 		body["models"] = list
 		p.step("install", "running", fmt.Sprintf("Asking the dashboard to set up the playground in %s...", p.project))
