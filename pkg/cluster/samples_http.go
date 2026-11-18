@@ -72,8 +72,13 @@ func samplesTLSConfig(getenv func(string) string, readFile func(string) ([]byte,
 // samplesHTTPClient sends the MLflow requests. The demo generator
 // took 27 s live, so a request may take up to two minutes; the operation's
 // own deadline still applies through the request context. Tests replace it.
+// It never follows a redirect: the request carries the app's token, which
+// Go's client would resend on a same-host redirect (also to plain http), so
+// a 3xx answer is returned as it is and reported as an error
+// (redirectError).
 var samplesHTTPClient = &http.Client{
-	Timeout: 2 * time.Minute,
+	Timeout:       2 * time.Minute,
+	CheckRedirect: refuseRedirect,
 	Transport: &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
 		TLSClientConfig:     samplesTLSConfig(os.Getenv, os.ReadFile),
@@ -83,6 +88,27 @@ var samplesHTTPClient = &http.Client{
 		TLSHandshakeTimeout: 10 * time.Second,
 		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 	},
+}
+
+// refuseRedirect makes the client return a 3xx answer instead of following
+// it (as fetchConfigLabels' client in image_labels.go, which strips the
+// token instead).
+func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// isRedirect: a 3xx answer, which the clients above do not follow.
+func isRedirect(status int) bool { return status >= 300 && status < 400 }
+
+// redirectMessage says, in words, that a 3xx was not followed, and where it
+// pointed (shortened; the Location holds no token).
+func redirectMessage(resp *http.Response) string {
+	loc := resp.Header.Get("Location")
+	if len(loc) > 200 {
+		loc = loc[:200] + "..."
+	}
+	if loc == "" {
+		loc = "another address"
+	}
+	return fmt.Sprintf("a redirect to %s, which this tool does not follow (its token is sent only to the address it called). Check the address the cluster reports for this server", loc)
 }
 
 // sampleAPI is one server the samples call: its base URL, the bearer token
@@ -247,6 +273,9 @@ func (a *sampleAPI) send(method, path string, query url.Values, contentType stri
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return fmt.Errorf("read the answer of %s: %w", a.server, err)
+	}
+	if isRedirect(resp.StatusCode) {
+		return &sampleAPIError{Status: resp.StatusCode, server: a.server, Message: redirectMessage(resp)}
 	}
 	if resp.StatusCode >= 300 {
 		return parseSampleAPIError(a.server, resp.StatusCode, respBody)

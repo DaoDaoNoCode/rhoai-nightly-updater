@@ -78,7 +78,8 @@ const (
 var genAIBaseURL = dashboardBaseURL
 
 // genAIHTTPClient sends the gen-ai calls; it trusts the same certificates
-// as the samples' calls to the same gateway. Tests replace it.
+// as the samples' calls to the same gateway, and does not follow redirects
+// either. Tests replace it.
 var genAIHTTPClient = samplesHTTPClient
 
 // genAIAPI is the dashboard's gen-ai API for one request.
@@ -181,6 +182,9 @@ func (a genAIAPI) call(method, path, ns string, in, out interface{}) error {
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return fmt.Errorf("read the answer of the dashboard's gen-ai API: %w", err)
+	}
+	if isRedirect(resp.StatusCode) {
+		return &genAIError{Status: resp.StatusCode, Method: method, Path: genAIAPIPrefix + path, Message: redirectMessage(resp)}
 	}
 	if resp.StatusCode >= 300 {
 		return parseGenAIError(method, genAIAPIPrefix+path, resp.StatusCode, data)

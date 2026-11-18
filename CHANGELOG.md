@@ -317,6 +317,9 @@ only accepts a tag whose version is the top dated section. See
   labelled projects**, which waits until every project whose models use the
   gateway has the label. Someone else's gateway is not changed; the tab says
   when it accepts routes from every project.
+- The MLflow samples and the playground no longer follow HTTP redirects
+  with the app's token: a 3xx answer is reported as an error that says
+  where it pointed.
 
 ## [2.3.3] - 2026-11-16
 
