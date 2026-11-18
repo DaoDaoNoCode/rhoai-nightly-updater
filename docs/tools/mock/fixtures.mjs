@@ -915,8 +915,8 @@ export const playgroundModels = {
   qwen: { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true },
   granite: { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", source: "namespace", status: "Running", ready: true, chat: false, embeddingDimension: 768 },
   deepseek: { name: "deepseek-r1-qwen-7b", displayName: "DeepSeek R1 Distill Qwen 7B", source: "namespace", status: "Failed", ready: false, chat: true },
-  maas: { name: "gpt-oss-20b", source: "maas", status: "Ready", ready: true, chat: true },
-  opt: { name: "publishers/llm/models/facebook/opt-125m", displayName: "Facebook OPT 125M (Simulated)", source: "maas", status: "Ready", ready: true, chat: true },
+  maas: { name: "gpt-oss-20b", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] },
+  opt: { name: "publishers/llm/models/facebook/opt-125m", displayName: "Facebook OPT 125M (Simulated)", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] },
 };
 
 const PLAYGROUND = { name: "lsd-genai-playground", deployed: true, requested: true, managedByTool: true };

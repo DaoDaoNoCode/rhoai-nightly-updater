@@ -230,7 +230,10 @@ type namespaceModel struct {
 }
 
 type maasModel struct {
-	ID           string   `json:"id"`
+	ID            string `json:"id"`
+	Subscriptions []struct {
+		Name string `json:"name"`
+	} `json:"subscriptions"`
 	DisplayName  string   `json:"display_name"`
 	Ready        bool     `json:"ready"`
 	Capabilities []string `json:"capabilities"`
@@ -306,9 +309,15 @@ func (a genAIAPI) listPlaygroundModels(ns string) ([]types.PlaygroundModel, erro
 			if m.Ready {
 				st = "Ready"
 			}
+			var subs []string
+			for _, s := range m.Subscriptions {
+				if s.Name != "" {
+					subs = append(subs, s.Name)
+				}
+			}
 			out = append(out, types.PlaygroundModel{
 				Name: m.ID, DisplayName: m.DisplayName, Source: "maas", Status: st, Ready: m.Ready,
-				Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
+				Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType), Subscriptions: subs,
 			})
 		}
 	}

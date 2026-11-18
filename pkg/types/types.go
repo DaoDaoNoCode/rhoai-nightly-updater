@@ -879,6 +879,11 @@ type PlaygroundModel struct {
 	// catalog in the project: Set up adds it to the playground as an
 	// embedding model of that dimension.
 	EmbeddingDimension int `json:"embeddingDimension,omitempty"`
+	// Subscriptions are the MaaS subscriptions a MaaS model is offered
+	// under (the dashboard's gen-ai /maas/models). A playground chat request
+	// for a MaaS model names one, or the dashboard cannot mint the MaaS key
+	// it calls the model with.
+	Subscriptions []string `json:"subscriptions,omitempty"`
 }
 
 // PlaygroundModelRef is a model a playground setup uses.

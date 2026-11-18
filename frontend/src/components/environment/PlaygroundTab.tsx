@@ -80,10 +80,17 @@ const BreakableName: React.FC<{ name: string }> = ({ name }) => (
 
 /** s as one single-quoted shell word (a ' inside becomes '\''). */
 
-/** A chat request to the project's playground with the user's own OpenShift token. The model name comes from the dashboard, so the body is built as JSON and quoted for the shell. */
-export function playgroundCurl(dashboardUrl: string, project: string, model: string, source: string): string {
+/** This tool's MaaS subscription (pkg/cluster maasSubscriptionName). */
+const TOOL_MAAS_SUBSCRIPTION = "rhoai-nightly-updater-subscription";
+
+/**
+ * A chat request to the project's playground with the user's own OpenShift token. The model name comes from the dashboard, so the body is built as JSON and quoted for the shell.
+ * A MaaS model's request names one of its subscriptions (this tool's when offered under it): the dashboard mints the MaaS key for that subscription, and without one the playground answers 500 (odh-dashboard rhoai-3.6 packages/gen-ai/bff lsd_responses_handler.go "subscription").
+ */
+export function playgroundCurl(dashboardUrl: string, project: string, model: string, source: string, subscriptions: string[] = []): string {
   const base = dashboardUrl.replace(/\/+$/, "");
-  const body = JSON.stringify({ model, model_source_type: source, input: "Say hello in one sentence.", stream: false });
+  const subscription = source === "maas" ? (subscriptions.includes(TOOL_MAAS_SUBSCRIPTION) ? TOOL_MAAS_SUBSCRIPTION : subscriptions[0]) : undefined;
+  const body = JSON.stringify({ model, model_source_type: source, ...(subscription ? { subscription } : {}), input: "Say hello in one sentence.", stream: false });
   return [
     "TOKEN=$(oc whoami -t)",
     `curl -s -X POST ${shellQuote(`${base}/gen-ai/api/v1/lsd/responses?namespace=${encodeURIComponent(project)}`)} \\`,
@@ -248,7 +255,7 @@ const UsePlayground: React.FC<{ dashboardUrl?: string; project: string; model?: 
             <DescriptionListDescription>
               <Stack hasGutter>
                 <StackItem><Content component="p">The playground answers through the dashboard&apos;s gen-ai API. Call it with your own OpenShift token: anyone who can use {project} can.</Content></StackItem>
-                <StackItem><CopyableCode id="playground-curl" label="the commands" code={playgroundCurl(dashboardUrl, project, model.name, model.source)} /></StackItem>
+                <StackItem><CopyableCode id="playground-curl" label="the commands" code={playgroundCurl(dashboardUrl, project, model.name, model.source, model.subscriptions)} /></StackItem>
               </Stack>
             </DescriptionListDescription>
           </DescriptionListGroup>

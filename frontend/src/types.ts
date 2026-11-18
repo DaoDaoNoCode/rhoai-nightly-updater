@@ -1093,6 +1093,8 @@ export interface PlaygroundModel {
   chat: boolean;
   /** Set for this tool's embedding model: Set up adds it as an embedding model of this dimension. */
   embeddingDimension?: number;
+  /** A MaaS model's subscriptions: a playground chat request for it names one. */
+  subscriptions?: string[];
 }
 
 export interface PlaygroundModelRef {

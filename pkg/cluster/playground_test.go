@@ -640,3 +640,26 @@ func TestValidatePlaygroundRequest(t *testing.T) {
 		t.Errorf("refused: %s", p)
 	}
 }
+
+// A Models as a Service model carries the subscriptions it is offered
+// under (the dashboard's gen-ai /maas/models "subscriptions"): a chat
+// request through the playground for a MaaS model needs one, or the
+// dashboard cannot mint the MaaS key and the playground answers 500 (seen
+// live on RHOAI 3.6, 2026-11-18).
+func TestPlayground_MaaSModelsCarryTheirSubscriptions(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.maas = `{"object":"list","data":[{"id":"publishers/proj/models/qwen","ready":true,"subscriptions":[{"name":"team-sub","displayName":"Team"},{"name":"rhoai-nightly-updater-subscription"}]}]}`
+	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range st.Models {
+		if m.Source == "maas" {
+			if got := strings.Join(m.Subscriptions, ","); got != "team-sub,rhoai-nightly-updater-subscription" {
+				t.Fatalf("subscriptions = %q", got)
+			}
+			return
+		}
+	}
+	t.Fatalf("no MaaS model in %+v", st.Models)
+}

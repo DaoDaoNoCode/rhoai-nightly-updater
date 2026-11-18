@@ -83,6 +83,15 @@ describe("Playground clean-up and steps", () => {
     expect(curl).toContain(`-d '{"model":"it'\\''s \\"x\\" $(id)","model_source_type":"maas",`);
   });
 
+  it("a MaaS model's chat request names a subscription, the tool's own first", () => {
+    const tool = playgroundCurl("https://rh-ai.apps.example.com", "dev", "publishers/dev/models/m", "maas", ["team-sub", "rhoai-nightly-updater-subscription"]);
+    expect(tool).toContain('"model_source_type":"maas","subscription":"rhoai-nightly-updater-subscription",');
+    const other = playgroundCurl("https://rh-ai.apps.example.com", "dev", "publishers/dev/models/m", "maas", ["team-sub"]);
+    expect(other).toContain('"subscription":"team-sub",');
+    // A project model needs none.
+    expect(playgroundCurl("https://rh-ai.apps.example.com", "dev", "m", "namespace", ["x"])).not.toContain("subscription");
+  });
+
   it("the chat request uses the user's own token and the plain model name", () => {
     const curl = playgroundCurl("https://rh-ai.apps.example.com/", "dev", "qwen25-05b-instruct", "namespace");
     expect(curl).toContain("TOKEN=$(oc whoami -t)");

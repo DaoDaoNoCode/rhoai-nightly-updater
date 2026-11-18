@@ -18,6 +18,17 @@ only accepts a tag whose version is the top dated section. See
 
 ## [3.0.1] - unreleased
 
+### Fixed
+
+- The Playground tab's command for a Models as a Service model names the
+  model's subscription (this tool's when the model is offered under it).
+  Without one, the dashboard cannot mint the MaaS key it calls the model
+  with, and the playground answered 500. The dashboard's own playground
+  sends it.
+- `dev.sh` stops everything it started on Ctrl-C, kill or a closed
+  terminal (also after `kill -9`), and refuses a second copy for the same
+  checkout.
+
 ### Changed
 
 - Links to the RHOAI dashboard open the matching section page, not a
