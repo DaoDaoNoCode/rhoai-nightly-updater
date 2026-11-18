@@ -705,6 +705,10 @@ type ModelState struct {
 	// yet); setting the model up again with the newest released image
 	// fixes it.
 	PresetImageMissing bool `json:"presetImageMissing,omitempty"`
+	// MaaSPublished: the model routes through the MaaS gateway (published
+	// on the MaaS tab), so it is used through MaaS and its direct address
+	// answers 404.
+	MaaSPublished bool `json:"maasPublished,omitempty"`
 }
 
 // ModelsRequest is the body of POST /api/resources/models/stream.

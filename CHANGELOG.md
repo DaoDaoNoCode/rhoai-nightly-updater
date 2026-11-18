@@ -234,6 +234,23 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **MaaS: a published model routes through the MaaS gateway only.**
+  Earlier builds of 3.0.0 kept it on the inference gateway too, and every
+  call to its direct address then failed with 500: maas-controller's
+  rate-limit policy applies to the model's route on every gateway, and the
+  inference gateway's callers have no MaaS subscription. Publish now
+  records the model's gateway refs and sets `maas-default-gateway` alone,
+  then waits for KServe to move the model's route ("Partly published" with
+  the reason when it does not); Unpublish writes the recorded refs back and
+  refuses, before changing anything, when someone added a gateway to the
+  model meanwhile. While published, the model is used through MaaS (API
+  key) and the dashboard's playground; its direct address answers 404,
+  which the publish dialog says before you confirm, and the Models tab
+  shows the MaaS commands instead of the direct curl. A publication by an
+  earlier build shows as "Partly published": Unpublish, then Publish
+  again. New RBAC: `get` on the model's HTTPRoute
+  `qwen25-05b-instruct-kserve-route` (SECURITY.md).
+
 - In **Install a different build**, each choice's description touched the
   next choice: the choices were not inside a form, and PatternFly sets
   the space between stacked choices only on forms. The choices, the build

@@ -37,6 +37,8 @@ type modelsCluster struct {
 	modelReads int
 	// readyAfter is the model read that first reports Ready (0: never).
 	readyAfter int
+	// route is KServe's handling of the model's HTTPRoute (newMaaSCluster).
+	route *kserveRouteSim
 }
 
 func newModelsCluster(t *testing.T) *modelsCluster {

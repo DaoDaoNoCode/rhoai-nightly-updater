@@ -751,111 +751,16 @@ func isMaaSGatewayRef(name, namespace string) bool {
 	return name == maasGatewayName && namespace == inferenceGatewayNamespace
 }
 
-// setModelGatewayRef adds (on) or removes the MaaS gateway ref on the
-// tool's model, keeping every other ref, as field manager
-// rhoai-nightly-updater-maas. It reports whether it wrote the model.
-//
-// spec.router.gateway.refs is an atomic list (KServe rhoai-3.6
-// GatewaySpec.Refs has no list-map markers), so any write replaces the
-// whole list: a server-side apply would take the list over and drop a ref
-// someone else added. The list is therefore read and written back whole
-// with a JSON merge patch that carries the read resourceVersion: a model
-// changed in between is a conflict, never overwritten.
-//
-// Publish writes [MaaS gateway, the other refs]. The model keeps its
-// inference gateway: the docs append the MaaS gateway to the model's refs
-// (model-setup.md, "/spec/gateway/refs/-") and the dashboard's MaaS
-// transformer keeps the other refs. The tool's model names no ref
-// (spec.router.gateway {}: the default, the inference gateway), so a lone
-// MaaS ref would replace that; live, the model's inference address then
-// answered 404 and the playground 500. With no ref, the inference gateway
-// is therefore written out, as a dashboard-deployed model ends up.
-//
-// The MaaS gateway goes first. KServe updates a model's HTTPRoute only when
-// the expected parentRefs are not a prefix of the route's
-// (router.go semanticHTTPRouteIsEqual: equality.Semantic.DeepDerivative,
-// which compares a slice element by element up to the expected length;
-// opendatahub kserve rhoai-3.6). With the MaaS gateway last, unpublishing
-// leaves [inference gateway], a prefix of the route's [inference, MaaS],
-// so the route kept the MaaS parent: live, the model then went not Ready
-// once a new MaaS gateway refused the project. MaaS first, the rest is not
-// a prefix, and KServe rewrites the route.
-//
-// Unpublish writes the other refs; when only the inference gateway that
-// publish wrote out is left, the refs are removed, back to gateway {} (the
-// same default; live, an empty server-side apply instead left gateway
-// with no owner, so the API server nulled it and the CRD refused the
-// result: 422 "spec.router.gateway ... must be of type object: null").
-func setModelGatewayRef(c *Client, project string, on bool) (bool, error) {
-	path, _ := toolModelPath(project, maasModelRefName)
-	body, _, err := c.get(path)
-	if err != nil {
-		return false, err
+// gatewayRefNames are the model's gateway refs as "namespace/name".
+func (m llmisvcObject) gatewayRefNames() []string {
+	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
+		return nil
 	}
-	var model struct {
-		Metadata objectMeta `json:"metadata"`
-		Spec     struct {
-			Router struct {
-				Gateway struct {
-					Refs []map[string]interface{} `json:"refs"`
-				} `json:"gateway"`
-			} `json:"router"`
-		} `json:"spec"`
+	var names []string
+	for _, ref := range m.Spec.Router.Gateway.Refs {
+		names = append(names, firstNonEmpty(ref.Namespace, m.Metadata.Namespace)+"/"+ref.Name)
 	}
-	if err := json.Unmarshal(body, &model); err != nil {
-		return false, fmt.Errorf("parse the model in '%s': %w", project, err)
-	}
-	refName := func(r map[string]interface{}) (string, string) {
-		name, _ := r["name"].(string)
-		ns, _ := r["namespace"].(string)
-		return name, ns
-	}
-	current := model.Spec.Router.Gateway.Refs
-	others := []interface{}{}
-	hadMaaS := false
-	for _, r := range current {
-		if isMaaSGatewayRef(refName(r)) {
-			hadMaaS = true
-			continue
-		}
-		others = append(others, r)
-	}
-	maasRef := map[string]interface{}{"name": maasGatewayName, "namespace": inferenceGatewayNamespace}
-	var next interface{}
-	if on {
-		if len(others) == 0 {
-			others = append(others, map[string]interface{}{"name": inferenceGatewayName, "namespace": inferenceGatewayNamespace})
-		}
-		list := append([]interface{}{maasRef}, others...)
-		if raw, _ := json.Marshal(list); hadMaaS && len(current) > 0 && string(raw) == maasJSON(current) {
-			return false, nil
-		}
-		next = list
-	} else {
-		if !hadMaaS {
-			return false, nil
-		}
-		next = others
-		if len(others) == 0 {
-			next = nil
-		} else if name, ns := refName(others[0].(map[string]interface{})); len(others) == 1 && name == inferenceGatewayName && ns == inferenceGatewayNamespace {
-			next = nil
-		}
-	}
-	patch := map[string]interface{}{
-		"metadata": map[string]interface{}{"resourceVersion": model.Metadata.ResourceVersion},
-		"spec":     map[string]interface{}{"router": map[string]interface{}{"gateway": map[string]interface{}{"refs": next}}},
-	}
-	data, _ := json.Marshal(patch)
-	if _, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", data, url.Values{"fieldManager": {maasModelManager}}); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func maasJSON(v interface{}) string {
-	raw, _ := json.Marshal(v)
-	return string(raw)
+	return names
 }
 
 // modelHasMaaSRef: the model still routes through the MaaS gateway.
@@ -930,6 +835,23 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
 	}
+	// The refs Unpublish writes back: the model's own while it has no MaaS
+	// gateway, else what this build recorded when it published, else (a
+	// publication by an earlier build) what that one replaced.
+	refs, _, err := readModelGatewayRefs(c, project)
+	if err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot read the model in '%s': %v. Nothing was changed.", project, err), errorCodeFromK8sErr(err), "model read failed")
+	}
+	original, recorded := rec.ModelRefs[project]
+	switch {
+	case !refs.hasMaaS():
+		original = maasModelRefs{Refs: refs}
+	case recorded && !refs.maasOnly():
+		return m.fail("check", refsChangedRefusal(project, refs, original, "Then Publish again: it records them and routes the model through "+maasGatewayName+" alone."), "conflict", "model refs changed")
+	case !recorded:
+		original = maasModelRefs{Refs: refs.earlierBuildOriginal()}
+	}
+	rec.setModelRefs(project, original)
 	rec.setPublished(project, true)
 	infra := maasInfraNamespace(c)
 	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Published)
@@ -989,11 +911,9 @@ func (m *maasRun) publish(project string) (*types.OperationResponse, error) {
 	} else {
 		m.step("gateway", "success", "The gateway someone else made admits the project.")
 	}
-	m.step("model", "running", "Routing the model through the MaaS gateway...")
-	if _, err := setModelGatewayRef(c, project, true); err != nil {
-		return m.fail("model", fmt.Sprintf("Failed to route the model through the MaaS gateway: %v. Unpublish to undo.", err), maasWriteCode(err), "model patch failed")
+	if msg, code := m.routeModelThroughMaaS(project, original); msg != "" {
+		return m.fail("model", msg, code, "model routing failed")
 	}
-	m.step("model", "success", "The model routes through "+maasGatewayName+" as well as the inference gateway, so its address and the playground keep working.")
 	m.step("maas", "running", "Creating the model reference, the subscription and the access policy...")
 	for _, w := range []struct {
 		desc, path, create string
@@ -1073,6 +993,19 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 		say("check", "success", "Not published.")
 		return m.done(fmt.Sprintf("The model in '%s' is not published; nothing to undo.", project))
 	}
+	// The refs to write back, captured before the record forgets them; a
+	// gateway someone added since publishing stops Unpublish here, before
+	// anything changes.
+	recordedRefs, hasRecordedRefs := rec.ModelRefs[project]
+	if routed && hasRecordedRefs {
+		refs, _, err := readModelGatewayRefs(c, project)
+		if err != nil {
+			return m.fail("check", fmt.Sprintf("Cannot read the model in '%s': %v. Nothing was changed.", project, err), errorCodeFromK8sErr(err), "model read failed")
+		}
+		if !refs.maasOnly() {
+			return m.fail("check", refsChangedRefusal(project, refs, recordedRefs, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict", "model refs changed")
+		}
+	}
 	say("check", "success", "Unpublishing, in reverse order of publishing.")
 	live, err := maasLiveProjects(c, rec, "", project)
 	if err != nil {
@@ -1136,18 +1069,19 @@ func (m *maasRun) unpublish(project string, stepped bool) (*types.OperationRespo
 	}
 	say("maas", "success", "The model reference is deleted, and the access policy and subscription no longer list the model.")
 
-	// The model's gateway ref.
-	say("model", "running", "Routing the model back through its own gateway...")
+	// The model's gateway refs. The record keeps the publication until the
+	// route has left the MaaS gateway, so the tab shows a route that did not
+	// as partly published.
+	say("model", "running", "Routing the model as before publishing...")
 	switch {
 	case !modelFound:
 		say("model", "success", "The model is gone; nothing to change on it.")
 	case !modelOwned(model.Metadata):
 		say("model", "success", "The model was not created by this tool; it is left alone.")
 	default:
-		if _, err := setModelGatewayRef(c, project, false); err != nil {
-			return m.fail("model", fmt.Sprintf("Failed to remove the MaaS gateway from the model: %v. Unpublish again to retry.", err), maasWriteCode(err), "model patch failed")
+		if msg, code := m.restoreModelRoute(project, recordedRefs, hasRecordedRefs, say); msg != "" {
+			return m.fail("model", msg, code, "model routing failed")
 		}
-		say("model", "success", "The model routes as before publishing.")
 	}
 
 	// The project on the gateway.

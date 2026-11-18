@@ -51,10 +51,13 @@ import (
 //
 // Publishing follows install/model-setup.md "Update Existing Models": the
 // model routes through maas-default-gateway (spec.router.gateway.refs; the
-// docs' spec.gateway.refs is not a field of LLMInferenceService), then a
-// MaaSModelRef in the project, a MaaSSubscription (100 tokens a minute for
-// system:authenticated, the docs' sample) and a MaaSAuthPolicy in
-// models-as-a-service (docs/samples/maas-system/free/maas).
+// docs' spec.gateway.refs is not a field of LLMInferenceService), and only
+// through it ("Only models routing through maas-default-gateway appear in
+// the MaaS catalog and have policies applied", model-setup.md; why not also
+// the inference gateway: maas_routing.go), then a MaaSModelRef in the
+// project, a MaaSSubscription (100 tokens a minute for system:authenticated,
+// the docs' sample) and a MaaSAuthPolicy in models-as-a-service
+// (docs/samples/maas-system/free/maas).
 
 const (
 	maasGroup        = "maas.opendatahub.io"
@@ -103,8 +106,11 @@ var (
 	MaaSPlatformTimeout = 5 * time.Minute
 	// MaaSPublishTimeout bounds the wait for a published model to be Ready.
 	MaaSPublishTimeout = 5 * time.Minute
-	MaaSDeleteTimeout  = 2 * time.Minute
-	MaaSPoll           = 5 * time.Second
+	// MaaSRouteTimeout bounds the wait for KServe to move the model's
+	// HTTPRoute after its gateway refs change (live: about 6 s).
+	MaaSRouteTimeout  = 2 * time.Minute
+	MaaSDeleteTimeout = 2 * time.Minute
+	MaaSPoll          = 5 * time.Second
 )
 
 // authorinoGroup is the Authorino operator's API group (the Authorino CR).
@@ -121,11 +127,17 @@ func maasAPI(c *Client) string {
 
 // maasRecord is what this tool did to the platform that the cluster cannot
 // tell by itself: whether it set modelsAsAService and what it was before,
-// and the projects whose model it published.
+// the projects whose model it published, and the model's gateway refs
+// before each publication.
 type maasRecord struct {
 	DSCChanged               bool     `json:"dscChanged,omitempty"`
 	PreviousModelsAsAService string   `json:"previousModelsAsAService,omitempty"`
 	Published                []string `json:"published,omitempty"`
+	// ModelRefs is, by published project, the model's
+	// spec.router.gateway.refs as publish read them before routing it
+	// through the MaaS gateway alone; Unpublish writes them back. A
+	// publication by an earlier build has none.
+	ModelRefs map[string]maasModelRefs `json:"modelRefs,omitempty"`
 	// DBNamespace is where setup put the database and maas-db-config, so
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
@@ -179,7 +191,20 @@ func writeMaaSRecord(c *Client, rec maasRecord) error {
 	return nil
 }
 
+// maasModelRefs are a model's gateway refs as read; none is KServe's
+// default gateway (spec.router.gateway {}).
+type maasModelRefs struct {
+	Refs gatewayRefs `json:"refs,omitempty"`
+}
+
 func (r maasRecord) published(project string) bool { return containsString(r.Published, project) }
+
+func (r *maasRecord) setModelRefs(project string, refs maasModelRefs) {
+	if r.ModelRefs == nil {
+		r.ModelRefs = map[string]maasModelRefs{}
+	}
+	r.ModelRefs[project] = refs
+}
 
 func (r *maasRecord) setPublished(project string, on bool) {
 	var out []string
@@ -190,6 +215,11 @@ func (r *maasRecord) setPublished(project string, on bool) {
 	}
 	if on {
 		out = append(out, project)
+	} else {
+		delete(r.ModelRefs, project)
+		if len(r.ModelRefs) == 0 {
+			r.ModelRefs = nil
+		}
 	}
 	sort.Strings(out)
 	r.Published = out
@@ -1107,13 +1137,18 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
 			item.Access, item.Subscription = authPhase, subPhase
 			item.Ready = item.Phase == "Ready" && authPhase == "Active" && subPhase == "Active"
-			switch {
+			switch refs := m.gatewayRefNames(); {
+			case modelHasMaaSRef(m) && len(refs) > 1:
+				// An earlier build kept the other gateways (maas_routing.go):
+				// the rate limit fails every call on them.
+				item.Ready, item.Partly = false, true
+				item.Message = fmt.Sprintf("Partly published: the model routes through %s, as an earlier build of this tool published it, so calls to its direct address fail with 500. Unpublish, then Publish again.", strings.Join(refs, " and "))
 			case item.Ready:
 				item.Message = "Published"
 			default:
 				item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", firstNonEmpty(item.Phase, "pending"), firstNonEmpty(authPhase, "pending"), firstNonEmpty(subPhase, "pending"))
 			}
-		} else if left := maasLeftovers(m, recErr == nil && rec.published(m.Metadata.Namespace)); !found && len(left) > 0 {
+		} else if left := maasLeftovers(c, m, recErr == nil && rec.published(m.Metadata.Namespace)); !found && len(left) > 0 {
 			// A publication undone half-way (live: Unpublish deleted the
 			// model reference, then failed on the model): Unpublish again
 			// finishes it, so the tab must still offer it.
@@ -1163,11 +1198,17 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 
 // maasLeftovers names what is left of a publication of the tool's model
 // once its MaaSModelRef is gone: the model's route through the MaaS
-// gateway, and this tool's record of the publication.
-func maasLeftovers(m llmisvcObject, recorded bool) []string {
+// gateway (its refs, or a route KServe has not moved yet, read only for a
+// recorded publication), and this tool's record of the publication.
+func maasLeftovers(c *Client, m llmisvcObject, recorded bool) []string {
 	var left []string
 	if modelHasMaaSRef(m) {
 		left = append(left, "the model's route through "+maasGatewayName)
+	} else if recorded {
+		parents, _, err := readModelRoute(c, m.Metadata.Namespace)
+		if err == nil && containsString(parents, inferenceGatewayNamespace+"/"+maasGatewayName) {
+			left = append(left, "the model's route through "+maasGatewayName+" (KServe has not moved it yet)")
+		}
 	}
 	if recorded {
 		left = append(left, "this tool's record of the publication")
