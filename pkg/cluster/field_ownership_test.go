@@ -246,7 +246,7 @@ func TestSetupPipelineServer_DryRunFailureChangesNothing(t *testing.T) {
 	}
 	for _, m := range f.mutations() {
 		if strings.Contains(m, "/namespaces/team-a/") {
-			t.Errorf("write in the project: %s", m) // the project POST before (409: it exists) is not one
+			t.Errorf("write in the project: %s", m)
 		}
 	}
 }

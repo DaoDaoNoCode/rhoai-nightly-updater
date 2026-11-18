@@ -154,15 +154,17 @@ func TestSetupPipelineServer_CreatesLabelledObjectsWithUniqueNames(t *testing.T)
 	f, c := newResourceFake(t)
 	putManagedDSC(f)
 	putReadyManagedS3(f)
+	putDSProject(f, "new-project")
 
 	resp, _ := SetupPipelineServer(c, "new-project")
 	if !resp.Success {
 		t.Fatalf("setup failed: %+v", resp)
 	}
-	ns := f.get("/api/v1/namespaces/new-project")
-	labels := ns["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
-	if labels["modelmesh-enabled"] != "false" || labels["opendatahub.io/dashboard"] != "true" {
-		t.Errorf("project labels = %v", labels)
+	// The project is the user's: setup never creates or changes it.
+	for _, m := range f.mutations() {
+		if strings.Contains(m, "/api/v1/namespaces") && !strings.Contains(m, "/api/v1/namespaces/new-project/") {
+			t.Errorf("setup changed a namespace: %s", m)
+		}
 	}
 	for _, path := range []string{dspaPath("new-project", dspaName), secretPath("new-project", dspaSecretName)} {
 		obj := f.get(path)
@@ -215,8 +217,22 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 		}, "not_managed"},
 		{"no DSPA CRD", func(f *resourceFake) {
 			putReadyManagedS3(f)
+			putDSProject(f, "proj")
 			f.fail["GET /apis/"+dspaAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 404
 		}, "prerequisites"},
+		// Only a Data Science project (made in the dashboard) gets a
+		// pipeline server: setup never creates the namespace.
+		{"project does not exist", func(f *resourceFake) {
+			putReadyManagedS3(f)
+		}, "validation"},
+		{"namespace is not a Data Science project", func(f *resourceFake) {
+			putReadyManagedS3(f)
+			f.putJSON("/api/v1/namespaces/proj", `{"metadata":{},"status":{"phase":"Active"}}`)
+		}, "validation"},
+		{"project list unreadable", func(f *resourceFake) {
+			putReadyManagedS3(f)
+			f.fail["GET /api/v1/namespaces"] = 403
+		}, "forbidden"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -228,7 +244,7 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 				t.Fatalf("got %+v", resp)
 			}
 			for _, m := range f.mutations() {
-				if strings.Contains(m, "datasciencepipelinesapplications") || strings.Contains(m, "/secrets/") {
+				if strings.Contains(m, "datasciencepipelinesapplications") || strings.Contains(m, "/secrets/") || strings.Contains(m, "/api/v1/namespaces") {
 					t.Errorf("refusal changed %s", m)
 				}
 			}
@@ -240,6 +256,7 @@ func TestSetupPipelineServer_RerunIsIdempotent(t *testing.T) {
 	f, c := newResourceFake(t)
 	putManagedDSC(f)
 	putReadyManagedS3(f)
+	putDSProject(f, "proj")
 	for i := 0; i < 2; i++ {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d failed: %+v", i, resp)

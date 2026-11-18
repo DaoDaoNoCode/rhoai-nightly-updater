@@ -117,10 +117,11 @@ objects:
       - apiGroups: [""]
         resources: ["events"]
         verbs: ["list"]
-      # Namespaces: list DS projects; create redhat-ods-operator, seaweedfs
-      # and pipeline projects. Only the two storage namespaces may be
-      # deleted, each only when the user ticks it and only when it carries
-      # the tool label and the tool's managers wrote it (UID precondition):
+      # Namespaces: list DS projects; create redhat-ods-operator and
+      # seaweedfs (never a pipeline project: it must be a DS project).
+      # Only the two storage namespaces may be deleted, each only when the
+      # user ticks it and only when it carries the tool label and the
+      # tool's managers wrote it (UID precondition):
       # minio (the storage earlier versions set up) at the end of Migrate
       # storage, and seaweedfs at the end of the storage's Tear down.
       - apiGroups: [""]

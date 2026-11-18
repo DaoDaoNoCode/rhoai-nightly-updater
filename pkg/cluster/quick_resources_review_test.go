@@ -56,6 +56,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 			f, c := newResourceFake(t)
 			putManagedDSC(f)
 			putReadyManagedS3(f)
+			putDSProject(f, "p1")
 			var once sync.Once
 			f.beforeServe = func(method, path string) {
 				if method == tc.method && path == tc.trigger {
@@ -73,6 +74,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 		f, c := newResourceFake(t)
 		putManagedDSC(f)
 		putReadyManagedS3(f)
+		putDSProject(f, "p1")
 		f.putJSON(secretPath("p1", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`,"resourceVersion":"3"}}`)
 		var once sync.Once
 		f.beforeServe = func(method, path string) {
@@ -93,6 +95,7 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 		f, c := newResourceFake(t)
 		putManagedDSC(f)
 		putReadyManagedS3(f)
+		putDSProject(f, "p1")
 		putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
 		f.beforeServe = func(method, path string) {
 			if method == http.MethodPatch && path == dspaPath("p1", dspaName) {

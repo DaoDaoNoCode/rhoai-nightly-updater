@@ -351,6 +351,14 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {
 		return fail("The S3 storage is not deployed or not ready. Set it up first (or, with storage from an earlier version, migrate it).", "prerequisites", "S3 storage not ready")
 	}
+	// Only a Data Science project gets a pipeline server, as with the
+	// MLflow samples: the project is the user's (made in the dashboard),
+	// and setup never creates or changes it.
+	if ok, err := isDSProject(c, project); err != nil {
+		return fail(fmt.Sprintf("Cannot list the projects; nothing was changed: %v", err), errorCodeFromK8sErr(err), "project list failed")
+	} else if !ok {
+		return fail(fmt.Sprintf("'%s' is not a Data Science project. Create it in the RHOAI dashboard first. Nothing was changed.", project), "validation", "not a Data Science project")
+	}
 
 	// Never add a second pipeline server next to one this tool did not
 	// create: odh-dashboard shows only the first DSPA of a project.
@@ -377,50 +385,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 		return fail(fmt.Sprintf("Project '%s' already has a pipeline server ('%s') that this tool did not create. It was left unchanged.", project, d.Meta.Name), "not_managed", "unmanaged pipeline server exists")
 	}
 
-	// Step 1: Create DS project namespace (if it doesn't exist)
-	logs = append(logs, fmt.Sprintf("Creating project '%s'...", project))
-	nsData, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "Namespace",
-		"metadata": map[string]interface{}{
-			"name": project,
-			"labels": map[string]interface{}{
-				"opendatahub.io/dashboard": "true",
-				// RHOAI 3.x serves models with KServe only. odh-dashboard
-				// requires modelmesh-enabled=false for KServe projects
-				// (packages/kserve/extensions.ts, rhoai-3.6 branch).
-				"modelmesh-enabled": "false",
-			},
-			"annotations": map[string]interface{}{
-				"openshift.io/description":  "Data Science project with pipeline server",
-				"openshift.io/display-name": project,
-			},
-		},
-	})
-	_, _, err = c.post(withToolFieldManager("/api/v1/namespaces"), nsData)
-	if err != nil && !IsK8sError(err, 409) {
-		return fail(fmt.Sprintf("Failed to create project: %v", err), errorCodeFromK8sErr(err), "namespace creation failed")
-	}
-	if IsK8sError(err, 409) {
-		nsBody, _, nsGetErr := c.get("/api/v1/namespaces/" + project)
-		if nsGetErr != nil {
-			return fail(fmt.Sprintf("Cannot read project '%s': %v", project, nsGetErr), errorCodeFromK8sErr(nsGetErr), "namespace read failed")
-		}
-		var ns struct {
-			Metadata objectMeta `json:"metadata"`
-			Status   struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(nsBody, &ns) == nil && (ns.Metadata.terminating() || ns.Status.Phase == "Terminating") {
-			return fail(fmt.Sprintf("Namespace '%s' is terminating. Wait for it to fully delete before re-creating.", project), "terminating", "namespace terminating")
-		}
-		logs = append(logs, "Project already exists — reusing")
-	} else {
-		logs = append(logs, "OK: Project created")
-	}
-
-	// Step 2: Read the S3 credentials
+	// Step 1: Read the S3 credentials
 	logs = append(logs, "Reading S3 storage credentials...")
 	keys, found, err := readS3Keys(c)
 	if err != nil {
@@ -431,7 +396,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 	}
 	logs = append(logs, "OK: S3 storage credentials read")
 
-	// Step 3: Create the DSPA credentials secret, without taking over a
+	// Step 2: Create the DSPA credentials secret, without taking over a
 	// secret of the same name that someone else created.
 	logs = append(logs, "Creating pipeline server secret...")
 	dspaSecretPath := namespacedPath("v1", "secrets", project, dspaSecretName)
@@ -465,7 +430,7 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 			s3SecretKeyField: keys.SecretKey,
 		},
 	}
-	// Step 4 prepares the DSPA; both writes are dry-run first (below).
+	// Step 3 prepares the DSPA; both writes are dry-run first (below).
 	// fieldValidation=Strict (and server-side apply, which always validates
 	// strictly) rejects fields the CRD does not declare, so a manifest that
 	// drifts from the CRD fails instead of being silently pruned.
