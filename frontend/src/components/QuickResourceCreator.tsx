@@ -337,6 +337,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "deploy-mlflow-pr": return ["deploy-mlflow-pr", () => deployMLflowPR(p.pr), null];
       case "revert-mlflow": return ["revert-mlflow", revertMLflow, null];
       case "setup-pipeline-server": return ["setup-pipeline-server", () => setupPipelineServer(p.project), p.project];
+      // The setup request with recreate: the page shows it as setting up.
+      case "recreate-pipeline-server": return ["setup-pipeline-server", () => setupPipelineServer(p.project, true), p.project];
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };

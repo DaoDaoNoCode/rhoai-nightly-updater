@@ -52,6 +52,10 @@ import {
 /** The storage's namespace and in-cluster address (pkg/cluster s3Namespace, s3Host). */
 export const S3_NAMESPACE = "seaweedfs";
 export const S3_ENDPOINT = "http://seaweedfs-s3.seaweedfs.svc:8333";
+/** The pipeline server's name (pkg/cluster dspaName, the dashboard's and the one workbenches need), the earlier one (previousDSPAName) and its S3 Secret (dspaSecretName). */
+export const DSPA_NAME = "dspa";
+export const PREVIOUS_DSPA_NAME = "nightly-dspa";
+export const DSPA_SECRET_NAME = "nightly-dspa-s3";
 
 const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size})` : ""}</>;
 
@@ -289,7 +293,18 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
         : server
           ? <Content component="p">Runs your pipelines in {project} and keeps their artifacts in {old ? <>the storage of an earlier version, until Migrate storage moves it to the S3 storage</> : "the S3 storage"}.</Content>
           : <Content component="p">Not set up in {project} yet. Set up creates one that keeps its artifacts in the S3 storage.</Content>}
-      {server && <ProblemAlerts kind="pipeline" state={server} minioReady={storageReady} logsHref={consolePodsHref(consoleURL, server.namespace, `ds-pipeline-${server.name ?? "nightly-dspa"}`)} />}
+      {server && managed && server.nonStandardName && !isTerminating(server) && (
+        <Alert variant="warning" isInline component="div" title="Workbench pipelines don't work with this pipeline server"
+          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
+          <Content component="p">
+            An earlier version of this tool named it <code>{server.name ?? PREVIOUS_DSPA_NAME}</code>. Workbenches find their pipeline server only under the name <code>{DSPA_NAME}</code>, so Elyra pipelines from a workbench in {project} can&apos;t use it. The dashboard&apos;s pipelines pages and the KFP SDK work as they are.
+          </Content>
+          <Content component="p">
+            {readOnly ? "A cluster-admin can recreate it with the standard name." : <>Recreate with the standard name deletes it, with its run history, and creates <code>{DSPA_NAME}</code> in its place.{baseReason ? ` Not available now: ${baseReason}` : ""}</>}
+          </Content>
+        </Alert>
+      )}
+      {server && <ProblemAlerts kind="pipeline" state={server} minioReady={storageReady} logsHref={consolePodsHref(consoleURL, server.namespace, `ds-pipeline-${server.name ?? DSPA_NAME}`)} />}
       {server && server.deployed && !server.ready && !terminalReason(server) && !isTerminating(server) && <StartingNote state={server} typical="1 to 3 minutes" />}
     </PartItem>
   );
@@ -398,7 +413,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
         <FeatureSection title="What this creates">
           <CreatesList items={[
             <>On the cluster: namespace <code>{S3_NAMESPACE}</code>, labelled as managed by this tool, with Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-data</code> (20Gi), Secret <code>seaweedfs-s3-credentials</code> (the S3 keys), Service <code>seaweedfs-s3</code>, Route <code>seaweedfs-admin</code> (admin UI), NetworkPolicy <code>seaweedfs-ingress</code> and bucket <code>pipelines</code></>,
-            <>In the project: DataSciencePipelinesApplication <code>nightly-dspa</code> (the pipeline server) and Secret <code>nightly-dspa-s3</code> (a copy of the S3 keys)</>,
+            <>In the project: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> (the pipeline server) and Secret <code>{DSPA_SECRET_NAME}</code> (a copy of the S3 keys, owned by the pipeline server)</>,
           ]} />
         </FeatureSection>
       </StackItem>
@@ -485,15 +500,31 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         title: `Set up the pipeline server in ${pending.project}?`, confirm: "Set up", runTitle: `Set up the pipeline server in ${pending.project}`,
         summary: <Content component="p">In {pending.project}: a pipeline server that keeps its artifacts in the S3 storage. Takes 1 to 3 minutes.</Content>,
         changes: [
-          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>nightly-dspa</code> and Secret <code>nightly-dspa-s3</code> are created, storing artifacts in the S3 storage (Service <code>seaweedfs-s3</code> in namespace <code>seaweedfs</code>).</>,
+          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> (the name workbench pipelines use) and Secret <code>{DSPA_SECRET_NAME}</code> (owned by it) are created, storing artifacts in the S3 storage (Service <code>seaweedfs-s3</code> in namespace <code>seaweedfs</code>).</>,
         ],
       };
+    case "recreate-pipeline-server": {
+      const ps = pipelineServers.find((p) => p.namespace === pending.project);
+      return {
+        title: `Recreate the pipeline server in ${pending.project} with the standard name?`, confirm: "Recreate", danger: true,
+        runTitle: `Recreate the pipeline server in ${pending.project}`,
+        summary: <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>,
+        changes: [
+          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
+          <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> and Secret <code>{DSPA_SECRET_NAME}</code> (owned by it) are created, storing artifacts in the same S3 storage.</>,
+        ],
+        dataLoss: <>
+          The run history of <code>{pending.name}</code>: its runs, experiments and imported pipelines{pvcList(ps).length > 0 ? <> (volume {pvcList(ps).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)})</> : null}.
+          Artifacts already in the S3 storage stay there (bucket <code>pipelines</code>), but no run links to them any more.
+        </>,
+      };
+    }
     case "teardown-pipeline-server": {
       const ps = pipelineServers.find((p) => p.namespace === pending.project);
       return {
         title: `Delete the pipeline server in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete the pipeline server in ${pending.project}`,
         summary: <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>,
-        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || "nightly-dspa"}</code> and its S3 credentials Secret are deleted. The project stays.</>],
+        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted. The project stays.</>],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
       };
     }

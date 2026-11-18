@@ -161,6 +161,41 @@ describe("project picker", () => {
   });
 });
 
+// A server set up under the earlier name: workbench pipelines need "dspa"
+// (odh-notebook-controller dspaInstanceName); Recreate replaces it.
+describe("Pipelines: the earlier name", () => {
+  it("explains the workbench limitation and recreates the server as dspa after a confirmation that names the loss", async () => {
+    const api = stubApi({
+      "/api/resources/status": { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev", { nonStandardName: true })] },
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/pipeline-server/setup": { success: true, message: "Pipeline server 'nightly-dspa' replaced by 'dspa'." },
+    });
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    const alert = await screen.findByText(/Workbench pipelines don.t work with this pipeline server/);
+    const box = alert.closest(".pf-v6-c-alert") as HTMLElement;
+    expect(box).toHaveTextContent("nightly-dspa");
+    fireEvent.click(within(box).getByRole("button", { name: "Recreate with the standard name" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("DataSciencePipelinesApplication nightly-dspa");
+    expect(dialog).toHaveTextContent("mariadb-nightly-dspa");
+    expect(dialog).toHaveTextContent(/Artifacts already in the S3 storage stay there/);
+    expect(dialog).toHaveTextContent("DataSciencePipelinesApplication dspa");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Recreate" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev", recreate: true }]));
+  });
+
+  it("a server named dspa shows no such notice", async () => {
+    stubApi({
+      "/api/resources/status": { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev", { name: "dspa", dataPVCs: ["mariadb-dspa"] })] },
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    await screen.findByRole("region", { name: "Use it" });
+    expect(screen.queryByText(/Workbench pipelines don.t work/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Recreate with the standard name" })).not.toBeInTheDocument();
+  });
+});
+
 // Item 12: how to use a ready pipeline server.
 describe("Pipelines: use it", () => {
   it("a ready server shows where runs are, the API endpoint and a KFP client, and what next", async () => {

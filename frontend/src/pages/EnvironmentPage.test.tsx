@@ -15,7 +15,7 @@ vi.mock("../components/GlobalBanners", () => ({ GlobalBanners: () => null }));
 
 const notDeployed: ResourceState = { deployed: false, ready: false, message: "Not deployed" };
 const readyMinio: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running", uiUser: "admin", uiRoute: "https://seaweedfs-admin.apps.example.com" };
-const readyDspa = (ns: string): ResourceState => ({ deployed: true, ready: true, managedByTool: true, namespace: ns, name: "nightly-dspa", message: "Running", uiRoute: `https://rh-ai.apps.example.com/develop-train/pipelines/definitions/${ns}` });
+const readyDspa = (ns: string): ResourceState => ({ deployed: true, ready: true, managedByTool: true, namespace: ns, name: "dspa", message: "Running", uiRoute: `https://rh-ai.apps.example.com/develop-train/pipelines/definitions/${ns}` });
 const foreignMlflow: ResourceState = { deployed: true, ready: true, managedByTool: false, namespace: "redhat-ods-applications", message: "Running", uiRoute: "https://mlflow.apps.example.com" };
 
 function renderPage(path: string) {
@@ -176,7 +176,7 @@ describe("Environment page", () => {
     expect(confirm).toHaveTextContent("On the cluster: S3 storage (20 GiB)");
     expect(confirm).toHaveTextContent("In dev-project: a pipeline server");
     expect(confirm).toHaveTextContent("Deployment seaweedfs");
-    expect(confirm).toHaveTextContent("DataSciencePipelinesApplication nightly-dspa");
+    expect(confirm).toHaveTextContent("DataSciencePipelinesApplication dspa (the name workbench pipelines use)");
     fireEvent.click(within(confirm).getByRole("button", { name: "Set up" }));
     const progress = await screen.findByRole("dialog", { name: "Set up Pipelines in dev-project" });
     // Never a success before the part works: first "Starting", then ready, with the main action.

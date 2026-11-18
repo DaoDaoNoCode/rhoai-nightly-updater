@@ -208,6 +208,8 @@ export type Pending =
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
   | { kind: "deploy-mlflow-pr"; pr: number }
   | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string }
+  /** Replace the tool's pipeline server named nightly-dspa with one named dspa (workbench pipelines need it). */
+  | { kind: "recreate-pipeline-server"; project: string; name: string }
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */

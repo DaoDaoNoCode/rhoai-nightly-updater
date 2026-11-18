@@ -736,7 +736,7 @@ export interface ResourcesStatus {
 }
 
 export interface ResourceState {
-  /** DSPA name for pipeline servers ("nightly-dspa", or "dspa" for legacy ones). */
+  /** DSPA name for pipeline servers: "dspa" (the dashboard's name, which workbench pipelines need), or "nightly-dspa" (set up by an earlier version). */
   name?: string;
   /** False: the tool did not create it and will not tear it down. */
   managedByTool?: boolean;
@@ -772,6 +772,8 @@ export interface ResourceState {
   repairNeeded?: string;
   /** It exists but reports no readiness this tool can read: its health is unknown, not failed. */
   healthUnknown?: boolean;
+  /** A pipeline server set up under the earlier name nightly-dspa: workbench pipelines need "dspa" (pkg/cluster dspaName), so Recreate is offered. */
+  nonStandardName?: boolean;
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---

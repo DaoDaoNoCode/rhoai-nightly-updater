@@ -354,10 +354,11 @@ export function getS3AdminLogin(): Promise<{ user: string; password: string; acc
   return request('/api/resources/minio/admin-password', { cache: 'no-store' });
 }
 
-export function setupPipelineServer(project: string): Promise<OperationResponse> {
+/** Sets up the pipeline server in project; recreate replaces one named nightly-dspa with dspa. */
+export function setupPipelineServer(project: string, recreate = false): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/setup', {
     method: 'POST',
-    body: JSON.stringify({ project }),
+    body: JSON.stringify(recreate ? { project, recreate: true } : { project }),
     acceptStatuses: [422],
   });
 }
