@@ -88,9 +88,9 @@ Open the printed URL, or use the grid icon in the OpenShift console (Red Hat App
 oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
-<img src="images/masthead-version.png" alt="The masthead: the release v2.0.0, the appearance button, Help, Applications and the user menu" width="380">
+<img src="images/masthead-version.png" alt="The masthead: the release v3.0.1, the appearance button, Help, Applications and the user menu" width="380">
 
-**What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v2.0.0` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
+**What you should see:** the **Status** page. The masthead shows (1) the release you installed (`v3.0.1` in the picture), then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
 
 ## 3. One-time setup: pull secret and image mirror
 

@@ -73,7 +73,7 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`, `?tab=models&project=<name>`).
 
-<img src="docs/images/environment-overview.png" alt="Overview: 2 of 3 ready; Pipelines Ready in dev-project with Open pipelines; MLflow Ready, Not managed by this tool under the label, with Open MLflow experiments; Models Not set up in any project, with Choose a project" width="760">
+<img src="docs/images/environment-overview.png" alt="Overview: 2 of 5 ready; Pipelines Ready in dev-project with Open pipelines and Run a sample pipeline; MLflow Ready, Not managed by this tool under the label, with Open MLflow experiments and Add sample data; Models and Playground Not set up in any project, with Choose a project; MaaS Not set up, with Set up MaaS" width="760">
 
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).

@@ -81,7 +81,8 @@ async (page) => {
 
   /**
    * Draws numbered callouts and highlight boxes over the page. notes:
-   * [{ at: locator, n?: number, box?: false, pos?: "tl"|"tr"|"l"|"r" }].
+   * [{ at: locator, n?: number, box?: false, pos?: "tl"|"tr"|"l"|"r"|"b" }].
+   * "b" sits just under the middle of the bottom edge, for a target with text on both sides.
    * Returns the rectangles drawn, so a crop can include them.
    */
   async function annotate(notes, name = "") {
@@ -110,6 +111,7 @@ async (page) => {
           const at = {
             tl: [x, y], tr: [x + w, y],
             l: [x - R - 6, y + h / 2], r: [x + w + R + 6, y + h / 2],
+            b: [x + w / 2, y + h + R - 2],
           }[pos];
           const c = document.createElement("div");
           c.textContent = String(n);
@@ -565,7 +567,7 @@ async (page) => {
       // appearance button moves into a menu, and the crop window (CW) is
       // narrower. A crop's text size does not depend on the window width.
       await open("/components", "healthy", { width: W });
-      await crop("masthead-version", head, { notes: [{ at: page.getByText("v2.0.0", { exact: true }), n: 1, pos: "l" }] });
+      await crop("masthead-version", head, { notes: [{ at: page.getByText("v3.0.1", { exact: true }), n: 1, pos: "l" }] });
       // Tall enough for the whole Help dialog, so its body does not scroll.
       await page.setViewportSize({ width: vw, height: 2600 });
       await page.getByRole("button", { name: /help/i }).first().click();
@@ -680,7 +682,8 @@ async (page) => {
       await open("/test-resources?tab=mlflow", "env-live");
       await crop("environment-mlflow", [panel().getByRole("heading", { name: "MLflow", level: 2 }), part("MLflow server")], {
         notes: [
-          { at: label(part("MLflow server"), "Ready"), n: 1, pos: "r" },
+          // Below: the title is on its left and the ownership label on its right.
+          { at: label(part("MLflow server"), "Ready"), n: 1, pos: "b" },
           { at: label(part("MLflow server"), "Not managed by this tool"), n: 2, pos: "r" },
         ],
         pad: 24,
