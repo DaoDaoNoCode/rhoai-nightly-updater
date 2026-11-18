@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -69,6 +70,29 @@ func TestMaaSPublish_TheModelRefIsOwnedByTheModelAndCarriesItsDescription(t *tes
 	entry, _ := catalogEntry("")
 	if got := meta["annotations"].(map[string]interface{})["openshift.io/description"]; got != entry.Description {
 		t.Errorf("description %v", got)
+	}
+}
+
+// A model published before the inference gateway was restricted is not
+// counted by Restrict (it routed through MaaS only). Unpublished in a
+// project without the routes label, its route goes back to the inference
+// gateway, which does not admit it: Unpublish says so, with the command a
+// cluster-admin runs.
+func TestMaaSUnpublish_InAnUnlabelledProjectSaysTheDirectRouteNeedsTheLabel(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	if !res.Success {
+		t.Fatalf("unpublish: %+v", res)
+	}
+	if !strings.Contains(res.Message, "oc label namespace proj rhoai-nightly-updater/inference-routes=true") || !strings.Contains(res.Message, "direct address") {
+		t.Errorf("message %q", res.Message)
+	}
+	// A labelled project needs no word.
+	mc2 := publishedMaaSCluster(t)
+	res, _ = runMaaSOp(t, mc2.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
+	if strings.Contains(res.Message, "oc label namespace") {
+		t.Errorf("labelled project: %q", res.Message)
 	}
 }
 

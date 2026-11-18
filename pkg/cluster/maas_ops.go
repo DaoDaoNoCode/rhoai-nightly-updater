@@ -1192,5 +1192,11 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		}
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway no longer admits routes from '%s'.", project))
 	}
-	return m.done(fmt.Sprintf("%s in '%s' is unpublished from MaaS.", name, project))
+	note := ""
+	if modelFound && modelOwned {
+		if note = directRouteNote(c, project, name); note != "" {
+			m.logs = append(m.logs, strings.TrimSpace(note))
+		}
+	}
+	return m.done(fmt.Sprintf("%s in '%s' is unpublished from MaaS.%s", name, project, note))
 }
