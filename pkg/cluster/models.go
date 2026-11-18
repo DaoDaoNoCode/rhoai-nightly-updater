@@ -953,7 +953,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 	if hw.Name != "" {
 		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
 	} else {
-		m.step("check", "running", "Hardware profile: none; the dashboard shows the model without one, because "+why+".")
+		m.step("check", "running", "Hardware profile: none, because "+why+`. The dashboard's Deployments table then shows "No hardware profile" for the model, and its details "Hardware profile: Unknown"; the model runs as set up.`)
 	}
 	return &modelPlan{entry: entry, project: req.Project, preset: preset.name, image: img, hardware: hw,
 		obj: modelManifest(req.Project, entry, preset.name, img, hw), current: existing.Metadata, found: found}, "", ""

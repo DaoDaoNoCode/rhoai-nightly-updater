@@ -10,8 +10,22 @@ import (
 // The annotations the dashboard's deploy wizard writes for the hardware
 // profile a deployment uses (odh-dashboard
 // packages/hardware-profiles/shared/utils.ts applyHardwareProfileConfig).
-// Its Deployments page reads the name and namespace; without them it shows
-// "No hardware profile".
+// Its Deployments page reads the name and namespace. A model with none of
+// them (no profile fits it: Qwen3's 10-12 GiB against the default
+// profile's 8 GiB on 3.6) is shown so (odh-dashboard rhoai-3.6 a9ea0d86):
+//   - the table's Hardware profile column says "No hardware profile":
+//     useHardwareProfileBindingState returns no binding state without a
+//     name or resource-version annotation, so HardwareProfileTableColumn
+//     renders only HardwareProfileDetailsPopover, whose table-view trigger
+//     without a profile is "No hardware profile" (L102-114). Its "Custom"
+//     (HardwareProfileTableColumn.tsx L60) is the name in a binding-state
+//     label, shown only for a deleted, disabled or updated profile;
+//   - the expanded row says "Hardware profile: Unknown"
+//     (packages/model-serving deployments/row/HardwareProfileNameValue.tsx
+//     L37-38): useHardwareProfileConfig matches the model's resources to a
+//     profile (matchToHardwareProfile), and none holds them.
+//
+// The user accepted this for such a model: no profile is created for it.
 const (
 	hardwareProfileNameAnnotation      = "opendatahub.io/hardware-profile-name"
 	hardwareProfileNamespaceAnnotation = "opendatahub.io/hardware-profile-namespace"

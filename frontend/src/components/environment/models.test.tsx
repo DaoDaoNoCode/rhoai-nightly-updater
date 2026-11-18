@@ -314,6 +314,22 @@ describe("Models tab", () => {
     expect(screen.queryByText(/v1\/chat\/completions/)).toBeNull();
   });
 
+  it("a model no hardware profile fits says plainly what the dashboard shows for it", async () => {
+    const qwen3 = model("dev", { name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)" });
+    const qwen25 = model("dev", { hardwareProfile: "redhat-ods-applications/default-profile" });
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [qwen25, qwen3] }) }), "/api/resources/projects": { projects: ["dev"] } });
+    const view = renderAt("/test-resources?tab=models&project=dev&model=qwen3-1-7b");
+    const part = await screen.findByRole("listitem", { name: "Qwen3 1.7B (CPU, tool calling)" });
+    expect(within(part).getByText(/None fits: no hardware profile on this cluster allows 4 CPUs and 10 GiB of memory \(up to 12 GiB\)/)).toBeInTheDocument();
+    expect(within(part).getByText(/its Deployments table shows "No hardware profile" and the model's details "Hardware profile: Unknown"/)).toBeInTheDocument();
+    expect(within(part).getByText(/The model runs as set up/)).toBeInTheDocument();
+    view.unmount();
+    renderAt("/test-resources?tab=models&project=dev&model=qwen25-05b-instruct");
+    const fits = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(fits).getByText("redhat-ods-applications/default-profile")).toBeInTheDocument();
+    expect(within(fits).queryByText(/Unknown/)).toBeNull();
+  });
+
   it("a missing preset image offers the newest released image, which re-runs only the model", async () => {
     const api = stubApi({
       "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { ready: false, terminalError: true, presetImageMissing: true, waitingReason: "ErrImagePull", message: "ErrImagePull: manifest unknown" })] }) }),

@@ -427,7 +427,7 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListDescription>
               {model.hardwareProfile
                 ? <><code>{model.hardwareProfile}</code>, as the dashboard shows it</>
-                : "None: no profile on this cluster allows the model's CPUs and memory, so the dashboard shows \"No hardware profile\""}
+                : <>None fits: no hardware profile on this cluster allows {modelNeeds(c)}. So its Deployments table shows &quot;No hardware profile&quot; and the model&apos;s details &quot;Hardware profile: Unknown&quot;. The model runs as set up.</>}
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}

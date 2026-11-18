@@ -859,6 +859,10 @@ func TestModelsSetup_NoFittingHardwareProfileSaysWhy(t *testing.T) {
 			if !strings.Contains(e.Message, "default-profile: cpu 4 is outside 1-2") {
 				t.Errorf("reason: %q", e.Message)
 			}
+			// What the dashboard then shows, in its own words.
+			if !strings.Contains(e.Message, `"No hardware profile"`) || !strings.Contains(e.Message, `"Hardware profile: Unknown"`) {
+				t.Errorf("the run does not say what the dashboard shows: %q", e.Message)
+			}
 			return
 		}
 	}
