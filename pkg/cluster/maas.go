@@ -1235,7 +1235,7 @@ func maasPhase(c *Client, path string) (string, bool) {
 // this tool's record of it, or the model's route through the MaaS gateway.
 // Unpublish removes all three (and the project from the shared
 // subscription, access policy and gateway), so the model goes after it.
-func MaaSPublishedIn(c *Client, project string) (bool, error) {
+func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 	_, found, err := readObjectMeta(c, namespacedPath(maasAPI(c), "maasmodelrefs", project, "qwen25-05b-instruct"))
 	if err != nil && !IsK8sError(err, 404) {
 		return false, err

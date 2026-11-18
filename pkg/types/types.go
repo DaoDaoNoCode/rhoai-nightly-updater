@@ -665,10 +665,7 @@ type ModelsStatus struct {
 	// or "" when unknown; ImagePlanReason says why.
 	ImagePlan       string `json:"imagePlan,omitempty"`
 	ImagePlanReason string `json:"imagePlanReason,omitempty"`
-	// CapacityWarning says that no worker seems to have room for a model,
-	// or is "" (room found, or unknown). It never blocks a setup.
-	CapacityWarning string `json:"capacityWarning,omitempty"`
-	// Catalog is what setup offers.
+	// Catalog is what setup offers, in the order the page lists it.
 	Catalog []CatalogModel `json:"catalog"`
 	// Items are the catalog's models in data science projects: this tool's,
 	// and those of the same name it did not create.
@@ -677,13 +674,39 @@ type ModelsStatus struct {
 
 // CatalogModel is a model the Models feature sets up.
 type CatalogModel struct {
+	// Name is the LLMInferenceService's name, and the model name callers
+	// send.
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName"`
-	URI         string `json:"uri"`
-	CPU         string `json:"cpu"`
+	// URI is the Hugging Face repository, pinned to a revision
+	// (hf://<org>/<repo>:<commit>).
+	URI string `json:"uri"`
+	CPU string `json:"cpu"`
 	// MemoryRequest is what the scheduler reserves; Memory is the limit.
 	MemoryRequest string `json:"memoryRequest"`
 	Memory        string `json:"memory"`
+	// Type is "chat" or "embedding".
+	Type string `json:"type"`
+	// ToolCalling: a chat model served with tool calling turned on.
+	ToolCalling bool `json:"toolCalling,omitempty"`
+	// EmbeddingDimension is an embedding model's vector size.
+	EmbeddingDimension int `json:"embeddingDimension,omitempty"`
+	// UseCase is what it is for, as the dashboard shows it
+	// (opendatahub.io/genai-use-case); Description is its
+	// openshift.io/description.
+	UseCase     string `json:"useCase"`
+	Description string `json:"description"`
+	// Args are the vLLM arguments the model is served with
+	// (VLLM_ADDITIONAL_ARGS).
+	Args string `json:"args"`
+	// DownloadSize is roughly what is downloaded from Hugging Face
+	// ("270 MB").
+	DownloadSize string `json:"downloadSize"`
+	// Default: the model a request that names none sets up.
+	Default bool `json:"default,omitempty"`
+	// CapacityWarning says that no worker seems to have room for this model
+	// now, or is "" (room found, or unknown).
+	CapacityWarning string `json:"capacityWarning,omitempty"`
 }
 
 // ModelState is one LLMInferenceService of the catalog in a project
@@ -716,7 +739,8 @@ type ModelsRequest struct {
 	Gateway bool `json:"gateway,omitempty"`
 	// Project is the model's project; "" when the request has no model.
 	Project string `json:"project,omitempty"`
-	// Model is the catalog name; "" means the catalog's first entry.
+	// Model is the catalog name; "" means the catalog's default
+	// (qwen25-05b-instruct). Setup and teardown act on that model only.
 	Model string `json:"model,omitempty"`
 	// ReleasedImage (setup only): run the newest released Red Hat vLLM CPU
 	// image instead of the preset's.
@@ -788,6 +812,10 @@ type PlaygroundModel struct {
 	// Chat is false for an embedding model, which the playground cannot
 	// chat with.
 	Chat bool `json:"chat"`
+	// EmbeddingDimension is set for an embedding model of this tool's
+	// catalog in the project: Set up adds it to the playground as an
+	// embedding model of that dimension.
+	EmbeddingDimension int `json:"embeddingDimension,omitempty"`
 }
 
 // PlaygroundModelRef is a model a playground setup uses.
@@ -802,7 +830,8 @@ type PlaygroundRequest struct {
 	Action  string `json:"action"`
 	Project string `json:"project"`
 	// Models (setup only) are the models to use; none means every ready
-	// chat model deployed in the project.
+	// chat model deployed in the project, and this tool's ready embedding
+	// models there.
 	Models []PlaygroundModelRef `json:"models,omitempty"`
 }
 
@@ -881,9 +910,12 @@ type MaaSModel struct {
 // MaaSRequest is the body of POST /api/resources/maas/stream.
 type MaaSRequest struct {
 	// Action is "setup" or "teardown" (the platform), or "publish" or
-	// "unpublish" (the tool's model in Project).
+	// "unpublish" (the tool's model Model in Project).
 	Action  string `json:"action"`
 	Project string `json:"project,omitempty"`
+	// Model is the catalog name of a chat model (publish and unpublish
+	// only); "" means the catalog's default (qwen25-05b-instruct).
+	Model string `json:"model,omitempty"`
 }
 
 // ComponentBlock is a DataScienceCluster component a feature needs that is
@@ -912,14 +944,15 @@ type CleanupRequest struct {
 	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
 	// MLflow deletes the MLflow server.
 	MLflow bool `json:"mlflow,omitempty"`
-	// Models are the projects whose model of the tool's catalog goes;
+	// Models are the projects whose models of the tool's catalog go (all
+	// of them);
 	// InferenceGateway deletes the inference gateway after them.
 	Models           []string `json:"models,omitempty"`
 	InferenceGateway bool     `json:"inferenceGateway,omitempty"`
 	// Playgrounds are the projects whose playground (requested by this
 	// tool) goes, before the models it uses.
 	Playgrounds []string `json:"playgrounds,omitempty"`
-	// MaaSPublished are the projects whose model this tool unpublishes from
+	// MaaSPublished are the projects whose models this tool unpublishes from
 	// Models as a Service first, before anything else goes; MaaSPlatform
 	// removes the MaaS platform this tool set up, last.
 	MaaSPublished []string `json:"maasPublished,omitempty"`

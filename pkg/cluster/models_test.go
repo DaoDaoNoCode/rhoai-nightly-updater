@@ -161,7 +161,7 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	if ms["baseRefs"].([]interface{})[0].(map[string]interface{})["name"] != testPresetName {
 		t.Errorf("baseRefs: %v", ms["baseRefs"])
 	}
-	if m := ms["model"].(map[string]interface{}); m["name"] != "qwen25-05b-instruct" || m["uri"] != "hf://Qwen/Qwen2.5-0.5B-Instruct" {
+	if m := ms["model"].(map[string]interface{}); m["name"] != "qwen25-05b-instruct" || m["uri"] != "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775" {
 		t.Errorf("model: %v", m)
 	}
 	main := ms["template"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
@@ -565,7 +565,7 @@ func TestModelsStatus_UnknownAndForeign(t *testing.T) {
 	if st.Models.Preset != testPresetName || st.Models.ImagePlan != "preset" || st.Models.Dependencies != "True" || st.Models.Blocked != nil {
 		t.Errorf("models: %+v", st.Models)
 	}
-	if len(st.Models.Catalog) != 1 || st.Models.Catalog[0].Name != "qwen25-05b-instruct" {
+	if len(st.Models.Catalog) != 4 || st.Models.Catalog[1].Name != "qwen25-05b-instruct" {
 		t.Errorf("catalog: %+v", st.Models.Catalog)
 	}
 }
@@ -696,13 +696,13 @@ func TestModelCapacityWarning(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
 	mc.f.putJSON("/api/v1/nodes/m1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"spec":{"taints":[{"effect":"NoSchedule"}]},"status":{"allocatable":{"cpu":"64","memory":"256Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"14","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	w := modelCapacityWarning(mc.c, modelCatalog[0], "")
+	w := modelCapacityWarning(mc.c, defaultEntry(), "")
 	if !strings.Contains(w, "the most CPU free is 1.5 CPUs and 53.0 GiB on w1") {
 		t.Fatalf("warning: %q", w)
 	}
 	capacityCache.Purge()
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"2","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
-	if w := modelCapacityWarning(mc.c, modelCatalog[0], ""); w != "" {
+	if w := modelCapacityWarning(mc.c, defaultEntry(), ""); w != "" {
 		t.Fatalf("warning: %q", w)
 	}
 }
@@ -1175,11 +1175,11 @@ func TestModelCapacityWarning_IgnoresTheModelsOwnPod(t *testing.T) {
 	mc.f.putJSON("/api/v1/nodes/w1", `{"metadata":{"labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"15500m","memory":"61Gi"}}}`)
 	mc.f.putJSON("/api/v1/namespaces/a/pods/busy", `{"metadata":{"namespace":"a"},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"10","memory":"8Gi"}}}]},"status":{"phase":"Running"}}`)
 	mc.f.putJSON("/api/v1/namespaces/proj/pods/qwen", `{"metadata":{"namespace":"proj","labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},"spec":{"nodeName":"w1","containers":[{"resources":{"requests":{"cpu":"4","memory":"6Gi"}}}]},"status":{"phase":"Running"}}`)
-	if w := modelCapacityWarning(mc.c, modelCatalog[0], "proj"); w != "" {
+	if w := modelCapacityWarning(mc.c, defaultEntry(), "proj"); w != "" {
 		t.Fatalf("its own pod was counted: %q", w)
 	}
 	// In another project the running copy is a real occupant.
-	if w := modelCapacityWarning(mc.c, modelCatalog[0], "other"); w == "" {
+	if w := modelCapacityWarning(mc.c, defaultEntry(), "other"); w == "" {
 		t.Fatal("a copy in another project was not counted")
 	}
 }
@@ -1202,7 +1202,7 @@ func TestModelsSetup_SkipsAProfileNotVisibleForModelServing(t *testing.T) {
 	}
 	var p hardwareProfileObject
 	_ = json.Unmarshal([]byte(hwProfile("x", "8", "32Gi", `,"annotations":{"opendatahub.io/dashboard-feature-visibility":"not json"}`)), &p)
-	if why := p.fits(modelCatalog[0]); why != "" {
+	if why := p.fits(defaultEntry()); why != "" {
 		t.Errorf("an unreadable visibility hides the profile (the dashboard shows it): %s", why)
 	}
 }
