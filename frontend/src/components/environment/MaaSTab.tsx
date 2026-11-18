@@ -122,9 +122,9 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
         <Table variant="compact" aria-label="This tool's models in MaaS">
           <Thead>
             <Tr>
-              <Th modifier="wrap">Model</Th>
-              <Th modifier="wrap">Project</Th>
-              <Th modifier="wrap">In MaaS</Th>
+              <Th modifier="wrap" width={20}>Model</Th>
+              <Th modifier="wrap" width={15}>Project</Th>
+              <Th modifier="wrap" width={50}>In MaaS</Th>
               <Th screenReaderText="Actions" />
             </Tr>
           </Thead>
@@ -141,13 +141,13 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                     <Stack>
                       <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem>
                       <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
+                      {!readOnly && !i.published && reason && <StackItem><Content component="small">{reason}</Content></StackItem>}
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
                     {!readOnly && (i.published
                       ? <Button variant="secondary" isDanger size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "unpublish-maas", project, model })}>Unpublish</Button>
                       : <Button variant="secondary" size="sm" isAriaDisabled={!!reason} onClick={() => setPending({ kind: "publish-maas", project, model })}>Publish</Button>)}
-                    {!readOnly && !i.published && reason && <Content component="small">{reason}</Content>}
                   </Td>
                 </Tr>
               );
