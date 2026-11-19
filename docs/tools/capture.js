@@ -702,7 +702,7 @@ async (page) => {
       await crop("components-soft-reset-maas-in-use", modal, { noFit: true, pad: 6 });
       await keep.check();
       await dialog.getByLabel("Hard reset").check();
-      await dialog.getByText(/Every component is torn down/).waitFor();
+      await dialog.getByText(/tears down every enabled component/).waitFor();
       await dialog.getByText(/^Kept:/).waitFor();
       await dialog.getByRole("textbox").fill("default-dsc");
       await settle();

@@ -90,7 +90,12 @@ only accepts a tag whose version is the top dated section. See
   shows the tree read-only), and on Managed RHOAI for the hard reset.
   Diagnostics' **disable** fix now uses the same change for any component
   the CRD defines, instead of a fixed list. The hard reset deletes the DSC with your own token (no new
-  ServiceAccount RBAC).
+  ServiceAccount RBAC). The reset dialogs compare the DSC as the API server
+  stores it, so a field the installed CRD defaults is no change (the hard
+  reset listed six such fields as "→ not set"); a blocked reset shows why
+  first and collapses the rest; what stops working, the CRDs that cannot be
+  read meanwhile and the changes are collapsed sections with counts, read
+  from the plan rather than fixed text.
 - **MaaS: choose the database.** PostgreSQL is customer-provided in the
   MaaS docs, so Set up asks: your PostgreSQL (only Secret
   `maas-db-config` is written; the URL is never shown, logged or kept),

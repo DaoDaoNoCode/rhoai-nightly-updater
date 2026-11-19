@@ -155,37 +155,31 @@ func (rc *removalChecker) blockers(component string) []string {
 // (moduleBlockers). The standing refusals do not apply (their reasons are
 // checked one by one: dashboard-operator by moduleBlockers, MLflow by its
 // in-use check, pipeline servers only stop working meanwhile), and a
-// conversion webhook only fails while the module is down, so it is a
-// warning. A module the reset leaves Removed gets blockers instead.
-func (rc *removalChecker) teardownBlockers(component string) (blockers, warnings []string) {
+// conversion webhook only fails while the module is down: the CRDs whose
+// webhook it serves are returned (the plan lists them), not blockers. A
+// module the reset leaves Removed gets blockers instead.
+func (rc *removalChecker) teardownBlockers(component string) (blockers, conversionCRDs []string) {
 	blockers = rc.moduleBlockers(component)
 	crds, err := rc.conversionCRDsOf(component)
-	switch {
-	case err != nil:
+	if err != nil {
 		blockers = append(blockers, fmt.Sprintf("could not check which CRD conversion webhooks %s serves: %v", component, err))
-	case len(crds) > 0:
-		warnings = append(warnings, fmt.Sprintf("While %s is down, %s %s cannot be read at another version (%s serves the conversion webhook); this works again once %s is back.",
-			component, verb(len(crds), "CRD", "CRDs"), strings.Join(crds, ", "), component, component))
 	}
-	return blockers, warnings
+	return blockers, crds
 }
 
 // unknownModuleBlocker words a module the tool cannot check: no kind of the
 // component API is named after it, so the tool cannot tell which CR serves
 // it nor which operator cleans it up.
 func unknownModuleBlocker(component string) string {
-	return fmt.Sprintf("no %s kind is named after %s, so the tool cannot tell which module CR serves it nor check that its operator can clean it up; change it in the OpenShift console once you have checked that yourself", componentAPIGroup, component)
+	return fmt.Sprintf("can't tell which module serves it (no %s kind is named after %s), so the tool can't confirm an operator is running to clean up and won't remove it. Check in the OpenShift console, then change it there", componentAPIGroup, component)
 }
 
 // unknownOperatorBlocker words a module CR whose operator the tool does not
-// know: it cannot check that the operator runs, so it refuses (fail closed)
+// know: it cannot check that the operator runs (to remove the CR's
+// finalizers and clean up its operands), so it refuses (fail closed)
 // rather than skip the check.
-func unknownOperatorBlocker(component string, finalizers []string) string {
-	what := "cleans up its operands"
-	if len(finalizers) > 0 {
-		what = fmt.Sprintf("removes its finalizer %s and cleans up its operands", strings.Join(finalizers, ", "))
-	}
-	return fmt.Sprintf("the %s module CR exists and the tool does not know which operator %s, so it cannot check that the operator runs; change it in the OpenShift console once you have checked that yourself", component, what)
+func unknownOperatorBlocker() string {
+	return "can't confirm its operator is running to clean up, so the tool won't remove it. Check in the OpenShift console, then change it there"
 }
 
 // partBlockers are the preconditions for removing a sub-component while its
@@ -199,7 +193,7 @@ func (rc *removalChecker) partBlockers(component string) []string {
 	if why := rc.platformOperatorBlocker(); why != "" {
 		blockers = append(blockers, why)
 	}
-	finalizers, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
+	_, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
 	switch {
 	case err != nil:
 		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
@@ -211,7 +205,7 @@ func (rc *removalChecker) partBlockers(component string) []string {
 		op, known := moduleOperators[component]
 		switch {
 		case !known:
-			blockers = append(blockers, unknownOperatorBlocker(component, finalizers))
+			blockers = append(blockers, unknownOperatorBlocker())
 		case op.name != "rhods-operator":
 			if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
 				blockers = append(blockers, fmt.Sprintf("its operator %s/%s cleans up the sub-component, but %s; fix that operator first", op.namespace, op.name, why))
@@ -239,7 +233,7 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
 	case found && !knownOp:
-		blockers = append(blockers, unknownOperatorBlocker(component, finalizers))
+		blockers = append(blockers, unknownOperatorBlocker())
 	}
 	// The module operator removes the finalizers of the module CR and of
 	// its operands (TrustyAIService, RayCluster, FeatureStore, TrainJob,

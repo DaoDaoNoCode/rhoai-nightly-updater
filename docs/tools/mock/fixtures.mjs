@@ -1404,7 +1404,7 @@ const dscTree = [
  * in the DSC (a row each, under the nearest node above it); noDefault
  * leaves the release default out (no DataScienceCluster example in the CSV).
  */
-export function dscManager(overrides = {}, { unknown = {}, noDefault = false } = {}) {
+export function dscManager(overrides = {}, { unknown = {}, noDefault = false, hardResetBlocked = false } = {}) {
   const nodes = dscTree.map(([path, s, def, schemaDefault, allowed, actual, cond]) => {
     const parts = path.split(".");
     const toggle = s !== undefined;
@@ -1459,8 +1459,10 @@ export function dscManager(overrides = {}, { unknown = {}, noDefault = false } =
   // A component is in the DSC when it or anything below it is set.
   const inDSC = components.filter((c) => nodes.some((n) => (n.path === c || n.path.startsWith(`${c}.`)) && n.specSet));
   const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-  // The unknown fields' values, for dscPlan's Fix; not part of the answer (not enumerable, so not sent).
-  return Object.defineProperty({
+  // The unknown fields' values, for dscPlan's Fix, and whether the hard
+  // reset is blocked as on the live cluster; not part of the answer (not
+  // enumerable, so not sent).
+  return Object.defineProperties({
     exists: true, state: "present", name: "default-dsc", uid: "ba54ddbf-ad4a-4257-9ab4-977eb541dc1c", apiVersion: "datasciencecluster.opendatahub.io/v3", storageVersion: "v3",
     dscCount: 1, phase: "Ready", releaseName: "OpenShift AI Self-Managed", releaseVersion: "3.6.0", operatorVersion: "3.6.0",
     ...(noDefault
@@ -1474,7 +1476,10 @@ export function dscManager(overrides = {}, { unknown = {}, noDefault = false } =
       defaultComponents: noDefault ? [] : [...components].sort(byName),
       dscComponents: [...inDSC, ...Object.keys(unknown).filter((p) => !p.includes("."))].sort(byName),
     },
-  }, "unknownValues", { value: Object.fromEntries(Object.entries(unknown).map(([p, v]) => [p, typeof v === "string" ? v : JSON.stringify(v)])) });
+  }, {
+    unknownValues: { value: Object.fromEntries(Object.entries(unknown).map(([p, v]) => [p, typeof v === "string" ? v : JSON.stringify(v)])) },
+    hardResetBlocked: { value: hardResetBlocked },
+  });
 }
 
 // The plan's binding (a hash in the real backend); the mock never checks it.
@@ -1524,13 +1529,37 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
   if (action === "soft-reset" && differing.length === 0 && kept.length > 0) {
     return { ...reset, refusal: `The DataScienceCluster already matches the release default, apart from the components you turned on, which the reset keeps (${kept.join(", ")}). Nothing to change.`, code: "nothing_to_do" };
   }
-  if (action === "soft-reset") return { ...reset, changes: differing };
+  const protectedFields = ["aiHub.instancesNamespace", "workbenches.workbenchNamespace"];
+  if (action === "soft-reset") return { ...reset, changes: differing, protectedFields };
+  // The live case (RHOAI 3.6.0, 2026-11-19): modules the tool cannot check
+  // and MLflow in use block the hard reset (pkg/cluster removalBlocks).
+  const blocked = m.hardResetBlocked ? [
+    { component: "aigateway", reasons: [DSC_UNKNOWN_OPERATOR] },
+    { component: "mcplifecycleoperator", reasons: [DSC_UNKNOWN_OPERATOR] },
+    { component: "mlflowoperator", reasons: ["in use by MLflow mlflow, so its removal would hang; delete MLflow first (Environment page)"] },
+  ] : reset.blocked;
   return {
-    ...reset, changes: differing,
+    ...reset, changes: differing, protectedFields, ...(blocked ? { blocked } : {}),
     tornDown: m.nodes.filter((n) => n.depth === 0 && (n.toggle ? n.spec === "Managed" : n.actual === "Managed")).map((n) => n.path),
     stayRemoved: differing.filter((c) => c.effect === "removes").map((c) => c.path),
-    warnings: ["Until aipipelines is back, these stop working: pipeline server dev-project/dspa.",
-      ...(kept.includes("aigateway") ? ["While aigateway is down, MaaS does not serve (published model dev-project/qwen25-05b-instruct): every published model and every API key stops working until the new DataScienceCluster brings it back."] : [])],
-    newObject: `apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: ${kept.includes("aigateway") ? "Managed" : "Removed"}\n    ...\n`,
+    deleteTimeoutSeconds: 600,
+    stopsWorking: [
+      ...(kept.includes("aigateway") ? [
+        { resource: "published model dev-project/qwen25-05b-instruct", components: ["aigateway"] },
+        { resource: "every MaaS API key", components: ["aigateway"] },
+      ] : []),
+      { resource: "pipeline server dev-project/dspa", components: ["aipipelines"] },
+      { resource: "LLMInferenceService dev-project/qwen25-05b-instruct", components: ["kserve"] },
+      { resource: "playground server dev-project/lsd-genai-playground", components: ["dashboard", "ogx"] },
+    ],
+    conversionCRDs: [
+      { crd: "guardrailsorchestrators.trustyai.opendatahub.io", component: "trustyai" },
+      { crd: "trustyaiservices.trustyai.opendatahub.io", component: "trustyai" },
+    ],
+    // As the API server stores it: the CRD's defaults filled in.
+    newObject: `apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: ${kept.includes("aigateway") ? "Managed" : "Removed"}\n    ...\n    kserve:\n      managementState: Managed\n      nim:\n        airGapped: false\n        managementState: Managed\n      rawDeploymentServiceConfig: Headless\n    kueue:\n      autoCreateQueues: false\n      defaultClusterQueueName: default\n      defaultLocalQueueName: default\n      managementState: Removed\n    ...\n`,
   };
 }
+
+// The blocker for a module CR whose operator the tool does not know (pkg/cluster unknownOperatorBlocker).
+const DSC_UNKNOWN_OPERATOR = "can't confirm its operator is running to clean up, so the tool won't remove it. Check in the OpenShift console, then change it there";

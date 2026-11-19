@@ -13,6 +13,9 @@ import {
   ExpandableSection,
   Form,
   FormGroup,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
   List,
   ListItem,
   Modal,
@@ -34,7 +37,7 @@ import { ConfirmActionModal } from "../ConfirmActionModal";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { errorResult, outcomeTitle, outcomeVariant } from "../../outcomes";
-import { PathList, PlanAlerts, changeText } from "./planText";
+import { BlockedAlert, PathList, WarningsAlert, changeText, durationText } from "./planText";
 
 type HardStep = { id: string; title: string };
 const HARD_RESET_STEPS: HardStep[] = [
@@ -57,16 +60,19 @@ export const ResetModal: React.FC<{
   // Keep the components the user turned on: checked by default; the plan is
   // made again when it changes.
   const [keep, setKeep] = useState(true);
-  // The toggles the user turned on, from the last plan (kept while a new
-  // plan loads, so the option does not flicker).
+  // The toggles the user turned on and the fields a reset keeps, from the
+  // last plan (kept while a new plan loads, so the options do not flicker).
   const [turnedOn, setTurnedOn] = useState<string[]>([]);
+  const [protectedFields, setProtectedFields] = useState<string[]>([]);
   const [plan, setPlan] = useState<DSCPlan | null>(null);
   const [planError, setPlanError] = useState("");
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<Record<string, StepState>>({});
   const [result, setResult] = useState<OperationResponse | null>(null);
-  const [yamlOpen, setYamlOpen] = useState(false);
+  // What the reset would do: open unless it is blocked, until the user
+  // toggles it (null: the default for the plan shown).
+  const [detailsOpen, setDetailsOpen] = useState<boolean | null>(null);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const started = Object.keys(steps).length > 0;
@@ -75,13 +81,15 @@ export const ResetModal: React.FC<{
     let active = true;
     setPlan(null);
     setPlanError("");
+    setDetailsOpen(null);
     getDSCPlan(kind, undefined, { keepEnabled: keep })
-      .then((p) => { if (active) { setPlan(p); setTurnedOn(p.turnedOn ?? []); } })
+      .then((p) => { if (active) { setPlan(p); setTurnedOn(p.turnedOn ?? []); setProtectedFields(p.protectedFields ?? []); } })
       .catch((e) => { if (active) setPlanError(toApiError(e).message); });
     return () => { active = false; };
   }, [kind, keep]);
 
-  const blocked = !plan || !!plan.refusal || (plan.blocked?.length ?? 0) > 0;
+  const hasBlockers = (plan?.blocked?.length ?? 0) > 0;
+  const blocked = !plan || !!plan.refusal || hasBlockers;
   const confirm = async () => {
     if (!plan || blocked) return;
     setBusy(true);
@@ -117,8 +125,6 @@ export const ResetModal: React.FC<{
       });
   };
 
-  const removals = plan?.changes.filter((c) => c.effect === "removes") ?? [];
-  const deploys = plan?.changes.filter((c) => c.effect === "deploys") ?? [];
   const kept = plan?.kept ?? [];
   // A blocked removal of a component the user turned on: keeping them avoids it.
   const keepWouldHelp = !keep && (plan?.blocked ?? []).some((b) => turnedOn.includes(b.component));
@@ -133,10 +139,15 @@ export const ResetModal: React.FC<{
                 <FormGroup role="radiogroup" isStack fieldId="dsc-reset-kind" label="How">
                   <Radio id="dsc-reset-soft" name="dsc-reset-kind" isChecked={kind === "soft-reset"} onChange={() => setKind("soft-reset")}
                     label="Soft reset (recommended)"
-                    description={<>Changes <code>{name}</code> in place: only the components and settings that differ from the release default. Namespaces of workbenches and the AI hub are kept.</>} />
+                    description={<>Changes <code>{name}</code> in place: only the components and settings that differ from the release default.</>} />
                   <Radio id="dsc-reset-hard" name="dsc-reset-kind" isChecked={kind === "hard-reset"} onChange={() => setKind("hard-reset")}
                     label="Hard reset"
                     description={<>Deletes <code>{name}</code> and creates the release default in its place. Use it when components are stuck and a soft reset does not help.</>} />
+                  {protectedFields.length > 0 && (
+                    <FormHelperText>
+                      <HelperText><HelperTextItem>Both keep the value of <PathList paths={protectedFields} />.</HelperTextItem></HelperText>
+                    </FormHelperText>
+                  )}
                 </FormGroup>
                 {turnedOn.length > 0 && (
                   <Checkbox id="dsc-reset-keep" isChecked={keep} onChange={(_e, v) => setKeep(v)}
@@ -149,46 +160,21 @@ export const ResetModal: React.FC<{
           {planError && <StackItem><Alert component="p" variant="danger" isInline title="Could not work out the reset">{planError}</Alert></StackItem>}
           {!plan && !planError && <StackItem><Spinner size="md" aria-label="Working out the reset" /></StackItem>}
           {plan?.refusal && <StackItem><Alert component="p" variant={plan.code === "nothing_to_do" ? "info" : "warning"} isInline title={plan.code === "nothing_to_do" ? "Nothing to change" : "Not possible now"}>{plan.refusal}</Alert></StackItem>}
-          {plan && !plan.refusal && !started && kind === "soft-reset" && (
-            <StackItem>
-              <Content component="p">This changes the shared cluster:</Content>
-              <List aria-label="Changes of the reset">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
-              {kept.length > 0 && <Content component="p" className="pf-v6-u-mt-sm">Kept: <PathList paths={kept} /> (you turned these on).</Content>}
-            </StackItem>
-          )}
-          {plan && !plan.refusal && !started && kind === "hard-reset" && (
+          {plan && !plan.refusal && !started && (
             <>
-              <StackItem>
-                <Alert component="div" variant="danger" isInline title="Every component is torn down, then comes back as the release default">
-                  <List>
-                    <ListItem>The operator removes every component ({(plan.tornDown ?? []).join(", ") || "none enabled"}), then the release default brings back what it enables. This takes minutes; RHOAI is unavailable meanwhile.</ListItem>
-                    <ListItem>Your resources (notebooks, pipeline servers, models, model registries) are kept, but stop working until their components are back.</ListItem>
-                    {(plan.stayRemoved?.length ?? 0) > 0 && (
-                      <ListItem>Enabled now, but Removed in the release default, so they stay Removed: <PathList paths={plan.stayRemoved!} />. Turn them on again afterwards if you need them.</ListItem>
-                    )}
-                    {kept.length > 0 && <ListItem>Kept: <PathList paths={kept} /> (you turned these on). They come back as they are now.</ListItem>}
-                    <ListItem>If the old DataScienceCluster is not gone within 10 minutes, nothing is created and the reset stops; the finalizer is never removed by hand. Once it is gone, this page offers to finish the reset with the same object.</ListItem>
-                  </List>
-                </Alert>
-              </StackItem>
-              {plan.changes.length > 0 && (
+              {hasBlockers && <StackItem><BlockedAlert plan={plan} /></StackItem>}
+              {keepWouldHelp && (
                 <StackItem>
-                  <Content component="p">Compared with now, the new DataScienceCluster differs in:</Content>
-                  <List aria-label="Differences of the new DataScienceCluster">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+                  <Content component="p">Check <strong>Keep the components you turned on</strong> to reset everything else and keep these as they are.</Content>
                 </StackItem>
               )}
               <StackItem>
-                <ExpandableSection toggleText="The DataScienceCluster it creates" isExpanded={yamlOpen} onToggle={(_e, v) => setYamlOpen(v)}>
-                  <CodeBlock><CodeBlockCode>{plan.newObject}</CodeBlockCode></CodeBlock>
+                <ExpandableSection toggleText={kind === "hard-reset" ? "What a hard reset would do" : "What a soft reset would do"}
+                  isExpanded={detailsOpen ?? !hasBlockers} onToggle={(_e, v) => setDetailsOpen(v)}>
+                  {kind === "hard-reset" ? <HardResetDetails plan={plan} name={name} kept={kept} /> : <SoftResetDetails plan={plan} kept={kept} />}
                 </ExpandableSection>
               </StackItem>
             </>
-          )}
-          {plan && !started && <StackItem><PlanAlerts plan={plan} /></StackItem>}
-          {plan && !started && keepWouldHelp && (
-            <StackItem>
-              <Content component="p">Check <strong>Keep the components you turned on</strong> to reset everything else and keep these as they are.</Content>
-            </StackItem>
           )}
           {plan && !plan.refusal && !started && kind === "hard-reset" && !blocked && (
             <StackItem>
@@ -208,14 +194,6 @@ export const ResetModal: React.FC<{
           {result && (
             <StackItem>
               <Alert component="p" isInline isLiveRegion variant={outcomeVariant(result)} title={outcomeTitle(result, "The hard reset stopped")}>{result.success ? undefined : result.message}</Alert>
-            </StackItem>
-          )}
-          {kind === "soft-reset" && plan && !plan.refusal && (removals.length > 0 || deploys.length > 0) && (
-            <StackItem>
-              <Content component="p" className="pf-v6-u-text-color-subtle">
-                {removals.length > 0 && <>{removals.length} {removals.length === 1 ? "component is" : "components are"} removed. </>}
-                {deploys.length > 0 && <>{deploys.length} {deploys.length === 1 ? "component is" : "components are"} deployed.</>}
-              </Content>
             </StackItem>
           )}
         </Stack>
@@ -313,5 +291,103 @@ export const FinishHardReset: React.FC<{
         </ConfirmActionModal>
       )}
     </PageSection>
+  );
+};
+
+/** A collapsed section of details (controlled, so its toggle always says whether it is expanded). */
+const Details: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => {
+  const [open, setOpen] = useState(false);
+  return <ExpandableSection toggleText={title} isExpanded={open} onToggle={(_e, v) => setOpen(v)}>{children}</ExpandableSection>;
+};
+
+/** What a soft reset changes: the list of changes, what it keeps, and its warnings. */
+const SoftResetDetails: React.FC<{ plan: DSCPlan; kept: string[] }> = ({ plan, kept }) => {
+  const removals = plan.changes.filter((c) => c.effect === "removes").length;
+  const deploys = plan.changes.filter((c) => c.effect === "deploys").length;
+  return (
+    <Stack hasGutter>
+      <StackItem>
+        <Content component="p">This changes the shared cluster:</Content>
+        <List aria-label="Changes of the reset">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+        {kept.length > 0 && <Content component="p" className="pf-v6-u-mt-sm">Kept: <PathList paths={kept} /> (you turned these on).</Content>}
+      </StackItem>
+      {(plan.warnings?.length ?? 0) > 0 && <StackItem><WarningsAlert plan={plan} /></StackItem>}
+      {(removals > 0 || deploys > 0) && (
+        <StackItem>
+          <Content component="p" className="pf-v6-u-text-color-subtle">
+            {removals > 0 && <>{removals} {removals === 1 ? "component is" : "components are"} removed. </>}
+            {deploys > 0 && <>{deploys} {deploys === 1 ? "component is" : "components are"} deployed.</>}
+          </Content>
+        </StackItem>
+      )}
+    </Stack>
+  );
+};
+
+/**
+ * What a hard reset does, the decision first: a short summary, what is kept
+ * or stays off, then each group of details (from the plan) on demand.
+ */
+const HardResetDetails: React.FC<{ plan: DSCPlan; name: string; kept: string[] }> = ({ plan, name, kept }) => {
+  const tornDown = plan.tornDown ?? [];
+  const stayRemoved = plan.stayRemoved ?? [];
+  const stops = plan.stopsWorking ?? [];
+  const crds = plan.conversionCRDs ?? [];
+  const within = plan.deleteTimeoutSeconds ? `within ${durationText(plan.deleteTimeoutSeconds)}` : "in time";
+  return (
+    <Stack hasGutter>
+      <StackItem>
+        <Alert component="div" variant="danger" isInline
+          title={<>Deletes <code>{name}</code> and tears down every enabled component ({tornDown.length})</>}>
+          <Content component="p">
+            They come back as the release default; RHOAI is unavailable for minutes. If the old DataScienceCluster is not gone {within}, nothing is created and this page offers to finish later.
+          </Content>
+        </Alert>
+      </StackItem>
+      {(stayRemoved.length > 0 || kept.length > 0) && (
+        <StackItem>
+          {stayRemoved.length > 0 && <Content component="p">Stay Removed (on now, off in the release default): <PathList paths={stayRemoved} />. Turn them on again afterwards if you need them.</Content>}
+          {kept.length > 0 && <Content component="p">Kept: <PathList paths={kept} /> (you turned these on). They come back as they are now.</Content>}
+        </StackItem>
+      )}
+      {(plan.warnings?.length ?? 0) > 0 && <StackItem><WarningsAlert plan={plan} /></StackItem>}
+      <StackItem>
+        {/* The details, collapsed: one toggle under the other. */}
+        <Stack>
+          {stops.length > 0 && (
+            <StackItem>
+              <Details title={`Stops working until its component is back (${stops.length})`}>
+                <List aria-label="What stops working until its component is back">
+                  {stops.map((s) => <ListItem key={s.resource}>{s.resource}: needs <PathList paths={s.components} /></ListItem>)}
+                </List>
+              </Details>
+            </StackItem>
+          )}
+          {crds.length > 0 && (
+            <StackItem>
+              <Details title={`CRDs that cannot be read at another version meanwhile (${crds.length})`}>
+                <List aria-label="CRDs that cannot be read at another version meanwhile">
+                  {crds.map((c) => <ListItem key={c.crd}><code>{c.crd}</code>: served by <code>{c.component}</code></ListItem>)}
+                </List>
+              </Details>
+            </StackItem>
+          )}
+          <StackItem>
+            {plan.changes.length > 0 ? (
+              <Details title={`Changes in the new DataScienceCluster (${plan.changes.length})`}>
+                <List aria-label="Differences of the new DataScienceCluster">{plan.changes.map((c) => <ListItem key={c.path}>{changeText(c)}</ListItem>)}</List>
+              </Details>
+            ) : (
+              <Content component="p">Changes in the new DataScienceCluster: none; it has the same settings as now.</Content>
+            )}
+          </StackItem>
+          <StackItem>
+            <Details title="The DataScienceCluster it creates">
+              <CodeBlock><CodeBlockCode>{plan.newObject}</CodeBlockCode></CodeBlock>
+            </Details>
+          </StackItem>
+        </Stack>
+      </StackItem>
+    </Stack>
   );
 };

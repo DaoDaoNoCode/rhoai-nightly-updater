@@ -395,8 +395,8 @@ describe("DSCManagerSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
     const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
     fireEvent.click(within(dialog).getByLabelText("Hard reset"));
-    expect(await within(dialog).findByText(/Every component is torn down/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/so they stay Removed/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/tears down every enabled component/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Stay Removed/)).toBeInTheDocument();
     const confirm = within(dialog).getByRole("button", { name: "Hard reset" });
     expect(isOff(confirm)).toBe(true);
     fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "default-dsc" } });
@@ -425,6 +425,7 @@ describe("DSCManagerSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset to the release default…" }));
     const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
     fireEvent.click(within(dialog).getByLabelText("Hard reset"));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Changes in the new DataScienceCluster (2)" }));
     const list = await within(dialog).findByRole("list", { name: "Differences of the new DataScienceCluster" });
     expect(within(list).getByText(/Managed → Removed \(removes it\)/)).toBeInTheDocument();
     expect(within(list).getByText(/team → not set/)).toBeInTheDocument();
@@ -504,6 +505,8 @@ describe("DSCManagerSection", () => {
       fireEvent.click(within(dialog).getByRole("checkbox", { name: /Keep the components you turned on/ }));
       expect(await within(dialog).findByText(/MaaS is in use/)).toBeInTheDocument();
       expect(api.calls).toContain("GET /api/components/dsc/plan?action=soft-reset&keepEnabled=false");
+      // Blocked: why first, what it would do on demand.
+      fireEvent.click(within(dialog).getByRole("button", { name: "What a soft reset would do" }));
       const changes = within(dialog).getByRole("list", { name: "Changes of the reset" });
       expect(within(changes).getAllByText(/Managed → Removed \(removes it\)/)).toHaveLength(2);
       expect(within(dialog).getByText(/Clean up MaaS unpublishes and removes it in order/)).toBeInTheDocument();
@@ -517,7 +520,7 @@ describe("DSCManagerSection", () => {
 
     it("hard reset keeps them too and says so", async () => {
       const hardKeep = plan({ action: "hard-reset", keepEnabled: true, turnedOn, kept: turnedOn, tornDown: ["aigateway", "ray"], newObject: "kind: DataScienceCluster\n", changes: [],
-        warnings: ["While aigateway is down, MaaS does not serve (published model proj/qwen25-05b-instruct): every published model and every API key stops working until the new DataScienceCluster brings it back."] });
+        stopsWorking: [{ resource: "published model proj/qwen25-05b-instruct", components: ["aigateway"] }, { resource: "every MaaS API key", components: ["aigateway"] }] });
       const hardPure = plan({ action: "hard-reset", turnedOn, tornDown: ["aigateway", "ray"], stayRemoved: turnedOn, newObject: "kind: DataScienceCluster\n", changes: [], blocked: [{ component: "aigateway", reasons: [maasReason] }] });
       const api = stubApi({
         "GET /api/components/dsc": manager,
@@ -528,7 +531,8 @@ describe("DSCManagerSection", () => {
       const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
       fireEvent.click(within(dialog).getByLabelText("Hard reset"));
       expect(await within(dialog).findByText(/They come back as they are now/)).toBeInTheDocument();
-      expect(within(dialog).getByText(/While aigateway is down, MaaS does not serve/)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Stops working until its component is back (2)" }));
+      expect(within(dialog).getByText(/published model proj\/qwen25-05b-instruct/)).toBeInTheDocument();
       expect(api.calls).toContain("GET /api/components/dsc/plan?action=hard-reset&keepEnabled=true");
       fireEvent.click(within(dialog).getByRole("checkbox", { name: /Keep the components you turned on/ }));
       expect(await within(dialog).findByText(/MaaS is in use/)).toBeInTheDocument();

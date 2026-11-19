@@ -536,11 +536,25 @@ type DSCPlan struct {
 	// change is refused while any is listed.
 	Blocked  []DSCRemovalBlock `json:"blocked,omitempty"`
 	Warnings []string          `json:"warnings,omitempty"`
+	// Hard reset: what stops working while the components are down
+	// (each resource once, with the components it needs), and the CRDs
+	// that cannot be read at another version meanwhile (the component
+	// serves their conversion webhook).
+	StopsWorking   []DSCStopsWorking  `json:"stopsWorking,omitempty"`
+	ConversionCRDs []DSCConversionCRD `json:"conversionCRDs,omitempty"`
 	// Hard reset: the enabled components, those the default leaves
-	// Removed, and the object it creates (YAML).
+	// Removed, and the object it creates (YAML, with the values the
+	// API server's defaulting fills in from the installed CRD).
 	TornDown    []string `json:"tornDown,omitempty"`
 	StayRemoved []string `json:"stayRemoved,omitempty"`
 	NewObject   string   `json:"newObject,omitempty"`
+	// Hard reset: how long it waits for the old DataScienceCluster to be
+	// gone before it stops without creating anything.
+	DeleteTimeoutSeconds int `json:"deleteTimeoutSeconds,omitempty"`
+	// Resets: the fields under spec.components whose value the reset
+	// keeps (the CRD's validation rules do not let it change), where the
+	// DataScienceCluster sets them.
+	ProtectedFields []string `json:"protectedFields,omitempty"`
 	// Resets: KeepEnabled is the option the plan was made with (part of
 	// the token). TurnedOn are the toggles the user turned on: Managed (or
 	// Unmanaged) in the DataScienceCluster and deployed, while the release
@@ -635,6 +649,21 @@ type DSCVersionFallback struct {
 type DSCRemovalBlock struct {
 	Component string   `json:"component"`
 	Reasons   []string `json:"reasons"`
+}
+
+// DSCStopsWorking is a resource that stops working while a hard reset has
+// the components it needs down ("pipeline server team/dspa").
+type DSCStopsWorking struct {
+	Resource   string   `json:"resource"`
+	Components []string `json:"components"`
+}
+
+// DSCConversionCRD is a CRD whose conversion webhook a component serves:
+// while the component is down, its objects cannot be read at another
+// version.
+type DSCConversionCRD struct {
+	CRD       string `json:"crd"`
+	Component string `json:"component"`
 }
 
 // ComponentsResponse groups DSC component statuses with deployment details.

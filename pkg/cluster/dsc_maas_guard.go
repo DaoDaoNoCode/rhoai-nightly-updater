@@ -143,8 +143,10 @@ func (rc *removalChecker) maasBlocker(path string) string {
 // maasBlocks checks a change from before to after against MaaS: the first
 // MaaS path that stops being deployed blocks while MaaS is in use. In a
 // hard reset (teardown) a MaaS path that is deployed again afterwards is
-// down only meanwhile: a warning, while a read that fails still blocks.
-func (v *dscView) maasBlocks(rc *removalChecker, before, after map[string]any, teardown bool) (*types.DSCRemovalBlock, string) {
+// down only meanwhile: it returns that path and what stops working until
+// it is back (the published models and the API keys), while a read that
+// fails still blocks.
+func (v *dscView) maasBlocks(rc *removalChecker, before, after map[string]any, teardown bool) (*types.DSCRemovalBlock, string, []string) {
 	gone, down := "", ""
 	for _, p := range dscMaaSPaths {
 		t, ok := v.byKey[p]
@@ -161,21 +163,25 @@ func (v *dscView) maasBlocks(rc *removalChecker, before, after map[string]any, t
 	}
 	if gone != "" {
 		if why := rc.maasBlocker(gone); why != "" {
-			return &types.DSCRemovalBlock{Component: gone, Reasons: []string{why}}, ""
+			return &types.DSCRemovalBlock{Component: gone, Reasons: []string{why}}, "", nil
 		}
-		return nil, ""
+		return nil, "", nil
 	}
 	if down == "" {
-		return nil, ""
+		return nil, "", nil
 	}
 	use, err := rc.maasUse()
 	switch {
 	case err != nil:
-		return &types.DSCRemovalBlock{Component: down, Reasons: []string{rc.maasBlocker(down)}}, ""
+		return &types.DSCRemovalBlock{Component: down, Reasons: []string{rc.maasBlocker(down)}}, "", nil
 	case use.inUse():
-		return nil, fmt.Sprintf("While %s is down, MaaS does not serve (%s): every published model and every API key stops working until the new DataScienceCluster brings it back.", down, use.text())
+		var stops []string
+		for _, m := range use.models {
+			stops = append(stops, "published model "+m)
+		}
+		return nil, down, append(stops, "every MaaS API key")
 	}
-	return nil, ""
+	return nil, "", nil
 }
 
 // addBlock adds b to blocks, with the reasons of a block of the same
