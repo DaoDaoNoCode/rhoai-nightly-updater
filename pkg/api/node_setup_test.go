@@ -19,7 +19,10 @@ func TestNodeSetupValidatesTheRequest(t *testing.T) {
 	called := false
 	origPlan, origRun := planNodeSetup, runNodeSetup
 	t.Cleanup(func() { planNodeSetup, runNodeSetup = origPlan, origRun })
-	planNodeSetup = func(*cluster.Client, string) (*types.NodeSetupPlan, error) { called = true; return &types.NodeSetupPlan{}, nil }
+	planNodeSetup = func(*cluster.Client, string) (*types.NodeSetupPlan, error) {
+		called = true
+		return &types.NodeSetupPlan{}, nil
+	}
 	runNodeSetup = func(*cluster.Client, types.NodeSetupRequest, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		called = true
 		return &types.OperationResponse{Success: true}, nil
@@ -28,12 +31,24 @@ func TestNodeSetupValidatesTheRequest(t *testing.T) {
 		handler func(w *httptest.ResponseRecorder, body string)
 		body    string
 	}{
-		{func(w *httptest.ResponseRecorder, b string) { HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b)) }, `{}`},
-		{func(w *httptest.ResponseRecorder, b string) { HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b)) }, `{"action":"delete-everything"}`},
-		{func(w *httptest.ResponseRecorder, b string) { HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b)) }, `{"action":"mirror-create","uid":"a/b"}`},
-		{func(w *httptest.ResponseRecorder, b string) { HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b)) }, `{"action":"pull-secret-add"}`},
-		{func(w *httptest.ResponseRecorder, b string) { HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b)) }, `{"action":"mirror-remove","uid":"u"}`},
-		{func(w *httptest.ResponseRecorder, b string) { HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b)) }, `not json`},
+		{func(w *httptest.ResponseRecorder, b string) {
+			HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b))
+		}, `{}`},
+		{func(w *httptest.ResponseRecorder, b string) {
+			HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b))
+		}, `{"action":"delete-everything"}`},
+		{func(w *httptest.ResponseRecorder, b string) {
+			HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b))
+		}, `{"action":"mirror-create","uid":"a/b"}`},
+		{func(w *httptest.ResponseRecorder, b string) {
+			HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b))
+		}, `{"action":"pull-secret-add"}`},
+		{func(w *httptest.ResponseRecorder, b string) {
+			HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b))
+		}, `{"action":"mirror-remove","uid":"u"}`},
+		{func(w *httptest.ResponseRecorder, b string) {
+			HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b))
+		}, `not json`},
 	} {
 		w := httptest.NewRecorder()
 		tc.handler(w, tc.body)
