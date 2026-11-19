@@ -735,7 +735,7 @@ async function modelsStream(req, res) {
       send({ step: "model", status: "running", message: `Creating ${display} in '${project}'...` });
       const others = (i) => i.namespace !== project || i.name !== model;
       m.items = [...(m.items ?? []).filter(others), F.modelStates.startingAs(model, project)];
-      send({ step: "model", status: "success", message: `LLMInferenceService ${project}/${model} applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3.` });
+      send({ step: "model", status: "success", message: `LLMInferenceService ${project}/${model} applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3. Reached through gateway openshift-ingress/openshift-ai-inference, KServe's default.` });
       send({ step: "model-ready", status: "running", message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." });
       await nextStep();
       send({ step: "model-ready", status: "running", message: "Starting vLLM and loading the model..." });

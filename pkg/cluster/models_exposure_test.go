@@ -372,6 +372,16 @@ func TestModelsBlock_ConnectivityLinkAloneIsNoBlock(t *testing.T) {
 	}
 }
 
+// The model step says how it is reached in a sentence of its own.
+func TestModelsSetup_ModelStepSaysHowItIsReached(t *testing.T) {
+	mc := newModelsCluster(t)
+	_, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	msgs := strings.Join(eventMessages(events, "model"), "\n")
+	if !strings.Contains(msgs, "with the cluster preset's Red Hat vLLM CPU image. Reached through gateway openshift-ingress/openshift-ai-inference, KServe's default.") {
+		t.Fatalf("model step: %s", msgs)
+	}
+}
+
 // The "Through MaaS only" option says who can call the model: publish
 // keeps the subscription's audience, so not "anyone signed in" when it is
 // limited; and an unread MaaS state says so in words.

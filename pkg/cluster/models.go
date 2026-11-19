@@ -1183,7 +1183,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		if allow != nil {
 			listed = fmt.Sprintf(" %s was added to the projects the inference gateway allows.", mp.project)
 		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
+		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
 		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 		timeout := ModelReadyTimeout
 		if dl, ok := c.ctx.Deadline(); ok {
