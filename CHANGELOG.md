@@ -281,6 +281,22 @@ only accepts a tag whose version is the top dated section. See
 
 ### Fixed
 
+- **Components and Diagnostics: module operators are found at run time,
+  not from a list of names.** The list lacked `aigateway` and
+  `mcplifecycleoperator`, so on RHOAI 3.6 a hard reset or a change that
+  removed either was refused ("can't confirm its operator is running").
+  The operator of a module is now the Deployment in the applications
+  namespace, owned by the Platform, whose ServiceAccount a
+  ClusterRoleBinding lets update the module CR and its finalizers; Kueue,
+  whose CRD the installed CSV owns, is the RHOAI operator's own. No such
+  Deployment, several equally specific ones, a grant through `*`
+  resources, or a read error still refuse the change. The same discovery
+  names the operator in Platform modules, apply failures, leftovers and
+  the "has not retried yet" restart, which no longer guesses a Deployment
+  from its name. The ServiceAccount may now `list` ClusterRoles and
+  ClusterRoleBindings (read only; SECURITY.md, "Reading RBAC to find
+  module operators"); RUNBOOK §11.9.
+
 - **Components: MaaS is no longer removed by a change that does not know
   it is in use.** Setting `aigateway` or `aigateway.modelsAsAService` to
   Removed, a soft or hard reset (the release default leaves both
