@@ -1850,6 +1850,28 @@ var HandleMaaSStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 	writeJSON(w, st, "maas")
 })
 
+// checkMaaSGroups checks group names typed in a MaaS dialog; tests replace it.
+var checkMaaSGroups = cluster.CheckMaaSGroups
+
+// HandleMaaSGroups says which groups typed in a MaaS dialog
+// (?name=a&name=b, at most 20) have no OpenShift Group, so the dialog warns
+// before Publish. Only for a cluster-admin, who may read groups anyway:
+// the check uses this tool's read of a group by its name, which other
+// users may not have.
+var HandleMaaSGroups = withAdminRead(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	names := r.URL.Query()["name"]
+	if len(names) == 0 || len(names) > 20 {
+		writeError(w, "name 1 to 20 groups", http.StatusBadRequest, "validation")
+		return
+	}
+	problems, why := checkMaaSGroups(c, names)
+	if why != "" {
+		writeError(w, why, http.StatusBadRequest, "validation")
+		return
+	}
+	writeJSON(w, problems, "maas-groups")
+})
+
 // HandleMaaSStream sets up or removes the MaaS platform, or publishes or
 // unpublishes this tool's model in a project, as one operation streaming
 // its steps.

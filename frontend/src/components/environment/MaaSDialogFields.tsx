@@ -26,9 +26,10 @@ import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon"
 import PlusCircleIcon from "@patternfly/react-icons/dist/esm/icons/plus-circle-icon";
 import MinusCircleIcon from "@patternfly/react-icons/dist/esm/icons/minus-circle-icon";
 import type { MaaSDatabase } from "../../types";
+import { checkMaaSGroups } from "../../services/api";
 import {
   type AudienceForm, type DatabaseForm, type LimitForm, type WindowUnit, DATABASE_CHOICES, LIMIT_PRESETS, MAX_RATES,
-  audienceProblem, connectionUrlProblem, limitProblem,
+  audienceProblem, audienceRequest, connectionUrlProblem, groupNameProblem, limitProblem, MAX_NAMES, openShiftGroupName,
 } from "./maasForms";
 
 const Problem: React.FC<{ id: string; text: string | null }> = ({ id, text }) => text ? (
@@ -134,9 +135,43 @@ export const LimitFields: React.FC<{ value: LimitForm; onChange: (f: LimitForm) 
   );
 };
 
+/** How long typing must pause before the groups typed are checked. */
+export const GROUP_CHECK_DELAY_MS = 400;
+
+/**
+ * The groups typed that have no OpenShift Group: at once for a name that
+ * cannot be one, and after typing pauses for the others (GET
+ * /api/resources/maas/groups, which only a cluster-admin may ask). A failed
+ * check shows nothing: Publish checks again and says so in its steps.
+ */
+function useMissingGroups(groups: string[]): string[] {
+  const key = groups.join("\n");
+  const [missing, setMissing] = React.useState<Record<string, boolean>>({});
+  React.useEffect(() => {
+    const ask = key.split("\n").filter((g) => g && !groupNameProblem(g) && openShiftGroupName(g)).slice(0, MAX_NAMES);
+    if (ask.length === 0) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      checkMaaSGroups(ask).then((problems) => {
+        if (!live) return;
+        const found = new Set(problems.filter((p) => p.missing).map((p) => p.name));
+        setMissing((m) => ({ ...m, ...Object.fromEntries(ask.map((g) => [g, found.has(g)])) }));
+      }).catch(() => undefined);
+    }, GROUP_CHECK_DELAY_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [key]);
+  return groups.filter((g) => !groupNameProblem(g) && (!openShiftGroupName(g) || missing[g]));
+}
+
+export const missingGroupText = (g: string) => `${g} is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in.`;
+
 /** Who may use the published models: everyone signed in, or named groups and users. */
 export const AudienceFields: React.FC<{ value: AudienceForm; onChange: (f: AudienceForm) => void; idPrefix: string }> = ({ value, onChange, idPrefix }) => {
   const problem = audienceProblem(value);
+  const missing = useMissingGroups(value.everyone ? [] : audienceRequest(value).groups ?? []);
   return (
     <Form onSubmit={(e) => e.preventDefault()}>
       <FormGroup role="radiogroup" isStack fieldId={`${idPrefix}-audience`} label="Who can use the published models">
@@ -147,8 +182,13 @@ export const AudienceFields: React.FC<{ value: AudienceForm; onChange: (f: Audie
           body={!value.everyone ? (
             <>
               <FormGroup label="OpenShift groups" fieldId={`${idPrefix}-groups`}>
-                <TextArea id={`${idPrefix}-groups`} rows={2} resizeOrientation="vertical" value={value.groups} placeholder="One per line" onChange={(_e, v) => onChange({ ...value, groups: v })} />
-                <FormHelperText><HelperText><HelperTextItem>The MaaS docs advise groups for people (oc adm groups new, oc adm groups add-users).</HelperTextItem></HelperText></FormHelperText>
+                <TextArea id={`${idPrefix}-groups`} aria-describedby={`${idPrefix}-groups-help`} rows={2} resizeOrientation="vertical" value={value.groups} placeholder="One per line" onChange={(_e, v) => onChange({ ...value, groups: v })} />
+                <FormHelperText>
+                  <HelperText id={`${idPrefix}-groups-help`}>
+                    <HelperTextItem>The MaaS docs advise groups for people (oc adm groups new, oc adm groups add-users).</HelperTextItem>
+                    {missing.map((g) => <HelperTextItem key={g} variant="warning">{missingGroupText(g)}</HelperTextItem>)}
+                  </HelperText>
+                </FormHelperText>
               </FormGroup>
               <FormGroup label="Users" fieldId={`${idPrefix}-users`}>
                 <TextArea id={`${idPrefix}-users`} rows={2} resizeOrientation="vertical" value={value.users} placeholder="system:serviceaccount:<namespace>:<name>, one per line" onChange={(_e, v) => onChange({ ...value, users: v })} />

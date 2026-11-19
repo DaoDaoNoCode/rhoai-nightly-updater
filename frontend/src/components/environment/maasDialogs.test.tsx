@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { GROUP_CHECK_DELAY_MS } from "./MaaSDialogFields";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
@@ -64,6 +65,33 @@ describe("MaaS dialogs", () => {
     fireEvent.click(publish);
     await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "premium" }, access: { everyone: false, groups: ["ml-team", "data"], users: [] } }]);
+  });
+
+  it("Publish warns about groups with no OpenShift Group while they are typed", async () => {
+    const api = stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": maas({ parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], platform: { deployed: true, ready: true, managedByTool: true },
+        items: [{ namespace: "dev", name: "qwen3-1-7b", displayName: "Qwen3 1.7B", deployed: false, ready: false, managedByTool: true, modelReady: true, published: false }] }),
+      "/api/resources/maas/groups": [{ name: "nobody-yet", missing: true, message: "x", commands: "oc adm groups new nobody-yet" }],
+      "POST /api/resources/maas/stream": done });
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
+    const dialog = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Specific groups and users/ }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.change(within(dialog).getByLabelText("OpenShift groups"), { target: { value: "ml-team\nnobody-yet\n/admins" } });
+      // A name that cannot be an OpenShift Group's is said at once, without asking.
+      expect(within(dialog).getByText("/admins is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in.")).toBeInTheDocument();
+      expect(api.calls.filter((c) => c.includes("/maas/groups"))).toEqual([]);
+      await act(() => vi.advanceTimersByTimeAsync(GROUP_CHECK_DELAY_MS));
+      expect(api.calls.filter((c) => c.includes("/maas/groups"))).toEqual(["GET /api/resources/maas/groups?name=ml-team&name=nobody-yet"]);
+      expect(within(dialog).getByText(/^nobody-yet is not a group on this cluster/)).toBeInTheDocument();
+      expect(within(dialog).queryByText(/^ml-team is not a group/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    // A warning, not a refusal: Publish stays possible.
+    expect(within(dialog).getByRole("button", { name: "Publish" })).toBeEnabled();
   });
 
   it("Change limit takes custom rates by the CRD's rules", async () => {
