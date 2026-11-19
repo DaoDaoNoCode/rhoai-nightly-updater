@@ -106,8 +106,12 @@ export interface ClusterInfo {
   server: string;
   version: string;
   user: string;
-  /** "hosted" (ROSA HCP, HyperShift) or "self-managed"; absent when it could not be read, and in the gitops profile. */
-  controlPlane?: "hosted" | "self-managed";
+  /**
+   * "hosted" (ROSA HCP, HyperShift), "managed" (on the cluster, run by Red
+   * Hat: ROSA Classic, OpenShift Dedicated) or "self-managed"; absent when
+   * it could not be read, and in the gitops profile.
+   */
+  controlPlane?: "hosted" | "managed" | "self-managed";
 }
 
 export interface SubscriptionInfo {
@@ -151,8 +155,31 @@ export interface PullSecretInfo {
 export interface NodePullSecretInfo {
   /** Adds the quay.io/rhoai entry to openshift-config/pull-secret (a cluster-admin runs it; it prompts for the token). */
   command: string;
+  /** Removes that entry again. */
+  removeCommand: string;
   /** The nightly catalog is READY on its quay.io/rhoai image: the nodes have pulled from quay.io/rhoai. */
   pulled: boolean;
+}
+
+/** The one-click setup actions on a cluster whose control plane runs on the cluster. */
+export type NodeSetupAction = "mirror-create" | "mirror-remove" | "pull-secret-add" | "pull-secret-remove";
+
+/** What a one-click setup action would do (POST /api/setup/nodes/plan), worked out with the user's token and a dry run. */
+export interface NodeSetupPlan {
+  action: NodeSetupAction;
+  controlPlane?: ClusterInfo["controlPlane"];
+  ready: boolean;
+  nothingToDo?: boolean;
+  state: string;
+  changes?: string[];
+  nodeImpact?: string;
+  undo?: string;
+  /** Machine config pools that will not take the change yet (paused or degraded). */
+  pools?: string[];
+  refusal?: string;
+  refusalCode?: "hosted" | "managed" | "unknown_topology" | "forbidden" | "foreign" | "unreadable" | "external_secrets" | "no_token" | "quay" | "conflict" | "failed";
+  resourceVersion?: string;
+  uid?: string;
 }
 
 export interface ImageMirrorInfo {

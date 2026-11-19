@@ -1,6 +1,6 @@
 /** The RHOAI operator: status, the running operation, updates, reinstalls and refreshes, cluster setup, and usage tracking. */
 
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, UserPermissions, UpdateStep, OperationStatusResponse, VersionInfo, UpdateCheck } from '../../types';
+import { StatusResponse, OperationResponse, NodeSetupAction, NodeSetupPlan,LatestNightlyResponse, NightlyTagsResponse, UserPermissions, UpdateStep, OperationStatusResponse, VersionInfo, UpdateCheck } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -45,6 +45,27 @@ export function checkNodePull(image: string): Promise<OperationResponse> {
     method: 'POST',
     body: JSON.stringify({ image }),
   });
+}
+
+/** What a one-click setup action would do: read with your own token, checked by a server-side dry run; changes nothing. */
+export function planNodeSetup(action: NodeSetupAction): Promise<NodeSetupPlan> {
+  return request('/api/setup/nodes/plan', {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+}
+
+/** Runs a reviewed setup action, streaming "check", "dry_run", "apply" and "verify"; sends back the plan's object version. */
+export function streamNodeSetup(
+  plan: Pick<NodeSetupPlan, 'action' | 'resourceVersion' | 'uid'>,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  const body: Record<string, string> = { action: plan.action };
+  if (plan.resourceVersion) body.resourceVersion = plan.resourceVersion;
+  if (plan.uid) body.uid = plan.uid;
+  return streamSSE('/api/setup/nodes/stream', body, onStep, onDone, onConnectionDrop);
 }
 
 export function createPullSecret(auth: string): Promise<OperationResponse> {

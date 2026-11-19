@@ -22,7 +22,8 @@ import {
 } from "@patternfly/react-core";
 import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
-import type { ClusterInfo, OperationResponse, PullSecretInfo } from "../types";
+import type { ClusterInfo, NodeSetupAction, OperationResponse, PullSecretInfo } from "../types";
+import { NodeSetupDialog } from "./NodeSetupDialog";
 import { checkNodePull, createPullSecret, testPullSecret, toApiError } from "../services/api";
 import { CopyableCode } from "./environment/UseIt";
 import { describeError } from "../errors";
@@ -74,10 +75,18 @@ const NODE_PULL_RESULT_TITLE: Record<string, string> = {
 };
 
 /**
- * The nodes' side of the pull secret on a self-managed cluster (or one whose
- * control plane is unknown): they pull with openshift-config/pull-secret,
- * which the updater cannot read, so it shows the command a cluster-admin
- * runs, and a check that runs a temporary catalog pod.
+ * The nodes' side of the pull secret on a cluster whose control plane runs
+ * on the cluster: the nodes pull with openshift-config/pull-secret, which
+ * the updater's ServiceAccount cannot read.
+ *   - self-managed: Add to the nodes' pull secret (and its removal) copy the
+ *     token saved above into it with the user's own permissions
+ *     (NodeSetupDialog); the commands are under "Do it yourself instead";
+ *   - managed (ROSA Classic, OSD): Red Hat creates that secret and documents
+ *     no procedure for changing it, so there is no button; the commands are
+ *     there for whoever chooses to;
+ *   - unknown: the commands first, and the button as an attempt whose
+ *     refusal the dialog explains.
+ * Check that the nodes can pull runs a temporary catalog pod.
  */
 const NodePullSecret: React.FC<{
   nodes: NonNullable<PullSecretInfo["nodes"]>;
@@ -86,12 +95,16 @@ const NodePullSecret: React.FC<{
   checkImageReason?: string;
   result: OperationResponse | null;
   onResult: (result: OperationResponse | null) => void;
-}> = ({ nodes, controlPlane, checkImage, checkImageReason, result, onResult }) => {
+  onStatusRefresh?: () => void;
+}> = ({ nodes, controlPlane, checkImage, checkImageReason, result, onResult, onStatusRefresh }) => {
   const blocker = useMutationBlocker({ ignoreReconcile: true });
   const onBusy = useClusterBusyHandler();
   const [checking, setChecking] = useState(false);
-  const [commandOpen, setCommandOpen] = useState(false);
+  const [diyOpen, setDiyOpen] = useState(controlPlane === "managed");
+  const [dialog, setDialog] = useState<NodeSetupAction | null>(null);
   const selfManaged = controlPlane === "self-managed";
+  const managed = controlPlane === "managed";
+  const unknown = controlPlane === undefined;
 
   const handleCheck = async () => {
     if (!checkImage) return;
@@ -107,76 +120,87 @@ const NodePullSecret: React.FC<{
     }
   };
 
-  const command = (
+  const commands = (
     <Stack hasGutter>
+      <StackItem>
+        <Content component="p">Add the quay.io/rhoai entry (as a cluster-admin, in bash or zsh with jq 1.6 or later):</Content>
+      </StackItem>
       <StackItem>
         <CopyableCode id="node-pull-secret-command" label="the command" code={nodes.command} />
       </StackItem>
       <StackItem>
         <Content component="p" className="pf-v6-u-text-color-subtle">
-          Run it in bash or zsh with jq 1.6 or later. It asks for the token you saved above (base64 user:password, with
-          its = padding) without showing it, and changes only the quay.io/rhoai entry. The nodes pick it up within a few
-          minutes without a reboot; <code>oc get mcp</code> shows UPDATED True for every pool when done.
+          It asks for the token you saved above (base64 user:password, with its = padding) without showing it, and
+          changes only the quay.io/rhoai entry. The nodes pick it up within a few minutes without a drain or reboot;{" "}
+          <code>oc get mcp</code> shows UPDATED True for every pool when done.
         </Content>
+      </StackItem>
+      <StackItem>
+        <Content component="p">Remove it again:</Content>
+      </StackItem>
+      <StackItem>
+        <CopyableCode id="node-pull-secret-remove-command" label="the removal command" code={nodes.removeCommand} />
       </StackItem>
     </Stack>
   );
 
-  if (nodes.pulled) {
-    return (
-      <Stack hasGutter>
-        <StackItem>
-          <Content component="p">
-            The nodes pull with the cluster pull secret, openshift-config/pull-secret. The nightly catalog runs its
-            quay.io/rhoai image, so they can pull.
-          </Content>
-        </StackItem>
-        <StackItem>
-          <ExpandableSection
-            toggleText="The command that adds the quay.io/rhoai entry"
-            isExpanded={commandOpen}
-            onToggle={(_e, open) => setCommandOpen(open)}
-            isIndented
-          >
-            {command}
-          </ExpandableSection>
-        </StackItem>
-      </Stack>
-    );
-  }
+  const intro = nodes.pulled
+    ? "The nodes pull with the cluster pull secret, openshift-config/pull-secret. The nightly catalog runs its quay.io/rhoai image, so they can pull."
+    : selfManaged
+      ? "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret. The token saved above is the updater's own copy, for its Quay lookups. Add to the nodes' pull secret copies it there with your own permissions; every other registry login in that secret stays as it is."
+      : managed
+        ? "Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated): its nodes pull with the cluster pull secret, openshift-config/pull-secret. Red Hat creates that secret, and the documentation of these services has no procedure for changing it, so the updater does not change it. If you choose to add the quay.io/rhoai entry yourself, the commands are below."
+        : "The updater could not read what kind of cluster this is. On ROSA HCP the nodes use the token saved above. If this cluster is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret: a cluster-admin adds the quay.io/rhoai entry with this command, or tries Add to the nodes' pull secret:";
 
   const checkReason = blocker ?? (checking ? null : checkImage ? null : checkImageReason ?? "Looking up the newest nightly build...");
+  const setupButtons = !managed && (
+    <>
+      <ActionListItem>
+        <TooltipButton variant={selfManaged && !nodes.pulled ? "primary" : "secondary"} onClick={() => setDialog("pull-secret-add")} disabledReason={blocker}>
+          Add to the nodes&apos; pull secret
+        </TooltipButton>
+      </ActionListItem>
+      {selfManaged && (
+        <ActionListItem>
+          <TooltipButton variant="secondary" isDanger onClick={() => setDialog("pull-secret-remove")} disabledReason={blocker}>
+            Remove from the nodes&apos; pull secret
+          </TooltipButton>
+        </ActionListItem>
+      )}
+    </>
+  );
   return (
     <Stack hasGutter>
       <StackItem>
-        <Content component="p">
-          {selfManaged
-            ? "This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret. The secret saved above is the updater's own copy, for its Quay lookups. The updater has no access to openshift-config/pull-secret, so a cluster-admin adds the quay.io/rhoai entry with this command:"
-            : "The updater could not read whether this cluster has a hosted control plane. On ROSA HCP the nodes use the secret saved above. If this cluster is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret, which the updater has no access to: a cluster-admin adds the quay.io/rhoai entry with this command:"}
-        </Content>
+        <Content component="p">{intro}</Content>
       </StackItem>
-      <StackItem>{command}</StackItem>
+      {unknown && <StackItem>{commands}</StackItem>}
       <StackItem>
         <ActionList>
           <ActionListGroup>
-            <ActionListItem>
-              <TooltipButton
-                variant="secondary"
-                onClick={handleCheck}
-                isLoading={checking || undefined}
-                isDisabled={checking}
-                disabledReason={checkReason}
-              >
-                Check that the nodes can pull
-              </TooltipButton>
-            </ActionListItem>
+            {setupButtons}
+            {!nodes.pulled && (
+              <ActionListItem>
+                <TooltipButton
+                  variant="secondary"
+                  onClick={handleCheck}
+                  isLoading={checking || undefined}
+                  isDisabled={checking}
+                  disabledReason={checkReason}
+                >
+                  Check that the nodes can pull
+                </TooltipButton>
+              </ActionListItem>
+            )}
           </ActionListGroup>
         </ActionList>
-        <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-mt-sm">
-          {checking
-            ? "Waiting for a temporary catalog pod to pull the image. This takes up to two minutes."
-            : "Runs a temporary catalog pod with the newest nightly catalog image, then removes it. Nothing else changes."}
-        </Content>
+        {!nodes.pulled && (
+          <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-mt-sm">
+            {checking
+              ? "Waiting for a temporary catalog pod to pull the image. This takes up to two minutes."
+              : "Check that the nodes can pull runs a temporary catalog pod with the newest nightly catalog image, then removes it. Nothing else changes."}
+          </Content>
+        )}
       </StackItem>
       {result && (
         <StackItem>
@@ -191,6 +215,28 @@ const NodePullSecret: React.FC<{
             {result.message}
           </Alert>
         </StackItem>
+      )}
+      {!unknown && (
+        <StackItem>
+          <ExpandableSection
+            toggleText={managed ? "The commands" : "Do it yourself instead"}
+            isExpanded={diyOpen}
+            onToggle={(_e, open) => setDiyOpen(open)}
+            isIndented
+          >
+            {commands}
+          </ExpandableSection>
+        </StackItem>
+      )}
+      {dialog && (
+        <NodeSetupDialog
+          action={dialog}
+          onClose={() => setDialog(null)}
+          onChanged={() => {
+            onResult(null);
+            onStatusRefresh?.();
+          }}
+        />
       )}
     </Stack>
   );
@@ -344,8 +390,10 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
               <HelperTextItem>
                 {CREDENTIALS_HELP} Saved as additional-pull-secret in kube-system.
                 {nodes && !pullSecret.exists && (controlPlane === "self-managed"
-                  ? " The nodes of this self-managed cluster need it in openshift-config/pull-secret too: once it is saved, this item shows the command."
-                  : " If this cluster is self-managed, its nodes need it in openshift-config/pull-secret too: once it is saved, this item shows the command.")}
+                  ? " The nodes of this self-managed cluster need it in openshift-config/pull-secret too: once it is saved, this item offers to add it there."
+                  : controlPlane === "managed"
+                    ? " The nodes of this cluster pull with openshift-config/pull-secret, which Red Hat manages: once it is saved, this item explains what that means."
+                    : " If this cluster is self-managed, its nodes need it in openshift-config/pull-secret too: once it is saved, this item shows how to add it there.")}
               </HelperTextItem>
             )}
           </HelperText>
@@ -479,6 +527,7 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             checkImageReason={checkImageReason}
             result={nodeResult}
             onResult={setNodeResult}
+            onStatusRefresh={onStatusRefresh}
           />
         </StackItem>
       )}
