@@ -5,7 +5,10 @@
 // stay 2x; GIF frames go to frames/<gif>/NNN-<ms>.png.
 async (page) => {
   const origin = page.url().match(/^https?:\/\/[^/]+/)[0];
-  const { name: job, out } = await (await page.request.get(`${origin}/__docs/job`)).json();
+  const { name: job, out, contrast: jobContrast } = await (await page.request.get(`${origin}/__docs/job`)).json();
+  // The docs images use the Glass contrast mode; CONTRAST=default (or
+  // high-contrast) in screenshots.sh captures them in another mode.
+  const CONTRAST = jobContrast || "glass";
   const W = 1440;
   const H = 900;
   // Crops and GIFs use a narrower window, close to the width the docs show
@@ -37,10 +40,11 @@ async (page) => {
 
   /**
    * Opens path in scenario sc, in the light or dark color scheme and a
-   * contrast mode (docs images use "default"), with clean storage. The keys
+   * contrast mode (docs images use CONTRAST, Glass unless the run names
+   * another), with clean storage. The keys
    * are src/theme/themeCore.ts COLOR_SCHEME_KEY and CONTRAST_MODE_KEY.
    */
-  async function open(path, sc, { dark = false, contrast = "default", height = H, width = vw } = {}) {
+  async function open(path, sc, { dark = false, contrast = CONTRAST, height = H, width = vw } = {}) {
     if (sc) await scenario(sc);
     await page.setViewportSize({ width, height });
     await page.goto(origin + "/__docs/state");
@@ -597,7 +601,7 @@ async (page) => {
       });
 
       // The component tree with the differences from the release default,
-      // a toggle's confirmation, and the hard reset's dialog.
+      // and a toggle's confirmation.
       await open("/components", "components-differences");
       const tree = card("Components and sub-components");
       await tree.scrollIntoViewIfNeeded();
@@ -608,14 +612,59 @@ async (page) => {
       await settle();
       await crop("components-toggle", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
-      await wait(400);
-      await tree.getByRole("button", { name: "Reset to the release default…" }).click();
-      await page.getByRole("dialog").getByLabel("Hard reset").check();
-      await page.getByRole("dialog").getByText(/Every component is torn down/).waitFor();
-      await page.getByRole("dialog").getByRole("textbox").fill("default-dsc");
+
+      // MaaS set up and a model published: the resets keep the components
+      // the user turned on (checked by default); unchecked, and turning
+      // aigateway off, the MaaS guard refuses. Tall enough that no dialog
+      // body scrolls.
+      await open("/components", "components-turned-on", { height: 1800 });
+      const modal = page.locator(".pf-v6-c-modal-box");
+      const dialog = page.getByRole("dialog");
+      const keep = dialog.getByRole("checkbox", { name: /^Keep the components you turned on/ });
+      const turnedOn = card("Components and sub-components");
+      // No focus ring on the dialog's close button or the checkbox.
+      const unfocus = () => page.evaluate(() => document.activeElement?.blur());
+      await turnedOn.getByRole("button", { name: "Reset to the release default…" }).click();
+      await dialog.getByText(/^Kept:/).waitFor();
       await settle();
-      await crop("components-hard-reset", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
+      await unfocus();
+      await crop("components-soft-reset", modal, { noFit: true, pad: 6 });
+      await keep.uncheck();
+      await dialog.getByText("This change is not possible now").waitFor();
+      await settle();
+      await unfocus();
+      await crop("components-soft-reset-maas-in-use", modal, { noFit: true, pad: 6 });
+      await keep.check();
+      await dialog.getByLabel("Hard reset").check();
+      await dialog.getByText(/Every component is torn down/).waitFor();
+      await dialog.getByText(/^Kept:/).waitFor();
+      await dialog.getByRole("textbox").fill("default-dsc");
+      await settle();
+      await unfocus();
+      await crop("components-hard-reset", modal, { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
+      await wait(400);
+      await turnedOn.getByRole("combobox", { name: "Set aigateway", exact: true }).selectOption("Removed");
+      await dialog.getByText("This change is not possible now").waitFor();
+      await settle();
+      await unfocus();
+      await crop("components-toggle-maas-in-use", modal, { noFit: true, pad: 6 });
+      await page.keyboard.press("Escape");
+    },
+
+    // Signing in: the page once the session expired (any API answers 401
+    // session_expired), and a sign-in from before 4.0.0, whose changes are
+    // off with the reason (GET /api/user/permissions, reasonCode sign_in_again).
+    async signin() {
+      await open("/", "session-expired");
+      await crop("signin-session-expired", page.locator(".pf-v6-c-empty-state"), { pad: 0 });
+      await open("/", "sign-in-before-4");
+      const rhoai = card("RHOAI on this cluster");
+      await rhoai.getByRole("button", { name: "Update to latest" }).hover({ force: true });
+      const tip = page.getByRole("tooltip").filter({ hasText: "Your sign-in cannot make changes" });
+      await tip.waitFor();
+      await wait(300);
+      await crop("signin-before-4", [rhoai, tip], { noFit: true });
     },
 
     async builds() {
@@ -798,7 +847,7 @@ async (page) => {
       await crop("environment-playground-setup", [part("Models"), setUp], {
         notes: [
           { at: panel().getByRole("checkbox", { name: "Select row 0" }), n: 1, pos: "l" },
-          { at: panel().getByText(/^Published to Models as a Service:/).first(), n: 2, pos: "l" },
+          { at: panel().getByText(/^Not used unless you choose it/).first(), n: 2, pos: "r" },
           { at: setUp, n: 3, pos: "r" },
         ],
         pad: 24,

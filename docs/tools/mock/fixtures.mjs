@@ -22,6 +22,10 @@ export const digest = (seed) => "sha256:" + createHash("sha256").update(seed).di
 const hex = (seed, n) => createHash("sha1").update(seed).digest("hex").slice(0, n);
 
 export const USER = "dev-user";
+// pkg/api writeAuthError and sessionProblem (scopeRefusal): an expired or
+// revoked sign-in, and one made before 4.0.0 that cannot carry a change.
+export const SESSION_EXPIRED_MESSAGE = "Your OpenShift session has expired. Log in again.";
+export const SIGN_IN_SCOPE_MESSAGE = "Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again.";
 const APPS = "apps.example-cluster.example.com";
 export const CONSOLE_URL = `https://console-openshift-console.${APPS}`;
 // The Dashboard CR's status.url on a release behind the data-science gateway.
@@ -1479,7 +1483,7 @@ const DSC_PLAN_BINDING = "0".repeat(24);
 // The mock cluster's MaaS is in use (a published model, the tool's
 // subscription and access policy), as on the live cluster the guard was
 // written for (dsc_maas_guard.go).
-const DSC_MAAS_IN_USE = "MaaS is in use (published model team-a/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription; access policy models-as-a-service/rhoai-nightly-updater-access; this tool set MaaS up (MaaS tab)).";
+const DSC_MAAS_IN_USE = "MaaS is in use (published model dev-project/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription; access policy models-as-a-service/rhoai-nightly-updater-access; this tool set MaaS up (MaaS tab)).";
 
 /** What a change would do (GET /api/components/dsc/plan), for the mock's manager m. */
 export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
@@ -1525,8 +1529,8 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
     ...reset, changes: differing,
     tornDown: m.nodes.filter((n) => n.depth === 0 && (n.toggle ? n.spec === "Managed" : n.actual === "Managed")).map((n) => n.path),
     stayRemoved: differing.filter((c) => c.effect === "removes").map((c) => c.path),
-    warnings: ["Until aipipelines is back, these stop working: pipeline server team-a/dspa.",
-      ...(kept.includes("aigateway") ? ["While aigateway is down, MaaS does not serve (published model team-a/qwen25-05b-instruct): every published model and every API key stops working until the new DataScienceCluster brings it back."] : [])],
+    warnings: ["Until aipipelines is back, these stop working: pipeline server dev-project/dspa.",
+      ...(kept.includes("aigateway") ? ["While aigateway is down, MaaS does not serve (published model dev-project/qwen25-05b-instruct): every published model and every API key stops working until the new DataScienceCluster brings it back."] : [])],
     newObject: `apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: ${kept.includes("aigateway") ? "Managed" : "Removed"}\n    ...\n`,
   };
 }

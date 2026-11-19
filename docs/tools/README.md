@@ -7,6 +7,7 @@ them all with one command:
 ```bash
 make docs-screenshots                 # all images (about 3 minutes)
 make docs-screenshots JOBS="status gif-update"   # only some jobs
+CONTRAST=default make docs-screenshots            # another contrast mode
 ```
 
 It needs Node 22+, `playwright-cli`, `ffmpeg` and ImageMagick 7 (`magick`).
@@ -38,6 +39,12 @@ seconds late, to look at the loading states by hand. The browser clock is fixed 
 
 ## Conventions
 
+- **Contrast mode**: every image uses PatternFly's Glass contrast mode
+  (translucent surfaces over the theme's background image), light and dark
+  as below. `CONTRAST=default` or `CONTRAST=high-contrast` captures them in
+  another mode; `capture.js` sets it as the app stores it
+  (`src/theme/themeCore.ts` `CONTRAST_MODE_KEY`), and `open()` takes
+  `contrast` for a single image.
 - **Full pages** (`page-<page>-light.png`, `-dark.png`): 1440 px wide, rendered
   at 2x and scaled down. README uses them in `<picture>` elements with a
   `prefers-color-scheme: dark` source.
