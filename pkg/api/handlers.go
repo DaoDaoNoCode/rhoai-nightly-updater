@@ -1669,6 +1669,22 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		writeError(w, "deleteNamespace needs removeOldStorage", http.StatusBadRequest, "validation")
 		return
 	}
+	if len(req.ConfirmProjects) > 0 && req.RemoveOldStorage {
+		writeError(w, "confirmProjects is for Migrate only", http.StatusBadRequest, "validation")
+		return
+	}
+	if len(req.ConfirmProjects) > 200 {
+		writeError(w, "at most 200 projects", http.StatusBadRequest, "validation")
+		return
+	}
+	seen := map[string]bool{}
+	for _, p := range req.ConfirmProjects {
+		if !namespaceRegex.MatchString(p) || seen[p] {
+			writeError(w, "invalid or repeated project in confirmProjects", http.StatusBadRequest, "validation")
+			return
+		}
+		seen[p] = true
+	}
 
 	sseWriter, err := NewSSEWriter(w)
 	if err != nil {
@@ -1689,9 +1705,9 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		}
 	}
 	beginOperation(w, target)
-	slog.Info("mutation", "op", "migrate-storage", "target", target)
+	slog.Info("mutation", "op", "migrate-storage", "target", target, "confirmProjects", req.ConfirmProjects)
 
-	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace}, forwardSteps(sseWriter))
+	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace, ConfirmProjects: req.ConfirmProjects}, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, migrateErr)
 	if migrateErr != nil {
 		slog.Error("migrate-storage failed", "error", migrateErr)

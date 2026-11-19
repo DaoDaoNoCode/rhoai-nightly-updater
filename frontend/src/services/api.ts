@@ -634,6 +634,8 @@ export interface MigrateStorageOptions {
   removeOldStorage?: boolean;
   /** Also delete namespace minio (only with removeOldStorage). */
   deleteNamespace?: boolean;
+  /** Projects whose unrecorded pipeline server the user confirmed as this tool's (Migrate only). */
+  confirmProjects?: string[];
 }
 
 /**

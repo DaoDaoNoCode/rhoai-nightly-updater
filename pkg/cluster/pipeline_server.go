@@ -578,6 +578,15 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 		return fail(fmt.Sprintf("%s Secrets '%s' and '%s' are in place; re-run setup, or delete the pipeline server to clean up.", msg, dspaSecretName, connectionSecretName), code, "DSPA write failed")
 	}
 	logs = append(logs, "OK: Pipeline server "+dspaAction)
+	// Recorded as the tool's (pipeline_record.go): Migrate storage writes
+	// the storage's keys only into a recorded or confirmed pipeline
+	// server's project. A record that fails leaves it unrecorded, which
+	// Migrate storage then asks about: nothing is trusted without it.
+	recordNote := ""
+	if err := recordPipelineServer(c, dspaMeta); err != nil {
+		logs = append(logs, fmt.Sprintf("Warning: the pipeline server could not be recorded as this tool's (%v); Migrate storage will ask you to confirm its project.", err))
+		recordNote = " It could not be recorded as this tool's; Migrate storage will ask you to confirm its project."
+	}
 
 	// The secrets are created before the DSPA, which reads the first; once
 	// the DSPA exists it becomes their owner, so the garbage collector
@@ -602,7 +611,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	recordPipelineActivity(c, "setup-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, dspaName), true)
 
 	return &types.OperationResponse{
-		Success: true, Message: "Pipeline server created. It will take 1-3 minutes to become ready.",
+		Success: true, Message: "Pipeline server created. It will take 1-3 minutes to become ready." + recordNote,
 		Logs: logs,
 	}, nil
 }
@@ -763,6 +772,10 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 		}, nil
 	}
 	logs = append(logs, "OK: Pipeline server deleted")
+	if err := forgetPipelineServer(c, project, target.Meta.Name); err != nil {
+		// A stale entry names a UID that no longer exists: it trusts nothing.
+		logs = append(logs, fmt.Sprintf("Warning: this tool's record of the pipeline server could not be cleared: %v", err))
+	}
 
 	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", getUser(c))
 	recordPipelineActivity(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
