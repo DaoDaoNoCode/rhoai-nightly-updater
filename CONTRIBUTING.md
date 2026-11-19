@@ -7,8 +7,8 @@ This guide covers how to develop, test, and deploy changes to the RHOAI Nightly 
 ### Required Versions
 
 - **Go**: 1.27; `go.mod` names toolchain go1.27.4, the version CI and the Containerfile use, so an older local Go 1.21+ downloads and runs it (`GOTOOLCHAIN=auto`, the default)
-- **Node.js**: 22.x, ≥ 22.13 for the test tooling (CI uses `node:22-alpine`)
-- **TypeScript**: 5.x
+- **Node.js**: 26.x, the Active LTS line (CI and the image use `node:26-alpine`); Node 22.22.2+ and 24.15+ also run the tooling (jsdom 31)
+- **TypeScript**: 6.0 (installed by `npm ci`)
 
 ### Required Tools
 
@@ -57,13 +57,13 @@ Open **http://127.0.0.1:9000** in your browser.
 
 ### Frontend Development
 
-**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:22-alpine` image. A newer local npm (11) leaves out optional peer entries that npm 10 expects, and CI's `npm ci` then refuses the lock as out of sync. Renovate's merge requests: [Dependency updates](#dependency-updates).
+**Changing frontend dependencies:** after editing `frontend/package.json`, run `make frontend-lock`. It updates `package-lock.json` with the npm of CI's pinned `node:26-alpine` image (npm 11), so CI's `npm ci` accepts it. npm majors write the lock differently: when CI ran npm 10, it refused locks from a local npm 11 as out of sync (npm 11 leaves out optional peer entries npm 10 expects). Renovate's merge requests: [Dependency updates](#dependency-updates).
 
 The frontend uses:
 
-- **React 18.3.0** with TypeScript 5.6.x
+- **React 19** with TypeScript 6.0
 - **PatternFly 6.x** for UI components (`@patternfly/react-core`, `@patternfly/react-table`)
-- **React Router 7** (`react-router-dom` ^7.18.4) for client-side routing
+- **React Router 7** (`react-router-dom` ^7.18.6) for client-side routing
 - **Webpack 5** for bundling (configured in `frontend/webpack.config.js`)
 
 #### TypeScript Configuration
@@ -210,7 +210,7 @@ make build             # Build using podman or docker (auto-detected)
 
 1. Auto-detects container runtime (`podman` or `docker`)
 2. Builds a multi-stage image from `Containerfile`:
-   - **Stage 1 (frontend)**: `node:22-alpine`
+   - **Stage 1 (frontend)**: `node:26-alpine`
      - Installs dependencies: `npm ci`
      - Type-checks, lints and tests: `npm run typecheck && npm run lint && npm test` (skipped with `--build-arg RUN_CHECKS=false`, which only GitLab's image jobs pass: their pipeline's test jobs have run these checks on the same commit)
      - Builds production bundle: `npm run build` → `frontend/dist/`
@@ -295,7 +295,7 @@ Teammates install releases, so a broken `main` only reaches people who test `:ma
 
 `renovate.json5` configures [Renovate](https://docs.renovatebot.com/): merge requests every Monday before 6am (New York time) for Go modules (`go.mod`'s toolchain line moves, its `go` line stays), npm (`frontend/`), the container images of the Containerfile and of `.gitlab-ci.yml`'s `*_IMAGE` variables (tag and digest; digest-only references get digest updates), and the GitHub Actions (by commit SHA). Minor and patch updates are grouped (Go modules, npm dependencies, container image digests, GitHub Actions); the Go toolchain (go.mod, the golang images, the workflows' `go-version`) and golangci-lint (image and workflow version) each move in one merge request; major updates come one by one. Nothing is merged automatically; every merge request runs the normal pipeline. npm versions wait 3 days before a merge request. Labels: `dependencies`, plus `go`, `frontend` or `ci`.
 
-**The frontend lock.** Renovate updates `frontend/package-lock.json` with npm 10 (`constraints` in `renovate.json5`), the npm major of CI's `node:22-alpine` image, which is what `make frontend-lock` uses. If CI's `npm ci` still refuses a Renovate lock, check out the branch, run `make frontend-lock` and push. (Renovate's `postUpgradeTasks` could run that npm command itself, but only on a self-hosted Renovate whose admin allows the command, never on the Mend app; the version constraint covers both.) A Node major update (for example `node:24-alpine`) brings another npm: change the constraint in the same merge request.
+**The frontend lock.** Renovate updates `frontend/package-lock.json` with npm 11 (`constraints` in `renovate.json5`), the npm major of CI's `node:26-alpine` image, which is what `make frontend-lock` uses. If CI's `npm ci` still refuses a Renovate lock, check out the branch, run `make frontend-lock` and push. (Renovate's `postUpgradeTasks` could run that npm command itself, but only on a self-hosted Renovate whose admin allows the command, never on the Mend app; the version constraint covers both.) A Node major update (for example `node:28-alpine`) brings another npm: change the constraint in the same merge request.
 
 Not covered: the images the backend deploys on clusters (`pkg/cluster/*.go` constants such as SeaweedFS and rclone), Helm and shellcheck versions with their SHA-256s, and the chart's example `ose-cli` image (its tag follows the cluster's OCP version). Update those by hand.
 

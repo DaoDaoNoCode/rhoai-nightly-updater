@@ -49,7 +49,7 @@ variables:
   DOCKER_HUB: mirror.gcr.io
   # Images pinned by digest; keep in step with the Containerfile.
   GO_IMAGE: $DOCKER_HUB/library/golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
-  NODE_IMAGE: $DOCKER_HUB/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+  NODE_IMAGE: $DOCKER_HUB/library/node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5
   GOLANGCI_IMAGE: $DOCKER_HUB/golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
   # buildah builds the image (scripts/ci-build-image.sh); the multi-arch
   # index of the upstream image, which rebuilds the tag: the digest pins it.

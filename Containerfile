@@ -1,12 +1,14 @@
 # Base images are pinned by digest (multi-arch index); bump them together
-# with the tag in the comment. Go 1.27 is a supported release
-# (https://go.dev/doc/devel/release); UBI 9.8 is the current UBI 9 minor.
+# with the tag in the comment. Node 26 is the Active LTS line
+# (https://nodejs.org/en/about/previous-releases); Go 1.27 is a supported
+# release (https://go.dev/doc/devel/release); UBI 9.8 is the current UBI 9
+# minor.
 # Docker Hub images come through DOCKER_HUB: docker.io unless GitLab CI
 # passes its Dependency Proxy (DOCKER_HUB in .gitlab-ci.yml); the digests
 # pin them either way.
 ARG DOCKER_HUB=docker.io
-# node:22-alpine
-FROM ${DOCKER_HUB}/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS frontend
+# node:26-alpine
+FROM ${DOCKER_HUB}/library/node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci

@@ -17,12 +17,14 @@
   // (or version) kept beside it.
   pinDigests: true,
   // frontend/package-lock.json must be what CI's `npm ci` accepts: the npm
-  // of the pinned node:22 image (npm 10; a newer npm leaves out optional
-  // peer entries npm 10 expects). `make frontend-lock` does the same with
+  // of the pinned node:26 image (npm 11; npm majors write the lock
+  // differently, and CI refuses a lock from another major as out of sync).
+  // A Node major update changes this constraint in the same merge request.
+  // `make frontend-lock` does the same with
   // that exact image; when CI's `npm ci` refuses a Renovate lock, run it on
   // the branch.
   constraints: {
-    npm: '^10',
+    npm: '^11',
   },
   postUpdateOptions: ['gomodTidy'],
   // The image variables of .gitlab-ci.yml: jobs name them (`image:

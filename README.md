@@ -405,7 +405,7 @@ flowchart LR
 ```
 
 - **Backend:** Go `net/http`, a raw-HTTP Kubernetes client (no client-go), JSON logs. API routes are in `pkg/api/routes.go`.
-- **Frontend:** React 18, PatternFly 6, TypeScript, webpack; served by the backend.
+- **Frontend:** React 19, PatternFly 6, TypeScript, webpack; served by the backend.
 - **Progress:** Update, Re-deploy and Install a different build stream their steps over SSE. Afterwards the page polls `/api/status`, and `GET /api/operation` shows the running operation to every viewer.
 - **State:** ConfigMaps `rhoai-nightly-updater-activity` (audit log), `-snapshot` (pre-operation snapshot and the recorded Subscription), `-operation` (running-operation marker, last result and the cross-pod lease).
 

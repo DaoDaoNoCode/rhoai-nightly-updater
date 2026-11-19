@@ -82,8 +82,16 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const gw = status.inferenceGateway;
   const choosing = !!project && !model?.deployed && next?.kind === "set-up";
   const exposuresRead = useModelExposures(project, name, `${gw?.deployed}|${gw?.ready}|${(gw?.allowedProjects ?? []).join(",")}`, choosing);
+  // Another project or model starts from the recommended way again, in the
+  // same render: an effect would reset it one render later, after a choice
+  // made in between.
   const [choice, setChoice] = useState<string | null>(null);
-  useEffect(() => { setChoice(null); }, [project, name]);
+  const choiceFor = `${project}/${name}`;
+  const [choiceMadeFor, setChoiceMadeFor] = useState(choiceFor);
+  if (choiceMadeFor !== choiceFor) {
+    setChoiceMadeFor(choiceFor);
+    setChoice(null);
+  }
   const ex = exposuresRead.data;
   const selectedKey = choice ?? ex?.default ?? null;
   const option = ex?.options.find((o) => o.key === selectedKey);

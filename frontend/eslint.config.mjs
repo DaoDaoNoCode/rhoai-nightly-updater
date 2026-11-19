@@ -3,7 +3,7 @@ import js from "@eslint/js";
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
-import jsxA11y from "eslint-plugin-jsx-a11y";
+import jsxA11y from "eslint-plugin-jsx-a11y-x";
 import globals from "globals";
 
 export default defineConfig(
@@ -12,7 +12,7 @@ export default defineConfig(
   tseslint.configs.recommended,
   {
     files: ["src/**/*.{ts,tsx}"],
-    extends: [jsxA11y.flatConfigs.recommended],
+    extends: [jsxA11y.configs.recommended],
     languageOptions: { globals: globals.browser },
     plugins: { "react-hooks": reactHooks },
     rules: {
