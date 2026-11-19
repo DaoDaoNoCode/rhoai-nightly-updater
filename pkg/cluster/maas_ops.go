@@ -773,7 +773,7 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		return m.fail("check", fmt.Sprintf("Cannot list the MaaSSubscriptions, so this tool cannot pick a priority below the others'; nothing was changed: %v.", err), errorCodeFromK8sErr(err), "subscription list failed")
 	}
 	if len(others) > 0 && rhclBelowMinimum(rhcl.version) {
-		return m.fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later with RHOAI 3.6), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
+		return m.fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
 	}
 	if msg, code := maasNamespaceRefusal(c, maasInfraNamespace(c)); msg != "" {
 		return m.fail("check", msg, code, "namespace not rhoai's")

@@ -87,7 +87,7 @@ func rhclUpgradeOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 	changes = append(changes, "Afterwards, Authorino TLS is set up again where an upgrade step recreated Authorino's Service (which removes its certificate).")
 	return &types.MaaSAction{
 		ID: "upgrade-rhcl", Label: "Upgrade Connectivity Link",
-		Summary: fmt.Sprintf("Upgrades Red Hat Connectivity Link from %s to %s or later, as the MaaS docs ask with RHOAI 3.6, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.", st.version, rhclDocsMinimum),
+		Summary: fmt.Sprintf("Upgrades Red Hat Connectivity Link from %s to %s or later, as the MaaS docs ask, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.", st.version, rhclDocsMinimum),
 		Changes: changes,
 	}, strings.Join(cmds, "\n")
 }
@@ -103,7 +103,7 @@ func rhclMemoryOffer(c *Client, st operatorState) (*types.MaaSAction, string) {
 	if err != nil || len(killed) == 0 {
 		return nil, ""
 	}
-	note := fmt.Sprintf("The operator ran out of memory (OOMKilled: %s), a known issue of Connectivity Link 1.5.0 (CONNLINK-1878).", strings.Join(killed, ", "))
+	note := fmt.Sprintf("The operator ran out of memory (OOMKilled: %s), a known issue of Connectivity Link (CONNLINK-1878).", strings.Join(killed, ", "))
 	if why := rhclUpgradeRefusal(st); why != "" {
 		return nil, note + " " + why
 	}

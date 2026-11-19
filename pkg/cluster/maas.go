@@ -505,7 +505,7 @@ func rhclWarning(version string) string {
 	case versionCore(version) == rhclAuthBypassVersion:
 		return fmt.Sprintf("Red Hat Connectivity Link %s silently lets requests past the gateway's authentication (the MaaS docs' prerequisites: \"RHCL v1.4.0 contains a Wasm shim bug that silently bypasses gateway authentication\"). This tool publishes nothing until it is upgraded: Upgrade Connectivity Link does it.", version)
 	}
-	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for %s or later with RHOAI 3.6: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.", version, rhclDocsMinimum)
+	return fmt.Sprintf("Red Hat Connectivity Link %s is installed; the MaaS docs ask for %s or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.", version, rhclDocsMinimum)
 }
 
 // maasObjectPath is the path of a platform object this tool reads or

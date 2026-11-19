@@ -959,10 +959,10 @@ oc -n kuadrant-system set env deployment/authorino \\
   SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \\
   REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 oc rollout restart deployment/authorino -n kuadrant-system`;
-const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later with RHOAI 3.6: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.";
+const RHCL_WARNING = "Red Hat Connectivity Link 1.4.3 is installed; the MaaS docs ask for 1.5 or later: on 1.4.x a caller with two or more subscriptions can hang. MaaS works for a single subscription meanwhile. Upgrade Connectivity Link takes the upgrade path OLM offers, one channel at a time, and sets up Authorino TLS again afterwards.";
 const RHCL_UPGRADE = {
   id: "upgrade-rhcl", label: "Upgrade Connectivity Link",
-  summary: "Upgrades Red Hat Connectivity Link from 1.4.3 to 1.5 or later, as the MaaS docs ask with RHOAI 3.6, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.",
+  summary: "Upgrades Red Hat Connectivity Link from 1.4.3 to 1.5 or later, as the MaaS docs ask, one channel at a time along the path OLM offers. Gateway authentication and rate limits restart during each step; it takes a few minutes.",
   changes: [
     "Subscription kuadrant-system/kuadrant-operator: channel stable to stable-1.5 (version 1.5.0). OLM upgrades the operator; there is no way back to 1.4.3.",
     "If OLM has no path from 1.4.3 straight to 1.5.0 (it then stays at 1.4.3), channel stable-1.4 first, to 1.4.4, then stable-1.5.",
