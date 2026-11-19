@@ -243,6 +243,9 @@ only accepts a tag whose version is the top dated section. See
 - The oauth-proxy container runs with a read-only root filesystem, as the
   app container already did (part of template revision 7). oauth-proxy
   writes no files.
+- The Content-Security-Policy adds `base-uri 'none'`, `form-action 'self'`,
+  `frame-ancestors 'none'` and `object-src 'none'`, which `default-src`
+  does not cover.
 
 ## [3.0.0] - 2026-11-18
 
