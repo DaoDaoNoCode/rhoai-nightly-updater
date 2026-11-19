@@ -524,12 +524,17 @@ an older clone's `install.sh` does not know the client: delete it by hand,
 
 **Removing it.** Use `install.sh uninstall` (or `make undeploy`): it deletes
 the OAuthClient and revokes its sign-ins before the namespace. Deleting the
-namespace by hand leaves the sign-ins and possibly the client (the
-namespace owns it, but that is not yet checked live); a client left behind
-lets whoever later claims its redirect host with a Route collect a
-signed-in user's token ([SECURITY.md](../SECURITY.md#the-oauthclient-400)).
-Delete it with `oc delete oauthclient $APP-$NS` and revoke with
+namespace by hand leaves both the client and its sign-ins (live-checked:
+the client stays, Kubernetes' garbage collector does not remove it); a
+client left behind lets whoever later claims its redirect host with a
+Route collect a signed-in user's token
+([SECURITY.md](../SECURITY.md#the-oauthclient-400)). If you did, run
+`install.sh uninstall` with the same `--app-name` and `--namespace`: it
+works after the namespace is gone (live-checked). Or delete the client with
+`oc delete oauthclient $APP-$NS` and revoke with
 `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS`.
+A client applied by a 4.0.0 test build has an ownerReference to the
+namespace, which never deleted it; deploy and upgrade remove it.
 
 ## 6. Roll back
 

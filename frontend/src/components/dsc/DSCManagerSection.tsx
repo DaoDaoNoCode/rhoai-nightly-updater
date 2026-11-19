@@ -119,10 +119,12 @@ const ComponentTree: React.FC<{
     <Table isTreeTable aria-label="Components of the DataScienceCluster" variant="compact">
       <Thead>
         <Tr>
-          <Th modifier="wrap">Component</Th>
-          <Th modifier="wrap">In the DSC</Th>
-          <Th modifier="wrap">Release default</Th>
-          <Th modifier="wrap">Operator reports</Th>
+          {/* Set widths: an operator message appearing after a change must not take
+              the room of the select and its label (it wraps in its own column). */}
+          <Th modifier="wrap" width={25}>Component</Th>
+          <Th modifier="wrap" width={40}>In the DSC</Th>
+          <Th modifier="wrap" width={15}>Release default</Th>
+          <Th modifier="wrap" width={20}>Operator reports</Th>
         </Tr>
       </Thead>
       <Tbody>
@@ -148,9 +150,9 @@ const ComponentTree: React.FC<{
               </Td>
               <Td dataLabel="In the DSC">
                 {!n.toggle ? <span className="pf-v6-u-text-color-subtle">Group</span> : (
-                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
+                  <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "nowrap" }}>
                     {/* The value in the DSC, and the control that changes it (the CRD's values only). */}
-                    <FlexItem className="pf-v6-u-min-width" style={{ "--pf-v6-u-min-width--MinWidth": "16ch" } as React.CSSProperties}>
+                    <FlexItem className="pf-v6-u-min-width" style={{ "--pf-v6-u-min-width--MinWidth": "22ch" } as React.CSSProperties}>
                       <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
                         isDisabled={!!rowReason || pending !== null}
                         onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>

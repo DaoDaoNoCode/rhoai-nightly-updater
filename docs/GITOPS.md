@@ -282,14 +282,15 @@ in through the app's ServiceAccount as with 3.x
   `<APP_NAME>`'s host and the Secret, and server-side-applies the OAuthClient
   (`grantMethod: auto`, one redirect URI `https://<host>/oauth/callback`, the
   secret, `scopeRestrictions` of exactly `user:full`, labels naming the
-  install's app and namespace, and an ownerReference to the namespace), the
-  same object as `install.sh`'s (`scripts/test-chart.sh` compares them). It
+  install's app and namespace), the same object as `install.sh`'s
+  (`scripts/test-chart.sh` compares them), then removes an ownerReference a
+  4.0.0 test build left on it. It
   fails without changing anything when a client of that name belongs to
   another install (the name `<APP_NAME>-<NAMESPACE>` is ambiguous;
   [SECURITY.md](../SECURITY.md#the-oauthclient-400)). The secret goes to
   `oc` on stdin and is never printed. RBAC: `get` on that Route and Secret (a
   Role), and `get`/`patch` on that one OAuthClient plus `create` on
-  OAuthClients and `get` on the namespace (ClusterRole
+  OAuthClients (ClusterRole
   `<APP_NAME>-<NAMESPACE>-oauthclient`). `create`
   cannot be limited to a name, so while the hook runs its ServiceAccount
   could register any OAuth client; it exists only for the hook's run
@@ -310,8 +311,9 @@ in through the app's ServiceAccount as with 3.x
   commands of section 7.
 
 Until the PostSync hook ran, signing in fails with `unauthorized_client`.
-Argo CD never prunes the OAuthClient; the PostDelete hook and the namespace
-(its owner) remove it ([section 7](#7-removing-it)). With
+Argo CD never prunes the OAuthClient; the PostDelete hook removes it, and
+deleting the namespace does not (live-checked; [section 7](#7-removing-it)).
+With
 `gitops.oauthClient.enabled: false`, create both before the first sync
 (the secret never in Git):
 
@@ -320,11 +322,9 @@ secret=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
 printf '%s' "$secret" >client-secret && oc create secret generic <APP_NAME>-oauth-client -n <NAMESPACE> --from-file=client-secret=client-secret && rm client-secret
 # after the first sync, when the Route has its host:
 host=$(oc get route <APP_NAME> -n <NAMESPACE> -o jsonpath='{.spec.host}')
-uid=$(oc get namespace <NAMESPACE> -o jsonpath='{.metadata.uid}')
 printf '%s\n' 'apiVersion: oauth.openshift.io/v1' 'kind: OAuthClient' 'metadata:' '  name: <APP_NAME>-<NAMESPACE>' \
   '  labels:' '    app.kubernetes.io/instance: <APP_NAME>-<NAMESPACE>' '    app.kubernetes.io/name: "<APP_NAME>"' \
-  '    rhoai-nightly-updater/namespace: "<NAMESPACE>"' '  ownerReferences:' '    - apiVersion: v1' '      kind: Namespace' \
-  '      name: "<NAMESPACE>"' "      uid: \"$uid\"" 'grantMethod: auto' 'redirectURIs:' \
+  '    rhoai-nightly-updater/namespace: "<NAMESPACE>"' 'grantMethod: auto' 'redirectURIs:' \
   "  - https://$host/oauth/callback" 'scopeRestrictions:' '  - literals:' '      - user:full' \
   "secret: $secret" | oc apply --server-side -f -
 ```
@@ -418,7 +418,9 @@ What stays even then:
   later serves its redirect host (a Route with that host, once the namespace
   is gone) could collect a signed-in user's token from a crafted link
   ([SECURITY.md](../SECURITY.md#the-oauthclient-400)). Deleting the
-  namespace deletes the client too (it owns it), but not its sign-ins;
+  namespace removes neither the client nor its sign-ins (live-checked:
+  the client stays); `install.sh uninstall` below still removes both
+  after the namespace is gone;
 - the hook objects of a failed last run.
 
 Remove those, or after a non-cascading deletion the whole app, once the

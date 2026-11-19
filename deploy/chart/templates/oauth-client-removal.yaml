@@ -10,9 +10,11 @@ invalidate them). Why it matters: the OAuth server also answers the
 implicit flow, so with grantMethod auto whoever later serves the client's
 redirect host (a Route a project admin creates with that host once this
 one is gone) could collect a signed-in user's full token from a crafted
-link. The namespace's ownerReference on the client covers a namespace
-deleted by hand; this covers the namespace Argo CD leaves behind
-(CreateNamespace creates it untracked).
+link. Argo CD leaves the namespace behind (CreateNamespace creates it
+untracked), and deleting that namespace by hand does not remove the
+client either (live-checked: the garbage collector did not delete it even
+with an ownerReference to the namespace); then `install.sh uninstall` or
+the commands in docs/GITOPS.md remove it.
 
 A client without this install's labels is left alone (another install's,
 or one applied before the labels), and the hook says so; reading or

@@ -102,12 +102,7 @@ case "$1 $2" in
 "get rs")
 	# The current ReplicaSet, an old one of this Deployment, one of another owner.
 	printf '%s\n' "rs-old 2 uid-1 0 0" "rs-cur 3 uid-1 1 1" "rs-foreign 1 uid-2 0 0" ;;
-"get namespace" | "get project")
-	# The namespace's UID (the OAuthClient's owner) once it exists.
-	case "$*" in
-	*metadata.uid*) printf '%s' "${FAKE_NS_UID-ns-uid-1}" ;;
-	*) [ -n "${FAKE_NS:-}" ] ;;
-	esac ;;
+"get namespace" | "get project") [ -n "${FAKE_NS:-}" ] ;;
 "get secret")
 	# The OAuth client secret's value, as oc prints a Secret's data (base64).
 	if [[ " $* " == *"{.data.client-secret}"* ]]; then
@@ -121,6 +116,13 @@ case "$1 $2" in
 		--from-file=client-secret=*) cat "${a#--from-file=client-secret=}" >"$FAKE_LOG.client-secret" ;;
 	esac; done ;;
 "get oauthclient")
+	# After the apply: the UIDs of its ownerReferences (FAKE_CLIENT_OWNERS,
+	# as a 4.0.0 test build left them), or FAKE_OWNERS_READ_FAIL.
+	if [[ " $* " == *"ownerReferences"* ]]; then
+		[ -z "${FAKE_OWNERS_READ_FAIL:-}" ] || { echo "Error from server (Forbidden): oauthclients is forbidden" >&2; exit 1; }
+		printf '%s' "${FAKE_CLIENT_OWNERS:-}"
+		exit 0
+	fi
 	# FAKE_CLIENT: absent (default), ours, theirs (another install's
 	# labels), unlabelled-ours (no labels, this Route's callback),
 	# unlabelled-theirs, error; printed as install.sh's jsonpath asks.
@@ -134,6 +136,8 @@ case "$1 $2" in
 	esac ;;
 "delete oauthclient")
 	[ -z "${FAKE_CLIENT_DELETE_FAIL:-}" ] || { echo "error: oauthclients is forbidden" >&2; exit 1; } ;;
+"patch oauthclient")
+	[ -z "${FAKE_PATCH_FAIL:-}" ] || { echo "error: oauthclients is forbidden" >&2; exit 1; } ;;
 "apply --server-side")
 	cat >>"$FAKE_LOG.oauthclient"
 	[ -z "${FAKE_SSA_FAIL:-}" ] || { echo "error: oauthclients is forbidden" >&2; exit 1; } ;;
@@ -209,7 +213,7 @@ run() {
 	rm -f "$LOG" "$LOG.params" "$LOG.oauthclient" "$LOG.client-secret"
 	env PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_DIGEST="${FAKE_DIGEST-$DIGEST}" FAKE_REVISION="${FAKE_REVISION-$COMMIT}" FAKE_OCP_VERSION="${FAKE_OCP_VERSION-4.19.3}" "$@"
 }
-mutations() { grep -E '^oc (create|new-project|delete|rollout|apply -f|apply --server-side)' "$LOG" | grep -v -- '--dry-run=server' || true; }
+mutations() { grep -E '^oc (create|new-project|delete|rollout|patch|apply -f|apply --server-side)' "$LOG" | grep -v -- '--dry-run=server' || true; }
 
 # Fresh install, dry run: the namespace does not exist, so the server
 # rejects only the objects in it.
@@ -351,11 +355,6 @@ expect_eq "fresh install: the OAuthClient" "$(printf '%s\n' \
 	'    app.kubernetes.io/instance: rhoai-nightly-updater-scratch-ns' \
 	'    app.kubernetes.io/name: "rhoai-nightly-updater"' \
 	'    rhoai-nightly-updater/namespace: "scratch-ns"' \
-	'  ownerReferences:' \
-	'    - apiVersion: v1' \
-	'      kind: Namespace' \
-	'      name: "scratch-ns"' \
-	'      uid: "ns-uid-1"' \
 	'grantMethod: auto' \
 	'redirectURIs:' \
 	'  - https://app.example.com/oauth/callback' \
@@ -365,9 +364,27 @@ expect_eq "fresh install: the OAuthClient" "$(printf '%s\n' \
 	'secret: secret-from-the-cluster')" "$(cat "$LOG.oauthclient")"
 grep -q "secret-from-the-cluster\|c2VjcmV0LWZyb20tdGhlLWNsdXN0ZXI=" "$LOG" && fail "the OAuth client secret is on an oc command line" || pass
 grep -q "accessTokenMaxAgeSeconds" "$LOG.oauthclient" && fail "the OAuthClient shortens the sign-in" || pass
-# Without the namespace's UID there is no owner: nothing is applied.
-FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_NS_UID="" expect_fail "upgrade: no namespace UID" "Cannot read the UID of namespace scratch-ns" run bash "$ASSET" --namespace scratch-ns
-[ ! -s "$LOG.oauthclient" ] && pass || fail "upgrade without the namespace UID applied the OAuthClient"
+# No ownerReference: the garbage collector did not delete an OAuthClient
+# owned by its deleted namespace (live-checked), and nothing reads the
+# namespace's UID for one.
+grep -q "ownerReferences:" "$LOG.oauthclient" && fail "the OAuthClient has an ownerReference" || pass
+expect_eq "fresh install: no namespace UID read, no patch" "" "$(grep -E '^oc (get namespace.*uid|patch)' "$LOG" || true)"
+# A client a 4.0.0 test build gave an ownerReference loses it on upgrade,
+# after the apply; one that cannot be read or patched stops before the
+# rollout.
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_CLIENT=ours FAKE_CLIENT_OWNERS=ns-uid-1 \
+	expect_ok "upgrade: a test build's ownerReference" run bash "$ASSET" --namespace scratch-ns
+expect_eq "upgrade: the ownerReference removed after the apply" "$(printf '%s\n' \
+	"$SSA" \
+	"oc get oauthclient rhoai-nightly-updater-scratch-ns -o jsonpath={.metadata.ownerReferences[*].uid}" \
+	'oc patch oauthclient rhoai-nightly-updater-scratch-ns --type=merge -p {"metadata":{"ownerReferences":null}}')" \
+	"$(grep -E '^oc (apply --server-side|get oauthclient .*ownerReferences|patch)' "$LOG")"
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_CLIENT=ours FAKE_CLIENT_OWNERS=ns-uid-1 FAKE_OWNERS_READ_FAIL=1 \
+	expect_fail "upgrade: the client cannot be read after the apply" "Cannot read OAuthClient rhoai-nightly-updater-scratch-ns after applying it" run bash "$ASSET" --namespace scratch-ns
+expect_eq "upgrade, the client unreadable after the apply: no rollout" "" "$(calls rollout)"
+FAKE_INSTALLED=1 FAKE_NS=1 FAKE_SECRET=1 FAKE_CLIENT=ours FAKE_CLIENT_OWNERS=ns-uid-1 FAKE_PATCH_FAIL=1 \
+	expect_fail "upgrade: the ownerReference cannot be removed" "Cannot remove the ownerReference of OAuthClient rhoai-nightly-updater-scratch-ns" run bash "$ASSET" --namespace scratch-ns
+expect_eq "upgrade, the ownerReference not removed: no rollout" "" "$(calls rollout)"
 
 # An upgrade from a release whose ServiceAccount was the OAuth client: the
 # installed Secrets are kept, the OAuthClient is created, the new template

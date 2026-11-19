@@ -338,15 +338,26 @@ only accepts a tag whose version is the top dated section. See
   client left behind would hand a signed-in user's `user:full` token to
   whoever later serves its redirect host (a project admin's Route with the
   freed host); the client secret does not stop that. The client now
-  allows exactly the scope `user:full` (`scopeRestrictions`), is owned by
-  the install's Namespace (deleting the namespace deletes it; not yet
-  checked live), and is deleted with its sign-ins revoked by `install.sh
-  uninstall` (which now stops before deleting the namespace when it cannot
-  delete the client), by `make rollback` to a 3.x template, and by a new
-  PostDelete hook when the chart's Argo CD Application is deleted (Argo CD
-  2.10 or later). Deleting the namespace by hand still leaves the sign-ins:
-  `oc delete oauthaccesstokens --field-selector clientName=<APP_NAME>-<NAMESPACE>`
-  ([SECURITY.md](SECURITY.md#the-oauthclient-400)).
+  allows exactly the scope `user:full` (`scopeRestrictions`), and is
+  deleted with its sign-ins revoked by `install.sh uninstall` (which now
+  stops before deleting the namespace when it cannot delete the client), by
+  `make rollback` to a 3.x template, and by a new PostDelete hook when the
+  chart's Argo CD Application is deleted (Argo CD 2.10 or later).
+  **Deleting the namespace by hand leaves the client and its sign-ins**
+  (live-checked): run `install.sh uninstall` afterwards (it works once the
+  namespace is gone, live-checked), or `oc delete oauthclient
+  <APP_NAME>-<NAMESPACE>` and `oc delete oauthaccesstokens --field-selector
+  clientName=<APP_NAME>-<NAMESPACE>`
+  ([SECURITY.md](SECURITY.md#the-oauthclient-400)). Test builds of 4.0.0
+  gave the client an ownerReference to the Namespace; the garbage collector
+  did not delete the client with its namespace (live, after more than 3
+  minutes), so the client has none, and deploy, upgrade and the chart's
+  hook remove one an earlier build left.
+- **Revoking a sign-in takes about a minute.** After `oc delete
+  oauthaccesstokens --field-selector clientName=...` the API server kept
+  accepting the revoked token for about a minute (live; the same for `oc`
+  and the dashboard), then the app answered 401 and showed "Your session
+  expired" ([SECURITY.md](SECURITY.md#revoking-a-sign-in)).
 - **One install no longer takes over another's OAuthClient.** Its name
   `<APP_NAME>-<NAMESPACE>` is the same for app `a-b` in namespace `c` and app
   `a` in namespace `b-c`, and the apply forced its fields over. The client
