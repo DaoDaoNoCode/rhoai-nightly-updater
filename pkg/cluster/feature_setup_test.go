@@ -470,6 +470,29 @@ func TestPrerequisites_OperatorGroupReuse(t *testing.T) {
 			t.Fatalf("wrote %v", muts)
 		}
 	})
+	// A new OperatorGroup (namespace missing, or none in it) is planned only
+	// for an install mode the channel's head supports.
+	for name, prepare := range map[string]func(pc *prereqCluster){
+		"no namespace":     func(*prereqCluster) {},
+		"no OperatorGroup": func(pc *prereqCluster) { pc.f.putJSON(tCertNS, `{}`) },
+	} {
+		t.Run("a new group the package does not support: "+name, func(t *testing.T) {
+			pc := newPrereqCluster(t)
+			p := pc.sim.packages["openshift-cert-manager-operator"]
+			p.installModes = []string{"OwnNamespace"}
+			pc.sim.packages["openshift-cert-manager-operator"] = p
+			pc.putPackage("openshift-cert-manager-operator")
+			prepare(pc)
+			before := len(pc.f.mutations())
+			res, _ := runPrereqs(t, pc.c, "models")
+			if res.Success || !strings.Contains(res.Message, "does not support being installed for all namespaces") {
+				t.Fatalf("setup: %+v", res)
+			}
+			if muts := pc.f.mutations()[before:]; len(muts) != 0 {
+				t.Fatalf("wrote %v", muts)
+			}
+		})
+	}
 }
 
 // An operator spec for an own-namespace operator (LeaderWorkerSet, JobSet)

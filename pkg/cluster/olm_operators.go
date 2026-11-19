@@ -395,6 +395,19 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	}
 	ch, _ := pkg.channel(plan.channel)
 	plan.head = ch.head()
+	// The install mode of an OperatorGroup this tool would create: refused
+	// before anything is written when the channel's head says it does not
+	// support it (OLM would fail the CSV with UnsupportedOperatorGroup).
+	newGroupMode := "AllNamespaces"
+	if op.ownNamespace {
+		newGroupMode = "OwnNamespace"
+	}
+	newGroupRefusal := func() string {
+		if supported, known := ch.supports(newGroupMode); known && !supported {
+			return fmt.Sprintf("%s %s does not support being installed for %s, which is how this tool installs it (its catalog lists the install modes it supports). A cluster-admin installs it. Nothing was changed.", op.title, plan.head, map[bool]string{true: "its own namespace", false: "all namespaces"}[op.ownNamespace])
+		}
+		return ""
+	}
 
 	_, nsFound, err := readObjectMeta(c, "/api/v1/namespaces/"+op.namespace)
 	if err != nil {
@@ -404,6 +417,9 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	if !nsFound {
 		if op.group == "" {
 			return nil, fmt.Sprintf("Namespace %s does not exist; OpenShift makes it for operators of all namespaces. Nothing was changed.", op.namespace), "prerequisites"
+		}
+		if why := newGroupRefusal(); why != "" {
+			return nil, why, "prerequisites"
 		}
 		plan.groupMissing = true
 		return plan, "", ""
@@ -418,6 +434,9 @@ func planOperatorInstall(c *Client, op operatorSpec) (*operatorInstallPlan, stri
 	case len(groups) == 0 && op.group == "":
 		return nil, fmt.Sprintf("Namespace %s has no OperatorGroup, which OpenShift makes for it (global-operators). A cluster-admin restores it. Nothing was changed.", op.namespace), "prerequisites"
 	case len(groups) == 0:
+		if why := newGroupRefusal(); why != "" {
+			return nil, why, "prerequisites"
+		}
 		plan.groupMissing = true
 		return plan, "", ""
 	}
