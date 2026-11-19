@@ -7,8 +7,6 @@ import {
   EmptyStateFooter,
   Flex,
   FlexItem,
-  FormSelect,
-  FormSelectOption,
   Popover,
   Spinner,
   Switch,
@@ -20,6 +18,7 @@ import { Table, Tbody, Td, Th, Thead, TreeRowWrapper, Tr } from "@patternfly/rea
 import type { DSCManager, DSCMismatch, DSCNode } from "../../types";
 import { StatusLabel, TagLabel, type StatusKind } from "../StatusLabel";
 import { TruncatedText } from "../LongText";
+import { SingleSelect } from "../SingleSelect";
 
 /** A managementState as a status label. */
 function stateKind(state?: string): StatusKind {
@@ -219,12 +218,10 @@ export const ComponentTree: React.FC<{
                         {/* The same width in every row (room for "Not set (Removed)" and the caret),
                             narrower only when the column is. */}
                         <FlexItem style={{ width: "22ch", maxWidth: "100%" }}>
-                          <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
-                            isDisabled={!!rowReason || pending !== null}
-                            onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>
-                            {!n.specSet && <FormSelectOption value="" label={`Not set (${n.schemaDefault || "Removed"})`} isDisabled />}
-                            {allowed.map((v) => <FormSelectOption key={v} value={v} label={v} />)}
-                          </FormSelect>
+                          <SingleSelect id={`dsc-set-${n.path}`} label={`Set ${n.path}`} selected={n.specSet ? n.spec : undefined}
+                            text={n.specSet ? n.spec ?? "" : `Not set (${n.schemaDefault || "Removed"})`} isPlaceholder={!n.specSet}
+                            options={allowed.map((v) => ({ value: v, label: v }))} isDisabled={!!rowReason || pending !== null}
+                            onSelect={(v) => { if (!(n.specSet && n.spec === v)) onSet(n, v); }} />
                         </FlexItem>
                         {pending === n.path && <FlexItem><Spinner size="sm" aria-label={`Changing ${n.path}`} /></FlexItem>}
                         <RowLabels node={n} mismatches={mismatches.get(n.path) ?? []} byPath={byPath} />

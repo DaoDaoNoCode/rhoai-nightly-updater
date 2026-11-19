@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { GROUP_CHECK_DELAY_MS } from "./MaaSDialogFields";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
@@ -119,9 +119,26 @@ describe("MaaS dialogs", () => {
     expect(within(dialog).getByText(/Enter a whole number of tokens from 1 to 1,000,000,000/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Change limit" })).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText("Limit 1: tokens"), { target: { value: "500" } });
+    // The period unit: a PatternFly menu inside the dialog (its focus trap), the current unit marked.
+    const unit = within(dialog).getByRole("button", { name: "Limit 1: period unit" });
+    expect(unit).toHaveAccessibleDescription("minutes");
+    fireEvent.click(unit);
+    const units = await within(dialog).findByRole("listbox");
+    expect(within(units).getAllByRole("option").map((o) => o.textContent)).toEqual(["seconds", "minutes", "hours"]);
+    expect(within(units).getByRole("option", { name: "minutes" })).toHaveAttribute("aria-selected", "true");
+    // Escape closes the menu only, not the dialog, and puts the focus back on the toggle.
+    fireEvent.keyDown(within(units).getByRole("option", { name: "seconds" }), { key: "Escape" });
+    await waitFor(() => expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument());
+    expect(dialog).toBeInTheDocument();
+    expect(unit).toHaveFocus();
+    fireEvent.click(unit);
+    fireEvent.click(within(await within(dialog).findByRole("listbox")).getByRole("option", { name: "hours" }));
+    await waitFor(() => expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument());
+    expect(unit).toHaveAccessibleDescription("hours");
+    expect(unit).toHaveFocus();
     fireEvent.click(within(dialog).getByRole("button", { name: "Change limit" }));
     await screen.findByRole("dialog", { name: "Change the limit of Qwen3 1.7B in dev" });
-    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "change-limit", project: "dev", model: "qwen3-1-7b", limit: { preset: "custom", rates: [{ limit: 500, window: "1m" }] } }]);
+    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "change-limit", project: "dev", model: "qwen3-1-7b", limit: { preset: "custom", rates: [{ limit: 500, window: "1h" }] } }]);
   });
 
   it("Change database from your PostgreSQL says it is not changed or deleted, and warns only for another database", async () => {
