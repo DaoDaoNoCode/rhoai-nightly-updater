@@ -431,8 +431,9 @@ func checkApplyFailures(c *Client) checkOutput {
 		}
 	}
 	sort.Strings(keys)
+	operators := newModuleOperatorFinder(c, nil)
 	for _, k := range keys {
-		out.problems = append(out.problems, applyFailureProblem(c, api, found[k]))
+		out.problems = append(out.problems, applyFailureProblem(c, api, operators, found[k]))
 	}
 
 	switch {
@@ -452,18 +453,19 @@ func checkApplyFailures(c *Client) checkOutput {
 }
 
 // restartGuidance names the operator that reconciles the reporting CR and
-// how to restart it, from the module-operator mapping; "" command when the
-// operator is not known.
-func restartGuidance(r applyReporter) (who, cmd string) {
+// how to restart it, from the module's operator (moduleOperatorFinder); ""
+// command when the operator is not known.
+func restartGuidance(operators *moduleOperatorFinder, r applyReporter) (who, cmd string) {
 	ns, name := SubNS, SubName // the DataScienceCluster and the Platform
+	rhoai := true
 	if r.Module != "" {
-		op, ok := moduleOperators[r.Module]
-		if !ok {
+		op, _, err := operators.find(r.Module, r.Name)
+		if err != nil || op == nil {
 			return fmt.Sprintf("the operator that reconciles %s", r), ""
 		}
-		ns, name = op.namespace, op.name
+		ns, name, rhoai = op.Namespace, op.Name, op.RHOAI
 	}
-	if ns == SubNS && name == SubName {
+	if rhoai {
 		// The RHOAI operator's Deployment belongs to its CSV (OLM reverts
 		// edits to it), so its pod is deleted instead of a rollout restart.
 		return fmt.Sprintf("the RHOAI operator (%s/%s)", ns, name),
@@ -472,7 +474,7 @@ func restartGuidance(r applyReporter) (who, cmd string) {
 	return fmt.Sprintf("%s/%s", ns, name), shellCommand("oc", "rollout", "restart", "deployment/"+name, "-n", ns)
 }
 
-func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) Problem {
+func applyFailureProblem(c *Client, api componentAPI, operators *moduleOperatorFinder, rf *reportedApplyFailure) Problem {
 	sort.SliceStable(rf.reporters, func(i, j int) bool { return rf.reporters[i].rank > rf.reporters[j].rank })
 	reporter := rf.reporters[0]
 	severity := "warning"
@@ -494,7 +496,7 @@ func applyFailureProblem(c *Client, api componentAPI, rf *reportedApplyFailure) 
 		AffectedObjects: []string{f.object()},
 		AutoFixable:     false,
 	}
-	who, restart := restartGuidance(reporter)
+	who, restart := restartGuidance(operators, reporter)
 	var titles, descriptions, fixes, cmds []string
 
 	// A schema mismatch first: re-applying the CRD comes before anything

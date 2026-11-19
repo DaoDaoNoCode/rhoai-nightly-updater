@@ -423,9 +423,10 @@ func analyzeDSC(c *Client, dsc dscObject, appNS string, now time.Time) *dscAnaly
 		moduleNames = append(moduleNames, m)
 	}
 	sort.Strings(moduleNames)
+	operators := newModuleOperatorFinder(c, nil)
 	for _, m := range moduleNames {
 		b := &moduleBackoff{Module: m, Reasons: reasons[m], Blocking: blockingModule[m]}
-		b.Deployment, b.FindErr = findModuleOperator(c, m, appNS)
+		b.Deployment, b.FindErr = findModuleOperator(c, operators, m)
 		if b.Deployment != nil {
 			b.Restart = assessRestart(c, *b.Deployment)
 		}

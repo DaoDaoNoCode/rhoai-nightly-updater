@@ -642,7 +642,7 @@ func moduleOperatorCrash(c *Client, st *storedLeftover, appNS string, now time.T
 	if st.Resource == "" {
 		return nil
 	}
-	d, _ := findModuleOperator(c, strings.ToLower(st.Kind), appNS)
+	d, _ := findModuleOperator(c, newModuleOperatorFinder(c, nil), strings.ToLower(st.Kind))
 	if d == nil || len(d.TemplateLabels) == 0 {
 		return nil
 	}
@@ -994,7 +994,7 @@ func analyzeRecreate(c *Client, rf *reportedApplyFailure, appNS string, read wor
 			r.Recreator = "the RHOAI operator"
 		}
 	} else {
-		d, why := findModuleOperator(c, r.Module, appNS)
+		d, why := findModuleOperator(c, newModuleOperatorFinder(c, nil), r.Module)
 		switch {
 		case d == nil:
 			r.Blockers = append(r.Blockers, fmt.Sprintf("the tool cannot tell which Deployment runs the %s module operator that would create it again (%s)", r.Module, why))

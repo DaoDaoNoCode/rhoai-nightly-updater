@@ -53,27 +53,28 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 	return true, ""
 }
 
-// moduleCR returns the module CR of a component, or found=false. Discovery
-// and list errors are returned, so a precondition is never skipped because
-// the CR could not be read. kindUnknown: the component API is served, but
-// none of its kinds is named after the module, so the tool cannot tell
-// which CR (if any) serves the module.
-func moduleCR(c *Client, discover func() (componentAPI, error), component string) (finalizers []string, deleting, found, kindUnknown bool, err error) {
+// moduleCR returns the module CR of a component (its name and
+// finalizers), or found=false. Discovery and list errors are returned, so a
+// precondition is never skipped because the CR could not be read.
+// kindUnknown: the component API is served, but none of its kinds is named
+// after the module, so the tool cannot tell which CR (if any) serves the
+// module.
+func moduleCR(c *Client, discover func() (componentAPI, error), component string) (name string, finalizers []string, deleting, found, kindUnknown bool, err error) {
 	api, err := discover()
 	if err != nil {
-		return nil, false, false, false, err
+		return "", nil, false, false, false, err
 	}
 	if api.Version != "" {
 		if _, ok := api.resourceForModule(component); !ok {
-			return nil, false, false, true, nil
+			return "", nil, false, false, true, nil
 		}
 	}
 	items, err := listModuleCRs(c, discover, component)
 	if err != nil || len(items) == 0 {
-		return nil, false, false, false, err
+		return "", nil, false, false, false, err
 	}
 	m := items[0].Metadata
-	return m.Finalizers, m.DeletionTimestamp != "", true, false, nil
+	return m.Name, m.Finalizers, m.DeletionTimestamp != "", true, false, nil
 }
 
 // removalChecker evaluates the preconditions for setting components to
@@ -83,6 +84,7 @@ func moduleCR(c *Client, discover func() (componentAPI, error), component string
 type removalChecker struct {
 	c           *Client
 	api         func() (componentAPI, error)
+	operators   *moduleOperatorFinder
 	opLoaded    bool
 	opBlocker   string
 	convLoaded  bool
@@ -97,7 +99,8 @@ type removalChecker struct {
 }
 
 func newRemovalChecker(c *Client) *removalChecker {
-	return &removalChecker{c: c, api: cachedComponentAPI(c), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
+	api := cachedComponentAPI(c)
+	return &removalChecker{c: c, api: api, operators: newModuleOperatorFinder(c, api), svcOwner: map[string]string{}, svcOwnerErr: map[string]error{}}
 }
 
 // platformOperatorBlocker says why the RHOAI operator cannot apply a
@@ -174,12 +177,26 @@ func unknownModuleBlocker(component string) string {
 	return fmt.Sprintf("can't tell which module serves it (no %s kind is named after %s), so the tool can't confirm an operator is running to clean up and won't remove it. Check in the OpenShift console, then change it there", componentAPIGroup, component)
 }
 
-// unknownOperatorBlocker words a module CR whose operator the tool does not
-// know: it cannot check that the operator runs (to remove the CR's
-// finalizers and clean up its operands), so it refuses (fail closed)
-// rather than skip the check.
+// unknownOperatorBlocker words a module CR whose operator the tool cannot
+// identify (moduleOperatorFinder): it cannot check that the operator runs
+// (to remove the CR's finalizers and clean up its operands), so it refuses
+// (fail closed) rather than skip the check.
 func unknownOperatorBlocker() string {
 	return "can't confirm its operator is running to clean up, so the tool won't remove it. Check in the OpenShift console, then change it there"
+}
+
+// moduleOperatorBlocker returns the operator of the module CR crName, or
+// why it cannot be checked: a read error (named) or an operator the finder
+// cannot identify (the unknown-operator wording) blocks, fail closed.
+func (rc *removalChecker) moduleOperatorBlocker(component, crName string) (*moduleOperator, string) {
+	op, _, err := rc.operators.find(component, crName)
+	switch {
+	case err != nil:
+		return nil, fmt.Sprintf("could not identify its operator (%v), so the tool can't confirm it is running to clean up and won't remove it", err)
+	case op == nil:
+		return nil, unknownOperatorBlocker()
+	}
+	return op, ""
 }
 
 // partBlockers are the preconditions for removing a sub-component while its
@@ -193,7 +210,7 @@ func (rc *removalChecker) partBlockers(component string) []string {
 	if why := rc.platformOperatorBlocker(); why != "" {
 		blockers = append(blockers, why)
 	}
-	_, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
+	name, _, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
 	switch {
 	case err != nil:
 		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
@@ -202,13 +219,13 @@ func (rc *removalChecker) partBlockers(component string) []string {
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
 	case found:
-		op, known := moduleOperators[component]
+		op, why := rc.moduleOperatorBlocker(component, name)
 		switch {
-		case !known:
-			blockers = append(blockers, unknownOperatorBlocker())
-		case op.name != "rhods-operator":
-			if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
-				blockers = append(blockers, fmt.Sprintf("its operator %s/%s cleans up the sub-component, but %s; fix that operator first", op.namespace, op.name, why))
+		case why != "":
+			blockers = append(blockers, why)
+		case !op.RHOAI: // the RHOAI operator is checked above
+			if ok, why := deploymentReady(c, op.Namespace, op.Name); !ok {
+				blockers = append(blockers, fmt.Sprintf("its operator %s cleans up the sub-component, but %s; fix that operator first", op.ref(), why))
 			}
 		}
 	}
@@ -223,8 +240,7 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 	if why := rc.platformOperatorBlocker(); why != "" {
 		blockers = append(blockers, why)
 	}
-	finalizers, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
-	op, knownOp := moduleOperators[component]
+	name, finalizers, deleting, found, kindUnknown, err := moduleCR(c, rc.api, component)
 	switch {
 	case err != nil:
 		blockers = append(blockers, fmt.Sprintf("could not read the %s module CR: %v", component, err))
@@ -232,22 +248,25 @@ func (rc *removalChecker) moduleBlockers(component string) []string {
 		blockers = append(blockers, unknownModuleBlocker(component))
 	case deleting:
 		blockers = append(blockers, fmt.Sprintf("the %s module CR is already being deleted; see the Platform modules check", component))
-	case found && !knownOp:
-		blockers = append(blockers, unknownOperatorBlocker())
-	}
-	// The module operator removes the finalizers of the module CR and of
-	// its operands (TrustyAIService, RayCluster, FeatureStore, TrainJob,
-	// ...). If it is not running, they wait forever (D1, D7, D8). The
-	// ServiceAccount cannot list those operands, so the operator must be
-	// running whether or not the module CR itself has finalizers. The entry
-	// "rhods-operator" is the RHOAI operator itself, checked above.
-	if knownOp && op.name != "rhods-operator" && err == nil && found && !deleting {
-		if ok, why := deploymentReady(c, op.namespace, op.name); !ok {
-			what := "operands"
-			if len(finalizers) > 0 {
-				what = fmt.Sprintf("module CR (finalizer %s) and its operands", strings.Join(finalizers, ", "))
+	case found:
+		// The module operator removes the finalizers of the module CR and
+		// of its operands (TrustyAIService, RayCluster, FeatureStore,
+		// TrainJob, ...). If it is not running, they wait forever (D1, D7,
+		// D8). The ServiceAccount cannot list those operands, so the
+		// operator must be running whether or not the module CR itself has
+		// finalizers. The RHOAI operator itself is checked above.
+		op, why := rc.moduleOperatorBlocker(component, name)
+		switch {
+		case why != "":
+			blockers = append(blockers, why)
+		case !op.RHOAI:
+			if ok, why := deploymentReady(c, op.Namespace, op.Name); !ok {
+				what := "operands"
+				if len(finalizers) > 0 {
+					what = fmt.Sprintf("module CR (finalizer %s) and its operands", strings.Join(finalizers, ", "))
+				}
+				blockers = append(blockers, fmt.Sprintf("its operator %s removes the finalizers of the %s, but %s; fix that operator first or the removal hangs", op.ref(), what, why))
 			}
-			blockers = append(blockers, fmt.Sprintf("its operator %s/%s removes the finalizers of the %s, but %s; fix that operator first or the removal hangs", op.namespace, op.name, what, why))
 		}
 	}
 	return blockers

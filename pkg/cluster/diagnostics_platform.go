@@ -14,24 +14,6 @@ import (
 // diagnostics reports it.
 var moduleDeletionGrace = 5 * time.Minute
 
-// moduleOperators maps a module (lower-case kind of its
-// components.platform.opendatahub.io CR) to the Deployment that removes the
-// CR's finalizer (RHOAI operator notes §2.2; live names on RHOAI 3.6).
-var moduleOperators = map[string]struct{ namespace, name string }{
-	"dashboard":      {"redhat-ods-applications", "dashboard-operator"},
-	"workbenches":    {"redhat-ods-applications", "workbenches-operator"},
-	"aipipelines":    {"redhat-ods-applications", "data-science-pipelines-operator-controller-manager"},
-	"kserve":         {"redhat-ods-applications", "kserve-module-controller-manager"},
-	"aihub":          {"redhat-ods-applications", "aihub-controller-manager"},
-	"mlflowoperator": {"redhat-ods-applications", "mlflow-operator-controller-manager"},
-	"ogx":            {"redhat-ods-applications", "opendatahub-ogx-operator"},
-	"ray":            {"redhat-ods-applications", "ray-module-operator-controller-manager"},
-	"trainer":        {"redhat-ods-applications", "trainer-operator-controller-manager"},
-	"feastoperator":  {"redhat-ods-applications", "opendatahub-feast-operator"},
-	"trustyai":       {"redhat-ods-applications", "trustyai-operator-module-controller-manager"},
-	"kueue":          {SubNS, "rhods-operator"},
-}
-
 func checkPlatformModules(c *Client) checkOutput {
 	const name = "Platform modules"
 	out := checkOutput{check: CheckResult{Name: name, Status: "pass"}}
@@ -123,9 +105,10 @@ func checkPlatformModules(c *Client) checkOutput {
 			out.check.Status = "warn"
 		}
 	}
+	operators := newModuleOperatorFinder(c, nil)
 	for _, m := range stuck {
 		out.check.Status = "fail"
-		out.problems = append(out.problems, stuckModuleProblem(c, m))
+		out.problems = append(out.problems, stuckModuleProblem(c, operators, m))
 	}
 	if len(stuck) == 0 && err == nil {
 		moduleDetails = append(moduleDetails, "No module is stuck in deletion")
@@ -206,18 +189,23 @@ func stuckModuleCRs(c *Client, now time.Time) ([]stuckModule, error) {
 	return out, nil
 }
 
-func stuckModuleProblem(c *Client, m stuckModule) Problem {
+func stuckModuleProblem(c *Client, operators *moduleOperatorFinder, m stuckModule) Problem {
 	evidence := []string{fmt.Sprintf("%s %s has been deleting for %s; finalizers: %s", m.Module, m.Name, formatDuration(m.Since), nonEmpty(strings.Join(m.Finalizers, ", "), "none"))}
 	fix := "The finalizer is removed by the module's operator; make sure it is running and read its logs."
-	op, known := moduleOperators[m.Module]
-	if known {
-		ok, why := deploymentReady(c, op.namespace, op.name)
+	op, why, err := operators.find(m.Module, m.Name)
+	switch {
+	case err != nil:
+		evidence = append(evidence, fmt.Sprintf("Operator: could not identify it: %v", err))
+	case op == nil:
+		evidence = append(evidence, "Operator: not identified: "+why)
+	default:
+		ok, why := deploymentReady(c, op.Namespace, op.Name)
 		if ok {
-			evidence = append(evidence, fmt.Sprintf("Operator %s/%s is running", op.namespace, op.name))
-			fix = fmt.Sprintf("The operator %s is running; read its logs for why it does not finish the cleanup.", op.name)
+			evidence = append(evidence, fmt.Sprintf("Operator %s is running (%s)", op.ref(), op.Via))
+			fix = fmt.Sprintf("The operator %s is running; read its logs for why it does not finish the cleanup.", op.Name)
 		} else {
-			evidence = append(evidence, "Operator: "+why)
-			fix = fmt.Sprintf("Start %s/%s again; it removes the finalizer.", op.namespace, op.name)
+			evidence = append(evidence, fmt.Sprintf("Operator (%s): %s", op.Via, why))
+			fix = fmt.Sprintf("Start %s again; it removes the finalizer.", op.ref())
 		}
 	}
 	switch m.Module {
