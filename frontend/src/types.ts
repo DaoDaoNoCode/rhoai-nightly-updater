@@ -614,6 +614,19 @@ export interface DSCRemovalBlock {
   reasons: string[];
 }
 
+/** A resource that stops working while a hard reset has the components it needs down (pkg/types DSCStopsWorking). */
+export interface DSCStopsWorking {
+  /** e.g. "pipeline server team/dspa". */
+  resource: string;
+  components: string[];
+}
+
+/** A CRD whose conversion webhook a component serves (pkg/types DSCConversionCRD). */
+export interface DSCConversionCRD {
+  crd: string;
+  component: string;
+}
+
 /** One DSC status condition (pkg/types DSCConditionView). */
 export interface DSCConditionView {
   type: string;
@@ -737,9 +750,18 @@ export interface DSCPlan {
   changes: DSCChange[];
   blocked?: DSCRemovalBlock[] | null;
   warnings?: string[] | null;
+  /** Hard reset: what stops working while the components are down, each resource once. */
+  stopsWorking?: DSCStopsWorking[] | null;
+  /** Hard reset: the CRDs that cannot be read at another version while the component serving their conversion webhook is down. */
+  conversionCRDs?: DSCConversionCRD[] | null;
   tornDown?: string[] | null;
   stayRemoved?: string[] | null;
+  /** Hard reset: the object it creates, with the values the API server fills in from the CRD's defaults. */
   newObject?: string;
+  /** Hard reset: how long it waits for the old DataScienceCluster to be gone before it stops without creating anything. */
+  deleteTimeoutSeconds?: number;
+  /** Resets: the fields whose value the reset keeps (the CRD does not let them change), where the DataScienceCluster sets them. */
+  protectedFields?: string[] | null;
   /** Resets: the option the plan was made with (part of the token). */
   keepEnabled?: boolean;
   /** Resets: the toggles the user turned on (enabled now, off in the release default), with the parents they need. */
