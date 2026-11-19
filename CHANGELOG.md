@@ -368,6 +368,11 @@ only accepts a tag whose version is the top dated section. See
   your own token (as in the dashboard); 3.0.1 had turned that off because
   it ran with the ServiceAccount's. The status still uses the
   ServiceAccount's token and never reaches MaaS.
+- Internal: the frontend is built and tested on current majors: Node 26
+  (the Active LTS line; CI, the image and the GitHub workflows), React 19,
+  TypeScript 6.0, ESLint 10 (with the eslint-community jsx-a11y plugin),
+  jsdom 31 and webpack-cli 7. TypeScript 7 waits until ts-loader and
+  typescript-eslint support it.
 
 - Final review of the Environment page's wording (before release): a
   model published on the MaaS tab reads **Through MaaS while published**
