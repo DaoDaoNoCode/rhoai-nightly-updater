@@ -413,6 +413,23 @@ only accepts a tag whose version is the top dated section. See
   `/oauth/sign_out`, which clears the session cookie. Before, it opened
   the sign-in page and the session stayed. The OpenShift login itself
   stays (SECURITY.md, Sessions): log out of the console to end it.
+- **Every authorization check is listed and classified** (SECURITY.md,
+  Authorization checks): which checks the API server now makes itself
+  with the user's token, which are the app's own policy (the cluster-admin
+  gate, the sign-in check, locks, ownership and in-use checks, the
+  gen-ai token allowlists) and which gate the ServiceAccount's reads. The
+  migration's leftovers are gone: the playground's gen-ai calls use the
+  token of the request's client instead of a second, separately chosen
+  token (it always was the same one); a 403 answered to your own token no
+  longer adds "the updater's ServiceAccount is not allowed ... run `make
+  upgrade`", which only applies to the ServiceAccount's reads; unused
+  sign-in token fields and RBAC test data for rules the template no
+  longer has are removed. The access policy is unchanged and now pinned by
+  a test: whoever passes the sign-in gate (`list pods` in
+  `redhat-ods-operator`) sees every page read-only, read with the
+  ServiceAccount's token; only cluster-admins change things, with their
+  own token. Pages read with each user's own token are planned after
+  4.0.0.
 
 ## [3.0.1] - unreleased
 

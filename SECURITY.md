@@ -62,6 +62,57 @@ Token rules (pkg/api/identity.go, handlers.go):
 - The template must not add `--openshift-delegate-urls` or `--pass-user-bearer-token` to oauth-proxy, because both accept client tokens. `TestOAuthProxyForwardsOnlyItsOwnSessionToken` pins this; `TestTemplateOAuthProxySignsInThroughTheOAuthClient` pins the client, the scope and that `--cookie-refresh` stays off; `scripts/test-chart.sh` pins the sign-in of both chart profiles.
 - The user's token is never logged, stored, put in an error, a streamed step, the activity log, the operation record or the lease (`TestUserTokenIsNeverLoggedOrEchoed`). It lives in the request and in the operation's client, in memory, until the operation ends.
 
+## Authorization checks (4.0.0)
+
+Since every change runs with the user's own token, the API server is the enforcement point for changes: it checks each request against the user's RBAC. The backend is a thin layer over it that adds only the app's own policy. This is the list of every authorization-like check, in three classes: **(a)** a copy of what the API server now enforces for user-token calls; **(b)** the app's own user-safety or product policy, which the API server does not know about; **(c)** the gate in front of reads made with the ServiceAccount's token, which the API server checks against the SA, not the user.
+
+**Access policy of 4.0.0 (deliberate).** Whoever passes the sign-in gate (oauth-proxy `--openshift-sar`: `list pods` in `redhat-ods-operator`) sees every page read-only; those reads use the ServiceAccount's token. Only cluster-admins change things, with their own token. The ServiceAccount's read path and the gate are unchanged in 4.0.0. Pages read with each user's own token (each user sees only what they may see) are planned after 4.0.0. `TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace` pins the gate.
+
+### Backend
+
+| # | Check | Token | What it checks / why | Class | 4.0.0 cleanup |
+|---|---|---|---|---|---|
+| 1 | Sign-in gate (oauth-proxy `--openshift-sar`) | user's (oauth-proxy) | `list pods` in `redhat-ods-operator`; who may open the UI at all | c | kept, now pinned by a test |
+| 2 | `requestUser` / `authenticate` (`pkg/api/identity.go`) | user's | `users/~` with the token, cached 1 min; `X-Forwarded-User` not trusted; a bearer token outside `DEV_MODE` is refused (it did not come through oauth-proxy) | b | kept |
+| 3 | Cluster-admin gate (`mutationPermission`, `mutationRequirement`; `withMutationAuth`, `withGitOpsMutationAuth`) | user's | `authorization.openshift.io` SAR for `*`/`*`/`*`, cluster-wide. The app's policy: only cluster-admins start a change, before anything is touched, so a user with partial rights cannot leave a half-done change. The API server would refuse the individual requests, but only one by one, mid-change | b | kept; its comment no longer says the SA acts for the user |
+| 4 | Sign-in check (`sessionProblem`) | user's | the token has `user:full` and outlives the operation, before anything changes | b | kept; unused `SessionToken` fields (`InactivityTimeoutSeconds`, `ClientName`) removed |
+| 5 | `GET /api/user/permissions` (`HandleUserPermissions`) | user's | runs 3 and 4 so the UI can say why changes are off | b (UI hint) | kept |
+| 6 | Per-user rate limit (`mutationLimiter`) | n/a | one accepted change per user and endpoint per 30 s (double clicks, duplicate tabs) | b | kept |
+| 7 | Shutdown gate (`mutations.begin`), 15-minute operation deadline | n/a | no change starts while the pod drains; bounded lifetime | b | kept |
+| 8 | Cluster lock, cross-pod lease and operation marker (`lockCluster`, `leases`, `markers`) | SA (`bookkeeping()`) | one change at a time across pods; fails closed (`lock_unavailable`) when the lease cannot be read or written | b | kept |
+| 9 | Admin reads (`withAdminRead`: S3 credentials, MaaS groups check, DSC plan) | gate: user's; read: SA | only a cluster-admin gets an answer that the SA reads (a credential, every project's use of a component) | c | kept (4.0.0 policy above) |
+| 10 | Gitops profile reads (`withGitOpsAdmin`) and route allow-list (`refusedInGitOpsProfile`) | gate: user's; read: SA | in the gitops profile only cluster-admins see the SA's reads; every other route answers 403 before any call | c | kept |
+| 11 | Gitops Update on the SA (`withGitOpsMutationAuth`) + admission policy check (`CheckGitOpsAdmissionPolicy`) | SA | the ValidatingAdmissionPolicy matches only the SA's username, so Update must use the SA; the app refuses Update when the policy differs from the release's | b | kept |
+| 12 | Gitops diagnostics: the SA cannot read Secrets (`checkServiceAccountSecretAccess`, SelfSubjectAccessReview) | SA | a posture check of the SA's own RBAC, not a gate | c | kept |
+| 13 | CSRF and request hygiene (`RequireJSONForMutations`, dev-mode Host/Origin check, CSP and security headers, static path checks) | n/a | cross-site requests cannot change anything | b | kept |
+| 14 | Input validation (image, namespace, channel, FBC image, DSC path and state, plan actions, clean-up list bounds) | n/a | allow-lists at the boundary; names a request may not choose | b | kept |
+| 15 | Ownership: labels, field managers and recorded UIDs; `updateToolObject` (ownership, field-ownership upgrade, `resourceVersion` guard); `deleteWithUID`; `foreignObjectError` (`not_managed`) | user's (change) / SA (prune job) | the tool changes or deletes only what it made; RBAC cannot express "objects this tool made" | b | kept |
+| 16 | In-use and fail-closed refusals (storage used by a pipeline server, gateway used by a model, MaaS in use, DSC disable checks, downgrade guard, catalog validation, install safety; "cannot check, so nothing was changed") | user's (change) | refuse a change that would break something else; fail closed when it cannot be checked | b | kept |
+| 17 | Plan tokens (DSC hard reset: `pendingHardResetToken`; the plan's confirmation) | n/a | "Finish" applies only the plan the user confirmed | b | kept |
+| 18 | Server-side dry runs before multi-step changes | user's | the API server itself, asked before the first write so a refusal changes nothing | b (not a copy: it is the API server's answer) | kept |
+| 19 | Gen-ai call allowlists (`genAICallAllowed` for the SA, `genAIUserCallAllowed` for the user) | per client | which dashboard gen-ai calls may carry which token, so no token reaches the MaaS gateway by the tool's choice (above) | b | kept. Removed the separately chosen gen-ai token (`genAIToken`, `genAIUserToken` and a `token` parameter through `GetPlaygroundStatus`, `RunPlayground`, `TeardownPlayground`, `CleanUp`): it always equalled the client's own token, so `playgroundAPI` now takes the client's token and `asUser` |
+| 20 | A model's own token for "Can it be called?" (recorded Secret UID, type, `https` only, no redirects) | user's (reads the Secret) | the token goes only to that model's address | b | kept |
+| 21 | Data science project check before status reads (playground, MLflow samples) | SA | a request may not make the SA read (or send its token to MLflow for) any namespace | c | kept |
+| 22 | Error explanations of a 403: `templateHint` ("the updater's ServiceAccount is not allowed ... run `make upgrade`") | n/a | **a: SA-era wording.** Since 4.0.0 a 403 during a change is about the user's RBAC; `K8sError` already says so (`UserForbiddenMessage`) | a | `templateHint` now adds its hint only to a 403 answered to the SA (`TestTemplateHintOnlyForTheServiceAccountsRefusals`); same rule as `deniedHint` for MLflow |
+
+### Tests that pin the split
+
+| Test | Checks | Class | Cleanup |
+|---|---|---|---|
+| `TestMutationPathsActWithTheUsersToken` | no change reaches the SA's token | b (keeps the SA read-mostly) | kept; `saTokenSources` lost the removed `genAIToken` and each entry must now exist in the graph |
+| `TestTemplateRBACCoversEveryServiceAccountCall`, `TestTemplateRBACGrantsNothingTheCodeDoesNotUse`, `TestServiceAccountWritesAreNamedOrItsOwnRecords` | the template grants exactly the SA's reads, records and the prune job's named writes | b | kept: they found no unused SA rule (unchanged: the template's rules are what the SA's code paths use) |
+| `genAIDashboardRequests` (the gen-ai API's requests with the caller's token) | listed Set up's writes too (create OGXServers and ConfigMaps, ...) | **a: data for rules the template no longer has** | now only the status's reads, which the SA needs; `playgroundStatusKeys` removed |
+| Samples fake (`templateAllow`, `userAllow`) | the status's MLflow reviews against the template, a change's against the user | b | kept; its header comment no longer says add and remove prove the template |
+| `TestEveryServiceAccountCallIsReachable` (full scan) | every function with an API call is reachable from `main`; it resolves every call's path, user-token calls included | b (dead-code detector) | kept; this is why paths stay written out by name in the code |
+
+### Frontend
+
+`canMutate` (from `GET /api/user/permissions`), `useMutationBlocker`, the permission banners and the gitops "cluster-admins only" screen are UI only: they disable buttons and explain why. Enforcement is rows 3 and 4 above and the API server.
+
+### Counts
+
+22 backend checks: (a) 1 (row 22), (b) 16, (c) 5; plus 5 test-side items, 1 of them (a). No runtime pre-flight access review per resource was left from before 4.0.0 (the migration had replaced them with the user's token); what was left was token plumbing, wording and test data, removed above. Not changed: the cluster-admin gate (the app's policy, not duplicated: rows 5 and 9 reuse the same function), every (b) check, the SA's read path and gate (the 4.0.0 policy above), and the SA's RBAC (the coverage tests show every rule in use).
+
 ## Threat model of the user token (4.0.0)
 
 What changed (`install.sh` and the chart's full profile; not the chart's gitops profile): the session cookie oauth-proxy sets now carries a token that can act with the user's whole RBAC (most users of this tool are cluster-admins), for up to the cookie's lifetime (`--cookie-expire=23h`, below the 24h default token lifetime). Before, it carried a token that could only identify the user.
