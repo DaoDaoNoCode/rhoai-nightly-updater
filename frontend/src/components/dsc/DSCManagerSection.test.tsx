@@ -192,6 +192,17 @@ describe("DSCManagerSection", () => {
       expect(gone).toHaveStyle({ visibility: "collapse" });
     });
 
+    it("fits narrow cards: a fixed layout, and names that wrap between their words", async () => {
+      stubApi({ "GET /api/components/dsc": problems });
+      renderSection();
+      const table = await screen.findByRole("treegrid");
+      // The widths follow the table's width only: content (an operator message, the filter) never moves a column.
+      expect(table).toHaveStyle({ tableLayout: "fixed" });
+      const name = [...table.querySelectorAll("code")].find((c) => c.textContent === "modelsAsAService")!;
+      expect(name.innerHTML).toBe("models<wbr>As<wbr>AService");
+      expect(name).toHaveStyle({ overflowWrap: "anywhere" });
+    });
+
     it("hides rows that match the release default", async () => {
       stubApi({ "GET /api/components/dsc": manager });
       renderSection();
