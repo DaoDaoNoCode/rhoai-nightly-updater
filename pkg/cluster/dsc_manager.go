@@ -673,7 +673,7 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]interface{},
 				switch {
 				case err != nil:
 					reasons = append(reasons, fmt.Sprintf("could not check what still uses %s: %v", name, err))
-				case len(users) > 0 && (!(teardown && isOn) || name == "mlflowoperator"):
+				case len(users) > 0 && (!teardown || !isOn || name == "mlflowoperator"):
 					what := "remove them first"
 					if name == "mlflowoperator" {
 						what = "the MLflowOperator CR cannot be deleted while an MLflow CR exists, so its removal would hang; delete MLflow first (Environment page)"

@@ -19,8 +19,13 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 	Register(mux)
 	var toggled []types.DSCToggleRequest
 	var reset []types.DSCPlanRequest
-	prevSet, prevHard := setDSCManagementState, hardResetDSC
-	t.Cleanup(func() { setDSCManagementState, hardResetDSC = prevSet, prevHard })
+	var finished []types.DSCFinishRequest
+	prevSet, prevHard, prevFinish := setDSCManagementState, hardResetDSC, finishDSCHardReset
+	t.Cleanup(func() { setDSCManagementState, hardResetDSC, finishDSCHardReset = prevSet, prevHard, prevFinish })
+	finishDSCHardReset = func(_ *cluster.Client, req types.DSCFinishRequest) (*types.OperationResponse, error) {
+		finished = append(finished, req)
+		return &types.OperationResponse{Success: true, Message: "ok"}, nil
+	}
 	setDSCManagementState = func(_ *cluster.Client, req types.DSCToggleRequest) (*types.OperationResponse, error) {
 		toggled = append(toggled, req)
 		return &types.OperationResponse{Success: true, Message: "ok"}, nil
@@ -44,6 +49,8 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"short","confirm":"default-dsc"}`, http.StatusBadRequest},
 		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","confirm":"default-dsc"}`, http.StatusOK},
 		{"/api/components/dsc/fix", `{"name":"default-dsc","uid":"u-1"}`, http.StatusBadRequest},
+		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc"}`, http.StatusBadRequest},
+		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc","token":"` + token + `"}`, http.StatusOK},
 	} {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, postJSON(tc.path, "user:admin", tc.body))
@@ -57,6 +64,9 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 	}
 	if len(reset) != 1 || reset[0].Confirm != "default-dsc" || reset[0].Token != token {
 		t.Fatalf("reset = %+v", reset)
+	}
+	if len(finished) != 1 || finished[0].Name != "default-dsc" || finished[0].Token != token {
+		t.Fatalf("finished = %+v", finished)
 	}
 }
 
