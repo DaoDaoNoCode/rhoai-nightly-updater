@@ -13,7 +13,8 @@
 //                                 POST /__docs/hold without a path (the loading states)
 //   --delay <ms>                  answer every GET /api/resources/* that much later
 //   GET  /__docs/state            scenario name, held work, the fixed "now"
-//   POST /__docs/job?name=X&out=DIR, GET /__docs/job   the capture job to run
+//   POST /__docs/job?name=X&out=DIR[&contrast=M], GET /__docs/job   the capture job to run
+//                                 (M: the contrast mode, glass unless named)
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
@@ -131,10 +132,31 @@ const scenarios = {
     };
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
+  // The user's OpenShift token expired or was revoked: the identity check
+  // (GET /api/user/permissions) and every change answer 401 session_expired
+  // (pkg/api writeAuthError, sessionProblem).
+  "session-expired": (w) => { w.signIn = { status: 401, code: "session_expired", message: F.SESSION_EXPIRED_MESSAGE }; },
+  // A cluster-admin still signed in from before 4.0.0 (a user:info
+  // user:check-access token): GET /api/user/permissions says canMutate false
+  // with the reason, and every change answers 401 sign_in_again
+  // (pkg/api HandleUserPermissions, sessionProblem).
+  "sign-in-before-4": (w) => {
+    w.status = F.updateAvailableStatus();
+    w.signIn = { status: 401, code: "sign_in_again", message: F.SIGN_IN_SCOPE_MESSAGE };
+  },
   "components-not-ready": (w) => { w.components = F.notReadyComponents(); },
   // An upgraded DSC: things a later release added are not set, and
   // modelsAsAService is Managed under a Removed aigateway.
   "components-differences": (w) => { w.dscManager = F.dscManager({ "workbenches.workbenchesV2": null, databaseservice: null, aigateway: "Removed" }); },
+  // MaaS set up and a model published (aigateway and modelsAsAService are
+  // Managed, off in the release default), ray Removed by hand, and a
+  // sub-component a later release added not set: the reset dialogs offer
+  // Keep the components you turned on, and the MaaS guard refuses turning
+  // aigateway off.
+  "components-turned-on": (w) => {
+    scenarios["env-maas-published"](w);
+    w.dscManager = F.dscManager({ ray: "Removed", "workbenches.workbenchesV2": null });
+  },
   // The page compared the DSC as v2; when the reset dialog opens, the defaults are v3 (the conversion recovered).
   "components-reset-stale": (w) => {
     w.components.dscCompatibility = { ...w.components.dscCompatibility, missingComponents: ["sparkoperator"], resetRemovals: ["trainer"] };
@@ -486,7 +508,7 @@ for (const name of ["healthy", "prerequisite-missing", "operand-missing", "modul
 
 let scenario = args.scenario || process.env.DOCS_SCENARIO || "healthy";
 let world;
-let job = { name: "", out: "" };
+let job = { name: "", out: "", contrast: "" };
 // steps: resolvers of update steps waiting for /__docs/advance; credits: advances not yet used.
 const held = { steps: [], credits: 0, mutation: null };
 // Reads held for the loading-state images: GET /api/* requests whose path
@@ -1008,6 +1030,16 @@ async function api(req, res, u) {
     }
   }
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
+  if (world.signIn) {
+    // An expired sign-in fails the identity check; a sign-in from before
+    // 4.0.0 passes it, so permissions answer with the reason instead.
+    const { status, code, message } = world.signIn;
+    if (key === "GET /api/user/permissions") {
+      if (code === "session_expired") return json(res, status, { error: message, errorCode: code });
+      return json(res, 200, { canMutate: false, user: F.USER, reason: message, reasonCode: code });
+    }
+    if (req.method !== "GET") return json(res, status, { error: code === "session_expired" ? message : `${message} Nothing was changed.`, errorCode: code });
+  }
   if (key === "GET /api/resources/minio/admin-password" && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can read this through the updater.", errorCode: "forbidden" });
   }
@@ -1080,7 +1112,7 @@ function control(req, res, u) {
     case "/__docs/state":
       return json(res, 200, { scenario, now: F.NOW, waitingSteps: held.steps.length, waitingMutation: !!held.mutation, scenarios: Object.keys(scenarios) });
     case "/__docs/job":
-      if (req.method === "POST") job = { name: u.searchParams.get("name") || "", out: u.searchParams.get("out") || "" };
+      if (req.method === "POST") job = { name: u.searchParams.get("name") || "", out: u.searchParams.get("out") || "", contrast: u.searchParams.get("contrast") || "" };
       return json(res, 200, job);
     default:
       return json(res, 404, {});

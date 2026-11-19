@@ -7,6 +7,8 @@
 #
 # Needs node (22+), playwright-cli, ffmpeg and ImageMagick 7 (magick).
 # SKIP_BUILD=1 reuses frontend/dist; PORT picks the mock's port (18181).
+# The images use the Glass contrast mode; CONTRAST=default or
+# CONTRAST=high-contrast captures them in another mode.
 # The themes job (not run by default) captures every page in every color
 # scheme and contrast mode into THEMES_DIR (default tmp/themes), for review.
 set -euo pipefail
@@ -16,7 +18,9 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 IMAGES="$ROOT/docs/images"
 PORT=${PORT:-18181}
 SESSION=${SESSION:-docs-screenshots}
-ALL_JOBS=(pages status banners components builds dashdev resources diagnostics
+CONTRAST=${CONTRAST:-glass}
+case $CONTRAST in glass | default | high-contrast) ;; *) echo "ERROR: CONTRAST must be glass, default or high-contrast" >&2; exit 1 ;; esac
+ALL_JOBS=(pages status banners signin components builds dashdev resources diagnostics
   gif-update gif-install gif-migrate gif-repair gif-diagnostics gif-pr-search)
 if [ $# -gt 0 ]; then JOBS=("$@"); else JOBS=("${ALL_JOBS[@]}"); fi
 
@@ -60,7 +64,7 @@ RAW="$WORK/raw"
 mkdir -p "$RAW/full" "$RAW/crop" "$RAW/frames" "$RAW/themes"
 for job in "${JOBS[@]}"; do
   echo "Capturing $job..."
-  curl -fsS -X POST "http://127.0.0.1:$PORT/__docs/job?name=$job&out=$RAW" >/dev/null
+  curl -fsS -X POST "http://127.0.0.1:$PORT/__docs/job?name=$job&out=$RAW&contrast=$CONTRAST" >/dev/null
   out=$(playwright-cli -s="$SESSION" run-code --filename="$WORK/capture.js" 2>&1)
   if ! grep -q "\"$job: done\"" <<<"$out"; then
     echo "$out" | head -30 >&2
