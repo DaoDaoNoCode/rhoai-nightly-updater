@@ -267,9 +267,22 @@ GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release t
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`.
 - **Image jobs** (`build-main`, `build-branch`, `release-build`) `need` the Go and frontend test jobs of their pipeline and build with `RUN_CHECKS=false`, so the Containerfile does not run those checks a second time.
 - **main**: `build-main` builds the image to a tarball; `publish-main` pushes it as the write-once `:$CI_COMMIT_SHORT_SHA` (8 characters; an existing tag is kept when it is a build of the same commit, and refused from another commit) and moves `:main` only while the commit is still the tip of `main`. It never touches `:latest`.
-- **Other branches**: a manual job publishes `:$CI_COMMIT_REF_SLUG`.
+- **Other branches**: the manual `build-branch` job builds the image. It pushes it as `$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG` only when the project has the variables `BRANCH_IMAGE`, `QUAY_BRANCH_USER` and `QUAY_BRANCH_TOKEN` (below); without them it builds and pushes nothing. It never uses `QUAY_USER`/`QUAY_TOKEN`.
 - **Release tags**: `release-build` builds the image (`VERSION=<tag>`) to a tarball; `release-installer` generates `install.sh`; `release-publish` pushes `:vX.Y.Z` and moves `:vN` and `:latest` (every tag-writing job, main or release, holds the one resource group `publish-latest`); `release-notes` creates the GitLab Release. `promote-latest` is manual.
-- The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials.
+- The registry comes from the `IMAGE` variable (a project CI/CD variable overrides the default) with `QUAY_USER`/`QUAY_TOKEN` as its credentials. Only the crane jobs (`publish-main`, `release-publish`, `promote-latest`) read them, and those run only on `main` and on release tags. Kaniko never gets them: the build's `RUN` steps (`npm ci` with its packages' install scripts, `go mod download`) could read kaniko's registry login, so `build-main` and `release-build` build a tarball with no registry login and the crane job pushes it.
+
+#### GitLab and Quay settings
+
+The image tags are only as safe as the credentials that write them. Set these by hand (a Maintainer of the GitLab project, and the owner of the Quay repository):
+
+| Where | Setting | Why |
+|---|---|---|
+| GitLab, Settings > CI/CD > Variables | `QUAY_USER` and `QUAY_TOKEN`: **Protect variable** and **Mask variable** on (Visibility: Masked) | Protected variables reach only pipelines of protected branches and tags, so a pipeline of any other branch (whoever can push one can change `.gitlab-ci.yml`) cannot read the token that pushes `:main`, `:latest` and the release tags |
+| GitLab, Settings > Repository > Protected branches | `main` protected (allowed to push and merge: Maintainers) | `publish-main` runs on every `main` pipeline with the push token |
+| GitLab, Settings > Repository > Protected tags | `v*`: allowed to create **Maintainers** only | A release tag pipeline gets the protected variables and publishes `:vX.Y.Z`, `:vN` and `:latest`; without the protection anyone who can push a tag could publish a release |
+| Quay, the repository's robot accounts | `QUAY_USER`/`QUAY_TOKEN` a robot account with **Write** on the `IMAGE` repository only (not the user's own password or an organisation-wide token) | Limits what a leaked token can overwrite |
+| Quay, the repository's Settings | Tag immutability for `v[0-9]+\.[0-9]+\.[0-9]+` (immutability policies, where the Quay instance offers them) | `:vX.Y.Z` then cannot be overwritten even with the push token; `release.sh publish` already refuses to |
+| Optional: `build-branch` | `BRANCH_IMAGE` (a repository of its own, for example `quay.io/<you>/rhoai-nightly-updater-dev`), `QUAY_BRANCH_USER`, `QUAY_BRANCH_TOKEN` (masked, not protected: a robot with Write on that repository only) | Branch builds then push to that repository; the job refuses a `BRANCH_IMAGE` equal to `IMAGE`. Unset, it only builds |
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same test-stage checks on pushes to `main` and on pull requests; `release.yml` runs them on release tags and creates the GitHub Release. Nothing is published to a registry from GitHub.
 

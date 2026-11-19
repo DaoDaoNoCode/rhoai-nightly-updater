@@ -80,6 +80,18 @@ only accepts a tag whose version is the top dated section. See
   pinned by digest. A project variable `DOCKER_HUB` points it elsewhere
   (`docker.io`, or GitLab's Dependency Proxy).
 
+### Security
+
+- CI, GitLab: kaniko no longer gets the Quay push credentials
+  (`QUAY_USER`/`QUAY_TOKEN`). `build-main` built only a tarball but was
+  logged in, and the build's `RUN` steps (`npm ci` install scripts,
+  `go mod download`) could read that login. The manual `build-branch` job
+  no longer pushes with the release credentials either: it pushes to a
+  repository of its own (`BRANCH_IMAGE`, with `QUAY_BRANCH_USER` and
+  `QUAY_BRANCH_TOKEN`), or builds only. The release credentials can now be
+  protected variables; CONTRIBUTING.md lists the GitLab and Quay settings
+  that keep `:main`, `:latest` and the release tags safe.
+
 ## [3.0.0] - 2026-11-18
 
 ### Added

@@ -196,16 +196,24 @@ release-guard:
     name: $KANIKO_IMAGE
     entrypoint: [""]
   variables:
-    # Whether kaniko logs in to the image registry (QUAY_USER/QUAY_TOKEN).
-    REGISTRY_LOGIN: "true"
-  # Kaniko's logins: the image registry (REGISTRY_LOGIN), and the
+    # Set to "true" by build-branch only: kaniko logs in to BRANCH_IMAGE's
+    # registry with QUAY_BRANCH_USER/QUAY_BRANCH_TOKEN, when all three are
+    # set.
+    BRANCH_PUSH: "false"
+  # Kaniko never gets the release credentials (QUAY_USER/QUAY_TOKEN): the
+  # build's RUN steps (npm ci with its packages' install scripts, go mod
+  # download) can read /kaniko/.docker/config.json. build-main and
+  # release-build push nothing; the crane jobs below push their tarballs.
+  # Kaniko's logins: build-branch's own registry (BRANCH_PUSH), and the
   # Dependency Proxy when DOCKER_HUB points at it (the Containerfile's
   # Docker Hub bases come through it), with the job's proxy credentials.
   before_script:
     - |
       login() { printf '"%s":{"auth":"%s"}' "$1" "$(printf '%s:%s' "$2" "$3" | base64 -w0)"; }
       auths=""
-      if [ "$REGISTRY_LOGIN" = true ]; then auths=$(login "${IMAGE%%/*}" "$QUAY_USER" "$QUAY_TOKEN"); fi
+      if [ "$BRANCH_PUSH" = true ] && [ -n "${BRANCH_IMAGE:-}" ] && [ -n "${QUAY_BRANCH_USER:-}" ] && [ -n "${QUAY_BRANCH_TOKEN:-}" ]; then
+        auths=$(login "${BRANCH_IMAGE%%/*}" "$QUAY_BRANCH_USER" "$QUAY_BRANCH_TOKEN")
+      fi
       hub=${DOCKER_HUB%%/*}
       if [ -n "${CI_DEPENDENCY_PROXY_SERVER:-}" ] && { [ "$hub" = "$CI_DEPENDENCY_PROXY_SERVER" ] || [ "$hub" = "${CI_DEPENDENCY_PROXY_SERVER%:443}" ]; }; then
         auths="${auths:+$auths,}$(login "$hub" "$CI_DEPENDENCY_PROXY_USER" "$CI_DEPENDENCY_PROXY_PASSWORD")"
@@ -239,22 +247,39 @@ build-main:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
 
 
-# Manual trigger for any other branch → :<branch-slug>
+# Manual trigger for any other branch: builds the image, and pushes it as
+# $BRANCH_IMAGE:<branch-slug> only when the project has the branch
+# variables BRANCH_IMAGE, QUAY_BRANCH_USER and QUAY_BRANCH_TOKEN (a robot
+# account that can write only that repository; CONTRIBUTING.md). It never
+# uses QUAY_USER/QUAY_TOKEN, which can push the release tags: anyone who
+# can push a branch can run this job with code of their own.
 build-branch:
   extends: .kaniko-build
   needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build]
+  variables:
+    BRANCH_PUSH: "true"
   script:
-    - >-
-      /kaniko/executor
-      --context=$CI_PROJECT_DIR
-      --dockerfile=Containerfile
-      --build-arg GIT_SHA=$CI_COMMIT_SHA
-      --build-arg VERSION=$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
-      --build-arg BUILD_DATE=$CI_COMMIT_TIMESTAMP
-      --build-arg RUN_CHECKS=false
-      --build-arg DOCKER_HUB=$DOCKER_HUB
-      --destination=$IMAGE:$CI_COMMIT_REF_SLUG
-      --cache=true
+    - |
+      if [ -n "${BRANCH_IMAGE:-}" ] && [ -n "${QUAY_BRANCH_USER:-}" ] && [ -n "${QUAY_BRANCH_TOKEN:-}" ]; then
+        case "$BRANCH_IMAGE" in
+        "$IMAGE" | *@* | */*:*)
+          echo "BRANCH_IMAGE must be a repository of its own, without a tag or digest, not $BRANCH_IMAGE (IMAGE is $IMAGE)."
+          exit 1 ;;
+        esac
+        set -- "--destination=$BRANCH_IMAGE:$CI_COMMIT_REF_SLUG"
+      else
+        echo "BRANCH_IMAGE, QUAY_BRANCH_USER or QUAY_BRANCH_TOKEN is not set: the image is built, not pushed (CONTRIBUTING.md, Automatic Image Publishing)."
+        set -- --no-push
+      fi
+      /kaniko/executor \
+        "--context=$CI_PROJECT_DIR" \
+        --dockerfile=Containerfile \
+        --build-arg "GIT_SHA=$CI_COMMIT_SHA" \
+        --build-arg "VERSION=$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA" \
+        --build-arg "BUILD_DATE=$CI_COMMIT_TIMESTAMP" \
+        --build-arg RUN_CHECKS=false \
+        --build-arg "DOCKER_HUB=$DOCKER_HUB" \
+        "$@"
   rules:
     - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
       when: manual
@@ -266,9 +291,6 @@ build-branch:
 release-build:
   extends: .kaniko-build
   needs: [go, golangci-lint, frontend-checks, frontend-test, frontend-build, release-scripts, chart, release-guard]
-  variables:
-    # It pushes nothing: no image registry credentials.
-    REGISTRY_LOGIN: "false"
   script:
     - >-
       /kaniko/executor
