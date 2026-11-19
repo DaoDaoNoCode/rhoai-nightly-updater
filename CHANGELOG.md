@@ -197,6 +197,19 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- Final review of the Environment page's wording (before release): a
+  model published on the MaaS tab reads **Through MaaS while published**
+  and shows its **MaaS address**; a model that cannot be called says so
+  once (the alert keeps the message and **Check again**); the MaaS words
+  are the dashboard's (**authorization policy**, **MaaS governance**,
+  the subscription's display name) and one name per shared part
+  (**Connectivity Link instance (Kuadrant)**, **MaaS gateway**,
+  **Database**); **Clean up MaaS** as on every other tab; a shared part
+  with a warning needs attention, and a part waiting for another is a
+  grey **Waiting**; MaaS dialogs name the model by its display name, and
+  messages no longer quote project names; the capacity warning uses GiB;
+  the Overview's in-app step reads **Show issue in &lt;project&gt;**;
+  `/environment` opens the Environment page.
 - Links to the RHOAI dashboard open the matching section page, not a
   project's details page: a project's models open its Deployments page
   (`/ai-hub/models/deployments/internal/<project>`), and MaaS opens MaaS
