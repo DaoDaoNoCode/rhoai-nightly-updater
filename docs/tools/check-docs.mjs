@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Checks the Markdown docs: every relative link and image path exists, every
-// #anchor matches a heading (GitHub's slugs), and every file in docs/images
+// #anchor matches a heading (GitHub's slugs) or an <a id="...">, and every file in docs/images
 // is used. Exits 1 on a problem. Run: make docs-check
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -32,6 +32,8 @@ function anchors(md) {
     if (n) slug += `-${n}`;
     out.add(slug);
   }
+  // Explicit anchors (<a id="...">) keep old links working after a section moves.
+  for (const m of md.replace(/```[\s\S]*?```/g, "").matchAll(/<a\s+(?:id|name)="([^"]+)"/g)) out.add(m[1]);
   return out;
 }
 
