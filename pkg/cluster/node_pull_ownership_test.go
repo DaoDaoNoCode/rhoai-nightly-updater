@@ -107,9 +107,9 @@ func nsSetPullSecret(t *testing.T, f *resourceFake, extra map[string]any) {
 
 // nsPutRecord stores the tool's record of having written auth under key
 // into the Secret with uid.
-func nsPutRecord(t *testing.T, f *resourceFake, uid, key, auth string) {
+func nsPutRecord(t *testing.T, f *resourceFake, uid, auth string) {
 	t.Helper()
-	rec := nodePullRecord{SecretUID: uid, Key: key, Salt: "5a17", AuthSHA256: hashPullAuth("5a17", auth), At: "2026-11-18T10:00:00Z", By: "admin"}
+	rec := nodePullRecord{SecretUID: uid, Key: "quay.io/rhoai", Salt: "5a17", AuthSHA256: hashPullAuth("5a17", auth), At: "2026-11-18T10:00:00Z", By: "admin"}
 	raw, _ := json.Marshal(rec)
 	f.put(testSnapshotCM, map[string]any{"data": map[string]any{nodePullRecordKey: string(raw), "snapshot": `{"images":{}}`}})
 }
@@ -153,13 +153,13 @@ func TestPullSecretAddLeavesAnEntryItDidNotAdd(t *testing.T) {
 		{"a provisioner's entry, no record", "quay.io/rhoai", func(*testing.T, *resourceFake) {}, "this tool has no record of adding it"},
 		{"an entry with a scheme, no record", "https://quay.io/rhoai/", func(*testing.T, *resourceFake) {}, "this tool has no record of adding it"},
 		{"the Secret was made again", "quay.io/rhoai", func(t *testing.T, f *resourceFake) {
-			nsPutRecord(t, f, "an-earlier-uid", "quay.io/rhoai", nsOldRHOAI)
+			nsPutRecord(t, f, "an-earlier-uid", nsOldRHOAI)
 		}, "was made again since this tool added its entry"},
 		{"the tool's entry got another token since", "quay.io/rhoai", func(t *testing.T, f *resourceFake) {
-			nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", base64.StdEncoding.EncodeToString([]byte("rhoai+robot:what-the-tool-wrote")))
+			nsPutRecord(t, f, nsPullSecretUID, base64.StdEncoding.EncodeToString([]byte("rhoai+robot:what-the-tool-wrote")))
 		}, "its token was changed since this tool added it"},
 		{"the tool's entry is gone, another is there", "https://quay.io/rhoai/", func(t *testing.T, f *resourceFake) {
-			nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", nsOldRHOAI)
+			nsPutRecord(t, f, nsPullSecretUID, nsOldRHOAI)
 		}, "the entry this tool added is gone"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestPullSecretAddUpdatesItsOwnEntry(t *testing.T) {
 	f, c := nodeSetupFake(t, "HighlyAvailable", false)
 	captureNodeSetupLogs(t)
 	nsSetPullSecret(t, f, map[string]any{"quay.io/rhoai": map[string]any{"auth": nsOldRHOAI}})
-	nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", nsOldRHOAI)
+	nsPutRecord(t, f, nsPullSecretUID, nsOldRHOAI)
 
 	plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
 	if !plan.Ready || plan.Replaceable || plan.Replacing || plan.EntrySetBy != EntrySetByTool ||
@@ -305,7 +305,7 @@ func TestPullSecretRemoveTakesOutOnlyItsOwnEntry(t *testing.T) {
 		"https://quay.io/rhoai/":  map[string]any{"auth": nsOldRHOAI},
 		"quay.io/rhoai/other-app": map[string]any{"auth": nsOldRHOAI},
 	})
-	nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", nsTokenPadded)
+	nsPutRecord(t, f, nsPullSecretUID, nsTokenPadded)
 
 	plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove})
 	if !plan.Ready || plan.EntrySetBy != EntrySetByOther || !strings.Contains(plan.State, "this tool added on 2026-11-18T10:00:00Z by admin") ||
@@ -343,13 +343,13 @@ func TestPullSecretRemoveRefusesAnEntryItDidNotAdd(t *testing.T) {
 	}{
 		{"no record (a provisioner's entry)", "quay.io/rhoai", func(*testing.T, *resourceFake) {}, "this tool has no record of adding it"},
 		{"the Secret was made again", "quay.io/rhoai", func(t *testing.T, f *resourceFake) {
-			nsPutRecord(t, f, "an-earlier-uid", "quay.io/rhoai", nsOldRHOAI)
+			nsPutRecord(t, f, "an-earlier-uid", nsOldRHOAI)
 		}, "was made again"},
 		{"the token was changed since", "quay.io/rhoai", func(t *testing.T, f *resourceFake) {
-			nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", nsTokenPadded)
+			nsPutRecord(t, f, nsPullSecretUID, nsTokenPadded)
 		}, "its token was changed since this tool added it"},
 		{"the tool's entry is gone, another is there", "https://quay.io/rhoai/", func(t *testing.T, f *resourceFake) {
-			nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", nsOldRHOAI)
+			nsPutRecord(t, f, nsPullSecretUID, nsOldRHOAI)
 		}, "the entry this tool added is gone"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -386,7 +386,7 @@ func TestPullSecretOwnershipFailsClosedWithoutTheRecord(t *testing.T) {
 		for _, entry := range []map[string]any{nil, {"quay.io/rhoai": map[string]any{"auth": nsOldRHOAI}}} {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			nsSetPullSecret(t, f, entry)
-			nsPutRecord(t, f, nsPullSecretUID, "quay.io/rhoai", nsOldRHOAI)
+			nsPutRecord(t, f, nsPullSecretUID, nsOldRHOAI)
 			f.fail["GET "+testSnapshotCM] = 403
 			plan := nsPlan(t, c, types.NodeSetupRequest{Action: action})
 			if plan.Ready || plan.NothingToDo || plan.RefusalCode != "unreadable" || !strings.Contains(plan.Refusal, "cannot tell who set the quay.io/rhoai entry") {
@@ -515,11 +515,11 @@ func TestNodePullRecordInfo(t *testing.T) {
 // The salt makes two records of one token differ, and neither holds it.
 func TestNodePullRecordHoldsNoToken(t *testing.T) {
 	_, c := nodeSetupFake(t, "HighlyAvailable", false)
-	a, err := newNodePullRecord(c, "u", "quay.io/rhoai", nsTokenPadded)
+	a, err := newNodePullRecord(c, "u", nsTokenPadded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := newNodePullRecord(c, "u", "quay.io/rhoai", nsTokenPadded)
+	b, _ := newNodePullRecord(c, "u", nsTokenPadded)
 	if a.Salt == b.Salt || a.AuthSHA256 == b.AuthSHA256 || !a.matches(nsTokenPadded) || !b.matches(nsTokenPadded) || a.matches(nsOldRHOAI) {
 		t.Fatalf("records %+v %+v", a, b)
 	}
@@ -529,7 +529,7 @@ func TestNodePullRecordHoldsNoToken(t *testing.T) {
 			t.Fatalf("the record holds %q: %s", cred, raw)
 		}
 	}
-	if _, err := newNodePullRecord(c, "", "quay.io/rhoai", nsTokenPadded); err == nil {
+	if _, err := newNodePullRecord(c, "", nsTokenPadded); err == nil {
 		t.Fatal("a record without the Secret's UID")
 	}
 }

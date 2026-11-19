@@ -71,9 +71,9 @@ func (r *nodePullRecord) matches(auth string) bool {
 	return subtle.ConstantTimeCompare([]byte(hashPullAuth(r.Salt, auth)), []byte(r.AuthSHA256)) == 1
 }
 
-// newNodePullRecord records that the tool wrote auth under key into the
+// newNodePullRecord records that the tool wrote auth under quay.io/rhoai into the
 // Secret with UID uid.
-func newNodePullRecord(c *Client, uid, key, auth string) (nodePullRecord, error) {
+func newNodePullRecord(c *Client, uid, auth string) (nodePullRecord, error) {
 	if uid == "" {
 		return nodePullRecord{}, fmt.Errorf("%s has no UID", clusterPullSecretRef)
 	}
@@ -82,7 +82,7 @@ func newNodePullRecord(c *Client, uid, key, auth string) (nodePullRecord, error)
 		return nodePullRecord{}, err
 	}
 	s := hex.EncodeToString(salt)
-	return nodePullRecord{SecretUID: uid, Key: key, Salt: s, AuthSHA256: hashPullAuth(s, auth), At: nowRFC3339(), By: getUser(c)}, nil
+	return nodePullRecord{SecretUID: uid, Key: quayRHOAIRegistry, Salt: s, AuthSHA256: hashPullAuth(s, auth), At: nowRFC3339(), By: getUser(c)}, nil
 }
 
 // readNodePullRecord reads the record (nil when there is none).

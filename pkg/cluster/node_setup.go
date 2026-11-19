@@ -705,7 +705,7 @@ func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, e
 	}
 	w.plan.NodeImpact = pullSecretNodeImpact
 	w.record = func(c *Client) error {
-		r, err := newNodePullRecord(c, ps.uid, quayRHOAIRegistry, token)
+		r, err := newNodePullRecord(c, ps.uid, token)
 		if err != nil {
 			return err
 		}
