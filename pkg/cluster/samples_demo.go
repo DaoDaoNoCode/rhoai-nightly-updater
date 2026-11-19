@@ -44,9 +44,11 @@ import (
 //
 // The tool may not delete the demo: demo/delete checks experiments,
 // datasets and registeredmodels "delete" without names
-// (mlflow-kubernetes-plugins v2.1.1 auth/rules_base.py:1183-1187), and the
-// ServiceAccount holds no unnamed delete on MLflow data. So the demo has
-// Add and Regenerate, no Remove.
+// (mlflow-kubernetes-plugins v2.1.1 auth/rules_base.py:1183-1187). The demo
+// has Add and Regenerate, no Remove: that was decided while changes ran as
+// the ServiceAccount, which holds no unnamed delete on MLflow data. Since
+// 4.0.0 changes run with the signed-in user's token, so a Remove calling
+// demo/delete is possible; what demo/delete removes has not been checked.
 const (
 	demoExperiment       = "MLflow Demo"
 	demoVersionTagPrefix = "mlflow.demo.version."

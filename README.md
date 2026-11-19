@@ -190,7 +190,7 @@ An unavailable choice says why under it, with a link to fix it where there is on
 
 1. A model deployed elsewhere (in the dashboard, say) in a project the gateway does not list: its route is rejected, so it never becomes ready. The Overview's Models row says so too.
 2. **Allow <project>** adds the project to the gateway's list; the projects already on it stay. For a gateway this tool did not create, the tab gives RHOAI's step for a cluster admin instead.
-3. The projects the gateway allows. Deleting a model leaves its project on the list, since another model there may use the gateway.
+3. The projects the gateway allows. Deleting a project's last model takes the project off the list (it stays while another model there uses the gateway); a project that was deleted leaves it at the next Models change, and **Remove from the list** does it by hand.
 
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 

@@ -48,12 +48,10 @@ import (
 // tool recorded when it created it. Its existence is checked with a
 // dry-run delete carrying the recorded UID as a precondition; the tool
 // reads it (get on these names, since 4.0.0) only for "Can it be called?"
-// (models_call.go), which sends the model's own token to it. That does
-// not keep a leaked token of this tool from minting tokens: "create" on
-// Secrets anywhere plus the named "get" on other Secrets lets it create a
-// token Secret of such a name for any ServiceAccount and read it back
-// (SECURITY.md, within the accepted "leaked SA token is about as good as
-// cluster-admin" risk).
+// (models_call.go), which sends the model's own token to it. It reads it
+// with the signed-in user's token, during the change; the ServiceAccount
+// cannot read or create token Secrets since 4.0.0 (SECURITY.md, Which
+// token is used where).
 const (
 	tokenDisplayName  = "default-name"
 	dashboardLabel    = "opendatahub.io/dashboard"

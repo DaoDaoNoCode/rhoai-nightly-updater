@@ -43,7 +43,7 @@ import (
 //     objects, which Connectivity Link's operators own and reconcile. This
 //     tool never edits operator-owned objects: it only checks the three
 //     settings and shows the script's commands for a cluster-admin
-//     (SECURITY.md, MaaS audit).
+//     (SECURITY.md, Models as a Service).
 //  4. Configure DataScienceCluster: aigateway.modelsAsAService Managed; the
 //     previous value is recorded so removal restores it.
 //  5. Validation: maas-api Available (rollout status), the default tenant
