@@ -1932,6 +1932,12 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	}
 
 	logs = append(logs, "Auth value validated")
+	// Every error from the API server is redacted before it is returned
+	// (the operation's message is kept and shown): an admission webhook or
+	// a validation error may quote the object it was sent.
+	_, pass, _ := strings.Cut(string(decoded), ":")
+	credentials := []string{auth, base64.StdEncoding.EncodeToString([]byte(auth)), string(decoded), pass}
+	redact := func(err error) string { return redactSecrets(err.Error(), credentials...) }
 
 	// Check if secret already exists. Its other registry credentials must be
 	// preserved: only the quay.io/rhoai entry is replaced.
@@ -1944,7 +1950,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		} else {
 			return &types.OperationResponse{
 				Success:   false,
-				Message:   fmt.Sprintf("Failed to check existing secret: %v", getErr),
+				Message:   "Failed to check existing secret: " + redact(getErr),
 				Logs:      logs,
 				ErrorCode: errorCodeFromK8sErr(getErr),
 			}, nil
@@ -1994,6 +2000,18 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		}, nil
 	}
 	dockerConfigB64 := base64.StdEncoding.EncodeToString(dockerConfigBytes)
+	// The whole config (as JSON and base64), and the other registries'
+	// credentials it keeps, are redacted too.
+	credentials = append(credentials, dockerConfigB64, string(dockerConfigBytes))
+	for _, entry := range auths {
+		if e, ok := entry.(map[string]interface{}); ok {
+			for _, field := range []string{"auth", "password", "identitytoken", "registrytoken"} {
+				if v, ok := e[field].(string); ok {
+					credentials = append(credentials, v)
+				}
+			}
+		}
+	}
 
 	secret := map[string]interface{}{
 		"apiVersion": "v1",
@@ -2014,7 +2032,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		if err != nil {
 			return &types.OperationResponse{
 				Success:   false,
-				Message:   fmt.Sprintf("Failed to update pull secret: %v", err),
+				Message:   "Failed to update pull secret: " + redact(err),
 				Logs:      logs,
 				ErrorCode: errorCodeFromK8sErr(err),
 			}, nil
@@ -2031,7 +2049,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		if err != nil {
 			return &types.OperationResponse{
 				Success:   false,
-				Message:   fmt.Sprintf("Failed to create pull secret: %v", err),
+				Message:   "Failed to create pull secret: " + redact(err),
 				Logs:      logs,
 				ErrorCode: errorCodeFromK8sErr(err),
 			}, nil
@@ -2042,7 +2060,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	// Validate by reading it back
 	ps, err := getPullSecret(c)
 	if err != nil {
-		logs = append(logs, fmt.Sprintf("Warning: failed to verify secret after creation: %v", err))
+		logs = append(logs, "Warning: failed to verify secret after creation: "+redact(err))
 		return &types.OperationResponse{
 			Success: true,
 			Message: "Pull secret was created but verification failed. Try refreshing the status.",

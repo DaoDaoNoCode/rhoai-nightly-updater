@@ -719,6 +719,13 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer mwg.Done(); status.Models = getModelsStatus(c, dsc, dscErr, models, modelsErr, visible) }()
 	mwg.Wait()
 
+	// A record that cannot be read leaves every pipeline server unrecorded
+	// (fail closed: Migrate storage then asks before moving one).
+	pipelineRec, recErr := readPipelineRecord(c)
+	if recErr != nil {
+		slog.Debug("cannot read the pipeline server record", "error", recErr)
+		pipelineRec = pipelineRecord{}
+	}
 	unmanaged := map[string]bool{}
 	for _, d := range dspas {
 		if !visible[d.Meta.Namespace] {
@@ -733,7 +740,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 			status.UnmanagedPipelineServers = append(status.UnmanagedPipelineServers, foreign)
 			continue
 		}
-		status.PipelineServers = append(status.PipelineServers, pipelineServerState(d, dashURL))
+		ps := pipelineServerState(d, dashURL)
+		ps.Unrecorded = !pipelineRec.owns(d.Meta)
+		status.PipelineServers = append(status.PipelineServers, ps)
 	}
 	for ns := range unmanaged {
 		status.UnmanagedPipelineProjects = append(status.UnmanagedPipelineProjects, ns)
@@ -760,7 +769,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		newReady := status.MinIO.Ready && status.MinIO.ManagedByTool && status.MinIO.RepairNeeded == ""
 		// Unreadable counts as not copied: the stage stays "migrate".
 		copied, _ := migrationCopied(c)
-		status.LegacyStorage = legacyStorageState(legacy, dspas, newReady, copied)
+		status.LegacyStorage = legacyStorageState(legacy, dspas, pipelineRec, newReady, copied)
 		status.MinIO.MigrationPending = true
 	}
 

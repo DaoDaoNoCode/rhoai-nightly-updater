@@ -546,14 +546,22 @@ export function playgroundIn(pg: PlaygroundStatus | null, project: string): Play
   return (pg?.items ?? []).find((i) => i.namespace === project);
 }
 
-/** The project's models the playground can chat with: ready, not embedding. */
+/**
+ * The project's own models the playground can chat with: ready, not embedding. Models as a Service are not among them:
+ * Set up never adds one (the dashboard would send this tool's ServiceAccount token to the MaaS gateway, pkg/cluster genAICallAllowed).
+ */
 export function playgroundChatModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
-  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && m.chat) : [];
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.source === "namespace" && m.ready && m.chat) : [];
 }
 
-/** The ready models Set up can add: chat models, and this tool's embedding models (their dimension is known). */
+/** The ready models Set up can add: the project's own chat models, and this tool's embedding models (their dimension is known). */
 export function playgroundUsableModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
-  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && (m.chat || !!m.embeddingDimension)) : [];
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.source === "namespace" && m.ready && (m.chat || !!m.embeddingDimension)) : [];
+}
+
+/** Ready chat models of Models as a Service: the user adds one in the dashboard's playground, with their own login. */
+export function playgroundMaaSModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.source === "maas" && m.ready && m.chat) : [];
 }
 
 /** Ready embedding models of the project this tool did not set up: Set up cannot add them (their dimension is unknown). */
@@ -561,7 +569,7 @@ export function playgroundOtherEmbeddingModels(pg: PlaygroundStatus | null, proj
   return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && !m.chat && !m.embeddingDimension && m.source === "namespace") : [];
 }
 
-/** What Set up uses by default: the project's own ready chat models, and this tool's ready embedding models (MaaS only when chosen). */
+/** What Set up uses by default: the project's own ready chat models, and this tool's ready embedding models. */
 export function defaultPlaygroundModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
   return playgroundUsableModels(pg, project).filter((m) => m.source === "namespace");
 }

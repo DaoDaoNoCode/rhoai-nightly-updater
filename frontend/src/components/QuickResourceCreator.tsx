@@ -946,7 +946,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           legacy={legacy}
           run={migration.run}
           baseReason={migrating ? null : mutateBlocker ?? (resAction || run.run?.running ? BUSY_REASON : null)}
-          onStart={(kind, deleteNamespace) => migration.start(kind, kind === "remove" ? { removeOldStorage: true, deleteNamespace } : {})}
+          onStart={(kind, deleteNamespace, confirmProjects) => migration.start(kind, kind === "remove" ? { removeOldStorage: true, deleteNamespace } : confirmProjects.length > 0 ? { confirmProjects } : {})}
           onClose={() => {
             setMigrateKind(null);
             migration.reset();

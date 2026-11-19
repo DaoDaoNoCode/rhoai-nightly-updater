@@ -556,12 +556,16 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
   switch (pending.kind) {
     case "setup-pipeline-server":
       if (pending.again) {
+        const adopted = pipelineServers.find((p) => p.namespace === pending.project)?.unrecorded;
         return {
           title: `Set up the pipeline server in ${pending.project} again?`, confirm: "Set up again", runTitle: `Set up the pipeline server in ${pending.project} again`,
           summary: <Content component="p">Applies this tool&apos;s settings to the pipeline server in {pending.project} again and creates what is missing; runs and data are kept.</Content>,
           changes: [
             <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are applied again.</>,
             <>The dashboard S3 Connection <code>{CONNECTION_NAME}</code> ({CONNECTION_DISPLAY_NAME}) is created again, owned by the pipeline server.</>,
+            ...(adopted
+              ? [<>This pipeline server carries this tool&apos;s label, but this tool has no record that it set it up (set up before version 3.0.1, or labelled by someone in {pending.project}). Set up again adopts it as this tool&apos;s and writes the S3 storage&apos;s keys into {pending.project}, as a new setup there does.</>]
+              : []),
           ],
         };
       }

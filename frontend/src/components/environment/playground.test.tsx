@@ -28,7 +28,8 @@ afterEach(() => vi.unstubAllGlobals());
 describe("playgroundState", () => {
   it("not set up: one Set up of the playground, blocked with the reason when something is missing", () => {
     expect(playgroundState(status, pg(), "dev")).toMatchObject({ status: "not-set-up", next: { kind: "set-up", label: "Set up the playground in dev", setup: [{ kind: "setup-playground", project: "dev" }], reason: null } });
-    expect(playgroundState(status, pg({ models: [maas] }), "dev").next).toMatchObject({ reason: null });
+    // A Models as a Service model alone is not enough: Set up adds only the project's own models.
+    expect(playgroundState(status, pg({ models: [maas] }), "dev").next).toMatchObject({ reason: expect.stringContaining("Needs: Models") });
     expect(playgroundState(status, pg({ models: [] }), "dev").next).toMatchObject({ reason: expect.stringContaining("Needs: Models") });
     // The dashboard's install checks only the models it is given: another one that is not ready does not block.
     expect(playgroundState(status, pg({ models: [qwen, { name: "deepseek", source: "namespace", status: "Failed", ready: false, chat: true }] }), "dev").next).toMatchObject({ reason: null });
@@ -120,8 +121,10 @@ describe("Playground tab", () => {
     const table = within(models).getByRole("grid", { name: "Models the playground can use" });
     expect(within(table).getByText("Qwen2.5 0.5B Instruct (CPU)")).toBeInTheDocument();
     expect(within(table).getByRole("checkbox", { name: "Select row 0" })).toBeChecked();
-    expect(within(table).getByRole("checkbox", { name: "Select row 1" })).not.toBeChecked();
-    expect(within(table).getByText("Not used unless you choose it (needs a Models as a Service subscription)")).toBeInTheDocument();
+    // A Models as a Service model is not offered for Set up: the user adds it in the dashboard, signed in as themselves.
+    expect(within(table).queryByRole("checkbox", { name: "Select row 1" })).toBeNull();
+    expect(within(table).queryByText("gpt-oss-20b")).toBeNull();
+    expect(within(models).getByText(/Published to Models as a Service: gpt-oss-20b\. Set up does not add them/)).toHaveTextContent("open the playground in the dashboard, signed in as yourself");
     fireEvent.click(screen.getByRole("button", { name: "Set up the playground in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up the playground in dev\?/ });
     expect(within(dialog).getByText(/with qwen25-05b-instruct/)).toBeInTheDocument();

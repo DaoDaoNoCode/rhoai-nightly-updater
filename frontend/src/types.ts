@@ -464,6 +464,11 @@ export interface LegacyStorageState {
   repoint?: string[] | null;
   /** The other pipeline servers on the old storage, each with why the tool leaves it. */
   notMoved?: string[] | null;
+  /**
+   * Those of repoint that carry this tool's label but whose UID this tool has no record of (set up before 3.0.1, or labelled by a
+   * project's editor): Migrate storage moves one only when the user confirms its project (confirmProjects).
+   */
+  unrecorded?: string[] | null;
   /** Why the old storage cannot be removed yet. */
   removeBlockedReason?: string;
   /** True when namespace minio carries this tool's label and the tool wrote it: removing the old storage offers to delete it. */
@@ -755,6 +760,8 @@ export interface ResourceState {
   name?: string;
   /** False: the tool did not create it and will not tear it down. */
   managedByTool?: boolean;
+  /** A pipeline server with this tool's label but no record of its UID (set up before 3.0.1, or labelled by a project's editor): Set up again adopts it. */
+  unrecorded?: boolean;
   terminating?: boolean;
   setupBlockedReason?: string;
   teardownBlockedReason?: string;

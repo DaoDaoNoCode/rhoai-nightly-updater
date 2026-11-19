@@ -521,6 +521,34 @@ describe("storage from an earlier version", () => {
     expect(footerClose(dialog)).toHaveClass("pf-m-primary");
   });
 
+  it("an unrecorded pipeline server moves only when its project is ticked; unticked by default", async () => {
+    const run = sse({ step: "operation_complete", status: "success", message: "Migrated.", elapsedMs: 1 });
+    const unrecorded: LegacyStorageState = { ...legacy, repoint: ["evil/dspa", "juntao-test/dspa"], unrecorded: ["evil/dspa"] };
+    const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/minio/migrate/stream": run });
+    renderAt();
+    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Confirm the pipeline servers this tool set up")).toBeInTheDocument();
+    const box = within(dialog).getByRole("checkbox", { name: /Move evil\/dspa: this tool set it up/ });
+    expect(box).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
+    await within(dialog).findByText("The data is in the new storage");
+    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{}]);
+  });
+
+  it("a ticked project is sent as confirmed", async () => {
+    const run = sse({ step: "operation_complete", status: "success", message: "Migrated.", elapsedMs: 1 });
+    const unrecorded: LegacyStorageState = { ...legacy, repoint: ["evil/dspa", "juntao-test/dspa"], unrecorded: ["evil/dspa"] };
+    const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/minio/migrate/stream": run });
+    renderAt();
+    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Move evil\/dspa: this tool set it up/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
+    await within(dialog).findByText("The data is in the new storage");
+    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{ confirmProjects: ["evil"] }]);
+  });
+
   it("a failed run shows its reason once, in the outcome (follow-up 1)", async () => {
     const reason = "Setting up the new storage did not finish: SeaweedFS deployed but bucket creation failed: connection refused. Run Migrate storage again to retry, or create bucket 'pipelines' from the admin UI. The old storage is unchanged.";
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }), {

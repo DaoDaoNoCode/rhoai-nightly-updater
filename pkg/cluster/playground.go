@@ -34,10 +34,9 @@ import (
 // all on the dashboard's address with a bearer token the API layer chooses
 // (pkg/api genAIToken) and passes in as a plain string:
 //
-//	GET    /gen-ai/api/v1/aaa/models?namespace=<ns>   the project's models
-//	GET    /gen-ai/api/v1/maas/models?namespace=<ns>  Models as a Service (404 or empty when off)
+//	GET    /gen-ai/api/v1/aaa/models?namespace=<ns>   the project's models (no "sources": namespace and custom endpoints only)
 //	GET    /gen-ai/api/v1/lsd/status?namespace=<ns>   {"data":{"name","phase",...}} or {"data":null}
-//	POST   /gen-ai/api/v1/lsd/install?namespace=<ns>  {"models":[...],...}
+//	POST   /gen-ai/api/v1/lsd/install?namespace=<ns>  {"models":[...],...}, the project's own models only
 //	DELETE /gen-ai/api/v1/lsd/delete?namespace=<ns>   {"name":"<server>"}
 //
 // The dashboard's API acts with the caller's token, here the app's
@@ -45,6 +44,20 @@ import (
 // (SECURITY.md audits it). The tool records the projects it requested a
 // playground in, in its own namespace; a playground it did not request is
 // shown but never deleted.
+//
+// No call may reach Models as a Service: the gen-ai API forwards the
+// caller's token to the MaaS API through the MaaS gateway (odh-dashboard
+// rhoai-3.6 packages/gen-ai/bff maas_models_handler.go, aaa_models_handler.go
+// fetchMaaSModels for sources=maas, token_k8s_client.go
+// generateLlamaStackConfig for an install with a MaaS model; packages/maas/bff
+// maas_client.go addIdentityHeaderToRequest), and that gateway admits routes
+// from every published project, whose editors could attach one for the
+// MaaS API's path and receive the ServiceAccount's token. So the tool never
+// calls maas/models or aaa/models with sources, never installs a MaaS
+// model (genAICallAllowed refuses anything else in call), and reads the MaaS
+// models it shows from their MaaSModelRefs with the Kubernetes API
+// (listMaaSPlaygroundModels). The user adds a MaaS model to the playground
+// in the dashboard, with their own login.
 
 const genAIAPIPrefix = "/gen-ai/api/v1"
 
@@ -153,8 +166,74 @@ func parseGenAIError(method, path string, status int, body []byte) *genAIError {
 	return e
 }
 
+// errGenAINotAllowed: a gen-ai call the tool refuses to make with the
+// ServiceAccount's token.
+var errGenAINotAllowed = errors.New("this tool does not make this call to the dashboard's gen-ai API: it could send the updater's ServiceAccount token on to the Models as a Service gateway")
+
+// genAICallAllowed is the only gen-ai calls the tool makes (see the
+// comment at the top), none of which reaches Models as a Service:
+// aaa/models without "sources" (call sets only namespace, so the dashboard
+// lists the project's own models and custom endpoints), lsd/status,
+// lsd/delete, and lsd/install when every model is the project's own
+// (model_source_type "namespace"). Anything else (maas/models, maas/tokens,
+// lsd/responses, an install with a MaaS model, a path added later) is
+// refused before a request is made.
+func genAICallAllowed(method, path string, in interface{}) bool {
+	switch method + " " + path {
+	case "GET /aaa/models", "GET /lsd/status", "DELETE /lsd/delete":
+		return true
+	case "POST /lsd/install":
+		return genAIInstallAllowed(in)
+	}
+	return false
+}
+
+// genAIInstallAllowed is the only install body the tool sends: the
+// project's own models, no tracing, no guardrails, no vector stores (each
+// of those names further endpoints or providers the dashboard would wire
+// with the caller's token), and no key the tool does not know.
+func genAIInstallAllowed(in interface{}) bool {
+	body, ok := in.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	for k := range body {
+		switch k {
+		case "models", "enable_tracing", "enable_guardrails", "vector_stores":
+		default:
+			return false
+		}
+	}
+	if body["enable_tracing"] != false || body["enable_guardrails"] != false {
+		return false
+	}
+	if vs, ok := body["vector_stores"].([]interface{}); !ok || len(vs) != 0 {
+		return false
+	}
+	models, ok := body["models"].([]map[string]interface{})
+	if !ok || len(models) == 0 {
+		return false
+	}
+	for _, m := range models {
+		if m["model_source_type"] != "namespace" {
+			return false
+		}
+		for k := range m {
+			switch k {
+			case "model_name", "model_source_type", "model_type", "embedding_dimension":
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // call makes one request to path (below /gen-ai/api/v1) in namespace ns.
 func (a genAIAPI) call(method, path, ns string, in, out interface{}) error {
+	if !genAICallAllowed(method, path, in) {
+		return errGenAINotAllowed
+	}
 	u := a.base + genAIAPIPrefix + path + "?" + url.Values{"namespace": {ns}}.Encode()
 	var body io.Reader
 	if in != nil {
@@ -229,18 +308,6 @@ type namespaceModel struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-type maasModel struct {
-	ID            string `json:"id"`
-	Subscriptions []struct {
-		Name string `json:"name"`
-	} `json:"subscriptions"`
-	DisplayName  string   `json:"display_name"`
-	Ready        bool     `json:"ready"`
-	Capabilities []string `json:"capabilities"`
-	ModelType    string   `json:"model_type"`
-	Usecase      string   `json:"usecase"`
-}
-
 // chatModel: not an embedding model. The dashboard's models carry
 // capabilities (text-generation by default), a use case and sometimes a
 // model type; any of them naming embedding makes it one.
@@ -274,10 +341,10 @@ func markToolEmbeddingModels(c *Client, project string, models []types.Playgroun
 	}
 }
 
-// listPlaygroundModels lists the project's models (an error means the API
-// cannot be used) and its Models as a Service (any error is none: MaaS is
-// optional and may be off).
-func (a genAIAPI) listPlaygroundModels(ns string) ([]types.PlaygroundModel, error) {
+// listProjectModels lists the project's own models through the gen-ai API
+// (an error means the API cannot be used). It never asks for MaaS models
+// (genAICallAllowed).
+func (a genAIAPI) listProjectModels(ns string) ([]types.PlaygroundModel, error) {
 	var own struct {
 		Data []namespaceModel `json:"data"`
 	}
@@ -295,36 +362,122 @@ func (a genAIAPI) listPlaygroundModels(ns string) ([]types.PlaygroundModel, erro
 			Ready: m.Status == "Running", Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType),
 		})
 	}
-	var maas struct {
-		Data []maasModel `json:"data"`
-	}
-	if err := a.call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
-		slog.Debug("no Models as a Service for the playground", "project", ns, "error", err)
-	} else {
-		for _, m := range maas.Data {
-			if m.ID == "" {
-				continue
-			}
-			st := "Not ready"
-			if m.Ready {
-				st = "Ready"
-			}
-			var subs []string
-			for _, s := range m.Subscriptions {
-				if s.Name != "" {
-					subs = append(subs, s.Name)
-				}
-			}
-			out = append(out, types.PlaygroundModel{
-				Name: m.ID, DisplayName: m.DisplayName, Source: "maas", Status: st, Ready: m.Ready,
-				Chat: chatModel(m.Capabilities, m.Usecase, m.ModelType), Subscriptions: subs,
-			})
-		}
-	}
 	if len(out) > playgroundMaxModels {
 		out = out[:playgroundMaxModels]
 	}
 	return out, nil
+}
+
+// Annotations maas-api reads a MaaSModelRef's details from
+// (models-as-a-service maas-api internal/models/maasmodelref.go
+// maasModelRefToModel, internal/constant/const.go).
+const (
+	maasDisplayNameAnnotation  = "openshift.io/display-name"
+	maasCapabilitiesAnnotation = "opendatahub.io/model-capabilities"
+)
+
+// listMaaSPlaygroundModels lists the Models as a Service the cluster
+// offers, from their MaaSModelRefs (cluster-wide list) and the
+// MaaSSubscriptions that offer them (in models-as-a-service), read with
+// the Kubernetes API: the ServiceAccount's existing list grants, and no
+// call to the gen-ai API, which would send its token on to the MaaS
+// gateway. A model's name is what maas-api lists it as
+// (maasModelRefToModel): status.resolvedModelAlias, else the referenced
+// ExternalModel's name for an ExternalModel, else the MaaSModelRef's name;
+// it is ready when its phase is Ready. They are only shown: whether the
+// user may call one depends on the subscriptions they are in, which the
+// MaaS API decides for them (in the dashboard, with their own login). Any
+// error, an API that is not served included, is no models: MaaS is
+// optional.
+func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
+	body, _, err := c.get("/apis/" + maasAPI(c) + "/maasmodelrefs")
+	if err != nil {
+		if !IsK8sError(err, http.StatusNotFound) {
+			slog.Debug("cannot list the MaaS models for the playground", "error", err)
+		}
+		return nil
+	}
+	var refs struct {
+		Items []struct {
+			Metadata objectMeta `json:"metadata"`
+			Spec     struct {
+				ModelRef struct {
+					Kind string `json:"kind"`
+					Name string `json:"name"`
+				} `json:"modelRef"`
+			} `json:"spec"`
+			Status struct {
+				Phase              string `json:"phase"`
+				ResolvedModelAlias string `json:"resolvedModelAlias"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &refs); err != nil {
+		slog.Debug("cannot parse the MaaS model references", "error", err)
+		return nil
+	}
+	subs := maasSubscriptionsByModel(c)
+	var out []types.PlaygroundModel
+	for _, r := range refs.Items {
+		name := r.Metadata.Name
+		if r.Spec.ModelRef.Kind == "ExternalModel" && r.Spec.ModelRef.Name != "" {
+			name = r.Spec.ModelRef.Name
+		}
+		name = firstNonEmpty(r.Status.ResolvedModelAlias, name)
+		offered := subs[r.Metadata.Namespace+"/"+r.Metadata.Name]
+		// A reference no MaaSSubscription lists is offered to nobody: not
+		// shown as published.
+		if name == "" || r.Metadata.terminating() || len(offered) == 0 {
+			continue
+		}
+		var caps []string
+		if raw := r.Metadata.Annotations[maasCapabilitiesAnnotation]; raw != "" {
+			_ = json.Unmarshal([]byte(raw), &caps)
+		}
+		out = append(out, types.PlaygroundModel{
+			Name: name, DisplayName: r.Metadata.Annotations[maasDisplayNameAnnotation], Source: "maas",
+			Status: firstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
+			Chat: chatModel(caps, r.Metadata.Annotations[genAIUseCaseAnnotation], ""), Subscriptions: offered,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// maasSubscriptionsByModel names, by MaaSModelRef ("<namespace>/<name>"),
+// the MaaSSubscriptions that offer it (none when they cannot be read).
+func maasSubscriptionsByModel(c *Client) map[string][]string {
+	out := map[string][]string{}
+	body, _, err := c.get(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""))
+	if err != nil {
+		return out
+	}
+	var list struct {
+		Items []struct {
+			Metadata objectMeta `json:"metadata"`
+			Spec     struct {
+				ModelRefs []struct {
+					Name      string `json:"name"`
+					Namespace string `json:"namespace"`
+				} `json:"modelRefs"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &list) != nil {
+		return out
+	}
+	for _, s := range list.Items {
+		for _, ref := range s.Spec.ModelRefs {
+			k := ref.Namespace + "/" + ref.Name
+			if !containsString(out[k], s.Metadata.Name) {
+				out[k] = append(out[k], s.Metadata.Name)
+			}
+		}
+	}
+	for k := range out {
+		sort.Strings(out[k])
+	}
+	return out
 }
 
 // --- what this tool requested --------------------------------------------------------
@@ -564,6 +717,9 @@ func tokenKey(token string) string {
 
 // apiProblem explains an error of the gen-ai API for people, with its kind.
 func apiProblem(err error) (string, string) {
+	if errors.Is(err, errGenAINotAllowed) {
+		return "Nothing was sent: " + err.Error() + ".", "validation"
+	}
 	if e, ok := asGenAIError(err); ok {
 		switch e.Status {
 		case http.StatusUnauthorized, http.StatusForbidden:
@@ -661,9 +817,13 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 		pwg.Add(1)
 		go func() {
 			defer pwg.Done()
-			models, err := api.listPlaygroundModels(project)
+			models, err := api.listProjectModels(project)
 			if err == nil {
 				markToolEmbeddingModels(c, project, models)
+				models = append(models, listMaaSPlaygroundModels(c)...)
+				if len(models) > playgroundMaxModels {
+					models = models[:playgroundMaxModels]
+				}
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -812,6 +972,12 @@ func sortPlaygrounds(items []types.PlaygroundState) {
 
 var playgroundProjectRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
+// playgroundMaaSRefusal: Set up adds only the project's own models. The
+// dashboard's install of a MaaS model sends the caller's token to the MaaS
+// gateway (see the comment at the top), and the caller here would be the
+// updater's ServiceAccount.
+const playgroundMaaSRefusal = "this tool sets up the playground with the project's own models only. Add a Models as a Service model in the dashboard's playground, signed in as yourself: the dashboard would send the caller's token to the MaaS gateway, and here that would be the updater's ServiceAccount token"
+
 // ValidatePlaygroundRequest returns why req cannot run, or "".
 func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 	switch req.Action {
@@ -830,8 +996,11 @@ func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 	}
 	seen := map[string]bool{}
 	for _, m := range req.Models {
-		if m.Source != "namespace" && m.Source != "maas" {
-			return "a model's source must be namespace or maas"
+		if m.Source == "maas" {
+			return playgroundMaaSRefusal
+		}
+		if m.Source != "namespace" {
+			return "a model's source must be namespace (the project's own models)"
 		}
 		if m.Name == "" || len(m.Name) > 253 || strings.ContainsAny(m.Name, " \t\n\"'\\") {
 			return "invalid model name"
@@ -970,7 +1139,7 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 			return stop(fmt.Sprintf("The playground in %s is being deleted. Wait until it is gone, then set it up again.", p.project), "terminating", "terminating")
 		}
 	}
-	models, err := p.api.listPlaygroundModels(p.project)
+	models, err := p.api.listProjectModels(p.project)
 	if err != nil {
 		msg, code := apiProblem(err)
 		return stop(msg, code, "models")
@@ -1018,7 +1187,7 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		}
 	}
 	if chat == 0 {
-		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first (or choose a Models as a Service model, if you have a subscription).", p.project), "no_model", "no model")
+		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first. Models as a Service models are added in the dashboard's playground, signed in as yourself.", p.project), "no_model", "no model")
 	}
 	names := make([]string, len(chosen))
 	for i, m := range chosen {

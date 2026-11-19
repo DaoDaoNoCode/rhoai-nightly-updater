@@ -180,7 +180,7 @@ The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page 
 <img src="docs/images/environment-playground-setup.png" alt="Before Set up: the project's own chat model and this tool's embedding model (768 dimensions) are chosen, Models as a Service models are not used unless chosen, and Set up the playground in dev-project" width="760">
 
 1. Before Set up, the models are rows you choose: the project's own ready models are chosen, as in the dashboard. This tool's Granite embedding model goes in as an embedding model of 768 dimensions, for searching your documents. An embedding model this tool did not set up is not added (its dimension is not known): the tab says to add it in the dashboard's Gen AI studio, choosing **Embedding** and entering its dimension.
-2. A Models as a Service model is not used unless you choose it; it works only with a subscription to it.
+2. Models as a Service models are listed but not added by Set up (since 3.0.1): add one in the dashboard's playground, signed in as yourself; it works only with a subscription to it. Adding it through this tool would send the tool's own credentials to the MaaS gateway, which the editors of published projects can reach.
 3. **Set up** runs it.
 
 **Set up** asks the dashboard itself to create the playground, as its Gen AI studio does, with the models you choose, and waits until it is ready, typically 1 to 2 minutes. **Use it** has a chat request to run from a terminal with your own `oc whoami -t` token. **Delete** (in the part's menu) asks the dashboard to delete it, with its chats and documents; the models stay. Troubleshooting: [RUNBOOK §10.3](RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).

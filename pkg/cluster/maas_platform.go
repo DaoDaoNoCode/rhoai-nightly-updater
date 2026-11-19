@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The platform pieces MaaS needs besides its own: the Kuadrant CR,
@@ -423,7 +424,7 @@ spec:
     - name: RATELIMIT_REPORT_SERVICE_FAILURE_MODE
       value: deny
 EOF
-oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`, channel)
+oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s`, yamlString(channel))
 }
 
 // kuadrantCommands create the Kuadrant CR as platform-setup.md does.
@@ -434,7 +435,7 @@ kind: Kuadrant
 metadata:
   name: kuadrant
   namespace: %s
-EOF`, ns)
+EOF`, yamlString(ns))
 }
 
 // cnpgInstallCommands install CloudNativePG as this tool does.
@@ -462,7 +463,7 @@ spec:
   name: cloudnative-pg
   source: certified-operators
   sourceNamespace: openshift-marketplace
-EOF`, channel)
+EOF`, yamlString(channel))
 }
 
 // rhclDenyEnvCommand is platform-setup.md's patch that adds the
@@ -494,7 +495,29 @@ func rhclDenyEnvCommand(sub *olmSubscription) string {
 
 // rhclChannelCommand switches a Subscription's channel.
 func rhclChannelCommand(ns, name, channel string) string {
-	return fmt.Sprintf("oc patch subscription %s -n %s --type=merge -p '{\"spec\":{\"channel\":\"%s\"}}'", shellQuote(name), shellQuote(ns), channel)
+	patch, _ := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"channel": channel}})
+	return fmt.Sprintf("oc patch subscription %s -n %s --type=merge -p %s", shellQuote(name), shellQuote(ns), shellQuote(string(patch)))
+}
+
+// yamlString is s as a YAML scalar for a shown heredoc: a JSON string,
+// which YAML reads as a double-quoted scalar. Values read from the cluster
+// (a catalog's channel names) go into commands a cluster-admin pastes into
+// a shell: quoted and escaped, a newline cannot end the heredoc and run
+// what follows.
+func yamlString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// commentText is s for a shown "# ..." comment line: control characters
+// (a newline would end the comment) become spaces.
+func commentText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // legacyPolicyCommands delete the tier-era gateway policies

@@ -1238,6 +1238,19 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 				st.URL = "https://" + h
 			}
 		}
+		gone, modelsErr := goneMaaSPublications(c, rec)
+		var warnings []string
+		if len(gone) > 0 {
+			w := "It still admits routes from published projects that are gone (" + goneMaaSText(gone) + "). Anyone who creates a project of such a name could attach routes to it. The background check (every few minutes) or the next MaaS change, Models change or Clean up removes them."
+			if !gw.owned {
+				w = "This tool's record names published projects that are gone (" + goneMaaSText(gone) + "). If this gateway, which this tool did not create, lists them, its owner removes them from its allowedRoutes: anyone who creates a project of such a name could attach routes to it."
+			}
+			warnings = append(warnings, w)
+		}
+		if modelsErr != nil && len(rec.pubs()) > 0 {
+			warnings = append(warnings, "This tool's record of its models cannot be read ("+modelsErr.Error()+"), so whether a published model was deleted and made again under its name cannot be checked: such a publication stays on the gateway until the record can be read.")
+		}
+		gwPart.Warning = strings.Join(warnings, " ")
 	}
 	part(gwPart)
 

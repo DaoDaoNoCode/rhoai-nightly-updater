@@ -119,7 +119,10 @@ func CleanUp(c *Client, req types.CleanupRequest, genAIToken string, onStep func
 		}
 	}
 	parts := cleanupParts(c, req, genAIToken)
-	var logs, done []string
+	var done []string
+	// Projects of MaaS publications that are gone leave the MaaS gateway
+	// first (maas_prune.go), whatever is selected.
+	logs := releaseGoneMaaSProjects(c)
 	for i, p := range parts {
 		if err := c.ctx.Err(); err != nil {
 			return cleanupStopped(c, parts[i:], done, logs, fmt.Sprintf("The clean-up was stopped before %s: %v.", p.title, err), "cancelled"), nil

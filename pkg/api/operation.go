@@ -249,6 +249,21 @@ func (t *operationTracker) start(sw *statusWriter) *Operation {
 	return op
 }
 
+// startBackground records an operation the updater runs on its own (no
+// request) as the one holding the lock, so the status shows it and the
+// lease heartbeat renews it. The caller holds the local lock.
+func (t *operationTracker) startBackground(typ, label, user string, c *cluster.Client) *Operation {
+	now := time.Now().UTC()
+	op := &Operation{
+		ID: newOperationID(), Type: typ, Label: label, User: user,
+		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), client: c,
+	}
+	t.mu.Lock()
+	t.current = op
+	t.mu.Unlock()
+	return op
+}
+
 func (t *operationTracker) update(id string, fn func(*Operation)) {
 	if id == "" {
 		return

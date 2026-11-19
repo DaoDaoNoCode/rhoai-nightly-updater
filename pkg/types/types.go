@@ -1293,6 +1293,10 @@ type MigrateStorageRequest struct {
 	// DeleteNamespace also deletes namespace minio (with RemoveOldStorage,
 	// and only when this tool created it).
 	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
+	// ConfirmProjects are the projects whose unrecorded pipeline server the
+	// user confirmed as this tool's (LegacyStorageState.Unrecorded); Migrate
+	// only.
+	ConfirmProjects []string `json:"confirmProjects,omitempty"`
 }
 
 // LegacyStorageState describes the S3 storage an earlier version of this
@@ -1332,6 +1336,11 @@ type LegacyStorageState struct {
 	// NotMoved are the other pipeline servers on the old storage, each with
 	// why the tool leaves it ("ns/name (not created by this tool)").
 	NotMoved []string `json:"notMoved,omitempty"`
+	// Unrecorded are those of Repoint whose UID this tool has no record of
+	// (set up before 3.0.1, or labelled by a project editor): Migrate
+	// storage writes the new storage's keys into their project only when
+	// the user confirms the project (MigrateStorageRequest.ConfirmProjects).
+	Unrecorded []string `json:"unrecorded,omitempty"`
 	// RemoveBlockedReason explains why the old storage cannot be removed
 	// yet (a pipeline server still uses it).
 	RemoveBlockedReason string `json:"removeBlockedReason,omitempty"`
@@ -1362,6 +1371,12 @@ type ResourceState struct {
 	// ManagedByTool is true when this tool created the resource. Teardown is
 	// offered only for managed resources.
 	ManagedByTool bool `json:"managedByTool"`
+	// Unrecorded (a pipeline server) is true when it carries this tool's
+	// label but this tool has no record of its UID (set up before 3.0.1, or
+	// labelled by someone else, which a project editor can do): Set up again
+	// adopts it, and Migrate storage moves it only when its project is
+	// confirmed.
+	Unrecorded bool `json:"unrecorded,omitempty"`
 	// Terminating is true while the resource is being deleted.
 	Terminating bool `json:"terminating,omitempty"`
 	// SetupBlockedReason explains why setup cannot run (for example a

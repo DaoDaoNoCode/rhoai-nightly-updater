@@ -195,7 +195,7 @@ func secretForms(urls, passwords []string) []string {
 // message may become hard to read, never revealing. Overlapping finds are
 // redacted as one.
 func redactURL(msg, connURL string, passwords ...string) string {
-	return redactSecrets(msg, []string{connURL}, passwords)
+	return redactDBSecrets(msg, []string{connURL}, passwords)
 }
 
 // redact removes every secret the plan holds from msg: the URL given, and
@@ -205,10 +205,12 @@ func (p *maasDBPlan) redact(msg string, more ...string) string {
 	if p.password != "" {
 		urls, passwords = append(urls, maasPOCConnectionURL(p.password)), append(passwords, p.password)
 	}
-	return redactSecrets(msg, urls, passwords)
+	return redactDBSecrets(msg, urls, passwords)
 }
 
-func redactSecrets(msg string, urls, passwords []string) string {
+// redactDBSecrets replaces every form of the URLs and passwords
+// (secretForms) in msg; overlapping finds become one [redacted].
+func redactDBSecrets(msg string, urls, passwords []string) string {
 	covered := make([]bool, len(msg))
 	any := false
 	for _, f := range secretForms(urls, passwords) {

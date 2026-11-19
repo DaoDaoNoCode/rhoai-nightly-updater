@@ -21,6 +21,9 @@ import { S3_ENDPOINT, S3_NAMESPACE } from "./PipelinesTab";
 import { MIGRATE_STEPS, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
 import { StepProgress } from "./StepProgress";
 
+/** The project of a "project/name" pipeline server. */
+const projectOf = (n: string) => n.split("/")[0];
+
 const codes = (items: string[]) => items.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>);
 
 /**
@@ -34,8 +37,10 @@ const RunProgress: React.FC<{ run: MigrateRun }> = ({ run }) => (
 );
 
 /** What Migrate storage does, before it runs. */
-const MigratePlan: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
-  const repoint = legacy.repoint ?? [];
+const MigratePlan: React.FC<{ legacy: LegacyStorageState; confirmed: string[]; setConfirmed: (v: string[]) => void }> = ({ legacy, confirmed, setConfirmed }) => {
+  const unrecorded = legacy.unrecorded ?? [];
+  // Unrecorded ones move only when their project is confirmed.
+  const repoint = (legacy.repoint ?? []).filter((n) => !unrecorded.includes(n) || confirmed.includes(projectOf(n)));
   const notMoved = legacy.notMoved ?? [];
   const uncopied = legacy.uncopiedPVCs ?? [];
   return (
@@ -54,6 +59,23 @@ const MigratePlan: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
           </ListItem>
         </List>
       </StackItem>
+      {unrecorded.length > 0 && (
+        <StackItem>
+          <Alert component="div" variant="warning" isInline title="Confirm the pipeline servers this tool set up">
+            <Content component="p">
+              {unrecorded.length > 1 ? "These pipeline servers carry" : "This pipeline server carries"} this tool&apos;s label, but this tool has no record that it set {unrecorded.length > 1 ? "them" : "it"} up:
+              set up before version 3.0.1, or labelled by someone else (a project&apos;s editors can add the label).
+              Moving one writes the new storage&apos;s keys into its project, and those keys open every project&apos;s pipeline artifacts.
+              Tick only those you know this tool set up; the others stay on the old storage.
+            </Content>
+            {unrecorded.map((n) => (
+              <Checkbox key={n} id={`migrate-confirm-${n.replace("/", "-")}`} label={<>Move <code>{n}</code>: this tool set it up</>}
+                isChecked={confirmed.includes(projectOf(n))}
+                onChange={(_e, v) => setConfirmed(v ? [...confirmed.filter((p) => p !== projectOf(n)), projectOf(n)] : confirmed.filter((p) => p !== projectOf(n)))} />
+            ))}
+          </Alert>
+        </StackItem>
+      )}
       {notMoved.length > 0 && (
         <StackItem>
           <Alert component="p" variant="info" isInline title={`Not moved: ${notMoved.length > 1 ? "these pipeline servers" : "this pipeline server"}`}>
@@ -144,10 +166,12 @@ export const MigrateStorageModal: React.FC<{
   run: MigrateRun | null;
   /** Why changes are disabled now, or null. */
   baseReason: string | null;
-  onStart: (kind: MigrateKind, deleteNamespace: boolean) => void;
+  onStart: (kind: MigrateKind, deleteNamespace: boolean, confirmProjects: string[]) => void;
   onClose: () => void;
 }> = ({ isOpen, kind, legacy, run, baseReason, onStart, onClose }) => {
   const [deleteNamespace, setDeleteNamespace] = useState(false);
+  // Unticked by default: an unrecorded pipeline server is moved only when the user ticks its project.
+  const [confirmed, setConfirmed] = useState<string[]>([]);
   const titleId = React.useId();
   const stage = kind;
   // A run of the other kind is not this dialog's.
@@ -179,7 +203,7 @@ export const MigrateStorageModal: React.FC<{
           )}
           {showPlan && legacy && (
             <StackItem>
-              {stage === "migrate" ? <MigratePlan legacy={legacy} /> : <RemovePlan legacy={legacy} deleteNamespace={deleteNamespace} setDeleteNamespace={setDeleteNamespace} />}
+              {stage === "migrate" ? <MigratePlan legacy={legacy} confirmed={confirmed} setConfirmed={setConfirmed} /> : <RemovePlan legacy={legacy} deleteNamespace={deleteNamespace} setDeleteNamespace={setDeleteNamespace} />}
             </StackItem>
           )}
         </Stack>
@@ -187,7 +211,7 @@ export const MigrateStorageModal: React.FC<{
       <ModalFooter>
         {showAction && legacy && (
           <TooltipButton variant={stage === "remove" ? "danger" : "primary"} disabledReason={blocked}
-            onClick={() => onStart(stage, stage === "remove" && legacy.namespaceDeletable && deleteNamespace)}>
+            onClick={() => onStart(stage, stage === "remove" && legacy.namespaceDeletable && deleteNamespace, stage === "migrate" ? confirmed.filter((p) => (legacy.unrecorded ?? []).some((n) => projectOf(n) === p)) : [])}>
             {stage === "remove" ? "Delete old storage" : "Migrate storage"}
           </TooltipButton>
         )}

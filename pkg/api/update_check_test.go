@@ -332,7 +332,30 @@ func TestUpdateCheckerCaches(t *testing.T) {
 	}
 }
 
+// The update check answers only a signed-in user, before it reads the
+// registry: an anonymous request is refused.
+func TestHandleUpdateCheck_NeedsASignedInUser(t *testing.T) {
+	setupDevMode(t)
+	t.Setenv("DEV_MODE", "false") // in the cluster: oauth-proxy forwards no token for this request
+	oldChecker := defaultUpdateChecker
+	t.Cleanup(func() { defaultUpdateChecker = oldChecker })
+	defaultUpdateChecker = &updateChecker{
+		now: time.Now,
+		fetch: func(context.Context, string) ([]string, error) {
+			t.Error("the registry was read for an anonymous request")
+			return nil, nil
+		},
+	}
+	t.Setenv("IMAGE_REPOSITORY", "quay.io/example/app")
+	w := httptest.NewRecorder()
+	HandleUpdateCheck(w, httptest.NewRequest("GET", "/api/update-check", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleUpdateCheck(t *testing.T) {
+	setupDevMode(t)
 	oldVersion, oldChecker, oldSums := Version, defaultUpdateChecker, defaultChecksums
 	t.Cleanup(func() { Version, defaultUpdateChecker, defaultChecksums = oldVersion, oldChecker, oldSums })
 	var calls int
@@ -350,7 +373,7 @@ func TestHandleUpdateCheck(t *testing.T) {
 
 	get := func() UpdateInfo {
 		w := httptest.NewRecorder()
-		HandleUpdateCheck(w, httptest.NewRequest("GET", "/api/update-check", nil))
+		HandleUpdateCheck(w, postJSONMethod(http.MethodGet, "/api/update-check", "tok", ""))
 		var info UpdateInfo
 		if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
 			t.Fatalf("decode %s: %v", w.Body.String(), err)

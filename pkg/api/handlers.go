@@ -1669,6 +1669,22 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		writeError(w, "deleteNamespace needs removeOldStorage", http.StatusBadRequest, "validation")
 		return
 	}
+	if len(req.ConfirmProjects) > 0 && req.RemoveOldStorage {
+		writeError(w, "confirmProjects is for Migrate only", http.StatusBadRequest, "validation")
+		return
+	}
+	if len(req.ConfirmProjects) > 200 {
+		writeError(w, "at most 200 projects", http.StatusBadRequest, "validation")
+		return
+	}
+	seen := map[string]bool{}
+	for _, p := range req.ConfirmProjects {
+		if !namespaceRegex.MatchString(p) || seen[p] {
+			writeError(w, "invalid or repeated project in confirmProjects", http.StatusBadRequest, "validation")
+			return
+		}
+		seen[p] = true
+	}
 
 	sseWriter, err := NewSSEWriter(w)
 	if err != nil {
@@ -1689,9 +1705,9 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		}
 	}
 	beginOperation(w, target)
-	slog.Info("mutation", "op", "migrate-storage", "target", target)
+	slog.Info("mutation", "op", "migrate-storage", "target", target, "confirmProjects", req.ConfirmProjects)
 
-	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace}, forwardSteps(sseWriter))
+	result, migrateErr := runMigrateStorage(c, cluster.MigrateOptions{RemoveOldStorage: req.RemoveOldStorage, DeleteNamespace: req.DeleteNamespace, ConfirmProjects: req.ConfirmProjects}, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, migrateErr)
 	if migrateErr != nil {
 		slog.Error("migrate-storage failed", "error", migrateErr)
@@ -1762,7 +1778,11 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 // API. The user's own token is not used: oauth-proxy's session token is
 // scoped user:info user:check-access, which identifies the user and runs
 // access reviews but cannot act. The token goes only to the dashboard's
-// gen-ai API on this cluster, never into logs, errors or responses.
+// gen-ai API on this cluster, and only in the calls that the gen-ai API
+// does not pass on to Models as a Service (pkg/cluster genAICallAllowed):
+// the dashboard sends the caller's token on to the MaaS gateway, which
+// project editors can attach routes to. Never into logs, errors or
+// responses.
 var genAIToken = func(*http.Request) string { return getClusterToken() }
 
 // runPlayground runs a Playground operation; tests replace it.

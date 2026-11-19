@@ -191,6 +191,10 @@ type MigrateOptions struct {
 	// DeleteNamespace also deletes namespace minio, when this tool created
 	// it (see legacyNamespaceOwned).
 	DeleteNamespace bool
+	// ConfirmProjects are the projects whose pipeline server the user
+	// confirmed as this tool's in the dialog: Migrate moves an unrecorded
+	// pipeline server (pipeline_record.go) only in one of them.
+	ConfirmProjects []string
 }
 
 // rcloneProvider is rclone's S3 provider for a server. Both providers
@@ -465,7 +469,7 @@ func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(UpdateStepEven
 	if opts.RemoveOldStorage {
 		return m.removeOldStorage(legacy, dspas, opts.DeleteNamespace)
 	}
-	return m.migrate(legacy, dspas)
+	return m.migrate(legacy, dspas, opts.ConfirmProjects)
 }
 
 // sourceReady checks that the old storage's server can be copied from and
@@ -502,10 +506,20 @@ func (m *migrateRun) newStorageReady(step string) (bool, *types.OperationRespons
 }
 
 // migrate runs steps 1 to 3.
-func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.OperationResponse, error) {
+func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo, confirmed []string) (*types.OperationResponse, error) {
 	oldKeys, resp := m.sourceReady(legacy, "check")
 	if resp != nil {
 		return resp, nil
+	}
+	// Which pipeline servers get the new storage's keys: recorded ones, and
+	// unrecorded ones only in a project the user confirmed. Read before
+	// anything is written; a record that cannot be read stops the run.
+	rec, err := readPipelineRecord(m.c)
+	if err != nil {
+		return m.fail("check", fmt.Sprintf("Cannot read this tool's record of its pipeline servers, so which ones are this tool's is unknown; nothing was changed: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "pipeline record unreadable")
+	}
+	owned := func(d dspaInfo) bool {
+		return d.managedByTool() && (rec.owns(d.Meta) || containsString(confirmed, d.Meta.Namespace))
 	}
 	m.step("check", "success", fmt.Sprintf("OK: %s in namespace %s is running", legacy.server, legacyNamespace))
 
@@ -558,7 +572,7 @@ func (m *migrateRun) migrate(legacy *legacyStorage, dspas []dspaInfo) (*types.Op
 		}
 		return m.fail("repoint", fmt.Sprintf("Cannot read the new storage's keys; no pipeline server was moved: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "new keys unreadable")
 	}
-	repointed, listed, resp := m.repoint(legacy, dspas, newKeys)
+	repointed, listed, resp := m.repoint(legacy, dspas, newKeys, owned)
 	if resp != nil {
 		return resp, nil
 	}
@@ -974,6 +988,10 @@ func readMigrateResult(c *Client, job migrateJobInfo) (copyResult, error) {
 	return copyResult{}, errors.New(reason)
 }
 
+// unrecordedReason is why Migrate storage leaves a pipeline server that
+// looks like this tool's but has no record (pipeline_record.go).
+const unrecordedReason = "not recorded as this tool's: confirm its project in Migrate storage to move it"
+
 // repointable reports whether the tool may move a pipeline server that
 // uses the old storage, or why not.
 func repointable(d dspaInfo) (string, bool) {
@@ -1012,7 +1030,7 @@ func (d dspaInfo) objectStoreReadyAt(generation int64) bool {
 // Every write is dry-run first. Each server is waited for before the next
 // is moved; one that does not reach the new storage stops the run, so the
 // old storage stays.
-func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Keys) (moved, listed []string, resp *types.OperationResponse) {
+func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Keys, owned func(dspaInfo) bool) (moved, listed []string, resp *types.OperationResponse) {
 	c := m.c
 	failed := func(msg, code, activity string) ([]string, []string, *types.OperationResponse) {
 		r, _ := m.fail("repoint", msg, code, activity)
@@ -1028,12 +1046,17 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		name := d.Meta.Namespace + "/" + d.Meta.Name
 		switch {
 		case legacy.address.usedBy(d.Meta.Namespace, d.Host):
-			if why, ok := repointable(d); ok {
+			if why, ok := repointable(d); ok && owned(d) {
 				todo = append(todo, d)
+			} else if ok {
+				// Its label (or field managers) say this tool's, which a
+				// project editor can write: without the record or the user's
+				// confirmation, the storage's keys stay out of that project.
+				listed = append(listed, name+" ("+unrecordedReason+")")
 			} else {
 				listed = append(listed, name+" ("+why+")")
 			}
-		case d.managedByTool() && endpoints.address.usedBy(d.Meta.Namespace, d.Host) && !d.Meta.terminating() && !d.objectStoreReady():
+		case owned(d) && endpoints.address.usedBy(d.Meta.Namespace, d.Host) && !d.Meta.terminating() && !d.objectStoreReady():
 			// Moved by an earlier run that stopped: it must work before
 			// anything else happens.
 			return failed(fmt.Sprintf("Pipeline server %s already uses the new storage but does not reach it (%s). The old storage is kept. Check the pipeline server's conditions, then run Migrate storage again.", name, objectStoreText(d)), "not_ready", "moved server not ready")
@@ -1157,6 +1180,9 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 			return failed(fmt.Sprintf("Pipeline server %s was moved to the new storage, but %s. The old storage is kept. Check the pipeline server's conditions, then run Migrate storage again.", name, err.Error()), "not_ready", "moved server not ready")
 		}
 		moved = append(moved, name)
+		if err := recordPipelineServer(c, d.Meta); err != nil {
+			m.step("repoint", "running", fmt.Sprintf("Warning: %s could not be recorded as this tool's (%v); the next Migrate storage asks you to confirm its project again", name, err))
+		}
 		note := ""
 		if d.ObjectStore.Message != "" {
 			note = " (" + d.ObjectStore.Message + ")"

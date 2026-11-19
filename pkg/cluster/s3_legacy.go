@@ -438,7 +438,7 @@ func (l *legacyStorage) uncopiable() []string {
 // left to move, and every pipeline server of this tool on the new storage
 // reaches it (DSPO's ObjectStoreAvailable). Until then it stays "migrate",
 // so Migrate storage finishes the job.
-func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady, copied bool) *types.LegacyStorageState {
+func legacyStorageState(l *legacyStorage, dspas []dspaInfo, rec pipelineRecord, newReady, copied bool) *types.LegacyStorageState {
 	if l == nil {
 		return nil
 	}
@@ -466,6 +466,9 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady, copied boo
 		}
 		if why, ok := repointable(d); ok {
 			state.Repoint = append(state.Repoint, name)
+			if !rec.owns(d.Meta) {
+				state.Unrecorded = append(state.Unrecorded, name)
+			}
 		} else {
 			state.NotMoved = append(state.NotMoved, name+" ("+why+")")
 		}
@@ -473,6 +476,7 @@ func legacyStorageState(l *legacyStorage, dspas []dspaInfo, newReady, copied boo
 	sort.Strings(state.UsedBy)
 	sort.Strings(state.Repoint)
 	sort.Strings(state.NotMoved)
+	sort.Strings(state.Unrecorded)
 	movedReady := true
 	for _, d := range dspas {
 		if d.managedByTool() && !d.Meta.terminating() && !l.address.usedBy(d.Meta.Namespace, d.Host) && !d.objectStoreReady() {

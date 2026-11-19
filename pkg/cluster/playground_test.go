@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,16 +18,18 @@ import (
 const testGenAIToken = "genai-secret-token"
 
 // genAIFake is the RHOAI dashboard's gen-ai API, with the response shapes
-// seen live on RHOAI 3.6: aaa/models {"data":[...]}, maas/models
-// {"object":"list","data":[...]}, lsd/status {"data":null} or
-// {"data":{"name","phase"}}, errors {"error":{"code","message"}}.
+// seen live on RHOAI 3.6: aaa/models {"data":[...]}, lsd/status
+// {"data":null} or {"data":{"name","phase"}}, errors
+// {"error":{"code","message"}}. Every call the dashboard passes on to Models
+// as a Service with the caller's token (maas/*, aaa/models with sources,
+// an install with a MaaS model, lsd/responses, genai-proxy) fails the
+// test: the tool's token must never reach the MaaS gateway.
 type genAIFake struct {
 	t  *testing.T
 	mu sync.Mutex
 	// servers is each project's playground (absent: none).
 	servers map[string]*genAIServer
 	models  map[string]string // project -> aaa/models body
-	maas    string            // maas/models body ("" answers 404)
 	// startingReads is how many status reads a new playground reports
 	// Initializing before Ready; failPhase makes it report Failed instead.
 	startingReads int
@@ -69,15 +72,19 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusNotFound, "the requested resource could not be found")
 		return
 	}
-	switch r.Method + " " + r.URL.Path {
-	case "GET /gen-ai/api/v1/aaa/models":
-		_, _ = io.WriteString(w, firstNonEmpty(g.models[ns], `{"data":[]}`))
-	case "GET /gen-ai/api/v1/maas/models":
-		if g.maas == "" {
-			fail(http.StatusNotFound, "not found")
+	for _, forwarding := range []string{"/gen-ai/api/v1/maas/", "/gen-ai/api/v1/lsd/responses", "/gen-ai/api/v1/genai-proxy/"} {
+		if strings.HasPrefix(r.URL.Path, forwarding) {
+			g.t.Errorf("%s %s: the dashboard sends the caller's token on to the MaaS gateway", r.Method, r.URL.Path)
+			fail(http.StatusInternalServerError, "forwarding call")
 			return
 		}
-		_, _ = io.WriteString(w, g.maas)
+	}
+	switch r.Method + " " + r.URL.Path {
+	case "GET /gen-ai/api/v1/aaa/models":
+		if src := r.URL.Query()["sources"]; len(src) > 0 {
+			g.t.Errorf("aaa/models with sources %v: for sources=maas the dashboard asks MaaS with the caller's token", src)
+		}
+		_, _ = io.WriteString(w, firstNonEmpty(g.models[ns], `{"data":[]}`))
 	case "GET /gen-ai/api/v1/lsd/status":
 		srv := g.servers[ns]
 		if srv == nil {
@@ -99,6 +106,12 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		g.installs = append(g.installs, body)
+		models, _ := body["models"].([]interface{})
+		for _, m := range models {
+			if mm, _ := m.(map[string]interface{}); mm["model_source_type"] != "namespace" {
+				g.t.Errorf("install with model %v: the dashboard lists MaaS models with the caller's token", m)
+			}
+		}
 		if g.conflicts > 0 {
 			g.conflicts--
 			fail(http.StatusConflict, "previous pgvector resources are still being removed")
@@ -143,9 +156,28 @@ type playgroundEnv struct {
 
 const (
 	testQwenModels = `{"data":[{"model_name":"qwen25-05b-instruct","model_id":"qwen25-05b-instruct","serving_runtime":"Distributed inference with llm-d","api_protocol":"REST","usecase":"chat","endpoints":["internal: https://x.svc.cluster.local/"],"status":"Running","display_name":"Qwen2.5 0.5B Instruct (CPU)","model_source_type":"namespace","capabilities":["text-generation"]}]}`
-	testMaaSModels = `{"object":"list","data":[{"id":"gpt-oss-20b","object":"model","ready":true,"capabilities":["text-generation"]},{"id":"publishers/llm/models/facebook/opt-125m","ready":false,"display_name":"Facebook OPT 125M (Simulated)"}]}`
 	testRecordPath = "/api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-snapshot"
 )
+
+// putMaaSModels publishes two models to Models as a Service, as
+// MaaSModelRefs in the cluster: gpt-oss-20b (Ready, offered under team-sub
+// and this tool's subscription), an ExternalModel-backed one that is not
+// ready, listed under its resolved alias with a display name, and one no
+// subscription offers.
+func (e *playgroundEnv) putMaaSModels() {
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/gpt-oss-20b", `{
+		"metadata":{"annotations":{"opendatahub.io/model-capabilities":"[\"text-generation\"]"}},
+		"spec":{"modelRef":{"kind":"LLMInferenceService","name":"gpt-oss-20b"}},"status":{"phase":"Ready"}}`)
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/llm/maasmodelrefs/opt", `{
+		"metadata":{"annotations":{"openshift.io/display-name":"Facebook OPT 125M (Simulated)"}},
+		"spec":{"modelRef":{"kind":"ExternalModel","name":"opt-125m"}},"status":{"phase":"Pending","resolvedModelAlias":"publishers/llm/models/facebook/opt-125m"}}`)
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
+		`{"spec":{"modelRefs":[{"name":"gpt-oss-20b","namespace":"team"},{"name":"opt","namespace":"llm"}]}}`)
+	// A reference no subscription lists is offered to nobody: not shown.
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/unoffered", `{"spec":{"modelRef":{"kind":"LLMInferenceService","name":"unoffered"}},"status":{"phase":"Ready"}}`)
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/rhoai-nightly-updater-subscription",
+		`{"spec":{"modelRefs":[{"name":"gpt-oss-20b","namespace":"team"},{"name":"qwen","namespace":"proj"}]}}`)
+}
 
 func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	t.Helper()
@@ -214,12 +246,11 @@ func setup(project string) types.PlaygroundRequest {
 }
 
 // Setup asks the dashboard to install with the project's ready chat models
-// (MaaS models are offered, not chosen by default), records the request,
-// and waits until the playground reports Ready; every call carries the
-// token it was given.
+// (MaaS models are never added), records the request, and waits until the
+// playground reports Ready; every call carries the token it was given.
 func TestPlayground_SetupInstallsThroughTheDashboardAndWaitsForReady(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.g.maas = testMaaSModels
+	e.putMaaSModels()
 	res, steps := e.run(t, setup("proj"))
 	if !res.Success {
 		t.Fatalf("got %+v", res)
@@ -250,26 +281,73 @@ func TestPlayground_SetupInstallsThroughTheDashboardAndWaitsForReady(t *testing.
 	}
 }
 
-// A MaaS model is used when chosen.
-func TestPlayground_SetupWithAChosenMaaSModel(t *testing.T) {
+// A MaaS model is never installed with the ServiceAccount's token: the
+// dashboard's install would list MaaS models through the MaaS gateway with
+// it. The request is refused before any call, and says where to add one.
+func TestPlayground_SetupRefusesAMaaSModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.g.maas = testMaaSModels
+	e.putMaaSModels()
 	req := setup("proj")
-	req.Models = []types.PlaygroundModelRef{{Name: "gpt-oss-20b", Source: "maas"}}
-	if res, _ := e.run(t, req); !res.Success {
+	req.Models = []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}, {Name: "gpt-oss-20b", Source: "maas"}}
+	res, _ := e.run(t, req)
+	if res.Success || res.ErrorCode != "validation" || !strings.Contains(res.Message, "dashboard's playground, signed in as yourself") {
 		t.Fatalf("got %+v", res)
 	}
-	models, _ := e.g.installs[0]["models"].([]interface{})
-	if m, _ := models[0].(map[string]interface{}); len(models) != 1 || m["model_name"] != "gpt-oss-20b" || m["model_source_type"] != "maas" {
-		t.Errorf("models %v", models)
+	if len(e.g.paths) != 0 || len(e.g.installs) != 0 {
+		t.Fatalf("the gen-ai API was called: %v", e.g.paths)
 	}
-	// A MaaS model that is not ready is refused before the install.
-	PurgePlaygroundStatus()
-	delete(e.g.servers, "proj")
-	req.Models = []types.PlaygroundModelRef{{Name: "publishers/llm/models/facebook/opt-125m", Source: "maas"}}
-	res, _ := e.run(t, req)
-	if res.Success || res.ErrorCode != "model_not_ready" || len(e.g.installs) != 1 {
-		t.Fatalf("got %+v, installs %d", res, len(e.g.installs))
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("a refused request was recorded")
+	}
+}
+
+// The client refuses, before sending anything, every gen-ai call that the
+// dashboard passes on to Models as a Service with the caller's token: the
+// check guards the token whatever calls it.
+func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	api, problem, _ := playgroundAPI(e.c, testGenAIToken)
+	if problem != "" {
+		t.Fatal(problem)
+	}
+	ns := map[string]interface{}{"model_name": "m", "model_source_type": "namespace"}
+	// install is the body Set up sends, with over changed.
+	install := func(over map[string]interface{}) map[string]interface{} {
+		b := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}, "models": []map[string]interface{}{ns}}
+		for k, v := range over {
+			b[k] = v
+		}
+		return b
+	}
+	for _, c := range []struct {
+		method, path string
+		in           interface{}
+	}{
+		{http.MethodGet, "/maas/models", nil},
+		{http.MethodPost, "/maas/tokens", map[string]string{"model": "m"}},
+		{http.MethodPost, "/lsd/responses", nil},
+		{http.MethodGet, "/genai-proxy/ns/proj/v1/models", nil},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{ns, {"model_name": "x", "model_source_type": "maas"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "x", "model_source_type": "custom_endpoint"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_tracing": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_guardrails": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"vector_stores": []interface{}{map[string]interface{}{"provider": "remote"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"guardrail_models": []interface{}{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "m", "model_source_type": "namespace", "subscription": "s"}}})},
+		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{ns}}},
+		{http.MethodPost, "/lsd/install", nil},
+		{http.MethodGet, "/lsd/models", nil},
+	} {
+		if err := api.call(c.method, c.path, "proj", c.in, nil); !errors.Is(err, errGenAINotAllowed) {
+			t.Errorf("%s %s %v: got %v", c.method, c.path, c.in, err)
+		}
+	}
+	if len(e.g.paths) != 0 {
+		t.Fatalf("sent: %v", e.g.paths)
+	}
+	if err := api.call(http.MethodPost, "/lsd/install", "proj", install(nil), nil); err != nil {
+		t.Fatalf("an install with the project's own model: %v", err)
 	}
 }
 
@@ -454,7 +532,7 @@ func TestPlayground_StatusFanOutIsSharedAcrossProjects(t *testing.T) {
 func TestPlayground_SetupNeedsAChatModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = `{"data":[{"model_name":"granite-embedding","status":"Running","usecase":"embedding","capabilities":["embedding"]}]}`
-	e.g.maas = testMaaSModels
+	e.putMaaSModels()
 	res, _ := e.run(t, setup("proj"))
 	if res.Success || res.ErrorCode != "no_model" || !strings.Contains(res.Message, "Models tab") || len(e.g.installs) != 0 {
 		t.Fatalf("got %+v", res)
@@ -566,7 +644,7 @@ func TestPlayground_NoToken(t *testing.T) {
 }
 
 // The status: the playgrounds in the projects with their owner, and the
-// selected project's models (MaaS listed, its 404 meaning none).
+// selected project's models (none from MaaS while nothing is published).
 func TestPlayground_Status(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	if res, _ := e.run(t, setup("proj")); !res.Success {
@@ -629,37 +707,64 @@ func TestValidatePlaygroundRequest(t *testing.T) {
 		{Action: "setup", Project: "Bad_Name"},
 		{Action: "teardown", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "namespace"}}},
 		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "custom"}}},
-		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "a b", Source: "maas"}}},
-		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "maas"}, {Name: "m", Source: "maas"}}},
+		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "a b", Source: "namespace"}}},
+		{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "m", Source: "namespace"}, {Name: "m", Source: "namespace"}}},
 	} {
 		if ValidatePlaygroundRequest(req) == "" {
 			t.Errorf("accepted %+v", req)
 		}
 	}
-	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "publishers/llm/models/x", Source: "maas"}}}); p != "" {
+	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "publishers/llm/models/x", Source: "maas"}}}); p != playgroundMaaSRefusal {
+		t.Errorf("a MaaS model: %q", p)
+	}
+	if p := ValidatePlaygroundRequest(types.PlaygroundRequest{Action: "setup", Project: "p", Models: []types.PlaygroundModelRef{{Name: "qwen", Source: "namespace"}}}); p != "" {
 		t.Errorf("refused: %s", p)
 	}
 }
 
-// A Models as a Service model carries the subscriptions it is offered
-// under (the dashboard's gen-ai /maas/models "subscriptions"): a chat
-// request through the playground for a MaaS model needs one, or the
-// dashboard cannot mint the MaaS key and the playground answers 500 (seen
-// live on RHOAI 3.6, 2026-11-18).
-func TestPlayground_MaaSModelsCarryTheirSubscriptions(t *testing.T) {
+// The status lists the published Models as a Service from their
+// MaaSModelRefs with the Kubernetes API (the gen-ai fake fails the test on
+// any MaaS call), under the name maas-api lists them by, with the
+// subscriptions that offer them: a chat request through the playground for
+// a MaaS model names one, or the dashboard cannot mint the MaaS key and the
+// playground answers 500 (seen live on RHOAI 3.6, 2026-11-18).
+func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.g.maas = `{"object":"list","data":[{"id":"publishers/proj/models/qwen","ready":true,"subscriptions":[{"name":"team-sub","displayName":"Team"},{"name":"rhoai-nightly-updater-subscription"}]}]}`
+	e.putMaaSModels()
 	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var got []string
 	for _, m := range st.Models {
-		if m.Source == "maas" {
-			if got := strings.Join(m.Subscriptions, ","); got != "team-sub,rhoai-nightly-updater-subscription" {
-				t.Fatalf("subscriptions = %q", got)
-			}
-			return
+		got = append(got, fmt.Sprintf("%s %s ready=%t chat=%t %q %v", m.Source, m.Name, m.Ready, m.Chat, m.DisplayName, m.Subscriptions))
+	}
+	want := []string{
+		`namespace qwen25-05b-instruct ready=true chat=true "Qwen2.5 0.5B Instruct (CPU)" []`,
+		`maas gpt-oss-20b ready=true chat=true "" [rhoai-nightly-updater-subscription team-sub]`,
+		`maas publishers/llm/models/facebook/opt-125m ready=false chat=true "Facebook OPT 125M (Simulated)" [team-sub]`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("models\n got %s\nwant %s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, p := range e.g.paths {
+		if !strings.Contains(p, "/aaa/models") && !strings.Contains(p, "/lsd/status") {
+			t.Errorf("gen-ai call %s", p)
 		}
 	}
-	t.Fatalf("no MaaS model in %+v", st.Models)
+}
+
+// MaaS models that cannot be read are none (MaaS is optional): the
+// project's own models are still listed.
+func TestPlayground_StatusWithoutReadableMaaSModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.putMaaSModels()
+	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
+	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Models) != 1 || st.Models[0].Source != "namespace" || st.ModelsProblem != "" {
+		t.Fatalf("got %+v (%s)", st.Models, st.ModelsProblem)
+	}
 }

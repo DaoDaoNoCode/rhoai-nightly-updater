@@ -140,6 +140,27 @@ func putMigrationCase(f *resourceFake) {
 	putDSPAOn(f, "team-a", previousDSPAName, toolLabelJSON, toolFieldManager, dspaSecretName)
 	f.putJSON(secretPath("team-a", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth(legacyKeyID)+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth(legacyKey)+`"}}`)
 	putDSPAOn(f, "hand-made", legacyDSPAName, `{}`, "Mozilla", "my-secret")
+	recordDSPAs(f, "juntao-test/"+legacyDSPAName, "team-a/"+previousDSPAName)
+}
+
+// recordDSPAs records the pipeline servers ("<project>/<name>") as this
+// tool's, with the UIDs they have in the fake (pipeline_record.go).
+func recordDSPAs(f *resourceFake, keys ...string) {
+	rec := pipelineRecord{}
+	for _, k := range keys {
+		ns, name, _ := strings.Cut(k, "/")
+		uid, _ := ensureMap(f.get(dspaPath(ns, name)), "metadata")["uid"].(string)
+		rec[k] = recordedPipelineServer{UID: uid}
+	}
+	path := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	cm := f.get(path)
+	if cm == nil {
+		cm = map[string]interface{}{}
+	}
+	data := ensureMap(cm, "data")
+	raw, _ := json.Marshal(rec)
+	data[pipelineRecordKey] = string(raw)
+	f.put(path, cm)
 }
 
 // putDSPAOn stores a DSPA on the old storage, as earlier versions wrote it.
@@ -1195,7 +1216,7 @@ func TestLegacyStorageState_RemoveNeedsProof(t *testing.T) {
 		{"no verified copy recorded", false, []dspaInfo{moved("True")}, "migrate"},
 		{"a moved server does not reach the new storage", true, []dspaInfo{moved("False")}, "migrate"},
 	} {
-		if got := legacyStorageState(l, tc.dspas, true, tc.copied).Stage; got != tc.want {
+		if got := legacyStorageState(l, tc.dspas, nil, true, tc.copied).Stage; got != tc.want {
 			t.Errorf("%s: stage %q, want %q", tc.name, got, tc.want)
 		}
 	}

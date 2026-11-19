@@ -72,6 +72,9 @@ func main() {
 	// The gitops profile updates only while its admission policy is in
 	// place; this checks it now and every minute (no-op in full).
 	api.StartGitOpsPolicyWatch(context.Background())
+	// MaaS publications whose project is gone leave the MaaS gateway: now
+	// and every few minutes, under the cluster lock (no-op in gitops).
+	api.StartMaaSPruneJob(context.Background())
 	mux.HandleFunc("/api/", middleware.APINotFound)
 	mux.Handle("/", middleware.StaticFiles(absStaticDir))
 

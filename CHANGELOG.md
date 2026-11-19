@@ -181,14 +181,6 @@ only accepts a tag whose version is the top dated section. See
 - Change database and Remove MaaS name the database without nested
   parentheses: "...then permanently deletes the current one, the persistent
   development database (CloudNativePG)."
-- The Playground tab's command for a Models as a Service model names the
-  model's subscription (this tool's when the model is offered under it).
-  Without one, the dashboard cannot mint the MaaS key it calls the model
-  with, and the playground answered 500. The dashboard's own playground
-  sends it.
-- `dev.sh` stops everything it started on Ctrl-C, kill or a closed
-  terminal (also after `kill -9`), and refuses a second copy for the same
-  checkout.
 - A model set up on the Models tab **Through MaaS only** is published as
   part of its setup, and its lifecycle now follows that. **Unpublish**
   leaves it with no route (only inside the cluster), as it was set up;
@@ -230,29 +222,6 @@ only accepts a tag whose version is the top dated section. See
   messages no longer quote project names; the capacity warning uses GiB;
   the Overview's in-app step reads **Show issue in &lt;project&gt;**;
   `/environment` opens the Environment page.
-- Links to the RHOAI dashboard open the matching section page, not a
-  project's details page: a project's models open its Deployments page
-  (`/ai-hub/models/deployments/internal/<project>`), and MaaS opens MaaS
-  governance (`/maas/maas-governance`). Pipelines (`/develop-train/pipelines/definitions/<project>`)
-  and the playground (`/gen-ai-studio/playground/<project>`) already did.
-- MLflow links open MLflow in the dashboard too: **Open MLflow experiments**
-  goes to `/develop-train/mlflow/experiments`, a project's link adds
-  `?workspace=<project>`, and a sample's link opens its experiment's runs
-  (`/develop-train/mlflow/experiments/<id>/runs`), as the dashboard's own
-  links do. Without the dashboard's address they open MLflow's own UI as
-  before.
-- Release notes (GitLab and GitHub) open with the install and upgrade
-  block (download, checksum, dry run, install), then the CHANGELOG
-  section; 3.0.0's long section had buried it.
-- Internal, CI only: faster pipelines with every check kept. The frontend
-  checks run as three parallel jobs (checks, tests, build), the GitLab Go
-  and golangci-lint jobs keep their module and build caches, and GitLab's
-  image jobs skip the Containerfile's checks (`RUN_CHECKS=false`), which
-  the pipeline's test jobs already ran on the same commit. GitLab pulls
-  Docker Hub images from `mirror.gcr.io`, Google's public cache of Docker
-  Hub, after Docker Hub's anonymous pull limit stopped jobs; the images stay
-  pinned by digest. A project variable `DOCKER_HUB` points it elsewhere
-  (`docker.io`, or GitLab's Dependency Proxy).
 
 ### Security
 
@@ -266,24 +235,6 @@ only accepts a tag whose version is the top dated section. See
   in commands and calls a model with a served name only when it is
   letters, digits and `. _ / : -`; otherwise Use it shows no commands and
   says why.
-- CI, GitLab: kaniko no longer gets the Quay push credentials
-  (`QUAY_USER`/`QUAY_TOKEN`). `build-main` built only a tarball but was
-  logged in, and the build's `RUN` steps (`npm ci` install scripts,
-  `go mod download`) could read that login. The manual `build-branch` job
-  no longer pushes with the release credentials either: it pushes to a
-  repository of its own (`BRANCH_IMAGE`, with `QUAY_BRANCH_USER` and
-  `QUAY_BRANCH_TOKEN`), or builds only. The release credentials can now be
-  protected variables; CONTRIBUTING.md lists the GitLab and Quay settings
-  that keep `:main`, `:latest` and the release tags safe.
-- CI: `:main` is always the main pipeline's own image. `publish-main` kept
-  an existing commit tag whose revision label named the same commit and
-  moved `:main` to it, so a workstation build (`make push` pushed the same
-  8-character tag, even from a tree with uncommitted changes) could become
-  `:main`. It now pushes its own image as `:main`, and stops when the
-  commit tag holds anything but its own image or the release image of the
-  same commit. `make build` and `make push` use `dev-<commit>` tags
-  (`-dirty` with uncommitted changes), `make push` refuses a tree with
-  uncommitted changes, and a commit-like `TAG` is not pushed.
 - Commit links on the Components page (Deployments) and in a build's
   components (Build Explorer, catalog contents) come from the image's
   labels, which whoever builds the image chooses. They are now links only
@@ -313,6 +264,93 @@ only accepts a tag whose version is the top dated section. See
   `/oauth/sign_out`, which clears the session cookie. Before, it opened
   the sign-in page and the session stayed. The OpenShift login itself
   stays (SECURITY.md, Sessions): log out of the console to end it.
+
+## [3.0.1] - unreleased
+
+### Security
+
+- The updater's ServiceAccount token no longer reaches the Models as a
+  Service gateway. The Playground's status and Set up called dashboard
+  gen-ai endpoints that pass the caller's token on to the MaaS gateway,
+  which the editors of published projects can attach routes to. The tab
+  now reads MaaS models from their MaaSModelRefs (only those a
+  MaaSSubscription offers), and Set up adds only the project's own models,
+  with tracing, guardrails and vector stores off: add a MaaS model in the
+  dashboard's playground, signed in as yourself.
+- Migrate storage writes the storage's S3 keys only into the projects of
+  pipeline servers this tool recorded, or whose project you confirm in the
+  dialog. A pipeline server's label was enough before, and a project's
+  editors can set it. Pipeline servers set up before 3.0.1 are listed for
+  confirmation the first time.
+- The MaaS gateway stops admitting projects whose publication is gone (the
+  project was deleted, or the model is not the one published): the
+  updater checks at start and every 5 minutes (while no other operation
+  runs) and at the start of every MaaS, Models or Clean up operation. The
+  tool's access policy and subscription stop listing them, and the tool's
+  model reference of a remade model is deleted; the MaaS tab names them
+  until then, and warns when its record of models cannot be read. A
+  deleted project's name could otherwise be recreated by anyone allowed to
+  create projects and given routes on the MaaS gateway.
+- Errors from writing the node pull secret no longer show the credential
+  when the API server quotes what it was sent.
+- `GET /api/update-check` now requires a signed-in user, like every other
+  API read.
+- The MaaS tab's CLI commands quote catalog channel names.
+- CI, GitLab: kaniko no longer gets the Quay push credentials
+  (`QUAY_USER`/`QUAY_TOKEN`). `build-main` built only a tarball but was
+  logged in, and the build's `RUN` steps (`npm ci` install scripts,
+  `go mod download`) could read that login. The manual `build-branch` job
+  no longer pushes with the release credentials either: it pushes to a
+  repository of its own (`BRANCH_IMAGE`, with `QUAY_BRANCH_USER` and
+  `QUAY_BRANCH_TOKEN`), or builds only. The release credentials can now be
+  protected variables; CONTRIBUTING.md lists the GitLab and Quay settings
+  that keep `:main`, `:latest` and the release tags safe.
+- CI: `:main` is always the main pipeline's own image. `publish-main` kept
+  an existing commit tag whose revision label named the same commit and
+  moved `:main` to it, so a workstation build (`make push` pushed the same
+  8-character tag, even from a tree with uncommitted changes) could become
+  `:main`. It now pushes its own image as `:main`, and stops when the
+  commit tag holds anything but its own image or the release image of the
+  same commit. `make build` and `make push` use `dev-<commit>` tags
+  (`-dirty` with uncommitted changes), `make push` refuses a tree with
+  uncommitted changes, and a commit-like `TAG` is not pushed.
+
+### Fixed
+
+- The Playground tab's command for a Models as a Service model names the
+  model's subscription (this tool's when the model is offered under it).
+  Without one, the dashboard cannot mint the MaaS key it calls the model
+  with, and the playground answered 500. The dashboard's own playground
+  sends it.
+- `dev.sh` stops everything it started on Ctrl-C, kill or a closed
+  terminal (also after `kill -9`), and refuses a second copy for the same
+  checkout.
+
+### Changed
+
+- Links to the RHOAI dashboard open the matching section page, not a
+  project's details page: a project's models open its Deployments page
+  (`/ai-hub/models/deployments/internal/<project>`), and MaaS opens MaaS
+  governance (`/maas/maas-governance`). Pipelines (`/develop-train/pipelines/definitions/<project>`)
+  and the playground (`/gen-ai-studio/playground/<project>`) already did.
+- MLflow links open MLflow in the dashboard too: **Open MLflow experiments**
+  goes to `/develop-train/mlflow/experiments`, a project's link adds
+  `?workspace=<project>`, and a sample's link opens its experiment's runs
+  (`/develop-train/mlflow/experiments/<id>/runs`), as the dashboard's own
+  links do. Without the dashboard's address they open MLflow's own UI as
+  before.
+- Release notes (GitLab and GitHub) open with the install and upgrade
+  block (download, checksum, dry run, install), then the CHANGELOG
+  section; 3.0.0's long section had buried it.
+- Internal, CI only: faster pipelines with every check kept. The frontend
+  checks run as three parallel jobs (checks, tests, build), the GitLab Go
+  and golangci-lint jobs keep their module and build caches, and GitLab's
+  image jobs skip the Containerfile's checks (`RUN_CHECKS=false`), which
+  the pipeline's test jobs already ran on the same commit. GitLab pulls
+  Docker Hub images from `mirror.gcr.io`, Google's public cache of Docker
+  Hub, after Docker Hub's anonymous pull limit stopped jobs; the images stay
+  pinned by digest. A project variable `DOCKER_HUB` points it elsewhere
+  (`docker.io`, or GitLab's Dependency Proxy).
 
 ## [3.0.0] - 2026-11-18
 
