@@ -62,7 +62,7 @@ func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	// The project cannot be read: kept, nothing written.
 	mc.f.fail["GET /api/v1/namespaces/proj"] = 500
 	mc.f.requests = nil
-	if logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
+	if _, logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
 		t.Fatalf("an unreadable project: %v, %v", logs, err)
 	}
 	for _, r := range mc.f.mutations() {
@@ -111,13 +111,85 @@ func TestMaaS_APublishedModelMadeAgainIsGone(t *testing.T) {
 	if gatewayAdmits(t, mc, "proj") {
 		t.Fatal("the gateway still admits proj")
 	}
+	// The tool's reference in the project that still exists is deleted.
+	if mc.f.has(tMaaSRef) {
+		t.Fatal("the tool's MaaSModelRef is left")
+	}
+}
+
+// The steps are independent: the access policy and subscription cannot be
+// changed, yet the gateway stops admitting the gone project; the record
+// keeps the publication, so the next run finishes the rest.
+func TestMaaS_PruneNarrowsTheGatewayWhenAnotherStepFails(t *testing.T) {
+	mc := publishedCluster(t)
+	dropNamespace(mc, "proj")
+	mc.f.fail["DELETE "+tMaaSSub] = 500
+	changed, _, err := pruneGoneMaaSPublications(mc.c)
+	if err == nil || !changed {
+		t.Fatalf("changed %t, err %v", changed, err)
+	}
+	if gatewayAdmits(t, mc, "proj") {
+		t.Fatal("the gateway still admits proj")
+	}
+	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 1 {
+		t.Fatalf("the record forgot a publication whose subscription is not updated: %+v", rec)
+	}
+	delete(mc.f.fail, "DELETE "+tMaaSSub)
+	if _, _, err := pruneGoneMaaSPublications(mc.c); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 0 || mc.f.has(tMaaSSub) {
+		t.Fatalf("record %+v, subscription left %t", rec, mc.f.has(tMaaSSub))
+	}
+}
+
+// The models record cannot be read: a model made again cannot be told
+// from the published one, so the status says so; the publication stays.
+func TestMaaSStatus_WarnsWhenTheModelsRecordIsUnreadable(t *testing.T) {
+	mc := publishedCluster(t)
+	path := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	cm := mc.f.get(path)
+	ensureMap(cm, "data")[modelsRecordKey] = "not json"
+	mc.f.put(path, cm)
+	st, err := GetMaaSStatus(mc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := maasPart(t, st, "gateway").Warning; !strings.Contains(w, "record of its models cannot be read") {
+		t.Fatalf("warning = %q", w)
+	}
+	if _, _, err := pruneGoneMaaSPublications(mc.c); err != nil || !gatewayAdmits(t, mc, "proj") {
+		t.Fatalf("the publication was dropped: %v", err)
+	}
+}
+
+// The background run records an activity entry only when it changed
+// something.
+func TestMaaS_BackgroundPruneRecordsActivityOnlyOnChange(t *testing.T) {
+	mc := publishedCluster(t)
+	var entries []types.ActivityEntry
+	orig := recordPruneActivity
+	t.Cleanup(func() { recordPruneActivity = orig })
+	recordPruneActivity = func(_ *Client, e types.ActivityEntry) { entries = append(entries, e) }
+	PruneGoneMaaSPublicationsInBackground(mc.c)
+	if len(entries) != 0 {
+		t.Fatalf("an activity entry was recorded although nothing changed: %+v", entries)
+	}
+	dropNamespace(mc, "proj")
+	PruneGoneMaaSPublicationsInBackground(mc.c)
+	if len(entries) != 1 || entries[0].Action != "prune-maas-publications" || !entries[0].Success || !strings.Contains(entries[0].Detail, "project proj no longer exists") {
+		t.Fatalf("entries = %+v", entries)
+	}
+	if gatewayAdmits(t, mc, "proj") {
+		t.Fatal("the gateway still admits proj")
+	}
 }
 
 // A live publication is kept.
 func TestMaaS_ALivePublicationIsKept(t *testing.T) {
 	mc := publishedCluster(t)
 	mc.f.requests = nil
-	if logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
+	if _, logs, err := pruneGoneMaaSPublications(mc.c); err != nil || len(logs) != 0 {
 		t.Fatalf("got %v, %v", logs, err)
 	}
 	if len(mc.f.mutations()) != 0 || !gatewayAdmits(t, mc, "proj") {
