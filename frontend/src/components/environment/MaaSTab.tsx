@@ -490,7 +490,9 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         summary: <Content component="p">
           {before
             ? <>Creates the new database, points maas-api at it and restarts maas-api, then permanently deletes the current one ({databaseLabel(db.current)}).</>
-            : <>Creates the new database if this tool makes it, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>}
+            : yoursToYours
+              ? <>Points maas-api at the new URL and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>
+              : <>Creates the new database, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>}
         </Content>,
         choice: <DatabaseChoice db={db} value={form} except={db.current} idPrefix="change" onChange={(f) => setPending?.({ ...pending, database: f })} />,
         dataLoss: yoursToYours ? undefined : before

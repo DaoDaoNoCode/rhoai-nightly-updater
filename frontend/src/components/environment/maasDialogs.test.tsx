@@ -124,6 +124,24 @@ describe("MaaS dialogs", () => {
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "change-limit", project: "dev", model: "qwen3-1-7b", limit: { preset: "custom", rates: [{ limit: 500, window: "1m" }] } }]);
   });
 
+  it("Change database from your PostgreSQL says it is not changed or deleted, and warns only for another database", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: [] },
+      "/api/resources/maas": maas({ database: database({ current: "external", needed: false }), platform: { deployed: true, ready: true, managedByTool: true },
+        parts: [{ id: "database", title: "Database (PostgreSQL) and maas-db-config", state: "ready", managedByTool: true,
+          actions: [{ id: "change-database" as never, label: "Change database", summary: "", changes: [], danger: true }] }] }),
+      "POST /api/resources/maas/stream": done });
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Change database" }));
+    const dialog = await screen.findByRole("dialog", { name: /Change the MaaS database\?/ });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Development database/ }));
+    expect(within(dialog).getByText("Creates the new database, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Data is deleted and cannot be recovered")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Your PostgreSQL/ }));
+    expect(within(dialog).getByText("Points maas-api at the new URL and restarts maas-api. Your current PostgreSQL is not changed or deleted.")).toBeInTheDocument();
+    expect(within(dialog).getByText("API keys are lost if this is a different database")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Data is deleted and cannot be recovered")).toBeNull();
+  });
+
   it("Change database is offered only by the database part, and needs the loss of every key confirmed", async () => {
     const api = stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: [] },
       "/api/resources/maas": maas({ database: database({ current: "development", needed: false }), platform: { deployed: true, ready: true, managedByTool: true },
