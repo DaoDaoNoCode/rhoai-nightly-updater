@@ -103,7 +103,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 
 	currentCSV, csvCheckErr := getCSV(c)
 	if csvCheckErr != nil {
-		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), "prerequisites")
+		return fail("Cannot identify installed CSV: "+csvCheckErr.Error(), errorCodeOr(csvCheckErr, "prerequisites"))
 	}
 
 	gitOps, channelOverride, gitOpsProblem, gitOpsErr := updateGitOpsPlan(c, image, currentCSV, &logs)
@@ -153,7 +153,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	}
 	captured, recoveryErr := captureOperatorRecovery(c)
 	if recoveryErr != nil {
-		return fail(recoveryErr.Error()+". Nothing was changed.", "prerequisites")
+		return fail(recoveryErr.Error()+". Nothing was changed.", errorCodeOr(recoveryErr, "prerequisites"))
 	}
 	if blocked := foreignSubscriptionRefusal(c); blocked != "" {
 		return fail(blocked, "prerequisites")
@@ -242,7 +242,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 	logs = append(logs, ogLog)
 	currentCSV, err := getCSV(c)
 	if err != nil {
-		return fail("Cannot identify installed CSV: "+err.Error(), "prerequisites")
+		return fail("Cannot identify installed CSV: "+err.Error(), errorCodeOr(err, "prerequisites"))
 	}
 	planned, channelOverride, problem, err := updateGitOpsPlan(c, image, currentCSV, &logs)
 	if err != nil {

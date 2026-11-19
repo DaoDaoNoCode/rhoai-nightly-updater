@@ -2,8 +2,11 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +40,21 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 		{name: "bundle unpack failed", wantCode: "bundle_unpack_failed", wantRestore: true, wantInMsg: "bundle-unpack Job",
 			onSubscribe: func(f *fakeOLM, _ map[string]any) {
 				f.sub["status"] = map[string]any{"conditions": []any{cond("BundleUnpackFailed", "BundleUnpackFailed", "DeadlineExceeded")}}
+			}},
+		// The pull keeps failing past BundlePullFailureGrace, poll after
+		// poll; unhealthy catalogs are only noted, a condition that is not
+		// True is not read.
+		{name: "bundle image pull failing", wantCode: "bundle_image_pull", wantRestore: true, wantInMsg: "cannot pull the operator bundle image: unpack job: image pull failed",
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.sub["status"] = map[string]any{"conditions": []any{
+					map[string]any{"type": "InstallPlanFailed", "status": "False"},
+					cond("CatalogSourcesUnhealthy", "UnhealthyCatalogSourceFound", "targeted catalogsource is unhealthy"),
+					cond("BundleUnpacking", "JobIncomplete", "unpack job: image pull failed"),
+				}}
+			}},
+		{name: "install plan failed condition", wantCode: "installplan_failed", wantRestore: true, wantInMsg: "InstallPlan failed: InstallComponentFailed",
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.sub["status"] = map[string]any{"conditions": []any{cond("InstallPlanFailed", "InstallComponentFailed", "CRD step failed")}}
 			}},
 		{name: "install plan failed", wantCode: "installplan_failed", wantRestore: true, wantInMsg: "InstallComponentFailed",
 			onSubscribe: func(f *fakeOLM, _ map[string]any) {
@@ -1007,6 +1025,127 @@ func TestOperationsRefuseBeforeEndingDashboardDev(t *testing.T) {
 				if !strings.Contains(w, "-verify-") {
 					t.Fatalf("changed the cluster (the Dashboard Dev session must stay): %v", f.writes())
 				}
+			}
+		})
+	}
+}
+
+// Install a different build records its activity under the target it
+// resolved (the GA release's source and channel), and records nothing for
+// a request it refuses before running.
+func TestReinstall_ActivityRecord(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	activityWrites := func(f *fakeOLM) []string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var out []string
+		for _, r := range f.requests {
+			// Created by a POST to the collection, then updated by name.
+			body, _ := json.Marshal(r.Body)
+			if r.Method != http.MethodGet && strings.Contains(r.Path, "/configmaps") && strings.Contains(string(body), activityConfigMapName) {
+				out = append(out, string(body))
+			}
+		}
+		return out
+	}
+	t.Run("stable", func(t *testing.T) {
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"source": CatalogName})
+		f.stableChans = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.1","currentCSVDesc":{"version":"3.6.1"}}]`
+		f.onSubscribe = olmInstalls("rhods-operator.3.6.1")
+		r, err := Reinstall(f.client(context.Background()), "stable", "", "")
+		if err != nil || !r.Success {
+			t.Fatalf("result = %+v, %v", r, err)
+		}
+		w := activityWrites(f)
+		if len(w) != 1 || !strings.Contains(w[0], `to redhat-operators/stable-3.x`) || !strings.Contains(w[0], `reinstall`) {
+			t.Fatalf("activity writes = %v", w)
+		}
+	})
+	t.Run("refused request", func(t *testing.T) {
+		f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+		r, _ := Reinstall(f.client(context.Background()), "beta", "", "")
+		if r.Success || r.ErrorCode != "validation" {
+			t.Fatalf("result = %+v", r)
+		}
+		if w := activityWrites(f); len(w) != 0 {
+			t.Fatalf("activity writes = %v", w)
+		}
+	})
+}
+
+// A failed cluster read before the first change (here the CSV list the
+// recovery record needs) carries the request's own code (CONTRIBUTING
+// "Errors and operation results"), as the dry run and Refresh already did:
+// a 403 is "forbidden", not "prerequisites".
+func TestOperations_UnreadableCSVsCarryTheRequestsCode(t *testing.T) {
+	for _, op := range []string{"update", "reinstall"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
+				if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/clusterserviceversions") {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","message":"denied","code":403}`)
+					return true
+				}
+				return false
+			}
+			c := f.client(context.Background())
+			var r *types.OperationResponse
+			if op == "update" {
+				r, _ = UpdateStream(c, testNightlyImage, func(UpdateStepEvent) {})
+			} else {
+				r, _ = Reinstall(c, "nightly", testNightlyImage, "")
+			}
+			if r == nil || r.Success || r.ErrorCode != "forbidden" || !strings.Contains(r.Message, "list CSVs") || !strings.Contains(r.Message, "Nothing was changed") {
+				t.Fatalf("result = %+v", r)
+			}
+		})
+	}
+}
+
+// With "end the Dashboard Dev session first" confirmed and nothing to
+// refuse, every operation ends the session after its checks and before its
+// first change to OLM's objects, then runs to the end.
+func TestOperationsEndDashboardDevBeforeTheFirstChange(t *testing.T) {
+	const dashboardOpPath = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/dashboard-operator"
+	for _, op := range []string{"update", "reinstall", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+			f.onSubscribe = olmInstalls("rhods-operator.3.6.0")
+			f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+			// Ending the session resumes dashboard-operator.
+			f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+				if r.Method != http.MethodGet && r.URL.Path == dashboardOpPath {
+					f.dashboardOp = `{"metadata":{"uid":"u1"},"spec":{"replicas":1},"status":{"replicas":1,"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1}}`
+				}
+				return false
+			}
+			c := f.client(context.Background())
+			opts := OperationOptions{RevertDashboardDev: true}
+			var r *types.OperationResponse
+			switch op {
+			case "update":
+				r, _ = UpdateStreamWithOptions(c, testNightlyImage, opts, func(UpdateStepEvent) {})
+			case "reinstall":
+				r, _ = ReinstallStreamWithOptions(c, "nightly", testNightlyImage, "", opts, func(UpdateStepEvent) {})
+			case "refresh":
+				r, _ = RefreshOperatorStreamWithOptions(c, opts, func(UpdateStepEvent) {})
+			}
+			if r == nil || !r.Success || !slices.Contains(r.Logs, "OK: Dashboard Dev session ended; dashboard-operator is running again") {
+				t.Fatalf("result = %+v", r)
+			}
+			ended := false
+			for _, w := range f.writes() {
+				switch {
+				case strings.HasSuffix(w, " "+dashboardOpPath):
+					ended = true
+				case !strings.Contains(w, "-verify-") && !ended:
+					t.Fatalf("%s before the session was ended: %v", w, f.writes())
+				}
+			}
+			if !ended {
+				t.Fatalf("the session was not ended: %v", f.writes())
 			}
 		})
 	}

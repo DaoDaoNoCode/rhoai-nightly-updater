@@ -1051,7 +1051,46 @@ type modelPlan struct {
 	publish   bool
 }
 
+// modelsSetup is what Set up's check step planned, and the summary the
+// steps after it add to.
+type modelsSetup struct {
+	// gw: the inference gateway part; allow: the project added to this
+	// tool's existing gateway for the model.
+	gw, allow *gatewayPlan
+	mp        *modelPlan
+	summary   []string
+}
+
+// setup sets up the inference gateway, a model, or both. Steps: "check",
+// "gateway", "gateway-ready", "model", "model-ready", "callable". Each part
+// returns nil, nil to go on.
 func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, error) {
+	c := m.c
+	s := &modelsSetup{}
+	if r, err := m.setupCheck(req, s); r != nil || err != nil {
+		return r, err
+	}
+	if s.gw != nil {
+		if r, err := m.setupGateway(req, s); r != nil || err != nil {
+			return r, err
+		}
+	}
+	if s.mp != nil {
+		if r, err := m.setupModelApply(s); r != nil || err != nil {
+			return r, err
+		}
+		if r, err := m.setupModelReady(s); r != nil || err != nil {
+			return r, err
+		}
+	}
+	slog.Info("models setup", "target", m.target, "user", getUser(c))
+	recordActivity(c, "setup-models", m.target, true)
+	return &types.OperationResponse{Success: true, Message: strings.Join(s.summary, " "), Logs: m.logs}, nil
+}
+
+// setupCheck plans the gateway and the model parts into s and dry-runs
+// every write.
+func (m *modelsRun) setupCheck(req types.ModelsRequest, s *modelsSetup) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", "Checking what every part needs...")
 	var notes []string
@@ -1114,129 +1153,142 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		}
 	}
 	m.step("check", "success", strings.TrimSpace("Everything the parts need is there. "+strings.Join(notes, " ")))
+	s.gw, s.mp, s.allow = gw, mp, allow
+	return nil, nil
+}
 
-	var summary []string
-	if gw != nil {
-		if gw.foreign {
-			msg := fmt.Sprintf("Gateway %s/%s already exists and was not created by this tool: models use it as it is, and this tool does not change it.", inferenceGatewayNamespace, inferenceGatewayName)
-			m.step("gateway", "success", msg)
-			m.step("gateway-ready", "success", "Not checked: the existing gateway's health is shown on the Models tab.")
-			summary = append(summary, "The existing inference gateway is used.")
-		} else {
-			m.step("gateway", "running", "Creating the inference gateway...")
-			if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !slices.Contains(listed, req.Project) {
-				if err := recordGatewayProject(c, req.Project); err != nil {
-					return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
-				}
-			}
-			written, msg, code := writeInferenceGateway(c, gw, func(line string) { m.step("gateway", "running", line) })
-			if msg != "" {
-				return m.fail("gateway", msg, code, "gateway apply failed")
-			}
-			m.step("gateway", "success", fmt.Sprintf("GatewayClass, ConfigMap and Gateway %s/%s applied; external hostname %s. Projects it allows: %s.", inferenceGatewayNamespace, inferenceGatewayName, gw.host, strings.Join(written.names, ", ")))
-			m.step("gateway-ready", "running", "Waiting for the gateway and its load balancer...")
-			ready, dns, problem, pending, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
-			switch {
-			case err != nil:
-				return m.fail("gateway-ready", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created; the Models tab shows its state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
-			case problem != "":
-				return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
-			case !ready:
-				why := ""
-				if pending != "" {
-					why = " The gateway controller says: " + truncateText(pending, 300) + "."
-				}
-				m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", clockText(InferenceGatewayReadyTimeout), why))
-			case dns == "published":
-				m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
-			default:
-				m.step("gateway-ready", "success", fmt.Sprintf("Ready; https://%s is not published in DNS yet (a new load balancer's name can take a few minutes to resolve).", gw.host))
-			}
-			summary = append(summary, "The inference gateway is set up.")
-		}
-	}
-
-	if mp != nil {
-		if allow != nil {
-			m.step("model", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", mp.project))
-			if err := recordGatewayProject(c, mp.project); err != nil {
-				return m.fail("model", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
-			}
-			if _, msg, code := writeInferenceGateway(c, allow, func(line string) { m.step("model", "running", line) }); msg != "" {
-				return m.fail("model", msg, code, "gateway list failed")
+// setupGateway creates the inference gateway and waits for it, or uses one
+// someone else made as it is.
+func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*types.OperationResponse, error) {
+	c, gw := m.c, s.gw
+	if gw.foreign {
+		msg := fmt.Sprintf("Gateway %s/%s already exists and was not created by this tool: models use it as it is, and this tool does not change it.", inferenceGatewayNamespace, inferenceGatewayName)
+		m.step("gateway", "success", msg)
+		m.step("gateway-ready", "success", "Not checked: the existing gateway's health is shown on the Models tab.")
+		s.summary = append(s.summary, "The existing inference gateway is used.")
+	} else {
+		m.step("gateway", "running", "Creating the inference gateway...")
+		if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !slices.Contains(listed, req.Project) {
+			if err := recordGatewayProject(c, req.Project); err != nil {
+				return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
 			}
 		}
-		m.step("model", "running", fmt.Sprintf("Creating %s in %s (%s)...", mp.entry.DisplayName, mp.project, mp.image.describe()))
-		if msg, code := m.applyModel(mp, false); msg != "" {
-			return m.fail("model", msg, code, "model apply failed")
+		written, msg, code := writeInferenceGateway(c, gw, func(line string) { m.step("gateway", "running", line) })
+		if msg != "" {
+			return m.fail("gateway", msg, code, "gateway apply failed")
 		}
-		if msg, code := m.applyToken(mp); msg != "" {
-			return m.fail("model", msg, code, "token apply failed")
-		}
-		listed := ""
-		if allow != nil {
-			listed = fmt.Sprintf(" %s was added to the projects the inference gateway allows.", mp.project)
-		}
-		m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
-		m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
-		timeout := ModelReadyTimeout
-		if dl, ok := c.ctx.Deadline(); ok {
-			if left := clk.Until(dl) - 30*time.Second; left < timeout {
-				timeout = left
-			}
-		}
-		// A model reached through MaaS is Ready only once published (its
-		// route needs the MaaS gateway to admit the project): its workload
-		// is waited on, then it is published.
-		publish := mp.publish
-		res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", publish, timeout, func(line string) { m.step("model-ready", "running", line) })
-		if res.err == nil && res.problem == "" && res.ready && publish {
-			m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
-			if r, err := m.publishToMaaS(mp.project, mp.entry.Name); r != nil || err != nil {
-				return r, err
-			}
-			res.url = ""
-		}
+		m.step("gateway", "success", fmt.Sprintf("GatewayClass, ConfigMap and Gateway %s/%s applied; external hostname %s. Projects it allows: %s.", inferenceGatewayNamespace, inferenceGatewayName, gw.host, strings.Join(written.names, ", ")))
+		m.step("gateway-ready", "running", "Waiting for the gateway and its load balancer...")
+		ready, dns, problem, pending, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
 		switch {
-		case res.err != nil:
-			return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), firstNonEmpty(errorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
-		case res.imageMissing:
-			return m.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
-		case res.imageMaybeMissing:
-			return m.fail("model-ready", "The model cannot start: "+res.problem+" A registry answered that the image does not exist (\"manifest unknown\"): if this nightly build's runtime image is not published yet, use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image.", "image_unavailable", "preset image may be missing")
-		case res.problem != "":
-			return m.fail("model-ready", "The model cannot start: "+res.problem+" It was created; delete it from the Models tab, or fix the cause and set it up again.", "not_ready", "model not starting")
-		case !res.ready && res.pulling != "":
-			// The wait ended while a failing pull was still in its grace
-			// window: what to check is not lost.
-			return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", clockText(timeout), res.pulling), "not_ready", "image pull failing")
-		case !res.ready:
-			m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", clockText(timeout)))
-			m.step("callable", "success", "Not checked: the model is not ready yet. Check again on the Models tab once it is.")
-			summary = append(summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
+		case err != nil:
+			return m.fail("gateway-ready", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created; the Models tab shows its state.", err), firstNonEmpty(errorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
+		case problem != "":
+			return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
+		case !ready:
+			why := ""
+			if pending != "" {
+				why = " The gateway controller says: " + truncateText(pending, 300) + "."
+			}
+			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", clockText(InferenceGatewayReadyTimeout), why))
+		case dns == "published":
+			m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
 		default:
-			if !publish {
-				m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", firstNonEmpty(res.url, "its address")))
-			}
-			// Ready is not enough: one request through the way it is
-			// reached tells whether a caller gets an answer.
-			m.step("callable", "running", "Calling the model once, as a user would...")
-			// The record as written by this setup (the token's UID).
-			rec, err := readModelsRecord(c)
-			if err != nil {
-				rec = mp.rec
-			}
-			check := checkModelCall(c, mp.project, mp.entry.Name, rec, func(line string) { m.step("callable", "running", line) })
-			if !check.OK && check.Result != "not-checked" {
-				return m.fail("callable", callFailureWords(fmt.Sprintf("%s is ready in %s", mp.entry.DisplayName, mp.project), check)+" It stays set up; check again on the Models tab after fixing the cause.", "not_callable", "model not callable ("+check.Result+")")
-			}
-			m.step("callable", "success", check.Message)
-			summary = append(summary, fmt.Sprintf("%s is ready in %s. %s", mp.entry.DisplayName, mp.project, check.Message))
+			m.step("gateway-ready", "success", fmt.Sprintf("Ready; https://%s is not published in DNS yet (a new load balancer's name can take a few minutes to resolve).", gw.host))
+		}
+		s.summary = append(s.summary, "The inference gateway is set up.")
+	}
+	return nil, nil
+}
+
+// setupModelApply adds the model's project to this tool's gateway when it
+// needs it, then applies the model and its token objects.
+func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, error) {
+	c, mp, allow := m.c, s.mp, s.allow
+	if allow != nil {
+		m.step("model", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", mp.project))
+		if err := recordGatewayProject(c, mp.project); err != nil {
+			return m.fail("model", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
+		}
+		if _, msg, code := writeInferenceGateway(c, allow, func(line string) { m.step("model", "running", line) }); msg != "" {
+			return m.fail("model", msg, code, "gateway list failed")
 		}
 	}
-	slog.Info("models setup", "target", m.target, "user", getUser(c))
-	recordActivity(c, "setup-models", m.target, true)
-	return &types.OperationResponse{Success: true, Message: strings.Join(summary, " "), Logs: m.logs}, nil
+	m.step("model", "running", fmt.Sprintf("Creating %s in %s (%s)...", mp.entry.DisplayName, mp.project, mp.image.describe()))
+	if msg, code := m.applyModel(mp, false); msg != "" {
+		return m.fail("model", msg, code, "model apply failed")
+	}
+	if msg, code := m.applyToken(mp); msg != "" {
+		return m.fail("model", msg, code, "token apply failed")
+	}
+	listed := ""
+	if allow != nil {
+		listed = fmt.Sprintf(" %s was added to the projects the inference gateway allows.", mp.project)
+	}
+	m.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s.%s%s", mp.project, mp.entry.Name, mp.preset, mp.image.describe(), exposureWords(mp.exp), tokenWords(mp.project, mp.entry.Name, mp.token), listed))
+	return nil, nil
+}
+
+// setupModelReady waits for the model (publishing it first when it is
+// reached through MaaS), then calls it once.
+func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, error) {
+	c, mp := m.c, s.mp
+	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
+	timeout := ModelReadyTimeout
+	if dl, ok := c.ctx.Deadline(); ok {
+		if left := clk.Until(dl) - 30*time.Second; left < timeout {
+			timeout = left
+		}
+	}
+	// A model reached through MaaS is Ready only once published (its
+	// route needs the MaaS gateway to admit the project): its workload
+	// is waited on, then it is published.
+	publish := mp.publish
+	res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", publish, timeout, func(line string) { m.step("model-ready", "running", line) })
+	if res.err == nil && res.problem == "" && res.ready && publish {
+		m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
+		if r, err := m.publishToMaaS(mp.project, mp.entry.Name); r != nil || err != nil {
+			return r, err
+		}
+		res.url = ""
+	}
+	switch {
+	case res.err != nil:
+		return m.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v. It was created; the Models tab shows its state.", res.err), firstNonEmpty(errorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
+	case res.imageMissing:
+		return m.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
+	case res.imageMaybeMissing:
+		return m.fail("model-ready", "The model cannot start: "+res.problem+" A registry answered that the image does not exist (\"manifest unknown\"): if this nightly build's runtime image is not published yet, use the newest released Red Hat image instead: the Models tab offers it, and it replaces only the model's image.", "image_unavailable", "preset image may be missing")
+	case res.problem != "":
+		return m.fail("model-ready", "The model cannot start: "+res.problem+" It was created; delete it from the Models tab, or fix the cause and set it up again.", "not_ready", "model not starting")
+	case !res.ready && res.pulling != "":
+		// The wait ended while a failing pull was still in its grace
+		// window: what to check is not lost.
+		return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", clockText(timeout), res.pulling), "not_ready", "image pull failing")
+	case !res.ready:
+		m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", clockText(timeout)))
+		m.step("callable", "success", "Not checked: the model is not ready yet. Check again on the Models tab once it is.")
+		s.summary = append(s.summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
+	default:
+		if !publish {
+			m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", firstNonEmpty(res.url, "its address")))
+		}
+		// Ready is not enough: one request through the way it is
+		// reached tells whether a caller gets an answer.
+		m.step("callable", "running", "Calling the model once, as a user would...")
+		// The record as written by this setup (the token's UID).
+		rec, err := readModelsRecord(c)
+		if err != nil {
+			rec = mp.rec
+		}
+		check := checkModelCall(c, mp.project, mp.entry.Name, rec, func(line string) { m.step("callable", "running", line) })
+		if !check.OK && check.Result != "not-checked" {
+			return m.fail("callable", callFailureWords(fmt.Sprintf("%s is ready in %s", mp.entry.DisplayName, mp.project), check)+" It stays set up; check again on the Models tab after fixing the cause.", "not_callable", "model not callable ("+check.Result+")")
+		}
+		m.step("callable", "success", check.Message)
+		s.summary = append(s.summary, fmt.Sprintf("%s is ready in %s. %s", mp.entry.DisplayName, mp.project, check.Message))
+	}
+	return nil, nil
 }
 
 // planModel checks everything a model setup needs: the project, KServe and

@@ -16,7 +16,7 @@ export const BACKGROUND_POLL_MS = 60_000;
 
 /**
  * Longest time a progress stream is trusted (ms). The backend caps operations
- * at 15 minutes (withMutationAuth in pkg/api/handlers.go), so a stream still open after this
+ * at 15 minutes (withMutationAuth in pkg/api/auth_handlers.go), so a stream still open after this
  * is abandoned and status polling takes over.
  */
 export const STREAM_MAX_MS = 20 * 60_000;

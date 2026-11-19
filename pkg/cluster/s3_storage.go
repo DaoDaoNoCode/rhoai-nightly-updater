@@ -1304,7 +1304,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	}
 	if bucketErr != nil {
 		log.add(fmt.Sprintf("Bucket creation failed: %v — you can create it from the SeaweedFS admin UI.", bucketErr))
-		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), "", "bucket failed"), nil
+		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), errorCodeFromK8sErr(bucketErr), "bucket failed"), nil
 	}
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 

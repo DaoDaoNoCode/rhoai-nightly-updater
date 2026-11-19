@@ -464,7 +464,47 @@ func restartMaaSAPI(c *Client, ns string) (bool, error) {
 
 // --- removal --------------------------------------------------------------------
 
+// maasTeardown is what Remove's check step read, for the steps after it.
+type maasTeardown struct {
+	rec   maasRecord
+	dsc   maasDSC
+	infra string
+	// objs: the Gateway, its options ConfigMap, then the database objects.
+	objs []maasTeardownObj
+}
+
+// maasTeardownObj is one object Remove read.
+type maasTeardownObj struct {
+	kind  string
+	meta  objectMeta
+	found bool
+}
+
+// teardown removes the MaaS platform this tool set up, in reverse order of
+// setup. Steps: "check", "unpublish", "dsc", "gateway", "database". Each
+// step returns nil, nil to go on.
 func (m *maasRun) teardown() (*types.OperationResponse, error) {
+	t := &maasTeardown{}
+	if r, err := m.teardownCheck(t); r != nil || err != nil {
+		return r, err
+	}
+	// Published models first.
+	if r, err := m.teardownUnpublish(t); r != nil || err != nil {
+		return r, err
+	}
+	// MaaS in the DataScienceCluster, back to what it was.
+	if r, err := m.teardownDSC(t); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.teardownGateway(t); r != nil || err != nil {
+		return r, err
+	}
+	return m.teardownDatabase(t)
+}
+
+// teardownCheck reads what this tool set up into t, and refuses while
+// someone else uses MaaS. It ends the run when nothing was set up.
+func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", "Checking what this tool set up...")
 	rec, err := readMaaSRecord(c)
@@ -476,12 +516,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		return m.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was deleted: %v.", err), errorCodeFromK8sErr(err), "dsc read failed")
 	}
 	infra := firstNonEmpty(rec.DBNamespace, maasInfraNamespace(c))
-	type obj struct {
-		kind  string
-		meta  objectMeta
-		found bool
-	}
-	var objs []obj
+	var objs []maasTeardownObj
 	owned := 0
 	// The gateway and its options, then the database: maas-db-config and
 	// every database object of this tool, whichever kind it set up (a
@@ -492,7 +527,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		if err != nil && (kind != "Cluster" || !IsK8sError(err, 404)) {
 			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), errorCodeFromK8sErr(err), "read failed")
 		}
-		objs = append(objs, obj{kind, meta, found})
+		objs = append(objs, maasTeardownObj{kind, meta, found})
 		if found && toolOwned(meta) {
 			owned++
 		}
@@ -524,8 +559,14 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		return m.fail("check", fmt.Sprintf("Others use this MaaS platform: %s. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.", strings.Join(others, ", ")), "in_use", "maas in use")
 	}
 	m.step("check", "success", "Removing, in reverse order of setup: published models, MaaS in the DataScienceCluster, the gateway, the database.")
+	t.rec, t.dsc, t.infra, t.objs = rec, dsc, infra, objs
+	return nil, nil
+}
 
-	// Published models first.
+// teardownUnpublish unpublishes this tool's models, then reads the record
+// they changed again.
+func (m *maasRun) teardownUnpublish(t *maasTeardown) (*types.OperationResponse, error) {
+	c, rec := m.c, &t.rec
 	m.step("unpublish", "running", "Unpublishing this tool's models...")
 	pubs := rec.pubs()
 	for _, p := range pubs {
@@ -536,11 +577,17 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		}
 	}
 	m.step("unpublish", "success", fmt.Sprintf("%d %s unpublished.", len(pubs), verb(len(pubs), "model", "models")))
-	if rec, err = readMaaSRecord(c); err != nil {
+	var err error
+	if *rec, err = readMaaSRecord(c); err != nil {
 		return m.fail("dsc", err.Error(), errorCodeFromK8sErr(err), "record read failed")
 	}
+	return nil, nil
+}
 
-	// MaaS in the DataScienceCluster, back to what it was.
+// teardownDSC sets modelsAsAService, then aigateway, back to what they were
+// where this tool changed them.
+func (m *maasRun) teardownDSC(t *maasTeardown) (*types.OperationResponse, error) {
+	c, rec, dsc, infra := m.c, &t.rec, t.dsc, t.infra
 	if rec.DSCChanged {
 		prev := firstNonEmpty(rec.PreviousModelsAsAService, "Removed")
 		if dsc.maas == "Managed" {
@@ -556,7 +603,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 			}
 		}
 		rec.DSCChanged, rec.PreviousModelsAsAService = false, ""
-		if err := writeMaaSRecord(c, rec); err != nil {
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("dsc", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
 		m.step("dsc", "running", "modelsAsAService is "+prev+" again, as before setup.")
@@ -580,32 +627,41 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 			m.logs = append(m.logs, "OK: aigateway is "+prev+" again")
 		}
 		rec.AIGatewayChanged, rec.PreviousAIGateway = false, ""
-		if err := writeMaaSRecord(c, rec); err != nil {
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("dsc", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
 	}
 	m.step("dsc", "success", "The DataScienceCluster is back to what it was before setup, where this tool changed it.")
+	return nil, nil
+}
 
-	del := func(step string, o obj) (bool, *types.OperationResponse) {
-		if !o.found {
-			return false, nil
-		}
-		if !toolOwned(o.meta) {
-			m.logs = append(m.logs, "Kept "+maasDesc(o.kind, infra)+": not created by this tool")
-			return false, nil
-		}
-		path := maasObjectPath(o.kind, infra)
-		m.step(step, "running", "Deleting "+maasDesc(o.kind, infra)+"...")
-		if _, err := deleteWithUID(c, path, o.meta.UID); err != nil && !IsK8sError(err, 404) {
-			res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), maasWriteCode(err), "delete failed")
-			return false, res
-		}
-		if gone, _ := waitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); !gone {
-			m.logs = append(m.logs, maasDesc(o.kind, infra)+" is still being deleted")
-		}
-		return true, nil
+// teardownDelete deletes o when this tool created it and waits for it to
+// go; whether it was deleted, or the refusal that ends the run.
+func (m *maasRun) teardownDelete(step, infra string, o maasTeardownObj) (bool, *types.OperationResponse) {
+	c := m.c
+	if !o.found {
+		return false, nil
 	}
-	var kept []string
+	if !toolOwned(o.meta) {
+		m.logs = append(m.logs, "Kept "+maasDesc(o.kind, infra)+": not created by this tool")
+		return false, nil
+	}
+	path := maasObjectPath(o.kind, infra)
+	m.step(step, "running", "Deleting "+maasDesc(o.kind, infra)+"...")
+	if _, err := deleteWithUID(c, path, o.meta.UID); err != nil && !IsK8sError(err, 404) {
+		res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), maasWriteCode(err), "delete failed")
+		return false, res
+	}
+	if gone, _ := waitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll); !gone {
+		m.logs = append(m.logs, maasDesc(o.kind, infra)+" is still being deleted")
+	}
+	return true, nil
+}
+
+// teardownGateway deletes the Gateway and its options ConfigMap this tool
+// created, while no route is attached to the Gateway.
+func (m *maasRun) teardownGateway(t *maasTeardown) (*types.OperationResponse, error) {
+	c, infra, objs := m.c, t.infra, t.objs
 	// The gateway goes only when no route is attached to it, as for the
 	// inference gateway: the gateway controller's count also sees routes of
 	// models published by others and routes made by hand.
@@ -620,16 +676,24 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	}
 	// The Gateway, then its options ConfigMap.
 	for _, o := range objs[:2] {
-		if _, res := del("gateway", o); res != nil {
+		if _, res := m.teardownDelete("gateway", infra, o); res != nil {
 			return res, nil
 		}
 	}
 	m.step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer. GatewayClass "+maasGatewayClass+" stays: it is OpenShift's shared class for gateways and costs nothing on its own.")
+	return nil, nil
+}
+
+// teardownDatabase deletes the database objects and the infrastructure
+// namespace this tool created, and ends the run with what was kept.
+func (m *maasRun) teardownDatabase(t *maasTeardown) (*types.OperationResponse, error) {
+	c, rec, infra, objs := m.c, &t.rec, t.infra, t.objs
+	var kept []string
 	var deleted []string
 	devOurs := false
 	for _, o := range objs[2:] {
 		devOurs = devOurs || (o.kind == "PostgresDeployment" && o.found && toolOwned(o.meta))
-		gone, res := del("database", o)
+		gone, res := m.teardownDelete("database", infra, o)
 		if res != nil {
 			return res, nil
 		}
@@ -640,7 +704,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	// The development database's postgres-creds: by its recorded UID only;
 	// with no record it is kept, and the log says why.
 	if rec.POCCredsUID != "" || devOurs {
-		gone, res := m.deletePOCCreds("database", infra, &rec)
+		gone, res := m.deletePOCCreds("database", infra, rec)
 		if res != nil {
 			return res, nil
 		}
@@ -650,7 +714,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	}
 	if rec.DBNamespace != "" || rec.Database != "" {
 		rec.DBNamespace, rec.Database = "", ""
-		if err := writeMaaSRecord(c, rec); err != nil {
+		if err := writeMaaSRecord(c, *rec); err != nil {
 			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
 	}
@@ -659,7 +723,7 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		dbMsg = "Deleted: " + strings.Join(deleted, ", ") + " (a database's data goes with it). A PostgreSQL of your own is never touched."
 	}
 	if ns := rec.InfraNamespace; ns != "" {
-		kept, err := m.deleteInfraNamespace(&rec, ns)
+		kept, err := m.deleteInfraNamespace(rec, ns)
 		if err != nil {
 			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
@@ -794,7 +858,63 @@ func maasLivePubs(c *Client, rec maasRecord, with, without maasPub) ([]maasPub, 
 	return out, nil
 }
 
+// maasPublish is what Publish's check step found, for the steps after it.
+type maasPublish struct {
+	project, name string
+	limit         maasLimit
+	priority      int
+	refPath       string
+	model         llmisvcObject
+	expect        modelSpecExpectation
+	rec           maasRecord
+	// original: the refs Unpublish writes back.
+	original maasModelRefs
+	// gwPlan: nil when the gateway is someone else's.
+	gwPlan    *maasGatewayPlan
+	aud       maasAudience
+	sub, auth map[string]any
+	refObj    map[string]any
+}
+
+// publish publishes the tool's model name in project. Steps: "check"
+// (the platform, the model, the record, the gateway, who can use it, then
+// every write as a dry run), "gateway", "model", "maas", "ready". Each part
+// returns nil, nil to go on.
 func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
+	pl := &maasPublish{project: project, name: name}
+	if r, err := m.publishCheckPlatform(pl, limitReq); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishCheckModel(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishRecordRefs(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishCheckGateway(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishAccess(pl, access); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishDryRuns(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishGateway(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishModel(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishMaaSObjects(pl); r != nil || err != nil {
+		return r, err
+	}
+	return m.publishWaitReady(pl)
+}
+
+// publishCheckPlatform checks the limit, the platform, Connectivity Link's
+// version and the other subscriptions' priorities.
+func (m *maasRun) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", "Checking the platform and the model...")
 	limit, problem := parseMaaSLimit(limitReq)
@@ -826,6 +946,14 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	if msg, code := maasNamespaceRefusal(c, maasInfraNamespace(c)); msg != "" {
 		return m.fail("check", msg, code, "namespace not rhoai's")
 	}
+	pl.limit, pl.priority = limit, priority
+	return nil, nil
+}
+
+// publishCheckModel checks that the model is this tool's, ready and as set
+// up, and that its MaaSModelRef, if any, is this tool's.
+func (m *maasRun) publishCheckModel(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name := m.c, pl.project, pl.name
 	refPath, _ := maasModelRefPath(c, project, name)
 	model, found, err := readToolModel(c, project, name)
 	owned := false
@@ -859,6 +987,15 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	if refFound && !toolOwned(ref.Metadata) {
 		return m.fail("check", fmt.Sprintf("Project %s already has a MaaSModelRef %s that this tool did not create; it is left alone. Nothing was changed.", project, name), "not_managed", "ref foreign")
 	}
+	pl.refPath, pl.model, pl.expect = refPath, model, expect
+	return nil, nil
+}
+
+// publishRecordRefs reads the record and sets in it what Unpublish writes
+// back: the model's refs and Gen AI metadata, and that it is published.
+// Nothing is written yet.
+func (m *maasRun) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, model := m.c, pl.project, pl.name, pl.model
 	rec, err := readMaaSRecord(c)
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record read failed")
@@ -897,6 +1034,14 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		rec.setGenAI(project, name, genAIOf(model.Metadata))
 	}
 	rec.setPublished(project, name, true)
+	pl.rec, pl.original = rec, original
+	return nil, nil
+}
+
+// publishCheckGateway plans the tool's gateway with the project admitted;
+// a gateway someone else made has to admit it already.
+func (m *maasRun) publishCheckGateway(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, rec := m.c, pl.project, pl.rec
 	infra := maasInfraNamespace(c)
 	gwPlan, msg, code := planMaaSGateway(c, infra, rec.projects())
 	if msg != "" {
@@ -918,6 +1063,15 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		}
 		gwPlan = nil
 	}
+	pl.gwPlan = gwPlan
+	return nil, nil
+}
+
+// publishAccess builds the shared subscription and access policy with the
+// model added: the other models keep their limits, and access sets the
+// audience only for the first model.
+func (m *maasRun) publishAccess(pl *maasPublish, access *types.MaaSAudience) (*types.OperationResponse, error) {
+	c, project, name, rec, limit, priority := m.c, pl.project, pl.name, pl.rec, pl.limit, pl.priority
 	live, err := maasLivePubs(c, rec, maasPub{project, name}, maasPub{})
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
@@ -953,6 +1107,14 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 			m.step("check", "running", p.Message)
 		}
 	}
+	pl.aud, pl.sub, pl.auth = aud, sub, auth
+	return nil, nil
+}
+
+// publishDryRuns dry-runs the gateway and the MaaS objects, and ends the
+// check step.
+func (m *maasRun) publishDryRuns(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, model, refPath, gwPlan, sub, auth, limit, aud := m.c, pl.project, pl.name, pl.model, pl.refPath, pl.gwPlan, pl.sub, pl.auth, pl.limit, pl.aud
 	// The catalog's display name and description (the text setup writes on
 	// the model), never the object's: MaaS shows them to every signed-in
 	// user, and a project editor can change the annotations.
@@ -979,7 +1141,14 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		}
 	}
 	m.step("check", "success", fmt.Sprintf("The platform is ready and the model can be published: %s, for %s.", limit.text(), aud.text()))
+	pl.refObj = refObj
+	return nil, nil
+}
 
+// publishGateway writes the record, then lets the tool's gateway admit the
+// project.
+func (m *maasRun) publishGateway(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, rec, gwPlan := m.c, pl.project, pl.rec, pl.gwPlan
 	if err := writeMaaSRecord(c, rec); err != nil {
 		return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
 	}
@@ -992,6 +1161,13 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 	} else {
 		m.step("gateway", "success", "The gateway someone else made admits the project.")
 	}
+	return nil, nil
+}
+
+// publishModel routes the model through the MaaS gateway and takes it out
+// of Gen AI studio's AI assets.
+func (m *maasRun) publishModel(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, original, expect := m.c, pl.project, pl.name, pl.original, pl.expect
 	if msg, code := m.routeModelThroughMaaS(project, name, original, expect); msg != "" {
 		return m.fail("model", msg, code, "model routing failed")
 	}
@@ -999,6 +1175,13 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		return m.fail("model", err.Error()+". Publish again to retry, or Unpublish to undo.", maasWriteCode(err), "genai metadata failed")
 	}
 	m.logs = append(m.logs, "OK: the model left Gen AI studio's AI assets (label "+genAIAssetLabel+" and annotation "+genAIUseCaseAnnotation+" removed, as the dashboard's MaaS option does); MaaS lists it")
+	return nil, nil
+}
+
+// publishMaaSObjects applies the model reference, the subscription and the
+// authorization policy.
+func (m *maasRun) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, refPath, refObj, sub, auth := m.c, pl.project, pl.name, pl.refPath, pl.refObj, pl.sub, pl.auth
 	m.step("maas", "running", "Creating the model reference, the subscription and the authorization policy...")
 	for _, w := range []struct {
 		desc, path, create string
@@ -1014,6 +1197,12 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		m.logs = append(m.logs, "OK: "+w.desc)
 	}
 	m.step("maas", "success", fmt.Sprintf("MaaSModelRef %s/%s, MaaSSubscription %s and MaaSAuthPolicy %s are applied.", project, name, maasSubscriptionName, maasAuthPolicyName))
+	return nil, nil
+}
+
+// publishWaitReady waits for MaaS to accept the model and ends the run.
+func (m *maasRun) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name := m.c, pl.project, pl.name
 	m.step("ready", "running", "Waiting for MaaS to accept the model...")
 	last := ""
 	ready, err := waitForGone(c, MaaSPublishTimeout, MaaSPoll, func(cc *Client) (bool, error) {
@@ -1043,13 +1232,33 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 
 // --- unpublish ---------------------------------------------------------------------
 
+// maasUnpublish is what Unpublish's check step read, for the steps after it.
+type maasUnpublish struct {
+	project, name string
+	// say steps, or only logs when the unpublish is part of a removal.
+	say      func(id, status, msg string)
+	rec      maasRecord
+	refPath  string
+	ref      maasModelRefObject
+	refFound bool
+	model    llmisvcObject
+	// modelFound, modelOwned: the model exists, and this tool created it.
+	modelFound, modelOwned bool
+	// recordedRefs, recordedGenAI: what Unpublish writes back on the model.
+	recordedRefs     maasModelRefs
+	hasRecordedRefs  bool
+	recordedGenAI    maasGenAI
+	hasRecordedGenAI bool
+	live             []maasPub
+}
+
 // unpublish removes the publication of the tool's model name in project, in
 // reverse order: the authorization policy and subscription entries (the objects
 // when no other project is left), the model reference, the model's gateway
 // ref, and the project from the gateway. stepped is false when it runs as
-// part of a removal.
+// part of a removal. Steps: "check", "maas", "model", "gateway". Each part
+// returns nil, nil to go on.
 func (m *maasRun) unpublish(project, name string, stepped bool) (*types.OperationResponse, error) {
-	c := m.c
 	say := func(id, status, msg string) {
 		if stepped {
 			m.step(id, status, msg)
@@ -1057,6 +1266,28 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 			m.logs = append(m.logs, msg)
 		}
 	}
+	u := &maasUnpublish{project: project, name: name, say: say}
+	if r, err := m.unpublishCheck(u); r != nil || err != nil {
+		return r, err
+	}
+	// The authorization policy and the subscription.
+	if r, err := m.unpublishAccess(u); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.unpublishModelRef(u); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.unpublishModel(u); r != nil || err != nil {
+		return r, err
+	}
+	return m.unpublishGateway(u)
+}
+
+// unpublishCheck reads the publication into u and refuses when the model's
+// gateways changed since publishing. It ends the run when the model is not
+// published.
+func (m *maasRun) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say := m.c, u.project, u.name, u.say
 	say("check", "running", "Checking the publication...")
 	rec, err := readMaaSRecord(c)
 	if err != nil {
@@ -1108,8 +1339,15 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
 	rec.setPublished(project, name, false)
+	u.rec, u.refPath, u.ref, u.refFound, u.model, u.modelFound, u.modelOwned = rec, refPath, ref, refFound, model, modelFound, modelOwned
+	u.recordedRefs, u.hasRecordedRefs, u.recordedGenAI, u.hasRecordedGenAI, u.live = recordedRefs, hasRecordedRefs, recordedGenAI, hasRecordedGenAI, live
+	return nil, nil
+}
 
-	// The authorization policy and the subscription.
+// unpublishAccess takes the model off the shared authorization policy and
+// subscription, and deletes them when no publication is left.
+func (m *maasRun) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, say, live := m.c, u.say, u.live
 	say("maas", "running", "Removing the model from the authorization policy and the subscription...")
 	// The models left keep their limits and the audience (fail closed: a
 	// subscription that cannot be read is not rewritten with defaults).
@@ -1146,6 +1384,13 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 			return m.fail("maas", fmt.Sprintf("Failed to update %s: %v.", w.desc, err), maasWriteCode(err), "apply failed")
 		}
 	}
+	return nil, nil
+}
+
+// unpublishModelRef deletes the tool's MaaSModelRef and waits for it to go,
+// taking maas-controller's finalizer off it when maas-controller is gone.
+func (m *maasRun) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say, refPath, ref, refFound := m.c, u.project, u.name, u.say, u.refPath, u.ref, u.refFound
 	if refFound {
 		path := refPath
 		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !IsK8sError(err, 404) {
@@ -1174,7 +1419,14 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 		}
 	}
 	say("maas", "success", "The model reference is deleted, and the authorization policy and subscription no longer list the model.")
+	return nil, nil
+}
 
+// unpublishModel routes the model as before publishing and puts it back in
+// Gen AI studio's AI assets.
+func (m *maasRun) unpublishModel(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say := m.c, u.project, u.name, u.say
+	modelFound, modelOwned, recordedRefs, hasRecordedRefs, recordedGenAI, hasRecordedGenAI := u.modelFound, u.modelOwned, u.recordedRefs, u.hasRecordedRefs, u.recordedGenAI, u.hasRecordedGenAI
 	// The model's gateway refs. The record keeps the publication until the
 	// route has left the MaaS gateway, so the tab shows a route that did not
 	// as partly published.
@@ -1195,7 +1447,14 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 			m.logs = append(m.logs, "OK: the model is back in Gen AI studio's AI assets (its "+genAIAssetLabel+" label and "+genAIUseCaseAnnotation+" annotation)")
 		}
 	}
+	return nil, nil
+}
 
+// unpublishGateway writes the record, takes the project off the tool's
+// gateway when no other publication there needs it, and ends the run.
+func (m *maasRun) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say, rec := m.c, u.project, u.name, u.say, u.rec
+	modelFound, modelOwned, recordedRefs := u.modelFound, u.modelOwned, u.recordedRefs
 	// The project on the gateway.
 	infra := maasInfraNamespace(c)
 	if err := writeMaaSRecord(c, rec); err != nil {

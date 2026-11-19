@@ -129,7 +129,8 @@ func TestModelsSetup_CreatesTheGatewayThenTheModel(t *testing.T) {
 	if got := finalSteps(events); got != "check=success gateway=success gateway-ready=success model=success model-ready=success callable=success" {
 		t.Fatalf("steps: %s", got)
 	}
-	if !strings.Contains(res.Message, "Qwen2.5 0.5B Instruct (CPU) is ready in proj.") {
+	// The summary: each part, in order.
+	if !strings.HasPrefix(res.Message, "The inference gateway is set up. Qwen2.5 0.5B Instruct (CPU) is ready in proj.") {
 		t.Errorf("message: %q", res.Message)
 	}
 
@@ -208,6 +209,9 @@ func TestModelsSetup_UsesAForeignGatewayWithoutTouchingIt(t *testing.T) {
 	}
 	if !strings.Contains(finalSteps(events), "gateway=success") || !mc.f.has(testModelPath) {
 		t.Fatalf("steps %s, model created %v", finalSteps(events), mc.f.has(testModelPath))
+	}
+	if !strings.HasPrefix(res.Message, "The existing inference gateway is used. Qwen2.5 0.5B Instruct (CPU) is ready in proj.") {
+		t.Errorf("message: %q", res.Message)
 	}
 }
 

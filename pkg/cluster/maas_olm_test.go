@@ -832,6 +832,63 @@ func TestMaaS_ForeignGatewayAdmittingAll(t *testing.T) {
 	}
 }
 
+// A gateway someone else made that selects the namespaces it admits by
+// label: Publish never writes it. When it admits the project, Publish goes
+// on without a gateway write; when it does not, Publish refuses before
+// changing anything.
+func TestMaaSPublish_ForeignGatewaySelectingByLabel(t *testing.T) {
+	const foreignGW = `{"metadata":{"name":"maas-default-gateway","namespace":"openshift-ingress"},"spec":{"listeners":[{"name":"https","hostname":"maas.apps.example.com","allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchLabels":{"maas.opendatahub.io/gateway-access":"true"}}}}}]},"status":{"conditions":[{"type":"Programmed","status":"True"}],"addresses":[{"value":"lb"}]}}`
+	for _, tc := range []struct {
+		name, nsLabels string
+		admitted       bool
+	}{
+		{"labelled project", `{"opendatahub.io/dashboard":"true","maas.opendatahub.io/gateway-access":"true"}`, true},
+		{"project without the label", `{"opendatahub.io/dashboard":"true"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := maasClusterWithModel(t)
+			mc.f.putJSON(tMaaSGateway, foreignGW)
+			mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":`+tc.nsLabels+`}}`)
+			mc.f.requests = nil
+			res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"})
+			if hasMutation(mc.f, "PUT "+tMaaSGateway) || hasMutation(mc.f, "PATCH "+tMaaSGateway) || hasMutation(mc.f, "DELETE "+tMaaSGateway) {
+				t.Fatalf("the foreign gateway was written: %v", mc.f.mutations())
+			}
+			if !tc.admitted {
+				if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "does not admit routes from proj") {
+					t.Fatalf("res = %+v", res)
+				}
+				if len(mc.f.mutations()) != 0 {
+					t.Fatalf("mutations = %v", mc.f.mutations())
+				}
+				return
+			}
+			if !res.Success {
+				t.Fatalf("publish: %+v", res)
+			}
+			if got := finalSteps(events); got != "check=success gateway=success model=success maas=success ready=success" {
+				t.Fatalf("steps = %s", got)
+			}
+			if !stepSaid(events, "gateway", "The gateway someone else made admits the project.") {
+				t.Fatalf("events = %+v", events)
+			}
+			if !mc.f.has(tMaaSRef) || !readRecord(t, mc.c).published("proj", "qwen25-05b-instruct") {
+				t.Fatalf("not published: record %+v", readRecord(t, mc.c))
+			}
+		})
+	}
+}
+
+// stepSaid: a step event of id carried msg.
+func stepSaid(events []UpdateStepEvent, id, msg string) bool {
+	for _, e := range events {
+		if e.Step == id && e.Message == msg {
+			return true
+		}
+	}
+	return false
+}
+
 // After Connectivity Link and CloudNativePG are uninstalled, OLM leaves their
 // CRDs, so both APIs are still served with no operator to reconcile them
 // (seen live 2026-11-18). A served API alone is not an installed operator:

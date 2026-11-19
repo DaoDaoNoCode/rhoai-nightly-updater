@@ -720,7 +720,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 	result, readErr := readMigrateResult(c, job)
 	m.deleteMigrateJob(job)
 	if readErr != nil {
-		return fail(fmt.Sprintf("The copy Job ended without a readable result (%v). Nothing else was changed; run %s again.", readErr, m.op), "", "no result")
+		return fail(fmt.Sprintf("The copy Job ended without a readable result (%v). Nothing else was changed; run %s again.", readErr, m.op), errorCodeFromK8sErr(readErr), "no result")
 	}
 	if p := result.problem(job.Mode); p != nil {
 		msg := fmt.Sprintf("The copy is not complete: %s. Nothing else was changed: %s.", p.what, m.kept)

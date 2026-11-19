@@ -363,51 +363,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		failures = append(failures, "the Subscription was replaced by someone else while the operation ran, so it was left unchanged")
 	}
 	if operatorTouched {
-		delCtx, cancelDel := postOperationContext(c, restoreCSVBudget)
-		cd := c.WithContext(delCtx)
-		// Delete the Subscription that is there now (the attempt's), guarded
-		// by the UID just read: one an administrator created in the
-		// meantime is reported, and neither deleted nor overwritten. One
-		// the operation already found replaced is not even read.
-		replacedNow := false
-		if !subReplaced {
-			if err := r.deleteOwnSubscription(cd); errors.Is(err, errReplacedMeanwhile) && r.attemptSubscriptionUID != "" {
-				subReplaced, replacedNow = true, true
-				failures = append(failures, "another Subscription replaced the one this operation created, so it and the CSVs installed for it were left unchanged")
-			} else if errors.Is(err, errReplacedMeanwhile) {
-				subReplaced = true
-				failures = append(failures, "the Subscription was replaced by someone else while the restore ran, so it was left unchanged")
-			} else if err != nil {
-				failures = append(failures, "delete the new Subscription: "+err.Error())
-			}
-		}
-		// A replacement found now may already have installed CSVs, which
-		// the list below cannot tell from the attempt's: none is deleted.
-		var csvs []rhoaiCSV
-		var err error
-		if !replacedNow {
-			csvs, err = r.attemptCSVsToRemove(cd)
-		}
-		if err != nil {
-			failures = append(failures, "list CSVs: "+err.Error())
-		}
-		for _, csv := range csvs {
-			gone, err := deleteCSVByUIDAndWait(cd, csv)
-			switch {
-			case errors.Is(err, errReplacedMeanwhile):
-				failures = append(failures, "CSV "+csv.Name+" was replaced by another one while the restore ran, so it was left in place")
-			case err != nil && delCtx.Err() != nil:
-				stillDeleting = append(stillDeleting, csv.Name)
-			case err != nil:
-				failures = append(failures, "delete CSV "+csv.Name+": "+err.Error())
-			case !gone:
-				stillDeleting = append(stillDeleting, csv.Name)
-			}
-		}
-		cancelDel()
-		if len(stillDeleting) > 0 {
-			slog.Warn("CSV from the failed attempt is still being deleted", "csvs", stillDeleting)
-		}
+		failures, stillDeleting, subReplaced = r.removeAttempt(c, failures, subReplaced)
 	}
 	applyCtx, cancelApply := postOperationContext(c, restoreApplyTimeout)
 	defer cancelApply()
@@ -416,22 +372,95 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 		failures = append(failures, r.catalogRestore(r, c)...)
 	}
 	if operatorTouched && r.subscription != nil && !subReplaced {
-		spec := r.subscription["spec"]
-		// A pin the restored spec sets itself (Git's) is kept.
-		if prev, _ := spec.(map[string]any); r.csvRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
-			pinned := make(map[string]any, len(prev)+1)
-			maps.Copy(pinned, prev)
-			pinned["startingCSV"] = r.restoreStartingCSV
-			spec = pinned
-		}
-		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
-			"metadata": map[string]any{"name": SubName, "namespace": SubNS}, "spec": spec}
-		keepArgoTracking(r.subscription, obj)
-		if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
-			failures = append(failures, "Subscription: "+err.Error())
-		}
+		failures = append(failures, r.reapplySubscription(c)...)
 	}
 
+	status, message := r.restoreMessage(failures, stillDeleting, operatorTouched)
+	if result != nil {
+		result.Logs = append(result.Logs, message)
+		result.Message = strings.TrimSpace(result.Message + " " + message)
+	}
+	emit(UpdateStepEvent{Step: restoreStepName, Status: status, Message: message})
+}
+
+// removeAttempt deletes the attempt's Subscription and the CSVs installed
+// for it, within restoreCSVBudget. It returns failures with what failed
+// added, the CSVs still being deleted, and whether the Subscription turned
+// out to be replaced by someone else (subReplaced: already known).
+func (r *operatorRecovery) removeAttempt(c *Client, failures []string, subReplaced bool) ([]string, []string, bool) {
+	var stillDeleting []string
+	delCtx, cancelDel := postOperationContext(c, restoreCSVBudget)
+	cd := c.WithContext(delCtx)
+	// Delete the Subscription that is there now (the attempt's), guarded
+	// by the UID just read: one an administrator created in the
+	// meantime is reported, and neither deleted nor overwritten. One
+	// the operation already found replaced is not even read.
+	replacedNow := false
+	if !subReplaced {
+		if err := r.deleteOwnSubscription(cd); errors.Is(err, errReplacedMeanwhile) && r.attemptSubscriptionUID != "" {
+			subReplaced, replacedNow = true, true
+			failures = append(failures, "another Subscription replaced the one this operation created, so it and the CSVs installed for it were left unchanged")
+		} else if errors.Is(err, errReplacedMeanwhile) {
+			subReplaced = true
+			failures = append(failures, "the Subscription was replaced by someone else while the restore ran, so it was left unchanged")
+		} else if err != nil {
+			failures = append(failures, "delete the new Subscription: "+err.Error())
+		}
+	}
+	// A replacement found now may already have installed CSVs, which
+	// the list below cannot tell from the attempt's: none is deleted.
+	var csvs []rhoaiCSV
+	var err error
+	if !replacedNow {
+		csvs, err = r.attemptCSVsToRemove(cd)
+	}
+	if err != nil {
+		failures = append(failures, "list CSVs: "+err.Error())
+	}
+	for _, csv := range csvs {
+		gone, err := deleteCSVByUIDAndWait(cd, csv)
+		switch {
+		case errors.Is(err, errReplacedMeanwhile):
+			failures = append(failures, "CSV "+csv.Name+" was replaced by another one while the restore ran, so it was left in place")
+		case err != nil && delCtx.Err() != nil:
+			stillDeleting = append(stillDeleting, csv.Name)
+		case err != nil:
+			failures = append(failures, "delete CSV "+csv.Name+": "+err.Error())
+		case !gone:
+			stillDeleting = append(stillDeleting, csv.Name)
+		}
+	}
+	cancelDel()
+	if len(stillDeleting) > 0 {
+		slog.Warn("CSV from the failed attempt is still being deleted", "csvs", stillDeleting)
+	}
+	return failures, stillDeleting, subReplaced
+}
+
+// reapplySubscription re-applies the previous Subscription, pinned to the
+// CSV that was installed when the operation removed it; what failed, if
+// anything.
+func (r *operatorRecovery) reapplySubscription(c *Client) []string {
+	var failures []string
+	spec := r.subscription["spec"]
+	// A pin the restored spec sets itself (Git's) is kept.
+	if prev, _ := spec.(map[string]any); r.csvRemoved && r.restoreStartingCSV != "" && prev != nil && prev["startingCSV"] == nil {
+		pinned := make(map[string]any, len(prev)+1)
+		maps.Copy(pinned, prev)
+		pinned["startingCSV"] = r.restoreStartingCSV
+		spec = pinned
+	}
+	obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
+		"metadata": map[string]any{"name": SubName, "namespace": SubNS}, "spec": spec}
+	keepArgoTracking(r.subscription, obj)
+	if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
+		failures = append(failures, "Subscription: "+err.Error())
+	}
+	return failures
+}
+
+// restoreMessage is the restore step's status and message.
+func (r *operatorRecovery) restoreMessage(failures, stillDeleting []string, operatorTouched bool) (string, string) {
 	var message string
 	status := "success"
 	switch {
@@ -470,11 +499,7 @@ func (r *operatorRecovery) restore(c *Client, result *types.OperationResponse, e
 			message += " The Subscription uses Manual approval: approve its InstallPlan in the console to reinstall the operator."
 		}
 	}
-	if result != nil {
-		result.Logs = append(result.Logs, message)
-		result.Message = strings.TrimSpace(result.Message + " " + message)
-	}
-	emit(UpdateStepEvent{Step: restoreStepName, Status: status, Message: message})
+	return status, message
 }
 
 // stillDeletingNote explains CSVs whose deletion did not finish within the
