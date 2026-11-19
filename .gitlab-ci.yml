@@ -35,14 +35,18 @@ variables:
   IMAGE: quay.io/juntao_wang/rhoai-nightly-updater
   # Where Docker Hub images come from: the job images below and the
   # Containerfile's node and golang bases (build arg DOCKER_HUB). Docker Hub
-  # limits anonymous pulls per IP, which shared runners hit. To pull through
-  # GitLab's Dependency Proxy (a cache in the group) instead, turn on the
-  # proxy (group Settings > Packages and registries > Dependency Proxy >
-  # Enable Proxy; Owner role) and set a project CI/CD variable DOCKER_HUB to
-  # $CI_DEPENDENCY_PROXY_DIRECT_GROUP_IMAGE_PREFIX (keep "Expand variable
-  # reference" on). Runners and the image jobs log in to it with the job's
-  # own credentials. The digests below pin the images either way.
-  DOCKER_HUB: docker.io
+  # limits anonymous pulls per IP, which shared runners hit ("toomanyrequests"),
+  # so they come from mirror.gcr.io, Google's public cache of Docker Hub, which
+  # needs no login and has no such limit. The digests below pin the images,
+  # so the mirror serves exactly the same content or nothing. The mirror holds
+  # only images people pull often: if a new digest is not there yet, the job
+  # fails to pull it; set a project CI/CD variable DOCKER_HUB to docker.io, or
+  # to GitLab's Dependency Proxy (a cache in the group: group Settings >
+  # Packages and registries > Dependency Proxy > Enable Proxy, Owner role;
+  # value $CI_DEPENDENCY_PROXY_DIRECT_GROUP_IMAGE_PREFIX with "Expand variable
+  # reference" on; runners and the image jobs log in to it with the job's own
+  # credentials).
+  DOCKER_HUB: mirror.gcr.io
   # Images pinned by digest; keep in step with the Containerfile.
   GO_IMAGE: $DOCKER_HUB/library/golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
   NODE_IMAGE: $DOCKER_HUB/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
