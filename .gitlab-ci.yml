@@ -335,6 +335,14 @@ release-installer:
   # be set in this file):
   #   PUT /projects/:id/resource_groups/publish-latest  process_mode=newest_first
   resource_group: publish-latest
+  # QUAY_USER/QUAY_TOKEN are meant to be scoped to this environment in the
+  # project's CI/CD variables (Environment scope: quay-publish), so only the
+  # crane jobs receive them; every other job of a main or tag pipeline,
+  # including npm ci with its packages' install scripts, does not.
+  # action: access records no deployment.
+  environment:
+    name: quay-publish
+    action: access
   before_script:
     - go install github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION
     - printf '%s' "$QUAY_TOKEN" | crane auth login "${IMAGE%%/*}" -u "$QUAY_USER" --password-stdin
@@ -405,6 +413,11 @@ renovate:
   stage: test
   image: $RENOVATE_IMAGE
   needs: []
+  # RENOVATE_TOKEN (and GITHUB_COM_TOKEN) scoped to this environment, as
+  # QUAY_* are to quay-publish: no other job receives them.
+  environment:
+    name: renovate
+    action: access
   variables:
     # Renovate clones the project itself, with the bot token.
     GIT_STRATEGY: none
