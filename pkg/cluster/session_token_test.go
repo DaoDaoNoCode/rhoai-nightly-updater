@@ -56,7 +56,7 @@ func TestReadSessionToken(t *testing.T) {
 	if gotAuth != "Bearer "+token || gotPath != "/apis/oauth.openshift.io/v1/useroauthaccesstokens/"+name {
 		t.Fatalf("request %s with %q", gotPath, gotAuth)
 	}
-	if !s.FullScope() || s.ClientName != "app-ns" || s.InactivityTimeoutSeconds != 600 {
+	if !s.FullScope() || s.ExpiresIn != 86400 || !s.Created.Equal(created) {
 		t.Fatalf("token %+v", s)
 	}
 	if left, ok := s.Remaining(created.Add(23 * time.Hour)); !ok || left != time.Hour {

@@ -10,24 +10,18 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// fakeGenAIToken makes genAIToken return a known token for the test.
-func fakeGenAIToken(t *testing.T) {
-	t.Helper()
-	orig := genAIToken
-	t.Cleanup(func() { genAIToken = orig })
-	genAIToken = func(*http.Request) string { return "sa-token" }
-}
-
+// The playground's gen-ai calls carry the token of the client the handler
+// gets (pkg/cluster playgroundAPI): the user's own for Set up and delete,
+// the ServiceAccount's for the status.
 func TestPlaygroundStream(t *testing.T) {
 	setupDevMode(t)
 	allowMutations(t)
-	fakeGenAIToken(t)
 	orig := runPlayground
 	t.Cleanup(func() { runPlayground = orig })
 	var got types.PlaygroundRequest
-	var gotToken string
-	runPlayground = func(_ *cluster.Client, req types.PlaygroundRequest, token string, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
-		got, gotToken = req, token
+	asUser := false
+	runPlayground = func(c *cluster.Client, req types.PlaygroundRequest, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		got, asUser = req, c.ActsAsUser()
 		emit(cluster.UpdateStepEvent{Step: "install", Status: "success", Message: "asked"})
 		return &types.OperationResponse{Success: true, Message: "ready"}, nil
 	}
@@ -53,10 +47,10 @@ func TestPlaygroundStream(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(out, `"step":"install"`) || !strings.Contains(out, `"step":"operation_complete"`) {
 		t.Errorf("%d %s", w.Code, out)
 	}
-	if got.Action != "setup" || got.Project != "p" || len(got.Models) != 2 || gotToken != "user-token" {
-		t.Errorf("request %+v, token %q", got, gotToken)
+	if got.Action != "setup" || got.Project != "p" || len(got.Models) != 2 || !asUser {
+		t.Errorf("request %+v, client acts as the user: %v", got, asUser)
 	}
-	if strings.Contains(out, "user-token") || strings.Contains(out, "sa-token") {
+	if strings.Contains(out, "user-token") || strings.Contains(out, "test-cluster-token") {
 		t.Error("the stream shows the token")
 	}
 	if clusterMutationInProgress.Load() {
@@ -66,12 +60,12 @@ func TestPlaygroundStream(t *testing.T) {
 
 func TestPlaygroundStatusHandler(t *testing.T) {
 	setupDevMode(t)
-	fakeGenAIToken(t)
 	orig := getPlaygroundStatus
 	t.Cleanup(func() { getPlaygroundStatus = orig })
-	var gotProject, gotToken string
-	getPlaygroundStatus = func(_ *cluster.Client, token, project string) (*types.PlaygroundStatus, error) {
-		gotProject, gotToken = project, token
+	var gotProject string
+	asUser := true
+	getPlaygroundStatus = func(c *cluster.Client, project string) (*types.PlaygroundStatus, error) {
+		gotProject, asUser = project, c.ActsAsUser()
 		return &types.PlaygroundStatus{Project: project}, nil
 	}
 	w := httptest.NewRecorder()
@@ -81,26 +75,9 @@ func TestPlaygroundStatusHandler(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	HandlePlaygroundStatus(w, postJSONMethod(http.MethodGet, "/api/resources/playground?project=proj", "tok", ""))
-	if w.Code != http.StatusOK || gotProject != "proj" || gotToken != "sa-token" || strings.Contains(w.Body.String(), "sa-token") {
-		t.Errorf("%d %s (project %q, token %q)", w.Code, w.Body.String(), gotProject, gotToken)
-	}
-}
-
-// The status's gen-ai calls carry the ServiceAccount's token (the cluster
-// token), never the user's; a change's carry the user's own, never a
-// bearer token a client sends.
-func TestGenAITokens(t *testing.T) {
-	inCluster(t)
-	r := postJSON("/api/resources/playground/stream", "user-session-token", `{}`)
-	if got := genAIToken(r); got != "sa-token" {
-		t.Errorf("genAIToken = %q", got)
-	}
-	if got := genAIUserToken(r); got != "user-session-token" {
-		t.Errorf("genAIUserToken = %q", got)
-	}
-	r.Header.Del("X-Forwarded-Access-Token")
-	r.Header.Set("Authorization", "Bearer mallory")
-	if got := genAIUserToken(r); got != "" {
-		t.Errorf("genAIUserToken took the client's bearer token: %q", got)
+	// The status reads with the ServiceAccount's client (so with its
+	// token, the gen-ai calls too), never the user's.
+	if w.Code != http.StatusOK || gotProject != "proj" || asUser || strings.Contains(w.Body.String(), "test-cluster-token") {
+		t.Errorf("%d %s (project %q, client acts as the user: %v)", w.Code, w.Body.String(), gotProject, asUser)
 	}
 }

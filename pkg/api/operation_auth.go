@@ -15,10 +15,15 @@ import (
 // mutationRequirement is the permission every mutation endpoint, and the
 // read-only UI switch, require: any verb on any resource in all namespaces.
 //
-// The ServiceAccount acts cluster-wide on the user's behalf: it installs an
-// operator (OLM grants whatever the CSV asks for), writes the node pull
-// secret in kube-system, deletes admission webhooks and patches CRDs. Adding
-// operators is a cluster-admin task in OpenShift
+// This is the app's own policy, not a copy of a check the API server
+// makes: every change runs with the user's own token, so the API server
+// already refuses each request the user's RBAC does not allow. The gate
+// decides who may start a change at all, before anything is touched, so a
+// user with partial rights cannot leave a half-done change behind. The
+// tool does cluster-admin work: it installs operators (OLM grants whatever
+// the CSV asks for), writes the node pull secret in kube-system, deletes
+// admission webhooks and patches CRDs. Adding operators is a cluster-admin
+// task in OpenShift
 // (https://docs.okd.io/latest/operators/admin/olm-adding-operators-to-cluster.html),
 // so the gate asks for the cluster-admin role's own rule
 // (apiGroups/resources/verbs "*", cluster-wide). RBAC matches a "*" request

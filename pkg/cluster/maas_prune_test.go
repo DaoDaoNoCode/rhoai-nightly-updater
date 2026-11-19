@@ -73,7 +73,7 @@ func TestMaaS_APublishedProjectThatIsGoneLeavesTheGateway(t *testing.T) {
 	}
 	delete(mc.f.fail, "GET /api/v1/namespaces/proj")
 
-	res, err := CleanUp(mc.c, types.CleanupRequest{}, "", nil)
+	res, err := CleanUp(mc.c, types.CleanupRequest{}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("clean up: %+v, %v", res, err)
 	}

@@ -828,7 +828,7 @@ func TestCleanUp_RestoresComponentsLast(t *testing.T) {
 	}
 	_, c := newResourceFake(t)
 	var steps []string
-	res, _ := CleanUp(c, types.CleanupRequest{MLflow: true, Components: []string{"mlflowoperator"}}, "", func(e UpdateStepEvent) { steps = append(steps, e.Step) })
+	res, _ := CleanUp(c, types.CleanupRequest{MLflow: true, Components: []string{"mlflowoperator"}}, func(e UpdateStepEvent) { steps = append(steps, e.Step) })
 	if !res.Success || strings.Join(order, " ") != "mlflow components:mlflowoperator" || steps[len(steps)-1] != "components" {
 		t.Fatalf("res %+v order %v steps %v", res, order, steps)
 	}

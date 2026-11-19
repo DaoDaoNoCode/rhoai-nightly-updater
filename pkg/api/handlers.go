@@ -1818,27 +1818,6 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 	}
 })
 
-// genAIToken and genAIUserToken are the tokens the calls to the RHOAI
-// dashboard's gen-ai API (the Playground feature) carry, and the only
-// places that choose them, as for the cluster API:
-//   - genAIToken, for the status a read shows any signed-in user: the
-//     app's ServiceAccount token (DEV_TOKEN in dev mode), and only in the
-//     calls that the gen-ai API does not pass on to Models as a Service
-//     (pkg/cluster genAICallAllowed): the dashboard sends the caller's
-//     token on to the MaaS gateway, which project editors can attach
-//     routes to.
-//   - genAIUserToken, for Set up, delete and Clean up (mutations): the
-//     signed-in user's own token, the one their client acts with, so the
-//     dashboard acts as them, as when they use it themselves. A MaaS model
-//     may then be added (genAIUserCallAllowed).
-//
-// The token goes only to the dashboard's gen-ai API on this cluster,
-// never into logs, errors or responses.
-var (
-	genAIToken     = func(*http.Request) string { return getClusterToken() }
-	genAIUserToken = extractUserToken
-)
-
 // runPlayground runs a Playground operation; tests replace it.
 var runPlayground = cluster.RunPlayground
 
@@ -1854,7 +1833,7 @@ var HandlePlaygroundStatus = withAuth(func(c *cluster.Client, w http.ResponseWri
 		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
 		return
 	}
-	st, err := getPlaygroundStatus(c, genAIToken(r), project)
+	st, err := getPlaygroundStatus(c, project)
 	if err != nil {
 		code, errorCode := cluster.HTTPStatusForError(err)
 		writeError(w, "Cannot read the playground state: "+err.Error(), code, errorCode)
@@ -1899,7 +1878,7 @@ var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.Res
 
 	beginOperation(w, req.Action+" playground in "+req.Project)
 	slog.Info("mutation", "op", "playground", "action", req.Action, "project", req.Project, "models", len(req.Models))
-	result, runErr := runPlayground(c, req, genAIUserToken(r), forwardSteps(sseWriter))
+	result, runErr := runPlayground(c, req, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, runErr)
 	if runErr != nil {
 		slog.Error("playground failed", "error", runErr)
@@ -2196,11 +2175,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	beginOperation(w, strings.Join(target, ", "))
 	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components)
 
-	token := ""
-	if len(req.Playgrounds) > 0 {
-		token = genAIUserToken(r)
-	}
-	result, cleanupErr := runCleanUp(c, req, token, forwardSteps(sseWriter))
+	result, cleanupErr := runCleanUp(c, req, forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, cleanupErr)
 	if cleanupErr != nil {
 		slog.Error("cleanup failed", "error", cleanupErr)

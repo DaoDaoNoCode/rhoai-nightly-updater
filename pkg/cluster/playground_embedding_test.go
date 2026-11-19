@@ -84,7 +84,7 @@ func TestPlayground_StatusAndChoiceOfTheToolsEmbeddingModel(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.g.models["proj"] = testQwenAndGranite
 	e.putGranite(true)
-	st, err := GetPlaygroundStatus(e.c, testGenAIToken, "proj")
+	st, err := GetPlaygroundStatus(e.c, "proj")
 	if err != nil {
 		t.Fatal(err)
 	}

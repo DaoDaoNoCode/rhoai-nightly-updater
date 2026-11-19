@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -180,6 +181,74 @@ func TestOAuthProxyForwardsOnlyItsOwnSessionToken(t *testing.T) {
 	for _, forbidden := range []string{"--openshift-delegate-urls", "--pass-user-bearer-token", "--skip-auth-regex", "--htpasswd-file"} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("oauth-proxy sets %s, which lets requests through without this tool's own OAuth session", forbidden)
+		}
+	}
+}
+
+// TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace pins the
+// sign-in gate, the 4.0.0 read policy (SECURITY.md, Authorization checks):
+// oauth-proxy lets a user in only when a SubjectAccessReview says they may
+// list pods in redhat-ods-operator, and whoever passes it sees every page
+// read-only, read with the ServiceAccount's token. Exactly one
+// --openshift-sar, with exactly that review: a wider gate would show the
+// ServiceAccount's reads to more people, and the app has no other gate on
+// reads (changes have mutationRequirement).
+func TestOAuthProxySignInGateIsListPodsInTheOperatorNamespace(t *testing.T) {
+	data, err := os.ReadFile("../../deploy/template.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tmpl struct {
+		Objects []struct {
+			Kind string `yaml:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name string   `yaml:"name"`
+							Args []string `yaml:"args"`
+						} `yaml:"containers"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		} `yaml:"objects"`
+	}
+	if err := yaml.Unmarshal(data, &tmpl); err != nil {
+		t.Fatal(err)
+	}
+	var sars []string
+	for _, o := range tmpl.Objects {
+		if o.Kind != "Deployment" {
+			continue
+		}
+		for _, c := range o.Spec.Template.Spec.Containers {
+			if c.Name != "oauth-proxy" {
+				continue
+			}
+			for _, a := range c.Args {
+				if v, ok := strings.CutPrefix(a, "--openshift-sar="); ok {
+					sars = append(sars, v)
+				}
+				if strings.HasPrefix(a, "--openshift-sar-by-host") {
+					t.Errorf("oauth-proxy sets %s: the gate must be the same for every host", a)
+				}
+			}
+		}
+	}
+	if len(sars) != 1 {
+		t.Fatalf("oauth-proxy has %d --openshift-sar flags, want exactly 1: %v", len(sars), sars)
+	}
+	var review map[string]string
+	if err := json.Unmarshal([]byte(sars[0]), &review); err != nil {
+		t.Fatalf("--openshift-sar=%s: %v", sars[0], err)
+	}
+	want := map[string]string{"resource": "pods", "verb": "list", "namespace": "redhat-ods-operator"}
+	if len(review) != len(want) {
+		t.Fatalf("--openshift-sar=%s, want %v", sars[0], want)
+	}
+	for k, v := range want {
+		if review[k] != v {
+			t.Errorf("--openshift-sar %s = %q, want %q", k, review[k], v)
 		}
 	}
 }

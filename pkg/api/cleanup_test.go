@@ -17,7 +17,7 @@ func fakeCleanUp(t *testing.T, run func(req types.CleanupRequest, onStep func(cl
 	orig := runCleanUp
 	t.Cleanup(func() { runCleanUp = orig })
 	var got []types.CleanupRequest
-	runCleanUp = func(_ *cluster.Client, req types.CleanupRequest, _ string, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+	runCleanUp = func(_ *cluster.Client, req types.CleanupRequest, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		got = append(got, req)
 		return run(req, onStep), nil
 	}

@@ -47,7 +47,7 @@ type cleanupPart struct {
 // is published), and the MaaS platform goes last but for the
 // DataScienceCluster components this tool turned on, which go back to what
 // they were once nothing of the clean-up uses them.
-func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []cleanupPart {
+func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	var parts []cleanupPart
 	for _, project := range req.MaaSPublished {
 		parts = append(parts, cleanupPart{
@@ -79,7 +79,7 @@ func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []clea
 		parts = append(parts, cleanupPart{
 			id:    CleanupStepID("playground", project),
 			title: fmt.Sprintf("the playground in '%s'", project),
-			run:   func() (*types.OperationResponse, error) { return cleanupPlayground(c, project, genAIToken) },
+			run:   func() (*types.OperationResponse, error) { return cleanupPlayground(c, project) },
 		})
 	}
 	for _, project := range req.Models {
@@ -106,19 +106,18 @@ func cleanupParts(c *Client, req types.CleanupRequest, genAIToken string) []clea
 // servers in the given projects, then the S3 storage (with storage an
 // earlier version left, and namespace seaweedfs when asked), then MLflow,
 // then the playgrounds and the models in the given projects, then the
-// inference gateway. genAIToken is what the dashboard's gen-ai API is
-// called with for the playgrounds.
+// inference gateway.
 // Each part runs the part's own teardown, with all its guards (only what
 // this tool created, never while something still uses it). Each part is a
 // streamed step; the first part that does not succeed stops the run, and
 // the result names what was deleted and what was not.
-func CleanUp(c *Client, req types.CleanupRequest, genAIToken string, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	emit := func(e UpdateStepEvent) {
 		if onStep != nil {
 			onStep(e)
 		}
 	}
-	parts := cleanupParts(c, req, genAIToken)
+	parts := cleanupParts(c, req)
 	var done []string
 	// Projects of MaaS publications that are gone leave the MaaS gateway
 	// first (maas_prune.go), whatever is selected.

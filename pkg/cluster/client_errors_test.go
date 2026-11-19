@@ -5,8 +5,32 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 )
+
+// A 403 answered to the ServiceAccount's token (a read, the app's records)
+// points at its RBAC from an older template; one answered to the user's
+// own token (every change) is about the user's RBAC, which its error says
+// itself, so it gets no template hint.
+func TestTemplateHintOnlyForTheServiceAccountsRefusals(t *testing.T) {
+	sa := fmt.Errorf("read: %w", &K8sError{Status: 403, Reason: "Forbidden"})
+	user := fmt.Errorf("patch: %w", &K8sError{Status: 403, Reason: "Forbidden", User: true})
+	if templateHint(sa) == "" {
+		t.Error("no hint for the ServiceAccount's 403")
+	}
+	if h := templateHint(user); h != "" {
+		t.Errorf("hint for the user's 403: %q", h)
+	}
+	if !strings.Contains(user.Error(), UserForbiddenMessage) {
+		t.Errorf("the user's 403 does not say whose permissions refused it: %v", user)
+	}
+	for _, err := range []error{nil, errors.New("x"), &K8sError{Status: 404}, &K8sError{Status: 401}} {
+		if h := templateHint(err); h != "" {
+			t.Errorf("%v: hint %q", err, h)
+		}
+	}
+}
 
 func TestHTTPStatusForError(t *testing.T) {
 	cases := []struct {

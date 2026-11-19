@@ -7,40 +7,26 @@ import (
 )
 
 // genAIDashboardRequests are the Kubernetes requests the RHOAI dashboard's
-// gen-ai API makes with the caller's token (this ServiceAccount's) for the
-// calls the Playground feature makes, in any data science project
+// gen-ai API makes with the caller's token for the Playground status's
+// calls (aaa/models, lsd/status), in any data science project
 // (odh-dashboard rhoai-3.6 packages/gen-ai/bff: api/middleware.go
 // RequireAccessToService, integrations/kubernetes/token_k8s_client.go
-// InstallOGXServer, DeleteOGXServer, GetAAModels; validated live on RHOAI
-// 3.6 as the minimum, DESIGN.md §6). The pgvector objects and the router CA
-// are the dashboard's own ServiceAccount's and are not listed.
+// GetAAModels; validated live on RHOAI 3.6 as the minimum, DESIGN.md §6).
+// The status calls it with the ServiceAccount's token, so the template
+// must grant these (otherServerSARequests). Set up, delete and Clean up
+// call it with the signed-in user's own token, so the API server checks
+// what the dashboard does then against that user's RBAC, and the template
+// grants none of it.
 var genAIDashboardRequests = []struct {
 	verb, group, resource, name string
 	why                         string
 }{
-	{"list", "ogx.io", "ogxservers", "", "the API's access review on every call, and the install's check for an existing server"},
-	{"create", "ogx.io", "ogxservers", "", "install"},
-	{"get", "ogx.io", "ogxservers", "lsd-genai-playground", "status, and the ownerReferences"},
-	{"delete", "ogx.io", "ogxservers", "lsd-genai-playground", "delete"},
-	{"create", "", "configmaps", "", "install: the configuration ConfigMaps"},
-	{"get", "", "configmaps", "llama-stack-config", "install"},
-	{"update", "", "configmaps", "llama-stack-config", "install: the ownerReference"},
-	{"delete", "", "configmaps", "llama-stack-config", "an ownerReference needs delete on the object"},
-	{"get", "", "configmaps", "ogx-office-mime-types", "install"},
-	{"update", "", "configmaps", "ogx-office-mime-types", "install: the ownerReference"},
-	{"delete", "", "configmaps", "ogx-office-mime-types", "an ownerReference needs delete on the object"},
-	{"get", "", "configmaps", "ogx-router-ca-bundle", "install"},
-	{"update", "", "configmaps", "ogx-router-ca-bundle", "install: the ownerReference"},
-	{"delete", "", "configmaps", "ogx-router-ca-bundle", "an ownerReference needs delete on the object"},
-	{"get", "", "configmaps", "ogx-trusted-ca-bundle", "install, without odh-trusted-ca-bundle"},
-	{"update", "", "configmaps", "ogx-trusted-ca-bundle", "install: the ownerReference"},
-	{"delete", "", "configmaps", "ogx-trusted-ca-bundle", "an ownerReference needs delete on the object"},
-	{"get", "", "configmaps", "odh-trusted-ca-bundle", "install: the cluster's CA bundle"},
-	{"update", "", "configmaps", "odh-trusted-ca-bundle", "install: the label ogx.io/watch=true the OGX operator's cache needs"},
+	{"list", "ogx.io", "ogxservers", "", "the API's access review on every call"},
+	{"get", "ogx.io", "ogxservers", "lsd-genai-playground", "lsd/status"},
 	{"get", "", "configmaps", "gen-ai-aa-custom-model-endpoints", "aaa/models: the optional custom endpoints"},
-	{"get", "serving.kserve.io", "inferenceservices", "", "aaa/models and install: each model's endpoint"},
+	{"get", "serving.kserve.io", "inferenceservices", "", "aaa/models: each model's endpoint"},
 	{"list", "serving.kserve.io", "inferenceservices", "", "aaa/models"},
-	{"get", "serving.kserve.io", "llminferenceservices", "", "aaa/models and install: each model's endpoint"},
+	{"get", "serving.kserve.io", "llminferenceservices", "", "aaa/models: each model's endpoint"},
 	{"list", "serving.kserve.io", "llminferenceservices", "", "aaa/models"},
 }
 

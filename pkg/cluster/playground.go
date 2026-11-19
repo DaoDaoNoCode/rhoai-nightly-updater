@@ -31,8 +31,8 @@ import (
 // copied here and nothing depends on the release.
 //
 // The calls (odh-dashboard packages/gen-ai, the frontend's own contract),
-// all on the dashboard's address with a bearer token the API layer chooses
-// (pkg/api genAIToken) and passes in as a plain string:
+// all on the dashboard's address with the bearer token of the request's
+// client (the user's own for a change, the ServiceAccount's for the status):
 //
 //	GET    /gen-ai/api/v1/aaa/models?namespace=<ns>   the project's models (no "sources": namespace and custom endpoints only)
 //	GET    /gen-ai/api/v1/maas/models?namespace=<ns>  Models as a Service (the user's token only)
@@ -817,17 +817,19 @@ func apiProblem(err error) (string, string) {
 	return fmt.Sprintf("The dashboard's gen-ai API cannot be reached: %v.", err), "unreachable"
 }
 
-// playgroundAPI is the API for a request, or why it cannot be used.
-func playgroundAPI(c *Client, token string) (genAIAPI, string, string) {
-	if token == "" {
-		return genAIAPI{}, "No token is available to call the dashboard's gen-ai API with (the updater's ServiceAccount token could not be read).", "no_token"
+// playgroundAPI is the API for a request, or why it cannot be used. It
+// calls with the client's own token: the user's for a change's client
+// (NewUserClient), which allows genAIUserCallAllowed, the ServiceAccount's
+// for a read, which allows only genAICallAllowed.
+func playgroundAPI(c *Client) (genAIAPI, string, string) {
+	if c.token == "" {
+		return genAIAPI{}, "No token is available to call the dashboard's gen-ai API with.", "no_token"
 	}
 	base := genAIBaseURL(c)
 	if base == "" {
 		return genAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
 	}
-	// The user's own token only when it is the client's (a change's client).
-	return genAIAPI{ctx: c.ctx, base: base, token: token, asUser: c.asUser && token == c.token}, "", ""
+	return genAIAPI{ctx: c.ctx, base: base, token: c.token, asUser: c.asUser}, "", ""
 }
 
 // playgroundItem is a playground (srv, nil for none) in a project as the
@@ -866,9 +868,9 @@ func playgroundItem(project string, srv *genAIServer, requested bool) types.Play
 
 // GetPlaygroundStatus reports the playground feature: the cluster parts,
 // the playgrounds in the data science projects, and, for project, the
-// models it can use. token is what the gen-ai API is called with.
-func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundStatus, error) {
-	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(token), project)
+// models it can use. The gen-ai API is called with the client's token.
+func GetPlaygroundStatus(c *Client, project string) (*types.PlaygroundStatus, error) {
+	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(c.token), project)
 	if st, ok := playgroundStatusCache.Get(key); ok {
 		return st, nil
 	}
@@ -887,7 +889,7 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); playgroundClusterParts(c, st) }()
-	api, problem, code := playgroundAPI(c, token)
+	api, problem, code := playgroundAPI(c)
 	if problem != "" {
 		st.APIProblem, st.APICode = problem, code
 		wg.Wait()
@@ -923,7 +925,7 @@ func GetPlaygroundStatus(c *Client, token, project string) (*types.PlaygroundSta
 			st.Models = models
 		}()
 	}
-	fo := readPlaygroundFanOut(c, api, token, projects, records)
+	fo := readPlaygroundFanOut(c, api, projects, records)
 	if project != "" && !containsString(fo.projects, project) {
 		// Past the bound: the selected project is read on its own.
 		fo = fo.with(c, api, project, records)
@@ -979,8 +981,8 @@ type playgroundFanOut struct {
 
 var playgroundFanOutCache = newLRU[string, *playgroundFanOut](16)
 
-func readPlaygroundFanOut(c *Client, api genAIAPI, token string, projects []string, records map[string]playgroundRecord) *playgroundFanOut {
-	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), tokenKey(token))
+func readPlaygroundFanOut(c *Client, api genAIAPI, projects []string, records map[string]playgroundRecord) *playgroundFanOut {
+	key := fmt.Sprintf("%d|%s", playgroundStatusGen.Load(), tokenKey(api.token))
 	if fo, ok := playgroundFanOutCache.Get(key); ok {
 		return fo
 	}
@@ -1130,8 +1132,8 @@ func (p *playgroundRun) record(detail string, success bool) {
 // RunPlayground sets up or deletes the Gen AI playground in a project
 // through the dashboard's gen-ai API, as one operation with streamed
 // steps: setup "check", "install", "ready"; teardown "delete", "gone".
-// token is what the gen-ai API is called with.
-func RunPlayground(c *Client, req types.PlaygroundRequest, token string, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+// The gen-ai API is called with the client's token (the user's own).
+func RunPlayground(c *Client, req types.PlaygroundRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	defer PurgePlaygroundStatus()
 	p := &playgroundRun{c: c, emit: onStep, project: req.Project, action: req.Action}
 	first := "check"
@@ -1141,7 +1143,7 @@ func RunPlayground(c *Client, req types.PlaygroundRequest, token string, onStep 
 	if problem := ValidatePlaygroundRequest(req); problem != "" {
 		return p.fail(first, problem, "validation", "invalid request")
 	}
-	api, problem, code := playgroundAPI(c, token)
+	api, problem, code := playgroundAPI(c)
 	if problem != "" {
 		return p.fail(first, problem, code, code)
 	}
@@ -1154,8 +1156,8 @@ func RunPlayground(c *Client, req types.PlaygroundRequest, token string, onStep 
 
 // TeardownPlayground deletes the playground this tool requested in project
 // (Clean up).
-func TeardownPlayground(c *Client, project, token string) (*types.OperationResponse, error) {
-	return RunPlayground(c, types.PlaygroundRequest{Action: "teardown", Project: project}, token, nil)
+func TeardownPlayground(c *Client, project string) (*types.OperationResponse, error) {
+	return RunPlayground(c, types.PlaygroundRequest{Action: "teardown", Project: project}, nil)
 }
 
 // failAPI stops on a gen-ai API error with its explanation.

@@ -7,13 +7,15 @@ import (
 )
 
 // The samples' MLflow calls are authorized by MLflow with access reviews of
-// the app's token, so the RBAC coverage test cannot derive them from
+// the caller's token, so the RBAC coverage test cannot derive them from
 // Kubernetes paths. They come from the fake's rule table instead
 // (mlflowFakeRules), which every samples test runs through:
 // a call outside the tables fails its test, a name outside a rule's names
-// fails it too, TestSampleFakeRulesAreAllUsed fails for an entry no code
-// path uses, and the fakes decide every review with templateAllow, so each
-// add, remove and status test also proves deploy/template.yaml sufficient.
+// fails it too, and TestSampleFakeRulesAreAllUsed fails for an entry no
+// code path uses. The status reads with the ServiceAccount's token, whose
+// reviews the fake decides with templateAllow, so each status test also
+// proves deploy/template.yaml sufficient; add and remove run with the
+// user's own token (userAllow), which the template does not grant.
 
 const mlflowAuthGroup = "mlflow.kubeflow.org"
 
