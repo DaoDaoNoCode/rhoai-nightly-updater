@@ -32,6 +32,7 @@ import {
   playgroundChatModels,
   playgroundHref,
   playgroundIn,
+  playgroundMaaSModels,
   playgroundModelStatus,
   playgroundModelsNotReady,
   playgroundStatusOf,
@@ -101,11 +102,7 @@ export function playgroundCurl(dashboardUrl: string, project: string, model: str
 
 /** What the playground does with a model, in words. */
 function playgroundUse(m: PlaygroundModel, picked: string[] | null): string {
-  if (picked) {
-    if (picked.includes(modelKey(m))) return "Used";
-    return m.source === "maas" ? "Not used unless you choose it (needs a Models as a Service subscription)" : "Not used";
-  }
-  return m.source === "maas" ? "Only with a Models as a Service subscription" : "Used";
+  return picked && !picked.includes(modelKey(m)) ? "Not used" : "Used";
 }
 
 /**
@@ -127,6 +124,7 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
   const usable = playgroundUsableModels(playground, project);
   const otherEmbedding = playgroundOtherEmbeddingModels(playground, project);
   const notReady = playgroundModelsNotReady(playground, project);
+  const maas = playgroundMaaSModels(playground, project);
   const toggle = (m: PlaygroundModel, on: boolean) => onPick?.(on ? [...(picked ?? []).filter((k) => k !== modelKey(m)), modelKey(m)] : (picked ?? []).filter((k) => k !== modelKey(m)));
   return (
     <PartItem id="playground-models" title="Models" scope={`In project ${project}`} status={s} unmanaged={false}
@@ -174,6 +172,15 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
           <Content component="p">
             Set up here does not add {otherEmbedding.map((m) => m.name).join(", ")}: this tool did not set {otherEmbedding.length === 1 ? "it" : "them"} up, so the size of {otherEmbedding.length === 1 ? "its" : "their"} vectors is not known.
             To use one, open the playground&apos;s settings in the dashboard&apos;s Gen AI studio, choose <strong>Embedding</strong> as its type, and enter its embedding dimension (the model card on Hugging Face gives it).
+          </Content>
+        </Alert>
+      )}
+      {maas.length > 0 && (
+        <Alert variant="info" isInline component="div" title="Models as a Service">
+          <Content component="p">
+            Published to Models as a Service: {maas.map((m) => m.displayName || m.name).join(", ")}. Set up does not add them.
+            To use one, open the playground in the dashboard, signed in as yourself, and add it there; it needs a subscription you are in.
+            This tool would have to send its own credentials to the Models as a Service gateway, which the editors of published projects can reach.
           </Content>
         </Alert>
       )}
@@ -286,6 +293,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
   React.useEffect(() => setChosen(null), [project]);
   const picked = chosen ?? defaults;
   const chat = project ? playgroundChatModels(playground, project) : [];
+  const maasModels = project ? playgroundMaaSModels(playground, project) : [];
   const usable = project ? playgroundUsableModels(playground, project) : [];
   const pickedModels = usable.filter((m) => picked.includes(modelKey(m)));
   const models: PlaygroundModelRef[] = pickedModels.map((m) => ({ name: m.name, source: m.source }));
@@ -348,7 +356,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
           <PrimaryAction label={next.label} onClick={() => onSetUp([{ kind: "setup-playground", project, models }])} reason={readOnly ? READ_ONLY_SETUP : baseReason ?? next.reason ?? pickReason} />
         </StackItem>
       )}
-      {project && item?.ready && <StackItem><UsePlayground dashboardUrl={status.dashboardUrl} project={project} model={chat[0]} /></StackItem>}
+      {project && item?.ready && <StackItem><UsePlayground dashboardUrl={status.dashboardUrl} project={project} model={chat[0] ?? maasModels[0]} /></StackItem>}
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
