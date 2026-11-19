@@ -1020,8 +1020,8 @@ func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limi
 		if err != nil {
 			return false, err
 		}
-		a, _ := maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
-		s, _ := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
+		a := maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
+		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
 		msg := fmt.Sprintf("Model reference: %s; access: %s; subscription: %s", firstNonEmpty(r.Status.Phase, "pending"), firstNonEmpty(a, "pending"), firstNonEmpty(s, "pending"))
 		if msg != last {
 			last = msg

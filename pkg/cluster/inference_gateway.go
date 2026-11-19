@@ -398,16 +398,16 @@ func gatewayOwned(meta objectMeta) bool {
 // gatewayObjectPath returns the path of an inference gateway object this
 // tool creates, by kind; only these names, so teardown cannot reach
 // another object and the RBAC rules stay limited to them.
-func gatewayObjectPath(kind string) (string, bool) {
+func gatewayObjectPath(kind string) string {
 	switch kind {
 	case "GatewayClass":
-		return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-ai-inference"), true
+		return clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "openshift-ai-inference")
 	case "ConfigMap":
-		return namespacedPath("v1", "configmaps", "openshift-ingress", "openshift-ai-inference-options"), true
+		return namespacedPath("v1", "configmaps", "openshift-ingress", "openshift-ai-inference-options")
 	case "Gateway":
-		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "openshift-ai-inference"), true
+		return namespacedPath("gateway.networking.k8s.io/v1", "gateways", "openshift-ingress", "openshift-ai-inference")
 	}
-	return "", false
+	return ""
 }
 
 // gatewayCreatePath returns the collection an inference gateway object is
@@ -439,12 +439,12 @@ func gatewayDesc(kind string) string {
 }
 
 func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
-	path, _ := gatewayObjectPath(kind)
+	path := gatewayObjectPath(kind)
 	return readObjectMeta(c, path)
 }
 
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
-	path, _ := gatewayObjectPath("Gateway")
+	path := gatewayObjectPath("Gateway")
 	body, _, err := c.get(path)
 	if IsK8sError(err, 404) {
 		return gatewayObject{}, false, nil
@@ -569,7 +569,7 @@ func inferenceGatewayObjects(domain, certificate string, namespaces []string) ma
 // gatewayClassController reads the controller of the GatewayClass named
 // openshift-ai-inference, when it exists.
 func gatewayClassController(c *Client) (string, error) {
-	path, _ := gatewayObjectPath("GatewayClass")
+	path := gatewayObjectPath("GatewayClass")
 	body, _, err := c.get(path)
 	if err != nil {
 		return "", err
@@ -1209,7 +1209,7 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 		if kind == "GatewayClass" && plan.classForeign || plan.gatewayOnly && kind != "Gateway" {
 			continue
 		}
-		path, _ := gatewayObjectPath(kind)
+		path := gatewayObjectPath(kind)
 		createPath, _ := gatewayCreatePath(kind)
 		k := kind
 		read := func() (objectMeta, bool, error) { return readGatewayObject(c, k) }
@@ -1411,7 +1411,7 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 				continue
 			}
 		}
-		path, _ := gatewayObjectPath(kind)
+		path := gatewayObjectPath(kind)
 		logs = append(logs, fmt.Sprintf("Deleting %s...", gatewayDesc(kind)))
 		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
 			done := ""

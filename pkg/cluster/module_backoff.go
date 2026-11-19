@@ -119,8 +119,8 @@ func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDe
 // (defaults 25%), and when both resolve to 0, maxUnavailable becomes 1. ok
 // is false when a value does not parse, so the caller assumes the worst.
 func (d operatorDeployment) maxUnavailablePods() (int, bool) {
-	surge, _, err1 := resolveIntOrPercent(d.MaxSurge, d.Replicas, true, "25%")
-	unavailable, _, err2 := resolveIntOrPercent(d.MaxUnavailable, d.Replicas, false, "25%")
+	surge, _, err1 := resolveIntOrPercent(d.MaxSurge, d.Replicas, true)
+	unavailable, _, err2 := resolveIntOrPercent(d.MaxUnavailable, d.Replicas, false)
 	if surge == 0 && unavailable == 0 {
 		unavailable = 1
 	}

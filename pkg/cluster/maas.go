@@ -1444,8 +1444,8 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 		slog.Debug("cannot list models for MaaS", "error", err)
 	}
 	rec, recErr := readMaaSRecord(c)
-	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
-	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	authPhase := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
+	subPhase := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	// Who may use the published models, and each one's limit: the
 	// subscription's (one an earlier build wrote reads as the free sample).
 	st.NoUnlimited = maasNoUnlimited(c)
@@ -1644,12 +1644,12 @@ func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 }
 
 // maasPhase is a MaaS object's status.phase ("" when absent).
-func maasPhase(c *Client, path string) (string, bool) {
+func maasPhase(c *Client, path string) string {
 	obj, found, err := readMaaSObject(c, path)
 	if err != nil || !found {
-		return "", false
+		return ""
 	}
-	return obj.Status.Phase, true
+	return obj.Status.Phase
 }
 
 // MaaSPublishedIn reports whether anything of a publication of this tool's

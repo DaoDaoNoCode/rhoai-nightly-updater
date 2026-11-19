@@ -779,7 +779,7 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 			part.State, part.Message = "waiting", "The development database is starting"
 		}
 	case maasDBCNPG:
-		out.parts = append(out.parts, cnpgStatusPart(c, rec, cnpg, cr))
+		out.parts = append(out.parts, cnpgStatusPart(rec, cnpg, cr))
 		part.ManagedByTool = true
 		switch {
 		case st.clusterFound && !toolOwned(st.cluster):
@@ -821,7 +821,7 @@ func maasDatabaseStatus(c *Client, rec maasRecord, infra string, cnpg operatorSt
 
 // cnpgStatusPart is the CloudNativePG operator's part, while the database
 // is a CloudNativePG one.
-func cnpgStatusPart(c *Client, rec maasRecord, cnpg operatorState, cr cnpgReadiness) types.MaaSPart {
+func cnpgStatusPart(rec maasRecord, cnpg operatorState, cr cnpgReadiness) types.MaaSPart {
 	p := types.MaaSPart{ID: "cnpg", Title: "CloudNativePG operator", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
 	_, byTool := rec.Shared["cnpg"]
 	switch {
