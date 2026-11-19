@@ -95,12 +95,12 @@ flowchart TD
 
 ### In the app
 
-<img src="images/masthead-version.png" alt="The masthead shows the release v3.0.1" width="380">
+<img src="images/masthead-version.png" alt="The masthead shows the release v4.0.0" width="380">
 
-1. The masthead shows the running release, for example `v3.0.1`. Builds of
+1. The masthead shows the running release, for example `v4.0.0`. Builds of
    `main` or of a commit show no version here.
 
-<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build v3.0.1 with its commit and build date" width="760">
+<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build v4.0.0 with its commit and build date" width="760">
 
 1. **Help** (`?`) → **About this installation** → **Updater build**: the
    release, its commit and its build date.

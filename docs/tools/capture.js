@@ -567,7 +567,7 @@ async (page) => {
       // appearance button moves into a menu, and the crop window (CW) is
       // narrower. A crop's text size does not depend on the window width.
       await open("/components", "healthy", { width: W });
-      await crop("masthead-version", head, { notes: [{ at: page.getByText("v3.0.1", { exact: true }), n: 1, pos: "l" }] });
+      await crop("masthead-version", head, { notes: [{ at: page.getByText("v4.0.0", { exact: true }), n: 1, pos: "l" }] });
       // Tall enough for the whole Help dialog, so its body does not scroll.
       await page.setViewportSize({ width: vw, height: 2600 });
       await page.getByRole("button", { name: /help/i }).first().click();

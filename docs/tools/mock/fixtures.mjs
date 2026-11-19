@@ -847,11 +847,11 @@ sdkVersion: kfp-2.13.0
 // --- Versions and the update check ---------------------------------------------
 
 export const versionInfo = (overrides = {}) => ({
-  version: "v3.0.1", commit: hex("v3.0.1", 40), buildDate: "2026-10-06T09:00:00Z", goVersion: "go1.25.1",
-  templateRevision: "5", expectedTemplateRevision: "5", templateOutdated: false, ...overrides,
+  version: "v4.0.0", commit: hex("v4.0.0", 40), buildDate: "2026-11-19T09:00:00Z", goVersion: "go1.25.1",
+  templateRevision: "7", expectedTemplateRevision: "7", templateOutdated: false, ...overrides,
 });
 
-export const noUpdate = { current: "v3.0.1", latest: "v3.0.1", updateAvailable: false, majorUpgrade: false };
+export const noUpdate = { current: "v4.0.0", latest: "v4.0.0", updateAvailable: false, majorUpgrade: false };
 
 // --- Diagnostics -----------------------------------------------------------------
 
