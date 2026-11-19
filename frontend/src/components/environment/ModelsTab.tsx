@@ -506,9 +506,11 @@ export function agoWords(at: string, now: number = Date.now()): string {
   return `${d} ${d === 1 ? "day" : "days"} ago`;
 }
 
-const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined }> = ({ check }) => {
+/** The last check: its label and when; brief leaves out the message (a failed check's alert above the details says it). */
+const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined; brief?: boolean }> = ({ check, brief }) => {
   if (!check) return <>Not checked since this app started. Check again calls the model once.</>;
-  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : check.result === "unauthenticated" ? "orange" : "red";
+  // A failed check needs attention (orange, as the part's status), never an error label.
+  const color = check.ok ? "green" : check.result === "not-checked" ? "grey" : "orange";
   const word = check.ok ? (check.result === "maas" ? "Listed by MaaS" : "Answers requests")
     : check.result === "not-checked" ? "Not checked" : check.result === "unauthenticated" ? "Answers without a token" : "Cannot be called";
   return (
@@ -517,7 +519,7 @@ const CallCheckWords: React.FC<{ check: ModelCallCheck | undefined }> = ({ check
         <Label isCompact color={color}>{word}</Label>{" "}
         <Tooltip content={new Date(check.at).toLocaleString()}><Content component="small" tabIndex={0}>Checked {agoWords(check.at)}</Content></Tooltip>
       </StackItem>
-      <StackItem>{check.message}</StackItem>
+      {!brief && <StackItem>{check.message}</StackItem>}
     </Stack>
   );
 };
@@ -660,8 +662,8 @@ const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: name, bus
             <DescriptionListTerm>Can it be called?</DescriptionListTerm>
             <DescriptionListDescription>
               <Stack hasGutter>
-                <StackItem><CallCheckWords check={model.callCheck} /></StackItem>
-                {!readOnly && <StackItem>{checkButton}</StackItem>}
+                <StackItem><CallCheckWords check={model.callCheck} brief={callCheckFailed(model)} /></StackItem>
+                {!readOnly && !callCheckFailed(model) && <StackItem>{checkButton}</StackItem>}
                 {!readOnly && checkError && !isChecking && <StackItem><HelperText><HelperTextItem variant="warning">{checkError}</HelperTextItem></HelperText></StackItem>}
               </Stack>
             </DescriptionListDescription>

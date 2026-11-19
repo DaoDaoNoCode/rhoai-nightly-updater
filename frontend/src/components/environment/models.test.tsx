@@ -431,8 +431,11 @@ describe("Models tab", () => {
     expect(within(part).getByText("Qwen2.5 0.5B Instruct is running but can't be called")).toBeInTheDocument();
     expect(screen.getByText("The last check got no answer; these commands will fail until it passes.")).toBeInTheDocument();
     expect(within(part).getByText(/^Checked /)).toBeInTheDocument();
-    // Check again changes nothing: it runs in place, without a dialog.
+    // Said once: the alert has the message and Check again; the row only the label and when.
+    expect(within(part).getAllByText(/Nothing answers at https:/)).toHaveLength(1);
     const buttons = within(part).getAllByRole("button", { name: "Check again" });
+    expect(buttons).toHaveLength(1);
+    // Check again changes nothing: it runs in place, without a dialog.
     fireEvent.click(buttons[buttons.length - 1]);
     await vi.waitFor(() => expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "check", project: "dev", model: "qwen25-05b-instruct" }]));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
