@@ -27,6 +27,8 @@ type statusAPI struct {
 	infra    string // Infrastructure status.controlPlaneTopology; "" = the field is absent
 	// webhooks is the ValidatingWebhookConfiguration list; "" = none.
 	webhooks string
+	// snapshot is the updater's snapshot ConfigMap; "" = none.
+	snapshot string
 }
 
 func (a *statusAPI) count(path string) int {
@@ -93,6 +95,8 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{"data":{".dockerconfigjson":%q}}`, cfg)
 	case strings.HasSuffix(p, "/datascienceclusters"):
 		_, _ = fmt.Fprint(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
+	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && a.snapshot != "":
+		_, _ = fmt.Fprint(w, a.snapshot)
 	case strings.HasSuffix(p, "/configmaps/rhoai-updater-activity"):
 		_, _ = fmt.Fprint(w, `{"data":{}}`)
 	default:

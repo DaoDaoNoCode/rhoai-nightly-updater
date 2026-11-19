@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -158,6 +159,61 @@ func TestGetStatusGitOps_DoesNotReadControlPlane(t *testing.T) {
 	if a.count(infrastructurePath) != 0 || status.PullSecret.Nodes != nil || status.Cluster.ControlPlane != "" {
 		t.Fatalf("read %d times, status %+v %+v", a.count(infrastructurePath), status.PullSecret, status.Cluster)
 	}
+}
+
+// The status carries the tool's record of the entry it added to the
+// nodes' pull secret (read with the ServiceAccount from its own
+// ConfigMap), so the card offers the removal only for that entry; the
+// gitops profile and a hosted control plane do not read it.
+func TestGetStatus_NodePullRecord(t *testing.T) {
+	t.Setenv("STABLE_SOURCE", "redhat-operators")
+	t.Setenv("STABLE_CHANNEL", "")
+	saved := paddedAuth(exampleAuth("user:pass"))
+	record := func(auth string) string {
+		raw, _ := json.Marshal(nodePullRecord{SecretUID: "u", Key: "quay.io/rhoai", Salt: "aa", AuthSHA256: hashPullAuth("aa", auth), At: "2026-11-18T10:00:00Z", By: "admin"})
+		cm, _ := json.Marshal(map[string]any{"data": map[string]string{nodePullRecordKey: string(raw)}})
+		return string(cm)
+	}
+	snapshotPath := namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	for _, tc := range []struct {
+		name     string
+		topology string
+		snapshot string
+		fail     bool
+		want     *types.NodePullSecretRecord
+	}{
+		{"no record", "HighlyAvailable", "", false, nil},
+		{"recorded with the saved token", "HighlyAvailable", record(saved), false, &types.NodePullSecretRecord{At: "2026-11-18T10:00:00Z", By: "admin", SameToken: true}},
+		{"recorded with an earlier token", "HighlyAvailable", record(nsOldRHOAI), false, &types.NodePullSecretRecord{At: "2026-11-18T10:00:00Z", By: "admin"}},
+		{"record unreadable: none shown", "HighlyAvailable", record(saved), true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakeRegistry(t, newFakeRegistry())
+			a := &statusAPI{csvList: `{"items":[]}`, infra: tc.topology, snapshot: tc.snapshot}
+			if tc.fail {
+				a.failPath = map[string]int{snapshotPath: 403}
+			}
+			status, err := GetStatus(newStatusAPI(t, a))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.PullSecret.Nodes == nil || !jsonEqual(status.PullSecret.Nodes.AddedByTool, tc.want) {
+				t.Fatalf("nodes %+v, want addedByTool %+v", status.PullSecret.Nodes, tc.want)
+			}
+			if len(status.Errors) != 0 {
+				t.Fatalf("errors %v", status.Errors)
+			}
+		})
+	}
+	t.Run("gitops profile: not read", func(t *testing.T) {
+		a := &statusAPI{csvList: `{"items":[]}`, infra: "HighlyAvailable", snapshot: record(saved)}
+		if _, err := GetStatusGitOps(newStatusAPI(t, a)); err != nil {
+			t.Fatal(err)
+		}
+		if n := a.count(snapshotPath); n != 0 {
+			t.Fatalf("snapshot read %d times", n)
+		}
+	})
 }
 
 func TestCatalogPulledFromQuay(t *testing.T) {
