@@ -478,7 +478,8 @@ func lastStatus(events []UpdateStepEvent, step string) string {
 // dashboardOperatorAbsent answers the Dashboard Dev guard's lookup with 404
 // for mocks that return a generic body for unknown paths.
 func dashboardOperatorAbsent(w http.ResponseWriter, r *http.Request) bool {
-	if strings.HasSuffix(r.URL.Path, "/deployments/dashboard-operator") {
+	// No component API: the cluster has no dashboard module (legacy flow).
+	if p := r.URL.Path; p == "/apis/"+componentAPIGroup || strings.HasPrefix(p, "/apis/"+componentAPIGroup+"/") {
 		notFound(w)
 		return true
 	}

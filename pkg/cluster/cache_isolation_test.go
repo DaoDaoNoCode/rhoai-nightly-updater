@@ -23,6 +23,8 @@ func resetClusterCaches() {
 	stableTargetCache.Purge()
 	consoleURLCache.Purge()
 	dashboardURLCache.Purge()
+	rhoaiNamespacesCache.Purge()
+	dashboardTargetCache.Purge()
 	packageIndexMu.Lock()
 	packageIndexCache = map[string]packageIndex{}
 	packageIndexMu.Unlock()
@@ -47,15 +49,17 @@ func isolateClusterCaches(t *testing.T) {
 // one must be emptied by resetClusterCaches too; then update this list.
 func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 	want := map[string]int{
-		"api_versions.go":    1, // apiVersionsCache
-		"components.go":      1, // replicaSetOwnerCache
-		"control_plane.go":   2, // controlPlaneCache
-		"diagnostics_dsc.go": 1, // staleSeen
-		"maas.go":            1, // apiVersionsCache (read)
-		"models_call.go":     1, // callChecks
-		"models_image.go":    2, // capacityCache, planCache
-		"prerequisites.go":   2, // packageIndexCache
-		"status.go":          5, // stableTargetCache, consoleURLCache, dashboardURLCache
+		"api_versions.go":                 1, // apiVersionsCache
+		"components.go":                   1, // replicaSetOwnerCache
+		"control_plane.go":                2, // controlPlaneCache
+		"dashboard_operator_discovery.go": 2, // dashboardTargetCache
+		"diagnostics_dsc.go":              1, // staleSeen
+		"maas.go":                         1, // apiVersionsCache (read)
+		"models_call.go":                  1, // callChecks
+		"models_image.go":                 2, // capacityCache, planCache
+		"prerequisites.go":                2, // packageIndexCache
+		"rhoai_namespaces.go":             1, // rhoaiNamespacesCache
+		"status.go":                       5, // stableTargetCache, consoleURLCache, dashboardURLCache
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {

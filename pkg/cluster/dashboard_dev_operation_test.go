@@ -2,9 +2,7 @@ package cluster
 
 import (
 	"context"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -54,43 +52,6 @@ func TestDashboardDevActive(t *testing.T) {
 			tc.setup(t, f, c)
 			active, err := DashboardDevActive(c)
 			if err != nil || active != tc.active {
-				t.Fatalf("active=%v err=%v", active, err)
-			}
-		})
-	}
-}
-
-func TestDashboardDevActiveLegacyAndErrors(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		dashboard string // rhods-dashboard body; "" means 404
-		operator  int    // dashboard-operator status
-		active    bool
-		wantErr   bool
-	}{
-		{name: "legacy-clean", operator: 404, dashboard: `{"metadata":{},"spec":{"template":{"spec":{"containers":[{"name":"rhods-dashboard","image":"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:1"}]}}}}`},
-		{name: "legacy-unmanaged", operator: 404, dashboard: `{"metadata":{"annotations":{"opendatahub.io/managed":"false"}}}`, active: true},
-		{name: "legacy-pr-image", operator: 404, dashboard: `{"metadata":{},"spec":{"template":{"spec":{"containers":[{"name":"gen-ai-ui","image":"quay.io/opendatahub/odh-mod-arch-gen-ai:pr-12"}]}}}}`, active: true},
-		{name: "legacy-not-installed", operator: 404},
-		{name: "operator-read-error", operator: 503, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch {
-				case strings.HasSuffix(r.URL.Path, "/dashboard-operator"):
-					w.WriteHeader(tc.operator)
-					io.WriteString(w, `{"kind":"Status","status":"Failure"}`)
-				case strings.HasSuffix(r.URL.Path, "/rhods-dashboard") && tc.dashboard != "":
-					io.WriteString(w, tc.dashboard)
-				default:
-					w.WriteHeader(404)
-					io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound"}`)
-				}
-			}))
-			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-			active, err := DashboardDevActive(c)
-			if (err != nil) != tc.wantErr || active != tc.active {
 				t.Fatalf("active=%v err=%v", active, err)
 			}
 		})

@@ -39,10 +39,11 @@ func componentsAPI(t *testing.T, gate *callGate, dscV2, dscV1 mockResponse, almE
 		namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName):                                {body: `{"spec":{"source":"rhoai-catalog-dev"},"status":{"installedCSV":"rhods-operator.3.6.0"}}`},
 		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"):        {body: installedCSVBody(almExamples)},
 		"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io": {body: testDSCCRD()},
-		namespacedPath("apps/v1", "deployments", "redhat-ods-applications", ""):                                         {body: `{"items":[{"metadata":{"name":"rhods-dashboard"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"rhods-dashboard"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:` + strings.Repeat("1", 64) + `"}]}}},"status":{"readyReplicas":2,"availableReplicas":2,"updatedReplicas":2}}]}`},
+		namespacedPath("apps/v1", "deployments", fixtureAppsNS, ""):                                                     {body: `{"items":[{"metadata":{"name":"rhods-dashboard"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"rhods-dashboard"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:` + strings.Repeat("1", 64) + `"}]}}},"status":{"readyReplicas":2,"availableReplicas":2,"updatedReplicas":2}}]}`},
 		namespacedPath("apps/v1", "deployments", "redhat-ods-operator", ""):                                             {body: `{"items":[{"metadata":{"name":"rhods-operator"},"spec":{"selector":{"matchLabels":{"name":"rhods-operator"}},"template":{"spec":{"containers":[{"image":"registry.redhat.io/rhoai/odh-rhel9-operator@sha256:` + strings.Repeat("2", 64) + `"}]}}},"status":{"readyReplicas":0,"unavailableReplicas":1,"conditions":[{"type":"Progressing","status":"False","reason":"ProgressDeadlineExceeded","message":"timed out"}]}}]}`},
-		namespacedPath("v1", "pods", "redhat-ods-applications", ""):                                                     {body: `{"items":[{"metadata":{"name":"rhods-dashboard-abc-1","labels":{"app":"rhods-dashboard","pod-template-hash":"abc"},"ownerReferences":[{"kind":"ReplicaSet","name":"rhods-dashboard-abc","controller":true}]},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true}]}}]}`},
+		namespacedPath("v1", "pods", fixtureAppsNS, ""):                                                                 {body: `{"items":[{"metadata":{"name":"rhods-dashboard-abc-1","labels":{"app":"rhods-dashboard","pod-template-hash":"abc"},"ownerReferences":[{"kind":"ReplicaSet","name":"rhods-dashboard-abc","controller":true}]},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true}]}}]}`},
 		"/apis/config.openshift.io/v1/consoles/cluster":                                                                 {body: `{"status":{"consoleURL":"https://console"}}`},
+		dsciV2List: {body: `{"items":[{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"` + fixtureAppsNS + `"}}]}`},
 	}
 	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -60,8 +61,7 @@ func componentsAPI(t *testing.T, gate *callGate, dscV2, dscV1 mockResponse, almE
 		}
 		_, _ = fmt.Fprint(w, resp.body)
 	})
-	consoleURLCache.Purge()
-	t.Cleanup(consoleURLCache.Purge)
+	isolateClusterCaches(t)
 	return &Client{baseURL: "https://api.test", httpClient: &http.Client{Transport: handlerTransport{api}}, ctx: context.Background()}, &requests
 }
 

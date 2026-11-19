@@ -221,7 +221,7 @@ func TestCleanupStuckComponentCRsRefusals(t *testing.T) {
 			api: func(f *fakeAPI) {
 				f.status("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments", http.StatusForbidden, "Forbidden")
 			}},
-		{name: "no DSCInitialization", module: "trustyai", want: "no DSCInitialization names the applications namespace",
+		{name: "no DSCInitialization", module: "trustyai", want: "no DSCInitialization exists",
 			edit: func(w *moduleOperatorWorld) { w.dropDeployment(trusty.Deployment) },
 			api:  func(f *fakeAPI) { f.json("GET", dsciV2List, 200, `{"items":[]}`) }},
 		// Resolved cases next to them.

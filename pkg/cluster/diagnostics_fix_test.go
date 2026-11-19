@@ -367,7 +367,7 @@ func TestDisableComponent_Preconditions(t *testing.T) {
 		wantPatch bool
 		wantIn    string
 	}{
-		{"dashboard refused (D1)", "dashboard", func(*fakeAPI) {}, false, "dashboard-operator"},
+		{"dashboard refused (D1)", "dashboard", func(*fakeAPI) {}, false, "the dashboard module's operator removes"},
 		{"mlflowoperator refused (D7)", "mlflowoperator", func(*fakeAPI) {}, false, "MLflow CR"},
 		{"aipipelines refused (D8)", "aipipelines", func(*fakeAPI) {}, false, "DSPAs"},
 		{"module operator down", "ray", func(f *fakeAPI) {

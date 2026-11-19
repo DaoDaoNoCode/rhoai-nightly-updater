@@ -40,6 +40,12 @@ type dashboardDevFixture struct {
 	dashboardDeleting bool
 	// readyOnResume reports the operator Ready as soon as it is scaled up.
 	readyOnResume bool
+	// discovery serves the dashboard module discovery by path (nil: none
+	// served, as on a cluster without RHOAI); paths are recorded in reads.
+	discovery map[string]string
+	reads     []string
+	// patchPaths are the paths of every PATCH.
+	patchPaths []string
 }
 
 func dashboardFixtureDeployment(name, container, image, owner string) dashboardDeployment {
@@ -52,13 +58,15 @@ func dashboardFixtureDeployment(name, container, image, owner string) dashboardD
 func newDashboardDevFixture(t *testing.T) (*dashboardDevFixture, *Client) {
 	t.Helper()
 	f := &dashboardDevFixture{workloads: map[string]dashboardDeployment{}}
-	json.Unmarshal([]byte(`{"metadata":{"name":"dashboard-operator","uid":"operator-uid","resourceVersion":"1","annotations":{}},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"dashboard-operator"}},"template":{"spec":{"containers":[{"name":"manager","env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"release-host"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_NOTEBOOKS_IMAGE","value":"release-notebooks"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_FUTURE_IMAGE","value":"release-future"},{"name":"RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE","value":"release-proxy"}]}]}}}}`), &f.operator)
+	json.Unmarshal([]byte(`{"metadata":{"name":"dashboard-module-manager","namespace":"custom-apps","uid":"operator-uid","resourceVersion":"1","annotations":{}},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"dashboard-operator"}},"template":{"spec":{"containers":[{"name":"manager","env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"release-host"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_NOTEBOOKS_IMAGE","value":"release-notebooks"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_FUTURE_IMAGE","value":"release-future"},{"name":"RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE","value":"release-proxy"}]}]}}}}`), &f.operator)
 	f.workloads[dashboardDeploymentName] = dashboardFixtureDeployment(dashboardDeploymentName, dashboardContainerName, "release-host", "dashboard-owner")
 	f.workloads["notebooks-ui"] = dashboardFixtureDeployment("notebooks-ui", "notebooks-ui", "release-notebooks", "dashboard-owner")
 	// No naming convention is required when the original image matches the env.
 	f.workloads["future-workload"] = dashboardFixtureDeployment("future-workload", "custom-name", "release-future", "dashboard-owner")
 	f.workloads["unrelated"] = dashboardFixtureDeployment("unrelated", dashboardContainerName, "release-host", "different-owner")
 	f.workloads["proxy"] = dashboardFixtureDeployment("proxy", "kube-rbac-proxy", "release-proxy", "dashboard-owner")
+	isolateClusterCaches(t)
+	f.discovery = dashboardModuleDiscoveryRoutes(fixtureAppsNS, fixtureOperatorSA)
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
@@ -70,8 +78,13 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	if r.Method == "GET" {
+		f.reads = append(f.reads, r.URL.Path)
+		if body, ok := f.discovery[r.URL.Path]; ok {
+			io.WriteString(w, body)
+			return
+		}
 		switch name {
-		case dashboardOperatorName:
+		case fixtureOperatorName:
 			json.NewEncoder(w).Encode(f.operator)
 		case "dashboards":
 			deletion := ""
@@ -80,7 +93,7 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			io.WriteString(w, `{"items":[{"metadata":{"name":"default-dashboard"`+deletion+`}}]}`)
 		case "deployments", "":
-			items := []dashboardDeployment{}
+			items := []any{dashboardModuleOperatorListItem(f.operator, fixtureOperatorSA)}
 			for _, d := range f.workloads {
 				items = append(items, d)
 			}
@@ -115,7 +128,8 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]any
 	json.NewDecoder(r.Body).Decode(&patch)
 	f.writes = append(f.writes, name)
-	if name == dashboardOperatorName {
+	f.patchPaths = append(f.patchPaths, r.URL.Path)
+	if name == fixtureOperatorName {
 		spec := patch["spec"].(map[string]any)
 		replicas := int(spec["replicas"].(float64))
 		if replicas > 0 && f.failResume {
@@ -373,7 +387,7 @@ func TestDashboardMainDiscoversOwnedComponentsAndRecoversAfterRestart(t *testing
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if *f.operator.Spec.Replicas != 0 || f.writes[0] != dashboardOperatorName {
+	if *f.operator.Spec.Replicas != 0 || f.writes[0] != fixtureOperatorName {
 		t.Fatalf("operator not paused first: %v", f.writes)
 	}
 	if f.workloads["unrelated"].Spec.Template.Spec.Containers[0].Image != "release-host" || f.workloads["proxy"].Spec.Template.Spec.Containers[0].Image != "release-proxy" {
@@ -450,7 +464,7 @@ func TestDashboardTargetStatusDetectsMissingOrReplacedWorkloads(t *testing.T) {
 
 func TestDashboardLegacyTargetStatusPreservesPRReadiness(t *testing.T) {
 	state := types.DashboardState{IsCustomPR: true, PodReady: true}
-	populateDashboardDevStateWithOperator(nil, &state, nil, nil)
+	populateDashboardDevStateWithOperator(nil, &state, dashboardTarget{Legacy: "no Dashboard kind is served"}, nil, nil)
 	if !state.AllDevImagesReady || !state.DevImagesMatchTarget || !state.IsDevMode {
 		t.Fatalf("legacy PR readiness lost: %+v", state)
 	}

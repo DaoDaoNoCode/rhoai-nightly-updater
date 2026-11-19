@@ -19,6 +19,9 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 	var mu sync.Mutex
 	patched := map[string][]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if legacyClusterRoute(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		const prefix = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/"
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/deployments/rhods-operator") {

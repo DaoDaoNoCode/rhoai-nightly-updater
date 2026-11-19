@@ -23,9 +23,7 @@ func TestDashboardPartialDeployAndRevertReportActualFailures(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			var mainPatched, moduleAttempted bool
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/deployments/dashboard-operator") {
-					w.WriteHeader(404)
-					io.WriteString(w, `{"kind":"Status","reason":"NotFound"}`)
+				if legacyClusterRoute(w, r) {
 					return
 				}
 				if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/deployments/model-registry-ui") {

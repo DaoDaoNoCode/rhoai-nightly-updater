@@ -114,19 +114,19 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	)
 	// The applications namespace is the DSCInitialization's; unknown, its
 	// Deployments are left out and the response says why.
-	appNS, appNSErr := appsNamespace(c)
 	resp.OperatorNamespace = SubNS
-	switch {
-	case appNSErr == nil:
-		resp.ApplicationsNamespace = appNS
-		run(func() { appDeps, appErr = getDeployments(c, appNS) })
-		run(func() { appPods, _ = getPodsInNamespace(c, appNS) })
-	case errors.Is(appNSErr, errNoDSCInitialization):
-		appErr = appNSErr // nothing to list yet
-	default:
-		appErr = appNSErr
-		resp.ApplicationsNamespaceError = appNSErr.Error()
-	}
+	var appNS string
+	var appNSErr error
+	run(func() {
+		if appNS, appNSErr = appsNamespace(c); appNSErr != nil {
+			appErr = appNSErr
+			return
+		}
+		var inner sync.WaitGroup
+		inner.Go(func() { appDeps, appErr = getDeployments(c, appNS) })
+		inner.Go(func() { appPods, _ = getPodsInNamespace(c, appNS) })
+		inner.Wait()
+	})
 	run(func() { opDeps, opDepsErr = getDeployments(c, SubNS) })
 	run(func() { opPods, _ = getPodsInNamespace(c, SubNS) })
 	run(func() { resp.ConsoleURL = cachedConsoleURL(c) })
@@ -167,8 +167,12 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	if resp.Deployments == nil {
 		resp.Deployments = []types.DeploymentInfo{}
 	}
-	if appNSErr == nil {
+	switch {
+	case appNSErr == nil:
+		resp.ApplicationsNamespace = appNS
 		matchPodsToDeployments(c, appPods, appNS, resp.Deployments)
+	case !errors.Is(appNSErr, errNoDSCInitialization): // none yet is not an error
+		resp.ApplicationsNamespaceError = appNSErr.Error()
 	}
 	matchPodsToDeployments(c, opPods, SubNS, resp.Deployments)
 

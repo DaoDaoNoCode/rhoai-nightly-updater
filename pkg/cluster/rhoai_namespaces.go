@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -49,6 +50,23 @@ func discoverRHOAINamespaces(c *Client) (rhoaiNamespaces, error) {
 	if ns, ok := rhoaiNamespacesCache.Get(key); ok {
 		return ns, nil
 	}
+	// Status reads ask from several goroutines at once: one read serves them.
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ns, err, _ := rhoaiNamespacesFlight.Do(ctx, key, func(context.Context) (rhoaiNamespaces, error) {
+		if ns, ok := rhoaiNamespacesCache.Get(key); ok {
+			return ns, nil
+		}
+		return readRHOAINamespaces(c, key)
+	})
+	return ns, err
+}
+
+var rhoaiNamespacesFlight flightGroup[rhoaiNamespaces]
+
+func readRHOAINamespaces(c *Client, key string) (rhoaiNamespaces, error) {
 	dscis, apiFound, err := listFirstServed(c, dsciGroup, "/apis/dscinitialization.opendatahub.io/%s/dscinitializations", "dscinitializations", dsciFallbackVersions)
 	switch {
 	case err != nil:

@@ -147,7 +147,7 @@ func TestRepairDSC_RefusedComponents(t *testing.T) {
 	patched := false
 	c := dscRepairD3Server(t, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":{"dashboard":{"managementState":"Managed"},"aipipelines":{"managementState":"Managed"}}}}`, &patched, &mu)
 	r, err := RepairDSC(c, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{"dashboard"})
-	if err != nil || r.Success || !strings.Contains(r.Message, "dashboard") || !strings.Contains(r.Message, "dashboard-operator") {
+	if err != nil || r.Success || !strings.Contains(r.Message, "dashboard") || !strings.Contains(r.Message, "the dashboard module's operator") {
 		t.Fatalf("result = %+v, %v", r, err)
 	}
 	if patched {
