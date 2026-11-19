@@ -62,7 +62,7 @@ describe("The pull secret's node part, by control plane", () => {
     expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-primary");
     // No record: the removal is not offered, and who set an entry is not known.
     expect(screen.queryByRole("button", { name: "Remove from the nodes' pull secret" })).not.toBeInTheDocument();
-    expect(screen.getByText(/^Not known: this tool did not add one/)).toBeInTheDocument();
+    expect(screen.getByText(/^Not known \(not this tool\)/)).toBeInTheDocument();
     expect(document.getElementById("node-pull-secret-command-code")).not.toBeVisible();
     const toggle = screen.getByRole("button", { name: "Do it yourself instead" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");

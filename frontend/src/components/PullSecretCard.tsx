@@ -171,7 +171,7 @@ const NodePullSecret: React.FC<{
   const setByText = {
     tool: `This tool${ownWhen ? ` (${ownWhen})` : ""}${own && !own.sameToken ? ", with an earlier token than the one saved above" : ""}`,
     other: "Someone else: the nodes can pull, and this tool did not add an entry",
-    unknown: "Not known: this tool did not add one. Add to the nodes' pull secret reads the secret with your permissions first, and does not replace an entry it did not add without asking",
+    unknown: "Not known (not this tool): Add to the nodes' pull secret reads that secret with your permissions first, and asks before it replaces an entry it did not add",
   }[setBy];
   // Primary until the nodes are known to pull (the catalog, or a passed
   // check); "Update" when the tool's own entry has an earlier token. With
@@ -204,9 +204,9 @@ const NodePullSecret: React.FC<{
       </StackItem>
       {!managed && (
         <StackItem>
-          <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "18ch" }}>
+          <DescriptionList isCompact isHorizontal horizontalTermWidthModifier={{ default: "12ch" }}>
             <DescriptionListGroup>
-              <DescriptionListTerm>quay.io/rhoai entry set by</DescriptionListTerm>
+              <DescriptionListTerm>Entry set by</DescriptionListTerm>
               <DescriptionListDescription>{setByText}</DescriptionListDescription>
             </DescriptionListGroup>
           </DescriptionList>

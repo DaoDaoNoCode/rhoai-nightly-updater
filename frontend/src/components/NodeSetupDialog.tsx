@@ -160,6 +160,9 @@ export const NodeSetupDialog: React.FC<{
 
   const running = phase === "running";
   const ready = phase === "plan" && !!plan?.ready;
+  // Someone else's entry: if it works, nothing is needed, so the check is
+  // the first thing to try.
+  const checkOffered = phase === "plan" && plan?.refusalCode === "foreign_entry" && !!onCheck;
 
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={() => !running && onClose()}>
@@ -257,10 +260,8 @@ export const NodeSetupDialog: React.FC<{
           <Button variant={text.danger ? "danger" : "primary"} onClick={confirm}>{text.confirm}</Button>
         )}
         {running && <Button variant="primary" isLoading isDisabled>{text.confirm}</Button>}
-        {phase === "plan" && plan?.refusalCode === "foreign_entry" && onCheck && (
-          <Button variant="secondary" onClick={onCheck}>Check that the nodes can pull</Button>
-        )}
-        <Button variant={ready || running ? "link" : "primary"} onClick={onClose} isDisabled={running}>{ready ? "Cancel" : "Close"}</Button>
+        {checkOffered && <Button variant="primary" onClick={onCheck}>Check that the nodes can pull</Button>}
+        <Button variant={ready || running || checkOffered ? "link" : "primary"} onClick={onClose} isDisabled={running}>{ready ? "Cancel" : "Close"}</Button>
       </ModalFooter>
     </Modal>
   );
