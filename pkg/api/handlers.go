@@ -1762,7 +1762,11 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 // API. The user's own token is not used: oauth-proxy's session token is
 // scoped user:info user:check-access, which identifies the user and runs
 // access reviews but cannot act. The token goes only to the dashboard's
-// gen-ai API on this cluster, never into logs, errors or responses.
+// gen-ai API on this cluster, and only in the calls that the gen-ai API
+// does not pass on to Models as a Service (pkg/cluster genAICallAllowed):
+// the dashboard sends the caller's token on to the MaaS gateway, which
+// project editors can attach routes to. Never into logs, errors or
+// responses.
 var genAIToken = func(*http.Request) string { return getClusterToken() }
 
 // runPlayground runs a Playground operation; tests replace it.
