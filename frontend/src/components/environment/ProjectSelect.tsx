@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   Button,
   MenuToggle,
@@ -39,7 +39,14 @@ export const ProjectSelect: React.FC<{
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = `${id}-listbox`;
 
-  useEffect(() => { setInputValue(selected ?? ""); }, [selected]);
+  // A new selection shows in the same render, not one render later from an
+  // effect, which would show the old project in between (React's "adjusting
+  // some state when a prop changes").
+  const [shownSelected, setShownSelected] = useState(selected);
+  if (selected !== shownSelected) {
+    setShownSelected(selected);
+    setInputValue(selected ?? "");
+  }
 
   const shown = filter ? projects.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase())) : projects;
   const optionId = (name: string) => `${id}-option-${name}`;

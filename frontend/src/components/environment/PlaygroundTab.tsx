@@ -289,8 +289,14 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
   const item = project ? playgroundIn(playground, project) : undefined;
   const toolPlaygrounds = (playground?.items ?? []).filter((i) => i.managedByTool && (i.deployed || i.terminating));
   const defaults = React.useMemo(() => (project ? defaultPlaygroundModels(playground, project).map(modelKey) : []), [playground, project]);
+  // Another project starts from its defaults, in the same render: an effect
+  // would reset the choice one render later, dropping a pick made in between.
   const [chosen, setChosen] = React.useState<string[] | null>(null);
-  React.useEffect(() => setChosen(null), [project]);
+  const [chosenFor, setChosenFor] = React.useState(project);
+  if (chosenFor !== project) {
+    setChosenFor(project);
+    setChosen(null);
+  }
   const picked = chosen ?? defaults;
   const chat = project ? playgroundChatModels(playground, project) : [];
   const usable = project ? playgroundUsableModels(playground, project) : [];
