@@ -629,7 +629,10 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 			m.step("publish", "running", e.Message)
 		}
 	}
-	res, err := pub.publish(project, name)
+	// No audience or limit of its own: the subscription keeps who can use
+	// the published models (everyone signed in, when it is the first), and
+	// the model gets the free sample limit; both change on the MaaS tab.
+	res, err := pub.publish(project, name, nil, nil)
 	if err != nil {
 		return nil, err
 	}

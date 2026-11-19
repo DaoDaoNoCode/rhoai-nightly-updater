@@ -2,6 +2,7 @@ import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, ModelExposureKind, ModelExposureOption, PlaygroundModelRef, PrerequisiteFeature, ResourceState } from "../../types";
+import type { AudienceForm, DatabaseForm, LimitForm } from "./maasForms";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
 
@@ -231,10 +232,16 @@ export type Pending =
   | { kind: "setup-playground"; project: string; models?: PlaygroundModelRef[] }
   | { kind: "teardown-playground"; project: string }
   /** Models as a Service: the platform, or this tool's model in a project (one streamed operation). */
-  | { kind: "setup-maas" }
+  /** database: the dialog's choice, while Set up must create one (maasForms.ts). */
+  | { kind: "setup-maas"; database?: DatabaseForm }
   | { kind: "teardown-maas" }
-  | { kind: "publish-maas"; project: string; model: string }
+  /** access: only for the first published model (the audience is the subscription's). */
+  | { kind: "publish-maas"; project: string; model: string; access?: AudienceForm; limit?: LimitForm }
   | { kind: "unpublish-maas"; project: string; model: string }
+  /** MaaS: a published model's limit, who can use the published models, the database (every key is lost). */
+  | { kind: "maas-limit"; project: string; model: string; limit?: LimitForm }
+  | { kind: "maas-access"; access?: AudienceForm }
+  | { kind: "maas-database"; database?: DatabaseForm; confirmKeysLost?: boolean }
   /** A MaaS platform part's own fix (its action lists the changes). */
   | { kind: "maas-action"; action: MaaSActionId };
 
@@ -248,8 +255,9 @@ export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending =>
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
-export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "maas-action" }>;
-export const isMaaSPending = (p: Pending): p is MaaSPending => p.kind === "setup-maas" || p.kind === "teardown-maas" || p.kind === "publish-maas" || p.kind === "unpublish-maas" || p.kind === "maas-action";
+export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
+const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
+export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
 export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
@@ -267,6 +275,8 @@ export interface ConfirmSpec {
   /** A choice that changes what is deleted, shown above the data-loss alert it changes. */
   choice?: React.ReactNode;
   danger?: boolean;
+  /** Confirm stays disabled (a form in the dialog is not complete or valid yet). */
+  confirmDisabled?: boolean;
   extra?: React.ReactNode;
   /** The run's title and its step's line once done ("Delete the pipeline server in x"). */
   runTitle?: string;

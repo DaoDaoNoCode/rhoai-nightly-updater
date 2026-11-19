@@ -18,10 +18,39 @@ only accepts a tag whose version is the top dated section. See
 
 ## [4.0.0] - unreleased
 
-- **Requires a full redeploy** (template revision 6; 3.0.0 has revision 5):
+- **Requires a full redeploy** (template revision 7; 3.0.0 has revision 5):
   `git checkout v4.0.0 && make upgrade`, or the release's `install.sh`.
 
 ### Added
+
+- **MaaS: choose the database.** PostgreSQL is customer-provided in the
+  MaaS docs, so Set up asks: your PostgreSQL (only Secret
+  `maas-db-config` is written; the URL is never shown, logged or kept),
+  the MaaS docs' development database (`scripts/setup-database.sh`
+  reproduced: one pod, no volume, keys lost when it restarts; the
+  default), or a persistent development database on CloudNativePG, now
+  labelled as this tool's own option (it is in neither the MaaS nor the
+  RHOAI docs). A `maas-db-config` someone else wrote is used as it is; a
+  CloudNativePG database an earlier build made is kept and shown as such.
+  **Change database** switches between them for a database this tool set
+  up, while nobody else uses MaaS, after you confirm that every API key is
+  lost. Remove deletes only what the chosen option created. The status
+  warns when the development database's pod was replaced after maas-api
+  started (maas-api makes its tables only at startup).
+- **MaaS: who can use the published models, and each model's limit.**
+  Publish asks for the audience (everyone signed in, or OpenShift groups
+  and users; a group without a Group object is a warning) and the
+  model's token limit: the docs' free (100 a minute) and premium (100,000
+  a day) samples, unlimited (usage still metered), or custom rates checked
+  by the MaaSSubscription API's rules. **Change limit** and **Change who
+  can use them** edit them in place after a server-side dry run; API keys
+  keep working. Published models are adopted as they are (an earlier
+  build's 100 tokens a minute reads as the free sample). The
+  subscription's description names the limits and the audience, so the
+  dashboard's API-key dialog reads right. New RBAC (template revision 7,
+  SECURITY.md audit): Secret `postgres-creds` get, patch, delete;
+  Deployment `postgres` delete; Service `postgres` patch, delete; Groups
+  get.
 
 - **Set up what a feature needs on the cluster, from its tab (backend).**
   `GET /api/resources/prerequisites` reports, per feature, the parts it

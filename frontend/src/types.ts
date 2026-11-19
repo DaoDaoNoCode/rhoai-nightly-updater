@@ -1171,6 +1171,56 @@ export interface MaaSModel extends ResourceState {
   endpoint?: string;
   access?: string;
   subscription?: string;
+  /** Its entry in this tool's subscription (published only). */
+  limit?: MaaSLimit;
+}
+
+// --- MaaS: the database choice and the subscription's settings (4.0.0) ---
+
+/** Where MaaS keeps its API keys: the user's PostgreSQL, the docs' development database, or CloudNativePG (this tool's option). */
+export type MaaSDatabaseKind = "external" | "development" | "cnpg";
+
+/** The database Set up creates, or Change database switches to (pkg/types MaaSDatabaseRequest). The URL is never sent back. */
+export interface MaaSDatabaseRequest {
+  kind: MaaSDatabaseKind;
+  connectionUrl?: string;
+}
+
+/** One database Set up can make, with every change it makes (pkg/types MaaSDatabaseChoice). */
+export interface MaaSDatabaseChoice {
+  id: MaaSDatabaseKind;
+  plan: string[];
+  blockedReason?: string;
+}
+
+/** The database (pkg/types MaaSDatabase). current "": none yet; "adopted": a maas-db-config this tool did not write. */
+export interface MaaSDatabase {
+  current: "" | "adopted" | MaaSDatabaseKind;
+  namespace: string;
+  needed?: boolean;
+  default: MaaSDatabaseKind;
+  choices: MaaSDatabaseChoice[];
+  changeBlockedReason?: string;
+}
+
+/** Who may use this tool's published models (pkg/types MaaSAudience). */
+export interface MaaSAudience {
+  everyone: boolean;
+  groups?: string[];
+  users?: string[];
+}
+
+/** One tokenRateLimits entry: limit tokens per window ("1m", "24h"). */
+export interface MaaSTokenRate {
+  limit: number;
+  window: string;
+}
+
+/** A published model's limit (pkg/types MaaSLimit). */
+export interface MaaSLimit {
+  preset: "free" | "premium" | "unlimited" | "custom";
+  unlimited?: boolean;
+  rates?: MaaSTokenRate[];
 }
 
 /** GET /api/resources/maas (pkg/types MaaSStatus). */
@@ -1184,14 +1234,26 @@ export interface MaaSStatus {
   /** Every change Set up would make now, in order; absent when it has nothing to do. */
   setupPlan?: string[];
   items?: MaaSModel[];
+  /** The database choice; absent from older servers. */
+  database?: MaaSDatabase;
+  /** The audience of this tool's subscription; absent while it does not exist. */
+  access?: MaaSAudience & { warnings?: string[] };
 }
 
 /** The body of POST /api/resources/maas/stream. */
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "change-limit" | "change-access" | "change-database" | MaaSActionId;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;
+  /** setup (when needed) and change-database. */
+  database?: MaaSDatabaseRequest;
+  /** publish (first model) and change-access. */
+  access?: MaaSAudience;
+  /** publish and change-limit. */
+  limit?: MaaSLimit;
+  /** change-database: every API key is lost. */
+  confirmKeysLost?: boolean;
 }
 
 // --- Models routing (pkg/types ModelExposures, ModelCallCheck) ---------------

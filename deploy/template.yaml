@@ -587,6 +587,29 @@ objects:
         resources: ["secrets"]
         resourceNames: ["maas-db-config"]
         verbs: ["patch", "delete"]
+      # The MaaS docs' development database (scripts/setup-database.sh),
+      # when chosen: Secret postgres-creds, Deployment postgres and Service
+      # postgres in the infrastructure namespace, only these names (create,
+      # get and list are the existing rules above). Removed by Remove or
+      # Change database only when this tool created them. SECURITY.md, "MaaS
+      # database choice and subscription settings (4.0.0)".
+      - apiGroups: [""]
+        resources: ["secrets"]
+        resourceNames: ["postgres-creds"]
+        verbs: ["get", "patch", "delete"]
+      - apiGroups: ["apps"]
+        resources: ["deployments"]
+        resourceNames: ["postgres"]
+        verbs: ["delete"]
+      - apiGroups: [""]
+        resources: ["services"]
+        resourceNames: ["postgres"]
+        verbs: ["patch", "delete"]
+      # Whether the OpenShift groups named for the published MaaS models
+      # exist (a warning when not); read-only, by the name given
+      - apiGroups: ["user.openshift.io"]
+        resources: ["groups"]
+        verbs: ["get"]
       # Connectivity Link: the Kuadrant CR, created as platform-setup.md
       # does when there is none (create cannot be limited by name; never
       # changed or deleted), and Authorino's TLS as setup-authorino-tls.sh
@@ -932,7 +955,7 @@ objects:
                 # Must match api.ExpectedTemplateRevision; bump both when a
                 # template change matters to the running code.
                 - name: TEMPLATE_REVISION
-                  value: "6"
+                  value: "7"
                 # The update check (GET /api/update-check).
                 - name: IMAGE_REPOSITORY
                   value: ${IMAGE_REPOSITORY}

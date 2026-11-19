@@ -65,15 +65,19 @@ func maasWriteCode(err error) string {
 
 // ValidateMaaSRequest returns why req cannot run, or "".
 func ValidateMaaSRequest(req types.MaaSRequest) string {
+	// Which of the optional fields each action takes.
+	var takesDB, takesAccess, takesLimit bool
 	switch req.Action {
-	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies":
+	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies", "change-access", "change-database":
 		if req.Project != "" {
 			return "the platform takes no project"
 		}
 		if req.Model != "" {
 			return "the platform takes no model"
 		}
-	case "publish", "unpublish":
+		takesDB = req.Action == "setup" || req.Action == "change-database"
+		takesAccess = req.Action == "change-access"
+	case "publish", "unpublish", "change-limit":
 		if !playgroundProjectRegex.MatchString(req.Project) {
 			return "a valid project is required"
 		}
@@ -84,8 +88,48 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 		if entry.Type != modelTypeChat {
 			return "only chat models are published to MaaS"
 		}
+		takesAccess = req.Action == "publish"
+		takesLimit = req.Action == "publish" || req.Action == "change-limit"
 	default:
-		return "action must be setup, teardown, publish, unpublish, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
+		return "action must be setup, teardown, publish, unpublish, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
+	}
+	switch {
+	case req.Database != nil && !takesDB:
+		return req.Action + " takes no database"
+	case req.Access != nil && !takesAccess:
+		return req.Action + " takes no audience"
+	case req.Limit != nil && !takesLimit:
+		return req.Action + " takes no limit"
+	case req.ConfirmKeysLost && req.Action != "change-database":
+		return req.Action + " takes no confirmation"
+	}
+	switch req.Action {
+	case "change-database":
+		if req.Database == nil {
+			return "choose the database to change to"
+		}
+		if !req.ConfirmKeysLost {
+			return "changing the database loses every API key: confirm it"
+		}
+	case "change-access":
+		if req.Access == nil {
+			return "say who can use the published models"
+		}
+	case "change-limit":
+		if req.Limit == nil {
+			return "give the model's new limit"
+		}
+	}
+	if req.Database != nil {
+		if problem := validateMaaSDatabaseRequest(*req.Database); problem != "" {
+			return problem
+		}
+	}
+	if _, problem := parseMaaSAudience(req.Access); req.Access != nil && problem != "" {
+		return problem
+	}
+	if _, problem := parseMaaSLimit(req.Limit); problem != "" {
+		return problem
 	}
 	return ""
 }
@@ -107,7 +151,7 @@ func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*t
 	}
 	switch req.Action {
 	case "setup":
-		return m.setup()
+		return m.setup(req.Database)
 	case "teardown":
 		return m.teardown()
 	case "upgrade-rhcl":
@@ -126,7 +170,15 @@ func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*t
 		m.target = "the old tier policies"
 		return m.removeTierPolicies()
 	case "publish":
-		return m.publish(req.Project, entry.Name)
+		return m.publish(req.Project, entry.Name, req.Access, req.Limit)
+	case "change-limit":
+		return m.changeLimit(req.Project, entry.Name, req.Limit)
+	case "change-access":
+		m.target = "who can use the published MaaS models"
+		return m.changeAccess(req.Access)
+	case "change-database":
+		m.target = "the MaaS database"
+		return m.changeDatabase(req.Database)
 	}
 	return m.unpublish(req.Project, entry.Name, true)
 }
@@ -383,7 +435,11 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 	}
 	var objs []obj
 	owned := 0
-	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster"} {
+	// The gateway and its options, then the database: maas-db-config and
+	// every database object of this tool, whichever kind it set up (a
+	// Change database that stopped half-way leaves two). The user's own
+	// database has no object here; one this tool did not create is kept.
+	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster", "PostgresDeployment", "PostgresService", "PostgresSecret"} {
 		meta, found, err := readObjectMeta(c, maasObjectPath(kind, infra))
 		if err != nil && (kind != "Cluster" || !IsK8sError(err, 404)) {
 			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), errorCodeFromK8sErr(err), "read failed")
@@ -516,18 +572,26 @@ func (m *maasRun) teardown() (*types.OperationResponse, error) {
 		}
 	}
 	m.step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer. GatewayClass "+maasGatewayClass+" stays: it is OpenShift's shared class for gateways and costs nothing on its own.")
+	var deleted []string
 	for _, o := range objs[2:] {
-		if _, res := del("database", o); res != nil {
+		gone, res := del("database", o)
+		if res != nil {
 			return res, nil
 		}
+		if gone {
+			deleted = append(deleted, maasDesc(o.kind, infra))
+		}
 	}
-	if rec.DBNamespace != "" {
-		rec.DBNamespace = ""
+	if rec.DBNamespace != "" || rec.Database != "" {
+		rec.DBNamespace, rec.Database = "", ""
 		if err := writeMaaSRecord(c, rec); err != nil {
 			return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 		}
 	}
-	dbMsg := "The database and its connection Secret are deleted (with the database's volume)."
+	dbMsg := "Nothing of the database was created by this tool."
+	if len(deleted) > 0 {
+		dbMsg = "Deleted: " + strings.Join(deleted, ", ") + " (a database's data goes with it). A PostgreSQL of your own is never touched."
+	}
 	if ns := rec.InfraNamespace; ns != "" {
 		kept, err := m.deleteInfraNamespace(&rec, ns)
 		if err != nil {
@@ -581,34 +645,6 @@ func maasModelRefObjectFor(c *Client, project, name, displayName, description, m
 		},
 		"spec": map[string]interface{}{"modelRef": map[string]interface{}{"kind": "LLMInferenceService", "name": name}},
 	}
-}
-
-// maasAccessObjects are the tool's MaaSSubscription and MaaSAuthPolicy for
-// the published models (the docs' free sample: system:authenticated, 100
-// tokens a minute, priority 10).
-func maasAccessObjects(c *Client, pubs []maasPub, priority int) (map[string]interface{}, map[string]interface{}) {
-	var subRefs, authRefs []interface{}
-	for _, p := range pubs {
-		subRefs = append(subRefs, map[string]interface{}{"name": p.model, "namespace": p.project,
-			"tokenRateLimits": []interface{}{map[string]interface{}{"limit": 100, "window": "1m"}}})
-		authRefs = append(authRefs, map[string]interface{}{"name": p.model, "namespace": p.project})
-	}
-	group := map[string]interface{}{"groups": []interface{}{map[string]interface{}{"name": maasSubjectGroup}}, "users": []interface{}{}}
-	sub := map[string]interface{}{
-		"apiVersion": maasAPI(c),
-		"kind":       "MaaSSubscription",
-		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-subscription", "namespace": maasTenantNamespace, "labels": toolLabels(),
-			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "100 tokens a minute for every signed-in user"}},
-		"spec": map[string]interface{}{"owner": group, "modelRefs": subRefs, "priority": priority},
-	}
-	auth := map[string]interface{}{
-		"apiVersion": maasAPI(c),
-		"kind":       "MaaSAuthPolicy",
-		"metadata": map[string]interface{}{"name": "rhoai-nightly-updater-access", "namespace": maasTenantNamespace, "labels": toolLabels(),
-			"annotations": map[string]interface{}{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": "Every signed-in user may use this tool's published models"}},
-		"spec": map[string]interface{}{"modelRefs": authRefs, "subjects": group},
-	}
-	return sub, auth
 }
 
 func maasAccessPath(c *Client, kind string) string {
@@ -692,9 +728,13 @@ func maasLivePubs(c *Client, rec maasRecord, with, without maasPub) ([]maasPub, 
 	return out, nil
 }
 
-func (m *maasRun) publish(project, name string) (*types.OperationResponse, error) {
+func (m *maasRun) publish(project, name string, access *types.MaaSAudience, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
 	c := m.c
 	m.step("check", "running", "Checking the platform and the model...")
+	limit, problem := parseMaaSLimit(limitReq)
+	if problem != "" {
+		return m.fail("check", "Invalid limit: "+problem+". Nothing was changed.", "validation", "invalid limit")
+	}
 	st, err := GetMaaSStatus(c)
 	if err != nil {
 		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "status failed")
@@ -805,7 +845,37 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), errorCodeFromK8sErr(err), "ref read failed")
 	}
-	sub, auth := maasAccessObjects(c, live, priority)
+	// The other models keep their limits, and the audience is the
+	// subscription's: Publish sets it only for the first model.
+	cur, err := readMaaSToolSubscription(c)
+	if err != nil {
+		return m.fail("check", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "subscription read failed")
+	}
+	aud := maasAudience{everyone: true}
+	if cur.found {
+		aud = cur.audience
+	}
+	if access != nil {
+		want, problem := parseMaaSAudience(access)
+		if problem != "" {
+			return m.fail("check", "Invalid audience: "+problem+". Nothing was changed.", "validation", "invalid audience")
+		}
+		if cur.found && len(live) > 1 && !want.equal(cur.audience) {
+			return m.fail("check", fmt.Sprintf("Who can use the published models is set for all of them (now %s), and other models are published. Change it with Change who can use them on the MaaS tab, then publish. Nothing was changed.", cur.audience.text()), "conflict", "audience differs")
+		}
+		aud = want
+	}
+	limits := map[string]maasLimit{}
+	for _, p := range live {
+		limits[p.key()] = cur.limitOf(p)
+	}
+	limits[maasPub{project, name}.key()] = limit
+	sub, auth := maasAccessObjects(c, live, limits, aud, priority)
+	if !aud.everyone {
+		for _, warning := range maasGroupWarnings(c, aud.groups) {
+			m.step("check", "running", warning)
+		}
+	}
 	// The catalog's display name and description (the text setup writes on
 	// the model), never the object's: MaaS shows them to every signed-in
 	// user, and a project editor can change the annotations.
@@ -825,10 +895,13 @@ func (m *maasRun) publish(project, name string) (*types.OperationResponse, error
 		{"MaaSAuthPolicy " + maasAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
 	} {
 		if err := applyMaaSObject(c, w.desc, w.path, w.create, w.obj, true); err != nil {
+			if why := unlimitedRefusal(err, limit); why != "" && strings.HasPrefix(w.desc, "MaaSSubscription") {
+				return m.fail("check", why+" Nothing was changed.", "prerequisites", "unlimited not served")
+			}
 			return m.fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", w.desc, err), maasWriteCode(err), "dry run failed")
 		}
 	}
-	m.step("check", "success", "The platform is ready and the model can be published.")
+	m.step("check", "success", fmt.Sprintf("The platform is ready and the model can be published: %s, for %s.", limit.text(), aud.text()))
 
 	if err := writeMaaSRecord(c, rec); err != nil {
 		return m.fail("gateway", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "record write failed")
@@ -958,7 +1031,17 @@ func (m *maasRun) unpublish(project, name string, stepped bool) (*types.Operatio
 
 	// The access policy and the subscription.
 	say("maas", "running", "Removing the model from the access policy and the subscription...")
-	sub, auth := maasAccessObjects(c, live, maasOwnSubscriptionPriority(c))
+	// The models left keep their limits and the audience (fail closed: a
+	// subscription that cannot be read is not rewritten with defaults).
+	cur, err := readMaaSToolSubscription(c)
+	if err != nil {
+		return m.fail("maas", err.Error()+" Nothing was changed.", errorCodeFromK8sErr(err), "subscription read failed")
+	}
+	limits := map[string]maasLimit{}
+	for _, p := range live {
+		limits[p.key()] = cur.limitOf(p)
+	}
+	sub, auth := maasAccessObjects(c, live, limits, cur.audience, maasOwnSubscriptionPriority(c))
 	for _, w := range []struct {
 		kind, desc string
 		obj        map[string]interface{}

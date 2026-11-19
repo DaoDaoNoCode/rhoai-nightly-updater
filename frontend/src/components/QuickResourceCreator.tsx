@@ -47,7 +47,7 @@ import { errorResult } from "../outcomes";
 import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ResourcePending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, isTerminating, nextStep, problemTitle, terminalReason, type ResourceKind } from "./environment/resourceRow";
 import { ModelsTab, modelsConfirm, modelsSteps } from "./environment/ModelsTab";
 import { PlaygroundTab, playgroundConfirm, playgroundSteps } from "./environment/PlaygroundTab";
-import { MaaSTab, maasConfirm, maasSteps, useMaaSStatus } from "./environment/MaaSTab";
+import { MaaSTab, maasConfirm, maasRequestOf, maasSteps, useMaaSStatus } from "./environment/MaaSTab";
 import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
 import { envStatusText } from "./environment/resourceStatus";
 import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
@@ -374,7 +374,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project), p.project];
     }
   };
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   /** A confirmed Models change: one streamed request whose steps the run dialog shows. */
   const startModels = (p: ModelsPending) => {
@@ -439,9 +439,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const startMaaS = (p: MaaSPending) => {
     if (run.run?.running) return;
     const spec = maasConfirm(p, maas);
-    const action = p.kind === "maas-action" ? p.action : p.kind === "setup-maas" ? "setup" : p.kind === "teardown-maas" ? "teardown" : p.kind === "publish-maas" ? "publish" : "unpublish";
-    const project = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.project : null;
-    const model = p.kind === "publish-maas" || p.kind === "unpublish-maas" ? p.model : null;
+    const req = maasRequestOf(p, maas);
+    const { action } = req;
+    const project = req.project ?? null;
+    const model = req.model ?? null;
     setPending(null);
     setSampleRun(null);
     setModelsRun(null);
@@ -456,7 +457,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       setMaaSRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS({ action, ...(project ? { project } : {}), ...(model ? { model } : {}) },
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
@@ -928,6 +929,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           choice={modal.choice}
           confirmLabel={modal.confirm}
           confirmVariant={modal.danger ? "danger" : "primary"}
+          confirmDisabled={modal.confirmDisabled}
           onConfirm={() => pending && execute(pending)}
           onCancel={() => setPending(null)}
         >

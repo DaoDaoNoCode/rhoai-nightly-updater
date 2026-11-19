@@ -146,6 +146,11 @@ type maasRecord struct {
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
 	DBNamespace string `json:"dbNamespace,omitempty"`
+	// Database is the database setup chose and made there ("external",
+	// "development" or "cnpg"; maas_database.go), written before its
+	// objects. Empty in records of earlier builds, which made only
+	// CloudNativePG databases.
+	Database string `json:"database,omitempty"`
 	// AIGatewayChanged: setup set aigateway's managementState to Managed,
 	// and PreviousAIGateway is what it was; removal restores it as it does
 	// modelsAsAService.
@@ -505,6 +510,12 @@ func maasObjectPath(kind, ns string) string {
 		return namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, "maas-db")
 	case "Secret":
 		return namespacedPath("v1", "secrets", ns, "maas-db-config")
+	case "PostgresSecret":
+		return namespacedPath("v1", "secrets", ns, "postgres-creds")
+	case "PostgresDeployment":
+		return namespacedPath("apps/v1", "deployments", ns, "postgres")
+	case "PostgresService":
+		return namespacedPath("v1", "services", ns, "postgres")
 	}
 	return ""
 }
@@ -517,8 +528,12 @@ func maasCreatePath(kind, ns string) string {
 		return withToolFieldManager(namespacedPath("v1", "configmaps", "openshift-ingress", ""))
 	case "Cluster":
 		return withToolFieldManager(namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, ""))
-	case "Secret":
+	case "Secret", "PostgresSecret":
 		return withToolFieldManager(namespacedPath("v1", "secrets", ns, ""))
+	case "PostgresDeployment":
+		return withToolFieldManager(namespacedPath("apps/v1", "deployments", ns, ""))
+	case "PostgresService":
+		return withToolFieldManager(namespacedPath("v1", "services", ns, ""))
 	}
 	return ""
 }
@@ -535,6 +550,12 @@ func maasDesc(kind, ns string) string {
 		return "CloudNativePG Cluster " + ns + "/" + maasDBCluster
 	case "Secret":
 		return "Secret " + ns + "/" + maasDBConfigSecret
+	case "PostgresSecret":
+		return "Secret " + ns + "/" + maasPOCCreds
+	case "PostgresDeployment":
+		return "Deployment " + ns + "/" + maasPOCName
+	case "PostgresService":
+		return "Service " + ns + "/" + maasPOCName
 	}
 	return kind
 }
@@ -1168,94 +1189,15 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	}
 	part(kPart)
 
-	// CloudNativePG, for this tool's database; not needed when
-	// maas-db-config names someone else's.
-	dbNS := firstNonEmpty(rec.DBNamespace, infra)
-	secMeta, secFound, secErr := readObjectMeta(c, maasObjectPath("Secret", dbNS))
-	foreignDB := secErr == nil && secFound && !toolOwned(secMeta)
-	cnpgServed, cnpgErr := groupServed(c, cnpgGroup)
-	if cnpgErr == nil && cnpgServed && !cnpg.installed() {
-		// Its API alone is not an installed operator (controllerDeployed).
-		cnpgServed, cnpgErr = controllerDeployed(c, cnpgController)
+	// The database, as chosen (maas_database.go), and CloudNativePG while
+	// it is the database.
+	dbs := maasDatabaseStatus(c, rec, infra, cnpg, cnpgReadErr)
+	for _, p := range dbs.parts {
+		part(p)
 	}
-	if !foreignDB {
-		cnpgPart := types.MaaSPart{ID: "cnpg", Title: "CloudNativePG operator", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
-		_, cnpgByTool := rec.Shared["cnpg"]
-		switch {
-		case cnpgErr != nil:
-			cnpgPart.State, cnpgPart.Message = "unknown", cnpgErr.Error()
-		case cnpgServed:
-			cnpgPart.ManagedByTool = cnpgByTool && cnpg.sub != nil && toolOwned(cnpg.sub.Metadata)
-			cnpgPart.NotManaged = !cnpgPart.ManagedByTool
-			cnpgPart.State, cnpgPart.Message = "ready", "Its API (postgresql.cnpg.io) is served"
-			if cnpg.installed() {
-				cnpgPart.Message = fmt.Sprintf("Version %s runs in %s", cnpg.version, cnpg.csvNS)
-			}
-		case cnpgReadErr != nil:
-			cnpgPart.State, cnpgPart.Message = "unknown", "Cannot read the installed operators: "+cnpgReadErr.Error()
-		case cnpg.installed() || cnpg.pending() != nil:
-			cnpgPart.ManagedByTool, cnpgPart.NotManaged = cnpgByTool, !cnpgByTool
-			cnpgPart.State, cnpgPart.Message = "waiting", "OLM is installing it"
-		default:
-			cnpgPart.State = "missing"
-			if p, msg, _ := planOperatorInstall(c, cnpgOperator); msg != "" {
-				cnpgPart.State, cnpgPart.Message = "problem", "Not installed, and Set up cannot install it: "+msg+" Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md)."
-				blockers = append(blockers, cnpgPart.Message)
-			} else {
-				cnpgPart.Message = fmt.Sprintf("Not installed. Set up installs version %s from certified-operators (channel %s) for this tool's database. Or a cluster-admin creates Secret maas-db-config for a PostgreSQL of their own (maas-setup.md).", p.head, p.channel)
-				cnpgPart.Commands = cnpgInstallCommands(p.channel)
-				plan(fmt.Sprintf("Install CloudNativePG %s: %sSubscription %s/%s (package %s, channel %s, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway)", p.head, operatorPlanPrefix(p), cnpgOperator.namespace, cnpgOperator.subName, cnpgOperator.pkg, p.channel))
-			}
-		}
-		part(cnpgPart)
-	}
-
-	// The database and its connection Secret, where setup put them.
-	dbPart := types.MaaSPart{ID: "database", Title: "Database (PostgreSQL) and maas-db-config", DocURL: maasDocsBase + "install/maas-setup.md#database-setup"}
-	clMeta, clFound, clReady, clPhase, clErr := readMaaSDBCluster(c, dbNS)
-	_, nsFound, nsErr := readObjectMeta(c, "/api/v1/namespaces/"+dbNS)
-	dbPlan := fmt.Sprintf("Run a one-instance CloudNativePG database %s/%s (1 GiB volume, for development and test) and write Secret %s/%s with its address", dbNS, maasDBCluster, dbNS, maasDBConfigSecret)
-	switch {
-	case secErr != nil:
-		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read Secret %s/%s: %v", dbNS, maasDBConfigSecret, secErr)
-	case foreignDB:
-		dbPart.State, dbPart.NotManaged = "ready", true
-		dbPart.Message = fmt.Sprintf("Secret %s/%s exists: maas-api uses the database it names", dbNS, maasDBConfigSecret)
-	case clErr == nil && clFound && toolOwned(clMeta):
-		dbPart.ManagedByTool = true
-		switch {
-		case clReady && secFound:
-			dbPart.State, dbPart.Message = "ready", fmt.Sprintf("CloudNativePG %s/%s runs (1 instance, development and test use); Secret %s set", dbNS, maasDBCluster, maasDBConfigSecret)
-		case clReady:
-			dbPart.State, dbPart.Message = "missing", "The database runs; its connection Secret is not written yet"
-			plan(fmt.Sprintf("Write Secret %s/%s with the database's address", dbNS, maasDBConfigSecret))
-		default:
-			dbPart.State, dbPart.Message = "waiting", "The database is starting: "+clPhase
-		}
-	case clErr == nil && clFound:
-		dbPart.State, dbPart.NotManaged = "problem", true
-		dbPart.Message = fmt.Sprintf("%s exists and was not created by this tool, so Set up leaves it alone. A cluster-admin creates Secret %s/%s for it, or removes it.", maasDesc("Cluster", dbNS), dbNS, maasDBConfigSecret)
-		blockers = append(blockers, dbPart.Message)
-	case nsErr != nil:
-		dbPart.State, dbPart.Message = "unknown", fmt.Sprintf("Cannot read namespace %s: %v", dbNS, nsErr)
-	case !nsFound:
-		if _, ok := maasInfraNamespacePath(dbNS); ok {
-			dbPart.State = "missing"
-			dbPart.Message = fmt.Sprintf("Set up creates namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does (RHOAI makes it only once MaaS is on, and the database must come first), then runs a one-instance CloudNativePG database there (development and test use).", dbNS)
-			plan(fmt.Sprintf("Create namespace %s (the AI gateway's infrastructure namespace; recorded, and deleted by Remove when nothing else is in it)", dbNS))
-			plan(dbPlan)
-		} else {
-			dbPart.State, dbPart.Message = "problem", fmt.Sprintf("Namespace %s, where maas-api and its database go, does not exist, and this tool creates only the AI gateway's own infrastructure namespaces. A cluster-admin creates it.", dbNS)
-			blockers = append(blockers, dbPart.Message)
-		}
-	default:
-		dbPart.State, dbPart.Message = "missing", "Set up runs a one-instance CloudNativePG database (development and test use) in "+dbNS
-		plan(dbPlan)
-	}
-	if rec.InfraNamespace != "" && rec.InfraNamespace == dbNS {
-		dbPart.ManagedByTool = true
-	}
-	part(dbPart)
+	st.SetupPlan = append(st.SetupPlan, dbs.plan...)
+	blockers = append(blockers, dbs.blockers...)
+	st.Database = dbs.db
 
 	// The gateway.
 	gwPart := types.MaaSPart{ID: "gateway", Title: "Gateway maas-default-gateway", DocURL: maasDocsBase + "install/maas-setup.md#create-gateway"}
@@ -1483,6 +1425,17 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	rec, recErr := readMaaSRecord(c)
 	authPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access"))
 	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
+	// Who may use the published models, and each one's limit: the
+	// subscription's (one an earlier build wrote reads as the free sample).
+	toolSub, subErr := readMaaSToolSubscription(c)
+	if subErr != nil {
+		slog.Debug("cannot read this tool's MaaSSubscription", "error", subErr)
+	} else if toolSub.found && toolSub.owned {
+		st.Access = &types.MaaSAudienceState{MaaSAudience: toolSub.audience.api()}
+		if !toolSub.audience.everyone {
+			st.Access.Warnings = maasGroupWarnings(c, toolSub.audience.groups)
+		}
+	}
 	owned, ownedErr := readModelsRecord(c)
 	if ownedErr != nil {
 		slog.Debug("cannot read the models record for MaaS", "error", ownedErr)
@@ -1509,6 +1462,9 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 			item.Published, item.Deployed = true, true
 			item.Phase, item.Endpoint = ref.Status.Phase, ref.Status.Endpoint
 			item.Access, item.Subscription = authPhase, subPhase
+			if subErr == nil && toolSub.found && toolSub.owned {
+				item.Limit = toolSub.limitOf(maasPub{m.Metadata.Namespace, m.Metadata.Name}).api()
+			}
 			item.Ready = item.Phase == "Ready" && authPhase == "Active" && subPhase == "Active"
 			_, recordedRefs := rec.modelRefs(m.Metadata.Namespace, m.Metadata.Name)
 			switch refs := m.gatewayRefNames(); {

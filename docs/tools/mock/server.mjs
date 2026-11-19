@@ -369,6 +369,14 @@ const scenarios = {
   "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
   // Three models in dev-project: Qwen2.5 published, Qwen3 not, the embedding model never offered.
   "env-maas-published": (w) => { scenarios["env-models-several"](w); w.maas = F.maasWorld("ready", { items: F.maasSeveral() }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
+  // Two published models with different limits, for two groups (one without an OpenShift Group).
+  "env-maas-limits": (w) => {
+    scenarios["env-models-several"](w);
+    w.maas = F.maasWorld("ready", { access: { everyone: false, groups: ["ml-team", "data-science"], warnings: ["Group data-science does not exist on this cluster, so nobody is in it, unless your identity provider sends it in the sign-in token. A cluster-admin creates it: oc adm groups new data-science, then oc adm groups add-users data-science <user>."] },
+      items: F.maasSeveral({ ...F.maasModel(true), limit: F.maasLimit("premium") }, { ...F.maasModel(true, { name: "qwen3-1-7b" }), limit: F.maasLimit("unlimited") }) });
+    F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true);
+    F.setMaaSPublished(w.resources, "dev-project", "qwen3-1-7b", true);
+  },
   // The same, on the Models tab: Use it of Qwen2.5 points at the MaaS tab's commands; Qwen3's keeps its curl.
   "env-models-published": (w) => { scenarios["env-maas-published"](w); },
   // A publication by an earlier build (the model also on the inference gateway): partly published.
@@ -771,7 +779,7 @@ async function playgroundStream(req, res) {
 
 /** POST /api/resources/maas/stream (pkg/cluster RunMaaS), in the backend's steps. */
 async function maasStream(req, res) {
-  const { action, project, model = "qwen25-05b-instruct" } = await body(req);
+  const { action, project, model = "qwen25-05b-instruct", limit, access } = await body(req);
   beginOperation("maas", "Models as a Service", project ? `${action} model in ${project}` : `${action} MaaS platform`);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   let n = 0;
@@ -797,6 +805,9 @@ async function maasStream(req, res) {
       ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
     unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", "The model routes as before publishing: KServe's default gateway (no refs)."],
       ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
+    "change-limit": [["check", "The model's limit can change."], ["limit", "The subscription lists the model with its new limit."], ["ready", "MaaS applies it."]],
+    "change-access": [["check", "Who can use the published models can change."], ["access", "The subscription and the access policy name the new audience."], ["ready", "MaaS applies it."]],
+    "change-database": [["check", "MaaS can switch databases."], ["cnpg", "Not needed."], ["database", `Secret ${F.MAAS_INFRA}/maas-db-config names the new database.`], ["cleanup", "Deleted the database before."]],
   }[action] ?? [];
   for (const [step, done] of steps) {
     send({ step, status: "running", message: "..." });
@@ -809,7 +820,10 @@ async function maasStream(req, res) {
     for (const i of world.maas.items ?? []) if (i.published) F.setMaaSPublished(world.resources, i.namespace, i.name, false);
     world.maas = F.maasWorld("none", { items: (world.maas.items ?? []).map((i) => (i.published ? F.maasModel(false, { name: i.name }) : i)) });
   }
-  if (action === "publish") world.maas = { ...world.maas, items: item(true) };
+  const withLimit = (items) => items.map((i) => (i.namespace === project && i.name === model && i.published ? { ...i, limit: { ...limit, ...(limit?.preset && limit.preset !== "custom" ? F.maasLimit(limit.preset) : {}) } } : i));
+  if (action === "publish") world.maas = { ...world.maas, items: withLimit(item(true)), access: access ?? world.maas.access ?? { everyone: true } };
+  if (action === "change-limit") world.maas = { ...world.maas, items: withLimit(world.maas.items ?? []) };
+  if (action === "change-access") world.maas = { ...world.maas, access };
   if (action === "unpublish") world.maas = { ...world.maas, items: item(false) };
   // The Models tab's model follows: published, it routes through the MaaS gateway alone.
   if (action === "publish" || action === "unpublish") F.setMaaSPublished(world.resources, project, model, action === "publish");

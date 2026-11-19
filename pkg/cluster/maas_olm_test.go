@@ -288,7 +288,7 @@ func kuadrantMakesAuthorino(f *resourceFake) {
 func maasClusterWithModel(t *testing.T) *modelsCluster {
 	t.Helper()
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
@@ -319,7 +319,8 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	if st.Platform.SetupBlockedReason != "" || st.Blocked != nil {
 		t.Fatalf("blocked: %+v %+v", st.Platform, st.Blocked)
 	}
-	plan := strings.Join(st.SetupPlan, "\n")
+	// The dialog shows the chosen database's plan next to Set up's.
+	plan := strings.Join(append(st.SetupPlan, st.Database.Choices[2].Plan...), "\n")
 	for _, want := range []string{"Install Red Hat Connectivity Link 1.5.0", "channel stable-1.5", "Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator",
 		"Create the Kuadrant CR kuadrant-system/kuadrant", "Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg", "RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny", "Create namespace redhat-ai-gateway-infra",
 		"maas-db", "Create Gateway openshift-ingress/maas-default-gateway", "Configure Authorino TLS", "aigateway.managementState Removed to Managed", "aigateway.modelsAsAService.managementState Removed to Managed"} {
@@ -327,12 +328,12 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 			t.Errorf("the plan lacks %q:\n%s", want, plan)
 		}
 	}
-	for _, id := range []string{"rhcl", "kuadrant", "cnpg", "database", "gateway", "authorino-tls", "dsc"} {
+	for _, id := range []string{"rhcl", "kuadrant", "database", "gateway", "authorino-tls", "dsc"} {
 		if p := maasPart(t, st, id); p.State != "missing" {
 			t.Errorf("part %s = %+v", id, p)
 		}
 	}
-	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -455,7 +456,7 @@ func TestMaaSSetup_AdoptsAnInstalledConnectivityLink(t *testing.T) {
 	mc := newMaaSCluster(t)
 	sim := newFakeOLMSim(mc.f)
 	sim.installed("rhcl-operator", "kuadrant-system", "rhcl-operator", "stable-1.5", "1.5.0")
-	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -482,13 +483,13 @@ func TestMaaSSetup_AdoptsCloudNativePGInItsOwnNamespace(t *testing.T) {
 	sim.installed("cloudnative-pg", "cnpg-system", "cloudnative-pg", "stable-v1", "1.27.1")
 	mc.f.putJSON("/apis/operators.coreos.com/v1/namespaces/cnpg-system/operatorgroups/cloudnative-pg", `{"spec":{}}`)
 	st, _ := GetMaaSStatus(mc.c)
-	if p := maasPart(t, st, "cnpg"); p.State != "waiting" || p.ManagedByTool || strings.Contains(strings.Join(st.SetupPlan, "\n"), "Install CloudNativePG") {
-		t.Fatalf("cnpg = %+v plan = %v", p, st.SetupPlan)
+	if plan := strings.Join(st.Database.Choices[2].Plan, "\n"); !strings.Contains(plan, "Wait for OLM to finish installing CloudNativePG") || strings.Contains(plan, "Install CloudNativePG") {
+		t.Fatalf("cnpg choice plan = %v", plan)
 	}
 	mc.f.mu.Lock()
 	mc.f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
 	mc.f.mu.Unlock()
-	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -523,7 +524,7 @@ func TestMaaSRHCLDenyOnFailure(t *testing.T) {
 	if !strings.Contains(strings.Join(st.SetupPlan, "\n"), "Not changed: Subscription kuadrant-system/kuadrant-operator") {
 		t.Fatalf("plan = %v", st.SetupPlan)
 	}
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	if indexOfPrefix(mc.f.mutations(), "PATCH "+subPath) >= 0 {
@@ -687,7 +688,7 @@ func TestMaaS_RefusesWhenAReadFails(t *testing.T) {
 	} {
 		mc, _ := newFreshMaaSCluster(t)
 		mc.f.fail[path] = 500
-		res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+		res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 		if res.Success {
 			t.Fatalf("%s: setup ran", path)
 		}
@@ -697,7 +698,7 @@ func TestMaaS_RefusesWhenAReadFails(t *testing.T) {
 	}
 	mc, _ := newFreshMaaSCluster(t)
 	mc.f.fail["GET /apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests"] = 500
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); res.Success || len(mc.f.mutations()) != 0 {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); res.Success || len(mc.f.mutations()) != 0 {
 		t.Fatalf("setup without the catalog: %+v %v", res, mc.f.mutations())
 	}
 }
@@ -707,7 +708,7 @@ func TestMaaS_RefusesWhenAReadFails(t *testing.T) {
 func TestMaaSSetup_StillRefusesAForeignInfraNamespace(t *testing.T) {
 	mc, _ := newFreshMaaSCluster(t)
 	mc.f.putJSON("/api/v1/namespaces/redhat-ai-gateway-infra", `{"metadata":{"annotations":{"openshift.io/requester":"mallory"}}}`)
-	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if res.Success || res.ErrorCode != "not_managed" || len(mc.f.mutations()) != 0 {
 		t.Fatalf("res = %+v, wrote %v", res, mc.f.mutations())
 	}
@@ -716,7 +717,7 @@ func TestMaaSSetup_StillRefusesAForeignInfraNamespace(t *testing.T) {
 // Remove keeps the namespace this tool created while anything else is in it.
 func TestMaaSTeardown_KeepsTheInfraNamespaceWhileItHoldsOthers(t *testing.T) {
 	mc, _ := newFreshMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	mc.f.putJSON("/apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/someone-elses", `{}`)
@@ -734,7 +735,7 @@ func TestMaaSTeardown_KeepsTheInfraNamespaceWhileItHoldsOthers(t *testing.T) {
 // judged by maas-controller's policy, not the first one.
 func TestMaaSTierPolicies(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	// TokenRateLimitPolicy is served at v1alpha1 only (RHCL 1.5).
@@ -815,7 +816,7 @@ func TestMaaSPublish_RHCLAndPriority(t *testing.T) {
 // and the part shows the patch to the documented list.
 func TestMaaS_ForeignGatewayAdmittingAll(t *testing.T) {
 	mc := newMaaSCluster(t)
-	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	mc.f.putJSON(tMaaSGateway, `{"spec":{"listeners":[{"name":"https","hostname":"maas.apps.example.com","allowedRoutes":{"namespaces":{"from":"All"}}}]},"status":{"conditions":[{"type":"Programmed","status":"True"}],"addresses":[{"value":"lb"}]}}`)
@@ -864,18 +865,17 @@ func TestMaaSSetup_LeftoverCRDsWithoutOperatorsAreInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"rhcl", "cnpg"} {
-		if p := maasPart(t, st, id); p.State != "missing" {
-			t.Errorf("part %s with only its CRDs left = %+v, want missing", id, p)
-		}
+	if p := maasPart(t, st, "rhcl"); p.State != "missing" {
+		t.Errorf("part rhcl with only its CRDs left = %+v, want missing", p)
 	}
-	plan := strings.Join(st.SetupPlan, "\n")
+	// CloudNativePG is in its database choice's plan, not a part, until chosen.
+	plan := strings.Join(append(st.SetupPlan, st.Database.Choices[2].Plan...), "\n")
 	for _, want := range []string{"Install Red Hat Connectivity Link", "Install CloudNativePG"} {
 		if !strings.Contains(plan, want) {
 			t.Errorf("the plan lacks %q:\n%s", want, plan)
 		}
 	}
-	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -901,7 +901,7 @@ func TestMaaSSetup_ControllerReadFailureChangesNothing(t *testing.T) {
 	delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
 	f.fail["GET /apis/apps/v1/deployments"] = 403
 	f.mu.Unlock()
-	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"})
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if res.Success {
 		t.Fatal("setup succeeded without knowing whether Kuadrant's operator runs")
 	}
