@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -42,10 +41,8 @@ var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.Res
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 16384)
 	var req types.PlaygroundRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 16384, &req, false) {
 		return
 	}
 	if problem := cluster.ValidatePlaygroundRequest(req); problem != "" {

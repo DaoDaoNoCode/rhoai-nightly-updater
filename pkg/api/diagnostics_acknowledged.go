@@ -21,12 +21,11 @@ var HandleDiagnosticsFixAcknowledged = withMutationAuth(func(c *cluster.Client, 
 	}
 	defer releaseClusterMutationLock()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req struct {
 		ProblemID    string `json:"problemId"`
 		Acknowledged bool   `json:"acknowledged"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ProblemID == "" {
+	if err := readBody(w, r, 4096, &req, false); err != nil || req.ProblemID == "" {
 		writeError(w, "problemId is required", http.StatusBadRequest, "validation")
 		return
 	}

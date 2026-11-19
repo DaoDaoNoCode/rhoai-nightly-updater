@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,10 +58,8 @@ var HandleMLflowSamplesStream = withMutationAuth(func(c *cluster.Client, w http.
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.MLflowSamplesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if !namespaceRegex.MatchString(req.Project) {

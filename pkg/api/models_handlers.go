@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -23,10 +22,8 @@ var HandleModelsStream = withMutationAuth(func(c *cluster.Client, w http.Respons
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.ModelsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if req.Project != "" && !namespaceRegex.MatchString(req.Project) {

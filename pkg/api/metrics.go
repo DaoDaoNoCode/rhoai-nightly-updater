@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -104,12 +103,11 @@ func HandlePageView(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := requestUser(w, r); !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 256)
 	var req struct {
 		Page   string `json:"page"`
 		Action string `json:"action"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := readBody(w, r, 256, &req, false); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}

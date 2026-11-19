@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -74,10 +73,8 @@ var HandlePrerequisitesStream = withMutationAuth(func(c *cluster.Client, w http.
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	var req types.PrerequisitesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 1024, &req, false) {
 		return
 	}
 	if problem := cluster.ValidatePrerequisitesRequest(req); problem != "" {
@@ -125,10 +122,8 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	var req types.CleanupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 16<<10, &req, false) {
 		return
 	}
 	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects {

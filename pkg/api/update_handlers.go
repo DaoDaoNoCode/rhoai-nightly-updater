@@ -1,9 +1,7 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -77,11 +75,8 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 		}
 	}()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	var req types.UpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if req.Image == "" {
@@ -168,10 +163,8 @@ var HandleUpdateGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w http.R
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.UpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if req.Image == "" || !imageRegex.MatchString(req.Image) || !isAllowedImage(req.Image) {
@@ -250,11 +243,8 @@ var HandleUpdateStreamGitOps = withGitOpsMutationAuth(func(c *cluster.Client, w 
 // decodeUpdateStreamRequest reads and validates an Update request body. It
 // answers 400 and returns false when the request must not proceed.
 func decodeUpdateStreamRequest(w http.ResponseWriter, r *http.Request) (types.UpdateRequest, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	var req types.UpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return req, false
 	}
 	if req.Image == "" {
@@ -285,12 +275,9 @@ var HandleReinstallStream = withMutationAuth(func(c *cluster.Client, w http.Resp
 		}
 	}()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	var req types.ReinstallRequest
 	// Preserve the legacy empty-body stable rollback, but reject malformed JSON.
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 	if err := validateReinstallRequest(&req); err != nil {
@@ -348,10 +335,8 @@ var HandleRefreshStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 	}()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.RefreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 

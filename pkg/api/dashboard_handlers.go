@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -63,11 +62,8 @@ var HandleDashboardDeployPR = withMutationAuth(func(c *cluster.Client, w http.Re
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	var req types.DeployPRRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if req.PR <= 0 {
@@ -115,10 +111,8 @@ var HandleDashboardDeployMain = withMutationAuth(func(c *cluster.Client, w http.
 	}
 	defer releaseClusterMutationLock()
 	// The body is optional; an empty body deploys the default (RHOAI) flavor.
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.DeployMainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 	if !cluster.ValidDashboardFlavor(req.Flavor) {

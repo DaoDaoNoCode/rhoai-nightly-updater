@@ -1,10 +1,7 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -45,13 +42,11 @@ var HandleAssistRollout = withMutationAuth(func(c *cluster.Client, w http.Respon
 
 	// Optional body {"namespace":"...","deployment":"..."} limits the action
 	// to one Deployment; an empty body checks all RHOAI Deployments.
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req struct {
 		Namespace  string `json:"namespace"`
 		Deployment string `json:"deployment"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 

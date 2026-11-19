@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -29,11 +28,8 @@ var HandleCreatePullSecret = withMutationAuth(func(c *cluster.Client, w http.Res
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	var req types.CreatePullSecretRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if req.Auth == "" {
@@ -74,11 +70,8 @@ var HandleNodePullCheck = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
 	var req types.NodePullCheckRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, false) {
 		return
 	}
 	if req.Image == "" {

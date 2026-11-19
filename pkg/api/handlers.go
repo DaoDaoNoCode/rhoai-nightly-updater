@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -187,4 +189,29 @@ func writeOperationResult(w http.ResponseWriter, result *types.OperationResponse
 		return
 	}
 	writeJSON(w, result, label)
+}
+
+// readBody decodes the request's JSON body into v, reading at most limit
+// bytes. With allowEmpty an empty body is no error (v keeps its zero
+// value); malformed JSON or a body over the limit always is. It writes no
+// response: handlers that answer a bad body with their own message use it,
+// the others use decodeBody.
+func readBody(w http.ResponseWriter, r *http.Request, limit int64, v any, allowEmpty bool) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	err := json.NewDecoder(r.Body).Decode(v)
+	if allowEmpty && errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
+
+// decodeBody is readBody answering a bad body with 400 "invalid request
+// body" (errorCode "validation"). It returns false when the handler must
+// stop.
+func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, v any, allowEmpty bool) bool {
+	if err := readBody(w, r, limit, v, allowEmpty); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return false
+	}
+	return true
 }

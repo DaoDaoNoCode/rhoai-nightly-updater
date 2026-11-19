@@ -1,9 +1,7 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -74,10 +72,8 @@ var HandleS3StorageMigrateStream = withMutationAuth(func(c *cluster.Client, w ht
 		}
 	}()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.MigrateStorageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 	if req.DeleteNamespace && !req.RemoveOldStorage {
@@ -136,10 +132,8 @@ var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.Re
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.S3TeardownRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
 	beginOperation(w, "")
@@ -159,9 +153,8 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.PipelineServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Project == "" {
+	if err := readBody(w, r, 4096, &req, false); err != nil || req.Project == "" {
 		writeError(w, "project is required", http.StatusBadRequest, "validation")
 		return
 	}
@@ -190,9 +183,8 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req types.PipelineServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Project == "" {
+	if err := readBody(w, r, 4096, &req, false); err != nil || req.Project == "" {
 		writeError(w, "project is required", http.StatusBadRequest, "validation")
 		return
 	}

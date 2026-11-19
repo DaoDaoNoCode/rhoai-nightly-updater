@@ -1,12 +1,12 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // HandleDebug returns debug pod information.
@@ -48,12 +48,8 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 	}
 	defer releaseClusterMutationLock()
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-
-	var req struct {
-		ProblemID string `json:"problemId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ProblemID == "" {
+	var req types.DiagnosticsFixRequest
+	if err := readBody(w, r, 4096, &req, false); err != nil || req.ProblemID == "" {
 		writeError(w, "problemId is required", http.StatusBadRequest, "validation")
 		return
 	}
@@ -68,8 +64,5 @@ var HandleDiagnosticsFix = withMutationAuth(func(c *cluster.Client, w http.Respo
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if encErr := json.NewEncoder(w).Encode(result); encErr != nil {
-		slog.Error("response encode error", "label", "diagnostics-fix", "error", encErr)
-	}
+	writeJSON(w, result, "diagnostics-fix")
 })

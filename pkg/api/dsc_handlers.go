@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -76,9 +75,8 @@ var HandleDSCManagement = withMutationAuth(func(c *cluster.Client, w http.Respon
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, dscChangeRequestMaxLen)
 	var req types.DSCToggleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || !dscPathRegex.MatchString(req.Path) ||
+	if err := readBody(w, r, dscChangeRequestMaxLen, &req, false); err != nil || !dscNameRegex.MatchString(req.Name) || !dscPathRegex.MatchString(req.Path) ||
 		!managementStateRegex.MatchString(req.To) || (req.From != "" && !managementStateRegex.MatchString(req.From)) ||
 		!dscUIDRegex.MatchString(req.UID) || !dscPlanTokenRegex.MatchString(req.Token) {
 		writeError(w, "Give the DataScienceCluster's name and UID, a component path, the value you saw (from), the value to set (to) and the token of the change you reviewed", http.StatusBadRequest, "validation")
@@ -98,9 +96,8 @@ var HandleDSCManagement = withMutationAuth(func(c *cluster.Client, w http.Respon
 // decodePlanRequest reads the body of a reviewed-plan change; a reset
 // must say whether it keeps the components the user turned on.
 func decodePlanRequest(w http.ResponseWriter, r *http.Request, reset bool) (types.DSCPlanRequest, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, dscChangeRequestMaxLen)
 	var req types.DSCPlanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || !dscUIDRegex.MatchString(req.UID) || !dscPlanTokenRegex.MatchString(req.Token) {
+	if err := readBody(w, r, dscChangeRequestMaxLen, &req, false); err != nil || !dscNameRegex.MatchString(req.Name) || !dscUIDRegex.MatchString(req.UID) || !dscPlanTokenRegex.MatchString(req.Token) {
 		writeError(w, "Give the DataScienceCluster's name and UID and the token of the change you reviewed", http.StatusBadRequest, "validation")
 		return req, false
 	}
@@ -201,9 +198,8 @@ var HandleDSCHardResetFinish = withMutationAuth(func(c *cluster.Client, w http.R
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, dscChangeRequestMaxLen)
 	var req types.DSCFinishRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || !dscPlanTokenRegex.MatchString(req.Token) {
+	if err := readBody(w, r, dscChangeRequestMaxLen, &req, false); err != nil || !dscNameRegex.MatchString(req.Name) || !dscPlanTokenRegex.MatchString(req.Token) {
 		writeError(w, "Give the DataScienceCluster's name and the token of the hard reset you reviewed", http.StatusBadRequest, "validation")
 		return
 	}
@@ -223,7 +219,6 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		return
 	}
 	defer releaseClusterMutationLock()
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req struct {
 		Name                    string   `json:"name"`
 		Mode                    string   `json:"mode"`
@@ -233,7 +228,7 @@ var HandleRepairDSC = withMutationAuth(func(c *cluster.Client, w http.ResponseWr
 		// The paths the reset preview listed; [] when it listed none.
 		ExpectedResetRemovals []string `json:"expectedResetRemovals"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || (req.Mode != "remove-invalid" && req.Mode != "remove-extra-components" && req.Mode != "reset-defaults") {
+	if err := readBody(w, r, 4096, &req, false); err != nil || !dscNameRegex.MatchString(req.Name) || (req.Mode != "remove-invalid" && req.Mode != "remove-extra-components" && req.Mode != "reset-defaults") {
 		writeError(w, "Provide a DSC name and mode: remove-invalid, remove-extra-components or reset-defaults", http.StatusBadRequest, "validation")
 		return
 	}

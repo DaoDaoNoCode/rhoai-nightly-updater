@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -60,10 +59,8 @@ var HandleMaaSStream = withMutationAuth(func(c *cluster.Client, w http.ResponseW
 	// Up to 20 groups and 20 users (253 bytes each), a 2 KiB connection
 	// URL and a limit: well under 32 KiB. The body is never logged: the URL
 	// holds a password.
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	var req types.MaaSRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+	if !decodeBody(w, r, 32<<10, &req, false) {
 		return
 	}
 	if problem := cluster.ValidateMaaSRequest(req); problem != "" {
