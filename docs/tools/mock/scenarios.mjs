@@ -51,7 +51,16 @@ export const scenarios = {
   "self-managed-saved": (w) => { scenarios["ready-to-install"](w); F.selfManaged(w.status); },
   "self-managed-saved-fails": (w) => { scenarios["self-managed-saved"](w); w.nodePullFails = true; },
   "self-managed-unknown": (w) => { scenarios["ready-to-install"](w); F.selfManaged(w.status, { known: false }); },
-  "self-managed-installed": (w) => { F.selfManaged(w.status, { pulled: true }); },
+  "self-managed-installed": (w) => { F.selfManaged(w.status, { pulled: true }); w.nodes = { pullEntry: "same" }; },
+  // The one-click setup (POST /api/setup/nodes/plan and /stream): the
+  // mirror missing on a self-managed cluster, a paused pool, ROSA Classic
+  // or OSD (the mirror allowed, the pull secret not), an unknown platform
+  // whose admission webhook refuses the attempt, and ROSA HCP.
+  "self-managed-mirror": (w) => { scenarios["self-managed-saved"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; },
+  "self-managed-paused-pool": (w) => { scenarios["self-managed-mirror"](w); w.stuckPools = ["worker (paused)"]; },
+  "managed-classic": (w) => { scenarios["ready-to-install"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; F.selfManaged(w.status, { managed: true }); },
+  "unknown-denied": (w) => { scenarios["self-managed-unknown"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; w.nodeSetupDenied = true; },
+  "hosted-mirror-missing": (w) => { scenarios["ready-to-install"](w); w.status.imageMirror = { exists: false, name: "", source: "" }; },
   // The update GIFs: steps wait for /__docs/advance.
   "update-flow": (w) => { w.status = F.updateAvailableStatus(); w.gated = true; },
   "install-flow": (w) => { scenarios["ready-to-install"](w); w.gated = true; w.afterUpdate = F.noDSCStatus; },
