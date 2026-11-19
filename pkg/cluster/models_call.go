@@ -305,8 +305,11 @@ func checkModelCall(c *Client, project, name string, rec modelsRecord, progress 
 	case exposureMaaS:
 		check = maasCallCheck(c, project, name)
 	case exposureInternal:
-		target := firstNonEmpty(modelInClusterURL(model), internalAddress(project, name))
-		check = runModelCall(c, target, served, entry.Type, "", true, progress)
+		if target := withServicePort(c, firstNonEmpty(modelInClusterURL(model), internalAddress(project, name))); target == "" {
+			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model's Service " + name + "-kserve-workload-svc in " + project + " could not be read for its port."}
+		} else {
+			check = runModelCall(c, target, served, entry.Type, "", true, progress)
+		}
 	default:
 		switch {
 		case model.Status.URL == "":

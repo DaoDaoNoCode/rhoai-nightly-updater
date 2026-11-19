@@ -66,7 +66,7 @@ func TestModelExposures_NoGatewayRecommendsSettingItUp(t *testing.T) {
 	if a := optionByKey(t, ex, exposureDefault); a.Available || !strings.Contains(a.Reason, "The inference gateway isn't set up yet") || a.Fix != "inference-gateway" {
 		t.Errorf("default: %+v", a)
 	}
-	if e := optionByKey(t, ex, exposureInternal); !e.Available || !strings.Contains(e.Warning, "not authenticated") || e.Address != "https://qwen25-05b-instruct-kserve-workload-svc.proj.svc.cluster.local" {
+	if e := optionByKey(t, ex, exposureInternal); !e.Available || !strings.Contains(e.Warning, "not authenticated") || e.Address != "" {
 		t.Errorf("internal: %+v", e)
 	}
 	if b := optionByKey(t, ex, exposureMaaS); b.Available {
@@ -165,6 +165,10 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 	if mc.f.has(testModelPath) {
 		t.Fatal("a model was created")
 	}
+	// KServe's Service for the model, on its own port (RHOAI 3.6: 8000).
+	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]interface{}{
+		"spec": map[string]interface{}{"ports": []interface{}{map[string]interface{}{"name": "https", "appProtocol": "https", "port": 8000}}},
+	})
 	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal})
 	if !res.Success {
 		t.Fatalf("internal: %+v", res)
@@ -179,7 +183,7 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 	}
 	// Called at its in-cluster address, without a token.
 	sent := mc.calls.sent()
-	if len(sent) == 0 || !strings.HasPrefix(sent[len(sent)-1], "https://qwen25-05b-instruct-kserve-workload-svc.proj.svc.cluster.local/v1/chat/completions  ") {
+	if len(sent) == 0 || !strings.HasPrefix(sent[len(sent)-1], "https://qwen25-05b-instruct-kserve-workload-svc.proj.svc.cluster.local:8000/v1/chat/completions  ") {
 		t.Errorf("calls: %v", sent)
 	}
 	if !strings.Contains(finalSteps(events), "callable=success") {

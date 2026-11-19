@@ -1,7 +1,11 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -48,5 +52,47 @@ func TestModelInClusterURL(t *testing.T) {
 		if got := modelInClusterURL(m); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// The model's own Service is reported without its port; RHOAI 3.6 serves on
+// 8000 (live: the address as reported does not connect). The port is read
+// from the Service; a gateway path, a known port or 443 stay as they are,
+// and an unreadable Service gives no address rather than a wrong one.
+func TestWithServicePort(t *testing.T) {
+	services := map[string]string{
+		"/api/v1/namespaces/e2e-400/services/smollm2-135m-instruct-kserve-workload-svc": `{"spec":{"ports":[{"name":"metrics","port":9090},{"name":"https","appProtocol":"https","port":8000}]}}`,
+		"/api/v1/namespaces/e2e-400/services/only-one":                                  `{"spec":{"ports":[{"name":"web","port":8443}]}}`,
+		"/api/v1/namespaces/e2e-400/services/on-443":                                    `{"spec":{"ports":[{"name":"https","port":443}]}}`,
+		"/api/v1/namespaces/e2e-400/services/two-plain":                                 `{"spec":{"ports":[{"name":"a","port":1},{"name":"b","port":2}]}}`,
+	}
+	reads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads++
+		if b, ok := services[r.URL.Path]; ok && r.Method == http.MethodGet {
+			_, _ = fmt.Fprint(w, b)
+			return
+		}
+		w.WriteHeader(404)
+		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
+	}))
+	defer srv.Close()
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	for _, x := range []struct{ in, want string }{
+		{"https://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local", "https://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local:8000"},
+		{"https://only-one.e2e-400.svc", "https://only-one.e2e-400.svc:8443"},
+		{"https://on-443.e2e-400.svc.cluster.local", "https://on-443.e2e-400.svc.cluster.local"},
+		{"https://two-plain.e2e-400.svc.cluster.local", ""},
+		{"https://gone.e2e-400.svc.cluster.local", ""},
+		{"https://gw.openshift-ingress.svc.cluster.local/e2e-400/m", "https://gw.openshift-ingress.svc.cluster.local/e2e-400/m"},
+		{"https://x.e2e-400.svc.cluster.local:9443", "https://x.e2e-400.svc.cluster.local:9443"},
+		{"", ""},
+	} {
+		if got := withServicePort(c, x.in); got != x.want {
+			t.Errorf("withServicePort(%q) = %q, want %q", x.in, got, x.want)
+		}
+	}
+	if reads != 5 {
+		t.Errorf("read %d Services, want 5 (only port-less Service addresses)", reads)
 	}
 }

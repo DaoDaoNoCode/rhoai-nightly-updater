@@ -181,6 +181,60 @@ func modelInClusterURL(m llmisvcObject) string {
 	return service
 }
 
+// withServicePort completes an in-cluster address that names a Service with
+// no port. KServe reports the model's own Service as "https://<svc>.<ns>.svc
+// .cluster.local" while the Service listens on another port (8000 on RHOAI
+// 3.6, seen live: the address as reported does not connect), so the port is
+// read from the Service: its https port (by appProtocol or name), or its
+// only port. An address with a port or a path (a gateway's) is returned as
+// it is. "" when the Service cannot be read or names no https port: no
+// address is better than one that does not connect.
+func withServicePort(c *Client, address string) string {
+	u, err := url.Parse(address)
+	if address == "" || err != nil || u.Port() != "" || strings.Trim(u.Path, "/") != "" {
+		return address
+	}
+	host := strings.TrimSuffix(u.Hostname(), ".cluster.local")
+	labels := strings.Split(host, ".")
+	if len(labels) != 3 || labels[2] != "svc" {
+		return address
+	}
+	body, _, err := c.get(namespacedPath("v1", "services", labels[1], labels[0]))
+	if err != nil {
+		return ""
+	}
+	var svc struct {
+		Spec struct {
+			Ports []struct {
+				Name        string `json:"name"`
+				AppProtocol string `json:"appProtocol"`
+				Port        int    `json:"port"`
+			} `json:"ports"`
+		} `json:"spec"`
+	}
+	if json.Unmarshal(body, &svc) != nil {
+		return ""
+	}
+	port := 0
+	for _, p := range svc.Spec.Ports {
+		if strings.EqualFold(p.AppProtocol, "https") || strings.EqualFold(p.Name, "https") {
+			port = p.Port
+			break
+		}
+	}
+	if port == 0 && len(svc.Spec.Ports) == 1 {
+		port = svc.Spec.Ports[0].Port
+	}
+	switch port {
+	case 0:
+		return ""
+	case 443:
+		return address
+	}
+	u.Host = fmt.Sprintf("%s:%d", u.Hostname(), port)
+	return u.String()
+}
+
 func internalAddress(project, model string) string {
 	return fmt.Sprintf("https://%s-kserve-workload-svc.%s.svc.cluster.local", model, project)
 }
@@ -454,8 +508,9 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	e := types.ModelExposureOption{Key: exposureInternal, Exposure: exposureInternal, Available: true,
 		Title:       "Only inside the cluster",
 		Description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
-		Address:     internalAddress(r.project, r.entry.Name),
-		Warning:     "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
+		// No Address: the port of the model's Service is known only once
+		// KServe has made it (withServicePort).
+		Warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
 	ep := exposurePlan{exposure: exposureInternal}
 	if !r.auth && r.authErr == nil {
 		ep.authOff = true
@@ -718,7 +773,7 @@ func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationRespons
 func addModelRouting(c *Client, s *types.ModelState, m llmisvcObject, def kserveGateway, auth map[string]string) {
 	s.Exposure, s.Gateway = modelExposureOf(m, def)
 	s.ServedName = firstNonEmpty(m.Spec.Model.Name, m.Metadata.Name)
-	s.InternalURL = modelInClusterURL(m)
+	s.InternalURL = withServicePort(c, modelInClusterURL(m))
 	switch s.Exposure {
 	case exposureMaaS:
 		s.GatewayAuth = "maas"

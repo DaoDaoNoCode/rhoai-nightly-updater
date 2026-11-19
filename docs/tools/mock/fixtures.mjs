@@ -1261,7 +1261,6 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
   const internal = {
     key: "internal", exposure: "internal", title: "Only inside the cluster", available: true,
     description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
-    address: `https://${model}-kserve-workload-svc.${project}.svc.cluster.local`,
     warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model.",
   };
   const options = [def, maas, ...other, internal];
@@ -1281,7 +1280,10 @@ export const routed = (m, { exposure = "default-gateway", check = "ok" } = {}) =
   ...m, exposure, servedName: m.name,
   gateway: exposure === "internal" ? undefined : exposure === "maas" ? "openshift-ingress/maas-default-gateway" : GW_KEY,
   gatewayAuth: exposure === "internal" ? undefined : exposure === "maas" ? "maas" : "enforced",
-  internalUrl: `https://${m.name}-kserve-workload-svc.${m.namespace}.svc.cluster.local`,
+  // As RHOAI 3.6 reports it (live): the model's path on its gateway's in-cluster Service; with no route, its own Service on port 8000.
+  internalUrl: exposure === "internal" ? `https://${m.name}-kserve-workload-svc.${m.namespace}.svc.cluster.local:8000`
+    : exposure === "maas" ? `https://maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local/${m.namespace}/${m.name}`
+      : `https://openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local/${m.namespace}/${m.name}`,
   url: exposure === "internal" ? undefined : m.url,
   callCheck: check === "ok" ? { result: "ok", ok: true, status: 200, message: exposure === "internal" ? `A chat request for "${m.name}" was answered (HTTP 200).` : `A chat request for "${m.name}" was answered (HTTP 200). A request without a token was refused (HTTP 401).`, url: `${m.url}/v1/chat/completions`, at: "2026-11-18T18:04:12Z" }
     : check === "unauthenticated" ? { result: "unauthenticated", ok: false, status: 200, message: `The model also answered a request without a token (HTTP 200): gateway ${GW_KEY} does not check who calls, so anyone who can reach ${m.url} can use the model. Check that RHOAI's AuthPolicy on the gateway is enforced (odh-model-controller and Red Hat Connectivity Link run), and that the gateway is not labelled opendatahub.io/managed=false.`, url: `${m.url}/v1/chat/completions`, at: "2026-11-18T18:04:12Z" }
