@@ -121,9 +121,33 @@ oc logs -n $NS deploy/$APP -c app --previous
 | 403 from oauth-proxy right after login | The user can't `list pods` in `redhat-ods-operator` (the login gate). On a fresh cluster only cluster-admins pass |
 | UI is read-only ("Read-only access") | Changes need cluster-admin. Check with `oc auth can-i '*' '*' --all-namespaces`. On ROSA: `rosa grant user cluster-admin --user=<u> --cluster=<c>` |
 | "Sign in again" banner | The oauth-proxy session (23 h) or the OAuth token expired. Follow the link |
+| "Your sign-in expires in N minutes ... Log out and log in again" (401 `sign_in_again`), or the changes are off with that reason | Since 4.0.0 changes run with your own token, which must outlive the change (the 15-minute deadline, the restore and a margin). Nothing was changed. Use **Log out** in the user menu, then log in again |
+| "Your sign-in cannot make changes ... Log out and log in again" | A session from before 4.0.0 (the cookie survives the upgrade; its token was made for the ServiceAccount OAuth client and can only identify you). Log out and log in again, once |
+| An operation stopped with "your OpenShift sign-in is no longer accepted (it expired or was revoked)" | Your token was rejected mid-operation (expired, revoked with `oc delete oauthaccesstokens`, or your user changed). The steps before it were made; the restore runs with the same token and may not have run. Log out and log in again, look at the Status and Components pages, then retry or recover by hand (sections 6 and 11) |
+| An operation stopped with "your OpenShift account is not allowed to do this" (403) | The API server refused your own RBAC for one step (for example a cluster-admin binding removed mid-operation, or a namespace-scoped admin). Ask for cluster-admin, then retry |
 | 401 "Bearer tokens are not accepted" | Something called the API with a bearer token. Use the Route in a browser |
 | 503 "Cannot verify ..." | The API server didn't answer the identity/SAR check. Nothing was changed; retry |
 | 429 | One accepted request per user and endpoint per 30 s. Dry runs and rejected requests don't count |
+
+### Sign-in and the OAuthClient
+
+Since 4.0.0 users sign in through the install's own OAuthClient `$APP-$NS` (`install.sh` creates it after the Route; the chart's PostSync hook in Argo CD). Check it:
+
+```bash
+oc get oauthclient $APP-$NS -o jsonpath='{.grantMethod} {.redirectURIs}{"\n"}'   # auto ["https://<route host>/oauth/callback"]
+oc get route $APP -n $NS -o jsonpath='{.spec.host}{"\n"}'                       # must be that host
+oc get secret $APP-oauth-client -n $NS -o jsonpath='{.data.client-secret}' | base64 -d | wc -c   # 32 (no newline)
+oc get oauthaccesstokens --field-selector clientName=$APP-$NS                   # the sign-ins it issued
+```
+
+| Symptom | Meaning / fix |
+|---|---|
+| The OAuth server shows JSON `{"error":"unauthorized_client"}` | OAuthClient `$APP-$NS` is missing (an install interrupted before it, or a chart with `gitops.oauthClient.enabled=false`). Re-run `install.sh upgrade` (or sync Argo CD) |
+| JSON `{"error":"invalid_request"}` about the redirect URI | The Route's host changed after the OAuthClient was made. Re-run `install.sh upgrade`; it applies the client with the current host |
+| oauth-proxy's "403 Permission Denied" with body `access_denied`, and `?error_description=scope+denied` in the address bar | The OAuthClient restricts the scope (someone added `scopeRestrictions`), or the pod still runs a template from before 4.0.0 with the ServiceAccount as the client. Remove the restriction, or upgrade ([OPENSHIFT_INTEGRATION §2](docs/OPENSHIFT_INTEGRATION.md#2-oauth-proxy-token-scopes)) |
+| oauth-proxy logs `invalid_client` after login | The OAuthClient's secret differs from Secret `$APP-oauth-client` (one was replaced by hand). Re-run `install.sh upgrade`: it applies the Secret's value |
+| Rotate the client secret | `oc delete secret $APP-oauth-client -n $NS`, then `install.sh upgrade`: a new secret, the client updated, the pod restarted; everyone signs in again |
+| End every session of this install now | `oc delete oauthaccesstokens --field-selector clientName=$APP-$NS` (their cookies then fail and users sign in again) |
 
 ## 5. Operations: busy, stuck, interrupted
 
@@ -553,7 +577,7 @@ For a Models as a Service model, the body names the source and a subscription to
 | Symptom | Cause and fix |
 |---|---|
 | Set up unavailable: "Needs: Models" | The project has no ready chat model. Set one up on the Models tab, or wait until it is ready |
-| Set up offers no Models as a Service model, or refuses one ("adds only the project's own models") | Since 3.0.1: adding a MaaS model through the dashboard's gen-ai API would send this tool's ServiceAccount token to the MaaS gateway. Open the playground in the dashboard, signed in as yourself, and add the MaaS model there (you need a subscription to it). The tab still lists the published MaaS models, read from their MaaSModelRefs |
+| Set up offers no Models as a Service model | Since 4.0.0 Set up lists the MaaS models the dashboard offers you (it runs with your own token): you need a subscription that includes the model. The status lists every published model, read from their MaaSModelRefs; choosing one you are not subscribed to stops Set up with "The dashboard does not offer model ..." before anything changes |
 | A playground this tool set up now reads "not managed by this tool" | Its OGXServer has another UID than the one recorded: it was deleted and made again in Gen AI studio, or the project was recreated. The new one is someone else's; the next Set up or Delete in the project drops the old record. Delete it in Gen AI studio if you no longer need it |
 | "This RHOAI release's dashboard gen-ai API differs" | A gen-ai path answered 404 on this release. Use the playground from the dashboard's Gen AI studio; report the call the message names |
 | "The dashboard's gen-ai API refused the request (HTTP 403)" | The updater's ServiceAccount lacks a rule the dashboard needs: re-apply the template (`deploy/template.yaml`). `oc auth can-i list ogxservers.ogx.io -n <project> --as=system:serviceaccount:<ns>:<sa>` must say yes |
@@ -908,7 +932,8 @@ The entry stays after the policy is removed (with `pruneObjectBehavior: None`), 
 |---|---|
 | Deployment / Service / Route / NetworkPolicy | `$APP` in `$NS` |
 | Cookie secret | Secret `$APP-proxy` (`session_secret`) |
+| OAuth client (4.0.0) | OAuthClient `$APP-$NS` (cluster-scoped), its secret in Secret `$APP-oauth-client` (`client-secret`) |
 | Serving cert | Secret `$APP-tls` (service-ca) |
-| ClusterRole / ClusterRoleBinding / ConsoleLink | `$APP-$NS` |
+| ClusterRole / ClusterRoleBinding / ConsoleLink / OAuthClient | `$APP-$NS` |
 | Roles | `$APP` in `$NS`; `$APP-$NS` in `kube-system`, `openshift-marketplace`, `openshift-ingress`, `openshift-ingress-operator` |
 | State ConfigMaps | `rhoai-nightly-updater-{activity,snapshot,operation}` (`operation` holds the running-operation marker, `lastCompleted` and the cross-pod lease `lock`) |

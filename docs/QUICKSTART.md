@@ -81,7 +81,7 @@ If it stops with an `ERROR:` line:
 
 ## 2. Open the app
 
-Open the printed URL, or use the grid icon in the OpenShift console (Red Hat Applications → RHOAI Nightly Updater). Sign in with OpenShift. To find the URL again:
+Open the printed URL, or use the grid icon in the OpenShift console (Red Hat Applications → RHOAI Nightly Updater). Sign in with OpenShift; there is no "Authorize Access" page (since 4.0.0 the updater has its own OAuth client, which `install.sh` creates). Your changes run with your own OpenShift permissions. To find the URL again:
 
 ```bash
 oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'

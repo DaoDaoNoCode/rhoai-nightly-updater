@@ -16,27 +16,17 @@ This document captures every OpenShift-specific behavior that affects the RHOAI 
 
 ## 2. OAuth Proxy Token Scopes
 
-**What:** SA-based OAuthClients in OpenShift are HARDCODED to `user:info user:check-access` scopes. This is set in oauth-proxy's `LoadDefaults()` function — NOT configurable via `--scope` flag for SA clients.
+**What:** When a ServiceAccount is the OAuth client (`--openshift-service-account`, what this tool did before 4.0.0), the OAuth server allows it only the scopes `user:info`, `user:check-access`, `user:list-scoped-projects`, `user:list-projects` and `role:<any role>:<the SA's own namespace>[:!]` (library-go `pkg/oauth/oauthserviceaccountclient/oauthclientregistry.go` `getScopeRestrictionsFor`). oauth-proxy passes `--scope` on unchanged (its `LoadDefaults` only supplies the default, `user:info user:check-access`, when `--scope` is empty); the OAuth server rejects `user:full` after the user has logged in (oauth-server `pkg/oauth/handlers/grant.go`) and redirects to `/oauth/callback?error=access_denied&error_description=scope+denied%3A+user%3Afull`. oauth-proxy then shows **"403 Permission Denied / access_denied"** and logs `ErrorPage 403 Permission Denied access_denied`; the reason is only in the callback URL's `error_description`.
 
-SA-based OAuthClients can ONLY request:
-- `user:info` — read user identity
-- `user:check-access` — perform access reviews (the app posts an `authorization.openshift.io` SubjectAccessReview with `scopes: []`, which evaluates the user's full RBAC)
-- `role:<role>:<namespace>` — scoped role access
+**Fix (4.0.0):** a real cluster-scoped OAuthClient `<APP_NAME>-<NAMESPACE>` (as RHOAI does for its `data-science` client): `grantMethod: auto` (no "Authorize Access" page), one redirect URI `https://<Route host>/oauth/callback` (the OAuth server matches scheme and host exactly), a random `secret` from Secret `<APP_NAME>-oauth-client`, no `scopeRestrictions`. oauth-proxy runs with `--client-id=<APP_NAME>-<NAMESPACE>`, `--client-secret-file=/etc/proxy/oauth/client-secret` (read raw: no trailing newline) and `--scope=user:full`. `install.sh` (and the chart's hooks) create both; see [SECURITY.md: The OAuthClient](../SECURITY.md#the-oauthclient-400).
 
-They CANNOT request: `user:full`, `user:list-projects`, `user:list-scoped-projects`.
+**Architecture:** oauth-proxy's `--openshift-sar` check (`list pods` in `redhat-ods-operator`) gates sign-in. For every change, the app runs a cluster-admin SAR with the user's token, checks that the sign-in can carry the change (its own `useroauthaccesstokens` object: scope and expiry), and makes the change **with the user's token**. The ServiceAccount reads, keeps the app's records and runs the MaaS prune job. See [SECURITY.md](../SECURITY.md).
 
-**Impact:** The user's OAuth token CANNOT:
-- List namespaces or projects
-- Create/delete resources
-- Make any K8s API calls except reading who the user is (`GET user.openshift.io/v1/users/~`) and access reviews (`authorization.openshift.io` SubjectAccessReview with `scopes: []`), which are all the app sends it for
+**Cookie behavior:** `--cookie-expire=23h`, below the default OAuth access-token lifetime of 24h, so a session ends before the token it carries stops working. OpenShift issues no refresh tokens. **Do not set `--cookie-refresh`**: openshift/oauth-proxy validates a refresh with the token as an `access_token` query parameter (`providers/internal_util.go`), which the API server ignores, so the request runs as `system:anonymous`, the refresh fails and the user is signed out (openshift/oauth-proxy issue #339), and a transport error logs the URL with the token. The cookie secret is read from Secret `<APP_NAME>-proxy` and must be 16, 24 or 32 bytes.
 
-All cluster operations MUST use the ServiceAccount token.
+**Diagnosis:** a sign-in that ends on oauth-proxy's "403 Permission Denied / access_denied" page with `?error_description=scope+denied` in the address bar means the OAuthClient restricts the scope, or oauth-proxy is still the ServiceAccount client; a JSON `{"error":"invalid_request"}` or `unauthorized_client` from the OAuth server means the OAuthClient is missing or its redirect URI does not match the Route ([RUNBOOK](../RUNBOOK.md#sign-in-and-the-oauthclient)).
 
-**Architecture:** oauth-proxy's `--openshift-sar` check (`list pods` in `redhat-ods-operator`) gates sign-in. For every change, the app runs a cluster-admin SAR with the user's token. If it passes, the SA does the work. See [SECURITY.md](../SECURITY.md).
-
-**Cookie behavior:** `--cookie-expire=23h`, below the default OAuth access-token lifetime of 24h, so a session ends before the token it carries stops working. OpenShift OAuth tokens are not refreshable. The cookie secret is read from Secret `<APP_NAME>-proxy`.
-
-**Source:** https://github.com/openshift/oauth-proxy/blob/master/providers/openshift/provider.go (LoadDefaults function)
+**Source:** openshift/oauth-proxy `providers/openshift/provider.go`, `options.go`, `oauthproxy.go`; library-go `oauthclientregistry.go`; oauth-server `grant.go`; oauth-apiserver `pkg/tokenvalidation/tokenauthenticator.go` (the `sha256~` object name).
 
 ## 3. Image Tags and Digests
 

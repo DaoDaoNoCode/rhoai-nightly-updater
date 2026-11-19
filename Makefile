@@ -100,7 +100,7 @@ release:  ## Tag a release: VERSION=vX.Y.Z (checks main, CHANGELOG and the templ
 	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=vX.Y.Z"; exit 1; }
 	@./scripts/release.sh tag '$(VERSION)'
 
-undeploy:  ## Remove the app, its cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
+undeploy:  ## Remove the app, its OAuthClient (revoking its sign-ins), cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
 	@$(INSTALL) uninstall
 
 # The Helm chart for Argo CD (docs/GITOPS.md) renders copies of
