@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
-  it("replaces the page with one sign-in state when the session expired (A02-3, UX-Global-16)", async () => {
+  it("replaces the page with one sign-in state when the session expired", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "expired", errorCode: "session_expired" }), { status: 401, headers: { "Content-Type": "application/json" } })));
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Your session expired" })).toBeInTheDocument();

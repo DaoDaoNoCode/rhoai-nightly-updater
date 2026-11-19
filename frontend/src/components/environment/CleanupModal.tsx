@@ -23,7 +23,7 @@ import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
 import { S3_NAMESPACE, storageTeardownOffered } from "./PipelinesTab";
-import { gatewayListRelease } from "./ModelsTab";
+import { gatewayListRelease } from "./modelsConfirm";
 
 /** What a Clean up offers: one feature's parts, or everything. */
 export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "all";

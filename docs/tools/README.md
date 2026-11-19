@@ -21,6 +21,7 @@ an image that no job produces any more disappears.
 |---|---|
 | `mock/server.mjs` | Serves `frontend/dist` and answers `/api/*` from fixtures. `make docs-mock SCENARIO=<name>` runs it for a look in a browser (port 18181) |
 | `mock/fixtures.mjs` | The fixtures, shaped like `pkg/types`, `pkg/api` and `pkg/cluster`. Cluster `example-cluster`, user `dev-user`, digests derived from names |
+| `mock/scenarios.mjs` | The scenarios (the world each starts from) and the reads every page makes. `npm test` in `frontend` type-checks every scenario's reads against the frontend's API types (`src/test/docsMockFixtures.test.ts`) |
 | `mock/diagnostics/*.json` | Diagnostics answers. `healthy.json` is kept by hand; the others are written by the backend from the fake clusters of the `pkg/cluster` tests: `make docs-fixtures` |
 | `capture.js` | The capture jobs (run through `playwright-cli run-code`): full pages, crops, callouts, GIF frames |
 | `screenshots.sh` | Starts everything, runs the jobs, optimises the PNGs and builds the GIFs |

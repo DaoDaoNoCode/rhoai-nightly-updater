@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { useGitOpsProfile, useProfile, useVersion } from "./AppInfo";
 import { GITOPS_POLICY_POLL_MS } from "../constants";
 import { renderWithApp } from "../test/providers";
@@ -34,8 +34,10 @@ describe("profile (docs/GITOPS.md, Profiles)", () => {
   it("never asks for the Dashboard Dev state in the gitops profile (403 profile_gitops)", async () => {
     const dashboard = vi.fn(async () => { throw new Error("must not be called"); });
     renderWithApp(<Probe />, { version: async () => version("gitops"), dashboard });
+    // The profile shows once the version settled; the effects of that render
+    // are where the Dashboard Dev state would be asked for.
     await waitFor(() => expect(probe().profile).toBe("gitops"));
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {});
     expect(dashboard).not.toHaveBeenCalled();
   });
 

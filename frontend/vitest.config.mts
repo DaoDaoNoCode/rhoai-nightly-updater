@@ -1,7 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Component and hook tests (src/**/*.test.ts[x]) run in jsdom. The older
-// node:test suites in tests/*.cjs keep running through `node --test`.
+// Every frontend test (src/**/*.test.ts[x]) runs here, in jsdom.
 export default defineConfig({
   test: {
     environment: "jsdom",

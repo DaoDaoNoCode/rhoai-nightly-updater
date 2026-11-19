@@ -111,7 +111,7 @@ function stubStream() {
 }
 
 describe("AppStateProvider operation lifecycle", () => {
-  it("keeps the stream open when the user navigates away and completes once (A06-1)", async () => {
+  it("keeps the stream open when the user navigates away and completes once", async () => {
     const phases = ["Succeeded", "Installing", "Succeeded"];
     const fetchStatus = vi.fn(async () => statusWith(phases.shift() ?? "Succeeded"));
     const { sse, signals } = stubStream();
@@ -223,7 +223,7 @@ describe("AppStateProvider operation lifecycle", () => {
   });
 });
 
-describe("reconcile tracking restored after a reload (R4b a)", () => {
+describe("reconcile tracking restored after a reload", () => {
   it("waits for GET /api/operation before a Succeeded CSV finishes it, and keeps the outcome unknown", async () => {
     sessionStorage.setItem("rhoai-reconciling", "true");
     sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 1_000));
@@ -255,7 +255,7 @@ describe("reconcile tracking restored after a reload (R4b a)", () => {
     expect(screen.getByTestId("live-region-polite")).toHaveTextContent(/outcome is unknown/);
   });
 
-  it("shows the failure when the server's lastCompleted says the tracked operation failed (R7 M1)", async () => {
+  it("shows the failure when the server's lastCompleted says the tracked operation failed", async () => {
     sessionStorage.setItem("rhoai-reconciling", "true");
     sessionStorage.setItem("rhoai-reconcile-start", String(Date.now() - 1_000));
     sessionStorage.setItem("rhoai-reconcile-kind", "update");
@@ -287,7 +287,7 @@ describe("reconcile tracking restored after a reload (R4b a)", () => {
   });
 });
 
-describe("background status polls (N9)", () => {
+describe("background status polls", () => {
   it("do not toggle loading once a status is shown", async () => {
     const fetchStatus = vi.fn(async () => statusWith("Succeeded"));
     const renders: boolean[] = [];

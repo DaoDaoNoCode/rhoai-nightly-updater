@@ -14,7 +14,7 @@ const Probe: React.FC = () => {
 };
 const probe = () => JSON.parse(screen.getByTestId("probe").textContent || "{}");
 
-describe("permissions (A02-3)", () => {
+describe("permissions", () => {
   it.each([
     ["allowed", async () => ({ canMutate: true, user: "me" }), { status: "allowed", canMutate: true, reason: null }],
     ["denied by the backend", async () => ({ canMutate: false, user: "me" }), { status: "denied", canMutate: false, reason: expect.stringContaining("cluster-admin"), reasonCode: null }],
@@ -35,7 +35,7 @@ describe("permissions (A02-3)", () => {
   });
 });
 
-describe("session expiry (A02-3)", () => {
+describe("session expiry", () => {
   it("any API call answered with 401 session_expired raises the app-wide flag and disables changes", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Your OpenShift session has expired. Log in again.", errorCode: "session_expired" }, 401)));
     renderWithApp(<Probe />);
@@ -51,7 +51,7 @@ describe("session expiry (A02-3)", () => {
     expect(isSessionExpired(new ApiError({ status: 401, errorCode: "unauthorized", message: "SA token rejected" }))).toBe(false);
   });
 
-  it("shows oauth-proxy's 403 HTML sign-in page as an expired session, not as read-only access (N3)", async () => {
+  it("shows oauth-proxy's 403 HTML sign-in page as an expired session, not as read-only access", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<!DOCTYPE html><html>Log In</html>", { status: 403, headers: { "Content-Type": "text/html" } })));
     // The real permissions call, as after a night with the tab open.
     renderWithApp(<Probe />, { permissions: getUserPermissions });
@@ -66,7 +66,7 @@ describe("session expiry (A02-3)", () => {
   });
 });
 
-describe("Dashboard Dev override (A04-1)", () => {
+describe("Dashboard Dev override", () => {
   it("reads the override from the state and from a 404 dashboard_not_deployed body", () => {
     expect(overrideFromDashboardResponse({ override: { active: true } } as never)?.active).toBe(true);
     const notDeployed = new ApiError({ status: 404, errorCode: "dashboard_not_deployed", message: "x", details: { override: { active: true, operatorPaused: true } } });

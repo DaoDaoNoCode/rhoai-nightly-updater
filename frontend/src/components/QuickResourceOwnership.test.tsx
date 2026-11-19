@@ -62,7 +62,7 @@ afterEach(() => {
 /** The dialog footer's Close button (the header's X is also named Close). */
 const footerClose = (dialog: HTMLElement) => within(dialog).getAllByRole("button", { name: "Close" }).find((b) => b.textContent === "Close")!;
 
-describe("terminal states (A06-5)", () => {
+describe("terminal states", () => {
   it("S3 storage in ImagePullBackOff reads Error, says it in words with Repair in the alert, raw reasons in Technical details; Delete says why it is off", async () => {
     setup(live());
     renderAt();
@@ -211,7 +211,7 @@ describe("health and ownership are separate", () => {
   });
 });
 
-describe("MLflow PR override (A04-5)", () => {
+describe("MLflow PR override", () => {
   it("Revert and Deploy PR stay available when the PR image broke MLflow", async () => {
     setup(live({ mlflow: { deployed: true, ready: false, managedByTool: true, prOverride: true, prNumber: 399, revertImage: "", waitingReason: "CrashLoopBackOff", terminalError: true, message: "CrashLoopBackOff", currentImage: "quay.io/opendatahub/mlflow:odh-pr-399" } }));
     renderAt("/test-resources?tab=mlflow");
