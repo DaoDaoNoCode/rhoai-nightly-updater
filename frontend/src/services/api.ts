@@ -1,4 +1,4 @@
-import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../types';
+import { StatusResponse, OperationResponse, LatestNightlyResponse, NightlyTagsResponse, ComponentsResponse, FBCContentResponse, UserPermissions, DashboardState, DashboardBuildsResponse, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, DiagnosticResult, OperationStatusResponse, VersionInfo, UpdateCheck, PRContainsResponse, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../types';
 
 /**
  * Error thrown by every API helper. `status` is the HTTP status (0 when no
@@ -753,6 +753,13 @@ export function streamPlayground(
 /** Models as a Service: the platform part by part, and this tool's models with their publication. */
 export function getMaaS(): Promise<MaaSStatus> {
   return request('/api/resources/maas');
+}
+
+/** Which of the groups typed in a MaaS dialog have no OpenShift Group (cluster-admins only; at most 20 names). */
+export function checkMaaSGroups(names: string[]): Promise<MaaSGroupProblem[]> {
+  const q = new URLSearchParams();
+  names.forEach((n) => q.append('name', n));
+  return request(`/api/resources/maas/groups?${q.toString()}`);
 }
 
 /**

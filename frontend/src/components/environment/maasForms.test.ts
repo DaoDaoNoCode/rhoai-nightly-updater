@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   audienceProblem, audienceRequest, audienceText, connectionUrlProblem, databaseProblem, databaseRequest, defaultDatabaseForm,
-  defaultLimitForm, limitProblem, limitRequest, limitText, windowText,
+  defaultLimitForm, limitProblem, limitRequest, limitSummary, limitText, openShiftGroupName, windowText,
 } from "./maasForms";
 import type { MaaSDatabase } from "../../types";
 
@@ -14,7 +14,9 @@ describe("the database form", () => {
   it("preselects the server's default, or the first usable choice", () => {
     expect(defaultDatabaseForm(db).kind).toBe("development");
     expect(defaultDatabaseForm({ ...db, choices: [db.choices[0], { id: "development", plan: [], blockedReason: "taken" }, db.choices[2]] }).kind).toBe("external");
-    expect(defaultDatabaseForm(db, "development").kind).toBe("external");
+    // Change database preselects nothing.
+    expect(defaultDatabaseForm(db, "development").kind).toBe("");
+    expect(databaseProblem({ kind: "", connectionUrl: "" }, db)).toBe("Choose a database.");
   });
 
   it("checks the URL as the server does, without quoting it", () => {
@@ -53,13 +55,18 @@ describe("the limit form", () => {
     expect(one("1000000001", "1")).toContain("Unlimited");
     expect(one("1.5", "1")).toContain("whole number");
     expect(one("5", "10000", "s")).toContain("9999");
-    expect(limitProblem({ preset: "custom", rows: [{ limit: "1", amount: "1", unit: "m" }, { limit: "2", amount: "1", unit: "m" }] })).toContain("twice");
+    expect(limitProblem({ preset: "custom", rows: [{ limit: "1", amount: "1", unit: "m" }, { limit: "2", amount: "1", unit: "m" }] })).toBe("Another limit is per minute already.");
     expect(limitProblem({ preset: "custom", rows: [] })).toContain("at least one");
   });
 
   it("reads an existing limit back into the form", () => {
     expect(defaultLimitForm({ preset: "custom", rates: [{ limit: 7, window: "30s" }] })).toEqual({ preset: "custom", rows: [{ limit: "7", amount: "30", unit: "s" }] });
-    expect(defaultLimitForm().preset).toBe("free");
+    expect(defaultLimitForm().preset).toBe("premium");
+    expect(limitSummary({ preset: "custom", rows: [{ limit: "100000", amount: "24", unit: "h" }, { limit: "10000", amount: "1", unit: "h" }] }))
+      .toBe("Each user: 100,000 tokens a day and 10,000 tokens an hour; whichever runs out first stops them.");
+    expect(limitSummary({ preset: "custom", rows: [{ limit: "0", amount: "1", unit: "h" }] })).toBeNull();
+    expect(limitProblem({ preset: "unlimited", rows: [] }, true)).toBe("This cluster's MaaS has no unlimited option.");
+    expect(limitProblem({ preset: "unlimited", rows: [] })).toBeNull();
   });
 
   it("says limits in words", () => {
@@ -72,19 +79,23 @@ describe("the limit form", () => {
 });
 
 describe("the audience form", () => {
-  it("sends everyone, or the names one per line or comma", () => {
+  it("sends everyone, or the names one per line (a name may have commas)", () => {
     expect(audienceRequest({ everyone: true, groups: "x", users: "" })).toEqual({ everyone: true });
-    expect(audienceRequest({ everyone: false, groups: "ml-team\n data , ml-team", users: "system:serviceaccount:ci:runner" }))
-      .toEqual({ everyone: false, groups: ["ml-team", "data"], users: ["system:serviceaccount:ci:runner"] });
+    expect(audienceRequest({ everyone: false, groups: "ml-team\r\n data \nml-team\ncn=admins,ou=groups", users: "system:serviceaccount:ci:runner" }))
+      .toEqual({ everyone: false, groups: ["ml-team", "data", "cn=admins,ou=groups"], users: ["system:serviceaccount:ci:runner"] });
   });
 
-  it("checks names by OpenShift's rules", () => {
+  it("takes names as MaaS matches them: exactly, as the identity provider sends them", () => {
     expect(audienceProblem({ everyone: false, groups: "", users: "" })).toContain("at least one");
     expect(audienceProblem({ everyone: false, groups: "system:authenticated", users: "" })).toContain("Everyone signed in");
-    expect(audienceProblem({ everyone: false, groups: "a/b", users: "" })).toContain('"/"');
-    expect(audienceProblem({ everyone: false, groups: "", users: "alice:bob" })).toContain("service accounts");
-    expect(audienceProblem({ everyone: false, groups: "", users: "system:serviceaccount:Bad:x" })).toContain("not a service account");
-    expect(audienceProblem({ everyone: false, groups: "ml", users: "kube:admin\nb64:YQ==" })).toBeNull();
+    expect(audienceProblem({ everyone: false, groups: "/admins\noidc:ml\na%b\n~", users: "alice:bob\nsystem:serviceaccount:Bad:x" })).toBeNull();
+    expect(audienceProblem({ everyone: false, groups: "a\tb", users: "" })).toContain("control character");
+    expect(audienceProblem({ everyone: false, groups: "", users: "x".repeat(254) })).toContain("253");
+  });
+
+  it("knows which names can be OpenShift groups", () => {
+    for (const n of ["ml-team", "ML Team", "team.a"]) expect(openShiftGroupName(n), n).toBe(true);
+    for (const n of ["/admins", "oidc:ml", "a%b", "..", ".", "~"]) expect(openShiftGroupName(n), n).toBe(false);
   });
 
   it("says the audience in words", () => {

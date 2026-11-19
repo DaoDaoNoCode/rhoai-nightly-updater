@@ -119,8 +119,8 @@ func (m *maasRun) changeAccess(req *types.MaaSAudience) (*types.OperationRespons
 	}
 	sub, auth := maasAccessObjects(c, live, limits, aud, maasOwnSubscriptionPriority(c))
 	if !aud.everyone {
-		for _, warning := range maasGroupWarnings(c, aud.groups) {
-			m.step("check", "running", warning)
+		for _, p := range maasGroupProblems(c, aud.groups) {
+			m.step("check", "running", p.Message)
 		}
 	}
 	subDesc, authDesc := "MaaSSubscription "+maasSubscriptionName, "MaaSAuthPolicy "+maasAuthPolicyName

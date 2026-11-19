@@ -130,7 +130,7 @@ describe("MaaS run dialog", () => {
       }),
     });
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
-    expect(await screen.findByText(/its direct address on the Models tab answers 404 until it is unpublished/)).toBeInTheDocument();
+    expect(await screen.findByText(/While published, the model.s direct address answers 404/)).toBeInTheDocument();
     expect(screen.queryByText(/keep working/)).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
     const confirm = await screen.findByRole("dialog", { name: /Publish qwen25-05b-instruct in dev to MaaS\?/ });
@@ -210,14 +210,18 @@ describe("MaaS run dialog", () => {
     });
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
     const granite = (await screen.findByText("Granite Embedding 125M English (CPU)")).closest("tr")!;
-    expect(within(granite).getByText(reason)).toBeInTheDocument();
+    // Only "Not published" in the row; why it cannot be published is the button's tooltip.
+    expect(within(granite).queryByText(reason)).toBeNull();
+    expect(within(granite).getByText("Not published")).toBeInTheDocument();
+    fireEvent.focus(within(granite).getByRole("button", { name: "Publish" }));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(reason);
     expect(within(granite).getByRole("button", { name: "Publish" })).toHaveAttribute("aria-disabled", "true");
     const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
     fireEvent.click(within(qwen3).getByRole("button", { name: "Publish" }));
     const confirm = await screen.findByRole("dialog", { name: /Publish qwen3-1-7b in dev to MaaS\?/ });
     fireEvent.click(within(confirm).getByRole("button", { name: "Publish" }));
     await screen.findByRole("dialog", { name: "Publish qwen3-1-7b in dev" });
-    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "free" }, access: { everyone: true } }]);
+    expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "publish", project: "dev", model: "qwen3-1-7b", limit: { preset: "premium" }, access: { everyone: true } }]);
   });
 
   it("several models of a project: each row has its own state, and Unpublish names its model", async () => {

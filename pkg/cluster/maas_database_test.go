@@ -1,8 +1,12 @@
 package cluster
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -45,21 +49,49 @@ func secretURL(t *testing.T, mc *modelsCluster) string {
 	return string(b)
 }
 
-// noLeak fails when the password shows anywhere but in maas-db-config:
-// responses, step events, logs, this tool's records and activity.
+// leakForms are the ways a secret could show: as it is, base64 (a
+// Secret's data), percent-encoded every way a URL holds it, and
+// JSON-escaped.
+func leakForms(secret string) []string {
+	var hex strings.Builder
+	for _, c := range []byte(secret) {
+		fmt.Fprintf(&hex, "%%%02x", c)
+	}
+	j, _ := json.Marshal(secret)
+	forms := []string{secret, base64.StdEncoding.EncodeToString([]byte(secret)), hex.String(), strings.ToUpper(hex.String()),
+		url.QueryEscape(secret), url.PathEscape(secret), string(j[1 : len(j)-1])}
+	return forms
+}
+
+// captureSlog sends the log to a buffer for the rest of the test.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	return &buf
+}
+
+// noLeak fails when the secret shows, in any of its forms, anywhere but in
+// maas-db-config and postgres-creds: responses, step events, this tool's
+// records and every other object (activity included), and the status.
 func noLeak(t *testing.T, mc *modelsCluster, secret string, res *types.OperationResponse, events []UpdateStepEvent) {
 	t.Helper()
 	out, _ := json.Marshal(struct {
 		R *types.OperationResponse
 		E []UpdateStepEvent
 	}{res, events})
-	if strings.Contains(string(out), secret) {
-		t.Fatalf("the password is in the response or the steps: %s", out)
-	}
+	var status []byte
 	if st, err := GetMaaSStatus(mc.c); err == nil {
-		raw, _ := json.Marshal(st)
-		if strings.Contains(string(raw), secret) {
-			t.Fatal("the password is in the status")
+		status, _ = json.Marshal(st)
+	}
+	for _, form := range leakForms(secret) {
+		if strings.Contains(string(out), form) {
+			t.Fatalf("the secret (as %q) is in the response or the steps: %s", form, out)
+		}
+		if strings.Contains(string(status), form) {
+			t.Fatalf("the secret (as %q) is in the status", form)
 		}
 	}
 	mc.f.mu.Lock()
@@ -69,9 +101,97 @@ func noLeak(t *testing.T, mc *modelsCluster, secret string, res *types.Operation
 			continue
 		}
 		raw, _ := json.Marshal(obj)
-		if strings.Contains(string(raw), secret) || strings.Contains(string(raw), base64.StdEncoding.EncodeToString([]byte(tUserDBURL))) {
-			t.Fatalf("the password is in %+v", k)
+		for _, form := range append(leakForms(secret), base64.StdEncoding.EncodeToString([]byte(tUserDBURL))) {
+			if strings.Contains(string(raw), form) {
+				t.Fatalf("the secret (as %q) is in %+v", form, k)
+			}
 		}
+	}
+}
+
+// echoedSecrets are the connection URLs and passwords in the bodies the
+// fake quoted back: what a refusal could carry.
+func echoedSecrets(t *testing.T, mc *modelsCluster) []string {
+	t.Helper()
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	var out []string
+	for _, body := range mc.f.echoed {
+		var obj struct {
+			Data map[string]string `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(body), &obj); err != nil {
+			t.Fatalf("echoed %q: %v", body, err)
+		}
+		for _, k := range []string{"DB_CONNECTION_URL", "POSTGRES_PASSWORD"} {
+			if v, err := base64.StdEncoding.DecodeString(obj.Data[k]); err == nil && len(v) > 0 {
+				out = append(out, string(v))
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the fake quoted no secret back: the test checks nothing")
+	}
+	return out
+}
+
+// An API server's refusal can quote the object it refuses: the connection
+// URL (base64 in maas-db-config's data) and the development database's
+// password (base64 in postgres-creds'). No message carries them, in any
+// form, whichever write is refused: a dry run, a create, an apply of an
+// existing Secret, in Set up and in Change database.
+func TestMaaSDatabase_RefusalsQuotingTheSecretAreRedacted(t *testing.T) {
+	const secrets = "/api/v1/namespaces/redhat-ai-gateway-infra/secrets"
+	otherURL := "postgresql://other:" + "Tw0-%40th3r" + "@db2.example.com/maas?sslmode=require"
+	ext := func(u string) *types.MaaSDatabaseRequest {
+		return &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: u}
+	}
+	dev := &types.MaaSDatabaseRequest{Kind: "development"}
+	for _, tc := range []struct {
+		name string
+		prep *types.MaaSDatabaseRequest
+		req  types.MaaSRequest
+		echo string
+	}{
+		{"Set up, yours: the dry run of maas-db-config", nil, types.MaaSRequest{Action: "setup", Database: ext(tUserDBURL)}, "DRYRUN POST " + secrets},
+		{"Set up, yours: the write of maas-db-config", nil, types.MaaSRequest{Action: "setup", Database: ext(tUserDBURL)}, "POST " + secrets},
+		{"Set up, development: the dry run of postgres-creds", nil, types.MaaSRequest{Action: "setup", Database: dev}, "DRYRUN POST " + secrets},
+		{"Set up, development: the write of postgres-creds", nil, types.MaaSRequest{Action: "setup", Database: dev}, "POST " + secrets},
+		{"Change database, yours to yours: the dry run of the apply", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: ext(otherURL), ConfirmKeysLost: true}, "DRYRUN PATCH " + secrets + "/maas-db-config"},
+		{"Change database, yours to yours: the apply", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: ext(otherURL), ConfirmKeysLost: true}, "PATCH " + secrets + "/maas-db-config"},
+		{"Change database, yours to development: the write of postgres-creds", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: dev, ConfirmKeysLost: true}, "POST " + secrets},
+		{"Change database, yours to development: the apply of maas-db-config", ext(tUserDBURL), types.MaaSRequest{Action: "change-database", Database: dev, ConfirmKeysLost: true}, "PATCH " + secrets + "/maas-db-config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureSlog(t)
+			mc := newMaaSCluster(t)
+			devDatabaseRuns(mc)
+			if tc.prep != nil {
+				if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tc.prep}); !res.Success {
+					t.Fatalf("prep: %+v", res)
+				}
+			}
+			mc.f.failEcho[tc.echo] = 422
+			res, events := runMaaSOp(t, mc.c, tc.req)
+			if res.Success {
+				t.Fatalf("succeeded although %s was refused: %+v", tc.echo, res)
+			}
+			for _, s := range echoedSecrets(t, mc) {
+				noLeak(t, mc, s, res, events)
+				if u, err := url.Parse(s); err == nil && u.User != nil {
+					p, _ := u.User.Password()
+					noLeak(t, mc, p, res, events)
+				}
+				for _, form := range leakForms(s) {
+					if strings.Contains(logs.String(), form) {
+						t.Fatalf("the secret (as %q) is in the log", form)
+					}
+				}
+			}
+			if !strings.Contains(res.Message, "[redacted]") {
+				t.Errorf("the refusal is not shown, redacted: %q", res.Message)
+			}
+		})
 	}
 }
 
@@ -114,11 +234,34 @@ func TestValidateMaaSConnectionURL(t *testing.T) {
 	}
 }
 
+// redactURL covers every form a secret can take in a message, any
+// password however short, and overlapping finds as one.
+func TestRedactURL_EveryForm(t *testing.T) {
+	typed := "postgresql://u:p%40ss@db/maas" // the password is p@ss, typed percent-encoded
+	for _, leak := range []string{typed, base64.StdEncoding.EncodeToString([]byte(typed)), "u:p%40ss", "p%40ss", "p@ss", "p%40ss", "%70%40%73%73", "%70%40%73%73"} {
+		if got := redactURL("refused: "+leak+" here", typed); strings.Contains(got, "p@ss") || strings.Contains(got, "40ss") || got != "refused: [redacted] here" {
+			t.Errorf("%q: %q", leak, got)
+		}
+	}
+	dev := maasPOCConnectionURL("pw")
+	for _, leak := range []string{dev, base64.StdEncoding.EncodeToString([]byte(dev)), "%70%77", "pw", base64.StdEncoding.EncodeToString([]byte("pw"))} {
+		if got := (&maasDBPlan{password: "pw"}).redact("x " + leak + " y"); got != "x [redacted] y" {
+			t.Errorf("dev %q: %q", leak, got)
+		}
+	}
+	if got := redactURL("abcab", "postgresql://u:ab@h/d"); got != "[redacted]c[redacted]" {
+		t.Errorf("a 2-character password: %q", got)
+	}
+	if got := redactURL("nothing here", ""); got != "nothing here" {
+		t.Errorf("no secret: %q", got)
+	}
+}
+
 // The development database is setup-database.sh's objects, field for field.
 func TestMaaSPOCObjects_AreTheDocsScript(t *testing.T) {
-	d := maasPOCDeploymentObject("ns", "img")
+	d := maasPOCDeploymentObject("ns", "img", "uid-7")
 	raw, _ := json.Marshal(d)
-	for _, want := range []string{`"replicas":1`, `"matchLabels":{"app":"postgres"}`, `"template":{"metadata":{"labels":{"app":"postgres"}}`,
+	for _, want := range []string{`"replicas":1`, `"matchLabels":{"app":"postgres"}`, `"template":{"metadata":{"annotations":{"rhoai-nightly-updater/postgres-creds-uid":"uid-7"},"labels":{"app":"postgres"}}`,
 		`{"name":"POSTGRESQL_USER","valueFrom":{"secretKeyRef":{"key":"POSTGRES_USER","name":"postgres-creds"}}}`,
 		`{"name":"POSTGRESQL_PASSWORD","valueFrom":{"secretKeyRef":{"key":"POSTGRES_PASSWORD","name":"postgres-creds"}}}`,
 		`{"name":"POSTGRESQL_DATABASE","valueFrom":{"secretKeyRef":{"key":"POSTGRES_DB","name":"postgres-creds"}}}`,
@@ -324,6 +467,321 @@ func TestMaaSDatabase_AdoptedAndForeignObjectsAreLeftAlone(t *testing.T) {
 	mc.f.requests = nil
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); res.Success || res.ErrorCode != "not_managed" || len(mc.f.mutations()) > 0 {
 		t.Fatalf("setup over someone's Deployment: %+v %v", res, mc.f.mutations())
+	}
+}
+
+// credsRequests are the requests that name postgres-creds, other than its
+// delete (its create goes to the collection): a read or a change.
+func credsRequests(mc *modelsCluster) []string {
+	mc.f.mu.Lock()
+	defer mc.f.mu.Unlock()
+	var out []string
+	for _, r := range mc.f.requests {
+		if strings.HasSuffix(r, tPOCCreds) && !strings.HasPrefix(r, "DELETE ") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func podCredsAnnotation(mc *modelsCluster) string {
+	tmpl := ensureMap(ensureMap(ensureMap(mc.f.get(tPOCDeploy), "spec"), "template"), "metadata")
+	v, _ := ensureMap(tmpl, "annotations")[maasPOCCredsAnnotation].(string)
+	return v
+}
+
+// postgres-creds is only created and deleted, never read or changed (the
+// template grants no get or patch on it): this tool knows it by the UID it
+// recorded, takes the password from its own maas-db-config, and deletes
+// only the object with that UID.
+func TestMaaSDatabase_PostgresCredsIsOnlyCreatedAndDeletedByUID(t *testing.T) {
+	mc := newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	dev := types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}
+	if res, _ := runMaaSOp(t, mc.c, dev); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	uid := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"].(string)
+	if rec := readRecord(t, mc.c); rec.POCCredsUID != uid {
+		t.Fatalf("record %+v, Secret UID %s", rec, uid)
+	}
+	if got := podCredsAnnotation(mc); got != uid {
+		t.Fatalf("the pod names postgres-creds %q, want %q", got, uid)
+	}
+	// Set up again: the password comes from maas-db-config; postgres-creds
+	// is not touched.
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup again: %+v", res)
+	}
+	if got := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"]; got != uid {
+		t.Fatal("postgres-creds was created again although its password was known")
+	}
+	// Without maas-db-config there is no password to keep: a new one, the
+	// recorded Secret deleted by its UID and created again, the pod rolled.
+	deleteFakeObject(mc, tMaaSDBConfig)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success {
+		t.Fatalf("setup without maas-db-config: %+v", res)
+	}
+	uid2 := ensureMap(mc.f.get(tPOCCreds), "metadata")["uid"].(string)
+	creds := ensureMap(mc.f.get(tPOCCreds), "data")
+	pw, _ := base64.StdEncoding.DecodeString(creds["POSTGRES_PASSWORD"].(string))
+	if uid2 == uid || readRecord(t, mc.c).POCCredsUID != uid2 || podCredsAnnotation(mc) != uid2 || secretURL(t, mc) != maasPOCConnectionURL(string(pw)) {
+		t.Fatalf("recreate: uid %s -> %s, record %+v", uid, uid2, readRecord(t, mc.c))
+	}
+	if r := credsRequests(mc); len(r) != 0 {
+		t.Fatalf("postgres-creds was read or changed: %v", r)
+	}
+	// Someone replaces it: Remove keeps theirs (UID precondition) and says so.
+	deleteFakeObject(mc, tPOCCreds)
+	mc.f.putJSON(tPOCCreds, `{"data":{"POSTGRES_PASSWORD":"dGhlaXJz"}}`)
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success || !mc.f.has(tPOCCreds) || mc.f.has(tPOCDeploy) {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if !strings.Contains(strings.Join(res.Logs, "\n"), "was replaced by one this tool did not create") {
+		t.Errorf("logs %v", res.Logs)
+	}
+	if rec := readRecord(t, mc.c); rec.POCCredsUID != "" {
+		t.Fatalf("record %+v", rec)
+	}
+	for _, r := range credsRequests(mc) {
+		if strings.HasPrefix(r, "GET ") || strings.Contains(r, "PATCH ") {
+			t.Fatalf("postgres-creds was read or changed: %s", r)
+		}
+	}
+}
+
+// A postgres-creds this tool did not record is someone else's: the
+// development choice is refused before any change (its create's dry run
+// answers 409), and Remove never deletes one without a record.
+func TestMaaSDatabase_UnrecordedPostgresCredsIsForeign(t *testing.T) {
+	mc := newMaaSCluster(t)
+	mc.f.putJSON(tPOCCreds, `{}`)
+	mc.f.requests = nil
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}})
+	if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, "postgres-creds") || len(mc.f.mutations()) > 0 {
+		t.Fatalf("setup over someone's postgres-creds: %+v %v", res, mc.f.mutations())
+	}
+	// A development database of this tool's with no record of its Secret
+	// (an earlier run's record lost): Remove keeps the Secret, saying why.
+	mc = newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	rec := readRecord(t, mc.c)
+	rec.POCCredsUID = ""
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success || !mc.f.has(tPOCCreds) || !strings.Contains(strings.Join(res.Logs, "\n"), "no record of creating it") {
+		t.Fatalf("teardown without a record: %+v", res)
+	}
+}
+
+// The development database that never becomes available stops Set up
+// after MaaSDevDatabaseTimeout (the injected clock: no real wait), with
+// what it made recorded; Set up again finishes it once the pod runs.
+func TestMaaSDatabase_DevelopmentNotAvailableTimesOut(t *testing.T) {
+	mc := newMaaSCluster(t)
+	plain := mc.f.onGet
+	dev := types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}
+	res, events := runMaaSOp(t, mc.c, dev)
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "not available after "+clockText(MaaSDevDatabaseTimeout)) {
+		t.Fatalf("setup with a pod that never runs: %+v", res)
+	}
+	if got := finalSteps(events); !strings.HasSuffix(got, "database=failed") {
+		t.Fatalf("steps %s", got)
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "development" || rec.POCCredsUID == "" || mc.f.has(tMaaSDBConfig) {
+		t.Fatalf("record %+v; maas-db-config written before the database runs: %v", rec, mc.f.has(tMaaSDBConfig))
+	}
+	st, _ := GetMaaSStatus(mc.c)
+	if db := maasPart(t, st, "database"); db.State != "missing" || !strings.Contains(db.Message, "maas-db-config") {
+		t.Fatalf("status %+v", db)
+	}
+	mc.f.onGet = plain
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup"}); !res.Success || !mc.f.has(tMaaSDBConfig) {
+		t.Fatalf("setup again: %+v", res)
+	}
+}
+
+// maasPOCRestartWarning: a development pod made after maas-api started
+// means its keys and tables are gone; one made before is fine; anything it
+// cannot read is no warning.
+func TestMaaSPOCRestartWarning(t *testing.T) {
+	const pods = "/api/v1/namespaces/redhat-ai-gateway-infra/pods/"
+	for _, tc := range []struct {
+		name, dbCreated, apiStarted string
+		want                        bool
+	}{
+		{"database replaced after maas-api started", "2026-11-18T10:05:00Z", "2026-11-18T10:00:00Z", true},
+		{"database older than maas-api", "2026-11-18T09:00:00Z", "2026-11-18T10:00:00Z", false},
+		{"no maas-api running", "2026-11-18T10:05:00Z", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			f.putJSON(pods+"postgres-abc", `{"metadata":{"labels":{"app":"postgres"},"creationTimestamp":"`+tc.dbCreated+`"}}`)
+			running := `{}`
+			if tc.apiStarted != "" {
+				running = `{"running":{"startedAt":"` + tc.apiStarted + `"}}`
+			}
+			f.putJSON(pods+"maas-api-xyz", `{"status":{"containerStatuses":[{"state":`+running+`}]}}`)
+			got := maasPOCRestartWarning(c, "redhat-ai-gateway-infra")
+			if (got != "") != tc.want {
+				t.Fatalf("warning %q, want one: %v", got, tc.want)
+			}
+			if tc.want && (!strings.Contains(got, "2026-11-18T10:05:00Z") || !strings.Contains(got, "oc rollout restart deployment/maas-api -n redhat-ai-gateway-infra")) {
+				t.Errorf("warning %q", got)
+			}
+		})
+	}
+	f, c := newResourceFake(t)
+	f.fail["GET /api/v1/namespaces/redhat-ai-gateway-infra/pods"] = 403
+	if got := maasPOCRestartWarning(c, "redhat-ai-gateway-infra"); got != "" {
+		t.Errorf("unreadable pods: %q", got)
+	}
+}
+
+// Change database deletes only what this tool made of the database before:
+// a Service postgres someone put in its place and a postgres-creds with
+// another UID are kept, and the log says so.
+func TestMaaSDatabase_ChangeKeepsForeignObjectsOfTheDatabaseBefore(t *testing.T) {
+	mc := newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	// Status reads a foreign Service as a problem, so the swap happens
+	// between the change's check and its cleanup.
+	swapped := false
+	mc.f.beforeServe = func(method, path string) {
+		if !swapped && method == "PATCH" && strings.HasSuffix(path, "/maas-db-config") {
+			swapped = true
+			deleteFakeObject(mc, tPOCService)
+			mc.f.putJSON(tPOCService, `{"metadata":{"labels":{"app":"theirs"}}}`)
+			deleteFakeObject(mc, tPOCCreds)
+			mc.f.putJSON(tPOCCreds, `{}`)
+		}
+	}
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "change-database", Database: tCNPG, ConfirmKeysLost: true})
+	if !res.Success || !swapped {
+		t.Fatalf("change: %+v (swapped %v)", res, swapped)
+	}
+	if mc.f.has(tPOCDeploy) || !mc.f.has(tPOCService) || !mc.f.has(tPOCCreds) {
+		t.Fatal("the change deleted an object this tool did not make, or kept its own Deployment")
+	}
+	logs := strings.Join(res.Logs, "\n")
+	if !strings.Contains(logs, "Kept Service redhat-ai-gateway-infra/postgres: not created by this tool") || !strings.Contains(logs, "was replaced by one this tool did not create") {
+		t.Errorf("logs %s", logs)
+	}
+}
+
+// A Change database that stops after the new database is in place leaves
+// two databases; Remove deletes both (each object this tool made).
+func TestMaaSDatabase_ChangeStoppedPartWayThenRemoveCleansBoth(t *testing.T) {
+	mc := newMaaSCluster(t)
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.fail["DELETE "+tPOCDeploy] = 500
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "change-database", Database: tCNPG, ConfirmKeysLost: true})
+	if res.Success || !strings.HasSuffix(finalSteps(events), "cleanup=failed") {
+		t.Fatalf("change: %+v %s", res, finalSteps(events))
+	}
+	if !mc.f.has(tMaaSDB) || !mc.f.has(tPOCDeploy) || !mc.f.has(tPOCCreds) {
+		t.Fatal("expected both databases after the stopped change")
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "cnpg" || rec.POCCredsUID == "" {
+		t.Fatalf("record %+v", rec)
+	}
+	if got := secretURL(t, mc); !strings.Contains(got, "maas-db-rw") {
+		t.Fatalf("maas-db-config names %q, not the new database", got)
+	}
+	delete(mc.f.fail, "DELETE "+tPOCDeploy)
+	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "teardown"})
+	if !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+	for _, p := range []string{tMaaSDB, tMaaSDBConfig, tPOCDeploy, tPOCService, tPOCCreds} {
+		if mc.f.has(p) {
+			t.Errorf("%s is left", p)
+		}
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "" || rec.POCCredsUID != "" {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
+// Set up never changes your PostgreSQL's URL in place: a new URL is refused
+// (it would be ignored), and Change database does it.
+func TestMaaSDatabase_SetUpRefusesANewURLForYours(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: tUserDBURL}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.requests = nil
+	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: "postgresql://u:n3w-pw@db2/maas"}})
+	if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "Change database") || len(mc.f.mutations()) > 0 {
+		t.Fatalf("setup with a new URL: %+v %v", res, mc.f.mutations())
+	}
+	noLeak(t, mc, "n3w-pw", res, events)
+	if got := secretURL(t, mc); got != tUserDBURL {
+		t.Fatal("the URL changed")
+	}
+}
+
+// Your PostgreSQL is recorded only once its Secret is written: a refused
+// write leaves no record, so the status asks again instead of calling the
+// Secret lost. A Secret of this tool's with no record (the record write
+// failed after it) reads as yours, not as an earlier build's CloudNativePG.
+func TestMaaSDatabase_YoursIsRecordedAfterItsSecret(t *testing.T) {
+	mc := newMaaSCluster(t)
+	mc.f.fail["POST /api/v1/namespaces/redhat-ai-gateway-infra/secrets"] = 500
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: tUserDBURL}}); res.Success {
+		t.Fatalf("setup with a failing write: %+v", res)
+	}
+	if rec := readRecord(t, mc.c); rec.Database != "" {
+		t.Fatalf("recorded before the Secret: %+v", rec)
+	}
+	st, _ := GetMaaSStatus(mc.c)
+	if db := maasPart(t, st, "database"); st.Database.Current != "" || !st.Database.Needed || strings.Contains(db.Message, "is gone") {
+		t.Fatalf("status %+v %+v", st.Database, db)
+	}
+	delete(mc.f.fail, "POST /api/v1/namespaces/redhat-ai-gateway-infra/secrets")
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "external", ConnectionURL: tUserDBURL}}); !res.Success {
+		t.Fatalf("setup again: %+v", res)
+	}
+	rec := readRecord(t, mc.c)
+	if rec.Database != "external" {
+		t.Fatalf("record %+v", rec)
+	}
+	rec.Database = ""
+	if err := writeMaaSRecord(mc.c, rec); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := GetMaaSStatus(mc.c); st.Database.Current != "external" {
+		t.Fatalf("an unrecorded Secret of this tool's reads as %q", st.Database.Current)
+	}
+}
+
+// Change database runs only from a database that runs: the check refuses
+// before any change.
+func TestMaaSDatabase_ChangeRefusesADatabaseThatDoesNotRun(t *testing.T) {
+	mc := newMaaSCluster(t)
+	plain := mc.f.onGet
+	devDatabaseRuns(mc)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: &types.MaaSDatabaseRequest{Kind: "development"}}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.onGet = plain // the pod is gone: not Available
+	mc.f.requests = nil
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "change-database", Database: tCNPG, ConfirmKeysLost: true})
+	if res.Success || res.ErrorCode != "not_ready" || len(mc.f.mutations()) > 0 {
+		t.Fatalf("change from a database that does not run: %+v %v", res, mc.f.mutations())
 	}
 }
 

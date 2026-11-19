@@ -12,14 +12,13 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
-  HelperText,
-  HelperTextItem,
   Label,
   Stack,
   StackItem,
+  Tooltip,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
-import type { MaaSModel, MaaSPart, MaaSRequest, MaaSStatus } from "../../types";
+import type { MaaSGroupProblem, MaaSModel, MaaSPart, MaaSRequest, MaaSStatus } from "../../types";
 import { AudienceFields, DatabaseChoice, KeysLostCheck, LimitFields } from "./MaaSDialogFields";
 import {
   audienceProblem, audienceRequest, audienceText, databaseLabel, databaseProblem, databaseRequest, defaultAudienceForm, defaultDatabaseForm,
@@ -133,6 +132,20 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
   );
 };
 
+/** A group of the audience with no OpenShift Group, or one that could not be checked, with the commands that make it. */
+export const GroupProblemAlert: React.FC<{ problem: MaaSGroupProblem; idPrefix: string }> = ({ problem, idPrefix }) => (
+  <Alert variant="warning" isInline component="p" title={problem.missing ? `Group ${problem.name} does not exist` : `Cannot check group ${problem.name}`}>
+    <Stack hasGutter>
+      <StackItem>{problem.message}{problem.commands ? " A cluster-admin creates it and adds people to it:" : ""}</StackItem>
+      {problem.commands && (
+        <StackItem>
+          <CopyableCode id={`${idPrefix}-group-${problem.name.replace(/[^A-Za-z0-9_-]/g, "_")}`} label={`the commands that create group ${problem.name}`} code={problem.commands} />
+        </StackItem>
+      )}
+    </Stack>
+  </Alert>
+);
+
 /** The words for a model's publication. */
 export function maasPublication(i: MaaSModel): string {
   if (!i.published) return "Not published";
@@ -148,7 +161,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
   return (
     <TabSection title="Published models" id="maas-models">
       <Content component="p">
-        Publishing offers one of this tool&apos;s chat models through MaaS to everyone signed in, or to the groups and users you name, each with a token limit per user (the docs&apos; samples, unlimited, or your own; counted from the token usage a response reports). While it is published, the model is used through MaaS (with an API key) and the dashboard&apos;s playground; its direct address on the Models tab answers 404 until it is unpublished. Unpublish routes it as before.
+        Publish a chat model to call it through MaaS with an API key. Each user gets the token limit you set. While published, the model's direct address answers 404.
       </Content>
       {maas?.access && (
         <Stack hasGutter>
@@ -158,7 +171,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
               {!readOnly && <FlexItem><Button variant="link" isInline isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "maas-access" })}>Change who can use them</Button></FlexItem>}
             </Flex>
           </StackItem>
-          {(maas.access.warnings ?? []).map((w) => <StackItem key={w}><HelperText><HelperTextItem variant="warning">{w}</HelperTextItem></HelperText></StackItem>)}
+          {(maas.access.groupProblems ?? []).map((p) => <StackItem key={p.name}><GroupProblemAlert problem={p} idPrefix="maas-access" /></StackItem>)}
         </Stack>
       )}
       {maas && items.length === 0 ? (
@@ -188,9 +201,8 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                   <Td dataLabel="Limit per user" modifier="wrap">{i.published && !i.partly ? limitText(i.limit) : "—"}</Td>
                   <Td dataLabel="In MaaS" modifier="wrap">
                     <Stack>
-                      <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem>
-                      <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
-                      {!readOnly && !i.published && reason && <StackItem><Content component="small">{reason}</Content></StackItem>}
+                      {(i.published || running(project, model)) ? <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem> : <StackItem><Label isCompact>Not published</Label></StackItem>}
+                      {(i.published || running(project, model)) && <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>}
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
@@ -201,7 +213,9 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                           <ActionListItem><Button variant="secondary" isDanger size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "unpublish-maas", project, model })}>Unpublish</Button></ActionListItem>
                         </ActionList>
                       )
-                      : <Button variant="secondary" size="sm" isAriaDisabled={!!reason} onClick={() => setPending({ kind: "publish-maas", project, model })}>Publish</Button>)}
+                      : reason
+                        ? <Tooltip content={reason}><Button variant="secondary" size="sm" isAriaDisabled>Publish</Button></Tooltip>
+                        : <Button variant="secondary" size="sm" onClick={() => setPending({ kind: "publish-maas", project, model })}>Publish</Button>)}
                   </Td>
                 </Tr>
               );
@@ -225,7 +239,7 @@ const UseMaaS: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
         </DescriptionListGroup>
         <DescriptionListGroup>
           <DescriptionListTerm>Subscription</DescriptionListTerm>
-          <DescriptionListDescription><code>{maas.subscription}</code> <Label isCompact>{audienceText(maas.access)}</Label> (each model&apos;s limit is in the table above)</DescriptionListDescription>
+          <DescriptionListDescription><code>{maas.subscription}</code> <Label isCompact>{audienceText(maas.access)}</Label><br />The MaaS subscription that gives access and holds the limits; you choose it when you create an API key.</DescriptionListDescription>
         </DescriptionListGroup>
         <DescriptionListGroup>
           <DescriptionListTerm>From a terminal</DescriptionListTerm>
@@ -450,7 +464,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const problem = db?.needed ? databaseProblem(form, db) : null;
       return {
         title: "Set up Models as a Service?", confirm: "Set up", runTitle: "Set up Models as a Service",
-        summary: <Content component="p">Does every step the MaaS install docs give that is not done yet, in their order, and nothing else. On a cluster without any of it this takes about 10 minutes. The gateway creates a cloud load balancer, which costs money while it exists. If a step fails, Set up again continues from there.</Content>,
+        summary: <Content component="p">Installs whatever the MaaS install docs list that this cluster doesn't have yet, in the docs' order. On a cluster without any of it this takes about 10 minutes. The gateway creates a cloud load balancer, which costs money while it exists. If a step fails, Set up again continues from there.</Content>,
         choice: db?.needed ? <DatabaseChoice db={db} value={form} idPrefix="setup" onChange={(f) => setPending?.({ kind: "setup-maas", database: f })} />
           : db && db.current ? <Content component="p">Database: {databaseLabel(db.current)}{db.current === "adopted" ? ", used as it is" : ""}.</Content> : undefined,
         confirmDisabled: !!problem,
@@ -469,13 +483,30 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const problem = databaseProblem(form, db) ?? (form.kind === db.current && form.kind !== "external" ? "Choose another database." : null);
       const before = db.current === "development" ? <>Deployment <code>postgres</code>, Service <code>postgres</code> and Secret <code>postgres-creds</code></>
         : db.current === "cnpg" ? <>CloudNativePG Cluster <code>maas-db</code> with its volume (the operator stays)</> : null;
+      const yoursToYours = db.current === "external" && form.kind === "external";
+      const kept = "This cannot be undone. Published models, who can use them, and their limits are kept.";
       return {
         title: "Change the MaaS database?", confirm: "Change database", danger: true, runTitle: "Change the MaaS database",
-        summary: <Content component="p">Creates the new database, points Secret <code>maas-db-config</code> at it and restarts maas-api, then deletes the database before. Now: {databaseLabel(db.current)}.</Content>,
-        choice: (
+        summary: <Content component="p">
+          {before
+            ? <>Creates the new database, points maas-api at it and restarts maas-api, then permanently deletes the current one ({databaseLabel(db.current)}).</>
+            : yoursToYours
+              ? <>Points maas-api at the new URL and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>
+              : <>Creates the new database, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>}
+        </Content>,
+        choice: <DatabaseChoice db={db} value={form} except={db.current} idPrefix="change" onChange={(f) => setPending?.({ ...pending, database: f })} />,
+        // Data is deleted only with a database this tool made; from yours, keys stop working but nothing is deleted.
+        dataLoss: before ? <>Every API key, with the current database: {before}. {kept}</> : undefined,
+        extra: (
           <Stack hasGutter>
-            <DatabaseChoice db={db} value={form} except={db.current} idPrefix="change" onChange={(f) => setPending?.({ ...pending, database: f })} />
-            <KeysLostCheck checked={!!pending.confirmKeysLost} onChange={(v) => setPending?.({ ...pending, database: form, confirmKeysLost: v })} />
+            {!before && form.kind && (
+              <StackItem>
+                {yoursToYours
+                  ? <Alert variant="warning" isInline component="p" title="API keys are lost if this is a different database">Pointing at the same database (for example, with a new password) keeps every key.</Alert>
+                  : <Alert variant="warning" isInline component="p" title="Every API key stops working">The new database starts empty. Your PostgreSQL keeps its data, but MaaS no longer uses it. Published models, who can use them, and their limits are kept.</Alert>}
+              </StackItem>
+            )}
+            <StackItem><KeysLostCheck checked={!!pending.confirmKeysLost} onChange={(v) => setPending?.({ ...pending, database: form, confirmKeysLost: v })} /></StackItem>
           </Stack>
         ),
         confirmDisabled: !!problem || !pending.confirmKeysLost,
@@ -492,15 +523,15 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       return {
         title: `Change the limit of ${pending.model} in ${pending.project}?`, confirm: "Change limit", runTitle: `Change the limit of ${pending.model} in ${pending.project}`,
         summary: <Content component="p">Now: {limitText(item?.limit)}. API keys keep working; MaaS applies the new limit within seconds.</Content>,
-        choice: <LimitFields value={form} idPrefix="change" onChange={(f) => setPending?.({ ...pending, limit: f })} />,
-        confirmDisabled: !!limitProblem(form),
+        choice: <LimitFields value={form} idPrefix="change" noUnlimited={m?.noUnlimited} onChange={(f) => setPending?.({ ...pending, limit: f })} />,
+        confirmDisabled: !!limitProblem(form, m?.noUnlimited),
         changes: [<>MaaSSubscription <code>{m?.subscription ?? "rhoai-nightly-updater-subscription"}</code> in <code>models-as-a-service</code>: the model&apos;s entry only (after a server-side dry run); the other models and who can use them stay.</>],
       };
     }
     case "maas-access": {
       const form = pending.access ?? defaultAudienceForm(m?.access);
       return {
-        title: "Change who can use the published models?", confirm: "Change", runTitle: "Change who can use the published MaaS models",
+        title: "Change who can use the published models?", confirm: "Change access", runTitle: "Change who can use the published MaaS models",
         summary: <Content component="p">Now: {audienceText(m?.access)}. It applies to every model this tool published; anyone left out can no longer call them, also with a key they made before.</Content>,
         choice: <AudienceFields value={form} idPrefix="change" onChange={(f) => setPending?.({ ...pending, access: f })} />,
         confirmDisabled: !!audienceProblem(form),
@@ -519,6 +550,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
     case "teardown-maas":
       return {
         title: "Remove Models as a Service?", confirm: "Remove", danger: true, runTitle: "Remove Models as a Service",
+        dataLoss: <>Every API key, with the database this tool created ({databaseLabel(m?.database?.current ?? "")}) and its data. A PostgreSQL of your own is never touched.</>,
         summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or access policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
         changes: [
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => `${i.name} in ${i.namespace}`).join(", ") || "none"}).</>,
@@ -539,10 +571,10 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
           <Stack hasGutter>
             {first ? <AudienceFields value={access} idPrefix="publish" onChange={(f) => setPending?.({ ...pending, access: f, limit })} />
               : <Content component="p">Who can use it: {audienceText(m?.access)}, as for the other published models (Change who can use them changes it for all).</Content>}
-            <LimitFields value={limit} idPrefix="publish" onChange={(f) => setPending?.({ ...pending, limit: f, access: first ? access : undefined })} />
+            <LimitFields value={limit} idPrefix="publish" noUnlimited={m?.noUnlimited} onChange={(f) => setPending?.({ ...pending, limit: f, access: first ? access : undefined })} />
           </Stack>
         ),
-        confirmDisabled: !!limitProblem(limit) || (first && !!audienceProblem(access)),
+        confirmDisabled: !!limitProblem(limit, m?.noUnlimited) || (first && !!audienceProblem(access)),
         changes: [
           <>Gateway <code>maas-default-gateway</code>: admits routes from {pending.project}.</>,
           <>LLMInferenceService <code>{pending.model}</code> in {pending.project}: routes through the MaaS gateway only (only its gateways are changed). The gateways it uses now are recorded, and Unpublish puts them back.</>,

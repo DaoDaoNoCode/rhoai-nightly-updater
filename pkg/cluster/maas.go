@@ -151,6 +151,11 @@ type maasRecord struct {
 	// objects. Empty in records of earlier builds, which made only
 	// CloudNativePG databases.
 	Database string `json:"database,omitempty"`
+	// POCCredsUID is the UID of Secret postgres-creds (the development
+	// database's password) as this tool created it, in DBNamespace. The
+	// tool never reads that Secret (no get or patch on it): it knows it
+	// only by this record, and deletes only the object with this UID.
+	POCCredsUID string `json:"pocCredsUID,omitempty"`
 	// AIGatewayChanged: setup set aigateway's managementState to Managed,
 	// and PreviousAIGateway is what it was; removal restores it as it does
 	// modelsAsAService.
@@ -510,8 +515,6 @@ func maasObjectPath(kind, ns string) string {
 		return namespacedPath("postgresql.cnpg.io/v1", "clusters", ns, "maas-db")
 	case "Secret":
 		return namespacedPath("v1", "secrets", ns, "maas-db-config")
-	case "PostgresSecret":
-		return namespacedPath("v1", "secrets", ns, "postgres-creds")
 	case "PostgresDeployment":
 		return namespacedPath("apps/v1", "deployments", ns, "postgres")
 	case "PostgresService":
@@ -1427,13 +1430,14 @@ func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
 	subPhase, _ := maasPhase(c, namespacedPath(maasAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription"))
 	// Who may use the published models, and each one's limit: the
 	// subscription's (one an earlier build wrote reads as the free sample).
+	st.NoUnlimited = maasNoUnlimited(c)
 	toolSub, subErr := readMaaSToolSubscription(c)
 	if subErr != nil {
 		slog.Debug("cannot read this tool's MaaSSubscription", "error", subErr)
 	} else if toolSub.found && toolSub.owned {
 		st.Access = &types.MaaSAudienceState{MaaSAudience: toolSub.audience.api()}
 		if !toolSub.audience.everyone {
-			st.Access.Warnings = maasGroupWarnings(c, toolSub.audience.groups)
+			st.Access.GroupProblems = maasGroupProblems(c, toolSub.audience.groups)
 		}
 	}
 	owned, ownedErr := readModelsRecord(c)

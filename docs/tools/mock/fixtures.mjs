@@ -1071,7 +1071,7 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
 }
 
 /** The database choice (pkg/cluster maasDatabaseStatus): none yet, or this tool's CloudNativePG one, or someone else's. */
-export function maasDatabase(state, { fresh = false } = {}) {
+export function maasDatabase(state, { fresh = false, current: kind } = {}) {
   const choices = [
     { id: "external", plan: [`Write Secret ${MAAS_INFRA}/maas-db-config (label app=maas-api) with the connection URL you enter; nothing else is created, and your database is never changed`] },
     { id: "development", plan: [`Run the MaaS docs' development PostgreSQL (scripts/setup-database.sh) in ${MAAS_INFRA}: Secret postgres-creds (a generated password), Deployment postgres (one pod, image registry.redhat.io/rhel9/postgresql-16@sha256:${"5".repeat(64)}, from the RHOAI operator's CSV (postgresql_16_image); no volume, so its data is lost when the pod restarts) and Service postgres, then Secret maas-db-config with its address (sslmode=disable, as the script does)`] },
@@ -1079,8 +1079,33 @@ export function maasDatabase(state, { fresh = false } = {}) {
       ...(fresh ? ["Install CloudNativePG 1.27.1: Namespace cnpg-system, OperatorGroup cnpg-system/cloudnative-pg, Subscription cnpg-system/cloudnative-pg (package cloudnative-pg, channel stable-v1, from certified-operators; in its own namespace, not openshift-operators, where an install can pull an OSSM upgrade that breaks the gateway; it stays after Remove)"] : []),
       `Run a one-instance CloudNativePG database ${MAAS_INFRA}/maas-db (1 GiB volume, so keys survive restarts) and write Secret ${MAAS_INFRA}/maas-db-config with its address (sslmode=require)`] },
   ];
-  const current = state === "none" ? "" : state === "foreign" ? "adopted" : "cnpg";
+  const current = kind ?? (state === "none" ? "" : state === "foreign" ? "adopted" : "cnpg");
   return { current, namespace: MAAS_INFRA, default: "development", ...(current === "" ? { needed: true } : {}), ...(current === "adopted" ? {} : { choices }), ...(current === "adopted" ? { choices: [] } : {}) };
+}
+
+/**
+ * The parts for a database of kind dbCurrent ("development" or "external";
+ * otherwise the parts as they are): the Database part's message as the
+ * backend words it, and no CloudNativePG part (shown only for its database).
+ */
+function maasDBParts(parts, dbCurrent) {
+  if (dbCurrent !== "development" && dbCurrent !== "external") return parts;
+  const message = dbCurrent === "development"
+    ? `The MaaS docs' development database ${MAAS_INFRA}/postgres runs (one pod, no volume). Ephemeral: API keys are lost when its pod restarts, and maas-api then needs a restart to make its tables again.`
+    : `Your PostgreSQL: Secret ${MAAS_INFRA}/maas-db-config, written by this tool, holds the connection URL you entered (never shown). Remove deletes only that Secret; your database is never touched.`;
+  return parts.filter((p) => p.id !== "cnpg").map((p) => (p.id === "database" && p.state === "ready" ? { ...p, message } : p));
+}
+
+/** The groups that exist on the mock cluster (GET /api/resources/maas/groups). */
+export const MAAS_GROUPS = ["ml-team"];
+
+/** pkg/cluster maasGroupProblems: a missing group, with the commands when its name can be an OpenShift Group's. */
+export function maasGroupProblems(names) {
+  const openShiftName = (n) => n !== "." && n !== ".." && n !== "~" && !/[/%:]/.test(n);
+  return names.filter((g) => !MAAS_GROUPS.includes(g)).map((g) => ({
+    name: g, missing: true, message: `${g} is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in.`,
+    ...(openShiftName(g) ? { commands: `oc adm groups new ${g}\noc adm groups add-users ${g} <user>` } : {}),
+  }));
 }
 
 /** A published model's limit (pkg/types MaaSLimit), by preset. */
@@ -1171,8 +1196,8 @@ export function maasOrphanPublication(namespace) {
 export const MAAS_IN_USE = "Others use this MaaS platform: MaaSModelRef team-a/granite-3-8b, MaaSSubscription models-as-a-service/team-a-subscription. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.";
 
 /** The MaaS status by state. */
-export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false, rhcl = state === "none" ? "1.4.3" : "1.5.0", tierPolicies = false, access = { everyone: true } } = {}) {
-  const parts = maasParts(state, { tls, rhcl, tierPolicies, cnpg: !noCNPG });
+export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false, rhcl = state === "none" ? "1.4.3" : "1.5.0", tierPolicies = false, access = { everyone: true }, dbCurrent, noUnlimited = false } = {}) {
+  const parts = maasDBParts(maasParts(state, { tls, rhcl, tierPolicies, cnpg: !noCNPG }), dbCurrent);
   const shared = ["rhcl", "kuadrant", "cnpg", "authorino-tls", "tier-policies"];
   const allReady = parts.every((p) => p.state === "ready");
   const tool = parts.some((p) => p.managedByTool && !shared.includes(p.id));
@@ -1191,7 +1216,8 @@ export function maasWorld(state = "none", { tls = true, items = [], blocked = nu
     ...(setupPlan.length ? { setupPlan } : {}),
     items: items.map((i) => (i.published || allReady || !notReady ? i : { ...i, setupBlockedReason: state === "none" && !tool ? "Set up the MaaS platform first." : `The MaaS platform is not ready: ${notReady.title} (see above).` }))
       .map((i) => (i.published && !i.partly && !i.limit ? { ...i, limit: maasLimit("free") } : i)),
-    database: maasDatabase(state, { fresh: rhcl === "missing" || noCNPG }),
+    database: maasDatabase(state, { fresh: rhcl === "missing" || noCNPG, current: dbCurrent }),
+    ...(noUnlimited ? { noUnlimited: true } : {}),
     ...(items.some((i) => i.published) ? { access } : {}),
   };
 }

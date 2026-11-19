@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -272,16 +273,23 @@ func parseMaaSAudience(a *types.MaaSAudience) (maasAudience, string) {
 	if len(groups) > maasMaxAudience || len(users) > maasMaxAudience {
 		return maasAudience{}, fmt.Sprintf("name at most %d groups and %d users (the MaaS docs advise groups for people: Subscription Cardinality)", maasMaxAudience, maasMaxAudience)
 	}
+	// MaaS matches both exactly, as the identity provider sends them
+	// (maas-controller api/maas/v1alpha1: GroupReference.Name "the opaque
+	// group name used for exact-match authorization"; owner groups "are
+	// matched exactly and are not Kubernetes object names"; no CRD
+	// pattern), so an OIDC group like /admins or oidc:ml is valid. Only
+	// what cannot be a name is refused; a group with no OpenShift Group is
+	// a warning (maasGroupProblems).
 	for _, g := range groups {
 		if g == maasSubjectGroup {
 			return maasAudience{}, "system:authenticated is every signed-in user: choose Everyone signed in"
 		}
-		if why := openShiftGroupNameProblem(g); why != "" {
+		if why := namePrintable(g); why != "" {
 			return maasAudience{}, fmt.Sprintf("group %q %s", g, why)
 		}
 	}
 	for _, u := range users {
-		if why := maasUserNameProblem(u); why != "" {
+		if why := namePrintable(u); why != "" {
 			return maasAudience{}, fmt.Sprintf("user %q %s", u, why)
 		}
 	}
@@ -312,53 +320,13 @@ func namePrintable(n string) string {
 	return ""
 }
 
-// openShiftGroupNameProblem is OpenShift's own rule for a Group's name
+// openShiftGroupName: n can be the name of an OpenShift Group object
 // (openshift/apiserver-library-go pkg/apivalidation/uservalidation.go
 // ValidateGroupName: a path segment, so not "." or ".." and no "/" or "%";
-// no ":"; not "~"), or "" when valid.
-func openShiftGroupNameProblem(n string) string {
-	if why := namePrintable(n); why != "" {
-		return why
-	}
-	switch {
-	case n == "." || n == ".." || n == "~":
-		return "is not a valid OpenShift group name"
-	case strings.Contains(n, "/"):
-		return `may not contain "/" (OpenShift group names)`
-	case strings.Contains(n, "%"):
-		return `may not contain "%" (OpenShift group names)`
-	case strings.Contains(n, ":"):
-		return `may not contain ":" (OpenShift group names)`
-	}
-	return ""
-}
-
-// maasUserNameProblem: a service account
-// (system:serviceaccount:<namespace>:<name>, what the MaaS docs mean
-// owner.users for), the kubeadmin user (kube:admin), or an OpenShift user
-// name (ValidateUserName: a path segment; ":" only after "b64:"; not "~").
-func maasUserNameProblem(n string) string {
-	if why := namePrintable(n); why != "" {
-		return why
-	}
-	if rest, ok := strings.CutPrefix(n, "system:serviceaccount:"); ok {
-		ns, name, found := strings.Cut(rest, ":")
-		if !found || len(ns) > 63 || !dns1123Label.MatchString(ns) || !dns1123Subdomain.MatchString(name) {
-			return "is not a service account (system:serviceaccount:<namespace>:<name>)"
-		}
-		return ""
-	}
-	switch {
-	case n == "kube:admin":
-		return ""
-	case n == "." || n == ".." || n == "~":
-		return "is not a valid OpenShift user name"
-	case strings.ContainsAny(n, "/%"):
-		return `may not contain "/" or "%" (OpenShift user names)`
-	case strings.Contains(n, ":") && !strings.HasPrefix(n, "b64:"):
-		return `has ":"; OpenShift user names with ":" begin with "b64:", and service accounts are system:serviceaccount:<namespace>:<name>`
-	}
-	return ""
+// no ":"; not "~"). A group whose name cannot be has no Group object, so
+// only the identity provider can put anyone in it.
+func openShiftGroupName(n string) bool {
+	return n != "." && n != ".." && n != "~" && !strings.ContainsAny(n, "/%:")
 }
 
 // owner is spec.owner of the subscription, and spec.subjects of the access
@@ -405,8 +373,15 @@ func maasAudienceFromOwner(owner map[string]interface{}) maasAudience {
 	return a
 }
 
+// equal: the same audience, in any order (MaaS matches names, not
+// positions).
 func (a maasAudience) equal(o maasAudience) bool {
-	return a.everyone == o.everyone && strings.Join(a.groups, "\n") == strings.Join(o.groups, "\n") && strings.Join(a.users, "\n") == strings.Join(o.users, "\n")
+	sorted := func(in []string) string {
+		s := append([]string(nil), in...)
+		sort.Strings(s)
+		return strings.Join(s, "\n")
+	}
+	return a.everyone == o.everyone && sorted(a.groups) == sorted(o.groups) && sorted(a.users) == sorted(o.users)
 }
 
 func (a maasAudience) api() types.MaaSAudience {
@@ -448,22 +423,47 @@ func (a maasAudience) text() string {
 	return joinWords(parts)
 }
 
-// maasGroupWarnings checks that each group exists as an OpenShift Group.
+// maasGroupProblems checks that each group exists as an OpenShift Group.
 // A missing one is a warning, not a refusal: with an external identity
 // provider the groups come from the sign-in token and have no Group
-// object. One that cannot be read (no permission) is said so.
-func maasGroupWarnings(c *Client, groups []string) []string {
-	var out []string
+// object. A name that cannot be an OpenShift Group's is not looked up: it
+// has none, and none can be created. One that cannot be read (no
+// permission) is said so.
+func maasGroupProblems(c *Client, groups []string) []types.MaaSGroupProblem {
+	var out []types.MaaSGroupProblem
+	missing := func(g string) types.MaaSGroupProblem {
+		return types.MaaSGroupProblem{Name: g, Missing: true, Message: g + " is not a group on this cluster. Nobody is in it unless your identity provider adds it at sign-in."}
+	}
 	for _, g := range groups {
+		if !openShiftGroupName(g) {
+			out = append(out, missing(g))
+			continue
+		}
 		_, found, err := readObjectMeta(c, clusterPath("user.openshift.io/v1", "groups", url.PathEscape(g)))
 		switch {
 		case err != nil:
-			out = append(out, fmt.Sprintf("Cannot check whether group %s exists (%v); check it with oc get group %s.", g, err, shellQuoteArg(g)))
+			out = append(out, types.MaaSGroupProblem{Name: g, Message: fmt.Sprintf("Cannot check whether group %s exists (%v). Check it with oc get group %s.", g, err, shellQuoteArg(g))})
 		case !found:
-			out = append(out, fmt.Sprintf("Group %s does not exist on this cluster, so nobody is in it, unless your identity provider sends it in the sign-in token. A cluster-admin creates it: oc adm groups new %s, then oc adm groups add-users %s <user>.", g, shellQuoteArg(g), shellQuoteArg(g)))
+			p := missing(g)
+			p.Commands = fmt.Sprintf("oc adm groups new %s\noc adm groups add-users %s <user>", shellQuoteArg(g), shellQuoteArg(g))
+			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// CheckMaaSGroups is maasGroupProblems for names typed in a dialog (GET
+// /api/resources/maas/groups): it refuses what Publish would refuse.
+func CheckMaaSGroups(c *Client, names []string) ([]types.MaaSGroupProblem, string) {
+	aud, problem := parseMaaSAudience(&types.MaaSAudience{Groups: names})
+	if problem != "" {
+		return nil, problem
+	}
+	out := maasGroupProblems(c, aud.groups)
+	if out == nil {
+		out = []types.MaaSGroupProblem{}
+	}
+	return out, ""
 }
 
 var shellSafeArg = regexp.MustCompile(`^[A-Za-z0-9._@-]+$`)
@@ -593,10 +593,58 @@ func maasAccessObjects(c *Client, pubs []maasPub, limits map[string]maasLimit, a
 }
 
 // unlimitedRefusal turns the API server's refusal of an unlimited model
-// reference (RHOAI 3.4: tokenRateLimits required, no unlimited) into words.
+// reference (a MaaSSubscription API without unlimited requires
+// tokenRateLimits) into words.
 func unlimitedRefusal(err error, l maasLimit) string {
 	if l.unlimited && err != nil && strings.Contains(err.Error(), "tokenRateLimits") {
-		return "This cluster's MaaS does not offer unlimited model references (its MaaSSubscription API requires tokenRateLimits; unlimited came with RHOAI 3.6). Choose a limit instead."
+		return "This cluster's MaaS has no unlimited option (its MaaSSubscription API requires a token limit). Choose a limit instead."
 	}
 	return ""
+}
+
+// maasNoUnlimited: the cluster's MaaSSubscription API, in the version this
+// tool writes, has no modelRefs[].unlimited (read from its CRD's schema,
+// with the existing list of CRDs, by name). False when that cannot be
+// told: Publish's dry run refuses then (unlimitedRefusal).
+func maasNoUnlimited(c *Client) bool {
+	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"fieldSelector": {"metadata.name=maassubscriptions." + maasGroup}})
+	if err != nil {
+		return false
+	}
+	type props map[string]struct {
+		Properties props `json:"properties"`
+		Items      *struct {
+			Properties props `json:"properties"`
+		} `json:"items"`
+	}
+	var list struct {
+		Items []struct {
+			Spec struct {
+				Versions []struct {
+					Name   string `json:"name"`
+					Schema struct {
+						OpenAPIV3Schema struct {
+							Properties props `json:"properties"`
+						} `json:"openAPIV3Schema"`
+					} `json:"schema"`
+				} `json:"versions"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &list) != nil || len(list.Items) != 1 {
+		return false
+	}
+	version := strings.TrimPrefix(maasAPI(c), maasGroup+"/")
+	for _, v := range list.Items[0].Spec.Versions {
+		if v.Name != version {
+			continue
+		}
+		refs := v.Schema.OpenAPIV3Schema.Properties["spec"].Properties["modelRefs"].Items
+		if refs == nil || len(refs.Properties) == 0 {
+			return false
+		}
+		_, ok := refs.Properties["unlimited"]
+		return !ok
+	}
+	return false
 }

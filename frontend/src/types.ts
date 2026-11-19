@@ -1239,7 +1239,18 @@ export interface MaaSStatus {
   /** The database choice; absent from older servers. */
   database?: MaaSDatabase;
   /** The audience of this tool's subscription; absent while it does not exist. */
-  access?: MaaSAudience & { warnings?: string[] };
+  access?: MaaSAudience & { groupProblems?: MaaSGroupProblem[] };
+  /** The cluster's MaaSSubscription API has no unlimited model reference (read from its CRD). */
+  noUnlimited?: boolean;
+}
+
+/** A group with no OpenShift Group (missing), or one that could not be checked (pkg/types MaaSGroupProblem). */
+export interface MaaSGroupProblem {
+  name: string;
+  missing?: boolean;
+  message: string;
+  /** Create the Group and add a user; absent when the name cannot be an OpenShift Group's. */
+  commands?: string;
 }
 
 /** The body of POST /api/resources/maas/stream. */
