@@ -230,9 +230,9 @@ Open the **Models** tab and pick a data science project.
    | Qwen3 1.7B | chat, tool calling, reasoning | 4, 12 GiB |
    | Granite Embedding 125M English | embeddings (768 dimensions) | 2, 3 GiB |
 
-2. If **On the cluster first** lists missing parts (KServe, cert-manager, and Connectivity Link when the model goes through a gateway), click **Set up what Models needs** and confirm.
-3. Under **How it is reached**, keep the recommended choice or pick another: the cluster's default inference gateway, MaaS only, another gateway that admits the project, or only inside the cluster. When no gateway fits, the tab recommends **Set up the inference gateway** (once per cluster; it runs a cloud load balancer, which costs money while it exists).
-4. Click **Set up** and confirm. The first time takes 3 to 5 minutes. Once the model runs, the tool calls it once, as a user would; the setup succeeds only when it answers.
+2. Under **Model access**, keep the recommended choice or pick another: the cluster's default inference gateway, MaaS only, another gateway that admits the project, or only inside the cluster. When no gateway fits, the tab offers **Set up the inference gateway** (once per cluster; it runs a cloud load balancer, which costs money while it exists).
+3. If **Needed on the cluster first** lists missing parts (KServe, cert-manager, and Connectivity Link when the model goes through a gateway), click **Set up what Models needs** and confirm with **Install and turn on**.
+4. Click **Set up** and confirm. The first time takes 3 to 5 minutes. Once the model runs, the tool calls it once, as a user would, and reports whether it answers.
 
 <img src="images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
 

@@ -108,6 +108,41 @@ only accepts a tag whose version is the top dated section. See
   node got its pull credentials a few minutes after it joined.
 - KServe reporting only Connectivity Link missing no longer blocks every
   model: a model reached only inside the cluster does not need it.
+- Review of Models and the prerequisites (before release):
+  - Taking a project off the inference gateway's list checks, on every
+    plan of the write, that no model there uses the gateway (a write
+    planned again after a conflict skipped it). **Remove** runs every check
+    and the dry run before its write, says when the project is not on the
+    list, and refuses when the models, the Gateway or KServe's
+    configuration cannot be read. Projects this tool added whose namespace
+    was deleted go off the list at the next Models change or Clean up.
+  - Clean up turns a component back only with the `resourceVersion` of the
+    read its checks were made on, and checks again after a conflict. The
+    ownership check notices someone who *changed* the component, not one
+    who set it to Managed again; the dialog says the in-use check covers
+    that.
+  - Only gateways whose token checks the tool can read are recommended
+    (in `openshift-ingress`, not `opendatahub.io/managed=false`); others are
+    an explicit choice. KServe's default gateway is never assumed when its
+    configuration cannot be read or names none.
+  - **Can it be called?** also sends the request without a token through a
+    gateway: an answer fails the check (**Answers without a token**). A
+    model that cannot be called **Needs attention** on its card;
+    **Check again** runs in place; results read "Checked 2 minutes ago"
+    and no longer repeat themselves; older vLLM's 404 is recognised.
+  - A ready wait that ends during a failing image pull keeps the pull
+    advice. A new OperatorGroup is planned only in an install mode the
+    package supports.
+  - Plainer Models tab: **Model access** before the cluster checklist, each
+    way described for the caller, unavailable ways say why with a link to
+    fix it, its own next steps for a model reached only inside the cluster,
+    the model's card first when it does not use the gateway, and the
+    deletion and Clean up dialogs say when a project goes off the
+    gateway's list. Prerequisites on every tab: **Needed on the cluster
+    first** with Set up as the primary action, a grey Waiting, one ordered
+    CLI script, the plan open in **Install and turn on**; the Overview
+    plans Models for the recommended inference gateway, and a feature that
+    reads Ready while its prerequisites are not needs attention.
 <!-- /Models routing -->
 
 ### Fixed
