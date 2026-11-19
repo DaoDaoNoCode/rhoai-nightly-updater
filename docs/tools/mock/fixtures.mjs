@@ -1290,7 +1290,7 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
     project, model, kserveDefaultGateway: GW_KEY, authReady, options,
     default: chosen?.key ?? "",
     defaultReason: chosen === def ? "works from your laptop with an OpenShift token, the way the dashboard deploys models."
-      : chosen === maas ? "MaaS is set up and the inference gateway can't be used: anyone signed in calls the model with a MaaS API key." : undefined,
+      : chosen === maas ? "MaaS is set up and the inference gateway can't be used: callers use a MaaS API key." : undefined,
     recommendGateway: !def.available,
     recommendGatewayReason: def.available ? undefined : "Set up the inference gateway to reach models from outside the cluster with an OpenShift token, as the dashboard does.",
   };

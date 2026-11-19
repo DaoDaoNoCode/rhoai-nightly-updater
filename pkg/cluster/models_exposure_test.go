@@ -371,3 +371,29 @@ func TestModelsBlock_ConnectivityLinkAloneIsNoBlock(t *testing.T) {
 		t.Error("cert-manager missing is a block")
 	}
 }
+
+// The "Through MaaS only" option says who can call the model: publish
+// keeps the subscription's audience, so not "anyone signed in" when it is
+// limited; and an unread MaaS state says so in words.
+func TestModelExposures_MaaSOptionNamesTheAudience(t *testing.T) {
+	entry, _ := catalogEntry("")
+	maasOpt := func(r exposureReads) types.ModelExposureOption {
+		out, _ := r.options()
+		for _, o := range out.Options {
+			if o.Key == exposureMaaS {
+				return o
+			}
+		}
+		t.Fatal("no MaaS option")
+		return types.ModelExposureOption{}
+	}
+	if o := maasOpt(exposureReads{project: "p", entry: entry, maasKnown: true}); !strings.Contains(o.Description, "anyone signed in") {
+		t.Errorf("everyone: %s", o.Description)
+	}
+	if o := maasOpt(exposureReads{project: "p", entry: entry, maasKnown: true, maasWho: "group team-a"}); strings.Contains(o.Description, "anyone signed in") || !strings.Contains(o.Description, "the same people as this tool's other published models (group team-a)") {
+		t.Errorf("limited: %s", o.Description)
+	}
+	if o := maasOpt(exposureReads{project: "p", entry: entry}); o.Reason != "Whether MaaS is set up could not be checked yet." {
+		t.Errorf("not checked: %s", o.Reason)
+	}
+}

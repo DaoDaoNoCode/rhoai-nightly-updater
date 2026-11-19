@@ -322,6 +322,9 @@ type exposureReads struct {
 	maas      string
 	maasURL   string
 	maasKnown bool
+	// maasWho: who may use this tool's published models when it is not
+	// everyone signed in ("" for everyone).
+	maasWho string
 }
 
 func readExposureInputs(c *Client, project string, labels map[string]string, entry catalogModel, needMaaS bool) exposureReads {
@@ -353,6 +356,13 @@ func readExposureInputs(c *Client, project string, labels map[string]string, ent
 			r.maas = maasNotReadyReason(st)
 		default:
 			r.maasURL = st.URL
+		}
+		// Publish keeps the audience of this tool's subscription: who can
+		// already use its published models (everyone, when none is).
+		if err == nil && st.Access != nil && !st.Access.Everyone {
+			if aud, problem := parseMaaSAudience(&st.Access.MaaSAudience); problem == "" {
+				r.maasWho = aud.text()
+			}
 		}
 	}
 	return r
@@ -446,12 +456,15 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 	b := types.ModelExposureOption{Key: exposureMaaS, Exposure: exposureMaaS, GatewayRef: gatewayKey(inferenceGatewayNamespace, maasGatewayName),
 		Title:       "Through MaaS only",
 		Description: "Published to Models as a Service: anyone signed in to the cluster can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model."}
+	if r.maasWho != "" {
+		b.Description = fmt.Sprintf("Published to Models as a Service: the same people as this tool's other published models (%s) can call it with a MaaS API key, within their subscription's token limit. The dashboard's playground lists it as a MaaS model.", r.maasWho)
+	}
 	bp := exposurePlan{exposure: exposureMaaS, gwNS: inferenceGatewayNamespace, gwName: maasGatewayName}
 	switch {
 	case r.entry.Type != modelTypeChat:
 		b.Reason = "Only chat models are published to MaaS."
 	case !r.maasKnown:
-		b.Reason = "Not checked."
+		b.Reason = "Whether MaaS is set up could not be checked yet."
 	case r.maas != "":
 		b.Reason = r.maas
 		b.Fix = "maas-tab"
@@ -528,7 +541,7 @@ func (r exposureReads) options() (*types.ModelExposures, map[string]exposurePlan
 		out.DefaultReason = "works from your laptop with an OpenShift token, the way the dashboard deploys models."
 	case b.Available:
 		out.Default = b.Key
-		out.DefaultReason = "MaaS is set up and the inference gateway can't be used: anyone signed in calls the model with a MaaS API key."
+		out.DefaultReason = "MaaS is set up and the inference gateway can't be used: callers use a MaaS API key."
 	default:
 		for _, o := range others {
 			if o.Available && !plans[o.Key].authUncertain {
