@@ -362,6 +362,65 @@ async (page) => {
       }
     },
 
+    // Not a docs image: the one-click setup of the image mirror and the
+    // nodes' pull secret on every platform, its review dialogs and a run,
+    // light and dark (screenshots.sh node-setup-review, THEMES_DIR).
+    async "node-setup-review"() {
+      const setup = () => card("One-time cluster setup");
+      const modal = () => page.locator(".pf-v6-c-modal-box");
+      const shoot = async (name, dark, el) => {
+        await fit();
+        await el.screenshot({ path: `${out}/themes/node-setup-${name}-${dark ? "dark" : "light"}.png` });
+      };
+      const review = async (name, dark, button) => {
+        await setup().getByRole("button", { name: button }).click();
+        await page.getByRole("dialog").getByRole("button", { name: /Cancel|Close/ }).last().waitFor();
+        await wait(300);
+        await shoot(name, dark, modal());
+      };
+      for (const dark of [false, true]) {
+        await open("/", "self-managed-mirror", { dark, width: 1440 });
+        await shoot("01-self-managed", dark, setup());
+        await setup().getByRole("button", { name: "Do it yourself instead" }).first().click();
+        await setup().getByRole("button", { name: "Do it yourself instead" }).last().click();
+        await wait(300);
+        await shoot("02-self-managed-diy", dark, setup());
+        await open("/", "self-managed-mirror", { dark, width: 1440 });
+        await review("03-mirror-create-review", dark, "Create the image mirror");
+        await page.getByRole("dialog").getByRole("button", { name: "Create the image mirror" }).click();
+        await page.getByRole("dialog").locator(".pf-v6-c-alert__title", { hasText: "Done" }).waitFor({ timeout: 20000 });
+        await wait(300);
+        await shoot("04-mirror-created", dark, modal());
+        await page.getByRole("dialog").getByRole("button", { name: "Close" }).last().click();
+        await wait(1500);
+        await shoot("05-mirror-ready", dark, setup());
+        await review("06-mirror-remove-review", dark, "Remove the image mirror");
+        await open("/", "self-managed-mirror", { dark, width: 1440 });
+        await review("07-pull-add-review", dark, "Add to the nodes' pull secret");
+        await open("/", "self-managed-installed", { dark, width: 1440 });
+        await page.locator("#cluster-setup-toggle").click();
+        await wait(300);
+        await shoot("08-installed", dark, card("Cluster setup"));
+        await card("Cluster setup").getByRole("button", { name: "Remove from the nodes' pull secret" }).click();
+        await page.getByRole("dialog").getByRole("heading", { name: "What the nodes do" }).waitFor();
+        await wait(300);
+        await shoot("09-pull-remove-review", dark, modal());
+        await open("/", "self-managed-paused-pool", { dark, width: 1440 });
+        await review("10-paused-pool-review", dark, "Create the image mirror");
+        await open("/", "managed-classic", { dark, width: 1440 });
+        await shoot("11-managed-classic", dark, setup());
+        await open("/", "unknown-denied", { dark, width: 1440 });
+        await shoot("12-unknown", dark, setup());
+        await review("13-unknown-refused", dark, "Try to create it here");
+        await open("/", "hosted-mirror-missing", { dark, width: 1440 });
+        await shoot("14-hosted", dark, setup());
+        await setup().getByRole("button", { name: "How to create the image mirror" }).click();
+        await page.getByRole("dialog").waitFor();
+        await wait(300);
+        await shoot("15-hosted-instructions", dark, modal());
+      }
+    },
+
     // Not a docs image: the MaaS tab in every state, light and dark, to
     // check it by eye (screenshots.sh maas-review, THEMES_DIR).
     async "maas-review"() {
@@ -573,19 +632,28 @@ async (page) => {
         pad: 24,
       });
 
-      // Self-managed OpenShift after step 1: the nodes' command and check.
-      await open("/", "self-managed-saved");
+      // Self-managed OpenShift after step 1: one click for the nodes' pull
+      // secret and the image mirror, and the nodes' check.
+      await open("/", "self-managed-mirror");
       const selfManaged = card("One-time cluster setup");
       await selfManaged.getByRole("button", { name: "Check that the nodes can pull" }).click();
       await selfManaged.locator(".pf-v6-c-alert__title", { hasText: "The nodes can pull from quay.io/rhoai" }).waitFor();
       await crop("status-cluster-setup-self-managed", selfManaged, {
         notes: [
-          { at: selfManaged.locator("#node-pull-secret-command-code"), n: 1, pos: "l" },
-          { at: selfManaged.getByRole("button", { name: "Check that the nodes can pull" }), n: 2, pos: "r" },
+          { at: selfManaged.getByRole("button", { name: "Add to the nodes' pull secret" }), n: 1, pos: "l" },
+          { at: selfManaged.getByRole("button", { name: "Check that the nodes can pull" }), n: 2, pos: "tr" },
           { at: selfManaged.locator(".pf-v6-c-alert__title", { hasText: "The nodes can pull from quay.io/rhoai" }), n: 3, pos: "r" },
+          { at: selfManaged.getByRole("button", { name: "Create the image mirror" }), n: 4, pos: "r" },
         ],
         pad: 24,
       });
+
+      // The review before the nodes' pull secret changes: the plan read with
+      // the user's own token and a dry run.
+      await open("/", "self-managed-mirror");
+      await card("One-time cluster setup").getByRole("button", { name: "Add to the nodes' pull secret" }).click();
+      await page.getByRole("dialog").getByRole("heading", { name: "What the nodes do" }).waitFor();
+      await crop("status-node-setup-review", page.locator(".pf-v6-c-modal-box"), { pad: 0 });
 
       await open("/", "no-dsc");
       await crop("status-create-dsc", card("Create the DataScienceCluster"), {

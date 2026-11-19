@@ -153,21 +153,21 @@ const NodePullSecret: React.FC<{
         : "The updater could not read what kind of cluster this is. On ROSA HCP the nodes use the token saved above. If this cluster is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret: a cluster-admin adds the quay.io/rhoai entry with this command, or tries Add to the nodes' pull secret:";
 
   const checkReason = blocker ?? (checking ? null : checkImage ? null : checkImageReason ?? "Looking up the newest nightly build...");
-  const setupButtons = !managed && (
-    <>
-      <ActionListItem>
-        <TooltipButton variant={selfManaged && !nodes.pulled ? "primary" : "secondary"} onClick={() => setDialog("pull-secret-add")} disabledReason={blocker}>
-          Add to the nodes&apos; pull secret
-        </TooltipButton>
-      </ActionListItem>
-      {selfManaged && (
-        <ActionListItem>
-          <TooltipButton variant="secondary" isDanger onClick={() => setDialog("pull-secret-remove")} disabledReason={blocker}>
-            Remove from the nodes&apos; pull secret
-          </TooltipButton>
-        </ActionListItem>
-      )}
-    </>
+  // Primary until the nodes are known to pull (the catalog, or a passed check).
+  const addButton = !managed && (
+    <FlexItem>
+      <TooltipButton variant={selfManaged && !nodes.pulled && !result?.success ? "primary" : "secondary"} onClick={() => setDialog("pull-secret-add")} disabledReason={blocker}>
+        Add to the nodes&apos; pull secret
+      </TooltipButton>
+    </FlexItem>
+  );
+  // The removal comes last, apart from the actions that set up.
+  const removeButton = selfManaged && (
+    <FlexItem>
+      <TooltipButton variant="secondary" isDanger onClick={() => setDialog("pull-secret-remove")} disabledReason={blocker}>
+        Remove from the nodes&apos; pull secret
+      </TooltipButton>
+    </FlexItem>
   );
   return (
     <Stack hasGutter>
@@ -176,24 +176,24 @@ const NodePullSecret: React.FC<{
       </StackItem>
       {unknown && <StackItem>{commands}</StackItem>}
       <StackItem>
-        <ActionList>
-          <ActionListGroup>
-            {setupButtons}
-            {!nodes.pulled && (
-              <ActionListItem>
-                <TooltipButton
-                  variant="secondary"
-                  onClick={handleCheck}
-                  isLoading={checking || undefined}
-                  isDisabled={checking}
-                  disabledReason={checkReason}
-                >
-                  Check that the nodes can pull
-                </TooltipButton>
-              </ActionListItem>
-            )}
-          </ActionListGroup>
-        </ActionList>
+        {/* Wraps on a narrow card: up to three long button labels. */}
+        <Flex gap={{ default: "gapMd" }} flexWrap={{ default: "wrap" }}>
+          {addButton}
+          {!nodes.pulled && (
+            <FlexItem>
+              <TooltipButton
+                variant="secondary"
+                onClick={handleCheck}
+                isLoading={checking || undefined}
+                isDisabled={checking}
+                disabledReason={checkReason}
+              >
+                Check that the nodes can pull
+              </TooltipButton>
+            </FlexItem>
+          )}
+          {removeButton}
+        </Flex>
         {!nodes.pulled && (
           <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-mt-sm">
             {checking
