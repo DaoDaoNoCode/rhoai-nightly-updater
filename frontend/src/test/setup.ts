@@ -1,8 +1,16 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { format } from "node:util";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setDocumentHidden } from "./utils";
+
+// findBy*/waitFor give up after 1s by default: on a loaded machine (a
+// CPU-limited build pod, parallel suites) a page whose stubbed reads
+// resolve at once can still take longer to render, and the test fails
+// for no fault of the page. They return as soon as the element is there,
+// so this only bounds a page that never shows it (vitest.config.mts's
+// testTimeout bounds the whole test).
+configure({ asyncUtilTimeout: 10_000 });
 
 // React's development warnings (a list item without a key, a <div> inside a
 // <p>, an update outside act, ...) are bugs in what the UI renders, not
