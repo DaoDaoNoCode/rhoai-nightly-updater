@@ -248,6 +248,7 @@ oc get installplan,csv -n redhat-ods-operator
 | "older than the installed" | Update never downgrades. Use Install a different build and tick the confirmation (see "Downgrades" below) |
 | Succeeded, but "an upgrade gate holds it" | The operator waits for an admin acknowledgement (set its key to "true" in ConfigMap `odh-upgrade-acks` in `redhat-ods-operator`) or cannot resolve a gate because it is older than the resources it found. The note reads the Platform and every DataScienceCluster condition |
 | Diagnostics: "Objects the operator cannot update" | Upgrade leftovers; see §11.6 |
+| Diagnostics: "Left over from an earlier release" | Stored field types or a changed selector; Fix, see §11.6 |
 | "cannot read the installed CSV version" | Use Install a different build and confirm |
 | A second rhods-operator Subscription exists | Delete the extra one yourself; the tool refuses to guess which one is right |
 | Namespace has 2+ OperatorGroups / a non-global one | Keep one global OperatorGroup in `redhat-ods-operator` |
@@ -727,18 +728,38 @@ OLM's documented recovery ("Refreshing failing subscriptions"), as a MANUAL ADMI
 
 ### 11.6 Upgrade leftovers the operator cannot fix itself
 
-<img src="docs/images/diag-apply-failures.png" alt="Diagnostics: Deployment redhat-ods-applications/kuberay-operator must be recreated: spec.selector cannot be changed, with the commands" width="760">
-
-The DataScienceCluster, the Platform and the module CRs report objects the operator failed to apply as `failure deploying resource <ns>/<name>: apply failed <group/version>, Kind=<Kind>: …`. Diagnostics ("Objects the operator cannot update") lists each object once, with the CRs that report it and exact commands. It changes nothing. Find them by hand with:
+The DataScienceCluster, the Platform and the module CRs report objects the operator failed to apply as `failure deploying resource <ns>/<name>: apply failed <group/version>, Kind=<Kind>: …`. Diagnostics lists each object once, with the CRs that report it and exact commands, under one of two checks: **Left over from an earlier release** (the two kinds the tool can fix, below, with a **Fix** button) or **Objects the operator cannot update** (everything else, guidance only; it changes nothing). Find them by hand with:
 
 ```bash
 oc get datasciencecluster -o jsonpath='{range .items[*].status.conditions[*]}{.message}{"\n"}{end}' | grep 'failure deploying'
 oc get platforms.config.opendatahub.io -o jsonpath='{range .items[*].status.conditions[*]}{.message}{"\n"}{end}' | grep 'failure deploying'
 ```
 
+**Left over from an earlier release** (live on RHOAI 3.6.0 after upgrades over several releases: the DSC was Not Ready while every component said Ready). Every fix runs with your token, reads everything again first, and changes nothing unless each check passes.
+
+<img src="docs/images/diag-leftover-fields.png" alt="Diagnostics: TrustyAI default-trustyai has field values from an earlier release, with the operator's error, a table of the fields (stored false, after deny, the CRD default) and a Fix button" width="760">
+
+1. **Stored field types**: `... to smd typed: errors: .spec.<path>: expected <type>, got ...`. A module CR still holds a value of the type an earlier release wrote (here `permitOnline: false` where the CRD now has a string enum `allow`/`deny` with default `deny`); Kubernetes never rewrites a stored object, and server-side apply cannot convert it. The module operator often crash-loops too ("failed waiting for *v1alpha1.<Kind> Informer to sync"); Diagnostics links that pod problem here when the pod's last exit says so.
+   1. **Observed**: the operator's error, each field's stored value and what the installed CRD says (type, values, default), and who last wrote the CRD's schema.
+   2. **Fields**: per field, the stored value and the value after: the CRD's **default**, or **Removed** for an optional field without one. A required field without a default has no automatic fix. A stored value that is not "off" (`true`, a number, text) may mean something other than the default, so the fix asks you to confirm you checked it.
+   3. **Fix** patches only those fields: a JSON Patch that tests the object's UID and each stored value, after a server-side dry run (`fieldValidation=Strict`). The tool refuses when it cannot tell that the CRD, not the object, is the current shape: when OLM last wrote the CRD for a bundle the installed operator does not ship, or someone wrote it by hand (the downgrade case of step 3 below).
+   The DataScienceCluster controller watches module CRs, so it applies the object again by itself (rhods-operator rhoai-3.6). If a re-scan still shows the error with every field valid, the problem becomes "still reports an error ... that is already fixed" with **Retry now**: it adds the annotation `rhoai-nightly-updater.opendatahub.io/retry` to the DataScienceCluster and removes it again, which makes the operator reconcile at once. By hand: `oc annotate datasciencecluster default-dsc rhoai-nightly-updater.opendatahub.io/retry=now`, then the same with `rhoai-nightly-updater.opendatahub.io/retry-`.
+2. **Changed selector**: `spec.selector: Invalid value: ...: field is immutable` on a Deployment, StatefulSet, DaemonSet or Job (the only failure for that object). An older release created it with another selector. **Fix** deletes it (UID and resourceVersion preconditions, propagation Background, after a dry run) so the operator creates it again, then waits up to 2 minutes for it to be back and ready, and says so if it is not. It refuses when the object is not in the applications namespace (read from the DSCInitialization), its controller owner is not a module CR or the DataScienceCluster that reports the failure, or that owner's operator has no available pod.
+
+<img src="docs/images/diag-leftover-recreate-dialog.png" alt="The Fix dialog for recreating Deployment trustyai-service-operator-controller-manager: the acknowledgement checkbox, what stops meanwhile, and the Fix button" width="760">
+
+   1. The workload is down until the operator creates it again; changes to that component's resources wait meanwhile. When the tool cannot tell whether the component is in use (it has no reader for most components' resources), or the pods serve failurePolicy Fail webhooks, you tick an acknowledgement first. The server refuses the fix without it.
+   2. **Fix** runs the delete and the wait.
+
+The Diagnostics scan reads Deployments only (the ServiceAccount reads no other workload kind): for a StatefulSet, DaemonSet or Job, Fix reads it with your token and checks it before deleting.
+
+**Objects the operator cannot update** (guidance only):
+
+<img src="docs/images/diag-apply-failures.png" alt="Diagnostics: Deployment redhat-ods-applications/kuberay-operator must be recreated: spec.template.metadata.labels cannot be changed, with the commands" width="760">
+
 MANUAL ADMIN STEPs, by error:
 
-1. **`field is immutable`** (for example `spec.selector` of a Deployment an older version created). The object must be recreated: delete it, then restart the operator that reconciles the reporting CR so it reconciles at once. Module operators back off a failing object exponentially (up to about 16m40s) and may wait that long otherwise.
+1. **`field is immutable`** on any other field (for example `spec.template.metadata.labels`), or together with another error. The object must be recreated: delete it, then restart the operator that reconciles the reporting CR so it reconciles at once. Module operators back off a failing object exponentially (up to about 16m40s) and may wait that long otherwise.
    ```bash
    oc delete deployment.apps <name> -n <ns>
    oc rollout restart deployment/<module-operator> -n <ns>        # a module operator (Diagnostics names it when known)
@@ -817,6 +838,7 @@ oc get datasciencecluster -o jsonpath='{range .items[0].status.conditions[*]}{.t
 | **Certificates never issued, or their Secret deleted** (pods stuck on `secret "<x>-cert" not found`; the `Certificate` has no `Ready`, or still says Ready=True because no cert-manager controller runs to update it) | `Certificate <ns>/<name> is not issued: cert-manager is not installed or not running` (or "reports Ready, but its Secret … is missing: cert-manager is installed but its controller is not running", with the operator Deployment (scaled to 0?) and `CertManager/cluster` managementState, or the Certificate's own failing condition). The stuck pods and the webhook whose CA it injects (`cert-manager.io/inject-ca-from`) are folded into it | Install cert-manager (Related: the prerequisite problem), or run the printed `oc scale deployment/<operator> --replicas=1` / `oc patch certmanager.operator.openshift.io cluster … Managed`. The pods start once the Secret exists |
 | **Upgrade gate** (`ModulesReady=False (AdminAckRequired)`, `failed to resolve upgrade gate version`) | `The DataScienceCluster waits on an upgrade gate`, plus `platform-admin-ack-required` for the Platform | Read what each gate is about, then run the per-key `oc patch configmap odh-upgrade-acks -n redhat-ods-operator --type merge -p '{"data":{"<key>":"true"}}'` commands. "Unable to determine target release" means the operator is older than what it found: install that version or newer (§6) |
 | **Upgrade leftovers** (`failure deploying resource …: field is immutable`, two controller owners, schema mismatch) | "Objects the operator cannot update" (§11.6) | §11.6 |
+| **Left over from an earlier release** (`to smd typed: errors: <path>: expected <type>`, or a changed `spec.selector` alone) | "Left over from an earlier release" (§11.6), with a Fix button | §11.6 |
 | **Dead CRD conversion webhook** (`conversion webhook …`) | `stale-crd-conversion` in "Stale webhooks" | §11.2 |
 | **`opendatahub.io/managed: "false"`** on an operator-applied object (the object never updates) | `<name> is excluded from operator management` | §11.3 |
 | **DSCInitialization in Error** | `DSCInitialization <name> is in phase Error`; linked from the DSC problem when other causes are not classified | Fix the cause its conditions name; the operator retries |

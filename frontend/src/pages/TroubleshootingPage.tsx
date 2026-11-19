@@ -4,6 +4,7 @@ import {
   Alert,
   AlertActionCloseButton,
   Button,
+  Checkbox,
   Card,
   CardBody,
   CardExpandableContent,
@@ -27,7 +28,7 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import CopyIcon from "@patternfly/react-icons/dist/esm/icons/copy-icon";
-import type { OperationResponse, Problem, DiagnosticResult } from "../types";
+import type { OperationResponse, Problem, DiagnosticResult, FieldChange } from "../types";
 import { getDiagnostics, fixProblem, toApiError, type ApiError } from "../services/api";
 import { errorResult, outcomeTitle, outcomeVariant } from "../outcomes";
 import { LoadErrorAlert } from "../components/LoadErrorAlert";
@@ -119,6 +120,10 @@ export function buildDiagnosticReport(data: DiagnosticResult): string {
       if (problem.affectedObjects && problem.affectedObjects.length > 0) {
         lines.push(`  Objects: ${problem.affectedObjects.join(", ")}`);
       }
+      for (const fc of problem.fieldChanges ?? []) {
+        const after = fc.change === "set-default" ? fc.after : fc.change === "remove" ? "removed" : fc.change === "valid" ? "already valid" : "not changed";
+        lines.push(`  Field ${fc.field}: ${fc.now || "not stored"} -> ${after} (the CRD says: ${fc.schema})`);
+      }
       lines.push(`  Fix: ${problem.fix ?? ""}${hasAutoFix(problem) ? " (automatic fix available)" : " (manual)"}`);
       const related = relatedProblems(problem, reportProblems);
       if (related.length > 0) lines.push(`  Related: ${related.map((r) => r.title).join("; ")}`);
@@ -131,6 +136,51 @@ export function buildDiagnosticReport(data: DiagnosticResult): string {
 
   return lines.join("\n");
 }
+
+const CHANGE_TEXT: Record<FieldChange["change"], string> = {
+  "set-default": "Set to the CRD default",
+  remove: "Removed",
+  none: "Not changed: no automatic fix",
+  valid: "Already valid",
+};
+
+/** The value after the fix, in words where there is no value. */
+function afterText(fc: FieldChange): React.ReactNode {
+  if (fc.change === "set-default") return <code>{fc.after}</code>;
+  if (fc.change === "remove") return "Removed";
+  return fc.change === "valid" ? "Already valid" : "Not changed";
+}
+
+/** The per-field plan of a fix: what is stored, what it becomes, and why. */
+export const FieldChangesTable: React.FC<{ changes: FieldChange[]; label: string }> = ({ changes, label }) => (
+  <Table aria-label={label} variant="compact" borders>
+    <Thead>
+      <Tr>
+        <Th>Field</Th>
+        <Th modifier="fitContent">Now</Th>
+        <Th modifier="fitContent">After</Th>
+        <Th>Why</Th>
+      </Tr>
+    </Thead>
+    <Tbody>
+      {changes.map((fc) => (
+        <Tr key={fc.object + fc.field}>
+          <Td dataLabel="Field">
+            {/* Long paths wrap at their dots, not inside a key. */}
+            <code>{fc.field.split(".").map((part, i) => <React.Fragment key={i}>{i > 0 && <>.<wbr /></>}{part}</React.Fragment>)}</code>
+            <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">The CRD says: {fc.schema}</div>
+          </Td>
+          <Td dataLabel="Now" modifier="fitContent">{fc.now ? <code>{fc.now}</code> : "Not stored"}</Td>
+          <Td dataLabel="After" modifier="fitContent">{afterText(fc)}</Td>
+          <Td dataLabel="Why">
+            {CHANGE_TEXT[fc.change] ?? fc.change}{fc.note ? `: ${fc.note}` : ""}
+            {fc.review && <div className="pf-v6-u-mt-xs"><StatusLabel status="warning" isCompact>Check the meaning</StatusLabel></div>}
+          </Td>
+        </Tr>
+      ))}
+    </Tbody>
+  </Table>
+);
 
 const ObjectList: React.FC<{ objects: string[] }> = ({ objects }) => (
   <List isPlain>
@@ -145,7 +195,13 @@ export const TroubleshootingPage: React.FC = () => {
   const [fixingId, setFixingId] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<OperationResponse | null>(null);
   const [copied, setCopied] = useState(false);
-  const [confirmFix, setConfirmFix] = useState<Problem | null>(null);
+  const [confirmFix, setConfirmFixState] = useState<Problem | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
+  // Every dialog starts with the acknowledgement unticked.
+  const setConfirmFix = (p: Problem | null) => {
+    setAcknowledged(false);
+    setConfirmFixState(p);
+  };
   const [lastScanned, setLastScanned] = useState<Date | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Permissions, session and the operation lock. An operator install in
@@ -184,12 +240,12 @@ export const TroubleshootingPage: React.FC = () => {
     };
   }, [runScan]);
 
-  const handleFix = async (autoFixAction: string) => {
+  const handleFix = async (autoFixAction: string, acknowledged: boolean) => {
     setFixingId(autoFixAction);
     setFixResult(null);
     let result: OperationResponse;
     try {
-      result = await fixProblem(autoFixAction);
+      result = await fixProblem(autoFixAction, acknowledged);
     } catch (err) {
       result = errorResult(err, "Fix failed");
     }
@@ -352,6 +408,14 @@ export const TroubleshootingPage: React.FC = () => {
                                         <DescriptionListDescription><ObjectList objects={objects} /></DescriptionListDescription>
                                       </DescriptionListGroup>
                                     )}
+                                    {(problem.fieldChanges?.length ?? 0) > 0 && (
+                                      <DescriptionListGroup>
+                                        <DescriptionListTerm>Fields</DescriptionListTerm>
+                                        <DescriptionListDescription>
+                                          <FieldChangesTable changes={problem.fieldChanges!} label={`Fields of ${problem.title}`} />
+                                        </DescriptionListDescription>
+                                      </DescriptionListGroup>
+                                    )}
                                     <DescriptionListGroup>
                                       <DescriptionListTerm>Fix</DescriptionListTerm>
                                       <DescriptionListDescription>{problem.fix}{!auto && " This page does not change anything for this problem."}</DescriptionListDescription>
@@ -455,16 +519,33 @@ export const TroubleshootingPage: React.FC = () => {
           : [confirmFix?.confirmMessage || "Resources on the shared cluster involved in this problem."]}
         confirmLabel="Fix"
         isLoading={fixingId !== null}
-        confirmDisabled={!!fixReason}
+        confirmDisabled={!!fixReason || (!!confirmFix?.acknowledge && !acknowledged)}
+        choice={confirmFix?.acknowledge ? (
+          <Checkbox
+            id="diagnostics-fix-acknowledge"
+            label={confirmFix.acknowledge}
+            isChecked={acknowledged}
+            onChange={(_e, checked) => setAcknowledged(checked)}
+          />
+        ) : undefined}
         onConfirm={() => {
           if (confirmFix?.autoFixAction) {
-            void handleFix(confirmFix.autoFixAction);
+            void handleFix(confirmFix.autoFixAction, !!confirmFix.acknowledge && acknowledged);
             setConfirmFix(null);
           }
         }}
         onCancel={() => setConfirmFix(null)}
       >
-        {(confirmFix?.affectedObjects?.length ?? 0) > 0 && confirmFix?.confirmMessage && <Content component="p">{confirmFix.confirmMessage}</Content>}
+        {(confirmFix?.fieldChanges?.length ?? 0) > 0 ? (
+          <Stack hasGutter className="pf-v6-u-mb-md">
+            <StackItem>
+              <FieldChangesTable changes={confirmFix!.fieldChanges!.filter((fc) => fc.change === "set-default" || fc.change === "remove")} label="Fields the fix changes" />
+            </StackItem>
+            <StackItem>
+              <Content component="p">Each field is changed only if it still holds the value shown, after the API server's dry run accepts the change. Nothing else changes.</Content>
+            </StackItem>
+          </Stack>
+        ) : (confirmFix?.affectedObjects?.length ?? 0) > 0 && confirmFix?.confirmMessage && <Content component="p">{confirmFix.confirmMessage}</Content>}
         <Content component="p" className="pf-v6-u-text-color-subtle">The server checks the problem again first and changes nothing if it is already gone.</Content>
       </ConfirmActionModal>
     </>

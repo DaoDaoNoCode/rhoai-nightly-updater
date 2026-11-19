@@ -116,6 +116,11 @@
       "detail": "No apply failures reported (13 CRs checked)"
     },
     {
+      "name": "Left over from an earlier release",
+      "status": "pass",
+      "detail": "No stored field of an older type and no changed selector reported (13 CRs checked)"
+    },
+    {
       "name": "Operator-managed config",
       "status": "pass",
       "detail": "39 deployments under operator management"

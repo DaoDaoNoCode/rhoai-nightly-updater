@@ -226,3 +226,70 @@ describe("Diagnostics related problems", () => {
     expect(text).toContain(`Related: ${prereq.title}`);
   });
 });
+
+describe("Diagnostics leftovers from an earlier release", () => {
+  // Shapes of the backend's leftover problems (docs fixtures, from the live RHOAI 3.6.0 messages).
+  const fields: Problem = {
+    id: "leftover-fields-trustyai-default-trustyai", severity: "critical",
+    title: "TrustyAI default-trustyai has field values from an earlier release",
+    description: "The operator cannot apply TrustyAI default-trustyai.", fix: "Set each listed field to the installed CRD's default.",
+    autoFixable: true, autoFixAction: "fix-leftover-fields:TrustyAI/default-trustyai",
+    confirmMessage: "This patches TrustyAI default-trustyai.", affectedObjects: ["TrustyAI default-trustyai"],
+    fieldChanges: [
+      { object: "TrustyAI default-trustyai", field: ".spec.eval.lmeval.permitOnline", now: "true", after: '"deny"', change: "set-default",
+        schema: "string, one of allow, deny, default deny, optional", note: "the installed CRD's default", review: true },
+      { object: "TrustyAI default-trustyai", field: ".spec.eval.lmeval.permitCodeExecution", now: "false", after: '"deny"', change: "set-default",
+        schema: "string, one of allow, deny, default deny, optional", note: "the installed CRD's default" },
+    ],
+    acknowledge: 'I checked what these fields mean and the new values are right for this cluster: .spec.eval.lmeval.permitOnline (true -> "deny").',
+  };
+
+  it("shows each field's plan, and Fix waits for the acknowledgement, then uses the acknowledged endpoint", async () => {
+    const api = stubApi({
+      "/api/diagnostics": result([fields]),
+      "POST /api/diagnostics/fix/acknowledged": () => jsonResponse({ success: true, message: "Changed TrustyAI default-trustyai.", logs: [] }, 200),
+    });
+    renderPage(<TroubleshootingPage />);
+    await screen.findByText(fields.title);
+    expand(fields.title);
+    const table = screen.getByRole("grid", { name: `Fields of ${fields.title}` });
+    expect(within(table).getByText(".spec.eval.lmeval.permitOnline")).toBeInTheDocument();
+    expect(within(table).getAllByText('"deny"')).toHaveLength(2);
+    expect(within(table).getByText("Check the meaning")).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("grid", { name: "Fields the fix changes" })).toBeInTheDocument();
+    const confirm = within(dialog).getByRole("button", { name: "Fix" });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: fields.acknowledge }));
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    expect(await screen.findByText("Changed TrustyAI default-trustyai.")).toBeInTheDocument();
+    expect(api.bodies["POST /api/diagnostics/fix/acknowledged"]).toEqual([{ problemId: fields.autoFixAction, acknowledged: true }]);
+    expect(api.bodies["POST /api/diagnostics/fix"]).toBeUndefined();
+  });
+
+  it("without an acknowledgement the plain endpoint is used, and a refusal is a warning", async () => {
+    const plain: Problem = { ...fields, acknowledge: undefined };
+    const api = stubApi({
+      "/api/diagnostics": result([plain]),
+      "POST /api/diagnostics/fix": () => jsonResponse({ success: false, errorCode: "acknowledgement_required", message: "Changing TrustyAI default-trustyai needs your acknowledgement first.", logs: [] }, 422),
+    });
+    renderPage(<TroubleshootingPage />);
+    await screen.findByText(plain.title);
+    expand(plain.title);
+    await new Promise((r) => setTimeout(r, 20));
+    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fix" }));
+    expect(await screen.findByText("Not started: confirm the acknowledgement first")).toBeInTheDocument();
+    expect(screen.getByText(/needs your acknowledgement first/).closest(".pf-v6-c-alert")).toHaveClass("pf-m-warning");
+    expect(api.bodies["POST /api/diagnostics/fix"]).toEqual([{ problemId: plain.autoFixAction }]);
+  });
+
+  it("the report lists each field's plan", () => {
+    expect(buildDiagnosticReport(result([fields]))).toContain('Field .spec.eval.lmeval.permitOnline: true -> "deny" (the CRD says: string, one of allow, deny, default deny, optional)');
+  });
+});

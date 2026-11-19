@@ -23,6 +23,8 @@ export function outcomeVariant(res: Pick<OperationResponse, "success" | "errorCo
     case "lock_unavailable":
     case "user_rate_limited":
     case "terminating":
+    case "acknowledgement_required":
+    case "not_recreated":
       return "warning";
     default:
       return "danger";
@@ -45,6 +47,8 @@ export function outcomeTitle(res: Pick<OperationResponse, "success" | "errorCode
     case "user_rate_limited": return "Not started: wait before repeating this change";
     case "terminating": return "Still being deleted";
     case "delete_failed": return "Nothing could be deleted";
+    case "acknowledgement_required": return "Not started: confirm the acknowledgement first";
+    case "not_recreated": return "Deleted, not created again yet";
     default: return failedTitle;
   }
 }

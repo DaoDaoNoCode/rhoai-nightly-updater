@@ -256,6 +256,51 @@ async (page) => {
     // Not a docs image: the Models tab in its states (each catalog model,
     // the picker with a model that has no room), light and dark, to check
     // it by eye (screenshots.sh models-review, THEMES_DIR).
+    // Not a docs image: the "Left over from an earlier release" problems,
+    // their Fix dialogs and the success and refusal states, at 1440 px,
+    // light and dark (screenshots.sh leftovers-review, THEMES_DIR).
+    async "leftovers-review"() {
+      const fieldsTitle = "TrustyAI default-trustyai has field values from an earlier release";
+      const recreateTitle = "trustyai-service-operator-controller-manager must be recreated: its selector changed";
+      const openAll = async () => {
+        const toggles = page.getByRole("button", { name: /Details/ });
+        for (let i = 0; i < (await toggles.count()); i++) await toggles.nth(i).click();
+        const more = page.getByRole("button", { name: /^(Show content|Show more)$/ });
+        for (let i = 0; i < 12 && (await more.count()) > 0; i++) await more.first().click();
+        await wait(400);
+      };
+      const shot = async (name) => { await fit(); await page.screenshot({ path: `${out}/themes/leftovers-${name}.png` }); };
+      const dialogShot = async (name) => { await wait(400); await page.getByRole("dialog").screenshot({ path: `${out}/themes/leftovers-${name}.png` }); };
+      const fixOf = (title) => problem(title).getByRole("button", { name: "Fix", exact: true });
+      for (const dark of [false, true]) {
+        const theme = dark ? "dark" : "light";
+        await open("/diagnostics", "diag-leftovers", { dark });
+        await openAll();
+        await shot(`page-${theme}`);
+        await fixOf(fieldsTitle).click();
+        await dialogShot(`fields-dialog-${theme}`);
+        await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+        await fixOf(recreateTitle).click();
+        await dialogShot(`recreate-dialog-${theme}`);
+        await page.getByRole("dialog").getByRole("checkbox").check();
+        await dialogShot(`recreate-dialog-ticked-${theme}`);
+        await page.getByRole("dialog").getByRole("button", { name: "Fix", exact: true }).click();
+        await settle();
+        await alert("Recreated Deployment").waitFor(); await settle(); await shot(`recreated-${theme}`);
+        await fixOf(fieldsTitle).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Fix", exact: true }).click();
+        await settle();
+        await alert("Changed TrustyAI default-trustyai").waitFor(); await settle(); await shot(`fields-fixed-${theme}`);
+        await open("/diagnostics", "diag-leftovers-refused", { dark });
+        await problem(recreateTitle).getByRole("button", { name: /Details/ }).click();
+        await fixOf(recreateTitle).click();
+        await page.getByRole("dialog").getByRole("checkbox").check();
+        await page.getByRole("dialog").getByRole("button", { name: "Fix", exact: true }).click();
+        await settle();
+        await alert("Blocked: prerequisites not met").waitFor(); await settle(); await shot(`refused-${theme}`);
+      }
+    },
+
     async "models-review"() {
       const shots = [
         ["env-models-several", "qwen25-05b-instruct", "qwen25"], ["env-models-several", "qwen3-1-7b", "qwen3"],
@@ -970,6 +1015,29 @@ async (page) => {
         notesFor: async (item) => [{ at: item.getByRole("button", { name: "Fix", exact: true }), n: 1, pos: "l" }],
       });
       await one("diag-certificate-stale", "diag-certificate-stale", "reports Ready, but its Secret");
+      await one("diag-leftovers", "diag-leftover-fields", "TrustyAI default-trustyai has field values from an earlier release", {
+        notesFor: async (item) => [
+          { at: item.getByText("Observed", { exact: true }), n: 1, pos: "l", box: false },
+          { at: item.getByText("Fields", { exact: true }), n: 2, pos: "l", box: false },
+          { at: item.getByRole("button", { name: "Fix", exact: true }), n: 3, pos: "l" },
+        ],
+      });
+      {
+        const item = problem("trustyai-service-operator-controller-manager must be recreated: its selector changed");
+        await item.getByRole("button", { name: "Details" }).click();
+        await item.getByRole("button", { name: "Fix", exact: true }).click();
+        const dialog = page.getByRole("dialog");
+        await dialog.getByRole("checkbox").check();
+        await wait(400);
+        await crop("diag-leftover-recreate-dialog", dialog, {
+          notes: [
+            { at: dialog.getByRole("checkbox"), n: 1, pos: "l" },
+            { at: dialog.getByRole("button", { name: "Fix", exact: true }), n: 2, pos: "l" },
+          ],
+          pad: 18,
+        });
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+      }
       await one("diag-apply-failures", "diag-apply-failures", "kuberay-operator must be recreated");
       await one("diag-upgrade-gates", "diag-upgrade-gates", "waits on an upgrade gate");
       await open("/diagnostics", "diag-healthy");
@@ -1067,7 +1135,7 @@ async (page) => {
     },
   };
 
-  if (job !== "pages" && job !== "themes") vw = CW;
+  if (job !== "pages" && job !== "themes" && job !== "leftovers-review") vw = CW;
   if (!jobs[job]) throw new Error(`unknown job ${job}; jobs: ${Object.keys(jobs).join(" ")}`);
   await jobs[job]();
   await page.setViewportSize({ width: W, height: H });

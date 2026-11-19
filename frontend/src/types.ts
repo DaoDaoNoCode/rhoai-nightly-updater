@@ -528,6 +528,26 @@ export interface Problem {
   affectedObjects?: string[] | null;
   /** IDs of other problems in the same report that fix this one's cause. */
   relatedProblems?: string[] | null;
+  /** Per-field plan of a fix that changes fields of an object. */
+  fieldChanges?: FieldChange[] | null;
+  /** A statement the user must confirm before the fix runs (sent to /api/diagnostics/fix/acknowledged). */
+  acknowledge?: string;
+}
+
+/** One field of a fix's plan (backend cluster.FieldChange). */
+export interface FieldChange {
+  object: string;
+  field: string;
+  /** The stored value as JSON; "" when the object no longer has the field. */
+  now: string;
+  /** The value after the fix as JSON; "" when removed or not changed. */
+  after: string;
+  change: "set-default" | "remove" | "none" | "valid";
+  /** What the installed CRD says about the field. */
+  schema: string;
+  note?: string;
+  /** The stored value may not mean the same as the new one. */
+  review?: boolean;
 }
 
 export interface CheckResult {

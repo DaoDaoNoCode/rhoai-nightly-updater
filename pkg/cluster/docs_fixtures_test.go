@@ -119,4 +119,18 @@ func TestWriteDocsFixtures(t *testing.T) {
 	// v3 nor Platform v1alpha2 (a RHOAI 3.6 nightly, 2026-10-07).
 	_, cc := conversionWorld(t, 500, liveDSCv3Conversion500)
 	write("conversion-webhook", checkConversionFailures(cc))
+
+	// Left over from an earlier release (the live RHOAI 3.6.0 case): the
+	// DSC reports the TrustyAI CR's stored booleans, the CR reports its
+	// Deployment's old selector, and the module operator crash-loops.
+	lw := newLeftoverWorld(t, []string{msgStoredTypes}, []string{msgTrustySelector}, storedFalse())
+	lw.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/pods", 200, `{"items":[{"metadata":{"name":"trustyai-operator-module-controller-manager-6d9f7c8b5-x2x7q","namespace":"redhat-ods-applications","creationTimestamp":"2026-11-10T00:00:00Z","labels":{"pod-template-hash":"6d9f7c8b5"},
+		"ownerReferences":[{"kind":"ReplicaSet","name":"trustyai-operator-module-controller-manager-6d9f7c8b5","controller":true}]},
+		"status":{"phase":"Running","containerStatuses":[{"name":"manager","restartCount":1061,"state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"Error","exitCode":1,"message":"`+msgInformer+`"}}}]}}]}`)
+	lw.f.json("GET", "/api/v1/namespaces", 200, `{"items":[]}`)
+	leftovers := checkLeftovers(lw.c)
+	leftovers.check.Name = leftoversCheckName
+	pods := checkRHOAIPods(lw.c)
+	pods.check.Name = "RHOAI pods"
+	write("leftovers", leftovers, pods)
 }

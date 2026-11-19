@@ -16,6 +16,7 @@
     { "name": "Certificates", "status": "pass", "detail": "2 Certificates Ready in redhat-ods-operator, redhat-ods-applications, redhat-ods-monitoring" },
     { "name": "Platform modules", "status": "pass", "detail": "No module is stuck in deletion; Platform default phase: Ready" },
     { "name": "Objects the operator cannot update", "status": "pass", "detail": "No apply failures reported (13 CRs checked)" },
+    { "name": "Left over from an earlier release", "status": "pass", "detail": "No stored field of an older type and no changed selector reported (13 CRs checked)" },
     { "name": "Operator-managed config", "status": "pass", "detail": "39 deployments under operator management" }
   ]
 }

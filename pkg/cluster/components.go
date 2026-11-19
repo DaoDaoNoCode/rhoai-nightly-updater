@@ -642,6 +642,11 @@ func componentCause(cond dscCondition) string {
 	case strings.Contains(lower, "observedgeneration < generation") || strings.Contains(lower, "status is stale"):
 		return "Its module operator has not reconciled the current spec yet"
 	case len(parseApplyFailures(cond.Message)) > 0:
+		for _, f := range parseApplyFailures(cond.Message) {
+			if f.leftover() {
+				return "An object is left over from an earlier release"
+			}
+		}
 		return "The operator cannot update one of its objects"
 	case strings.Contains(lower, "conversion webhook"):
 		return "A CRD conversion webhook cannot be called"
