@@ -819,7 +819,7 @@ Fix: update RHOAI to a newer nightly (Update on the Status page, or a build from
 
 The Components page's **Components and sub-components** card ([README](README.md#components-and-sub-components-change-them-without-the-openshift-console)) changes the DSC. What it writes: [CLUSTER_CHANGES §5](docs/CLUSTER_CHANGES.md#5-datasciencecluster-status-and-components-pages).
 
-**A component is "Not set" after an upgrade.** A release that adds a sub-component (`dashboard.maasPortal`, `workbenches.workbenchesV2`, `kserve.modelExpress`, `aigateway.aiGrid`, `databaseservice` in 3.6) does not add it to an existing DSC. The operator treats a value that is not set as Removed. When the release default is Removed too, nothing differs in practice; when it is Managed (for example `dashboard.standard` lost by a client that wrote the old `dashboard.managementState` shape against v3, which the API server prunes), the component is gone. **Fix** sets each missing value to the release default.
+**A component is "Not set" after an upgrade.** A release that adds a sub-component (`dashboard.maasPortal`, `workbenches.workbenchesV2`, `kserve.modelExpress`, `aigateway.aiGrid`, `databaseservice` in 3.6) does not add it to an existing DSC. The operator treats a value that is not set as the CRD's default for it where the CRD has one (`aipipelines.argoWorkflowsControllers` starts Managed; the tree shows "Not set (Managed)" and, as the release default, "Not set (CRD default Managed)"), else as Removed. When the release default is Removed too, nothing differs in practice; when it is Managed (for example `dashboard.standard` lost by a client that wrote the old `dashboard.managementState` shape against v3, which the API server prunes), the component is gone. **Fix** sets each missing value to the release default.
 
 **Managed under a parent that is not Managed.** A sub-component is deployed through its parent's module (`aigateway.modelsAsAService` needs `aigateway` Managed). Set the parent to Managed (the confirmation offers both in one change) or set the sub-component to Removed.
 
@@ -827,28 +827,38 @@ The Components page's **Components and sub-components** card ([README](README.md
 
 <img src="docs/images/components-toggle.png" alt="Set ray to Removed? The confirmation lists ray: Managed to Removed (removes it)" width="640">
 
-- "changed since you looked": someone else changed the DSC (the JSON Patch's `test` failed). Nothing was changed; reload.
+- "changed since you looked" or "changed since you reviewed this change": someone else changed the DSC (the JSON Patch's `test` failed, or the plan computed again differs from the one the dialog showed). Nothing was changed; reload.
 - "The API server refused the change in its dry run: ...": a validation rule or the operator's webhook refused it, quoted as is (for example Kueue `Managed`, which the 3.6 webhook denies; use `Unmanaged`; or `kserve.modelCache` Managed without `cacheSize`, which needs settings this page does not edit: use the console).
-- "removing X now could leave it stuck in deletion": the removal checks of [§11.1](#111-d1-dashboard-operator-scaled-to-0-dashboard-cr-deletion-hangs) and [§11.4](#114-d7--d8-mlflow-or-pipeline-server-finalizers) (the module operator must run, the module CR must not be deleting, the component must not serve a CRD conversion webhook, nothing must still use it). The dashboard, MLflow operator and pipelines are never removed by the tool.
-- Argo CD or an ACM policy manages the DSC: change it in Git or in the policy.
+- "removing X now could leave it stuck in deletion": the removal checks of [§11.1](#111-d1-dashboard-operator-scaled-to-0-dashboard-cr-deletion-hangs) and [§11.4](#114-d7--d8-mlflow-or-pipeline-server-finalizers) (the RHOAI operator, found from the installed CSV's Deployments, and the module operator must run; the module CR must not be deleting; nothing must still use it). The dialog shows them before you confirm: the change runs the same checks. The dashboard, MLflow operator and pipelines are never removed by the tool. A module the tool cannot check (no `components.platform.opendatahub.io` kind named after it, or a module CR whose operator it does not know) is refused rather than removed unchecked: check its operator yourself and change it in the console.
+- "X serves the conversion webhook of CRD ...": removing X deletes the webhook's Service but not the CRDs, so their objects could no longer be converted, garbage-collected or deleted with their namespace. The tool cannot list those objects; the message gives the commands, for example:
+
+  ```bash
+  oc get sparkapplications.sparkoperator.k8s.io -A            # any objects?
+  oc get scheduledsparkapplications.sparkoperator.k8s.io -A
+  ```
+
+  If any exist, delete them first. If none exist, set the component to Removed yourself in the OpenShift console (edit the DataScienceCluster).
+- Argo CD, an ACM policy or Helm (`meta.helm.sh/release-name` annotation, `app.kubernetes.io/managed-by: Helm` label) manages the DSC: change it in Git, in the policy or in the chart's values.
 
 **Hard reset.** Use it when components are stuck and a soft reset does not help.
 
 <img src="docs/images/components-hard-reset.png" alt="The hard reset dialog: every component is torn down and comes back as the release default; what stays Removed; the DataScienceCluster it creates; the DSC name typed to confirm" width="640">
 
-It runs as one operation with steps: check, delete (UID precondition, after a dry run), wait until the operator has removed every component and the DSC is gone, create the release default with the old name and the old workbench and AI hub namespaces (after a dry run), wait for Ready. Your notebooks, pipeline servers, models and model registries are kept, but stop working until their components are back. Components you enabled that the release default leaves Removed stay Removed: turn them on again afterwards. It is refused on Managed RHOAI (the operator recreates `default-dsc` itself), when the operator is not running, when the DSC is already being deleted, when there is not exactly one DSC, under Argo CD or ACM, and while a module cannot be cleaned up (for example an MLflow CR exists).
+It runs as one operation with steps: check, delete, wait until the operator has removed every component and the DSC is gone, create the release default with the old name and the old workbench and AI hub namespaces, wait for Ready. The dialog lists how the new DSC differs from the current one. Before anything is deleted, the check step runs a dry run of the delete and a dry run of the new spec against the live DSC (`fieldValidation=Strict`, so the CRD's rules and the operator's webhook see it), and records the object it will create in ConfigMap `rhoai-nightly-updater-operation` (key `dscHardReset`). The delete has the UID precondition and `propagationPolicy: Foreground`, so the DSC stays (finalizer `foregroundDeletion`) until the objects it owns are gone. Before the create, the DSCs are listed: if one exists by then, nothing is created. Your notebooks, pipeline servers, models and model registries are kept, but stop working until their components are back. Components you enabled that the release default leaves Removed stay Removed: turn them on again afterwards; they get the same removal checks as setting them to Removed (a conversion webhook, something that still uses them). It is refused on Managed RHOAI (the operator recreates `default-dsc` itself), when the operator is not running, when the installed CSV ships no DataScienceCluster example, when the DSC is already being deleted, when there is not exactly one DSC, under Argo CD, ACM or Helm, and while a module cannot be cleaned up (for example an MLflow CR exists).
 
-If it stops:
+If it stops after the delete, every message prints the object it planned, and nothing else is created. Once no DataScienceCluster exists, the Components page shows **A hard reset did not finish** with **Finish the hard reset…**: it creates exactly the recorded object (old name and namespaces), after checking that no DSC exists, that the CRD still stores the recorded version, that the installed operator is still the one whose release default it is, that the platform is self-managed and the operator runs, and a dry run. Use it rather than **Create DataScienceCluster**, which creates the release default named `default-dsc` without the old namespaces. This works after a restart of the tool too.
 
-- **"still being deleted after 10m0s"**: nothing was created. The DSC finalizer `platform.opendatahub.io/finalizer` is removed by the operator once every module is cleaned up; the message quotes `ModulesReady`. Check Diagnostics → Platform modules for the module that is stuck and fix it (§11.1, §11.4). Do **not** remove the finalizer by hand: the operator would leave modules behind. Once `oc get datasciencecluster` shows nothing, use **Create DataScienceCluster** on the Components page.
-- **"creating the release default failed"**: the old DSC is gone. Use **Create DataScienceCluster** (it creates the release default, named `default-dsc`), or apply the object the message prints:
+- **"still being deleted after 10m0s"**: the DSC finalizer `platform.opendatahub.io/finalizer` is removed by the operator once every module is cleaned up; the message quotes `ModulesReady`. Check Diagnostics → Platform modules for the module that is stuck and fix it (§11.1, §11.4). Do **not** remove the finalizer by hand: the operator would leave modules behind. Once `oc get datasciencecluster` shows nothing, use **Finish the hard reset…**.
+- **"could not be read for the last poll"**: reads of the DSC kept failing until the deadline (they are retried while waiting). Check it with `oc get datasciencecluster`, then finish as above.
+- **"The reset was stopped"**: the tool lost its lock or was stopping while the DSC was deleted. Finish as above once it is gone.
+- **"creating the release default failed"** or **"refused the release default in its dry run"**: the old DSC is gone. Fix what the message quotes, then use **Finish the hard reset…**, or create the printed object yourself:
 
   ```bash
   oc get datasciencecluster                 # expect: No resources found
-  oc apply -f dsc.yaml                      # the object from the message
+  oc create -f dsc.yaml                     # the object from the message
   ```
 
-- **"A new DataScienceCluster ... appeared"**: someone, or the operator, created one meanwhile; the reset created nothing. Review it on the Components page.
+- **"A new DataScienceCluster ... appeared"** or **"DataScienceCluster X now exists"**: someone, or the operator, created one meanwhile; the reset created nothing and Finish is not offered while it exists. Review it on the Components page.
 
 ## 12. Activity log
 

@@ -1423,7 +1423,7 @@ export function dscManager(overrides = {}) {
     if (!n.toggle) continue;
     if (!n.specSet && n.defaultSet) {
       mismatches.push({ kind: "unset", path: n.path, default: n.default, fixable: true, message: n.default === "Removed"
-        ? "Not set in the DataScienceCluster. The operator treats it as Removed, which is also the release default; Fix sets it explicitly."
+        ? "Not set in the DataScienceCluster, so the operator treats it as Removed, which is also the release default. Fix sets it explicitly."
         : `Not set in the DataScienceCluster, so the operator treats it as Removed, but the release default is ${n.default}. Fix sets it to ${n.default}.` });
     }
     const parent = byPath[n.parent];

@@ -40,13 +40,19 @@ only accepts a tag whose version is the top dated section. See
   default…**: a soft reset changes in place only what differs, keeping the
   workbench and AI hub namespaces; a hard reset (typed DSC name) deletes the
   DSC and creates the release default with the same name and namespaces,
-  waits up to 10 minutes for the operator's cleanup, never removes a
-  finalizer and creates nothing when the old DSC is not gone. Every change
+  after validating the new spec against the live DSC in a dry run; it
+  deletes in the foreground, waits up to 10 minutes for the operator's
+  cleanup, never removes a finalizer and creates nothing when the old DSC
+  is not gone; whatever stops it after the delete, **Finish the hard
+  reset** creates exactly the object it planned. A change runs the checks
+  its confirmation showed (the toggle is bound to the reviewed plan);
+  removing a component that serves a CRD conversion webhook is refused
+  with the `oc get` commands that check for its objects. Every change
   is a JSON Patch of only its fields (its `test` operations fail the patch
   when the DSC changed since you looked), after a server-side dry run, with
   `fieldValidation=Strict` and its own field manager
   (`rhoai-nightly-updater-components`, so Clean up never turns it back);
-  refused under Argo CD or an ACM policy, in the gitops profile (which
+  refused under Argo CD, an ACM policy or Helm, in the gitops profile (which
   shows the tree read-only), and on Managed RHOAI for the hard reset.
   Diagnostics' **disable** fix now uses the same change for any component
   the CRD defines, instead of a fixed list. **New RBAC**: `delete` on
