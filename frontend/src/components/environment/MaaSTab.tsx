@@ -107,7 +107,9 @@ const PlatformPart: React.FC<{ part: MaaSPart; readOnly: boolean; reason: string
   // A "manual" part has only the commands; the others can be done here, so the commands are an alternative.
   const onlyCommands = part.state === "manual" && fixes.length === 0;
   return (
-    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" status={maasPartLabelStatus(part)} unmanaged={!!part.notManaged}
+    <PartItem id={`maas-${part.id}`} title={part.title} scope="Shared by the cluster" unmanaged={!!part.notManaged}
+      // Waiting for something else is not this part setting itself up: a grey "Waiting", as on Prerequisites.
+      status={part.state === "waiting" ? "not-set-up" : maasPartLabelStatus(part)} statusText={part.state === "waiting" ? "Waiting" : undefined}
       actions={fixes.length > 0 || part.docUrl ? (
         <>
           {fixes.map((a) => (

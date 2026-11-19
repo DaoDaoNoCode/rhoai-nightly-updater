@@ -213,6 +213,24 @@ describe("MaaS run dialog", () => {
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "upgrade-rhcl" }]);
   });
 
+  it("a part waiting for another is a grey Waiting, and a ready part with a warning needs attention", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([
+        { id: "rhcl", title: "Red Hat Connectivity Link", state: "ready", warning: "Red Hat Connectivity Link 1.4.3 is installed. Upgrade it." },
+        { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)", state: "waiting", message: "Not Ready yet" },
+      ], { platform: { deployed: true, ready: false, managedByTool: true } }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const kuadrant = await screen.findByRole("listitem", { name: "Connectivity Link instance (Kuadrant)" });
+    expect(within(kuadrant).getByText("Waiting")).toBeInTheDocument();
+    expect(within(kuadrant).queryByText("Setting up")).toBeNull();
+    const rhcl = screen.getByRole("listitem", { name: "Red Hat Connectivity Link" });
+    expect(within(rhcl).getByText("Needs attention")).toBeInTheDocument();
+    expect(within(rhcl).getByText("Red Hat Connectivity Link 1.4.3 is installed.")).toBeInTheDocument();
+  });
+
   it("publishes the row's model by name; the embedding model says why it is not offered", async () => {
     const reason = "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground.";
     const api = stubApi({
