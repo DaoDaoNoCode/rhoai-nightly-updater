@@ -401,6 +401,21 @@ only accepts a tag whose version is the top dated section. See
   component is set to Managed); for CRDs with objects the advice brings the
   Service back, then deletes the objects and the CRDs before the component
   is set to Removed.
+- **`install.sh` no longer refuses a correct image with "reports revision
+  \<none\>".** The 3.0.x installers read the image's revision label only
+  with `oc image info` on your machine and hid its error, so where oc could
+  not read the image (reported on macOS, where the digest lookup through the
+  registry worked) they refused the correct v3.0.1 image. The label is now
+  read from the registry's v2 API first, anonymously like the digest: the
+  manifest (for a manifest list, the `PLATFORM` image's), then the config
+  blob. A blob redirected to another host (Quay's CDN) is fetched without
+  the registry token and must match its digest. `oc image info` is the
+  fallback. When both fail, the installer stops with "cannot read the
+  revision label" and each reason (the registry's HTTP status or curl's
+  error, and oc's error), never a token. Resolving the digest and
+  `make rollback`'s tag lookup print their reasons the same way. Older
+  installers: see the [UPGRADING.md FAQ](docs/UPGRADING.md#7-faq) for how
+  to check the label yourself before `ALLOW_TEMPLATE_MISMATCH=1`.
 
 ### Security
 
