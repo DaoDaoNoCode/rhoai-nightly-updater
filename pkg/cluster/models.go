@@ -299,10 +299,24 @@ func modelPodSelector(name string) string {
 
 // manifestUnknown reports an image pull that failed because the registry
 // does not have the image (a nightly build's preset image is not
-// published), as opposed to a credential or network problem.
+// published), as opposed to a credential or network problem. A pull through
+// an image mirror names every source it tried: registry.redhat.io answers
+// "manifest unknown" for an image that exists only in the quay.io/rhoai
+// mirror, so when any source refused the credentials the image may well
+// exist and the node only lacks the pull secret (a node that just joined
+// gets it a few minutes later on ROSA HCP, seen live); that is a pull
+// failure to wait on, not a missing image.
 func manifestUnknown(msg string) bool {
 	m := strings.ToLower(msg)
-	return strings.Contains(m, "manifest unknown") || strings.Contains(m, "manifest_unknown")
+	if !strings.Contains(m, "manifest unknown") && !strings.Contains(m, "manifest_unknown") {
+		return false
+	}
+	for _, refused := range []string{"unauthorized", "not authorized", "authentication required", "denied"} {
+		if strings.Contains(m, refused) {
+			return false
+		}
+	}
+	return true
 }
 
 // modelState reports one model. inspect reads its pods when it is not
