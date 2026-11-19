@@ -158,7 +158,7 @@ describe("MaaS dialogs", () => {
     expect(within(dialog).getAllByRole("radio").filter((r) => (r as HTMLInputElement).checked)).toEqual([]);
     expect(within(dialog).queryByText("Default")).toBeNull();
     expect(within(dialog).getByText("Data is deleted and cannot be recovered")).toBeInTheDocument();
-    expect(within(dialog).getByText(/permanently deletes the current one \(Development database\)/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/permanently deletes the current one, the development database\.$/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("radio", { name: /CloudNativePG/ }));
     const confirm = within(dialog).getByRole("button", { name: "Change database" });
     expect(confirm).toBeDisabled();

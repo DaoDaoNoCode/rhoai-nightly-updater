@@ -64,6 +64,17 @@ export const DATABASE_CHOICES: { id: MaaSDatabaseKind; label: string; descriptio
 export const databaseLabel = (kind: string): string =>
   kind === "adopted" ? "A database of someone else's (maas-db-config not written by this tool)" : DATABASE_CHOICES.find((c) => c.id === kind)?.label ?? "None yet";
 
+/**
+ * A database this tool created, named inside a sentence ("...deletes the
+ * current one, the persistent development database (CloudNativePG)."): the
+ * choice's label in lower case, so it needs no parentheses around a label
+ * that has its own. Any other kind is "the database this tool created".
+ */
+export const createdDatabaseInSentence = (kind: string): string => {
+  const label = kind === "development" || kind === "cnpg" ? DATABASE_CHOICES.find((c) => c.id === kind)?.label : undefined;
+  return label ? `the ${label.charAt(0).toLowerCase()}${label.slice(1)}` : "the database this tool created";
+};
+
 export const defaultDatabaseForm = (db: MaaSDatabase | undefined, except?: string): DatabaseForm => {
   if (except !== undefined) return { kind: "", connectionUrl: "" };
   const usable = (db?.choices ?? []).filter((c) => !c.blockedReason && c.id !== except).map((c) => c.id);
