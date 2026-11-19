@@ -228,27 +228,10 @@ func (f *moduleOperatorFinder) installedCSV() (*installedOperator, error) {
 func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, why string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	api, err := f.api()
-	if err != nil {
-		return nil, "", err
+	plural, why, err := f.moduleResource(module)
+	if err != nil || why != "" {
+		return nil, why, err
 	}
-	var kind *componentKind
-	for i := range api.Kinds {
-		if strings.ToLower(api.Kinds[i].Kind) == module {
-			kind = &api.Kinds[i]
-		}
-	}
-	switch {
-	case kind == nil:
-		return nil, fmt.Sprintf("no %s kind is named after %s", componentAPIGroup, module), nil
-	case kind.Namespaced:
-		// RoleBindings could grant a namespaced kind; they are not read.
-		return nil, fmt.Sprintf("%s is namespaced; the tool identifies the operators of cluster-scoped module kinds only", kind.Kind), nil
-	}
-	if err := f.load(); err != nil {
-		return nil, "", err
-	}
-	plural := kind.Resource
 	for _, sub := range []string{"finalizers", "status"} {
 		scores := f.serviceAccountScores(plural, sub, crName)
 		if len(scores) == 0 {
@@ -300,6 +283,105 @@ func (f *moduleOperatorFinder) find(module, crName string) (op *moduleOperator, 
 	}
 	return &moduleOperator{Namespace: SubNS, Name: csv.Deployments[0], RHOAI: true,
 		Via: fmt.Sprintf("the RHOAI operator: the installed CSV %s owns CRD %s", csv.Name, crd)}, "", nil
+}
+
+// moduleResource returns the resource of the cluster-scoped module kind
+// named after module, with the RBAC and Deployments loaded; why says why
+// the tool cannot identify its operator. f.mu must be held.
+func (f *moduleOperatorFinder) moduleResource(module string) (plural, why string, err error) {
+	api, err := f.api()
+	if err != nil {
+		return "", "", err
+	}
+	var kind *componentKind
+	for i := range api.Kinds {
+		if api.Kinds[i].Kind != "" && strings.ToLower(api.Kinds[i].Kind) == module {
+			kind = &api.Kinds[i]
+		}
+	}
+	switch {
+	case kind == nil:
+		return "", fmt.Sprintf("no %s kind is named after %s", componentAPIGroup, module), nil
+	case kind.Namespaced:
+		// RoleBindings could grant a namespaced kind; they are not read.
+		return "", fmt.Sprintf("%s is namespaced; the tool identifies the operators of cluster-scoped module kinds only", kind.Kind), nil
+	}
+	if err := f.load(); err != nil {
+		return "", "", err
+	}
+	return kind.Resource, "", nil
+}
+
+// finalizerOwner is what decides whether a stuck module CR's finalizers may
+// be removed (cleanupStuckComponentCRs): the operator that removes them,
+// identified as in find, and whether anything that may be it still exists.
+//
+// When the operator's Deployment is gone, find cannot name it, but its
+// ServiceAccount still can: the module's ClusterRoleBinding outlives the
+// Deployment unless the platform deletes the operator's resources, which
+// it does only once the CR is gone (rhods-operator rhoai-3.6
+// modules_controller_actions.go cleanupDisabledModules: the operator is
+// kept while the CR is deleting; the Platform finalizer
+// waitForModuleCRDeletion holds the Platform-owned operators during a
+// cascade delete). So the operator is gone when ServiceAccounts identify
+// it and no Deployment in the applications namespace runs as any
+// ServiceAccount that may update the CR together with its finalizers or
+// status, whatever owns that Deployment and however many replicas it has.
+type finalizerOwner struct {
+	Namespace string
+	// ServiceAccounts identify the operator: those that may update the CR
+	// and <plural>/finalizers (<plural>/status when none may), as Grant
+	// says. Empty when the operator is unknown, and Unknown says why.
+	ServiceAccounts []string
+	Grant           string
+	Unknown         string
+	// Deployments run as a ServiceAccount that may update the CR and its
+	// finalizers or status: while one exists, it may still remove them.
+	Deployments []string
+}
+
+// gone: the operator is identified and nothing that may be it exists.
+func (o finalizerOwner) gone() bool {
+	return o.Unknown == "" && len(o.ServiceAccounts) > 0 && len(o.Deployments) == 0
+}
+
+// finalizerOwner returns the finalizerOwner of the module's CR crName. A
+// kind no ServiceAccount of the applications namespace may update is
+// unknown here even when the RHOAI operator reconciles it (Kueue): that
+// operator is never gone for good, a reinstall brings it back. err is a
+// read error: callers refuse as for an unknown operator.
+func (f *moduleOperatorFinder) finalizerOwner(module, crName string) (finalizerOwner, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	plural, why, err := f.moduleResource(module)
+	if err != nil {
+		return finalizerOwner{}, err
+	}
+	if why != "" {
+		return finalizerOwner{Unknown: why}, nil
+	}
+	out := finalizerOwner{Namespace: f.appNS}
+	related := map[string]bool{}
+	for _, sub := range []string{"finalizers", "status"} {
+		scores := f.serviceAccountScores(plural, sub, crName)
+		for sa := range scores {
+			related[sa] = true
+		}
+		if len(out.ServiceAccounts) == 0 && len(scores) > 0 {
+			out.ServiceAccounts = slices.Sorted(maps.Keys(scores))
+			out.Grant = fmt.Sprintf("%s and %s/%s", plural, plural, sub)
+		}
+	}
+	if len(out.ServiceAccounts) == 0 {
+		out.Unknown = fmt.Sprintf("no ServiceAccount in %s may update %s and %s/finalizers or %s/status", f.appNS, plural, plural, plural)
+	}
+	for _, d := range f.deployments {
+		if related[d.serviceAccount()] {
+			out.Deployments = append(out.Deployments, f.appNS+"/"+d.Metadata.Name)
+		}
+	}
+	sort.Strings(out.Deployments)
+	return out, nil
 }
 
 // serviceAccountScores returns, for each ServiceAccount of the applications

@@ -174,31 +174,14 @@ func discoverComponentAPI(c *Client) (componentAPI, error) {
 // before its finalizers may be removed.
 var StuckComponentCRAge = 10 * time.Minute
 
-// componentFinalizerOwners maps each component CR kind to the module operator
-// Deployment in redhat-ods-applications that removes its finalizer (RHOAI
-// 3.6: these Deployments are owned by the Platform CR, not by the CSV, so
-// they keep running while rhods-operator is reinstalled). Kinds that are not
-// listed (kueues is handled inside rhods-operator itself; mcplifecycleoperators
-// and datasciencepipelines have no verified owner) are never unblocked.
-var componentFinalizerOwners = map[string]string{
-	"dashboards":      "dashboard-operator",
-	"workbenches":     "workbenches-operator",
-	"aipipelines":     "data-science-pipelines-operator-controller-manager",
-	"kserves":         "kserve-module-controller-manager",
-	"rays":            "ray-module-operator-controller-manager",
-	"trainers":        "trainer-operator-controller-manager",
-	"trustyais":       "trustyai-operator-module-controller-manager",
-	"feastoperators":  "opendatahub-feast-operator",
-	"ogxs":            "opendatahub-ogx-operator",
-	"aihubs":          "aihub-controller-manager",
-	"mlflowoperators": "mlflow-operator-controller-manager",
-}
-
 // cleanupStuckComponentCRs removes the finalizers of a component CR only when
 // nothing else can: the CR has been deleting for StuckComponentCRAge and the
-// module operator that owns its finalizer does not exist. Stripping a
-// finalizer whose operator is still running would skip that operator's
-// cleanup and orphan its operands, so every other case is left alone and
+// module operator that owns its finalizer is gone (finalizerOwner: its
+// ServiceAccount is known from RBAC and no Deployment runs as it; module
+// operators are owned by the Platform, not by the CSV, so they keep running
+// while rhods-operator is reinstalled). Stripping a finalizer whose operator
+// still exists would skip that operator's cleanup and orphan its operands,
+// so every other case (an unknown operator, a read error) is left alone and
 // logged. This is the documented pattern for unblocking a stuck deletion:
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
 // It returns the number of CRs unblocked and the problems or skips to log.
@@ -207,6 +190,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 	if err != nil {
 		return 0, []string{err.Error()}
 	}
+	operators := newModuleOperatorFinder(c, func() (componentAPI, error) { return api, nil })
 	unstuck := 0
 	var warnings []string
 	for _, kind := range api.Kinds {
@@ -247,18 +231,16 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				warnings = append(warnings, fmt.Sprintf("%s is being deleted; its finalizers were left for its operator", id))
 				continue
 			}
-			owner, known := componentFinalizerOwners[resource]
-			if !known {
-				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but the operator that owns its finalizers %v is unknown; left untouched", id, *m.DeletionTimestamp, m.Finalizers))
+			owner, err := operators.finalizerOwner(strings.ToLower(kind.Kind), m.Name)
+			switch {
+			case err != nil:
+				warnings = append(warnings, fmt.Sprintf("cannot identify the operator that owns the finalizers of %s: %v; left untouched", id, err))
 				continue
-			}
-			_, _, depErr := c.get(namespacedPath("apps/v1", "deployments", "redhat-ods-applications", owner))
-			if depErr == nil {
-				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but its operator %s still exists and will finish the deletion; left untouched", id, *m.DeletionTimestamp, owner))
+			case owner.Unknown != "":
+				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but the operator that owns its finalizers %v is unknown (%s); left untouched", id, *m.DeletionTimestamp, m.Finalizers, owner.Unknown))
 				continue
-			}
-			if !IsK8sError(depErr, 404) {
-				warnings = append(warnings, fmt.Sprintf("cannot check operator %s for %s: %v; left untouched", owner, id, depErr))
+			case !owner.gone():
+				warnings = append(warnings, fmt.Sprintf("%s has been deleting since %s, but its operator %s still exists and will finish the deletion; left untouched", id, *m.DeletionTimestamp, strings.Join(owner.Deployments, ", ")))
 				continue
 			}
 			if m.UID == "" || m.ResourceVersion == "" {
@@ -284,7 +266,8 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				continue
 			}
 			slog.Info("removed stuck finalizer from component CR whose operator is gone",
-				"resource", resource, "name", m.Name, "finalizers", m.Finalizers, "operator", owner)
+				"resource", resource, "name", m.Name, "finalizers", m.Finalizers,
+				"operatorServiceAccounts", owner.ServiceAccounts, "namespace", owner.Namespace, "grant", owner.Grant)
 			unstuck++
 		}
 	}
