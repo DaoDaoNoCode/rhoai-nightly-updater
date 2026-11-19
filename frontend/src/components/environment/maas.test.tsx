@@ -266,9 +266,10 @@ describe("MaaS run dialog", () => {
     });
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
     const granite = (await screen.findByText("Granite Embedding 125M English (CPU)")).closest("tr")!;
-    // Only "Not published" in the row; why it cannot be published is the button's tooltip.
+    // The row says it in short ("Chat models only"); the full reason is the button's tooltip.
     expect(within(granite).queryByText(reason)).toBeNull();
-    expect(within(granite).getByText("Not published")).toBeInTheDocument();
+    expect(within(granite).getByText("Not offered")).toBeInTheDocument();
+    expect(within(granite).getByText("Chat models only")).toBeInTheDocument();
     fireEvent.focus(within(granite).getByRole("button", { name: "Publish" }));
     expect((await screen.findByRole("tooltip")).textContent).toBe(reason);
     expect(within(granite).getByRole("button", { name: "Publish" })).toHaveAttribute("aria-disabled", "true");
@@ -298,6 +299,9 @@ describe("MaaS run dialog", () => {
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
     const qwen25 = (await screen.findByText("Qwen2.5 0.5B Instruct (CPU)")).closest("tr")!;
     expect(within(qwen25).getByRole("button", { name: "Unpublish" })).toBeInTheDocument();
+    // One green Published, not Ready above Published.
+    expect(within(qwen25).getByText("Published")).toBeInTheDocument();
+    expect(within(qwen25).queryByText("Ready")).toBeNull();
     const qwen3 = screen.getByText("Qwen3 1.7B (CPU, tool calling)").closest("tr")!;
     expect(within(qwen3).getByRole("button", { name: "Publish" })).toBeInTheDocument();
     const smollm2 = screen.getByText("SmolLM2 135M Instruct (CPU)").closest("tr")!;

@@ -161,6 +161,12 @@ export function maasPublication(i: MaaSModel): string {
   return `Published, waiting (reference ${i.phase || "pending"}, access ${i.access || "pending"}, subscription ${i.subscription || "pending"})`;
 }
 
+/** A publication MaaS has accepted. */
+const publishedReady = (i: MaaSModel) => !!i.published && !i.partly && !!i.ready;
+
+/** A model MaaS does not take (an embedding model: pkg/cluster maasEmbeddingReason). */
+const notOffered = (i: MaaSModel) => !i.published && i.message === "Not offered for MaaS";
+
 /** This tool's models and their publication: Publish / Unpublish per model. */
 const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readOnly, setPending, onModels }) => {
   const items = maas?.items ?? [];
@@ -208,8 +214,19 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                   <Td dataLabel="Limit per user" modifier="wrap">{i.published && !i.partly ? limitText(i.limit) : "—"}</Td>
                   <Td dataLabel="In MaaS" modifier="wrap">
                     <Stack>
-                      {(i.published || running(project, model)) ? <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : i.published ? (i.ready ? "ready" : "setting-up") : "not-set-up"} /></StackItem> : <StackItem><Label isCompact>Not published</Label></StackItem>}
-                      {(i.published || running(project, model)) && <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>}
+                      {publishedReady(i) && !running(project, model)
+                        // One green label: "Ready" above "Published" said the same twice.
+                        ? <StackItem><EnvStatusLabel status="ready" text="Published" /></StackItem>
+                        : (i.published || running(project, model))
+                          ? <>
+                            <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : "setting-up"} /></StackItem>
+                            <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
+                          </>
+                          : <>
+                            <StackItem><Label isCompact>{notOffered(i) ? "Not offered" : "Not published"}</Label></StackItem>
+                            {/* Why Publish is off, without hovering it. */}
+                            {notOffered(i) && <StackItem><Content component="small">Chat models only</Content></StackItem>}
+                          </>}
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
