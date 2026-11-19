@@ -121,7 +121,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 | 403 from oauth-proxy right after login | The user can't `list pods` in `redhat-ods-operator` (the login gate). On a fresh cluster only cluster-admins pass |
 | UI is read-only ("Read-only access") | Changes need cluster-admin. Check with `oc auth can-i '*' '*' --all-namespaces`. On ROSA: `rosa grant user cluster-admin --user=<u> --cluster=<c>` |
 | "Sign in again" banner | The oauth-proxy session (23 h) or the OAuth token expired. Follow the link |
-| "Your sign-in expires in N minutes ... Log out and log in again" (401 `sign_in_again`), or the changes are off with that reason | Since 4.0.0 changes run with your own token, which must outlive the change (the 15-minute deadline, the restore and a margin). Nothing was changed. Use **Log out** in the user menu, then log in again |
+| "Your sign-in expires in N minutes ... Log out and log in again" or "Your sign-in cannot make changes" (401 `sign_in_again`), or the banner "Sign in again to make changes" with that reason | Since 4.0.0 changes run with your own token, which must outlive the change (the 15-minute deadline, the restore and a margin). Nothing was changed. Use **Log out** in the banner or the user menu, then log in again |
 | "Your sign-in cannot make changes ... Log out and log in again" | A session from before 4.0.0 (the cookie survives the upgrade; its token was made for the ServiceAccount OAuth client and can only identify you). Log out and log in again, once |
 | An operation stopped with "your OpenShift sign-in is no longer accepted (it expired or was revoked)" | Your token was rejected mid-operation (expired, revoked with `oc delete oauthaccesstokens`, or your user changed). The steps before it were made; the restore runs with the same token and may not have run. Log out and log in again, look at the Status and Components pages, then retry or recover by hand (sections 6 and 11) |
 | An operation stopped with "your OpenShift account is not allowed to do this" (403) | The API server refused your own RBAC for one step (for example a cluster-admin binding removed mid-operation, or a namespace-scoped admin). Ask for cluster-admin, then retry |
@@ -845,6 +845,17 @@ Fix: update RHOAI to a newer nightly (Update on the Status page, or a build from
 The Components page's **Components and sub-components** card ([README](README.md#components-and-sub-components-change-them-without-the-openshift-console)) changes the DSC. What it writes: [CLUSTER_CHANGES §5](docs/CLUSTER_CHANGES.md#5-datasciencecluster-status-and-components-pages).
 
 **Read the comparison first.** The top of the card says what the DSC was compared with (the DataScienceCluster example in the installed CSV's `alm-examples`, with the operator version) and lists, for each kind of difference, the count and the paths or **None**: Missing, Not in the installed CRD, Deploys nothing, Changed from the default. **None** means it was checked; **Not checked** means it could not be: without a release default (the CSV ships no DataScienceCluster example in the version the DSC is read at, or its example sets fields the installed CRD does not define, which the message names) Missing and Changed are not checked, and without the CRD's schema neither are the other two. Each row carries the same labels; click one for what it means and what Fix does, and turn on **Show only differences** to see only those rows (with their parents).
+
+<img src="docs/images/components-summary-ok.png" alt="Nothing to fix compared with the release default: Missing, Not in the installed CRD and Deploys nothing read None; Changed from the default lists aigateway and aigateway.modelsAsAService, whose rows are labelled Changed from the default" width="760">
+
+With differences, the summary names each kind and offers **Fix**:
+
+<img src="docs/images/components-differences.png" alt="6 differences from the release default to fix: 3 Missing, 2 Not in the installed CRD, 1 Deploys nothing, 1 Changed from the default, with Fix; Show only differences on, the rows that differ with their labels" width="760">
+
+1. The comparison: each kind of difference with its count and paths, or **None**.
+2. **Fix**: sets what is missing to the release default and removes the fields the CRD does not define.
+3. **Show only differences**: only the rows that differ, with their parents.
+4. A row's label (here **Deploys nothing — parent Removed**); click it for what it means.
 
 **Deprecated fields.** The DataScienceCluster CRD marks only whole API versions as deprecated (`deprecated: true` on a served version), never single fields, so the page cannot list deprecated fields and does not guess. It does not need to: the API server prunes fields a CRD does not define, so a field the new CRD dropped cannot stay in the DSC, and components renamed between API versions (v2 to v3) are converted by the operator's conversion webhook. After an upgrade, what matters is what the new release default sets that the DSC lacks: those rows read **Missing**.
 

@@ -12,6 +12,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import type { DashboardOverride, InterruptedOperation, ServerOperation } from "../types";
 import { useClusterStatus, useOperation } from "../state/AppState";
 import {
+  NO_PERMISSION_REASON,
   describeServerOperation,
   serverOperationStep,
   useDashboardOverride,
@@ -373,6 +374,28 @@ function usePermissionNotice(): Notice | null {
         >
           {sentence(permissions.error?.message || "The OpenShift API did not answer")} The page stays read-only until the check
           succeeds; it is retried automatically.
+        </Alert>
+      ),
+    };
+  }
+  // The backend's reason: a cluster-admin whose sign-in cannot carry a change
+  // (made before 4.0.0, or about to expire; pkg/api HandleUserPermissions).
+  // Not the read-only notice, which is for users without the role.
+  if (permissions.status === "denied" && permissions.reason && permissions.reason !== NO_PERMISSION_REASON) {
+    const signInAgain = permissions.reasonCode === "sign_in_again";
+    return {
+      key: "permissions",
+      priority: 2,
+      element: (
+        <Alert
+          variant="warning"
+          isInline
+          component="p"
+          title={signInAgain ? "Sign in again to make changes" : "Changes are disabled"}
+          // The user menu's Log out: oauth-proxy's sign_out clears its session cookie (App).
+          actionLinks={signInAgain ? <AlertActionLink component="a" href="/oauth/sign_out">Log out</AlertActionLink> : undefined}
+        >
+          {sentence(permissions.reason)} You can still view everything.
         </Alert>
       ),
     };

@@ -84,7 +84,7 @@ func assertMaaSBlock(t *testing.T, plan *types.DSCPlan, component string) {
 	}
 	why := strings.Join(b.Reasons, " ")
 	for _, want := range []string{"MaaS is in use", "published model proj/qwen25-05b-instruct", "subscription models-as-a-service/rhoai-nightly-updater-subscription",
-		"access policy models-as-a-service/rhoai-nightly-updater-access", "this tool set MaaS up", "every API key stops working",
+		"access policy models-as-a-service/rhoai-nightly-updater-access", "set up by this tool on the MaaS tab", "every API key stops working",
 		"Remove MaaS on the MaaS tab first (Clean up MaaS unpublishes and removes it in order)", "or keep " + component + " Managed"} {
 		if !strings.Contains(why, want) {
 			t.Errorf("block of %s lacks %q: %s", component, want, why)
@@ -466,7 +466,7 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 		putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"})
 		plan := mustPlan(t, c, "toggle", "aigateway.modelsAsAService", "Removed", false)
 		b := maasBlock(plan, "aigateway.modelsAsAService")
-		if b == nil || !strings.Contains(b.Reasons[0], "MaaS is in use (this tool set MaaS up (MaaS tab))") {
+		if b == nil || !strings.Contains(b.Reasons[0], "MaaS is in use (set up by this tool on the MaaS tab)") {
 			t.Fatalf("plan = %+v", plan)
 		}
 	})

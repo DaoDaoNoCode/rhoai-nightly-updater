@@ -48,7 +48,16 @@ The same page has one-time cluster setup (pull secret, image mirror), **Update t
 
 #### Components and sub-components: change them without the OpenShift console
 
-<img src="docs/images/components-tree.png" alt="The component tree: the comparison with the release default with Fix, then each component and sub-component with its value in the DSC and a label for each difference, the release default and what the operator reports" width="760">
+<img src="docs/images/components-summary-ok.png" alt="The comparison when nothing needs fixing: Nothing to fix compared with the release default, the release default (operator 3.6.0, CSV rhods-operator.3.6.0), all 16 components in the DSC, Missing, Not in the installed CRD and Deploys nothing None, Changed from the default 2; then the first rows of the tree, aigateway and modelsAsAService labelled Changed from the default" width="760">
+
+With differences, the summary names each one and offers **Fix**:
+
+<img src="docs/images/components-differences.png" alt="The comparison with 6 differences from the release default to fix, with Fix; Show only differences on; the rows that differ with their labels, such as modelsAsAService Changed from the default and Deploys nothing, parent Removed" width="760">
+
+1. The comparison with the release default: the count and paths of each kind of difference, or **None**.
+2. **Fix** sets what is missing to the release default and removes what the CRD does not define.
+3. **Show only differences** keeps the rows that differ, with the rows above them.
+4. Each row's labels; click one for what it means.
 
 The tree is read from the installed DataScienceCluster CRD, so it follows whatever the release defines (`dashboard.standard`, `kserve.nim`, `aigateway.modelsAsAService`, ...). Each row shows the value in the DSC (a select limited to the values the CRD accepts), the **release default** (the example the installed operator's CSV ships in `alm-examples`) and what the operator reports.
 

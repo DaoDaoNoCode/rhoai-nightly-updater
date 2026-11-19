@@ -171,6 +171,12 @@ const RowLabels: React.FC<{ node: DSCNode; mismatches: DSCMismatch[]; byPath: Ma
   </>
 );
 
+/** A camelCase field name that may wrap between its words (argoWorkflows|Controllers); inside a word only when the column is narrower than it (overflow-wrap). */
+function breakableName(name: string): React.ReactNode {
+  const words = name.split(/(?<=[a-z0-9])(?=[A-Z])/);
+  return words.map((w, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{w}</React.Fragment>);
+}
+
 /** Whether a row differs from the release default: changed, or a difference that is a problem. */
 const differs = (n: DSCNode, mismatches: Map<string, DSCMismatch[]>) => !!n.changed || !!n.unknown || (mismatches.get(n.path)?.length ?? 0) > 0;
 
@@ -238,13 +244,15 @@ const ComponentTree: React.FC<{
           </EmptyStateFooter>
         </EmptyState>
       ) : (
-        <Table isTreeTable aria-label="Components of the DataScienceCluster" variant="compact">
+        // A fixed layout: the column widths follow the table's width only, never its
+        // content, so no column moves when an alert appears, the filter changes the
+        // rows, or an operator message appears after a change; and the table never
+        // grows past its card at narrow widths (names wrap, selects shrink).
+        <Table isTreeTable aria-label="Components of the DataScienceCluster" variant="compact" style={{ tableLayout: "fixed" }}>
           <Thead>
             <Tr>
-              {/* Set widths: an operator message appearing after a change must not take
-                  the room of the select and its label (it wraps in its own column). */}
-              <Th modifier="wrap" width={25}>Component</Th>
-              <Th modifier="wrap" width={40}>In the DSC</Th>
+              <Th modifier="wrap" width={30}>Component</Th>
+              <Th modifier="wrap" width={35}>In the DSC</Th>
               <Th modifier="wrap" width={15}>Release default</Th>
               <Th modifier="wrap" width={20}>Operator reports</Th>
             </Tr>
@@ -270,7 +278,7 @@ const ComponentTree: React.FC<{
                 <TreeRowWrapper key={n.path} row={{ props: treeRow.props }}
                   {...(filteredOut ? { "aria-hidden": true, style: { visibility: "collapse" } } : {})}>
                   <Td dataLabel="Component" treeRow={treeRow}>
-                    <code>{n.name}</code>
+                    <code style={{ overflowWrap: "anywhere" }}>{breakableName(n.name)}</code>
                   </Td>
                   <Td dataLabel="In the DSC">
                     {n.unknown ? (
@@ -280,7 +288,9 @@ const ComponentTree: React.FC<{
                       // for them; the column keeps its width.
                       <Flex gap={{ default: "gapSm" }} rowGap={{ default: "rowGapXs" }} alignItems={{ default: "alignItemsCenter" }} flexWrap={{ default: "wrap" }}>
                         {/* The value in the DSC, and the control that changes it (the CRD's values only). */}
-                        <FlexItem className="pf-v6-u-min-width" style={{ "--pf-v6-u-min-width--MinWidth": "22ch" } as React.CSSProperties}>
+                        {/* The same width in every row (room for "Not set (Removed)" and the caret),
+                            narrower only when the column is. */}
+                        <FlexItem style={{ width: "22ch", maxWidth: "100%" }}>
                           <FormSelect aria-label={`Set ${n.path}`} id={`dsc-set-${n.path}`} value={n.specSet ? n.spec : ""}
                             isDisabled={!!rowReason || pending !== null}
                             onChange={(_e, v) => { if (v && !(n.specSet && n.spec === v)) onSet(n, v); }}>

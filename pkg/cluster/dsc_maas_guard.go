@@ -58,7 +58,7 @@ func (u maasUse) text() string {
 		parts = append(parts, verb(len(u.policies), "access policy ", "access policies ")+strings.Join(u.policies, ", "))
 	}
 	if u.setUp {
-		parts = append(parts, "this tool set MaaS up (MaaS tab)")
+		parts = append(parts, "set up by this tool on the MaaS tab")
 	}
 	return strings.Join(parts, "; ")
 }

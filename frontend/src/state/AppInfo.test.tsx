@@ -10,17 +10,17 @@ const Probe: React.FC = () => {
   const p = usePermissions();
   const expired = useSessionExpired();
   const { override } = useDashboardOverride();
-  return <pre data-testid="probe">{JSON.stringify({ status: p.status, canMutate: p.canMutate, reason: p.reason, expired, override: override?.active ?? null })}</pre>;
+  return <pre data-testid="probe">{JSON.stringify({ status: p.status, canMutate: p.canMutate, reason: p.reason, reasonCode: p.reasonCode, expired, override: override?.active ?? null })}</pre>;
 };
 const probe = () => JSON.parse(screen.getByTestId("probe").textContent || "{}");
 
 describe("permissions (A02-3)", () => {
   it.each([
     ["allowed", async () => ({ canMutate: true, user: "me" }), { status: "allowed", canMutate: true, reason: null }],
-    ["denied by the backend", async () => ({ canMutate: false, user: "me" }), { status: "denied", canMutate: false, reason: expect.stringContaining("cluster-admin") }],
+    ["denied by the backend", async () => ({ canMutate: false, user: "me" }), { status: "denied", canMutate: false, reason: expect.stringContaining("cluster-admin"), reasonCode: null }],
     // A cluster-admin whose sign-in cannot carry a change sees the backend's reason, not "read-only access".
     ["a sign-in that cannot carry a change", async () => ({ canMutate: false, user: "me", reason: "Your sign-in expires in 3 minutes. Log out and log in again.", reasonCode: "sign_in_again" }),
-      { status: "denied", canMutate: false, reason: "Your sign-in expires in 3 minutes. Log out and log in again." }],
+      { status: "denied", canMutate: false, reason: "Your sign-in expires in 3 minutes. Log out and log in again.", reasonCode: "sign_in_again" }],
     ["403", async () => { throw new ApiError({ status: 403, errorCode: "forbidden", message: "Read-only access" }); }, { status: "denied", canMutate: false }],
     ["503 authorization_unavailable is never 'allowed'", async () => { throw new ApiError({ status: 503, errorCode: "authorization_unavailable", message: "Cannot verify" }); }, { status: "unknown", canMutate: false }],
     ["network error", async () => { throw new TypeError("Failed to fetch"); }, { status: "unknown", canMutate: false }],
