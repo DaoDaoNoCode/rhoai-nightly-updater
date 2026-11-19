@@ -161,8 +161,9 @@ const (
 
 // putMaaSModels publishes two models to Models as a Service, as
 // MaaSModelRefs in the cluster: gpt-oss-20b (Ready, offered under team-sub
-// and this tool's subscription) and an ExternalModel-backed one that is
-// not ready, listed under its resolved alias with a display name.
+// and this tool's subscription), an ExternalModel-backed one that is not
+// ready, listed under its resolved alias with a display name, and one no
+// subscription offers.
 func (e *playgroundEnv) putMaaSModels() {
 	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/gpt-oss-20b", `{
 		"metadata":{"annotations":{"opendatahub.io/model-capabilities":"[\"text-generation\"]"}},
@@ -171,7 +172,9 @@ func (e *playgroundEnv) putMaaSModels() {
 		"metadata":{"annotations":{"openshift.io/display-name":"Facebook OPT 125M (Simulated)"}},
 		"spec":{"modelRef":{"kind":"ExternalModel","name":"opt-125m"}},"status":{"phase":"Pending","resolvedModelAlias":"publishers/llm/models/facebook/opt-125m"}}`)
 	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/team-sub",
-		`{"spec":{"modelRefs":[{"name":"gpt-oss-20b","namespace":"team"}]}}`)
+		`{"spec":{"modelRefs":[{"name":"gpt-oss-20b","namespace":"team"},{"name":"opt","namespace":"llm"}]}}`)
+	// A reference no subscription lists is offered to nobody: not shown.
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/unoffered", `{"spec":{"modelRef":{"kind":"LLMInferenceService","name":"unoffered"}},"status":{"phase":"Ready"}}`)
 	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/rhoai-nightly-updater-subscription",
 		`{"spec":{"modelRefs":[{"name":"gpt-oss-20b","namespace":"team"},{"name":"qwen","namespace":"proj"}]}}`)
 }
@@ -308,6 +311,14 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 		t.Fatal(problem)
 	}
 	ns := map[string]interface{}{"model_name": "m", "model_source_type": "namespace"}
+	// install is the body Set up sends, with over changed.
+	install := func(over map[string]interface{}) map[string]interface{} {
+		b := map[string]interface{}{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []interface{}{}, "models": []map[string]interface{}{ns}}
+		for k, v := range over {
+			b[k] = v
+		}
+		return b
+	}
 	for _, c := range []struct {
 		method, path string
 		in           interface{}
@@ -316,9 +327,15 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 		{http.MethodPost, "/maas/tokens", map[string]string{"model": "m"}},
 		{http.MethodPost, "/lsd/responses", nil},
 		{http.MethodGet, "/genai-proxy/ns/proj/v1/models", nil},
-		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{ns, {"model_name": "x", "model_source_type": "maas"}}}},
-		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{{"model_name": "x", "model_source_type": "custom_endpoint"}}}},
-		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{}}},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{ns, {"model_name": "x", "model_source_type": "maas"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "x", "model_source_type": "custom_endpoint"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_tracing": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"enable_guardrails": true})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"vector_stores": []interface{}{map[string]interface{}{"provider": "remote"}}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"guardrail_models": []interface{}{}})},
+		{http.MethodPost, "/lsd/install", install(map[string]interface{}{"models": []map[string]interface{}{{"model_name": "m", "model_source_type": "namespace", "subscription": "s"}}})},
+		{http.MethodPost, "/lsd/install", map[string]interface{}{"models": []map[string]interface{}{ns}}},
 		{http.MethodPost, "/lsd/install", nil},
 		{http.MethodGet, "/lsd/models", nil},
 	} {
@@ -329,7 +346,7 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 	if len(e.g.paths) != 0 {
 		t.Fatalf("sent: %v", e.g.paths)
 	}
-	if err := api.call(http.MethodPost, "/lsd/install", "proj", map[string]interface{}{"models": []map[string]interface{}{ns}}, nil); err != nil {
+	if err := api.call(http.MethodPost, "/lsd/install", "proj", install(nil), nil); err != nil {
 		t.Fatalf("an install with the project's own model: %v", err)
 	}
 }
@@ -725,7 +742,7 @@ func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 	want := []string{
 		`namespace qwen25-05b-instruct ready=true chat=true "Qwen2.5 0.5B Instruct (CPU)" []`,
 		`maas gpt-oss-20b ready=true chat=true "" [rhoai-nightly-updater-subscription team-sub]`,
-		`maas publishers/llm/models/facebook/opt-125m ready=false chat=true "Facebook OPT 125M (Simulated)" []`,
+		`maas publishers/llm/models/facebook/opt-125m ready=false chat=true "Facebook OPT 125M (Simulated)" [team-sub]`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("models\n got %s\nwant %s", strings.Join(got, "\n"), strings.Join(want, "\n"))

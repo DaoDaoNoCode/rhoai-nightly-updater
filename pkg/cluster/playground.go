@@ -183,22 +183,50 @@ func genAICallAllowed(method, path string, in interface{}) bool {
 	case "GET /aaa/models", "GET /lsd/status", "DELETE /lsd/delete":
 		return true
 	case "POST /lsd/install":
-		body, ok := in.(map[string]interface{})
-		if !ok {
+		return genAIInstallAllowed(in)
+	}
+	return false
+}
+
+// genAIInstallAllowed is the only install body the tool sends: the
+// project's own models, no tracing, no guardrails, no vector stores (each
+// of those names further endpoints or providers the dashboard would wire
+// with the caller's token), and no key the tool does not know.
+func genAIInstallAllowed(in interface{}) bool {
+	body, ok := in.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	for k := range body {
+		switch k {
+		case "models", "enable_tracing", "enable_guardrails", "vector_stores":
+		default:
 			return false
 		}
-		models, ok := body["models"].([]map[string]interface{})
-		if !ok || len(models) == 0 {
+	}
+	if body["enable_tracing"] != false || body["enable_guardrails"] != false {
+		return false
+	}
+	if vs, ok := body["vector_stores"].([]interface{}); !ok || len(vs) != 0 {
+		return false
+	}
+	models, ok := body["models"].([]map[string]interface{})
+	if !ok || len(models) == 0 {
+		return false
+	}
+	for _, m := range models {
+		if m["model_source_type"] != "namespace" {
 			return false
 		}
-		for _, m := range models {
-			if m["model_source_type"] != "namespace" {
+		for k := range m {
+			switch k {
+			case "model_name", "model_source_type", "model_type", "embedding_dimension":
+			default:
 				return false
 			}
 		}
-		return true
 	}
-	return false
+	return true
 }
 
 // call makes one request to path (below /gen-ai/api/v1) in namespace ns.
@@ -396,7 +424,10 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 			name = r.Spec.ModelRef.Name
 		}
 		name = firstNonEmpty(r.Status.ResolvedModelAlias, name)
-		if name == "" || r.Metadata.terminating() {
+		offered := subs[r.Metadata.Namespace+"/"+r.Metadata.Name]
+		// A reference no MaaSSubscription lists is offered to nobody: not
+		// shown as published.
+		if name == "" || r.Metadata.terminating() || len(offered) == 0 {
 			continue
 		}
 		var caps []string
@@ -406,7 +437,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 		out = append(out, types.PlaygroundModel{
 			Name: name, DisplayName: r.Metadata.Annotations[maasDisplayNameAnnotation], Source: "maas",
 			Status: firstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
-			Chat: chatModel(caps, r.Metadata.Annotations[genAIUseCaseAnnotation], ""), Subscriptions: subs[r.Metadata.Namespace+"/"+r.Metadata.Name],
+			Chat: chatModel(caps, r.Metadata.Annotations[genAIUseCaseAnnotation], ""), Subscriptions: offered,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
