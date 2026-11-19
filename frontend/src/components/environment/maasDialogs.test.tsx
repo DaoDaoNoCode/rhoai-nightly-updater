@@ -135,7 +135,9 @@ describe("MaaS dialogs", () => {
     const dialog = await screen.findByRole("dialog", { name: /Change the MaaS database\?/ });
     fireEvent.click(within(dialog).getByRole("radio", { name: /^Development database/ }));
     expect(within(dialog).getByText("Creates the new database, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Data is deleted and cannot be recovered")).toBeInTheDocument();
+    // Nothing is deleted: the keys stop working, said as a warning, not a data-loss alert.
+    expect(within(dialog).getByText("Every API key stops working")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Data is deleted and cannot be recovered")).toBeNull();
     fireEvent.click(within(dialog).getByRole("radio", { name: /^Your PostgreSQL/ }));
     expect(within(dialog).getByText("Points maas-api at the new URL and restarts maas-api. Your current PostgreSQL is not changed or deleted.")).toBeInTheDocument();
     expect(within(dialog).getByText("API keys are lost if this is a different database")).toBeInTheDocument();

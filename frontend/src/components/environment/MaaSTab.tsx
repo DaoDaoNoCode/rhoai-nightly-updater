@@ -495,16 +495,15 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
               : <>Creates the new database, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>}
         </Content>,
         choice: <DatabaseChoice db={db} value={form} except={db.current} idPrefix="change" onChange={(f) => setPending?.({ ...pending, database: f })} />,
-        dataLoss: yoursToYours ? undefined : before
-          ? <>Every API key, with the current database: {before}. {kept}</>
-          : <>Every API key: the new database starts empty. {kept}</>,
+        // Data is deleted only with a database this tool made; from yours, keys stop working but nothing is deleted.
+        dataLoss: before ? <>Every API key, with the current database: {before}. {kept}</> : undefined,
         extra: (
           <Stack hasGutter>
-            {yoursToYours && (
+            {!before && form.kind && (
               <StackItem>
-                <Alert variant="warning" isInline component="p" title="API keys are lost if this is a different database">
-                  Pointing at the same database (for example, with a new password) keeps every key.
-                </Alert>
+                {yoursToYours
+                  ? <Alert variant="warning" isInline component="p" title="API keys are lost if this is a different database">Pointing at the same database (for example, with a new password) keeps every key.</Alert>
+                  : <Alert variant="warning" isInline component="p" title="Every API key stops working">The new database starts empty. Your PostgreSQL keeps its data, but MaaS no longer uses it. Published models, who can use them, and their limits are kept.</Alert>}
               </StackItem>
             )}
             <StackItem><KeysLostCheck checked={!!pending.confirmKeysLost} onChange={(v) => setPending?.({ ...pending, database: form, confirmKeysLost: v })} /></StackItem>

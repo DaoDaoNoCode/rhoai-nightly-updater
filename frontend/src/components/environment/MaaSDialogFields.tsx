@@ -216,7 +216,7 @@ export const AudienceFields: React.FC<{ value: AudienceForm; onChange: (f: Audie
             <Stack hasGutter>
               <StackItem>
                 <FormGroup label="Groups" fieldId={`${idPrefix}-groups`}>
-                  <TextArea id={`${idPrefix}-groups`} aria-describedby={`${idPrefix}-groups-help`} rows={2} resizeOrientation="vertical" value={value.groups} placeholder="One per line" onChange={(_e, v) => onChange({ ...value, groups: v })} />
+                  <TextArea id={`${idPrefix}-groups`} aria-describedby={`${idPrefix}-groups-help`} rows={3} resizeOrientation="vertical" value={value.groups} placeholder="One per line" onChange={(_e, v) => onChange({ ...value, groups: v })} />
                   <FormHelperText>
                     <HelperText id={`${idPrefix}-groups-help`}>
                       <HelperTextItem>Use groups for people. A cluster admin creates them with oc adm groups new.</HelperTextItem>
