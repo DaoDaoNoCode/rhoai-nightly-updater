@@ -40,7 +40,7 @@ const LEGACY_CATEGORIES: Record<string, string> = {
 export function activityCategory(entry: ActivityEntry): string {
   if (entry.category) return entry.category;
   if (LEGACY_CATEGORIES[entry.action]) return LEGACY_CATEGORIES[entry.action];
-  if (/minio|mlflow|pipeline/.test(entry.action)) return "test-resources";
+  if (/minio|s3|mlflow|pipeline/.test(entry.action)) return "test-resources";
   if (/dashboard|deploy-pr/.test(entry.action)) return "dashboard-dev";
   return "other";
 }

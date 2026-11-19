@@ -265,7 +265,7 @@ describe("teardown confirmations state the data loss", () => {
 
   it("a conversion-webhook refusal is shown with the server's reason", async () => {
     setup(live({ minio: { ...brokenMinio, teardownBlockedReason: undefined }, pipelineServers: [] }), {
-      "POST /api/resources/minio/teardown": () => jsonResponse({ success: false, errorCode: "prerequisites", logs: [], message: "Refusing to delete namespace seaweedfs: CRD mcpservers.mcp.x-k8s.io has a conversion webhook whose Service redhat-ods-applications/mcp-lifecycle-operator-webhook-service is missing." }, 422),
+      "POST /api/resources/s3/teardown": () => jsonResponse({ success: false, errorCode: "prerequisites", logs: [], message: "Refusing to delete namespace seaweedfs: CRD mcpservers.mcp.x-k8s.io has a conversion webhook whose Service redhat-ods-applications/mcp-lifecycle-operator-webhook-service is missing." }, 422),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
@@ -304,7 +304,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     vi.stubGlobal("ClipboardItem", undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async (t: string) => { writes.push(t); }) }, configurable: true });
     const api = setup(live({ minio: running, pipelineServers: [] }), {
-      "GET /api/resources/minio/admin-password": { user: "admin", password: "admin-value", secretKey: "s3cret-value" },
+      "GET /api/resources/s3/admin-password": { user: "admin", password: "admin-value", secretKey: "s3cret-value" },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
@@ -334,7 +334,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     vi.stubGlobal("ClipboardItem", undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async (t: string) => { writes.push(t); }) }, configurable: true });
     const api = setup(live({ minio: running, pipelineServers: [] }), {
-      "GET /api/resources/minio/admin-password": { user: "admin", accessKey: "AKEY", password: "admin-value", secretKey: "s3cret-value" },
+      "GET /api/resources/s3/admin-password": { user: "admin", accessKey: "AKEY", password: "admin-value", secretKey: "s3cret-value" },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
@@ -369,7 +369,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
       "/api/resources/projects": { projects: ["fresh"] },
-      "POST /api/resources/minio/teardown": () => { status = afterTeardown; return jsonResponse({ success: true, message: kept, logs: [] }); },
+      "POST /api/resources/s3/teardown": () => { status = afterTeardown; return jsonResponse({ success: true, message: kept, logs: [] }); },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
@@ -384,7 +384,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     const storage = await part("S3 storage");
     expect(await within(storage).findByText("Not set up")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toBeInTheDocument();
-    expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(1);
+    expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/teardown"))).toHaveLength(1);
   });
 
   it.each([
@@ -395,7 +395,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
       "/api/resources/projects": { projects: ["fresh"] },
-      "POST /api/resources/minio/teardown": () => { status = afterTeardown; return jsonResponse({ success: false, errorCode: code, message, logs: [] }, 422); },
+      "POST /api/resources/s3/teardown": () => { status = afterTeardown; return jsonResponse({ success: false, errorCode: code, message, logs: [] }, 422); },
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
@@ -406,7 +406,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toBeInTheDocument());
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/teardown"))).toHaveLength(2));
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/teardown"))).toHaveLength(2));
   });
 });
 
@@ -494,7 +494,7 @@ describe("storage from an earlier version", () => {
 
   it("Migrate storage shows the plan, runs as a stream, and ends with its outcome: no removal in the same dialog", async () => {
     const api = setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }), {
-      "POST /api/resources/minio/migrate/stream": sse(
+      "POST /api/resources/s3/migrate/stream": sse(
         { step: "check", status: "success", message: "OK: SeaweedFS in namespace 'minio' is running", elapsedMs: 1 },
         { step: "storage", status: "success", message: "OK: The new storage is ready", elapsedMs: 2 },
         { step: "copy", status: "success", message: "OK: 4 objects (4330 bytes) copied and checked byte for byte", elapsedMs: 3 },
@@ -510,7 +510,7 @@ describe("storage from an earlier version", () => {
     expect(within(dialog).getByText("Data from before SeaweedFS can't be moved")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
     expect(await within(dialog).findByText("The data is in the new storage")).toBeInTheDocument();
-    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{}]);
+    expect(api.bodies["POST /api/resources/s3/migrate/stream"]).toEqual([{}]);
     // Item 7: success ends there; the removal is a later, separate decision.
     expect(screen.getByRole("dialog", { name: "Migrate storage" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: /Delete old storage|Remove old storage/ })).not.toBeInTheDocument();
@@ -524,7 +524,7 @@ describe("storage from an earlier version", () => {
   it("an unrecorded pipeline server moves only when its project is ticked; unticked by default", async () => {
     const run = sse({ step: "operation_complete", status: "success", message: "Migrated.", elapsedMs: 1 });
     const unrecorded: LegacyStorageState = { ...legacy, repoint: ["evil/dspa", "juntao-test/dspa"], unrecorded: ["evil/dspa"] };
-    const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/minio/migrate/stream": run });
+    const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/s3/migrate/stream": run });
     renderAt();
     fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
@@ -533,26 +533,26 @@ describe("storage from an earlier version", () => {
     expect(box).not.toBeChecked();
     fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
     await within(dialog).findByText("The data is in the new storage");
-    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{}]);
+    expect(api.bodies["POST /api/resources/s3/migrate/stream"]).toEqual([{}]);
   });
 
   it("a ticked project is sent as confirmed", async () => {
     const run = sse({ step: "operation_complete", status: "success", message: "Migrated.", elapsedMs: 1 });
     const unrecorded: LegacyStorageState = { ...legacy, repoint: ["evil/dspa", "juntao-test/dspa"], unrecorded: ["evil/dspa"] };
-    const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/minio/migrate/stream": run });
+    const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/s3/migrate/stream": run });
     renderAt();
     fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: /Move evil\/dspa: this tool set it up/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
     await within(dialog).findByText("The data is in the new storage");
-    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{ confirmProjects: ["evil"] }]);
+    expect(api.bodies["POST /api/resources/s3/migrate/stream"]).toEqual([{ confirmProjects: ["evil"] }]);
   });
 
   it("a failed run shows its reason once, in the outcome (follow-up 1)", async () => {
     const reason = "Setting up the new storage did not finish: SeaweedFS deployed but bucket creation failed: connection refused. Run Migrate storage again to retry, or create bucket 'pipelines' from the admin UI. The old storage is unchanged.";
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }), {
-      "POST /api/resources/minio/migrate/stream": sse(
+      "POST /api/resources/s3/migrate/stream": sse(
         { step: "check", status: "success", message: "OK: SeaweedFS in namespace 'minio' is running", elapsedMs: 1 },
         { step: "storage", status: "failed", message: reason, elapsedMs: 2 },
         { step: "operation_complete", status: "failed", message: reason, elapsedMs: 3 },
@@ -569,7 +569,7 @@ describe("storage from an earlier version", () => {
   it("removal: the namespace choice comes before the data-loss alert (follow-up 4) and is sent only when ticked", async () => {
     const removable: LegacyStorageState = { ...legacy, stage: "remove", repoint: [], notMoved: [], usedBy: [], namespaceDeletable: true, namespaceKeptReason: undefined, otherObjects: ["Deployment notes-app"] };
     const api = setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: removable, pipelineServers: [] }), {
-      "POST /api/resources/minio/migrate/stream": sse({ step: "operation_complete", status: "success", message: "The old storage in namespace 'minio' was removed.", elapsedMs: 1 }),
+      "POST /api/resources/s3/migrate/stream": sse({ step: "operation_complete", status: "success", message: "The old storage in namespace 'minio' was removed.", elapsedMs: 1 }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     expect(await screen.findByText(/The old storage can be deleted/)).toBeInTheDocument();
@@ -581,7 +581,7 @@ describe("storage from an earlier version", () => {
     fireEvent.click(box);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete old storage" }));
     expect(await within(dialog).findByText("The old storage was deleted")).toBeInTheDocument();
-    expect(api.bodies["POST /api/resources/minio/migrate/stream"]).toEqual([{ removeOldStorage: true, deleteNamespace: true }]);
+    expect(api.bodies["POST /api/resources/s3/migrate/stream"]).toEqual([{ removeOldStorage: true, deleteNamespace: true }]);
   });
 
   it("Delete covers the earlier storage too, and names its data", async () => {
@@ -648,7 +648,7 @@ describe("every setup has its removal on the same tab", () => {
   it("storage Delete offers namespace seaweedfs, unticked, above the data loss, and sends it only when ticked", async () => {
     const own: ResourceState = { ...readyMinio, dataPVCs: ["seaweedfs-data"], namespaceDeletable: true, otherObjects: ["Deployment notes-app"] };
     const api = setup(live({ minio: own, pipelineServers: [] }), {
-      "POST /api/resources/minio/teardown": () => jsonResponse({ success: true, message: "S3 storage removed. Namespace 'seaweedfs' is being deleted, with everything else in it.", logs: [] }),
+      "POST /api/resources/s3/teardown": () => jsonResponse({ success: true, message: "S3 storage removed. Namespace 'seaweedfs' is being deleted, with everything else in it.", logs: [] }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
@@ -664,13 +664,13 @@ describe("every setup has its removal on the same tab", () => {
     expect(await within(dialog).findByText(/Then namespace/)).toHaveTextContent("Then namespace seaweedfs is deleted, with everything in it.");
     expect(dialog).not.toHaveTextContent("Namespace seaweedfs is kept");
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(api.bodies["POST /api/resources/minio/teardown"]).toEqual([{ deleteNamespace: true }]));
+    await waitFor(() => expect(api.bodies["POST /api/resources/s3/teardown"]).toEqual([{ deleteNamespace: true }]));
   });
 
   it("a namespace this tool did not write is not offered, and says why; unticked sends nothing extra", async () => {
     const own: ResourceState = { ...readyMinio, dataPVCs: ["seaweedfs-data"], namespaceDeletable: false, namespaceKeptReason: "Namespace 'seaweedfs' is kept: it carries this tool's label, but its managedFields show no write by this tool." };
     const api = setup(live({ minio: own, pipelineServers: [] }), {
-      "POST /api/resources/minio/teardown": () => jsonResponse({ success: true, message: "S3 storage removed.", logs: [] }),
+      "POST /api/resources/s3/teardown": () => jsonResponse({ success: true, message: "S3 storage removed.", logs: [] }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
@@ -678,7 +678,7 @@ describe("every setup has its removal on the same tab", () => {
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(dialog).toHaveTextContent("its managedFields show no write by this tool");
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(api.bodies["POST /api/resources/minio/teardown"]).toEqual([{}]));
+    await waitFor(() => expect(api.bodies["POST /api/resources/s3/teardown"]).toEqual([{}]));
   });
 
   it("a deployed PR image is removed with Revert, and storage of an earlier version with Delete old storage", async () => {
@@ -703,7 +703,7 @@ describe("status from the serving configuration (Repair)", () => {
     ["it runs another image", { ...base, ready: true, message: "Running", repairNeeded: "SeaweedFS runs mirror.example.com/seaweedfs:4.54, not the image this version deploys (ghcr.io/chrislusf/seaweedfs@sha256:4b42c212). Re-run setup to update it; the data PVC is kept." }, "Needs attention", "SeaweedFS runs mirror.example.com/seaweedfs"],
   ])("when %s, it says so and offers Repair, which re-runs setup", async (_name, minio, label, text) => {
     const api = setup(live({ minio: minio as ResourceState, pipelineServers: [] }), {
-      "POST /api/resources/minio/setup": () => jsonResponse({ success: true, message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.", logs: [] }),
+      "POST /api/resources/s3/setup": () => jsonResponse({ success: true, message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.", logs: [] }),
     });
     renderAt("/test-resources?tab=pipelines&project=fresh");
     const storage = await part("S3 storage");
@@ -714,7 +714,7 @@ describe("status from the serving configuration (Repair)", () => {
     // The fix is the alert's own action.
     fireEvent.click(within(storage).getByRole("button", { name: "Repair" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Repair" }));
-    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/minio/setup"))).toHaveLength(1));
+    await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/setup"))).toHaveLength(1));
   });
 
   it("someone else's storage gets no Repair", async () => {

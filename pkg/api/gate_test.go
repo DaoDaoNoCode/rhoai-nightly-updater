@@ -524,8 +524,8 @@ func TestFiveFormerlyUnlockedMutationsTakeTheClusterLock(t *testing.T) {
 	defer releaseClusterMutationLock()
 	for path, h := range map[string]http.HandlerFunc{
 		"/api/setup/pull-secret":                  HandleCreatePullSecret,
-		"/api/resources/minio/setup":              HandleS3StorageSetup,
-		"/api/resources/minio/teardown":           HandleS3StorageTeardown,
+		"/api/resources/s3/setup":                 HandleS3StorageSetup,
+		"/api/resources/s3/teardown":              HandleS3StorageTeardown,
 		"/api/resources/pipeline-server/setup":    HandlePipelineServerSetup,
 		"/api/resources/pipeline-server/teardown": HandlePipelineServerTeardown,
 	} {

@@ -297,7 +297,7 @@ func TestFullProfileRegistersEveryHandler(t *testing.T) {
 	Register(mux)
 	mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/rollback/stream", "user:reader", "{}"))
+	mux.ServeHTTP(w, postJSON("/api/reinstall/stream", "user:reader", "{}"))
 	if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != "forbidden" {
 		t.Fatalf("full profile, Reinstall without cluster-admin: %d %s", w.Code, w.Body.String())
 	}

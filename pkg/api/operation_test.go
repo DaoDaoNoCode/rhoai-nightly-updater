@@ -185,7 +185,7 @@ func TestRejectedAndDryRunRequestsWriteNoMarker(t *testing.T) {
 		code int
 	}{
 		{"invalid image", HandleUpdateStream, "/api/update/stream", `{"image":"docker.io/evil/fbc:1"}`, 400},
-		{"malformed body", HandleReinstallStream, "/api/rollback/stream", `{`, 400},
+		{"malformed body", HandleReinstallStream, "/api/reinstall/stream", `{`, 400},
 		{"bad PR", HandleDashboardDeployPR, "/api/dashboard/deploy-pr", `{"pr":0}`, 400},
 		{"bad project", HandlePipelineServerSetup, "/api/resources/pipeline-server/setup", `{"project":"Not_Valid"}`, 400},
 		{"dry run", HandleUpdate, "/api/update", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`, 200},

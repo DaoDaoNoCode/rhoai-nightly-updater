@@ -76,7 +76,7 @@ func TestDescribeActivity(t *testing.T) {
 // Every action the code records has a label and a category.
 func TestEveryRecordedActionIsDescribed(t *testing.T) {
 	for _, a := range []string{"update", "refresh", "reinstall", "rollback", "deploy-pr", "deploy-dashboard-pr", "deploy-dashboard-main",
-		"revert-dashboard", "setup-minio", "teardown-minio", "setup-pipeline-server", "teardown-pipeline-server", "setup-mlflow",
+		"revert-dashboard", "setup-s3", "teardown-s3", "setup-pipeline-server", "teardown-pipeline-server", "setup-mlflow",
 		"teardown-mlflow", "deploy-mlflow-pr", "revert-mlflow", "create-pull-secret", "create-dsc", "repair-dsc", "assist-rollout",
 		"fix-delete-stale-webhooks", "fix-recreate-subscription", "fix-delete-stale-installplans", "fix-maas-gateway",
 		"disable-component", "restart-operator"} {
@@ -148,7 +148,10 @@ func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
 	}{
 		{types.ActivityEntry{Action: "update", Success: true}, "Updated to nightly", "operator"},
 		{types.ActivityEntry{Action: "update", Success: false}, "Update to nightly failed", "operator"},
+		{types.ActivityEntry{Action: "teardown-s3", Success: false}, "S3 storage teardown failed", "test-resources"},
+		// Entries an earlier version recorded under the MinIO-era names.
 		{types.ActivityEntry{Action: "teardown-minio", Success: false}, "S3 storage teardown failed", "test-resources"},
+		{types.ActivityEntry{Action: "setup-minio", Success: true}, "S3 storage set up", "test-resources"},
 		{types.ActivityEntry{Action: "setup-mlflow", Success: true}, "MLflow set up", "test-resources"},
 		{types.ActivityEntry{Action: "deploy-dashboard-main", Success: true}, "Dashboard main deployed", "dashboard-dev"},
 		{types.ActivityEntry{Action: "assist-rollout", Success: false}, "Stuck rollout assisted", "diagnostics"},
@@ -159,5 +162,10 @@ func TestDescribeActivity_FailedLabelsAndCategories(t *testing.T) {
 		if e.Label != tc.label || e.Category != tc.catego {
 			t.Errorf("%s success=%v: got %q/%q, want %q/%q", e.Action, e.Success, e.Label, e.Category, tc.label, tc.catego)
 		}
+	}
+	old := types.ActivityEntry{Action: "setup-minio", Success: true}
+	describeActivity(&old)
+	if old.Action != "setup-s3" {
+		t.Errorf("an old entry's action reads as %q", old.Action)
 	}
 }

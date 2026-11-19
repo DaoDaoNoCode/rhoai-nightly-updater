@@ -10,21 +10,21 @@ import (
 )
 
 // HandleS3StorageSetup deploys the S3 storage (SeaweedFS in namespace seaweedfs) with a bucket for
-// pipeline artifacts. The route and the operation kind keep their names from earlier versions.
+// pipeline artifacts.
 var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
 	beginOperation(w, "")
-	slog.Info("mutation", "op", "setup-minio")
+	slog.Info("mutation", "op", "setup-s3")
 	result, err := cluster.SetupS3Storage(c)
 	if err != nil {
-		slog.Error("setup-minio failed", "error", err)
+		slog.Error("setup-s3 failed", "error", err)
 		writeError(w, "S3 storage setup failed", http.StatusInternalServerError)
 		return
 	}
-	writeOperationResult(w, result, "setup-minio")
+	writeOperationResult(w, result, "setup-s3")
 })
 
 // readS3AdminLogin reads the SeaweedFS admin UI login; tests replace it.
@@ -137,14 +137,14 @@ var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.Re
 		return
 	}
 	beginOperation(w, "")
-	slog.Info("mutation", "op", "teardown-minio", "deleteNamespace", req.DeleteNamespace)
+	slog.Info("mutation", "op", "teardown-s3", "deleteNamespace", req.DeleteNamespace)
 	result, err := cluster.TeardownS3Storage(c, req)
 	if err != nil {
-		slog.Error("teardown-minio failed", "error", err)
+		slog.Error("teardown-s3 failed", "error", err)
 		writeError(w, "S3 storage teardown failed", http.StatusInternalServerError)
 		return
 	}
-	writeOperationResult(w, result, "teardown-minio")
+	writeOperationResult(w, result, "teardown-s3")
 })
 
 // HandlePipelineServerSetup creates a pipeline server (DSPA) in the specified project.

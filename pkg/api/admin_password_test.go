@@ -14,7 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
 
-const adminPasswordPath = "/api/resources/minio/admin-password"
+const adminPasswordPath = "/api/resources/s3/admin-password"
 
 // stubAdminLogin replaces the Secret read and counts the calls.
 func stubAdminLogin(t *testing.T, user, password string, err error) *int {

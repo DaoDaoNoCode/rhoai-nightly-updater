@@ -332,12 +332,12 @@ export function revertMLflow(): Promise<OperationResponse> {
 }
 
 export function setupMinIO(): Promise<OperationResponse> {
-  return request('/api/resources/minio/setup', { method: 'POST', acceptStatuses: [422] });
+  return request('/api/resources/s3/setup', { method: 'POST', acceptStatuses: [422] });
 }
 
 /** Tear down the S3 storage; deleteNamespace also deletes namespace seaweedfs (only when this tool created it). */
 export function teardownMinIO(deleteNamespace = false): Promise<OperationResponse> {
-  return request('/api/resources/minio/teardown', { method: 'POST', body: JSON.stringify(deleteNamespace ? { deleteNamespace: true } : {}), acceptStatuses: [422] });
+  return request('/api/resources/s3/teardown', { method: 'POST', body: JSON.stringify(deleteNamespace ? { deleteNamespace: true } : {}), acceptStatuses: [422] });
 }
 
 /**
@@ -348,7 +348,7 @@ export function teardownMinIO(deleteNamespace = false): Promise<OperationRespons
  * no-store); keep them out of state, logs and the DOM.
  */
 export function getS3AdminLogin(): Promise<{ user: string; password: string; accessKey: string; secretKey: string }> {
-  return request('/api/resources/minio/admin-password', { cache: 'no-store' });
+  return request('/api/resources/s3/admin-password', { cache: 'no-store' });
 }
 
 /** Sets up the pipeline server in project; recreate replaces one named nightly-dspa with dspa. */
@@ -599,7 +599,7 @@ export function streamReinstall(
   const body: Record<string, unknown> = { targetType, image, channel: channel || undefined };
   if (options.allowDowngrade) body.allowDowngrade = true;
   if (options.revertDashboardDev) body.revertDashboardDev = true;
-  return streamSSE('/api/rollback/stream', body, onStep, onDone, onConnectionDrop);
+  return streamSSE('/api/reinstall/stream', body, onStep, onDone, onConnectionDrop);
 }
 
 /**
@@ -638,7 +638,7 @@ export function streamMigrateStorage(
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
-  return streamSSE('/api/resources/minio/migrate/stream', options, onStep, onDone, onConnectionDrop);
+  return streamSSE('/api/resources/s3/migrate/stream', options, onStep, onDone, onConnectionDrop);
 }
 
 /** What a clean-up deletes (pkg/types CleanupRequest), in this order. */

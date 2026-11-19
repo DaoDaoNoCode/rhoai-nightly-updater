@@ -44,7 +44,7 @@ export async function copyFetchedText(fetchText: () => Promise<string>): Promise
 /** What a hidden password field shows: dots, not the password (it is not fetched until asked for). */
 const HIDDEN = "••••••••••";
 
-/** Which credential a field shows (the fields of GET /api/resources/minio/admin-password). */
+/** Which credential a field shows (the fields of GET /api/resources/s3/admin-password). */
 export type S3CredentialField = "accessKey" | "secretKey" | "password";
 
 /**

@@ -329,6 +329,15 @@ only accepts a tag whose version is the top dated section. See
 
 ### Changed
 
+- API routes named after what they do: `/api/resources/minio/*` (the
+  SeaweedFS S3 storage) is `/api/resources/s3/*`, and `POST
+  /api/rollback/stream` (Install a different build) is `POST
+  /api/reinstall/stream`. The UI ships in the same image; a script that
+  called the old paths changes them. The S3 storage's activity entries are
+  `setup-s3` and `teardown-s3`; entries recorded as `setup-minio` and
+  `teardown-minio` read as the new names. The note that `MINIO_IMAGE`,
+  `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is set but unused (retired in
+  3.0.0) is gone.
 - Diagnostics' "Objects the operator cannot update" no longer lists an
   object whose only failure is a changed `spec.selector` of a workload: it
   is under "Left over from an earlier release", with a Fix. An object with

@@ -1106,7 +1106,7 @@ export interface KeptPVC {
 /** The cluster operation that holds the backend's mutation lock. */
 export interface ServerOperation {
   id: string;
-  /** update, reinstall, refresh, deploy-dashboard-pr, setup-minio, ... */
+  /** update, reinstall, refresh, deploy-dashboard-pr, setup-s3, ... */
   type: string;
   label: string;
   user: string;

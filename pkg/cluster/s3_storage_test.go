@@ -277,14 +277,14 @@ func TestSetupS3Storage_ImageOverride(t *testing.T) {
 	}
 }
 
-// Variables of earlier versions are not used any more; setup says so.
-func TestSetupS3Storage_NamesRetiredVariables(t *testing.T) {
+// Variables retired in 3.0.0 are not read.
+func TestSetupS3Storage_IgnoresRetiredVariables(t *testing.T) {
 	fastS3Timings(t)
 	t.Setenv("MINIO_ROOT_USER", "someone")
 	f, c := newResourceFake(t)
 	readyAfterApply(f)
 	resp, _ := SetupS3Storage(c)
-	if !resp.Success || !strings.Contains(strings.Join(resp.Logs, "\n"), "MINIO_ROOT_USER is set but no longer used") {
+	if !resp.Success {
 		t.Fatalf("setup = %+v", resp)
 	}
 	raw, _ := json.Marshal(f.get(s3SecretPath))

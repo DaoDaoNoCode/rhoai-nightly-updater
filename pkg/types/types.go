@@ -1531,7 +1531,7 @@ type CleanupRequest struct {
 	Components []string `json:"components,omitempty"`
 }
 
-// S3TeardownRequest is the body of POST /api/resources/minio/teardown.
+// S3TeardownRequest is the body of POST /api/resources/s3/teardown.
 type S3TeardownRequest struct {
 	// DeleteNamespace also deletes namespace seaweedfs, with everything in
 	// it, once the storage's objects are gone (only when this tool created
@@ -1539,7 +1539,7 @@ type S3TeardownRequest struct {
 	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
 }
 
-// MigrateStorageRequest is the body of POST /api/resources/minio/migrate/stream.
+// MigrateStorageRequest is the body of POST /api/resources/s3/migrate/stream.
 type MigrateStorageRequest struct {
 	// RemoveOldStorage runs the last part: removing the old storage once the
 	// migration is done. Without it Migrate storage sets up the new storage,
