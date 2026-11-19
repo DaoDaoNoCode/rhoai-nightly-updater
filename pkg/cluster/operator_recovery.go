@@ -36,7 +36,7 @@ var (
 // the final marker flush and the HTTP server shutdown with a margin;
 // budget_test.go checks the arithmetic.
 //   - OperationDeadline: the context deadline pkg/api gives every mutation
-//     (withMutationAuth in pkg/api/handlers.go). Every step, including the
+//     (withMutationAuth in pkg/api/auth_handlers.go). Every step, including the
 //     Dashboard Dev revert, runs inside it; the install wait ends
 //     installDeadlineReserve before it.
 //   - RecoveryTimeout: the automatic restore after a failure, after the

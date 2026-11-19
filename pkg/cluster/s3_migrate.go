@@ -1156,7 +1156,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		if len(moved) > 0 {
 			done = strings.Join(moved, ", ")
 		}
-		// The operation's deadline (15 minutes, pkg/api/handlers.go) can
+		// The operation's deadline (15 minutes, pkg/api/auth_handlers.go) can
 		// come before the last wait ends: setup, a copy wait of
 		// MigrateCopyTimeout and a MigrateRepointTimeout wait per server.
 		// A server is moved only when its whole wait fits, so a run never

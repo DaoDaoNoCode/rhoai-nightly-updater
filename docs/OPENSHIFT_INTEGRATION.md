@@ -58,7 +58,7 @@ That totals 1020 s, which is `terminationGracePeriodSeconds`.
 
 **What:** The ServiceAccount token is a projected volume at `/var/run/secrets/kubernetes.io/serviceaccount/token`. The kubelet rewrites the file before the token expires (once 80% of its lifetime has passed), so a reader must read the file again rather than keep the first token.
 
-**Current behavior:** `getClusterToken()` (`pkg/api/handlers.go`) reads the file and keeps the token for 5 minutes (`tokenCacheTTL`), then reads it again: far inside the token's lifetime, and one file read per 5 minutes instead of one per request. The app's own reads, its records and the MaaS prune job use this token; changes run with the signed-in user's token (Section 2).
+**Current behavior:** `getClusterToken()` (`pkg/api/auth_handlers.go`) reads the file and keeps the token for 5 minutes (`tokenCacheTTL`), then reads it again: far inside the token's lifetime, and one file read per 5 minutes instead of one per request. The app's own reads, its records and the MaaS prune job use this token; changes run with the signed-in user's token (Section 2).
 
 **Dev mode:** with `DEV_MODE=true` and no mounted token (`./dev.sh` on a workstation), the ServiceAccount token is `DEV_TOKEN` (your `oc whoami -t`), cached the same way; the same variable also stands in for the user's token, since there is no oauth-proxy.
 

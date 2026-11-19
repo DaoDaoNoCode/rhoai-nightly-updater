@@ -104,7 +104,7 @@ rhoai-nightly-updater/
 ├── dev.sh                   # Local development launcher
 ├── .env.example             # Environment variable reference
 ├── pkg/                     # Go backend packages
-│   ├── api/                 # HTTP handlers and auth
+│   ├── api/                 # HTTP handlers (one <feature>_handlers.go per feature), auth in auth_handlers.go
 │   ├── cluster/             # Kubernetes API client and operations
 │   ├── middleware/          # HTTP middleware (security, request ID)
 │   └── types/               # Shared type definitions
@@ -350,7 +350,7 @@ All API handlers use one of two wrapper functions:
 **`withAuth`** — For read-only endpoints (GET requests):
 
 ```go
-// From pkg/api/handlers.go
+// From pkg/api/update_handlers.go
 var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
     // Handler receives an authenticated cluster.Client
     // Use c.get(), c.post(), etc. to call Kubernetes APIs
