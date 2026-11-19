@@ -847,7 +847,7 @@ async (page) => {
       await crop("environment-playground-setup", [part("Models"), setUp], {
         notes: [
           { at: panel().getByRole("checkbox", { name: "Select row 0" }), n: 1, pos: "l" },
-          { at: panel().getByText(/^Published to Models as a Service:/).first(), n: 2, pos: "l" },
+          { at: panel().getByText(/^Not used unless you choose it/).first(), n: 2, pos: "r" },
           { at: setUp, n: 3, pos: "r" },
         ],
         pad: 24,
