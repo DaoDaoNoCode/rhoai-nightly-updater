@@ -250,6 +250,10 @@ only accepts a tag whose version is the top dated section. See
   single-quoted (`AWS_SECRET_ACCESS_KEY='...'`), so keys set at a first
   setup with `$`, backticks or spaces cannot run or split when pasted
   into a shell.
+- **Log out** now ends the updater's session: it opens oauth-proxy's
+  `/oauth/sign_out`, which clears the session cookie. Before, it opened
+  the sign-in page and the session stayed. The OpenShift login itself
+  stays (SECURITY.md, Sessions): log out of the console to end it.
 
 ## [3.0.0] - 2026-11-18
 
