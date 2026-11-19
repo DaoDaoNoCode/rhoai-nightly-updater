@@ -390,6 +390,51 @@ type DSCManager struct {
 	UpgradeGates []string      `json:"upgradeGates,omitempty"`
 	Nodes        []DSCNode     `json:"nodes"`
 	Mismatches   []DSCMismatch `json:"mismatches"`
+	// PendingHardReset is a hard reset that deleted the DataScienceCluster
+	// and did not create its replacement (a failure, a timeout, a restart
+	// of the tool): shown only while no DataScienceCluster exists, so
+	// "Finish the hard reset" creates exactly the object it planned.
+	PendingHardReset *DSCPendingHardReset `json:"pendingHardReset,omitempty"`
+	// PendingHardResetError says why a recorded hard reset could not be
+	// read.
+	PendingHardResetError string `json:"pendingHardResetError,omitempty"`
+}
+
+// DSCHardResetRecord is what a hard reset records before it deletes the
+// DataScienceCluster (the operation ConfigMap, key dscHardReset): the exact
+// object it creates, so the reset can be finished after a failure, a
+// timeout or a restart of the tool.
+type DSCHardResetRecord struct {
+	Name       string `json:"name"`
+	OldUID     string `json:"oldUID"`
+	APIVersion string `json:"apiVersion"`
+	// Object is the DataScienceCluster to create, as JSON; YAML the same
+	// object as the plan showed it.
+	Object string `json:"object"`
+	YAML   string `json:"yaml"`
+	// OperatorCSV is the installed CSV whose alm-examples gave the object.
+	OperatorCSV     string `json:"operatorCSV"`
+	OperatorVersion string `json:"operatorVersion,omitempty"`
+	User            string `json:"user,omitempty"`
+	StartedAt       string `json:"startedAt"`
+}
+
+// DSCPendingHardReset is a recorded hard reset that can be finished.
+type DSCPendingHardReset struct {
+	Name            string `json:"name"`
+	APIVersion      string `json:"apiVersion"`
+	NewObject       string `json:"newObject"`
+	OperatorVersion string `json:"operatorVersion,omitempty"`
+	User            string `json:"user,omitempty"`
+	StartedAt       string `json:"startedAt"`
+	// Token binds "Finish the hard reset" to this object.
+	Token string `json:"token"`
+}
+
+// DSCFinishRequest is the body of POST /api/components/dsc/hard-reset/finish.
+type DSCFinishRequest struct {
+	Name  string `json:"name"`
+	Token string `json:"token"`
 }
 
 // DSCConditionView is one status condition of the DataScienceCluster.
@@ -494,6 +539,11 @@ type DSCToggleRequest struct {
 	To   string `json:"to"`
 	// WithParent also sets the parents that are not Managed to Managed.
 	WithParent bool `json:"withParent"`
+	// UID and Token are those of the plan the user reviewed (GET
+	// /api/components/dsc/plan?action=toggle): the change is refused when
+	// the plan computed again differs.
+	UID   string `json:"uid"`
+	Token string `json:"token"`
 }
 
 // DSCPlanRequest is the body of POST /api/components/dsc/fix, /reset and

@@ -186,6 +186,7 @@ var operationTypes = map[string][2]string{
 	"/api/components/dsc/fix":                 {"fix-dsc", "Fix the DataScienceCluster"},
 	"/api/components/dsc/reset":               {"reset-dsc", "Reset the DataScienceCluster in place"},
 	"/api/components/dsc/hard-reset/stream":   {"hard-reset-dsc", "Hard reset the DataScienceCluster"},
+	"/api/components/dsc/hard-reset/finish":   {"finish-hard-reset-dsc", "Finish the hard reset of the DataScienceCluster"},
 	"/api/assist-rollout":                     {"assist-rollout", "Assist stuck rollouts"},
 	"/api/setup/pull-secret":                  {"create-pull-secret", "Configure pull secret"},
 	"/api/setup/node-pull-check":              {"node-pull-check", "Check that the nodes can pull"},

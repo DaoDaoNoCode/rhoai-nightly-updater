@@ -19,8 +19,13 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 	Register(mux)
 	var toggled []types.DSCToggleRequest
 	var reset []types.DSCPlanRequest
-	prevSet, prevHard := setDSCManagementState, hardResetDSC
-	t.Cleanup(func() { setDSCManagementState, hardResetDSC = prevSet, prevHard })
+	var finished []types.DSCFinishRequest
+	prevSet, prevHard, prevFinish := setDSCManagementState, hardResetDSC, finishDSCHardReset
+	t.Cleanup(func() { setDSCManagementState, hardResetDSC, finishDSCHardReset = prevSet, prevHard, prevFinish })
+	finishDSCHardReset = func(_ *cluster.Client, req types.DSCFinishRequest) (*types.OperationResponse, error) {
+		finished = append(finished, req)
+		return &types.OperationResponse{Success: true, Message: "ok"}, nil
+	}
 	setDSCManagementState = func(_ *cluster.Client, req types.DSCToggleRequest) (*types.OperationResponse, error) {
 		toggled = append(toggled, req)
 		return &types.OperationResponse{Success: true, Message: "ok"}, nil
@@ -34,7 +39,9 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		path, body string
 		want       int
 	}{
-		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed"}`, http.StatusOK},
+		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed","uid":"u-1","token":"` + token + `"}`, http.StatusOK},
+		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed"}`, http.StatusBadRequest},
+		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"Managed","to":"Removed","uid":"u-1","token":"short"}`, http.StatusBadRequest},
 		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve/nim","from":"Managed","to":"Removed"}`, http.StatusBadRequest},
 		{"/api/components/dsc/management", `{"name":"default-dsc","path":"kserve.nim","from":"","to":"Re moved"}`, http.StatusBadRequest},
 		{"/api/components/dsc/management", `{"name":"Bad Name","path":"ray","from":"","to":"Managed"}`, http.StatusBadRequest},
@@ -42,6 +49,8 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"short","confirm":"default-dsc"}`, http.StatusBadRequest},
 		{"/api/components/dsc/hard-reset/stream", `{"name":"default-dsc","uid":"u-1","token":"` + token + `","confirm":"default-dsc"}`, http.StatusOK},
 		{"/api/components/dsc/fix", `{"name":"default-dsc","uid":"u-1"}`, http.StatusBadRequest},
+		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc"}`, http.StatusBadRequest},
+		{"/api/components/dsc/hard-reset/finish", `{"name":"default-dsc","token":"` + token + `"}`, http.StatusOK},
 	} {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, postJSON(tc.path, "user:admin", tc.body))
@@ -50,11 +59,14 @@ func TestDSCChangeRoutesValidateTheirRequest(t *testing.T) {
 		}
 		resetPackageState(t) // the rate limit is per user and route
 	}
-	if len(toggled) != 1 || toggled[0].Path != "kserve.nim" || toggled[0].From != "Managed" || toggled[0].To != "Removed" {
+	if len(toggled) != 1 || toggled[0].Path != "kserve.nim" || toggled[0].From != "Managed" || toggled[0].To != "Removed" || toggled[0].Token != token || toggled[0].UID != "u-1" {
 		t.Fatalf("toggled = %+v", toggled)
 	}
 	if len(reset) != 1 || reset[0].Confirm != "default-dsc" || reset[0].Token != token {
 		t.Fatalf("reset = %+v", reset)
+	}
+	if len(finished) != 1 || finished[0].Name != "default-dsc" || finished[0].Token != token {
+		t.Fatalf("finished = %+v", finished)
 	}
 }
 

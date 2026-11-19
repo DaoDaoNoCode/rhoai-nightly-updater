@@ -227,6 +227,11 @@ export const ComponentsPage: React.FC = () => {
       {error && !data && <PageErrorState error={error} title="Can't load the components" onRetry={handleRefresh} />}
       {loading && !data && !error && <PageLoading title="Loading the components" />}
 
+      {/* A hard reset that deleted the DSC and did not create its replacement: "Finish the hard reset". */}
+      {data && dscState === "no-dsc" && !gitOpsProfile && (
+        <DSCManagerSection refreshKey={lastRefreshed} mutateReason={mutateReason ?? dscGitOpsReason} onResult={onResult} onChanged={handleRefresh} />
+      )}
+
       {data && noDSC && dscState && (
         <DSCEmptyState
           dscState={dscState}

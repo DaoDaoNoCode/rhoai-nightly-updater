@@ -20,6 +20,7 @@ var (
 	fixDSC                 = cluster.FixDSC
 	softResetDSC           = cluster.SoftResetDSC
 	hardResetDSC           = cluster.HardResetDSC
+	finishDSCHardReset     = cluster.FinishDSCHardReset
 	dscPathRegex           = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,62}(\.[A-Za-z][A-Za-z0-9]{0,62}){0,7}$`)
 	managementStateRegex   = regexp.MustCompile(`^[A-Za-z]{1,32}$`)
 	dscUIDRegex            = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
@@ -70,8 +71,9 @@ var HandleDSCManagement = withMutationAuth(func(c *cluster.Client, w http.Respon
 	r.Body = http.MaxBytesReader(w, r.Body, dscChangeRequestMaxLen)
 	var req types.DSCToggleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || !dscPathRegex.MatchString(req.Path) ||
-		!managementStateRegex.MatchString(req.To) || (req.From != "" && !managementStateRegex.MatchString(req.From)) {
-		writeError(w, "Give the DataScienceCluster's name, a component path, the value you saw (from) and the value to set (to)", http.StatusBadRequest, "validation")
+		!managementStateRegex.MatchString(req.To) || (req.From != "" && !managementStateRegex.MatchString(req.From)) ||
+		!dscUIDRegex.MatchString(req.UID) || !dscPlanTokenRegex.MatchString(req.Token) {
+		writeError(w, "Give the DataScienceCluster's name and UID, a component path, the value you saw (from), the value to set (to) and the token of the change you reviewed", http.StatusBadRequest, "validation")
 		return
 	}
 	beginOperation(w, req.Name+": "+req.Path+" to "+req.To)
@@ -177,4 +179,28 @@ var HandleDSCHardResetStream = withMutationAuth(func(c *cluster.Client, w http.R
 	if runErr != nil {
 		slog.Error("dsc hard reset failed", "error", runErr)
 	}
+})
+
+// HandleDSCHardResetFinish creates the DataScienceCluster a hard reset
+// recorded and did not create (FinishDSCHardReset), while none exists.
+var HandleDSCHardResetFinish = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	r.Body = http.MaxBytesReader(w, r.Body, dscChangeRequestMaxLen)
+	var req types.DSCFinishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !dscNameRegex.MatchString(req.Name) || !dscPlanTokenRegex.MatchString(req.Token) {
+		writeError(w, "Give the DataScienceCluster's name and the token of the hard reset you reviewed", http.StatusBadRequest, "validation")
+		return
+	}
+	beginOperation(w, req.Name)
+	slog.Info("mutation", "op", "dsc-hard-reset-finish", "dsc", req.Name)
+	result, err := finishDSCHardReset(c, req)
+	if err != nil {
+		code, errorCode := cluster.HTTPStatusForError(err)
+		writeError(w, "Could not finish the hard reset: "+err.Error(), code, errorCode)
+		return
+	}
+	writeOperationResult(w, result, "dsc-hard-reset-finish")
 })

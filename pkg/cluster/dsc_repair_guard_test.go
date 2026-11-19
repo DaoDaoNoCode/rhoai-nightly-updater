@@ -18,6 +18,9 @@ func repairGuardMock(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/deployments/rhods-operator"):
 		_, _ = io.WriteString(w, `{"status":{"readyReplicas":1}}`)
+	case strings.HasSuffix(r.URL.Path, "/clusterserviceversions/rhods-operator.test"):
+		// The installed CSV names the operator's Deployment.
+		_, _ = io.WriteString(w, `{"metadata":{"name":"rhods-operator.test"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}}}`)
 	case r.URL.Path == "/apis/components.platform.opendatahub.io":
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"kind":"Status","code":404}`)

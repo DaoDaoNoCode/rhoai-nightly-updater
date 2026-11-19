@@ -74,7 +74,7 @@ describe("DSCManagerSection", () => {
     expect(await within(dialog).findByText(/Managed → Removed \(removes it\)/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Set to Removed" }));
     await waitFor(() => expect(api.bodies["POST /api/components/dsc/management"]).toHaveLength(1));
-    expect(api.bodies["POST /api/components/dsc/management"][0]).toEqual({ name: "default-dsc", path: "ray", from: "Managed", to: "Removed", withParent: false });
+    expect(api.bodies["POST /api/components/dsc/management"][0]).toEqual({ name: "default-dsc", path: "ray", from: "Managed", to: "Removed", withParent: false, uid: "u-1", token: "0123456789abcdef01234567" });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(await screen.findByText("Set ray Managed → Removed.")).toBeInTheDocument();
   });
@@ -164,5 +164,55 @@ describe("DSCManagerSection", () => {
     stream.push(sseEvent("operation_complete", "success", "The DataScienceCluster was reset to the release default and is Ready."));
     stream.close();
     expect(await within(dialog).findByText("The DataScienceCluster was reset to the release default and is Ready.")).toBeInTheDocument();
+  });
+
+  it("hard reset lists what the new DataScienceCluster changes", async () => {
+    const hard = plan({ action: "hard-reset", tornDown: ["ray"], newObject: "kind: DataScienceCluster\n", changes: [
+      { path: "aigateway", from: "Managed", fromSet: true, to: "Removed", toSet: true, toggle: true, effect: "removes" },
+      { path: "kueue.defaultLocalQueueName", from: "team", fromSet: true, toSet: false, toggle: false },
+    ] });
+    stubApi({
+      "GET /api/components/dsc": manager,
+      "GET /api/components/dsc/plan": (url: string) => new Response(JSON.stringify(url.includes("hard-reset") ? hard : plan({ action: "soft-reset", changes: [] })), { headers: { "Content-Type": "application/json" } }),
+    });
+    renderSection();
+    await screen.findByRole("treegrid");
+    fireEvent.click(screen.getByRole("button", { name: "Reset to the release default…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
+    fireEvent.click(within(dialog).getByLabelText("Hard reset"));
+    const list = await within(dialog).findByRole("list", { name: "Differences of the new DataScienceCluster" });
+    expect(within(list).getByText(/Managed → Removed \(removes it\)/)).toBeInTheDocument();
+    expect(within(list).getByText(/team → not set/)).toBeInTheDocument();
+  });
+
+  it("labels an unset state with the CRD default it takes", async () => {
+    stubApi({ "GET /api/components/dsc": { ...manager, nodes: [...manager.nodes, node("ray.argo", { specSet: false, spec: undefined, defaultSet: false, default: undefined, schemaDefault: "Managed" })] } });
+    renderSection();
+    const table = await screen.findByRole("treegrid");
+    expect(within(table).getByRole("option", { name: "Not set (Managed)" })).toBeInTheDocument();
+    expect(within(table).getByText("Not set (CRD default Managed)")).toBeInTheDocument();
+  });
+
+  it("offers to finish a hard reset that deleted the DataScienceCluster", async () => {
+    const pending = { name: "my-dsc", apiVersion: "datasciencecluster.opendatahub.io/v3", newObject: "kind: DataScienceCluster\nmetadata:\n  name: my-dsc\n", operatorVersion: "3.6.0", user: "admin", startedAt: "2026-11-19T10:00:00Z", token: "abcdefabcdefabcdefabcdef" };
+    const api = stubApi({
+      "GET /api/components/dsc": { exists: false, state: "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [], pendingHardReset: pending },
+      "POST /api/components/dsc/hard-reset/finish": { success: true, message: "Created DataScienceCluster my-dsc: the hard reset is finished.", logs: [] },
+    });
+    const onChanged = renderSection();
+    expect(await screen.findByText("A hard reset did not finish")).toBeInTheDocument();
+    expect(screen.getByText(/without the old name and namespaces/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Finish the hard reset…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Finish the hard reset?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create my-dsc" }));
+    await waitFor(() => expect(api.bodies["POST /api/components/dsc/hard-reset/finish"]).toEqual([{ name: "my-dsc", token: pending.token }]));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("shows nothing without a DataScienceCluster or a hard reset to finish", async () => {
+    const api = stubApi({ "GET /api/components/dsc": { exists: false, state: "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } });
+    const { container } = render(<DSCManagerSection refreshKey={1} mutateReason={null} onResult={() => {}} onChanged={() => {}} />);
+    await waitFor(() => expect(api.calls).toContain("GET /api/components/dsc"));
+    expect(container).toBeEmptyDOMElement();
   });
 });

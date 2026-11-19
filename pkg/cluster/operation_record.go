@@ -17,8 +17,11 @@ import (
 //     process that is gone reports an interrupted operation.
 //   - lastCompletedKey: the most recent finished operation.
 //   - leaseKey: the cross-pod operation lock (WriteOperationLease).
+//   - dscHardResetKey: the DataScienceCluster a hard reset creates,
+//     recorded before it deletes the old one (SaveDSCHardResetRecord), and
+//     cleared once it is created.
 //
-// The marker's field manager never owns the other two keys, so a marker
+// The marker's field manager never owns the other keys, so a marker
 // write keeps them (an applier only removes fields it owned:
 // https://kubernetes.io/docs/reference/using-api/server-side-apply/#field-management).
 // The other writes are JSON merge patches of their own keys. The updater's
@@ -27,7 +30,61 @@ const (
 	operationKey     = "operation"
 	lastCompletedKey = "lastCompleted"
 	leaseKey         = "lock"
+	dscHardResetKey  = "dscHardReset"
 )
+
+// SaveDSCHardResetRecord records the DataScienceCluster a hard reset
+// creates: a JSON merge patch of its own key.
+func SaveDSCHardResetRecord(c *Client, rec *types.DSCHardResetRecord) error {
+	value, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if err := patchOperationRecord(c, "", map[string]string{dscHardResetKey: string(value)}); err != nil {
+		return fmt.Errorf("save the hard reset record: %w", err)
+	}
+	return nil
+}
+
+// clearDSCHardResetRecord forgets the recorded hard reset once its object
+// exists (or the reset deleted nothing). A failure is logged: the record is
+// only offered while no DataScienceCluster exists, and the next hard reset
+// replaces it.
+func clearDSCHardResetRecord(c *Client) {
+	if err := patchOperationRecord(c, "", map[string]string{dscHardResetKey: ""}); err != nil {
+		slog.Warn("could not clear the hard reset record", "error", err)
+	}
+}
+
+// readDSCHardResetRecord returns the recorded hard reset, nil when there is
+// none. A record that cannot be parsed is an error: it is never guessed at.
+func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
+	body, _, err := c.get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	if IsK8sError(err, 404) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get operation record: %w", err)
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &cm); err != nil {
+		return nil, fmt.Errorf("parse operation record: %w", err)
+	}
+	raw := cm.Data[dscHardResetKey]
+	if raw == "" {
+		return nil, nil
+	}
+	var rec types.DSCHardResetRecord
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		return nil, fmt.Errorf("parse the hard reset record: %w", err)
+	}
+	if rec.Name == "" || rec.Object == "" || rec.APIVersion == "" || rec.OperatorCSV == "" {
+		return nil, fmt.Errorf("the hard reset record lacks its name, object, apiVersion or operator")
+	}
+	return &rec, nil
+}
 
 // OperationRecord is what the operation ConfigMap records. A value that is
 // not recorded, or cannot be parsed, is nil.

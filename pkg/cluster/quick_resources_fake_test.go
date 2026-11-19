@@ -266,7 +266,14 @@ func matchesSelector(obj map[string]interface{}, selector string) bool {
 			continue
 		}
 		kv := strings.SplitN(term, "=", 2)
-		if len(kv) != 2 || labels[kv[0]] != kv[1] {
+		if len(kv) == 1 {
+			// "key": the label is present, with any value.
+			if _, has := labels[term]; !has {
+				return false
+			}
+			continue
+		}
+		if labels[kv[0]] != kv[1] {
 			return false
 		}
 	}

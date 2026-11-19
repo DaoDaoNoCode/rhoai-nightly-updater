@@ -61,6 +61,27 @@ type dscView struct {
 	op            *installedOperator
 	argoApp       string
 	acm           bool
+	// helm names the Helm release that manages the DSC ("" when none).
+	helm string
+}
+
+// helmManagerOf names the Helm release that manages an object: Helm 3 sets
+// the annotations meta.helm.sh/release-name and release-namespace on every
+// object it installs, and charts set the label
+// app.kubernetes.io/managed-by: Helm (RHOAI-Build-Config ships such a chart,
+// rhai-on-openshift-chart, with a DataScienceCluster). "" when neither is
+// set.
+func helmManagerOf(meta objectMeta) string {
+	if name := meta.Annotations["meta.helm.sh/release-name"]; name != "" {
+		if ns := meta.Annotations["meta.helm.sh/release-namespace"]; ns != "" {
+			return ns + "/" + name
+		}
+		return name
+	}
+	if strings.EqualFold(meta.Labels["app.kubernetes.io/managed-by"], "Helm") {
+		return "(release not named)"
+	}
+	return ""
 }
 
 // readDSCView reads the DataScienceCluster (the first, as the Components
@@ -95,6 +116,7 @@ func readDSCView(c *Client) (*dscView, error) {
 	}
 	v.argoApp = argoApplicationOf(v.obj, "DataScienceCluster")
 	v.acm = v.argoApp == "" && acmEnforcesSpec(v.meta)
+	v.helm = helmManagerOf(v.meta)
 	v.crd, v.crdErr = readDSCCRD(c)
 	if v.crdErr == nil {
 		if ver := v.crd.version(v.version); ver != nil && ver.Spec != nil {
@@ -177,20 +199,35 @@ func (v *dscView) status() map[string]interface{} {
 	return s
 }
 
+// stateOf returns the managementState the operator acts on for the toggle
+// at path in components, and whether components sets it. An unset state is
+// the CRD's schema default for it where it has one (rhods-operator 3.6
+// modules/aipipelines handler.go starts argoWorkflowsControllers Managed,
+// the schema's default), else Removed (components.NormalizeManagementState
+// of "").
+func (v *dscView) stateOf(components map[string]interface{}, path []string) (string, bool) {
+	if s, ok := lookupState(components, path); ok && s != "" {
+		return s, true
+	}
+	if t, ok := v.byKey[strings.Join(path, ".")]; ok && t.SchemaDefault != "" {
+		return t.SchemaDefault, false
+	}
+	return "Removed", false
+}
+
 // deployed reports whether the operator deploys the toggle at path in
-// components: its own state is Managed (Unmanaged for Kueue keeps it
-// enabled) and every toggle above it is Managed (a sub-component is
+// components: its own state (stateOf) is Managed (Unmanaged for Kueue keeps
+// it enabled) and every toggle above it is Managed (a sub-component is
 // deployed through its parent's module; rhods-operator 3.6
-// modules/aigateway/handler.go). An unset state is Removed
-// (components.NormalizeManagementState).
+// modules/aigateway/handler.go).
 func (v *dscView) deployed(components map[string]interface{}, path []string) bool {
-	s, _ := lookupState(components, path)
+	s, _ := v.stateOf(components, path)
 	if s != "Managed" && s != "Unmanaged" {
 		return false
 	}
 	for i := 1; i < len(path); i++ {
 		if t, ok := v.byKey[strings.Join(path[:i], ".")]; ok && t.Toggle {
-			if as, _ := lookupState(components, path[:i]); as != "Managed" {
+			if as, _ := v.stateOf(components, path[:i]); as != "Managed" {
 				return false
 			}
 		}
@@ -267,6 +304,8 @@ func (v *dscView) readOnlyReason() (string, string) {
 		return gitOpsRefusal("DataScienceCluster "+v.name, v.argoApp, "a change made here"), ErrorCodeGitOpsManaged
 	case v.acm:
 		return fmt.Sprintf("DataScienceCluster %s is enforced by %s, which puts back what differs from the policy. Change the policy instead. Nothing was changed.", v.name, acmCatalogManager), ErrorCodeGitOpsManaged
+	case v.helm != "":
+		return fmt.Sprintf("DataScienceCluster %s is managed by Helm (release %s): the next helm upgrade would undo a change made here, and a hard reset would replace the object Helm tracks. Change the chart's values instead. Nothing was changed.", v.name, v.helm), ErrorCodeGitOpsManaged
 	case v.meta.DeletionTimestamp != "":
 		return fmt.Sprintf("DataScienceCluster %s is being deleted (finalizers: %s). Nothing was changed.", v.name, nonEmpty(strings.Join(v.meta.Finalizers, ", "), "none")), "conflict"
 	case v.crdErr != nil:
@@ -283,7 +322,17 @@ func GetDSCManager(c *Client) (*types.DSCManager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return v.model(), nil
+	m := v.model()
+	// A hard reset that deleted the DSC and did not create its
+	// replacement is offered to finish while no DSC exists.
+	if v.state == DSCStateNoDSC {
+		pending, err := pendingHardReset(c)
+		if err != nil {
+			m.PendingHardResetError = "Cannot read the recorded hard reset: " + err.Error()
+		}
+		m.PendingHardReset = pending
+	}
+	return m, nil
 }
 
 func (v *dscView) model() *types.DSCManager {
@@ -373,10 +422,15 @@ func (v *dscView) mismatches() []types.DSCMismatch {
 		if v.defaults != nil && !specSet {
 			if def, ok := lookupState(defComps, t.Path); ok {
 				m := types.DSCMismatch{Kind: "unset", Path: t.key(), Default: def, Fixable: true}
-				if def == "Removed" {
-					m.Message = "Not set in the DataScienceCluster. The operator treats it as Removed, which is also the release default; Fix sets it explicitly."
+				eff, _ := v.stateOf(comps, t.Path)
+				how := "the operator treats it as Removed"
+				if t.SchemaDefault != "" {
+					how = fmt.Sprintf("the operator uses the CRD default, %s", t.SchemaDefault)
+				}
+				if def == eff {
+					m.Message = fmt.Sprintf("Not set in the DataScienceCluster, so %s, which is also the release default. Fix sets it explicitly.", how)
 				} else {
-					m.Message = fmt.Sprintf("Not set in the DataScienceCluster, so the operator treats it as Removed, but the release default is %s. Fix sets it to %s.", def, def)
+					m.Message = fmt.Sprintf("Not set in the DataScienceCluster, so %s, but the release default is %s. Fix sets it to %s.", how, def, def)
 				}
 				out = append(out, m)
 			}
@@ -387,10 +441,10 @@ func (v *dscView) mismatches() []types.DSCMismatch {
 				if !ok || !anc.Toggle {
 					continue
 				}
-				if as, set := lookupState(comps, anc.Path); as != "Managed" {
-					state := nonEmpty(as, "not set")
+				if as, set := v.stateOf(comps, anc.Path); as != "Managed" {
+					state := as
 					if !set {
-						state = "not set"
+						state = "not set (" + as + ")"
 					}
 					out = append(out, types.DSCMismatch{Kind: "parent-removed", Path: t.key(), Parent: anc.key(),
 						Message: fmt.Sprintf("Managed, but %s is %s, so the operator deploys nothing for it. Set %s to Managed, or set this to Removed.", anc.key(), state, anc.key())})
@@ -544,7 +598,7 @@ func (v *dscView) orphanWarnings(before, after map[string]interface{}) []string 
 		if !t.Toggle || len(t.Path) < 2 {
 			continue
 		}
-		if s, _ := lookupState(after, t.Path); s != "Managed" || v.deployed(after, t.Path) || !v.deployed(before, t.Path) {
+		if s, _ := v.stateOf(after, t.Path); s != "Managed" || v.deployed(after, t.Path) || !v.deployed(before, t.Path) {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s stays Managed but deploys nothing while %s is not Managed.", t.key(), strings.Join(t.Path[:len(t.Path)-1], ".")))
@@ -555,13 +609,38 @@ func (v *dscView) orphanWarnings(before, after map[string]interface{}) []string 
 // usersCheckedComponents are the components componentUsers can check.
 var usersCheckedComponents = map[string]bool{"aipipelines": true, "datasciencepipelines": true, "mlflowoperator": true, "kserve": true, "ogx": true, "llamastackoperator": true, "dashboard": true}
 
+// modulesOf returns the modules (guardModule) a top-level component runs in
+// components, in tree order: its own, and those of its deployed parts.
+func (v *dscView) modulesOf(components map[string]interface{}, top dscToggle) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(m string) {
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	if top.Toggle && v.deployed(components, top.Path) {
+		add(guardModule(top.key()))
+	}
+	for _, d := range v.descendants(top) {
+		if d.Toggle && v.deployed(components, d.Path) {
+			add(guardModule(d.key()))
+		}
+	}
+	return out
+}
+
 // removalBlocks checks what stops being deployed between before and after.
 // A component whose module goes away gets the removal preconditions of
 // disable-component and, where the tool can tell, what still uses it; a
 // sub-component whose module stays gets partBlockers. Read errors block
-// (fail closed). teardown is the hard reset: every module goes and comes
-// back, so the tool's standing refusals (refusedComponents) do not apply,
-// and what only stops working while the components are down is a warning.
+// (fail closed). teardown is the hard reset, which deletes every module
+// and creates after: a module after deploys again gets the teardown rules
+// (the standing refusals of refusedComponents do not apply, and what only
+// stops working while the components are down is a warning); a module
+// after leaves Removed gets the rules of removing it, and what still uses
+// it blocks.
 func (v *dscView) removalBlocks(c *Client, before, after map[string]interface{}, teardown bool) ([]types.DSCRemovalBlock, []string) {
 	rc := newRemovalChecker(c)
 	var blocks []types.DSCRemovalBlock
@@ -571,24 +650,16 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]interface{},
 			continue
 		}
 		wasOn, isOn := v.componentEnabled(before, top), v.componentEnabled(after, top)
-		if wasOn && !isOn {
+		if wasOn && (!isOn || teardown) {
 			var reasons []string
-			seen := map[string]bool{}
-			modules := []string{}
-			if top.Toggle {
-				modules = append(modules, guardModule(top.key()))
-			}
-			for _, d := range v.descendants(top) {
-				if d.Toggle && v.deployed(before, d.Path) {
-					modules = append(modules, guardModule(d.key()))
+			comesBack := map[string]bool{}
+			if teardown {
+				for _, m := range v.modulesOf(after, top) {
+					comesBack[m] = true
 				}
 			}
-			for _, m := range modules {
-				if seen[m] {
-					continue
-				}
-				seen[m] = true
-				if teardown {
+			for _, m := range v.modulesOf(before, top) {
+				if comesBack[m] {
 					b, w := rc.teardownBlockers(m)
 					reasons = append(reasons, b...)
 					warnings = append(warnings, w...)
@@ -602,7 +673,7 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]interface{},
 				switch {
 				case err != nil:
 					reasons = append(reasons, fmt.Sprintf("could not check what still uses %s: %v", name, err))
-				case len(users) > 0 && (!teardown || name == "mlflowoperator"):
+				case len(users) > 0 && (!teardown || !isOn || name == "mlflowoperator"):
 					what := "remove them first"
 					if name == "mlflowoperator" {
 						what = "the MLflowOperator CR cannot be deleted while an MLflow CR exists, so its removal would hang; delete MLflow first (Environment page)"
@@ -689,7 +760,7 @@ func (v *dscView) planToggle(c *Client, path, to string, withParent bool) *dscPl
 		for i := 1; i < len(t.Path); i++ {
 			anc, ok := v.byKey[strings.Join(t.Path[:i], ".")]
 			if ok && anc.Toggle {
-				if as, _ := lookupState(comps, anc.Path); as != "Managed" {
+				if as, _ := v.stateOf(comps, anc.Path); as != "Managed" {
 					parents = append(parents, anc)
 				}
 			}
@@ -959,16 +1030,23 @@ func recordDSCActivity(c *Client, action, detail string, success bool) {
 
 // SetDSCManagementState sets one managementState (and, with WithParent,
 // the parents that are not Managed) in the DataScienceCluster, only when
-// it still holds From. To Removed runs the removal preconditions first.
+// it still holds From and the change is the plan the user reviewed (its
+// UID and token, from GET /api/components/dsc/plan). It runs planToggle,
+// the function the plan comes from, so the checks the dialog showed are
+// the checks that run; to Removed runs the removal preconditions first.
 func SetDSCManagementState(c *Client, req types.DSCToggleRequest) (*types.OperationResponse, error) {
 	v, err := readDSCView(c)
 	if err != nil {
 		return nil, err
 	}
-	return v.setManagementState(c, req, "set-component-state"), nil
+	return v.setManagementState(c, req, "set-component-state", true), nil
 }
 
-func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, activity string) *types.OperationResponse {
+// setManagementState runs a toggle. reviewed: the request carries the
+// token of the plan the user reviewed, which must match the plan computed
+// now (Diagnostics' disable-component fix has its own confirmation and no
+// plan).
+func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, activity string, reviewed bool) *types.OperationResponse {
 	if v.state == DSCStatePresent && req.Name != "" && req.Name != v.name {
 		return &types.OperationResponse{Success: false, ErrorCode: "conflict", Message: fmt.Sprintf("The DataScienceCluster is %s now, not %s. Reload the page. Nothing was changed.", v.name, req.Name)}
 	}
@@ -981,6 +1059,10 @@ func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, acti
 	p := v.planToggle(c, req.Path, req.To, req.WithParent)
 	if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
 		return refusedResult(p.plan)
+	}
+	if reviewed && (req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token) {
+		return &types.OperationResponse{Success: false, ErrorCode: "conflict",
+			Message: "The DataScienceCluster changed since you reviewed this change, so nothing was changed. Review it again."}
 	}
 	if res := v.write(c, p); res != nil {
 		return res

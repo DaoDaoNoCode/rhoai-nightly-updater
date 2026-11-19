@@ -1238,7 +1238,7 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 	if state == "Removed" {
 		return nothingToDo(fmt.Sprintf("%s is already Removed. Nothing was changed.", compName), nil), nil
 	}
-	res := v.setManagementState(c, types.DSCToggleRequest{Name: v.name, Path: compName, From: state, To: "Removed"}, "disable-component")
+	res := v.setManagementState(c, types.DSCToggleRequest{Name: v.name, Path: compName, From: state, To: "Removed"}, "disable-component", false)
 	if res.Success {
 		res.Message = fmt.Sprintf("Set %s to Removed (was %s). The operator will clean up the component.", compName, nonEmpty(state, "unset"))
 	}
