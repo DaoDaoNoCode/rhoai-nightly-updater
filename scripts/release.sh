@@ -216,7 +216,7 @@ cmd_notes() {
 		printf '**Install or upgrade without a clone** (needs `oc`, logged in as cluster-admin, and `curl`):\n\n'
 		printf '```sh\ncurl -fsSLO %s\n' "${INSTALLER_URL:-<the install.sh asset of this release>}"
 		printf 'echo "%s  install.sh" | sha256sum -c -   # macOS: shasum -a 256 -c\n' "$sum"
-		printf 'less install.sh   # read it first\nbash install.sh --dry-run\nbash install.sh\n```\n\n'
+		printf 'bash install.sh --dry-run\nbash install.sh\n```\n\n'
 		printf 'install.sh SHA-256: `%s`\n\n' "$sum"
 	fi
 	printf 'From a clone: `git checkout %s && make deploy` (first install) or `make upgrade`.\n' "$version"

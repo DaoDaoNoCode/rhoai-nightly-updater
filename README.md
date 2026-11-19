@@ -15,11 +15,10 @@ The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShi
 
 ## Install
 
-Download the latest release's `install.sh`, read it, then run it. You need `oc` (logged in as cluster-admin) and `curl`:
+Download the latest release's `install.sh` and run it. You need `oc` (logged in as cluster-admin) and `curl`:
 
 ```bash
 curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest/download/install.sh
-less install.sh
 bash install.sh --dry-run && bash install.sh
 ```
 

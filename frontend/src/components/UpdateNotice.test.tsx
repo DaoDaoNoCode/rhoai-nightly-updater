@@ -60,7 +60,7 @@ describe("update available notice", () => {
     });
     expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
     expect(screen.getByText(/An admin upgrades with the v2.0.1 installer/)).toBeInTheDocument();
-    expect(screen.getByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(screen.getByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy the v2.0.1 install command" })).toBeInTheDocument();
     expect(screen.getByText("git checkout v2.0.1 && make upgrade")).toBeInTheDocument();
     expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
@@ -82,7 +82,7 @@ describe("update available notice", () => {
     });
     expect(await screen.findByText(/v3.0.0 is a new major version and requires a full redeploy/)).toBeInTheDocument();
     expect(screen.getByText(/An admin redeploys with the v3.0.0 installer/)).toBeInTheDocument();
-    expect(screen.getByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(screen.getByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
     // Without a checksum from the backend, the notice points at the release notes' one.
     expect(screen.getByText(/Before running it, check install.sh against the SHA-256 in the v3.0.0 release notes/)).toBeInTheDocument();
     // A GitLab release asset may need a sign-in.
@@ -97,7 +97,7 @@ describe("update available notice", () => {
       update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL, installerSHA256: sum }),
     });
     // sha256sum -c reads "<sum><two spaces><file>": compare without collapsing whitespace.
-    expect(await screen.findByText(`curl -fsSLO '${installerURL}' && echo '${sum}  install.sh' | sha256sum -c - && less install.sh && bash install.sh`,
+    expect(await screen.findByText(`curl -fsSLO '${installerURL}' && echo '${sum}  install.sh' | sha256sum -c - && bash install.sh`,
       { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toBeInTheDocument();
     expect(screen.getByText(/The command checks install.sh against the SHA-256 in the v2.0.1 release notes/)).toBeInTheDocument();
   });
@@ -108,7 +108,7 @@ describe("update available notice", () => {
       version: release("v2.0.0"),
       update: async () => ({ current: "v2.0.0", latest: "v2.0.1", updateAvailable: true, majorUpgrade: false, installerURL, installerSHA256: "$(id)" }),
     });
-    expect(await screen.findByText(`curl -fsSLO '${installerURL}' && less install.sh && bash install.sh`)).toBeInTheDocument();
+    expect(await screen.findByText(`curl -fsSLO '${installerURL}' && bash install.sh`)).toBeInTheDocument();
     expect(screen.queryByText(/\$\(id\)/)).not.toBeInTheDocument();
   });
 

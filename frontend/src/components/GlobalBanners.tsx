@@ -295,7 +295,7 @@ function useUpdateNotice(): Notice | null {
   // anything runs: a different file stops it at sha256sum.
   const sum = update.installerSHA256 && /^[0-9a-f]{64}$/.test(update.installerSHA256) ? update.installerSHA256 : "";
   const check = sum ? ` && echo '${sum}  install.sh' | sha256sum -c -` : "";
-  const installer = update.installerURL ? `curl -fsSLO '${update.installerURL}'${check} && less install.sh && bash install.sh` : "";
+  const installer = update.installerURL ? `curl -fsSLO '${update.installerURL}'${check} && bash install.sh` : "";
   return {
     key: "update",
     priority: 10,

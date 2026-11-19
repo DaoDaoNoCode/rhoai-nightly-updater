@@ -26,7 +26,6 @@ the notice shows the command to copy, for example
 
 ```bash
 curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.1/install.sh
-less install.sh                                     # read it first
 bash install.sh --dry-run                           # optional: validate only
 bash install.sh
 ```
@@ -214,7 +213,6 @@ From v1.0.0, or directly from V0, V1, V2 or a June build. Without a clone:
 
 ```bash
 curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v2.0.0/install.sh
-less install.sh                                     # read it first
 bash install.sh --dry-run --namespace $NS --app-name $APP
 bash install.sh --namespace $NS --app-name $APP
 ```
@@ -271,7 +269,6 @@ re-applied. The installer upgrades the existing install in place:
 
 ```bash
 curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/v3.0.0/install.sh
-less install.sh                                     # read it first
 bash install.sh --dry-run --namespace $NS --app-name $APP
 bash install.sh --namespace $NS --app-name $APP
 ```
