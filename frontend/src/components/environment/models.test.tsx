@@ -80,7 +80,7 @@ describe("modelsState", () => {
 
   it("ready opens the project in the dashboard; ownership is said apart from the label", () => {
     const s = modelsState(status({ inferenceGateway: { ...gateway, managedByTool: false }, models: modelsStatus({ items: [model("dev")] }) }), "dev", ["dev"]);
-    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open in dashboard", href: "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev" } });
+    expect(s).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open models in the dashboard", href: "https://rh-ai.apps.example.com/ai-hub/models/deployments/internal/dev" } });
   });
 
   it("a cluster that cannot serve models says why on Set up", () => {
@@ -602,7 +602,7 @@ describe("Models tab", () => {
     const table = await screen.findByRole("grid", { name: "Features" });
     const row = within(table).getByRole("link", { name: "Models" }).closest("tr")!;
     expect(within(row).getByText("Ready in dev")).toBeInTheDocument();
-    expect(within(row).getByRole("link", { name: "Open in dashboard" })).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "Open models in the dashboard" })).toBeInTheDocument();
   });
 });
 

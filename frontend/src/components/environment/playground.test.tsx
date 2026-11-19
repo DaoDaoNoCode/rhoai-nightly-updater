@@ -42,7 +42,7 @@ describe("playgroundState", () => {
 
   it("ready opens the dashboard's playground page for the project; ownership shows in the label only", () => {
     expect(playgroundState(status, pg({ items: [item("dev")] }), "dev")).toMatchObject({ status: "ready", label: "Ready in dev", next: { kind: "open", href: "https://rh-ai.apps.example.com/gen-ai-studio/playground/dev" } });
-    expect(playgroundState(status, pg({ items: [item("dev", { managedByTool: false, requested: false })] }), "dev")).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open playground" } });
+    expect(playgroundState(status, pg({ items: [item("dev", { managedByTool: false, requested: false })] }), "dev")).toMatchObject({ status: "ready", label: "Ready in dev", unmanaged: true, next: { kind: "open", label: "Open the playground" } });
   });
 
   it("starting, failed, deleting and an unreported phase", () => {
@@ -178,6 +178,8 @@ describe("Playground tab", () => {
     expect(within(part).getByText("Not managed by this tool")).toBeInTheDocument();
     expect(within(part).getByRole("link", { name: /Open the playground/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/gen-ai-studio/playground/dev");
     expect(within(part).queryByRole("button", { name: /actions/i })).toBeNull();
+    // Ready is its label; no "State: Ready" row repeats it.
+    expect(within(part).queryByText("State")).toBeNull();
     expect(screen.queryByText("Clean up Playground...")).toBeNull();
   });
 
