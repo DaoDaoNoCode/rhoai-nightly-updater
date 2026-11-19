@@ -55,14 +55,15 @@ import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview, type OverviewRow } from "./environment/Overview";
 import { FEATURE_PURPOSE, partTitleId } from "./environment/FeatureLayout";
 import { MigrateStorageModal } from "./environment/MigrateStorageModal";
-import { useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
+import { MIGRATE_TITLES, migrateStepNow, useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
 import { RunModal, runOutcome } from "./environment/SetupRun";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./environment/samples";
 import { MLFLOW_SAMPLES_ID } from "./environment/MLflowSamples";
 import { PIPELINE_SAMPLE_ID } from "./environment/PipelineSample";
 import { mlflowOpenHref } from "./environment/UseIt";
-import { useGoalRun, type GoalRunStep, type ReadyCheck } from "./environment/useGoalRun";
+import { runStepNow, useGoalRun, type GoalRunStep, type ReadyCheck } from "./environment/useGoalRun";
+import { useRegisterBackgroundRun } from "./ProgressViews";
 import { CleanupModal, type CleanupScope, cleanupCandidates, cleanupSteps } from "./environment/CleanupModal";
 import {
   type Busy,
@@ -649,6 +650,16 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     if (wasRunning.current && !now && !runOpen) setToast(true);
     wasRunning.current = now;
   }, [run.run?.running, runOpen]);
+
+  // While a run goes on with its dialog closed, the app's operation alert
+  // names it and its step, with View progress to open the same dialog again.
+  const reopenRun = useCallback(() => { setToast(false); setRunOpen(true); }, []);
+  const migrationKind = migration.run?.running ? migration.run.kind : null;
+  const reopenMigration = useCallback(() => { if (migrationKind) setMigrateKind(migrationKind); }, [migrationKind]);
+  const goal = run.run?.running ? run.run : null;
+  useRegisterBackgroundRun(goal
+    ? { title: goal.title, startedAt: goal.startedAt, step: runStepNow(goal), open: reopenRun }
+    : migration.run?.running ? { title: MIGRATE_TITLES[migration.run.kind], startedAt: migration.run.startedAt, step: migrateStepNow(migration.run), open: reopenMigration } : null);
 
   const runningSomething = !!resAction || migrating || !!run.run?.running || !!checking;
   const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };

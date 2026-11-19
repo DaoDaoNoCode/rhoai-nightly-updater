@@ -17,9 +17,9 @@ import type { NextStep } from "./featureState";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 
 const RUNNING_NOTE: Record<GoalRunKind, string> = {
-  setup: "Each part is created, then checked until it works. You can close this dialog: the setup goes on, and the tab shows each part's state.",
-  delete: "You can close this dialog: the deletion goes on, and the tab shows each part's state.",
-  change: "You can close this dialog: the change goes on, and the tab shows its state.",
+  setup: "Each part is created, then checked until it works. You can close this dialog: the setup goes on, the tab shows each part's state, and View progress on the alert at the top opens this again.",
+  delete: "You can close this dialog: the deletion goes on, the tab shows each part's state, and View progress on the alert at the top opens this again.",
+  change: "You can close this dialog: the change goes on, the tab shows its state, and View progress on the alert at the top opens this again.",
 };
 
 const STILL: Record<GoalRunKind, string> = { setup: "Still starting", delete: "Still deleting", change: "Still in progress" };

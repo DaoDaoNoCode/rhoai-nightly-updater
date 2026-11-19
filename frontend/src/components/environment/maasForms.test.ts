@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  audienceProblem, audienceRequest, audienceText, connectionUrlProblem, databaseProblem, databaseRequest, defaultDatabaseForm,
+  audienceProblem, audienceRequest, audienceText, connectionUrlProblem, createdDatabaseInSentence, databaseProblem, databaseRequest, defaultDatabaseForm,
   defaultLimitForm, limitProblem, limitRequest, limitSummary, limitText, openShiftGroupName, windowText,
 } from "./maasForms";
 import type { MaaSDatabase } from "../../types";
@@ -38,6 +38,11 @@ describe("the database form", () => {
     expect(databaseRequest({ kind: "development", connectionUrl: "postgresql://u:p@h/d" })).toEqual({ kind: "development" });
     expect(databaseRequest({ kind: "external", connectionUrl: " postgresql://u:p@h/d " })).toEqual({ kind: "external", connectionUrl: "postgresql://u:p@h/d" });
     expect(databaseProblem({ kind: "cnpg", connectionUrl: "" }, { ...db, choices: [{ id: "cnpg", plan: [], blockedReason: "not in the catalog" }] })).toBe("not in the catalog");
+  });
+  it("names a database this tool created inside a sentence, without parentheses around a label that has its own", () => {
+    expect(createdDatabaseInSentence("development")).toBe("the development database");
+    expect(createdDatabaseInSentence("cnpg")).toBe("the persistent development database (CloudNativePG)");
+    for (const kind of ["external", "adopted", ""]) expect(createdDatabaseInSentence(kind)).toBe("the database this tool created");
   });
 });
 

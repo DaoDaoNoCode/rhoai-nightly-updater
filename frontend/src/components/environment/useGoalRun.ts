@@ -42,11 +42,20 @@ export const shownSteps = (run: GoalRun) => run.steps.filter((s) => !s.optional 
 export interface GoalRun {
   title: string;
   kind: GoalRunKind;
+  /** When it started (epoch ms), for the elapsed time while its dialog is closed. */
+  startedAt: number;
   steps: GoalRunStepInfo[];
   states: Record<string, StepState>;
   running: boolean;
   /** The outcome, once the run ended. */
   result: { success: boolean; message: string; errorCode?: string } | null;
+}
+
+/** The step a run is on now, as the alert shown while its dialog is closed names it; null before the first step starts. */
+export function runStepNow(run: GoalRun): { title: string; index: number; count: number } | null {
+  const steps = shownSteps(run);
+  const i = steps.findIndex((s) => run.states[s.id]?.status === "running");
+  return i < 0 ? null : { title: steps[i].title, index: i + 1, count: steps.length };
 }
 
 /** How long a run waits for a part to work after creating it: the page's own polling stops after as long. */
@@ -106,7 +115,7 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
     running.current = true;
     const { kind = "setup", doneMessage, preflight } = options;
     const shown = steps.map(({ id, title: t }) => ({ id, title: t }));
-    setRun({ title, kind, steps: preflight ? [CHECK_STEP, ...shown] : shown, states: {}, running: true, result: null });
+    setRun({ title, kind, startedAt: now(), steps: preflight ? [CHECK_STEP, ...shown] : shown, states: {}, running: true, result: null });
     if (preflight) {
       setStep(CHECK_STEP.id, { status: "running", message: "Checking..." });
       let reason: string | null;
@@ -176,7 +185,7 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
   const follow = useCallback((title: string, steps: GoalRunStepInfo[], stream: StreamRun, kind: GoalRunKind = "delete") => {
     if (steps.length === 0 || running.current) return;
     running.current = true;
-    setRun({ title, kind, steps, states: {}, running: true, result: null });
+    setRun({ title, kind, startedAt: now(), steps, states: {}, running: true, result: null });
     let finalMessage = "";
     controller.current = stream(
       (step) => {
@@ -195,7 +204,7 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
         finish({ success: false, message: "The connection to the server was lost. The operation continues on the server; the parts show their state when it ends.", errorCode: "detached" });
       },
     );
-  }, [setStep, finish]);
+  }, [now, setStep, finish]);
 
   const reset = useCallback(() => setRun((r) => (r && !r.running ? null : r)), []);
   return { run, start, follow, reset };

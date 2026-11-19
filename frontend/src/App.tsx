@@ -60,6 +60,7 @@ import { AppInfoProvider, useGitOpsProfile, usePermissions, useSessionExpired, u
 import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
+import { ProgressViewsProvider } from "./components/ProgressViews";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ThemeMenuGroups, ThemeSwitcher } from "./theme/ThemeSwitcher";
 
@@ -372,7 +373,9 @@ export const App: React.FC = () => {
           <LiveAnnouncerProvider>
             <AppStateProvider>
               <AppInfoProvider>
-                <AppLayout />
+                <ProgressViewsProvider>
+                  <AppLayout />
+                </ProgressViewsProvider>
               </AppInfoProvider>
             </AppStateProvider>
           </LiveAnnouncerProvider>

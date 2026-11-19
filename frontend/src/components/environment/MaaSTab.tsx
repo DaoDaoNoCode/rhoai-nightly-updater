@@ -21,7 +21,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import type { MaaSGroupProblem, MaaSModel, MaaSPart, MaaSRequest, MaaSStatus } from "../../types";
 import { AudienceFields, DatabaseChoice, KeysLostCheck, LimitFields } from "./MaaSDialogFields";
 import {
-  audienceProblem, audienceRequest, audienceText, databaseLabel, databaseProblem, databaseRequest, defaultAudienceForm, defaultDatabaseForm,
+  audienceProblem, audienceRequest, audienceText, createdDatabaseInSentence, databaseLabel, databaseProblem, databaseRequest, defaultAudienceForm, defaultDatabaseForm,
   defaultLimitForm, limitProblem, limitRequest, limitText,
 } from "./maasForms";
 import { getMaaS, toApiError } from "../../services/api";
@@ -489,7 +489,7 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
         title: "Change the MaaS database?", confirm: "Change database", danger: true, runTitle: "Change the MaaS database",
         summary: <Content component="p">
           {before
-            ? <>Creates the new database, points maas-api at it and restarts maas-api, then permanently deletes the current one ({databaseLabel(db.current)}).</>
+            ? <>Creates the new database, points maas-api at it and restarts maas-api, then permanently deletes the current one, {createdDatabaseInSentence(db.current)}.</>
             : yoursToYours
               ? <>Points maas-api at the new URL and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>
               : <>Creates the new database, points maas-api at it and restarts maas-api. Your current PostgreSQL is not changed or deleted.</>}
@@ -550,12 +550,12 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
     case "teardown-maas":
       return {
         title: "Remove Models as a Service?", confirm: "Remove", danger: true, runTitle: "Remove Models as a Service",
-        dataLoss: <>Every API key, with the database this tool created ({databaseLabel(m?.database?.current ?? "")}) and its data. A PostgreSQL of your own is never touched.</>,
+        dataLoss: <>Every API key, with {createdDatabaseInSentence(m?.database?.current ?? "")} and its data. A PostgreSQL of your own is never touched.</>,
         summary: <Content component="p">Removes what this tool set up, in reverse order. API keys stop working, and the database&apos;s data (the keys&apos; records) is deleted. It refuses, before changing anything, while others use MaaS: model references, subscriptions or access policies this tool did not create. It keeps the gateway while routes are attached to it.</Content>,
         changes: [
           <>Unpublished: this tool&apos;s models ({(m?.items ?? []).filter((i) => i.published).map((i) => `${i.name} in ${i.namespace}`).join(", ") || "none"}).</>,
           <>DataScienceCluster: <code>aigateway.modelsAsAService</code> and <code>aigateway</code> back to their values before setup (each only if this tool changed it and nobody has set it since).</>,
-          <>Deleted: Gateway <code>maas-default-gateway</code>; the database this tool created ({databaseLabel(m?.database?.current ?? "")}: its objects, with its data) and Secret <code>maas-db-config</code> if this tool wrote it. A PostgreSQL of your own and a Secret someone else wrote are never touched; namespace <code>{m?.platform.namespace ?? "redhat-ai-gateway-infra"}</code> only if this tool created it and nothing else is in it.</>,
+          <>Deleted: Gateway <code>maas-default-gateway</code>; {createdDatabaseInSentence(m?.database?.current ?? "")} with its objects and data, and Secret <code>maas-db-config</code> if this tool wrote it. A PostgreSQL of your own and a Secret someone else wrote are never touched; namespace <code>{m?.platform.namespace ?? "redhat-ai-gateway-infra"}</code> only if this tool created it and nothing else is in it.</>,
           <>Kept, also if this tool installed or set them up: Red Hat Connectivity Link, its Kuadrant CR and Authorino TLS, and the CloudNativePG operator. They are shared platform pieces: RHOAI&apos;s inference gateway authentication uses Kuadrant. Remove them from the OpenShift console if nothing needs them.</>,
           <>Kept: GatewayClass <code>openshift-default</code>, also if this tool created it: it is OpenShift&apos;s shared class for gateways and costs nothing on its own. Also kept: the namespaces RHOAI made, and every object that was not created by this tool.</>,
         ],

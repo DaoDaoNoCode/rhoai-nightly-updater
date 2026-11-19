@@ -95,6 +95,17 @@ const scenarios = {
       },
     };
   },
+  // An Environment operation another user runs: the banner's View progress opens what the server records.
+  "env-operation-elsewhere": (w) => {
+    scenarios["env-models-ready"](w);
+    w.operation = {
+      inProgress: true,
+      operation: {
+        id: "op-2c81e0", type: "cleanup", label: "Clean up", user: "qa-user", startedAt: F.ago(2), updatedAt: F.ago(0.1),
+        step: "storage", stepStatus: "running", message: "Deleting the S3 storage (SeaweedFS)",
+      },
+    };
+  },
   interrupted: (w) => {
     w.status = F.updateAvailableStatus();
     w.operation = {
