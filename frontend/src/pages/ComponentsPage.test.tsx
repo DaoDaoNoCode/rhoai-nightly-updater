@@ -4,6 +4,7 @@ import { ComponentsPage } from "./ComponentsPage";
 import { stubApi, jsonResponse } from "../test/apiStub";
 import { nightlyStatus, renderPage as renderInApp } from "../test/providers";
 import type { ComponentsResponse, DeploymentInfo } from "../types";
+import { NO_PERMISSION_REASON } from "../state/AppInfo";
 
 function dep(name: string, over: Partial<DeploymentInfo> = {}): DeploymentInfo {
   return {
@@ -206,7 +207,9 @@ describe("ComponentsPage Deployments table", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Actions for x" }));
     await waitFor(() => expect(screen.getByRole("menuitem", { name: "Unblock rollout" })).toHaveAttribute("aria-disabled", "true"));
-    await new Promise((r) => setTimeout(r, 50));
+    // Disabled for the read-only answer, not only while the check runs.
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "Unblock rollout" }).closest("li")!);
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(NO_PERMISSION_REASON));
     fireEvent.click(screen.getByRole("menuitem", { name: "Unblock rollout" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });

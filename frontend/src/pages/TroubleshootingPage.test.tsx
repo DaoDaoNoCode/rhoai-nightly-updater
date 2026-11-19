@@ -4,6 +4,7 @@ import { TroubleshootingPage, buildDiagnosticReport, problemSummary } from "./Tr
 import { stubApi, jsonResponse } from "../test/apiStub";
 import { renderPage } from "../test/providers";
 import type { DiagnosticResult, OperationStatusResponse, Problem } from "../types";
+import { NO_PERMISSION_REASON } from "../state/AppInfo";
 
 // Shapes from the live GET /api/diagnostics (B2) on 2026-10-05.
 const guidance: Problem = {
@@ -43,6 +44,11 @@ function result(problems: Problem[]): DiagnosticResult {
 }
 
 
+/** Fix is enabled once the permission check answered for a cluster-admin. */
+async function fixEnabled(): Promise<void> {
+  await waitFor(() => expect(screen.getByRole("button", { name: "Fix" })).not.toHaveAttribute("aria-disabled", "true"));
+}
+
 /** Problems start collapsed (UX-Diagnostics-3): open one by its card toggle. */
 function expand(title: string): void {
   const card = screen.getByText(title).closest(".pf-v6-c-card") as HTMLElement;
@@ -77,7 +83,7 @@ describe("Diagnostics (B2 contract)", () => {
     await screen.findByText(fixable.title);
     expand(fixable.title);
     // Wait for permissions, then open the dialog.
-    await new Promise((r) => setTimeout(r, 20));
+    await fixEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("ValidatingWebhookConfiguration datasciencecluster-v2-validator.opendatahub.io-nfzvz")).toBeInTheDocument();
@@ -97,7 +103,7 @@ describe("Diagnostics (B2 contract)", () => {
     renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
     expand(fixable.title);
-    await new Promise((r) => setTimeout(r, 20));
+    await fixEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Fix" }));
     expect(await screen.findByText("Blocked: prerequisites not met")).toBeInTheDocument();
@@ -109,7 +115,9 @@ describe("Diagnostics (B2 contract)", () => {
     renderPage(<TroubleshootingPage />);
     await screen.findByText(fixable.title);
     expand(fixable.title);
-    await new Promise((r) => setTimeout(r, 20));
+    // Disabled for the read-only answer, not only while the check runs.
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Fix" }));
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(NO_PERMISSION_REASON));
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Fix" })).toHaveAttribute("aria-disabled", "true");
@@ -256,7 +264,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
     expect(within(table).getByText(".spec.eval.lmeval.permitOnline")).toBeInTheDocument();
     expect(within(table).getAllByText('"deny"')).toHaveLength(2);
     expect(within(table).getByText("Check the meaning")).toBeInTheDocument();
-    await new Promise((r) => setTimeout(r, 20));
+    await fixEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("grid", { name: "Fields the fix changes" })).toBeInTheDocument();
@@ -279,7 +287,7 @@ describe("Diagnostics leftovers from an earlier release", () => {
     renderPage(<TroubleshootingPage />);
     await screen.findByText(plain.title);
     expand(plain.title);
-    await new Promise((r) => setTimeout(r, 20));
+    await fixEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();

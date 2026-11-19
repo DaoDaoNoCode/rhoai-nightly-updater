@@ -76,7 +76,8 @@ describe("dashboard_dev_active (D1 guard)", () => {
     };
     renderWithApp(<AlreadyReverting />);
     fireEvent.click(screen.getByText("go"));
-    await new Promise((r) => setTimeout(r, 50));
+    // The run's end is announced in the same render that would open the question.
+    await waitFor(() => expect(screen.getByTestId("live-region-assertive")).toHaveTextContent("Could not end the Dashboard Dev session"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
