@@ -272,7 +272,6 @@ const installDeadlineReserve = 10 * time.Second
 // Manual approval is how admins hold back upgrades, and OLM cannot undo an
 // approved upgrade (RHOAI operator notes §1.3, §1.4).
 func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]string, recovery *operatorRecovery, expectedCSV string) installOutcome {
-	const step = "verify_installplan"
 	// waitStart is compared with the cluster's condition times (adminAckNote).
 	waitStart := time.Now()
 	deadline := clk.Now().Add(OperatorInstallTimeout)
@@ -280,36 +279,9 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 	if opDeadline, ok := c.ctx.Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
 		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
 	}
-	var resolutionSince, pullSince, csvFailedSince, succeededSince time.Time
-	var ipName, csvName, lastState, lastProgress string
-	var sawCSVFailed, catalogsNoted bool
+	w := &installWait{c: c, emit: emit, logs: logs}
 	approved := map[string]bool{}
-
-	progress := func(msg string) {
-		lastState = msg
-		if msg != lastProgress {
-			lastProgress = msg
-			*logs = append(*logs, "  "+msg)
-			emit(UpdateStepEvent{Step: step, Status: "running", Message: msg})
-		}
-	}
-	failed := func(code, msg string) installOutcome {
-		*logs = append(*logs, msg)
-		return installOutcome{csv: csvName, message: msg, errorCode: code}
-	}
-	stopped := func(code, why string) installOutcome {
-		keep := ipName != "" && !sawCSVFailed
-		state := lastState
-		if state == "" {
-			state = "OLM had not reported progress"
-		}
-		msg := fmt.Sprintf("%s (last state: %s).", why, state)
-		if keep {
-			msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Install a different build if it does not finish."
-		}
-		*logs = append(*logs, msg)
-		return installOutcome{csv: csvName, message: msg, errorCode: code, keepNewInstall: keep}
-	}
+	progress, failed, stopped := w.progress, w.failed, w.stopped
 
 	for {
 		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
@@ -333,80 +305,24 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 			slog.Debug("error polling Subscription", "error", err)
 			continue
 		}
-		var sub struct {
-			Spec struct {
-				Source  string `json:"source"`
-				Channel string `json:"channel"`
-			} `json:"spec"`
-			Status struct {
-				CurrentCSV     string `json:"currentCSV"`
-				InstalledCSV   string `json:"installedCSV"`
-				InstallPlanRef struct {
-					Name string `json:"name"`
-				} `json:"installPlanRef"`
-				InstallPlan struct {
-					Name string `json:"name"`
-				} `json:"installplan"`
-				Conditions []olmCondition `json:"conditions"`
-			} `json:"status"`
-		}
+		var sub installWaitSubscription
 		if json.Unmarshal(body, &sub) != nil {
 			continue
 		}
 
-		resolutionFailing, pullFailing := false, false
-		for _, cond := range sub.Status.Conditions {
-			if cond.Status != "True" {
-				continue
-			}
-			switch cond.Type {
-			case "InstallPlanFailed":
-				return failed("installplan_failed", "OLM reports that the InstallPlan failed: "+describeCondition(cond))
-			case "BundleUnpackFailed":
-				return failed("bundle_unpack_failed", "OLM could not unpack the operator bundle: "+describeCondition(cond)+
-					". If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in openshift-marketplace (label operatorframework.io/bundle-unpack-ref), then run the operation again.")
-			case "ResolutionFailed":
-				resolutionFailing = true
-				if resolutionSince.IsZero() {
-					resolutionSince = clk.Now()
-				}
-				if clk.Since(resolutionSince) >= ResolutionFailedGrace {
-					return failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond)))
-				}
-				progress("OLM resolution failed, retrying: " + describeCondition(cond))
-			case "BundleUnpacking":
-				if strings.Contains(strings.ToLower(cond.Message), "pull") {
-					pullFailing = true
-					if pullSince.IsZero() {
-						pullSince = clk.Now()
-					}
-					if clk.Since(pullSince) >= BundlePullFailureGrace {
-						return failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+IDMSSource+" and the pull secret.")
-					}
-					progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
-				}
-			case "CatalogSourcesUnhealthy":
-				if !catalogsNoted {
-					catalogsNoted = true
-					*logs = append(*logs, "  Note: OLM reports unhealthy CatalogSources: "+describeCondition(cond))
-				}
-			}
-		}
-		if !resolutionFailing {
-			resolutionSince = time.Time{}
-		}
-		if !pullFailing {
-			pullSince = time.Time{}
+		resolutionFailing, pullFailing, outcome, done := w.subscriptionConditions(sub)
+		if done {
+			return outcome
 		}
 
 		if name := sub.Status.InstallPlanRef.Name; name != "" {
-			ipName = name
+			w.ipName = name
 		} else if name := sub.Status.InstallPlan.Name; name != "" {
-			ipName = name
+			w.ipName = name
 		}
-		if ipName != "" {
-			if outcome, done := checkInstallPlan(c, ipName, expectedCSV, approved, logs, progress); done {
-				outcome.csv = csvName
+		if w.ipName != "" {
+			if outcome, done := checkInstallPlan(c, w.ipName, expectedCSV, approved, logs, progress); done {
+				outcome.csv = w.csvName
 				*logs = append(*logs, outcome.message)
 				return outcome
 			}
@@ -417,81 +333,207 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 			name = sub.Status.InstalledCSV
 		}
 		if name == "" {
-			if ipName == "" && !resolutionFailing && !pullFailing {
+			if w.ipName == "" && !resolutionFailing && !pullFailing {
 				progress("Waiting for OLM to resolve the Subscription")
 			}
 			continue
 		}
-		csvName = name
+		w.csvName = name
 		recovery.noteAttemptCSV(name)
-		csvBody, _, err := c.get(csvPath(name))
-		if IsK8sError(err, 404) {
-			if ipName != "" {
-				progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
-			}
-			continue
-		}
-		if err != nil {
-			continue
-		}
-		var csv struct {
-			Metadata struct {
-				DeletionTimestamp *string `json:"deletionTimestamp"`
-			} `json:"metadata"`
-			Status struct {
-				Phase   string `json:"phase"`
-				Reason  string `json:"reason"`
-				Message string `json:"message"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(csvBody, &csv) != nil {
-			continue
-		}
-		if csv.Metadata.DeletionTimestamp != nil {
-			// The previous CSV of the same name is still being removed.
-			progress(fmt.Sprintf("Waiting for the previous CSV %s to finish deleting", name))
-			continue
-		}
-		phase := csv.Status.Phase
-		if phase == "Failed" {
-			sawCSVFailed = true
-			if csvFailedSince.IsZero() {
-				csvFailedSince = clk.Now()
-			}
-			detail := describeCondition(olmCondition{Reason: csv.Status.Reason, Message: csv.Status.Message})
-			if clk.Since(csvFailedSince) >= CSVFailedGrace {
-				return failed("csv_failed", fmt.Sprintf("CSV %s failed to install: %s", name, detail))
-			}
-			progress(fmt.Sprintf("CSV %s: Failed (%s); waiting to see whether OLM retries", name, detail))
-			continue
-		}
-		csvFailedSince = time.Time{}
-		if phase != "Succeeded" {
-			succeededSince = time.Time{}
-		}
-		if phase == "Succeeded" && sub.Status.InstalledCSV == name {
-			if succeededSince.IsZero() {
-				succeededSince = clk.Now()
-			}
-			// Stay until the CSV has kept Succeeded for CSVSucceededSettle,
-			// unless the next poll would pass the deadline: a CSV that is
-			// Succeeded then is reported as installed.
-			if clk.Since(succeededSince) < CSVSucceededSettle && clk.Now().Add(InstallPlanPollInterval).Before(deadline) {
-				progress(fmt.Sprintf("CSV %s: Succeeded; confirming that OLM keeps it installed", name))
-				continue
-			}
-			*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
-			outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c, name, waitStart)}
-			if outcome.note != "" {
-				*logs = append(*logs, "Warning: "+outcome.note)
-			}
+		if outcome, done := w.checkCSV(name, sub.Status.InstalledCSV, deadline, waitStart); done {
 			return outcome
 		}
-		if phase == "" {
-			phase = "created"
-		}
-		progress(fmt.Sprintf("CSV %s: %s", name, strings.TrimSpace(phase+" "+parenthesize(csv.Status.Reason))))
 	}
+}
+
+// installWait is the state of one waitForOperatorInstall, kept across its
+// polls.
+type installWait struct {
+	c    *Client
+	emit func(UpdateStepEvent)
+	logs *[]string
+	// When each failing condition was first seen in a row (zero: not
+	// failing).
+	resolutionSince, pullSince, csvFailedSince, succeededSince time.Time
+	ipName, csvName, lastState, lastProgress                   string
+	sawCSVFailed, catalogsNoted                                bool
+}
+
+// installWaitSubscription is what the wait reads of the Subscription.
+type installWaitSubscription struct {
+	Spec struct {
+		Source  string `json:"source"`
+		Channel string `json:"channel"`
+	} `json:"spec"`
+	Status struct {
+		CurrentCSV     string `json:"currentCSV"`
+		InstalledCSV   string `json:"installedCSV"`
+		InstallPlanRef struct {
+			Name string `json:"name"`
+		} `json:"installPlanRef"`
+		InstallPlan struct {
+			Name string `json:"name"`
+		} `json:"installplan"`
+		Conditions []olmCondition `json:"conditions"`
+	} `json:"status"`
+}
+
+// progress emits msg once, and keeps it as the last state.
+func (w *installWait) progress(msg string) {
+	w.lastState = msg
+	if msg != w.lastProgress {
+		w.lastProgress = msg
+		*w.logs = append(*w.logs, "  "+msg)
+		w.emit(UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: msg})
+	}
+}
+
+// failed is the outcome of an install OLM failed.
+func (w *installWait) failed(code, msg string) installOutcome {
+	*w.logs = append(*w.logs, msg)
+	return installOutcome{csv: w.csvName, message: msg, errorCode: code}
+}
+
+// stopped is the outcome of a wait that ended before OLM did: the new
+// install is kept while OLM is still installing it.
+func (w *installWait) stopped(code, why string) installOutcome {
+	keep := w.ipName != "" && !w.sawCSVFailed
+	state := w.lastState
+	if state == "" {
+		state = "OLM had not reported progress"
+	}
+	msg := fmt.Sprintf("%s (last state: %s).", why, state)
+	if keep {
+		msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Install a different build if it does not finish."
+	}
+	*w.logs = append(*w.logs, msg)
+	return installOutcome{csv: w.csvName, message: msg, errorCode: code, keepNewInstall: keep}
+}
+
+// subscriptionConditions reads the Subscription's conditions: whether OLM's
+// resolution or the bundle pull is failing (and still retried), or the
+// failed outcome when done.
+func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resolutionFailing, pullFailing bool, outcome installOutcome, done bool) {
+	progress, failed, logs := w.progress, w.failed, w.logs
+	for _, cond := range sub.Status.Conditions {
+		if cond.Status != "True" {
+			continue
+		}
+		switch cond.Type {
+		case "InstallPlanFailed":
+			return false, false, failed("installplan_failed", "OLM reports that the InstallPlan failed: "+describeCondition(cond)), true
+		case "BundleUnpackFailed":
+			return false, false, failed("bundle_unpack_failed", "OLM could not unpack the operator bundle: "+describeCondition(cond)+
+				". If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in openshift-marketplace (label operatorframework.io/bundle-unpack-ref), then run the operation again."), true
+		case "ResolutionFailed":
+			resolutionFailing = true
+			if w.resolutionSince.IsZero() {
+				w.resolutionSince = clk.Now()
+			}
+			if clk.Since(w.resolutionSince) >= ResolutionFailedGrace {
+				return false, false, failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond))), true
+			}
+			progress("OLM resolution failed, retrying: " + describeCondition(cond))
+		case "BundleUnpacking":
+			if strings.Contains(strings.ToLower(cond.Message), "pull") {
+				pullFailing = true
+				if w.pullSince.IsZero() {
+					w.pullSince = clk.Now()
+				}
+				if clk.Since(w.pullSince) >= BundlePullFailureGrace {
+					return false, false, failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+IDMSSource+" and the pull secret."), true
+				}
+				progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
+			}
+		case "CatalogSourcesUnhealthy":
+			if !w.catalogsNoted {
+				w.catalogsNoted = true
+				*logs = append(*logs, "  Note: OLM reports unhealthy CatalogSources: "+describeCondition(cond))
+			}
+		}
+	}
+	if !resolutionFailing {
+		w.resolutionSince = time.Time{}
+	}
+	if !pullFailing {
+		w.pullSince = time.Time{}
+	}
+	return resolutionFailing, pullFailing, installOutcome{}, false
+}
+
+// checkCSV reads CSV name, the Subscription's current one: the outcome when
+// it failed for CSVFailedGrace or kept Succeeded (as installedCSV) for
+// CSVSucceededSettle, else done is false and the wait goes on.
+func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart time.Time) (installOutcome, bool) {
+	c, progress, failed, logs, ipName := w.c, w.progress, w.failed, w.logs, w.ipName
+	csvBody, _, err := c.get(csvPath(name))
+	if IsK8sError(err, 404) {
+		if ipName != "" {
+			progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
+		}
+		return installOutcome{}, false
+	}
+	if err != nil {
+		return installOutcome{}, false
+	}
+	var csv struct {
+		Metadata struct {
+			DeletionTimestamp *string `json:"deletionTimestamp"`
+		} `json:"metadata"`
+		Status struct {
+			Phase   string `json:"phase"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(csvBody, &csv) != nil {
+		return installOutcome{}, false
+	}
+	if csv.Metadata.DeletionTimestamp != nil {
+		// The previous CSV of the same name is still being removed.
+		progress(fmt.Sprintf("Waiting for the previous CSV %s to finish deleting", name))
+		return installOutcome{}, false
+	}
+	phase := csv.Status.Phase
+	if phase == "Failed" {
+		w.sawCSVFailed = true
+		if w.csvFailedSince.IsZero() {
+			w.csvFailedSince = clk.Now()
+		}
+		detail := describeCondition(olmCondition{Reason: csv.Status.Reason, Message: csv.Status.Message})
+		if clk.Since(w.csvFailedSince) >= CSVFailedGrace {
+			return failed("csv_failed", fmt.Sprintf("CSV %s failed to install: %s", name, detail)), true
+		}
+		progress(fmt.Sprintf("CSV %s: Failed (%s); waiting to see whether OLM retries", name, detail))
+		return installOutcome{}, false
+	}
+	w.csvFailedSince = time.Time{}
+	if phase != "Succeeded" {
+		w.succeededSince = time.Time{}
+	}
+	if phase == "Succeeded" && installedCSV == name {
+		if w.succeededSince.IsZero() {
+			w.succeededSince = clk.Now()
+		}
+		// Stay until the CSV has kept Succeeded for CSVSucceededSettle,
+		// unless the next poll would pass the deadline: a CSV that is
+		// Succeeded then is reported as installed.
+		if clk.Since(w.succeededSince) < CSVSucceededSettle && clk.Now().Add(InstallPlanPollInterval).Before(deadline) {
+			progress(fmt.Sprintf("CSV %s: Succeeded; confirming that OLM keeps it installed", name))
+			return installOutcome{}, false
+		}
+		*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
+		outcome := installOutcome{succeeded: true, csv: name, note: adminAckNote(c, name, waitStart)}
+		if outcome.note != "" {
+			*logs = append(*logs, "Warning: "+outcome.note)
+		}
+		return outcome, true
+	}
+	if phase == "" {
+		phase = "created"
+	}
+	progress(fmt.Sprintf("CSV %s: %s", name, strings.TrimSpace(phase+" "+parenthesize(csv.Status.Reason))))
+	return installOutcome{}, false
 }
 
 func parenthesize(s string) string {

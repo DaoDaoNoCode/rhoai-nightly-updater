@@ -40,6 +40,21 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 			onSubscribe: func(f *fakeOLM, _ map[string]any) {
 				f.sub["status"] = map[string]any{"conditions": []any{cond("BundleUnpackFailed", "BundleUnpackFailed", "DeadlineExceeded")}}
 			}},
+		// The pull keeps failing past BundlePullFailureGrace, poll after
+		// poll; unhealthy catalogs are only noted, a condition that is not
+		// True is not read.
+		{name: "bundle image pull failing", wantCode: "bundle_image_pull", wantRestore: true, wantInMsg: "cannot pull the operator bundle image: unpack job: image pull failed",
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.sub["status"] = map[string]any{"conditions": []any{
+					map[string]any{"type": "InstallPlanFailed", "status": "False"},
+					cond("CatalogSourcesUnhealthy", "UnhealthyCatalogSourceFound", "targeted catalogsource is unhealthy"),
+					cond("BundleUnpacking", "JobIncomplete", "unpack job: image pull failed"),
+				}}
+			}},
+		{name: "install plan failed condition", wantCode: "installplan_failed", wantRestore: true, wantInMsg: "InstallPlan failed: InstallComponentFailed",
+			onSubscribe: func(f *fakeOLM, _ map[string]any) {
+				f.sub["status"] = map[string]any{"conditions": []any{cond("InstallPlanFailed", "InstallComponentFailed", "CRD step failed")}}
+			}},
 		{name: "install plan failed", wantCode: "installplan_failed", wantRestore: true, wantInMsg: "InstallComponentFailed",
 			onSubscribe: func(f *fakeOLM, _ map[string]any) {
 				f.installPlans["install-new"] = map[string]any{"spec": map[string]any{}, "status": map[string]any{"phase": "Failed",
